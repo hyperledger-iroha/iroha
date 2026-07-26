@@ -3792,6 +3792,10 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "appeal_finance_config_version".into(),
                 JsonValue::from(receipt.appeal_finance_config_version.clone()),
             );
+            labels.insert(
+                "appeal_finance_policy_digest_hex".into(),
+                JsonValue::from(hex::encode(receipt.appeal_finance_policy_digest)),
+            );
             labels.insert("outcome".into(), JsonValue::from(receipt.outcome.as_str()));
             labels.insert(
                 "escrow_id_hex".into(),
@@ -4366,6 +4370,10 @@ fn appeal_finance_settlement_receipt_json(
         "appeal_finance_config_version".into(),
         JsonValue::from(receipt.appeal_finance_config_version.clone()),
     );
+    metadata.insert(
+        "appeal_finance_policy_digest_hex".into(),
+        JsonValue::from(hex::encode(receipt.appeal_finance_policy_digest)),
+    );
     metadata.insert("outcome".into(), JsonValue::from(receipt.outcome.as_str()));
     metadata.insert(
         "escrow_id_hex".into(),
@@ -4850,6 +4858,7 @@ mod tests {
             round_id: Some("round-1".to_string()),
             generated_at_unix_ms: 1_800_000_032_000,
             appeal_finance_config_version: "baseline-v1".to_string(),
+            appeal_finance_policy_digest: [0x44; 32],
             outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
             escrow_id_hex: "11".repeat(32),
             payer_account: "payer-account".to_string(),
@@ -6208,12 +6217,20 @@ mod tests {
         assert!(json_path.exists());
         let json_body = fs::read(&json_path).expect("read settlement receipt json");
         let json_value: JsonValue = json::from_slice(&json_body).expect("receipt json");
+        let expected_policy_digest_hex = hex::encode(receipt.appeal_finance_policy_digest);
         assert_eq!(
             json_value
                 .get("metadata")
                 .and_then(|value| value.get("tx_hash_hex"))
                 .and_then(JsonValue::as_str),
             Some(receipt.tx_hash_hex.as_str())
+        );
+        assert_eq!(
+            json_value
+                .get("metadata")
+                .and_then(|value| value.get("appeal_finance_policy_digest_hex"))
+                .and_then(JsonValue::as_str),
+            Some(expected_policy_digest_hex.as_str())
         );
 
         let index_bytes =
@@ -6226,6 +6243,16 @@ mod tests {
                 .and_then(JsonValue::as_array)
                 .map(Vec::len),
             Some(1)
+        );
+        assert_eq!(
+            index
+                .get("entries")
+                .and_then(JsonValue::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("labels"))
+                .and_then(|labels| labels.get("appeal_finance_policy_digest_hex"))
+                .and_then(JsonValue::as_str),
+            Some(expected_policy_digest_hex.as_str())
         );
 
         let runtime_index = runtime_index(temp.path());

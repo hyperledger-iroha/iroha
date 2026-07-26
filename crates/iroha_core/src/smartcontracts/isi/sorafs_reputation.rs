@@ -972,20 +972,15 @@ fn opened_dispute_entry(
                     "capacity-dispute terminal revision changes immutable opened material",
                 ));
             }
-            let ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
-                outcome,
-                resolved_at_unix_ms,
-                rationale,
-                ..
-            }) = &terminal_payload.status
+            let ProviderDisputeStatusV1::Resolved(journal_resolution) = &terminal_payload.status
             else {
                 return Err(corrupt_state(
                     "capacity-dispute terminal revision is not resolved",
                 ));
             };
-            if *outcome != resolution.outcome
-                || *resolved_at_unix_ms / 1_000 != resolution.resolved_epoch
-                || rationale != &resolution.notes
+            if journal_resolution.outcome != resolution.outcome
+                || journal_resolution.resolved_at_unix_ms / 1_000 != resolution.resolved_epoch
+                || journal_resolution.rationale != resolution.notes
             {
                 return Err(corrupt_state(
                     "capacity-dispute terminal journal differs from authoritative lifecycle state",
@@ -1103,13 +1098,7 @@ fn resolved_dispute_replay_matches(
             "resolved capacity-dispute source points to another source family",
         ));
     };
-    let ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
-        outcome,
-        decision_digest,
-        rationale,
-        ..
-    }) = &dispute.status
-    else {
+    let ProviderDisputeStatusV1::Resolved(resolution) = &dispute.status else {
         return Err(corrupt_state(
             "capacity-dispute revision two is not terminal",
         ));
@@ -1117,9 +1106,9 @@ fn resolved_dispute_replay_matches(
     Ok(terminal.entry.predecessor_event_id == Some(opened.event_id)
         && &terminal.entry.recorded_by == authority
         && terminal.entry.authority_policy_digest == instruction.expected_authority_policy_digest
-        && *outcome == instruction.outcome
-        && *decision_digest == instruction.decision_digest
-        && rationale == &instruction.rationale)
+        && resolution.outcome == instruction.outcome
+        && resolution.decision_digest == instruction.decision_digest
+        && resolution.rationale == instruction.rationale)
 }
 
 impl Execute for SetSorafsReputationJournalAuthorityPolicy {

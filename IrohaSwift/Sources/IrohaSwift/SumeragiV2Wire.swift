@@ -343,7 +343,12 @@ public struct SumeragiV2Vote: Equatable, Sendable {
         executionCommitment: SumeragiV2ExecutionCommitment,
         signer: UInt32,
         signature: Data
-    ) {
+    ) throws {
+        guard proposalRound == round else {
+            throw SumeragiV2WireError.invalid(
+                "Prepare/Commit vote proposal round must match its round"
+            )
+        }
         self.round = round
         self.proposalRound = proposalRound
         self.phase = phase
@@ -391,6 +396,27 @@ public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
 
     public init(
         round: SumeragiV2ConsensusRound,
+        proposalRound: SumeragiV2ConsensusRound,
+        phase: SumeragiV2GlobalPhase,
+        subject: SumeragiV2BlockSubject,
+        executionCommitment: SumeragiV2ExecutionCommitment
+    ) throws {
+        guard proposalRound == round else {
+            throw SumeragiV2WireError.invalid(
+                "Prepare/Commit certificate reference proposal round must match its round"
+            )
+        }
+        self.init(
+            validatedRound: round,
+            proposalRound: proposalRound,
+            phase: phase,
+            subject: subject,
+            executionCommitment: executionCommitment
+        )
+    }
+
+    fileprivate init(
+        validatedRound round: SumeragiV2ConsensusRound,
         proposalRound: SumeragiV2ConsensusRound,
         phase: SumeragiV2GlobalPhase,
         subject: SumeragiV2BlockSubject,
@@ -447,6 +473,11 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
         signers: [UInt32],
         aggregateSignature: Data
     ) throws {
+        guard proposalRound == round else {
+            throw SumeragiV2WireError.invalid(
+                "Prepare/Commit certificate proposal round must match its round"
+            )
+        }
         try sumeragiV2RequireIncreasing(signers, label: "quorum certificate signers")
         self.round = round
         self.proposalRound = proposalRound
@@ -467,7 +498,7 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
 
     public var reference: SumeragiV2QuorumCertificateRef {
         SumeragiV2QuorumCertificateRef(
-            round: round,
+            validatedRound: round,
             proposalRound: proposalRound,
             phase: phase,
             subject: subject,
@@ -962,32 +993,33 @@ public struct SumeragiV2CertifiedBodyRequest: Equatable, Sendable {
     }
 }
 
-/// Authenticated response carrying a certified body.
+/// Archive-signed response carrying a certified body and a distinct
+/// frozen-QC signer citation.
 public struct SumeragiV2CertifiedBodyResponse: Equatable, Sendable {
     public let requestHash: SumeragiV2Hash
     public let manifest: SumeragiV2PayloadManifest
     public let body: Data
-    public let responder: UInt32
+    public let citedResponder: UInt32
     public let signature: Data
 
     public init(
         requestHash: SumeragiV2Hash,
         manifest: SumeragiV2PayloadManifest,
         body: Data,
-        responder: UInt32,
+        citedResponder: UInt32,
         signature: Data
     ) {
         self.requestHash = requestHash
         self.manifest = manifest
         self.body = body
-        self.responder = responder
+        self.citedResponder = citedResponder
         self.signature = signature
     }
 
     public func encode() -> Data {
         sumeragiV2Struct(
             requestHash.bytes, manifest.encode(), sumeragiV2ByteVector(body),
-            sumeragiV2U32(responder), sumeragiV2ByteVector(signature)
+            sumeragiV2U32(citedResponder), sumeragiV2ByteVector(signature)
         )
     }
 
@@ -997,7 +1029,7 @@ public struct SumeragiV2CertifiedBodyResponse: Equatable, Sendable {
             requestHash: SumeragiV2Hash(reader.field("body response request hash")),
             manifest: SumeragiV2PayloadManifest.decode(reader.field("body response manifest")),
             body: sumeragiV2DecodeByteVector(reader.field("body response body")),
-            responder: sumeragiV2DecodeU32(reader.field("body response responder")),
+            citedResponder: sumeragiV2DecodeU32(reader.field("body response cited responder")),
             signature: sumeragiV2DecodeByteVector(reader.field("body response signature"))
         )
         try reader.finish("certified body response")
@@ -1438,7 +1470,12 @@ public struct SumeragiV2VoteQuorumStatus: Equatable, Sendable {
     public init(round: SumeragiV2ConsensusRound, proposalRound: SumeragiV2ConsensusRound,
                 subject: SumeragiV2BlockSubject,
                 executionCommitment: SumeragiV2ExecutionCommitment, signerCount: UInt32,
-                signedPower: UInt64, minSigners: UInt32, totalPower: UInt64) {
+                signedPower: UInt64, minSigners: UInt32, totalPower: UInt64) throws {
+        guard proposalRound == round else {
+            throw SumeragiV2WireError.invalid(
+                "Prepare/Commit quorum status proposal round must match its round"
+            )
+        }
         self.round = round
         self.proposalRound = proposalRound
         self.subject = subject
@@ -1573,12 +1610,10 @@ public struct SumeragiV2OutboundIntentStatus: Equatable, Sendable {
                   proposalRound.view <= round.view else {
                 throw SumeragiV2WireError.invalid("invalid outbound intent proposal round")
             }
-            if kind == .proposal || kind == .prepareVote || kind == .prepareQC {
-                guard proposalRound == round else {
-                    throw SumeragiV2WireError.invalid(
-                        "Prepare/proposal outbound intent origin must match its round"
-                    )
-                }
+            guard proposalRound == round else {
+                throw SumeragiV2WireError.invalid(
+                    "Proposal/Prepare/Commit outbound intent origin must match its round"
+                )
             }
         }
         self.kind = kind

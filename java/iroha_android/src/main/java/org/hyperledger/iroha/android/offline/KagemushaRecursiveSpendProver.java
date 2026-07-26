@@ -60,6 +60,8 @@ public final class KagemushaRecursiveSpendProver {
 
   public static final int V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 21;
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+  /** Mandatory sender-final peer-cash handoff/finality contract. */
+  public static final String CASH_HANDOFF_CAPABILITY_V1 = "cash_handoff_v1";
   public static final String V4_ARTIFACT_MANIFEST_SCHEMA =
       "kagemusha.offline.recursive_spend.artifact_manifest.v4";
   public static final String ARTIFACT_MANIFEST_SCHEMA = V4_ARTIFACT_MANIFEST_SCHEMA;
@@ -711,7 +713,7 @@ public final class KagemushaRecursiveSpendProver {
     requireArtifactBridge();
     final byte[][] fields =
         nativeProjectReadinessV4(Objects.requireNonNull(readiness, "readiness").noritoEncoded());
-    if (fields == null || fields.length < 16) {
+    if (fields == null || fields.length < 17) {
       throw new IllegalStateException(
           "native Kagemusha readiness projection returned invalid fields");
     }
@@ -721,8 +723,8 @@ public final class KagemushaRecursiveSpendProver {
             "native Kagemusha readiness projection returned a null field");
       }
     }
-    final int blockerCount = integer(fields[15], "blockerCount");
-    if (blockerCount < 0 || fields.length != 16 + blockerCount * 2) {
+    final int blockerCount = integer(fields[16], "blockerCount");
+    if (blockerCount < 0 || fields.length != 17 + blockerCount * 2) {
       throw new IllegalStateException(
           "native Kagemusha readiness projection returned invalid blockers");
     }
@@ -731,25 +733,26 @@ public final class KagemushaRecursiveSpendProver {
     for (int index = 0; index < blockerCount; index++) {
       blockers.add(
           new ReadinessBlocker(
-              canonicalText(fields[16 + index * 2], "blockerCode"),
-              canonicalText(fields[17 + index * 2], "blockerMessage")));
+              canonicalText(fields[17 + index * 2], "blockerCode"),
+              canonicalText(fields[18 + index * 2], "blockerMessage")));
     }
     return new ReadinessProjection(
-        integer(fields[0], "requiredBridgeAbiVersion"),
-        integer(fields[1], "maximumHops"),
-        canonicalText(fields[2], "assetDefinitionId"),
-        fields[3].length == 0 ? null : integer(fields[3], "assetScale"),
-        longInteger(fields[4], "evaluatedBlockHeight"),
-        requireDigest(fields[5], "evaluatedBlockHash"),
-        bool(fields[6], "proofBackendAvailable"),
-        bool(fields[7], "recursiveLineageSupported"),
-        bool(fields[8], "ready"),
-        activeVerifier(fields[9]),
+        canonicalText(fields[0], "cashHandoffCapability"),
+        integer(fields[1], "requiredBridgeAbiVersion"),
+        integer(fields[2], "maximumHops"),
+        canonicalText(fields[3], "assetDefinitionId"),
+        fields[4].length == 0 ? null : integer(fields[4], "assetScale"),
+        longInteger(fields[5], "evaluatedBlockHeight"),
+        requireDigest(fields[6], "evaluatedBlockHash"),
+        bool(fields[7], "proofBackendAvailable"),
+        bool(fields[8], "recursiveLineageSupported"),
+        bool(fields[9], "ready"),
         activeVerifier(fields[10]),
         activeVerifier(fields[11]),
         activeVerifier(fields[12]),
         activeVerifier(fields[13]),
-        authenticatedArtifactSet(fields[14]),
+        activeVerifier(fields[14]),
+        authenticatedArtifactSet(fields[15]),
         blockers);
   }
 
@@ -1779,6 +1782,10 @@ public final class KagemushaRecursiveSpendProver {
         Objects.requireNonNull(payment, "payment").noritoEncoded()));
   }
 
+  /**
+   * Verifies a receiver-signed delivery receipt. Under cash_handoff_v1 this
+   * is never a sender commit, acceptance, rollback, or clawback gate.
+   */
   public static AcknowledgementVerification verifyAcknowledgement(
       final ReceiverAcknowledgement acknowledgement,
       final RecipientPaymentRequest request,
@@ -4053,6 +4060,7 @@ public final class KagemushaRecursiveSpendProver {
     public byte[] commitment() { return Arrays.copyOf(commitment, commitment.length); }
   }
 
+  /** Delivery-receipt evidence for an already-final sender cash handoff. */
   public static final class AcknowledgementVerification {
     public final boolean valid;
     private final byte[] operationId;
@@ -4251,6 +4259,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static final class ReadinessProjection {
+    private final String cashHandoffCapability;
     private final int requiredBridgeAbiVersion;
     private final int maximumHops;
     private final String assetDefinitionId;
@@ -4269,6 +4278,7 @@ public final class KagemushaRecursiveSpendProver {
     private final List<ReadinessBlocker> blockers;
 
     ReadinessProjection(
+        final String cashHandoffCapability,
         final int requiredBridgeAbiVersion,
         final int maximumHops,
         final String assetDefinitionId,
@@ -4285,6 +4295,11 @@ public final class KagemushaRecursiveSpendProver {
         final ActiveVerifier recursiveStepEpVerifier,
         final AuthenticatedArtifactSet artifactSet,
         final List<ReadinessBlocker> blockers) {
+      if (!CASH_HANDOFF_CAPABILITY_V1.equals(cashHandoffCapability)) {
+        throw new IllegalArgumentException(
+            "cashHandoffCapability must be the exact cash_handoff_v1 contract");
+      }
+      this.cashHandoffCapability = cashHandoffCapability;
       this.requiredBridgeAbiVersion = requiredBridgeAbiVersion;
       this.maximumHops = maximumHops;
       this.assetDefinitionId = assetDefinitionId;
@@ -4303,6 +4318,7 @@ public final class KagemushaRecursiveSpendProver {
       this.blockers = Collections.unmodifiableList(new java.util.ArrayList<>(blockers));
     }
 
+    public String cashHandoffCapability() { return cashHandoffCapability; }
     public int requiredBridgeAbiVersion() { return requiredBridgeAbiVersion; }
     public int maximumHops() { return maximumHops; }
     public String assetDefinitionId() { return assetDefinitionId; }
@@ -4349,7 +4365,8 @@ public final class KagemushaRecursiveSpendProver {
       return installed != null && Arrays.equals(installed, artifactSet.manifestSha256());
     }
     public boolean offlineReady() {
-      return ready && recursiveLineageSupported && bridgeCompatible()
+      return ready && CASH_HANDOFF_CAPABILITY_V1.equals(cashHandoffCapability)
+          && recursiveLineageSupported && bridgeCompatible()
           && chainArtifactSetReady() && allVerifiersActive() && assetScale != null
           && assetScale >= 0 && assetScale <= KagemushaScaledAmount.MAXIMUM_SCALE
           && evaluatedBlockHeight > 0

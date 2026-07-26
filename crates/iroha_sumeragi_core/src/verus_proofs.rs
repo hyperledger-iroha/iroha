@@ -16,22 +16,21 @@
 use vstd::{assert_seqs_equal, prelude::*};
 
 use crate::refinement::{
-    BOUNDARY_ACKNOWLEDGE_WAL, BOUNDARY_BEGIN_WAL, BOUNDARY_COMPLETE_APPLICATION, BOUNDARY_NONE,
-    BOUNDARY_RESUME_AFTER_REPLAY, CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_INCOMING,
-    CERTIFICATE_EVIDENCE_LOCAL, CONTINUATION_DECIDE, CONTINUATION_INSTALL_TIMEOUT,
-    CONTINUATION_NONE, CONTINUATION_SIGN, EFFECT_PERSIST, EVENT_PERSISTED,
-    EVENT_PERSISTENCE_FAILED, EVENT_RESUME_AFTER_REPLAY, EVENT_SIGNED, IDENTITY_DOMAIN_CONTEXT,
-    IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_PEER,
-    IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
-    IDENTITY_KIND_CONSENSUS_CONTEXT, IDENTITY_KIND_CONSENSUS_SUBJECT,
-    IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
-    IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_FINALITY_ARTIFACT, IDENTITY_KIND_MERGE_ENTRY,
-    IDENTITY_KIND_NETWORK_RESPONSE, IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_PEER,
-    IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_REFERENCE_DIGEST, IDENTITY_KIND_REPLY_PAYLOAD,
-    IDENTITY_KIND_SIDECAR_CHUNK, IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST,
-    IDENTITY_KIND_SIDECAR_RESPONSE, IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
-    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, REPLAY_EFFECT_NONE, WAL_RECORD_DECISION,
-    WAL_RECORD_INSTALL_TIMEOUT, WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_NONE,
+    BOUNDARY_COMPLETE_APPLICATION, BOUNDARY_NONE, BOUNDARY_RESUME_AFTER_REPLAY,
+    CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_INCOMING, CERTIFICATE_EVIDENCE_LOCAL,
+    CONTINUATION_DECIDE, CONTINUATION_INSTALL_TIMEOUT, CONTINUATION_NONE, CONTINUATION_SIGN,
+    EFFECT_PERSIST, EVENT_PERSISTED, EVENT_PERSISTENCE_FAILED, EVENT_RESUME_AFTER_REPLAY,
+    EVENT_SIGNED, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+    IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_SUBJECT,
+    IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_CONSENSUS_CONTEXT,
+    IDENTITY_KIND_CONSENSUS_SUBJECT, IDENTITY_KIND_DURABLE_BODY_FRAME,
+    IDENTITY_KIND_EXECUTED_BLOCK_WIRE, IDENTITY_KIND_EXECUTION_COMMITMENT,
+    IDENTITY_KIND_FINALITY_ARTIFACT, IDENTITY_KIND_MERGE_ENTRY, IDENTITY_KIND_NETWORK_RESPONSE,
+    IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_PEER, IDENTITY_KIND_QUORUM_CERTIFICATE,
+    IDENTITY_KIND_REFERENCE_DIGEST, IDENTITY_KIND_REPLY_PAYLOAD, IDENTITY_KIND_SIDECAR_CHUNK,
+    IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST, IDENTITY_KIND_SIDECAR_RESPONSE,
+    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, REPLAY_EFFECT_NONE,
+    WAL_RECORD_DECISION, WAL_RECORD_INSTALL_TIMEOUT, WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_NONE,
     WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT, WAL_RECORD_PROPOSAL_INTENT,
     WAL_RECORD_TIMEOUT_INTENT,
 };
@@ -614,6 +613,90 @@ pub proof fn schedule_periodic_delay_is_bounded()
 
 
 // ---------------------------------------------------------------------------
+// Authenticated vote-statement identity
+// ---------------------------------------------------------------------------
+
+/// Full vote projection at the authenticated reducer-ingress seam.
+pub struct VoteStatementProjection {
+    /// Frozen height-context identity.
+    pub context: int,
+    /// Vote height.
+    pub height: int,
+    /// Vote round view.
+    pub view: int,
+    /// Proposal-origin height.
+    pub proposal_height: int,
+    /// Proposal-origin view.
+    pub proposal_view: int,
+    /// Prepare when true and Commit when false.
+    pub prepare: bool,
+    /// Voted subject identity.
+    pub subject: int,
+    /// Authenticated frozen-roster signer identity.
+    pub signer: int,
+}
+
+/// Equality of the exact signable statement, deliberately excluding signer.
+pub open spec fn same_vote_statement(
+    left: VoteStatementProjection,
+    right: VoteStatementProjection,
+) -> bool {
+    vote_statement_identity_equal_body!(
+        left.context,
+        left.height,
+        left.view,
+        left.proposal_height,
+        left.proposal_view,
+        left.prepare,
+        left.subject,
+        right.context,
+        right.height,
+        right.view,
+        right.proposal_height,
+        right.proposal_view,
+        right.prepare,
+        right.subject,
+    )
+}
+
+/// Distinct authenticated validators may sign one identical vote statement.
+pub proof fn vote_statement_identity_excludes_only_authenticated_signer(
+    left: VoteStatementProjection,
+    right: VoteStatementProjection,
+)
+    requires
+        left.signer != right.signer,
+        left.context == right.context,
+        left.height == right.height,
+        left.view == right.view,
+        left.proposal_height == right.proposal_height,
+        left.proposal_view == right.proposal_view,
+        left.prepare == right.prepare,
+        left.subject == right.subject,
+    ensures
+        same_vote_statement(left, right),
+{
+}
+
+/// Changing any signable field cannot hide behind an alternate signer.
+pub proof fn vote_statement_identity_rejects_altered_semantics(
+    left: VoteStatementProjection,
+    right: VoteStatementProjection,
+)
+    requires
+        left.context != right.context
+            || left.height != right.height
+            || left.view != right.view
+            || left.proposal_height != right.proposal_height
+            || left.proposal_view != right.proposal_view
+            || left.prepare != right.prepare
+            || left.subject != right.subject,
+    ensures
+        !same_vote_statement(left, right),
+{
+}
+
+// ---------------------------------------------------------------------------
 // Common certificate and quorum facts
 // ---------------------------------------------------------------------------
 
@@ -670,7 +753,27 @@ pub open spec fn same_certificate(
     same_certificate_body!(left, right)
 }
 
-/// Stable Commit decision identity, excluding only the finality view.
+/// Stable certificate body identity after independent phase validation.
+pub open spec fn same_certificate_height_subject(
+    left: CertificateProjection,
+    right: CertificateProjection,
+) -> bool {
+    certificate_height_subject_identity_equal_body!(
+        left.context,
+        left.height,
+        left.subject,
+        right.context,
+        right.height,
+        right.subject,
+    )
+}
+
+/// Stable Commit decision identity across unchanged reproposal.
+///
+/// Both the certificate/finality round and proposal-origin round are excluded.
+/// The phase checks plus frozen context, height, and subject retain the full
+/// semantic identity represented by this projection; production additionally
+/// binds the deterministic execution commitment.
 pub open spec fn same_commit_decision(
     left: CertificateProjection,
     right: CertificateProjection,
@@ -679,11 +782,37 @@ pub open spec fn same_commit_decision(
         && right.present
         && !left.prepare
         && !right.prepare
-        && left.context == right.context
-        && left.height == right.height
-        && left.proposal_height == right.proposal_height
-        && left.proposal_view == right.proposal_view
-        && left.subject == right.subject
+        && same_certificate_height_subject(left, right)
+}
+
+/// Same-body Commit identity accepts independently valid same-round QCs from
+/// different reproposal rounds.
+pub proof fn same_commit_decision_ignores_only_witness_rounds(
+    left: CertificateProjection,
+    right: CertificateProjection,
+)
+    requires
+        valid_commit(left),
+        valid_commit(right),
+        left.view != right.view,
+        same_certificate_height_subject(left, right),
+    ensures
+        same_commit_decision(left, right),
+{
+}
+
+/// A foreign subject cannot become equivalent by changing QC rounds.
+pub proof fn same_commit_decision_rejects_altered_subject(
+    left: CertificateProjection,
+    right: CertificateProjection,
+)
+    requires
+        valid_commit(left),
+        valid_commit(right),
+        left.subject != right.subject,
+    ensures
+        !same_commit_decision(left, right),
+{
 }
 
 /// Equality of the complete carried certificate, including its signer and
@@ -719,7 +848,7 @@ pub open spec fn valid_commit(certificate: CertificateProjection) -> bool {
         && 0 <= certificate.height <= machine_u64_max()
         && 0 <= certificate.view <= machine_u64_max()
         && certificate.proposal_height == certificate.height
-        && 0 <= certificate.proposal_view <= certificate.view
+        && certificate.proposal_view == certificate.view
 }
 
 /// Equal-view certificates do not conflict and a higher one may replace one.
@@ -1292,7 +1421,7 @@ pub proof fn wal_retirement_requires_exact_durable_kura_receipt(
         step.decision_proposal_height == step.receipt_proposal_height,
         step.decision_proposal_view == step.receipt_proposal_view,
         step.decision_height == step.decision_proposal_height,
-        step.decision_proposal_view <= step.decision_certificate_view,
+        step.decision_proposal_view == step.decision_certificate_view,
         step.decision_certificate_phase == wal_commit_phase_code(),
         step.decision_certificate_phase == step.receipt_certificate_phase,
         step.decision_certificate_subject == step.receipt_certificate_subject,
@@ -1315,6 +1444,51 @@ pub proof fn incomplete_kura_durability_cannot_authorize_wal_retirement(
 // Exact WAL safety projection
 // ---------------------------------------------------------------------------
 
+/// Primitive projection used by the shared exact local-proposal timeout
+/// justification kernel.
+pub struct LocalProposalTimeoutJustificationProjection {
+    /// Frozen context expected by the durable height.
+    pub expected_context_id: int,
+    /// Frozen block height expected by the durable height.
+    pub expected_height: int,
+    /// Current durable view.
+    pub current_view: int,
+    /// View of the locally generated proposal.
+    pub proposal_view: int,
+    /// Context carried by the proposal's timeout certificate.
+    pub proposal_timeout_context_id: int,
+    /// Height carried by the proposal's timeout certificate.
+    pub proposal_timeout_height: int,
+    /// View certified by the proposal's timeout certificate.
+    pub proposal_timeout_view: int,
+    /// Number of canonical timeout signature groups.
+    pub proposal_timeout_group_count: int,
+    /// Whether the proposal certificate selects a highest PrepareQC.
+    pub proposal_timeout_high_present: bool,
+    /// View of the selected PrepareQC, or zero when absent.
+    pub proposal_timeout_high_view: int,
+    /// Subject of the selected PrepareQC, or zero when absent.
+    pub proposal_timeout_high_subject: int,
+    /// Full timeout-certificate evidence identity.
+    pub proposal_timeout_evidence_identity: int,
+    /// Context carried by the latest durable timeout certificate.
+    pub durable_timeout_context_id: int,
+    /// Height carried by the latest durable timeout certificate.
+    pub durable_timeout_height: int,
+    /// View certified by the latest durable timeout certificate.
+    pub durable_timeout_view: int,
+    /// Number of canonical groups in the latest durable certificate.
+    pub durable_timeout_group_count: int,
+    /// Whether the latest durable certificate selects a highest PrepareQC.
+    pub durable_timeout_high_present: bool,
+    /// View of the durable selected PrepareQC, or zero when absent.
+    pub durable_timeout_high_view: int,
+    /// Subject of the durable selected PrepareQC, or zero when absent.
+    pub durable_timeout_high_subject: int,
+    /// Full durable timeout-certificate evidence identity.
+    pub durable_timeout_evidence_identity: int,
+}
+
 /// Every production `WalRecord` variant, projected onto checked predicates.
 pub enum WalRecordProjection {
     /// `WalRecord::ProposalIntent`.
@@ -1325,8 +1499,12 @@ pub enum WalRecordProjection {
         subject: int,
         /// Projection of the local-leader/context/round checks.
         local_leader_valid: bool,
-        /// Projection of parent/TC justification and safe-unlock checks.
-        justification_safe: bool,
+        /// View-zero parent-commit and safe-unlock checks.
+        parent_commit_safe: bool,
+        /// Whether a timeout justification is present.
+        timeout_justification_present: bool,
+        /// Explicit timeout/durable identity projection for non-zero views.
+        timeout_justification: LocalProposalTimeoutJustificationProjection,
     },
     /// `WalRecord::PrepareIntent`.
     PrepareIntent {
@@ -1395,6 +1573,10 @@ pub enum WalRecordProjection {
         certificate_valid: bool,
         /// Highest PrepareQC selected from all TC groups, or absent.
         selected_prepare: CertificateProjection,
+        /// Identity of all canonical timeout groups and signature evidence.
+        certificate_evidence: int,
+        /// Number of canonical timeout-signature groups.
+        group_count: int,
     },
     /// `WalRecord::Decision`.
     Decision {
@@ -1443,6 +1625,10 @@ pub struct WalStateProjection {
     pub locked: CertificateProjection,
     /// Last installed TC view, or -1 when absent.
     pub last_timeout_view: int,
+    /// Full identity of the last installed TC evidence, or zero when absent.
+    pub last_timeout_evidence: int,
+    /// Number of groups in the last installed TC, or zero when absent.
+    pub last_timeout_group_count: int,
     /// Durable CommitQC decision.
     pub decision: CertificateProjection,
 }
@@ -1465,6 +1651,8 @@ pub open spec fn wal_states_equivalent(
         && same_certificate_evidence(left.highest_prepare, right.highest_prepare)
         && same_certificate_evidence(left.locked, right.locked)
         && left.last_timeout_view == right.last_timeout_view
+        && left.last_timeout_evidence == right.last_timeout_evidence
+        && left.last_timeout_group_count == right.last_timeout_group_count
         && same_certificate_evidence(left.decision, right.decision)
 }
 
@@ -1476,6 +1664,13 @@ pub open spec fn wal_invariant(state: WalStateProjection) -> bool {
         && -1 <= state.local_validator < state.validator_count
         && state.last_id <= machine_u64_max()
         && state.last_timeout_view < state.view
+        && (if state.last_timeout_view < 0 {
+            state.last_timeout_evidence == 0
+                && state.last_timeout_group_count == 0
+        } else {
+            state.last_timeout_evidence > 0
+                && state.last_timeout_group_count > 0
+        })
         && (!state.highest_prepare.present
             || (valid_prepare(state.highest_prepare)
                 && state.highest_prepare.view <= state.view))
@@ -1499,56 +1694,148 @@ pub open spec fn unique_insert_allowed(
     !intents.dom().contains(view) || intents[view] == subject
 }
 
-/// Whether durable local Prepare evidence ranks any proposal origin above the
-/// candidate historical Commit. This is the exact safety projection of
-/// `DurableState::has_higher_prepare_evidence`: proposal origin is part of
-/// decision identity, so equal subject bytes do not make a higher Prepare
-/// compatible with an older-origin Commit.
-pub open spec fn has_higher_prepare_evidence(
-    before: WalStateProjection,
-    prepare: CertificateProjection,
-) -> bool {
-    (exists |higher_view: int|
-        before.prepare_intents.dom().contains(higher_view)
-            && higher_view > prepare.view)
-        || (before.highest_prepare.present
-            && before.highest_prepare.height == prepare.height
-            && before.highest_prepare.view > prepare.view)
-}
-
-/// The two production-legal round branches for `LockAndCommit`.
+/// Exact production round admissibility for a new `LockAndCommit` record.
 ///
-/// A current-round Commit remains behind that round's timeout fence.  The
-/// only historical exception reconstructs the exact retained lock and is
-/// rejected after any higher local Prepare or highest PrepareQC, including
-/// one for equal subject bytes at a different proposal origin.
+/// The vote round, proposal-origin round, and durable current round must all
+/// be equal, and the round must remain behind its timeout fence. Historical
+/// durable Commit records may be retransmitted, but replay never authorizes a
+/// new Commit under a later finality round.
 pub open spec fn lock_and_commit_round_is_admissible(
     before: WalStateProjection,
-    prepare: CertificateProjection,
     vote_view: int,
     vote_proposal_view: int,
 ) -> bool {
     vote_view == before.view
+        && vote_proposal_view == vote_view
         && !before.timeout_intents.dom().contains(vote_view)
-        && (vote_proposal_view == vote_view
-            || (vote_proposal_view < before.view
-                && same_certificate(before.locked, prepare)
-                && !has_higher_prepare_evidence(before, prepare)))
 }
 
 /// A second TC for the immediately preceding round may install only a
 /// strictly higher selected Prepare origin while retaining the current view.
+pub struct StrictSameRoundTimeoutUpgradeProjection {
+    /// Durable view before the candidate timeout frame.
+    pub current_view: int,
+    /// View certified by the candidate timeout certificate.
+    pub timeout_view: int,
+    /// Whether the durable timeout certificate names this exact round.
+    pub installed_same_round: bool,
+    /// Whether the candidate carries a selected PrepareQC.
+    pub selected_prepare_present: bool,
+    /// Origin view of the selected PrepareQC.
+    pub selected_prepare_view: int,
+    /// Whether a durable highest PrepareQC exists.
+    pub highest_prepare_present: bool,
+    /// Origin view of the durable highest PrepareQC.
+    pub highest_prepare_view: int,
+    /// Whether a durable lock exists.
+    pub locked_prepare_present: bool,
+    /// Origin view of the durable lock.
+    pub locked_prepare_view: int,
+}
+
+/// Verus instantiation of the source-shared fixed-width production predicate.
 pub open spec fn strict_same_round_timeout_upgrade(
     before: WalStateProjection,
     tc_view: int,
     selected_prepare: CertificateProjection,
 ) -> bool {
-    tc_view + 1 == before.view
-        && before.last_timeout_view == tc_view
-        && selected_prepare.present
-        && (!before.highest_prepare.present
-            || selected_prepare.view > before.highest_prepare.view)
-        && (!before.locked.present || selected_prepare.view > before.locked.view)
+    let zero: int = 0;
+    let one: int = 1;
+    strict_same_round_timeout_upgrade_body!(
+        StrictSameRoundTimeoutUpgradeProjection {
+            current_view: before.view,
+            timeout_view: tc_view,
+            installed_same_round: before.last_timeout_view == tc_view,
+            selected_prepare_present: selected_prepare.present,
+            selected_prepare_view: selected_prepare.view,
+            highest_prepare_present: before.highest_prepare.present,
+            highest_prepare_view: before.highest_prepare.view,
+            locked_prepare_present: before.locked.present,
+            locked_prepare_view: before.locked.view,
+        },
+        zero,
+        one
+    )
+}
+
+/// Verus instantiation of the exact production kernel binding a non-zero-view
+/// local proposal to the latest timeout certificate reconstructed from WAL.
+pub open spec fn local_proposal_timeout_justification_is_exact(
+    projection: LocalProposalTimeoutJustificationProjection,
+) -> bool {
+    let zero: int = 0;
+    let one: int = 1;
+    let absent_evidence: int = 0;
+    local_proposal_timeout_justification_body!(
+        projection,
+        zero,
+        one,
+        absent_evidence
+    )
+}
+
+/// Proof-mode Verus instance of the source-shared local-proposal timeout
+/// identity relation. Production executes the same macro over fixed-width
+/// values; the mathematical projection remains ghost-only here.
+pub proof fn verified_local_proposal_timeout_justification_is_exact(
+    projection: LocalProposalTimeoutJustificationProjection,
+) -> (accepted: bool)
+    ensures
+        accepted == local_proposal_timeout_justification_is_exact(projection),
+{
+    let zero: int = 0;
+    let one: int = 1;
+    let absent_evidence: int = 0;
+    let accepted = local_proposal_timeout_justification_body!(
+        projection,
+        zero,
+        one,
+        absent_evidence
+    );
+    reveal(local_proposal_timeout_justification_is_exact);
+    accepted
+}
+
+/// Acceptance exposes the exact predecessor, frozen context/height, selected
+/// high-QC projection, group cardinality, and full durable evidence identity.
+pub proof fn exact_local_proposal_timeout_justification_binds_latest_durable_tc(
+    projection: LocalProposalTimeoutJustificationProjection,
+)
+    requires
+        local_proposal_timeout_justification_is_exact(projection),
+    ensures
+        projection.current_view > 0,
+        projection.proposal_view == projection.current_view,
+        projection.proposal_timeout_view == projection.current_view - 1,
+        projection.durable_timeout_view == projection.current_view - 1,
+        projection.proposal_timeout_context_id == projection.expected_context_id,
+        projection.durable_timeout_context_id == projection.expected_context_id,
+        projection.proposal_timeout_height == projection.expected_height,
+        projection.durable_timeout_height == projection.expected_height,
+        projection.proposal_timeout_group_count
+            == projection.durable_timeout_group_count,
+        projection.proposal_timeout_high_present
+            == projection.durable_timeout_high_present,
+        projection.proposal_timeout_evidence_identity
+            == projection.durable_timeout_evidence_identity,
+        projection.proposal_timeout_evidence_identity != 0,
+{
+    reveal(local_proposal_timeout_justification_is_exact);
+}
+
+/// Altering the full certificate evidence class cannot be hidden by retaining
+/// an equal round, group count, or selected high-QC reference.
+pub proof fn foreign_local_proposal_timeout_evidence_is_rejected(
+    projection: LocalProposalTimeoutJustificationProjection,
+)
+    requires
+        projection.proposal_timeout_evidence_identity
+            != projection.durable_timeout_evidence_identity
+            || projection.proposal_timeout_evidence_identity == 0,
+    ensures
+        !local_proposal_timeout_justification_is_exact(projection),
+{
+    reveal(local_proposal_timeout_justification_is_exact);
 }
 
 /// A projected frame passes every production pre-state check, but has not yet
@@ -1565,13 +1852,43 @@ pub open spec fn wal_frame_admissible(
                 view,
                 subject,
                 local_leader_valid,
-                justification_safe,
+                parent_commit_safe,
+                timeout_justification_present,
+                timeout_justification,
             } => {
                 local_leader_valid
-                    && justification_safe
                     && view == before.view
                     && !before.timeout_intents.dom().contains(view)
                     && unique_insert_allowed(before.proposal_intents, view, subject)
+                    && (if view == 0 {
+                        parent_commit_safe && !timeout_justification_present
+                    } else {
+                        !parent_commit_safe
+                            && timeout_justification_present
+                            && timeout_justification.expected_context_id == before.context
+                            && timeout_justification.expected_height == before.height
+                            && timeout_justification.current_view == before.view
+                            && timeout_justification.proposal_view == view
+                            && timeout_justification.durable_timeout_view
+                                == before.last_timeout_view
+                            && timeout_justification.durable_timeout_evidence_identity
+                                == before.last_timeout_evidence
+                            && timeout_justification.durable_timeout_group_count
+                                == before.last_timeout_group_count
+                            && local_proposal_timeout_justification_is_exact(
+                                timeout_justification,
+                            )
+                            && (!timeout_justification.proposal_timeout_high_present
+                                || timeout_justification.proposal_timeout_high_subject
+                                    == subject)
+                            && (!before.locked.present
+                                || before.locked.subject == subject
+                                || (timeout_justification.proposal_timeout_high_present
+                                    && timeout_justification.proposal_timeout_high_subject
+                                        == subject
+                                    && timeout_justification.proposal_timeout_high_view
+                                        > before.locked.view))
+                    })
             }
             WalRecordProjection::PrepareIntent {
                 context,
@@ -1624,7 +1941,6 @@ pub open spec fn wal_frame_admissible(
                     && vote_subject == prepare.subject
                     && lock_and_commit_round_is_admissible(
                         before,
-                        prepare,
                         vote_view,
                         vote_proposal_view,
                     )
@@ -1660,8 +1976,12 @@ pub open spec fn wal_frame_admissible(
                 tc_view,
                 certificate_valid,
                 selected_prepare,
+                certificate_evidence,
+                group_count,
             } => {
                 certificate_valid
+                    && certificate_evidence > 0
+                    && group_count > 0
                     && (tc_view >= before.view
                         || strict_same_round_timeout_upgrade(
                             before,
@@ -1701,6 +2021,16 @@ pub open spec fn same_wal_identity_and_intents(
         && after.local_validator == before.local_validator
 }
 
+/// Exact latest-timeout identity retained by every non-install WAL branch.
+pub open spec fn same_latest_timeout(
+    before: WalStateProjection,
+    after: WalStateProjection,
+) -> bool {
+    after.last_timeout_view == before.last_timeout_view
+        && after.last_timeout_evidence == before.last_timeout_evidence
+        && after.last_timeout_group_count == before.last_timeout_group_count
+}
+
 /// Exact transition relation for the safety projection of
 /// `DurableState::apply_in_place`.
 pub open spec fn wal_apply(
@@ -1723,7 +2053,7 @@ pub open spec fn wal_apply(
                         before.highest_prepare,
                     )
                     && same_certificate_evidence(after.locked, before.locked)
-                    && after.last_timeout_view == before.last_timeout_view
+                    && same_latest_timeout(before, after)
                     && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::PrepareIntent { view, subject, .. } => {
@@ -1737,7 +2067,7 @@ pub open spec fn wal_apply(
                         before.highest_prepare,
                     )
                     && same_certificate_evidence(after.locked, before.locked)
-                    && after.last_timeout_view == before.last_timeout_view
+                    && same_latest_timeout(before, after)
                     && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::ObservePrepare { certificate, .. } => {
@@ -1751,7 +2081,7 @@ pub open spec fn wal_apply(
                         highest_after_update(before.highest_prepare, certificate),
                     )
                     && same_certificate_evidence(after.locked, before.locked)
-                    && after.last_timeout_view == before.last_timeout_view
+                    && same_latest_timeout(before, after)
                     && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::LockAndCommit {
@@ -1772,7 +2102,7 @@ pub open spec fn wal_apply(
                         highest_after_update(before.highest_prepare, prepare),
                     )
                     && same_certificate_evidence(after.locked, prepare)
-                    && after.last_timeout_view == before.last_timeout_view
+                    && same_latest_timeout(before, after)
                     && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::TimeoutIntent {
@@ -1794,12 +2124,14 @@ pub open spec fn wal_apply(
                         before.highest_prepare,
                     )
                     && same_certificate_evidence(after.locked, before.locked)
-                    && after.last_timeout_view == before.last_timeout_view
+                    && same_latest_timeout(before, after)
                     && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::InstallTimeout {
                 tc_view,
                 selected_prepare,
+                certificate_evidence,
+                group_count,
                 ..
             } => {
                 after.view
@@ -1825,6 +2157,8 @@ pub open spec fn wal_apply(
                         lock_after_timeout(before.locked, selected_prepare),
                     )
                     && after.last_timeout_view == tc_view
+                    && after.last_timeout_evidence == certificate_evidence
+                    && after.last_timeout_group_count == group_count
                     && same_certificate_evidence(after.decision, before.decision)
             }
             WalRecordProjection::Decision { certificate, .. } => {
@@ -1838,7 +2172,7 @@ pub open spec fn wal_apply(
                         before.highest_prepare,
                     )
                     && same_certificate_evidence(after.locked, before.locked)
-                    && after.last_timeout_view == before.last_timeout_view
+                    && same_latest_timeout(before, after)
                     && same_certificate_evidence(
                         after.decision,
                         decision_after_update(before.decision, certificate),
@@ -2104,6 +2438,47 @@ pub proof fn proposal_intent_branch_postcondition(
     }
 }
 
+/// A non-zero-view ProposalIntent is admissible only when its explicit
+/// timeout projection names the exact latest durable certificate evidence.
+pub proof fn proposal_intent_guard_binds_exact_latest_timeout(
+    before: WalStateProjection,
+    frame: WalFrameProjection,
+)
+    requires
+        wal_frame_admissible(before, frame),
+    ensures
+        match frame.record {
+            WalRecordProjection::ProposalIntent {
+                view,
+                timeout_justification_present,
+                timeout_justification,
+                ..
+            } => view <= 0
+                || (timeout_justification_present
+                    && timeout_justification.proposal_view == before.view
+                    && timeout_justification.proposal_timeout_view
+                        == before.view - 1
+                    && timeout_justification.durable_timeout_view
+                        == before.last_timeout_view
+                    && timeout_justification.proposal_timeout_evidence_identity
+                        == before.last_timeout_evidence
+                    && timeout_justification.proposal_timeout_group_count
+                        == before.last_timeout_group_count),
+            _ => true,
+        },
+{
+    match frame.record {
+        WalRecordProjection::ProposalIntent { view, timeout_justification, .. } => {
+            if view > 0 {
+                exact_local_proposal_timeout_justification_binds_latest_durable_tc(
+                    timeout_justification,
+                );
+            }
+        },
+        _ => {},
+    }
+}
+
 /// PrepareIntent admissibility is computed from vote primitives and frozen
 /// replay inputs; no caller-supplied validity bit can authorize the record.
 pub proof fn prepare_intent_guard_is_derived_from_vote_and_frozen_context(
@@ -2190,9 +2565,8 @@ pub proof fn observe_prepare_branch_postcondition(
 }
 
 /// LockAndCommit atomically installs the exact lock and matching unique Commit
-/// intent in the same acknowledged frame.  Its current-round branch remains
-/// behind the timeout fence; its only historical branch reconstructs the
-/// exact retained lock without crossing any higher Prepare-origin evidence.
+/// intent in the same acknowledged frame. Its proposal-origin round is the
+/// current vote round, which remains behind that round's timeout fence.
 pub proof fn lock_and_commit_branch_is_atomic(
     before: WalStateProjection,
     frame: WalFrameProjection,
@@ -2217,14 +2591,12 @@ pub proof fn lock_and_commit_branch_is_atomic(
                     && lock_extends(before.locked, after.locked)
                     && lock_and_commit_round_is_admissible(
                         before,
-                        prepare,
                         vote_view,
                         vote_proposal_view,
                     )
+                    && vote_view == before.view
+                    && vote_proposal_view == vote_view
                     && !before.timeout_intents.dom().contains(vote_view)
-                    && (vote_proposal_view < before.view
-                        ==> (same_certificate(before.locked, prepare)
-                            && !has_higher_prepare_evidence(before, prepare)))
             }
             _ => true,
         },
@@ -2320,9 +2692,13 @@ pub proof fn install_timeout_branch_postcondition(
             WalRecordProjection::InstallTimeout {
                 tc_view,
                 selected_prepare,
+                certificate_evidence,
+                group_count,
                 ..
             } => {
                 after.last_timeout_view == tc_view
+                    && after.last_timeout_evidence == certificate_evidence
+                    && after.last_timeout_group_count == group_count
                     && (if strict_same_round_timeout_upgrade(
                         before,
                         tc_view,
@@ -2343,20 +2719,22 @@ pub proof fn install_timeout_branch_postcondition(
     }
 }
 
-/// Decision installs the exact CommitQC reference and leaves application to a
-/// later reducer effect.
+/// Decision installs the first exact CommitQC witness and accepts a later
+/// same-body, independently same-round QC as the same semantic decision.
+/// Application remains a later reducer effect.
 pub proof fn decision_branch_postcondition(
     before: WalStateProjection,
     frame: WalFrameProjection,
     after: WalStateProjection,
 )
     requires
+        wal_invariant(before),
         wal_apply(before, frame, after),
     ensures
         match frame.record {
             WalRecordProjection::Decision { certificate, .. } => {
                 valid_commit(after.decision)
-                    && same_certificate(after.decision, certificate)
+                    && same_commit_decision(after.decision, certificate)
                     && after.view == before.view
             }
             _ => true,
@@ -3302,6 +3680,11 @@ pub struct LockedCommitProgressWitnessProjection {
     pub timeout_height: u64,
     pub timeout_view: u64,
     pub timeout_signer: int,
+    pub installed_timeout_present: bool,
+    pub installed_timeout_durable: bool,
+    pub installed_timeout_context_id: CanonicalIdentityProjection,
+    pub installed_timeout_height: u64,
+    pub installed_timeout_view: u64,
 }
 
 /// Verus-side complete semantic Decision identity.
@@ -3415,6 +3798,11 @@ pub struct ProductionTwoStageRelayRetryTraceProjection {
 }
 
 /// Verus-side primitive writer-flush ownership trace.
+///
+/// `stream_epoch` retains the non-zero durable request-stream incarnation,
+/// `service_generation` binds it to one responder service lifetime, and
+/// `semantic_sequence` identifies the occurrence within that stream. All
+/// three are independent of the merge reference's `epoch_id`.
 #[derive(Copy, Clone)]
 pub struct ProductionReliableFlushTraceProjection {
     pub status: u8,
@@ -3432,9 +3820,13 @@ pub struct ProductionReliableFlushTraceProjection {
     pub ticket_id: u64,
     pub ticket_rank: u64,
     pub ticket_topic: u8,
+    pub reply_writer_timeout_attempt: u8,
     pub canonical_request_digest: CanonicalIdentityProjection,
     pub stream_wire_bytes: u64,
     pub request_id: CanonicalIdentityProjection,
+    pub service_generation: u64,
+    pub stream_epoch: u64,
+    pub semantic_sequence: u64,
     pub entry_hash: CanonicalIdentityProjection,
     pub encoded_len: u64,
     pub epoch_id: u64,
@@ -3457,6 +3849,10 @@ pub struct ProductionReliableFlushTraceProjection {
 }
 
 /// Verus-side exact lane application of one actor-confirmed writer flush.
+///
+/// `service_generation`, `stream_epoch`, and `semantic_sequence` are captured
+/// from the admitted occurrence, while their `marker_*` counterparts are
+/// independently observed from the retained byte-free gate marker.
 #[derive(Copy, Clone)]
 pub struct ProductionReliableFlushApplicationProjection {
     pub semantic_target: CanonicalIdentityProjection,
@@ -3473,9 +3869,13 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub ticket_id: u64,
     pub ticket_rank: u64,
     pub ticket_topic: u8,
+    pub reply_writer_timeout_attempt: u8,
     pub canonical_request_digest: CanonicalIdentityProjection,
     pub stream_wire_bytes: u64,
     pub request_id: CanonicalIdentityProjection,
+    pub service_generation: u64,
+    pub stream_epoch: u64,
+    pub semantic_sequence: u64,
     pub entry_hash: CanonicalIdentityProjection,
     pub encoded_len: u64,
     pub epoch_id: u64,
@@ -3491,6 +3891,9 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub chunk_cursor_before: u64,
     pub chunk_cursor_after: u64,
     pub marker_request_id: CanonicalIdentityProjection,
+    pub marker_service_generation: u64,
+    pub marker_stream_epoch: u64,
+    pub marker_semantic_sequence: u64,
     pub marker_entry_hash: CanonicalIdentityProjection,
     pub marker_encoded_len: u64,
     pub marker_epoch_id: u64,
@@ -4115,19 +4518,19 @@ pub proof fn production_durable_intent_trace_refines_progress_witness(
         effect_slots_authorized_body!(projection.effects),
         effect_count_body!(projection.effects, refinement_tag_value!(EFFECT_PERSIST)) <= 1u64,
         projection.durable_sequence_after >= projection.durable_sequence_before,
-        projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
             ==> projection.durable_sequence_before < u64::MAX,
-        projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
             ==> projection.pending_after.persistence_id
                 == projection.durable_sequence_before + 1,
-        projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
             ==> projection.durable_sequence_after == projection.durable_sequence_before,
-        projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
             ==> projection.durable_sequence_before < u64::MAX,
-        projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
             ==> projection.durable_sequence_after
                 == projection.durable_sequence_before + 1,
-        projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
             ==> projection.pending_before.persistence_id
                 == projection.durable_sequence_after,
 {
@@ -4138,8 +4541,9 @@ pub proof fn production_durable_intent_trace_refines_progress_witness(
     ));
 }
 
-/// An exact active Commit, pending LockAndCommit, or durable current-view
-/// timeout retains a reconstruction path for the immutable locked origin.
+/// An exact active Commit, pending LockAndCommit, durable current-view timeout,
+/// or installed previous-view timeout retains a commit or reproposal path for
+/// the immutable locked subject.
 pub proof fn locked_commit_progress_witness_is_valid(
     projection: LockedCommitProgressWitnessProjection,
 )
@@ -4310,6 +4714,25 @@ pub proof fn production_reliable_flush_trace_refines_outbound_ownership(
             production_reliable_flush_application_projection(application),
         ),
         worker.status == 2u8,
+        worker.stream_epoch > 0u64,
+        application.stream_epoch > 0u64,
+        application.marker_stream_epoch > 0u64,
+        worker.stream_epoch == application.stream_epoch,
+        worker.stream_epoch == application.marker_stream_epoch,
+        application.stream_epoch == application.marker_stream_epoch,
+        worker.service_generation > 0u64,
+        application.service_generation > 0u64,
+        application.marker_service_generation > 0u64,
+        worker.service_generation == application.service_generation,
+        worker.service_generation == application.marker_service_generation,
+        application.service_generation == application.marker_service_generation,
+        worker.semantic_sequence > 0u64,
+        application.semantic_sequence > 0u64,
+        application.marker_semantic_sequence > 0u64,
+        worker.semantic_sequence == application.semantic_sequence,
+        worker.semantic_sequence == application.marker_semantic_sequence,
+        application.semantic_sequence == application.marker_semantic_sequence,
+        worker.reply_writer_timeout_attempt == application.reply_writer_timeout_attempt,
         application.claim_acquired,
         application.gate_marker_present_before,
         !application.gate_marker_present_after,
@@ -4351,6 +4774,158 @@ pub proof fn production_reliable_flush_trace_refines_outbound_ownership(
         production_reliable_flush_trace_projection(worker),
         production_reliable_flush_application_projection(application),
     ));
+}
+
+/// A durable writer occurrence without a stream incarnation cannot satisfy
+/// the worker-side ownership kernel.
+pub proof fn production_reliable_flush_trace_rejects_zero_stream_epoch(
+    worker: ProductionReliableFlushTraceProjection,
+)
+    requires
+        worker.stream_epoch == 0u64,
+    ensures
+        !production_reliable_flush_trace_refines_outbound_ownership_kernel(worker),
+{
+    reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
+}
+
+/// A writer occurrence without a responder service lifetime cannot satisfy the
+/// worker-side ownership kernel.
+pub proof fn production_reliable_flush_trace_rejects_zero_service_generation(
+    worker: ProductionReliableFlushTraceProjection,
+)
+    requires
+        worker.service_generation == 0u64,
+    ensures
+        !production_reliable_flush_trace_refines_outbound_ownership_kernel(worker),
+{
+    reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
+}
+
+/// A writer occurrence without a semantic sequence cannot satisfy the
+/// worker-side ownership kernel.
+pub proof fn production_reliable_flush_trace_rejects_zero_semantic_sequence(
+    worker: ProductionReliableFlushTraceProjection,
+)
+    requires
+        worker.semantic_sequence == 0u64,
+    ensures
+        !production_reliable_flush_trace_refines_outbound_ownership_kernel(worker),
+{
+    reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
+}
+
+/// Lane application rejects either an absent stream incarnation or a marker
+/// retained from a different incarnation.
+pub proof fn production_reliable_flush_application_rejects_disconnected_stream_epoch(
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        application.stream_epoch == 0u64
+            || application.marker_stream_epoch == 0u64
+            || application.stream_epoch != application.marker_stream_epoch,
+    ensures
+        !production_reliable_flush_application_refines_source_lane_kernel(application),
+{
+    reveal(production_reliable_flush_application_refines_source_lane_kernel);
+}
+
+/// Lane application rejects an erased responder service lifetime or a gate
+/// marker retained from a different service lifetime.
+pub proof fn production_reliable_flush_application_rejects_disconnected_service_generation(
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        application.service_generation == 0u64
+            || application.marker_service_generation == 0u64
+            || application.service_generation != application.marker_service_generation,
+    ensures
+        !production_reliable_flush_application_refines_source_lane_kernel(application),
+{
+    reveal(production_reliable_flush_application_refines_source_lane_kernel);
+}
+
+/// Lane application rejects an erased semantic occurrence or a gate marker
+/// retained from a different request sequence.
+pub proof fn production_reliable_flush_application_rejects_disconnected_semantic_sequence(
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        application.semantic_sequence == 0u64
+            || application.marker_semantic_sequence == 0u64
+            || application.semantic_sequence != application.marker_semantic_sequence,
+    ensures
+        !production_reliable_flush_application_refines_source_lane_kernel(application),
+{
+    reveal(production_reliable_flush_application_refines_source_lane_kernel);
+}
+
+/// Worker confirmation and lane application cannot be linked across distinct
+/// durable stream incarnations.
+pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_stream_epoch(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        worker.stream_epoch == 0u64
+            || application.stream_epoch == 0u64
+            || application.marker_stream_epoch == 0u64
+            || worker.stream_epoch != application.stream_epoch
+            || worker.stream_epoch != application.marker_stream_epoch,
+    ensures
+        !production_reliable_flush_two_phase_link_kernel(worker, application),
+{
+    reveal(production_reliable_flush_two_phase_link_kernel);
+}
+
+/// Worker confirmation and lane application cannot be linked across distinct
+/// responder service lifetimes.
+pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_service_generation(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        worker.service_generation == 0u64
+            || application.service_generation == 0u64
+            || application.marker_service_generation == 0u64
+            || worker.service_generation != application.service_generation
+            || worker.service_generation != application.marker_service_generation,
+    ensures
+        !production_reliable_flush_two_phase_link_kernel(worker, application),
+{
+    reveal(production_reliable_flush_two_phase_link_kernel);
+}
+
+/// Worker confirmation and lane application cannot be linked across distinct
+/// semantic request occurrences.
+pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_semantic_sequence(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        worker.semantic_sequence == 0u64
+            || application.semantic_sequence == 0u64
+            || application.marker_semantic_sequence == 0u64
+            || worker.semantic_sequence != application.semantic_sequence
+            || worker.semantic_sequence != application.marker_semantic_sequence,
+    ensures
+        !production_reliable_flush_two_phase_link_kernel(worker, application),
+{
+    reveal(production_reliable_flush_two_phase_link_kernel);
+}
+
+/// Worker confirmation and lane application cannot be linked across distinct
+/// adaptive writer-timeout generations.
+pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_timeout_attempt(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        worker.reply_writer_timeout_attempt != application.reply_writer_timeout_attempt,
+    ensures
+        !production_reliable_flush_two_phase_link_kernel(worker, application),
+{
+    reveal(production_reliable_flush_two_phase_link_kernel);
 }
 
 /// A returned application completion binds the task to the exact durable
@@ -4486,7 +5061,12 @@ pub struct EnterViewProjection {
     pub durable_timeout_after: TimeoutIdentityProjection,
     pub effect_timeout: TimeoutIdentityProjection,
     pub local_lock_before: CertificateIdentityProjection,
+    pub local_highest_before: CertificateIdentityProjection,
+    pub incoming_highest_for_control: CertificateIdentityProjection,
     pub durable_lock_after: CertificateIdentityProjection,
+    pub durable_highest_after: CertificateIdentityProjection,
+    pub prepare_control_slot_present_after: bool,
+    pub retained_prepare_qc_after: CertificateIdentityProjection,
     pub effect_protected_lock: CertificateIdentityProjection,
     pub following_fetch_lock: CertificateIdentityProjection,
     pub enter_count: u64,
@@ -4688,6 +5268,12 @@ pub struct ProductionTransitionProjection {
     pub validator_count: u64,
     pub volatile_before: ProductionVolatileSummaryProjection,
     pub volatile_after: ProductionVolatileSummaryProjection,
+    pub timeout_votes_before: int,
+    pub timeout_votes_after: int,
+    pub formed_timeouts_before: int,
+    pub formed_timeouts_after: int,
+    pub timeout_control_before: Option<int>,
+    pub timeout_control_after: Option<int>,
     pub boundary_claimed: ProductionBoundaryCapabilityKeyProjection,
     pub boundary_granted: ProductionBoundaryCapabilityKeyProjection,
     pub enter_view: EnterViewProjection,
@@ -4721,7 +5307,51 @@ pub struct ProductionTransitionFactsProjection {
     pub acknowledge_persist_exact: bool,
     pub application_transition_exact: bool,
     pub acknowledgement_continuation: u8,
+    pub install_view_unchanged: bool,
+    pub timeout_vote_pool_unchanged: bool,
+    pub formed_timeouts_unchanged: bool,
+    pub timeout_control_unchanged: bool,
+    pub timeout_control_after_absent: bool,
     pub enter_view_exact: bool,
+    pub effects: ProductionEffectTraceProjection,
+}
+
+/// Verus-side classification slice of the production fact constructor.
+#[derive(Copy, Clone)]
+pub struct ProductionTransitionClassificationFactsProjection {
+    pub before_invariant: bool,
+    pub after_invariant: bool,
+    pub context_unchanged: bool,
+    pub whole_state_unchanged: bool,
+    pub tag_matches: bool,
+    pub busy_fence_open: bool,
+    pub event_kind: u8,
+    pub action_kind: u8,
+    pub wal_record_kind: u8,
+    pub signed_message_kind: u8,
+    pub replay_effect_kind: u8,
+    pub validator_count: u64,
+}
+
+/// Verus-side durable/effect slice of the production fact constructor.
+#[derive(Copy, Clone)]
+pub struct ProductionTransitionDeltaFactsProjection {
+    pub volatile_before: ProductionVolatileSummaryProjection,
+    pub volatile_after: ProductionVolatileSummaryProjection,
+    pub durable_unchanged: bool,
+    pub pending_unchanged: bool,
+    pub generation_unchanged: bool,
+    pub application_unchanged: bool,
+    pub begin_persist_exact: bool,
+    pub acknowledge_persist_exact: bool,
+    pub application_transition_exact: bool,
+    pub acknowledgement_continuation: u8,
+    pub install_view_unchanged: bool,
+    pub timeout_vote_pool_unchanged: bool,
+    pub formed_timeouts_unchanged: bool,
+    pub timeout_control_unchanged: bool,
+    pub timeout_control_after_absent: bool,
+    pub replay_boundary_exact: bool,
     pub effects: ProductionEffectTraceProjection,
 }
 
@@ -4770,22 +5400,66 @@ pub open spec fn production_enter_view_preserves_locked_prepare_qc_identity(
     enter_view_locked_prepare_qc_identity_body!(projection)
 }
 
-/// Exact fact derivation shared with the executable production kernel.
-pub closed spec fn production_facts_from_projection(
+/// Exact durable-high PrepareQC remains the one retained retransmission owner.
+pub open spec fn production_enter_view_retains_high_prepare_qc_identity(
+    projection: EnterViewProjection,
+) -> bool {
+    enter_view_high_prepare_qc_control_identity_body!(projection)
+}
+
+/// Exact durable/effect derivation shared with the executable production kernel.
+pub closed spec fn production_delta_facts_from_projection(
     projection: ProductionTransitionProjection,
-) -> ProductionTransitionFactsProjection {
-    transition_facts_from_projection_body!(projection, ProductionTransitionFactsProjection)
+) -> ProductionTransitionDeltaFactsProjection {
+    transition_delta_facts_from_projection_body!(
+        projection,
+        ProductionTransitionDeltaFactsProjection
+    )
+}
+
+/// Exact classification derivation shared with the executable production kernel.
+pub closed spec fn production_classification_facts_from_projection(
+    projection: ProductionTransitionProjection,
+    delta: ProductionTransitionDeltaFactsProjection,
+) -> ProductionTransitionClassificationFactsProjection {
+    transition_classification_facts_from_projection_body!(
+        projection,
+        delta,
+        ProductionTransitionClassificationFactsProjection
+    )
 }
 
 /// The EnterView component of the source-linked fact constructor, isolated so
 /// its certificate-identity cases can be discharged independently of the
 /// remaining transition fields.
+pub closed spec fn production_enter_view_effect_counts_exact(
+    projection: ProductionTransitionProjection,
+) -> bool {
+    projection.enter_view.enter_count == production_effect_count(projection.effects, 8u8)
+        && projection.enter_view.fetch_count == production_effect_count(projection.effects, 2u8)
+}
+
+/// The complete EnterView fact composes the certificate relation with the two
+/// exact effect counts, keeping each proof query below the pinned solver limit.
 pub closed spec fn production_enter_view_exact_fact(
     projection: ProductionTransitionProjection,
 ) -> bool {
     production_enter_view_projection_relation(projection.enter_view)
-        && projection.enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
-        && projection.enter_view.fetch_count == effect_count_body!(projection.effects, 2u8)
+        && production_enter_view_effect_counts_exact(projection)
+}
+
+/// Exact fact composition shared with the executable production kernel.
+pub closed spec fn production_facts_from_projection(
+    projection: ProductionTransitionProjection,
+) -> ProductionTransitionFactsProjection {
+    let delta = production_delta_facts_from_projection(projection);
+    let classification = production_classification_facts_from_projection(projection, delta);
+    transition_facts_from_components_body!(
+        classification,
+        delta,
+        production_enter_view_exact_fact(projection),
+        ProductionTransitionFactsProjection
+    )
 }
 
 /// The full source-linked constructor projects the isolated exact EnterView
@@ -4798,30 +5472,7 @@ pub proof fn production_enter_view_fact_projection_is_exact(
         production_facts_from_projection(projection).enter_view_exact
             == production_enter_view_exact_fact(projection),
 {
-    let enter_view = projection.enter_view;
-    let local = enter_view.local_lock_before;
-    let incoming = enter_view.pending_record_timeout.highest_prepare;
-    if !enter_view.active {
-        reveal(production_facts_from_projection);
-        reveal(production_enter_view_exact_fact);
-    } else if !local.present {
-        if !incoming.present {
-            reveal(production_facts_from_projection);
-            reveal(production_enter_view_exact_fact);
-        } else {
-            reveal(production_facts_from_projection);
-            reveal(production_enter_view_exact_fact);
-        }
-    } else if !incoming.present {
-        reveal(production_facts_from_projection);
-        reveal(production_enter_view_exact_fact);
-    } else if incoming.view <= local.view {
-        reveal(production_facts_from_projection);
-        reveal(production_enter_view_exact_fact);
-    } else {
-        reveal(production_facts_from_projection);
-        reveal(production_enter_view_exact_fact);
-    }
+    reveal(production_facts_from_projection);
 }
 
 /// Equality of invariant, fence, and action-classification facts.
@@ -4858,6 +5509,11 @@ pub open spec fn production_delta_facts_equal(
         && left.acknowledge_persist_exact == right.acknowledge_persist_exact
         && left.application_transition_exact == right.application_transition_exact
         && left.acknowledgement_continuation == right.acknowledgement_continuation
+        && left.install_view_unchanged == right.install_view_unchanged
+        && left.timeout_vote_pool_unchanged == right.timeout_vote_pool_unchanged
+        && left.formed_timeouts_unchanged == right.formed_timeouts_unchanged
+        && left.timeout_control_unchanged == right.timeout_control_unchanged
+        && left.timeout_control_after_absent == right.timeout_control_after_absent
         && left.effects == right.effects
 }
 
@@ -4890,22 +5546,21 @@ pub proof fn production_transition_fact_extensionality(
 
 /// Executable projection of invariant, fence, and classification facts from
 /// the exact shared constructor.
+#[verifier::spinoff_prover]
 pub fn verified_classification_facts_from_projection(
     projection: ProductionTransitionProjection,
-) -> (facts: ProductionTransitionFactsProjection)
+    delta: ProductionTransitionDeltaFactsProjection,
+) -> (facts: ProductionTransitionClassificationFactsProjection)
     ensures
-        production_classification_facts_equal(
-            facts,
-            production_facts_from_projection(projection),
-        ),
+        facts == production_classification_facts_from_projection(projection, delta),
 {
-    let facts = transition_facts_from_projection_body!(
+    let facts = transition_classification_facts_from_projection_body!(
         projection,
-        ProductionTransitionFactsProjection
+        delta,
+        ProductionTransitionClassificationFactsProjection
     );
     proof {
-        reveal(production_classification_facts_equal);
-        reveal(production_facts_from_projection);
+        reveal(production_classification_facts_from_projection);
     }
     facts
 }
@@ -4915,27 +5570,37 @@ pub fn verified_classification_facts_from_projection(
 #[verifier::spinoff_prover]
 pub fn verified_delta_facts_from_projection(
     projection: ProductionTransitionProjection,
-) -> (facts: ProductionTransitionFactsProjection)
+) -> (facts: ProductionTransitionDeltaFactsProjection)
     ensures
-        production_delta_facts_equal(
-            facts,
-            production_facts_from_projection(projection),
-        ),
+        facts == production_delta_facts_from_projection(projection),
 {
-    let facts = transition_facts_from_projection_body!(
+    let facts = transition_delta_facts_from_projection_body!(
         projection,
-        ProductionTransitionFactsProjection
+        ProductionTransitionDeltaFactsProjection
     );
     proof {
-        assert(production_delta_facts_equal(
-            facts,
-            production_facts_from_projection(projection),
-        )) by {
-            reveal(production_delta_facts_equal);
-            reveal(production_facts_from_projection);
-        }
+        reveal(production_delta_facts_from_projection);
     }
     facts
+}
+
+/// Executable equality of the exact EnterView and follow-up-fetch effect
+/// counts, proved separately from certificate selection.
+#[verifier::spinoff_prover]
+pub fn verified_enter_view_effect_counts_fact(
+    projection: ProductionTransitionProjection,
+) -> (accepted: bool)
+    ensures
+        accepted == production_enter_view_effect_counts_exact(projection),
+{
+    let enter_count = verified_effect_count_gate(projection.effects, 8u8);
+    let fetch_count = verified_effect_count_gate(projection.effects, 2u8);
+    let accepted = projection.enter_view.enter_count == enter_count
+        && projection.enter_view.fetch_count == fetch_count;
+    proof {
+        reveal(production_enter_view_effect_counts_exact);
+    }
+    accepted
 }
 
 /// Exact EnterView fact when the transition is inactive.
@@ -4948,7 +5613,9 @@ pub fn verified_inactive_enter_view_fact(
     ensures
         enter_view_exact == production_enter_view_exact_fact(projection),
 {
-    let enter_view_exact = production_enter_view_exact_body!(projection);
+    let relation = verified_incoming_only_enter_view_projection_relation(projection.enter_view);
+    let effect_counts = verified_enter_view_effect_counts_fact(projection);
+    let enter_view_exact = relation && effect_counts;
     proof {
         assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
             reveal(production_enter_view_exact_fact);
@@ -4998,6 +5665,28 @@ pub fn verified_incoming_only_enter_view_lock_fact(
         }
     }
     enter_view_exact
+}
+
+/// Isolate the incoming-only certificate relation from the complete
+/// transition effect-count projection.
+#[verifier::spinoff_prover]
+pub fn verified_incoming_only_enter_view_projection_relation(
+    projection: EnterViewProjection,
+) -> (accepted: bool)
+    requires
+        projection.active,
+        !projection.local_lock_before.present,
+        projection.pending_record_timeout.highest_prepare.present,
+    ensures
+        accepted == production_enter_view_projection_relation(projection),
+{
+    let accepted = enter_view_projection_gate_body!(projection);
+    proof {
+        assert(accepted == production_enter_view_projection_relation(projection)) by {
+            reveal(production_enter_view_projection_relation);
+        }
+    }
+    accepted
 }
 
 /// Exact active EnterView fact when only the pre-transition local lock exists.
@@ -5111,10 +5800,9 @@ pub fn verified_incoming_max_enter_view_lock_fact(
     ensures
         enter_view_exact == production_enter_view_exact_fact(projection),
 {
-    let enter_view_exact = verified_incoming_max_enter_view_projection_relation(
-        projection.enter_view,
-    ) && projection.enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
-        && projection.enter_view.fetch_count == effect_count_body!(projection.effects, 2u8);
+    let relation = verified_incoming_max_enter_view_projection_relation(projection.enter_view);
+    let effect_counts = verified_enter_view_effect_counts_fact(projection);
+    let enter_view_exact = relation && effect_counts;
     proof {
         assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
             reveal(production_enter_view_exact_fact);
@@ -5160,45 +5848,18 @@ pub fn verified_facts_from_projection(
     ensures
         facts == production_facts_from_projection(projection),
 {
-    let classification_facts = verified_classification_facts_from_projection(projection);
     let delta_facts = verified_delta_facts_from_projection(projection);
+    let classification_facts =
+        verified_classification_facts_from_projection(projection, delta_facts);
     let enter_view_exact = verified_enter_view_fact_from_projection(projection);
-    let facts = ProductionTransitionFactsProjection {
-        before_invariant: classification_facts.before_invariant,
-        after_invariant: classification_facts.after_invariant,
-        context_unchanged: classification_facts.context_unchanged,
-        whole_state_unchanged: classification_facts.whole_state_unchanged,
-        tag_matches: classification_facts.tag_matches,
-        busy_fence_open: classification_facts.busy_fence_open,
-        event_kind: classification_facts.event_kind,
-        action_kind: classification_facts.action_kind,
-        wal_record_kind: classification_facts.wal_record_kind,
-        signed_message_kind: classification_facts.signed_message_kind,
-        replay_effect_kind: classification_facts.replay_effect_kind,
-        validator_count: classification_facts.validator_count,
-        volatile_before: delta_facts.volatile_before,
-        volatile_after: delta_facts.volatile_after,
-        durable_unchanged: delta_facts.durable_unchanged,
-        pending_unchanged: delta_facts.pending_unchanged,
-        generation_unchanged: delta_facts.generation_unchanged,
-        application_unchanged: delta_facts.application_unchanged,
-        begin_persist_exact: delta_facts.begin_persist_exact,
-        acknowledge_persist_exact: delta_facts.acknowledge_persist_exact,
-        application_transition_exact: delta_facts.application_transition_exact,
-        acknowledgement_continuation: delta_facts.acknowledgement_continuation,
+    let facts = transition_facts_from_components_body!(
+        classification_facts,
+        delta_facts,
         enter_view_exact,
-        effects: delta_facts.effects,
-    };
+        ProductionTransitionFactsProjection
+    );
     proof {
-        let expected = production_facts_from_projection(projection);
-        production_enter_view_fact_projection_is_exact(projection);
-        assert(enter_view_exact == expected.enter_view_exact);
-        assert(production_non_enter_view_facts_equal(facts, expected)) by {
-            reveal(production_non_enter_view_facts_equal);
-            reveal(production_classification_facts_equal);
-            reveal(production_delta_facts_equal);
-        }
-        production_transition_fact_extensionality(facts, expected);
+        reveal(production_facts_from_projection);
     }
     facts
 }
@@ -5241,16 +5902,16 @@ pub enum TlaActionNameProjection {
     CompleteTimeoutSignature,
     FormPrepareQC,
     FormCommitQC,
-    FormTC,
     ResumeProposal,
     ResumeVote,
     ResumeTimeout,
     ApplyDecision,
 }
 
-/// At most three TLA+ actions represented by one serialized production step:
-/// authenticated/completion ingress, optional local certificate formation,
-/// and the reducer's durable boundary action.
+/// At most three TLA+ names represented by one serialized production step:
+/// authenticated/completion ingress, an optional non-timeout certificate
+/// formation, and the reducer's durable boundary. Timeout receipt and local
+/// InstallTimeout WAL creation share the source action atomically.
 pub struct TlaMacroStepProjection {
     pub source: TlaActionNameProjection,
     pub formation: TlaActionNameProjection,
@@ -5298,7 +5959,6 @@ pub open spec fn production_formation_tla_action(
         match (facts.event_kind, facts.signed_message_kind, facts.wal_record_kind) {
             (2, _, 3 | 4) | (13, 2, 3 | 4) => TlaActionNameProjection::FormPrepareQC,
             (2, _, 7) | (13, 3, 7) => TlaActionNameProjection::FormCommitQC,
-            (4, _, 6) | (13, 4, 6) => TlaActionNameProjection::FormTC,
             _ => TlaActionNameProjection::NoAction,
         }
     }
@@ -5317,7 +5977,15 @@ pub open spec fn production_boundary_tla_action(
             3 => TlaActionNameProjection::BeginObservePrepare,
             4 => TlaActionNameProjection::BeginLockCommit,
             5 => TlaActionNameProjection::BeginTimeout,
-            6 => TlaActionNameProjection::BeginInstallTC,
+            6 => {
+                if facts.event_kind == 4 {
+                    TlaActionNameProjection::DeliverTimeout
+                } else if facts.event_kind == 13 && facts.signed_message_kind == 4 {
+                    TlaActionNameProjection::CompleteTimeoutSignature
+                } else {
+                    TlaActionNameProjection::BeginInstallTC
+                }
+            },
             7 => TlaActionNameProjection::BeginDecision,
             _ => TlaActionNameProjection::NoAction,
         },
@@ -5401,21 +6069,28 @@ pub open spec fn production_tla_boundary_delta(
                 && facts.durable_unchanged
                 && facts.pending_unchanged
         }
+        TlaActionNameProjection::DeliverTimeout
+        | TlaActionNameProjection::CompleteTimeoutSignature => {
+            facts.action_kind != 1
+                || (facts.wal_record_kind == 6
+                    && facts.begin_persist_exact
+                    && facts.durable_unchanged
+                    && !facts.pending_unchanged
+                    && facts.generation_unchanged
+                    && facts.application_unchanged)
+        }
         TlaActionNameProjection::NoAction
         | TlaActionNameProjection::DeliverProposal
         | TlaActionNameProjection::DeliverVote
         | TlaActionNameProjection::DeliverQC
-        | TlaActionNameProjection::DeliverTimeout
         | TlaActionNameProjection::DeliverTC
         | TlaActionNameProjection::FetchBody
         | TlaActionNameProjection::StoreBody
         | TlaActionNameProjection::ValidateBody
         | TlaActionNameProjection::CompleteProposalSignature
         | TlaActionNameProjection::CompleteVoteSignature
-        | TlaActionNameProjection::CompleteTimeoutSignature
         | TlaActionNameProjection::FormPrepareQC
         | TlaActionNameProjection::FormCommitQC
-        | TlaActionNameProjection::FormTC
         | TlaActionNameProjection::ResumeProposal
         | TlaActionNameProjection::ResumeVote
         | TlaActionNameProjection::ResumeTimeout => true,
@@ -5729,12 +6404,31 @@ pub proof fn production_action_preserves_volatile_bounds(
                 && facts.volatile_after.pending_prepare == 0
                 && facts.volatile_after.vote_pools == 0
                 && facts.volatile_after.vote_entries == 0
-                && facts.volatile_after.timeout_vote_pools == 0
-                && facts.volatile_after.timeout_vote_entries == 0
+                && (if facts.install_view_unchanged {
+                    facts.timeout_vote_pool_unchanged
+                        && facts.volatile_after.timeout_vote_pools
+                            == facts.volatile_before.timeout_vote_pools
+                        && facts.volatile_after.timeout_vote_entries
+                            == facts.volatile_before.timeout_vote_entries
+                } else {
+                    facts.volatile_after.timeout_vote_pools == 0
+                        && facts.volatile_after.timeout_vote_entries == 0
+                })
                 && facts.volatile_after.formed_certificates == 0
-                && facts.volatile_after.formed_timeouts == 0
+                && (if facts.install_view_unchanged {
+                    facts.formed_timeouts_unchanged
+                        && facts.volatile_after.formed_timeouts
+                            == facts.volatile_before.formed_timeouts
+                } else {
+                    facts.volatile_after.formed_timeouts == 0
+                })
+                && (if facts.install_view_unchanged {
+                    facts.timeout_control_unchanged
+                } else {
+                    facts.timeout_control_after_absent
+                })
                 && facts.volatile_after.known_prepare <= 2
-                && facts.volatile_after.outbound_control <= 3,
+                && facts.volatile_after.outbound_control <= 4,
 {
     reveal(production_transition_action_relation);
 }
@@ -5835,6 +6529,7 @@ pub fn verified_body_progress_action_gate(
 }
 
 /// Exact executable volatile-protocol action checker used by production.
+#[verifier::spinoff_prover]
 pub fn verified_volatile_protocol_action_gate(
     facts: ProductionTransitionFactsProjection,
 ) -> (accepted: bool)
@@ -6095,6 +6790,7 @@ pub proof fn accepted_core_enter_view_projection_selects_post_install_lock(
     ensures
         production_enter_view_projection_relation(projection.enter_view),
         production_enter_view_preserves_locked_prepare_qc_identity(projection.enter_view),
+        production_enter_view_retains_high_prepare_qc_identity(projection.enter_view),
         certificate_identity_equal_body!(
             projection.enter_view.durable_lock_after,
             production_enter_view_selected_lock(projection.enter_view)
@@ -6114,6 +6810,7 @@ pub proof fn accepted_core_enter_view_projection_selects_post_install_lock(
     reveal(production_facts_from_projection);
     reveal(production_enter_view_projection_relation);
     reveal(production_enter_view_preserves_locked_prepare_qc_identity);
+    reveal(production_enter_view_retains_high_prepare_qc_identity);
     reveal(production_enter_view_selected_lock);
     reveal(production_enter_view_has_exact_following_fetch);
 }

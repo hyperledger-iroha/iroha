@@ -28,8 +28,8 @@ public final class SumeragiV2WireFixtureTests {
               "proposal",
               "vote",
               "quorum_certificate",
-              "commit_vote_later_view",
-              "commit_quorum_certificate_later_view",
+              "commit_vote_reproposal",
+              "commit_quorum_certificate_reproposal",
               "timeout_vote",
               "timeout_certificate",
               "payload_manifest",
@@ -61,17 +61,17 @@ public final class SumeragiV2WireFixtureTests {
   }
 
   @Test
-  public void laterViewCommitFixturesPreserveProposalOrigin() throws Exception {
+  public void commitReproposalsRequireTheirVoteAndCertificateRound() throws Exception {
     SumeragiV2Wire.ConsensusPayload.VoteMessage votePayload =
         (SumeragiV2Wire.ConsensusPayload.VoteMessage)
             SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
-                    hexBytes(fixtureRow("message", "commit_vote_later_view").hex))
+                    hexBytes(fixtureRow("message", "commit_vote_reproposal").hex))
                 .payload;
     SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage certificatePayload =
         (SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage)
             SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
                     hexBytes(
-                        fixtureRow("message", "commit_quorum_certificate_later_view").hex))
+                        fixtureRow("message", "commit_quorum_certificate_reproposal").hex))
                 .payload;
     SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage responsePayload =
         (SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage)
@@ -83,14 +83,141 @@ public final class SumeragiV2WireFixtureTests {
     SumeragiV2Wire.QuorumCertificate certificate = certificatePayload.value;
     assertEquals(SumeragiV2Wire.GlobalPhase.COMMIT, vote.phase);
     assertEquals(9L, vote.round.view);
-    assertEquals(1L, vote.proposalRound.view);
-    assertEquals(vote.round.contextId, vote.proposalRound.contextId);
-    assertEquals(vote.round.height, vote.proposalRound.height);
+    assertEquals(vote.round, vote.proposalRound);
     assertEquals(vote.round, certificate.round);
     assertEquals(vote.proposalRound, certificate.proposalRound);
     assertEquals(vote.subject, certificate.subject);
     assertEquals(vote.executionCommitment, certificate.executionCommitment);
     assertEquals(certificate.reference(), responsePayload.value.certificate.reference());
+
+    IllegalArgumentException voteError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(fixtureRow("negative_message", "commit_vote_split_round").hex)));
+    assertEquals(
+        "Prepare/Commit vote proposal round must match its round", voteError.getMessage());
+
+    IllegalArgumentException certificateError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(
+                        fixtureRow(
+                                "negative_message",
+                                "commit_quorum_certificate_split_round")
+                            .hex)));
+    assertEquals(
+        "Prepare/Commit certificate proposal round must match its round",
+        certificateError.getMessage());
+  }
+
+  @Test
+  public void statusValidatorsRejectAnOlderCommitProposalRound() throws Exception {
+    SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage certificatePayload =
+        (SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage)
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(
+                        fixtureRow("message", "commit_quorum_certificate_reproposal").hex))
+                .payload;
+    SumeragiV2Wire.QuorumCertificate certificate = certificatePayload.value;
+    SumeragiV2Wire.ConsensusRound olderProposalRound =
+        new SumeragiV2Wire.ConsensusRound(
+            certificate.round.contextId,
+            certificate.round.height,
+            certificate.round.view - 1);
+
+    IllegalArgumentException referenceError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                new SumeragiV2Wire.QuorumCertificateRef(
+                    certificate.round,
+                    olderProposalRound,
+                    SumeragiV2Wire.GlobalPhase.COMMIT,
+                    certificate.subject,
+                    certificate.executionCommitment));
+    assertEquals(
+        "Prepare/Commit certificate reference proposal round must match its round",
+        referenceError.getMessage());
+
+    IllegalArgumentException quorumError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                new SumeragiV2Wire.VoteQuorumStatus(
+                    certificate.round,
+                    olderProposalRound,
+                    certificate.subject,
+                    certificate.executionCommitment,
+                    1,
+                    1,
+                    3,
+                    4));
+    assertEquals(
+        "Prepare/Commit quorum status proposal round must match its round",
+        quorumError.getMessage());
+
+    IllegalArgumentException outboundError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                new SumeragiV2Wire.OutboundIntentStatus(
+                    SumeragiV2Wire.OutboundIntentKind.COMMIT_VOTE,
+                    certificate.round,
+                    olderProposalRound,
+                    certificate.subject,
+                    certificate.executionCommitment,
+                    SumeragiV2Wire.OutboundIntentStage.QUEUED));
+    assertEquals(
+        "Proposal/Prepare/Commit outbound intent origin must match its round",
+        outboundError.getMessage());
+  }
+
+  @Test
+  public void prepareVotesAndCertificatesRejectSplitRounds() throws Exception {
+    SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage preparePayload =
+        (SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage)
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(fixtureRow("message", "quorum_certificate").hex))
+                .payload;
+    SumeragiV2Wire.QuorumCertificate prepare = preparePayload.value;
+    SumeragiV2Wire.ConsensusRound laterRound =
+        new SumeragiV2Wire.ConsensusRound(
+            prepare.round.contextId, prepare.round.height, prepare.round.view + 1);
+
+    IllegalArgumentException voteError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                new SumeragiV2Wire.Vote(
+                    laterRound,
+                    prepare.round,
+                    SumeragiV2Wire.GlobalPhase.PREPARE,
+                    prepare.subject,
+                    prepare.executionCommitment,
+                    0,
+                    new byte[] {1}));
+    assertEquals(
+        "Prepare/Commit vote proposal round must match its round", voteError.getMessage());
+
+    IllegalArgumentException certificateError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                new SumeragiV2Wire.QuorumCertificate(
+                    laterRound,
+                    prepare.round,
+                    SumeragiV2Wire.GlobalPhase.PREPARE,
+                    prepare.subject,
+                    prepare.executionCommitment,
+                    prepare.signers,
+                    prepare.aggregateSignature()));
+    assertEquals(
+        "Prepare/Commit certificate proposal round must match its round",
+        certificateError.getMessage());
   }
 
   @Test
@@ -182,7 +309,7 @@ public final class SumeragiV2WireFixtureTests {
     SumeragiV2Wire.CommitCertificateResponse response = responsePayload.value;
     assertEquals(SumeragiV2Wire.GlobalPhase.COMMIT, response.certificate.phase);
     assertEquals(9L, response.certificate.round.view);
-    assertEquals(1L, response.certificate.proposalRound.view);
+    assertEquals(response.certificate.round, response.certificate.proposalRound);
     assertEquals(48, response.signature().length);
     assertEquals(response.requestHash, request.requestHash());
     response.validateAgainst(request);
@@ -482,12 +609,12 @@ public final class SumeragiV2WireFixtureTests {
     assertEquals(1L, decoded.liveness.prepareQuorums.get(0).round.view);
     assertEquals(1L, decoded.liveness.prepareQuorums.get(0).proposalRound.view);
     assertEquals(3L, decoded.liveness.commitQuorums.get(0).round.view);
-    assertEquals(1L, decoded.liveness.commitQuorums.get(0).proposalRound.view);
+    assertEquals(3L, decoded.liveness.commitQuorums.get(0).proposalRound.view);
     assertEquals(1, decoded.liveness.timeoutQuorums.size());
     assertEquals(SumeragiV2Wire.OutboundIntentKind.COMMIT_VOTE,
         decoded.liveness.outboundIntents.get(0).kind);
     assertEquals(3L, decoded.liveness.outboundIntents.get(0).round.view);
-    assertEquals(1L, decoded.liveness.outboundIntents.get(0).proposalRound.view);
+    assertEquals(3L, decoded.liveness.outboundIntents.get(0).proposalRound.view);
     assertEquals(1, decoded.liveness.queues.size());
     assertEquals(SumeragiV2Wire.QueueKind.EFFECT_DISPATCH,
         decoded.liveness.queues.get(0).queue);

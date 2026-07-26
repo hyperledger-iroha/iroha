@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -40,6 +41,7 @@ COMMON_ROOT_INPUTS = (
     "rust-toolchain",
     ".cargo",
     "vendor",
+    "scripts/check_mobile_sdk_artifact_pin_commit.py",
     "codec",
     "scripts/check_mobile_sdk_artifacts.sh",
     "scripts/norito_bridge_source_seal.py",
@@ -97,6 +99,19 @@ ROOT_INPUTS = tuple(
     dict.fromkeys(COMMON_ROOT_INPUTS + APPLE_ROOT_INPUTS + ANDROID_ROOT_INPUTS)
 )
 SNAPSHOT_SCHEMA = "iroha.norito-bridge-source-seal.v1"
+SWIFT_NATIVE_BRIDGE_PATH = "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+SWIFT_NATIVE_BRIDGE_HASH_KEYS = frozenset(
+    {
+        "macos-arm64",
+        "ios-arm64",
+        "ios-arm64_x86_64-simulator",
+    }
+)
+SWIFT_NATIVE_BRIDGE_HASH_PIN = re.compile(
+    rb'^(?P<prefix>[ \t]+)"(?P<key>macos-arm64|ios-arm64|ios-arm64_x86_64-simulator)"'
+    rb': "(?P<digest>[0-9a-f]{64})"(?P<suffix>,?)$',
+    re.MULTILINE,
+)
 
 
 class AuthenticatedTool:
@@ -400,6 +415,39 @@ def listed_files(root: pathlib.Path, inputs: Iterable[str]) -> list[str]:
     return sorted(listed)
 
 
+def normalize_swift_native_bridge_hash_pins(contents: bytes) -> bytes:
+    """Normalize the three manifestless fallback digests for source sealing.
+
+    The artifact checker authenticates these values independently against every
+    slice in the embedded manifest. Normalizing only the digest literals keeps
+    a mechanical pin-only child commit on the exact source fingerprint of the
+    artifact-producing parent without excluding any executable loader logic.
+    """
+
+    matches = list(SWIFT_NATIVE_BRIDGE_HASH_PIN.finditer(contents))
+    keys = [match.group("key").decode("ascii") for match in matches]
+    if len(matches) != len(SWIFT_NATIVE_BRIDGE_HASH_KEYS) or set(keys) != set(
+        SWIFT_NATIVE_BRIDGE_HASH_KEYS
+    ):
+        raise RuntimeError(
+            "NativeBridge.swift must contain exactly one canonical fallback hash "
+            "for every Apple artifact slice"
+        )
+
+    return SWIFT_NATIVE_BRIDGE_HASH_PIN.sub(
+        lambda match: (
+            match.group("prefix")
+            + b'"'
+            + match.group("key")
+            + b'": "'
+            + (b"0" * 64)
+            + b'"'
+            + match.group("suffix")
+        ),
+        contents,
+    )
+
+
 def fingerprint(root: pathlib.Path, inputs: list[str]) -> str:
     digest = hashlib.sha256()
     for relative in listed_files(root, inputs):
@@ -408,9 +456,12 @@ def fingerprint(root: pathlib.Path, inputs: list[str]) -> str:
             raise RuntimeError(f"source-seal input is symlinked: {relative}")
         if not path.is_file():
             raise RuntimeError(f"source-seal input is not a regular file: {relative}")
+        contents = path.read_bytes()
+        if relative == SWIFT_NATIVE_BRIDGE_PATH:
+            contents = normalize_swift_native_bridge_hash_pins(contents)
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(contents)
         digest.update(b"\0")
     return digest.hexdigest()
 

@@ -183,7 +183,7 @@ PROOF
                        /\ PersistProposal(request)
         BY <3>3 DEF Next
       <3>4. CASE command.kind = "FetchBody"
-                  /\ ~DecisionFetchFrontier(command)
+                  /\ ~CertifiedRecoveryFetchFrontier(command)
                   /\ HeldChunksFor(command.node, command.view,
                                      command.subject) = AsyncChunks
                   /\ ~BodyHeldBy(
@@ -343,15 +343,26 @@ PROOF
                    /\ command.item.envelope.recipient = command.node
                    /\ command.item.envelope.view = command.view
                    /\ command.item.envelope.subject = command.subject
-                   /\ \E qc \in DecisionQcValues \cup prepareQCs:
-                        /\ CommandMatches(
-                             command, command.node, qc.view, qc.subject)
-                        /\ CertifiedBodyRecoveryAuthority(command.node, qc)
-                        /\ command.item.source \in qc.signers
-                        /\ FetchCertifiedBody(command.node, qc)
-        <4>1. command.node \in ValidatorIds
+                   /\ CertifiedResponseCapabilityAuthorized(command.item)
+                   /\ AcceptCertifiedResponseCapability(
+                        command.node, command.view, command.subject)
+        <4>1. /\ command.node \in ValidatorIds
+               /\ command.view \in Views
           BY <2>1 DEF AsyncCandidateTyped
-        <4> QED BY <3>19, <4>1 DEF Next
+        <4>2. BodyRecord(
+                 command.node, context, command.view, command.subject)
+                 \in BodyRecordSet
+          BY <3>19, Isa
+             DEF AcceptCertifiedResponseCapability,
+                 InstallCertifiedBodyEffect
+        <4>3. command.subject \in Subjects
+          BY <4>2, BodyRecordMembershipProjectsSubject
+        <4>4. \E node \in ValidatorIds, roundView \in Views,
+                    subject \in Subjects:
+                 AcceptCertifiedResponseCapability(
+                   node, roundView, subject)
+          BY <3>19, <4>1, <4>3
+        <4> QED BY <4>4 DEF Next
       <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
                    <3>7, <3>8, <3>9, <3>10, <3>11, <3>12, <3>13,
                    <3>14, <3>15, <3>16, <3>17, <3>18, <3>19
@@ -1014,7 +1025,7 @@ PROOF
                          RunHistoricalRecoveryNodeAnyRefinesCoreBracketNext
           <5> QED BY <5>1
         <4> QED BY <3>11, <4>1
-      <3>12. CASE \E node \in AsyncVotersAt(initialContext):
+      <3>12. CASE \E node \in Responsive:
                      PostGstRunHistoricalServer(node)
         <4>1. \A node:
                  PostGstRunHistoricalServer(node) => [Next]_vars
@@ -1023,7 +1034,9 @@ PROOF
                  PROVE [Next]_vars
             <6>1. RunHistoricalServer(node)
               BY <5>1 DEF PostGstRunHistoricalServer
-            <6> QED BY <6>1,
+            <6>2. node \in AsyncResponsiveAppliedArchiveServers
+              BY <6>1 DEF RunHistoricalServer
+            <6> QED BY <6>1, <6>2,
                          RunHistoricalServerRefinesCoreBracketNext
           <5> QED BY <5>1
         <4> QED BY <3>12, <4>1
@@ -1057,16 +1070,21 @@ PROOF
             <6> QED BY <6>1, CoreStutterRefinesBracketNext
           <5> QED BY <5>1
         <4> QED BY <3>14, <4>1
-      <3>15. CASE \E node \in AsyncVotersAt(initialContext):
+      <3>15. CASE \E node \in Responsive:
                      PostGstServiceIoWorker(node)
         <4>1. \A node:
                  PostGstServiceIoWorker(node) => [Next]_vars
           <5>1. ASSUME NEW node, PostGstServiceIoWorker(node)
                  PROVE [Next]_vars
-            <6>1. UNCHANGED vars
+            <6>1. ServiceIoWorker(node)
+              BY <5>1 DEF PostGstServiceIoWorker
+            <6>2. node \in AsyncArchiveIoServiceNodes
+              BY <6>1 DEF ServiceIoWorker
+            <6>3. UNCHANGED vars
               BY <5>1, Isa DEF PostGstServiceIoWorker,
                                   ServiceIoWorker, ServiceIoWorkerWork
-            <6> QED BY <6>1, CoreStutterRefinesBracketNext
+            <6> QED BY <6>2, <6>3,
+                         CoreStutterRefinesBracketNext
           <5> QED BY <5>1
         <4> QED BY <3>15, <4>1
       <3>16. CASE \E node \in Responsive:
@@ -1085,13 +1103,15 @@ PROOF
             <6> QED BY <6>1, CoreStutterRefinesBracketNext
           <5> QED BY <5>1
         <4> QED BY <3>16, <4>1
-      <3>17. CASE \E recipient \in AsyncVotersAt(initialContext),
-                         source \in AsyncVotersAt(initialContext):
+      <3>17. CASE \E recipient \in Responsive,
+                         source \in AsyncIngressSources:
                      PostGstAdmitHiddenPacket(recipient, source)
-        <4>1. \A recipient, source:
+        <4>1. \A recipient \in Responsive,
+                     source \in AsyncIngressSources:
                  PostGstAdmitHiddenPacket(recipient, source)
                    => [Next]_vars
-          <5>1. ASSUME NEW recipient, NEW source,
+          <5>1. ASSUME NEW recipient \in Responsive,
+                      NEW source \in AsyncIngressSources,
                       PostGstAdmitHiddenPacket(recipient, source)
                  PROVE [Next]_vars
             <6>1. UNCHANGED vars
@@ -1102,7 +1122,7 @@ PROOF
           <5> QED BY <5>1
         <4> QED BY <3>17, <4>1
       <3>18. CASE \E recipient \in ValidatorIds,
-                         source \in ValidatorIds:
+                         source \in AsyncIngressSources:
                      PostGstAdmitHistoricalRecoveryPacket(
                        recipient, source)
         <4>1. \A recipient, source:
@@ -1293,7 +1313,7 @@ PROOF
                /\ AsyncNonCrashOuterFrame
           BY <3>11, <4>1
         <4> QED BY <4>2, RunnerCategorySuppliesOuterFrame
-      <3>12. CASE \E node \in AsyncVotersAt(initialContext):
+      <3>12. CASE \E node \in Responsive:
                      PostGstRunHistoricalServer(node)
         <4>1. \A node:
                  PostGstRunHistoricalServer(node)
@@ -1303,9 +1323,14 @@ PROOF
                       PostGstRunHistoricalServer(node)
                  PROVE /\ AsyncRunnerStep
                         /\ AsyncNonCrashOuterFrame
-            BY <5>1, Isa
-               DEF PostGstRunHistoricalServer,
-                   AsyncRunnerStep, RunHistoricalServer
+            <6>1. /\ RunHistoricalServer(node)
+                   /\ AsyncNonCrashOuterFrame
+              BY <5>1 DEF PostGstRunHistoricalServer
+            <6>2. node \in AsyncResponsiveAppliedArchiveServers
+              BY <6>1 DEF RunHistoricalServer
+            <6>3. AsyncRunnerStep
+              BY <6>1, <6>2 DEF AsyncRunnerStep
+            <6> QED BY <6>1, <6>3
           <5> QED BY <5>1
         <4>2. /\ AsyncRunnerStep
                /\ AsyncNonCrashOuterFrame
@@ -1365,7 +1390,7 @@ PROOF
                /\ AsyncNonRunnerOuterFrame
           BY <3>14, <4>1
         <4> QED BY <4>2, NonRunnerCategorySuppliesOuterFrame
-      <3>15. CASE \E node \in AsyncVotersAt(initialContext):
+      <3>15. CASE \E node \in Responsive:
                      PostGstServiceIoWorker(node)
         <4>1. \A node:
                  PostGstServiceIoWorker(node)
@@ -1377,7 +1402,7 @@ PROOF
             <6>1. /\ ServiceIoWorker(node)
                    /\ AsyncNonRunnerOuterFrame
               BY <5>1 DEF PostGstServiceIoWorker
-            <6>2. node \in AsyncCurrentResponsiveVoters
+            <6>2. node \in AsyncArchiveIoServiceNodes
               BY <6>1 DEF ServiceIoWorker
             <6>3. AsyncNonRunnerStep
               BY <6>1, <6>2
@@ -1414,23 +1439,23 @@ PROOF
                /\ AsyncNonRunnerOuterFrame
           BY <3>16, <4>1
         <4> QED BY <4>2, NonRunnerCategorySuppliesOuterFrame
-      <3>17. CASE \E recipient \in AsyncVotersAt(initialContext),
-                         source \in AsyncVotersAt(initialContext):
+      <3>17. CASE \E recipient \in Responsive,
+                         source \in AsyncIngressSources:
                      PostGstAdmitHiddenPacket(recipient, source)
-        <4>1. \A recipient \in AsyncVotersAt(initialContext),
-                     source \in AsyncVotersAt(initialContext):
+        <4>1. \A recipient \in Responsive,
+                     source \in AsyncIngressSources:
                  PostGstAdmitHiddenPacket(recipient, source)
                    => /\ AsyncNonRunnerStep
                       /\ AsyncNonRunnerOuterFrame
-          <5>1. ASSUME NEW recipient \in AsyncVotersAt(initialContext),
-                      NEW source \in AsyncVotersAt(initialContext),
+          <5>1. ASSUME NEW recipient \in Responsive,
+                      NEW source \in AsyncIngressSources,
                       PostGstAdmitHiddenPacket(recipient, source)
                  PROVE /\ AsyncNonRunnerStep
                         /\ AsyncNonRunnerOuterFrame
             <6>1. /\ recipient \in ValidatorIds
                    /\ source \in AsyncIngressSources
               BY <1>1, <5>1, Isa
-                 DEF AsyncVotersAt, AsyncIngressSources,
+                 DEF AsyncIngressSources,
                      TypeInvariant, ModelConfiguration,
                      QuorumConfiguration
             <6>2. /\ AdmitIngressPacket(recipient, source)
@@ -1448,22 +1473,22 @@ PROOF
           BY <3>17, <4>1
         <4> QED BY <4>2, NonRunnerCategorySuppliesOuterFrame
       <3>18. CASE \E recipient \in ValidatorIds,
-                         source \in ValidatorIds:
+                         source \in AsyncIngressSources:
                      PostGstAdmitHistoricalRecoveryPacket(
                        recipient, source)
         <4>1. \A recipient \in ValidatorIds,
-                     source \in ValidatorIds:
+                     source \in AsyncIngressSources:
                  PostGstAdmitHistoricalRecoveryPacket(recipient, source)
                    => /\ AsyncNonRunnerStep
                       /\ AsyncNonRunnerOuterFrame
           <5>1. ASSUME NEW recipient \in ValidatorIds,
-                      NEW source \in ValidatorIds,
+                      NEW source \in AsyncIngressSources,
                       PostGstAdmitHistoricalRecoveryPacket(
                         recipient, source)
                  PROVE /\ AsyncNonRunnerStep
                         /\ AsyncNonRunnerOuterFrame
             <6>1. source \in AsyncIngressSources
-              BY <5>1 DEF AsyncIngressSources
+              BY <5>1
             <6>2. /\ AdmitIngressPacket(recipient, source)
                    /\ AsyncNonRunnerOuterFrame
               BY <5>1

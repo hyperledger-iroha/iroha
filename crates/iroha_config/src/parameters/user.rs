@@ -1029,18 +1029,8 @@ impl Root {
         let mut snapshot = self.snapshot;
         Self::derive_default_snapshot_store_dir(&mut snapshot, &kura);
         let dev_telemetry = self.dev_telemetry;
-        let (
-            sorafs_storage,
-            sorafs_discovery,
-            sorafs_repair,
-            sorafs_gc,
-            sorafs_quota,
-            sorafs_alias_cache,
-            sorafs_gateway,
-            sorafs_por,
-            sorafs_appeal_finance_settlement,
-        ) = self.sorafs.parse(&mut emitter);
-        let (mut torii, live_query_store) = self.torii.parse(&mut emitter);
+        let parsed_sorafs = self.sorafs.parse(&mut emitter);
+        let (torii, live_query_store) = self.torii.parse(&mut emitter, parsed_sorafs);
         let soracloud_runtime = self.soracloud_runtime.parse();
         let telemetry = self.telemetry.map(actual::Telemetry::from);
         let telemetry_profile = if self.telemetry_enabled {
@@ -1107,15 +1097,6 @@ impl Root {
         } else {
             None
         };
-        torii.sorafs_storage = sorafs_storage;
-        torii.sorafs_discovery = sorafs_discovery;
-        torii.sorafs_repair = sorafs_repair;
-        torii.sorafs_gc = sorafs_gc;
-        torii.sorafs_quota = sorafs_quota;
-        torii.sorafs_alias_cache = sorafs_alias_cache;
-        torii.sorafs_gateway = sorafs_gateway;
-        torii.sorafs_por = sorafs_por;
-        torii.sorafs_appeal_finance_settlement = sorafs_appeal_finance_settlement;
         let crypto = self.crypto.parse(&mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
         let hijiri = self.hijiri.parse(&mut emitter);
@@ -5858,9 +5839,6 @@ pub struct SumeragiV2RuntimeLimits {
     /// Idempotency request gates retained for one authenticated source.
     #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE")]
     pub merge_sidecar_server_request_gates_per_source: NonZeroUsize,
-    /// Lifetime of a completed/rejected server request gate.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL.into()")]
-    pub merge_sidecar_server_request_gate_ttl_ms: DurationMs,
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     #[config(default = "defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY")]
     pub pending_certified_merge_entry_capacity: NonZeroUsize,
@@ -6233,9 +6211,6 @@ impl Sumeragi {
                     .merge_sidecar_outbound_bytes_per_source,
                 merge_sidecar_server_request_gates_per_source: limits
                     .merge_sidecar_server_request_gates_per_source,
-                merge_sidecar_server_request_gate_ttl: limits
-                    .merge_sidecar_server_request_gate_ttl_ms
-                    .0,
                 pending_certified_merge_entry_capacity: limits
                     .pending_certified_merge_entry_capacity,
                 pending_queue_plan_admission_capacity: limits.pending_queue_plan_admission_capacity,
@@ -7104,6 +7079,10 @@ pub struct Network {
     /// (clamped to >= 100ms).
     #[config(default = "defaults::network::IDLE_TIMEOUT.into()")]
     pub idle_timeout_ms: DurationMs,
+    /// Base deadline for an exact reply to await one peer writer's full flush
+    /// (clamped to >= 100ms).
+    #[config(default = "defaults::network::REPLY_WRITER_FLUSH_TIMEOUT.into()")]
+    pub reply_writer_flush_timeout_ms: DurationMs,
     /// Delay outbound peer dials after startup (milliseconds).
     #[config(default = "defaults::network::CONNECT_STARTUP_DELAY.into()")]
     pub connect_startup_delay_ms: DurationMs,
@@ -7445,6 +7424,7 @@ impl Network {
             transaction_gossip_restricted_fallback,
             transaction_gossip_restricted_public_payload,
             idle_timeout_ms: idle_timeout,
+            reply_writer_flush_timeout_ms: reply_writer_flush_timeout,
             connect_startup_delay_ms: connect_startup_delay,
             dial_timeout_ms: dial_timeout,
             deferred_send_ttl_ms,
@@ -7644,6 +7624,7 @@ impl Network {
         };
         let min_interval = MIN_TIMER_INTERVAL;
         let idle_timeout = idle_timeout.get().max(min_interval);
+        let reply_writer_flush_timeout = reply_writer_flush_timeout.get().max(min_interval);
         let dial_timeout = dial_timeout.get().max(min_interval);
         let peer_gossip_period = peer_gossip_period.get().max(min_interval);
         let peer_gossip_max_period = peer_gossip_max_period.get().max(peer_gossip_period);
@@ -7677,6 +7658,7 @@ impl Network {
                 relay_hub_addresses,
                 relay_ttl,
                 idle_timeout,
+                reply_writer_flush_timeout,
                 connect_startup_delay: connect_startup_delay.get(),
                 dial_timeout,
                 deferred_send_ttl: deferred_send_ttl_ms.get().max(min_interval),
@@ -7880,9 +7862,6 @@ pub struct Queue {
     /// Maximum number of entries scanned per expired-transaction sweep.
     #[config(default = "defaults::queue::EXPIRED_CULL_BATCH")]
     pub expired_cull_batch: NonZeroUsize,
-    /// Persist pending transaction routing plans for local restart replay.
-    #[config(default = "defaults::queue::PLAN_JOURNAL_ENABLED")]
-    pub plan_journal_enabled: bool,
     /// Maximum queue-plan journal size before atomic compaction is considered.
     #[config(default = "defaults::queue::PLAN_JOURNAL_MAX_BYTES")]
     pub plan_journal_max_bytes: u64,
@@ -7898,7 +7877,6 @@ impl Queue {
             transaction_time_to_live_ms: transaction_time_to_live,
             expired_cull_interval_ms: expired_cull_interval,
             expired_cull_batch,
-            plan_journal_enabled,
             plan_journal_max_bytes,
         } = self;
         actual::Queue {
@@ -7908,7 +7886,6 @@ impl Queue {
             transaction_time_to_live: transaction_time_to_live.0,
             expired_cull_interval: expired_cull_interval.0,
             expired_cull_batch,
-            plan_journal_enabled,
             plan_journal_max_bytes,
         }
     }
@@ -7950,7 +7927,7 @@ pub struct Repo {
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
     /// Require Kagemusha cash to be escrow-backed.
-    #[config(default = "false")]
+    #[config(default = "true")]
     pub escrow_required: bool,
     /// Escrow account bindings keyed by asset definition id.
     #[config(default = "BTreeMap::new()")]
@@ -7967,7 +7944,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            escrow_required: false,
+            escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
@@ -8198,6 +8175,11 @@ impl Offline {
             kagemusha_artifact_dir,
             mut kagemusha_max_decoded_bytes,
         } = self;
+        if !escrow_required {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline.escrow_required cannot be false; offline cash is mandatory",
+            ));
+        }
         if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
             emitter.emit(
                 Report::new(ParseError::InvalidSettlementConfig).attach(
@@ -13796,9 +13778,6 @@ pub struct Torii {
     /// Data-availability ingest configuration.
     #[config(nested)]
     pub da_ingest: DaIngest,
-    /// SoraFS configuration (discovery + storage + repair/GC).
-    #[config(nested)]
-    pub sorafs: Sorafs,
     /// Transport-specific configuration (Norito-RPC rollout, streaming knobs).
     #[config(nested)]
     pub transport: ToriiTransport,
@@ -14182,7 +14161,11 @@ impl Torii {
         }
     }
 
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> (actual::Torii, actual::LiveQueryStore) {
+    fn parse(
+        self,
+        emitter: &mut Emitter<ParseError>,
+        parsed_sorafs: ParsedSorafs,
+    ) -> (actual::Torii, actual::LiveQueryStore) {
         let default_list_limit = std::num::NonZeroU32::new(self.app_api_default_list_limit.max(1))
             .unwrap_or(nonzero!(1_u32));
         let max_list_limit = std::num::NonZeroU32::new(
@@ -14209,7 +14192,7 @@ impl Torii {
             sorafs_gateway,
             sorafs_por,
             sorafs_appeal_finance_settlement,
-        ) = self.sorafs.parse(emitter);
+        ) = parsed_sorafs;
         let receipt_signer = Self::parse_receipt_signer(
             self.receipt_public_key.as_ref(),
             self.receipt_private_key.as_ref(),
@@ -17647,21 +17630,24 @@ pub struct Sorafs {
     pub appeal_finance_settlement: SorafsAppealFinanceSettlement,
 }
 
+type ParsedSorafs = (
+    actual::SorafsStorage,
+    actual::SorafsDiscovery,
+    actual::SorafsRepair,
+    actual::SorafsGc,
+    actual::SorafsQuota,
+    actual::SorafsAliasCachePolicy,
+    actual::SorafsGateway,
+    actual::SorafsPor,
+    actual::SorafsAppealFinanceSettlement,
+);
+
+const fn default_sorafs_appeal_finance_signer_valid_from_block_height() -> u64 {
+    1
+}
+
 impl Sorafs {
-    fn parse(
-        self,
-        emitter: &mut Emitter<ParseError>,
-    ) -> (
-        actual::SorafsStorage,
-        actual::SorafsDiscovery,
-        actual::SorafsRepair,
-        actual::SorafsGc,
-        actual::SorafsQuota,
-        actual::SorafsAliasCachePolicy,
-        actual::SorafsGateway,
-        actual::SorafsPor,
-        actual::SorafsAppealFinanceSettlement,
-    ) {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> ParsedSorafs {
         (
             self.storage.parse(emitter),
             self.discovery.parse(emitter),
@@ -17678,6 +17664,7 @@ impl Sorafs {
 
 /// Non-secret identity binding for one runtime-only appeal-finance signer.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SorafsAppealFinanceSignerBinding {
     /// Stable opaque PKCS#11/HSM/KMS provider handle.
     pub handle: String,
@@ -17686,15 +17673,223 @@ pub struct SorafsAppealFinanceSignerBinding {
     /// Canonical lowercase Ed25519 public key payload.
     pub public_key_hex: String,
     /// First finalized block height at which this binding is active.
-    #[config(default = "1")]
+    #[config(default = "default_sorafs_appeal_finance_signer_valid_from_block_height()")]
+    #[norito(default = "default_sorafs_appeal_finance_signer_valid_from_block_height")]
     pub valid_from_block_height: u64,
     /// First finalized block height at which this binding is revoked.
     pub revoked_at_block_height: Option<u64>,
 }
 
+/// User-facing inline appeal pricing policy.
+#[derive(Debug, Clone, PartialEq, Eq, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsAppealPricingPolicy {
+    /// Governed policy version.
+    pub version: String,
+    /// Quote validity window in seconds.
+    pub quote_ttl_secs: u64,
+    /// Default moderation panel size used by pricing.
+    pub default_panel_size: u32,
+    /// Urgency multipliers.
+    pub urgency_multipliers: SorafsAppealUrgencyMultipliers,
+    /// Complete first-release appeal class inventory.
+    pub classes: SorafsAppealPricingClasses,
+}
+
+impl Default for SorafsAppealPricingPolicy {
+    fn default() -> Self {
+        let baseline = actual::SorafsAppealPricingPolicy::default();
+        Self {
+            version: baseline.version,
+            quote_ttl_secs: baseline.quote_ttl_secs,
+            default_panel_size: baseline.default_panel_size,
+            urgency_multipliers: SorafsAppealUrgencyMultipliers {
+                normal: baseline.urgency_multipliers.normal,
+                high: baseline.urgency_multipliers.high,
+            },
+            classes: SorafsAppealPricingClasses {
+                content: baseline.classes.content.into(),
+                access: baseline.classes.access.into(),
+                fraud: baseline.classes.fraud.into(),
+                other: baseline.classes.other.into(),
+            },
+        }
+    }
+}
+
+/// User-facing urgency multipliers for appeal pricing.
+#[derive(Debug, Clone, PartialEq, Eq, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsAppealUrgencyMultipliers {
+    /// Multiplier applied to normal-urgency appeals.
+    pub normal: Numeric,
+    /// Multiplier applied to high-urgency appeals.
+    pub high: Numeric,
+}
+
+/// Complete, closed first-release appeal pricing class inventory.
+#[derive(Debug, Clone, PartialEq, Eq, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsAppealPricingClasses {
+    /// Content moderation appeals.
+    pub content: SorafsAppealPricingClassPolicy,
+    /// Access-policy appeals.
+    pub access: SorafsAppealPricingClassPolicy,
+    /// Fraud appeals.
+    pub fraud: SorafsAppealPricingClassPolicy,
+    /// Other governed appeals.
+    pub other: SorafsAppealPricingClassPolicy,
+}
+
+/// User-facing pricing parameters for one appeal class.
+#[derive(Debug, Clone, PartialEq, Eq, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsAppealPricingClassPolicy {
+    /// Base XOR rate.
+    pub base_rate_xor: XorQuantity,
+    /// Backlog at which the backlog multiplier reaches one.
+    pub backlog_target: u32,
+    /// Additional backlog multiplier cap.
+    pub backlog_cap: Numeric,
+    /// Evidence-size divisor in MiB.
+    pub size_divisor_mb: Numeric,
+    /// Additional evidence-size multiplier cap.
+    pub size_cap: Numeric,
+    /// Minimum admitted appeal deposit.
+    pub min_deposit_xor: XorQuantity,
+    /// Maximum admitted appeal deposit.
+    pub max_deposit_xor: XorQuantity,
+    /// Governed class-level surge multiplier.
+    pub surge_multiplier: Numeric,
+}
+
+impl From<actual::SorafsAppealPricingClassPolicy> for SorafsAppealPricingClassPolicy {
+    fn from(policy: actual::SorafsAppealPricingClassPolicy) -> Self {
+        Self {
+            base_rate_xor: policy.base_rate_xor,
+            backlog_target: policy.backlog_target,
+            backlog_cap: policy.backlog_cap,
+            size_divisor_mb: policy.size_divisor_mb,
+            size_cap: policy.size_cap,
+            min_deposit_xor: policy.min_deposit_xor,
+            max_deposit_xor: policy.max_deposit_xor,
+            surge_multiplier: policy.surge_multiplier,
+        }
+    }
+}
+
+/// User-facing inline appeal settlement policy.
+#[derive(Debug, Clone, PartialEq, Eq, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsAppealSettlementPolicy {
+    /// Governed policy version.
+    pub version: String,
+    /// Default moderation panel size used by settlement.
+    pub default_panel_size: u32,
+    /// Juror reward schedule.
+    pub panel_rewards: SorafsAppealPanelRewards,
+    /// Complete first-release settlement rule inventory.
+    pub rules: SorafsAppealSettlementRules,
+}
+
+impl Default for SorafsAppealSettlementPolicy {
+    fn default() -> Self {
+        let baseline = actual::SorafsAppealSettlementPolicy::default();
+        Self {
+            version: baseline.version,
+            default_panel_size: baseline.default_panel_size,
+            panel_rewards: SorafsAppealPanelRewards {
+                stipend_per_juror_xor: baseline.panel_rewards.stipend_per_juror_xor,
+                case_bonus_xor: baseline.panel_rewards.case_bonus_xor,
+            },
+            rules: SorafsAppealSettlementRules {
+                decisions: SorafsAppealDecisionRules {
+                    uphold: baseline.rules.decisions.uphold.into(),
+                    overturn: baseline.rules.decisions.overturn.into(),
+                    modify: baseline.rules.decisions.modify.into(),
+                },
+                withdrawn_before_panel: baseline.rules.withdrawn_before_panel.into(),
+                withdrawn_after_panel: baseline.rules.withdrawn_after_panel.into(),
+                frivolous: baseline.rules.frivolous.into(),
+                escalated: baseline.rules.escalated.into(),
+            },
+        }
+    }
+}
+
+/// User-facing appeal-panel reward schedule.
+#[derive(Debug, Clone, PartialEq, Eq, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsAppealPanelRewards {
+    /// XOR stipend paid to each attending juror.
+    pub stipend_per_juror_xor: XorQuantity,
+    /// XOR bonus pool paid once per case.
+    pub case_bonus_xor: XorQuantity,
+}
+
+/// Complete first-release appeal settlement rule inventory.
+#[derive(Debug, Clone, PartialEq, Eq, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsAppealSettlementRules {
+    /// Rules for terminal moderation decisions.
+    pub decisions: SorafsAppealDecisionRules,
+    /// Rule applied before panel activation.
+    pub withdrawn_before_panel: SorafsAppealSettlementRule,
+    /// Rule applied after panel activation.
+    pub withdrawn_after_panel: SorafsAppealSettlementRule,
+    /// Rule applied to frivolous appeals.
+    pub frivolous: SorafsAppealSettlementRule,
+    /// Rule applied while an appeal remains escalated.
+    pub escalated: SorafsAppealSettlementRule,
+}
+
+/// Complete first-release decision settlement rule inventory.
+#[derive(Debug, Clone, PartialEq, Eq, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsAppealDecisionRules {
+    /// Rule applied when the original decision is upheld.
+    pub uphold: SorafsAppealSettlementRule,
+    /// Rule applied when the original decision is overturned.
+    pub overturn: SorafsAppealSettlementRule,
+    /// Rule applied when the original decision is modified.
+    pub modify: SorafsAppealSettlementRule,
+}
+
+/// User-facing refund/treasury fractions for one appeal outcome.
+#[derive(Debug, Clone, PartialEq, Eq, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsAppealSettlementRule {
+    /// Fraction of the deposit returned to the appellant.
+    pub refund_rate: Numeric,
+    /// Fraction of the deposit transferred to treasury.
+    pub treasury_rate: Numeric,
+}
+
+impl From<actual::SorafsAppealSettlementRule> for SorafsAppealSettlementRule {
+    fn from(rule: actual::SorafsAppealSettlementRule) -> Self {
+        Self {
+            refund_rate: rule.refund_rate,
+            treasury_rate: rule.treasury_rate,
+        }
+    }
+}
+
 /// User-level SoraFS appeal-finance settlement worker configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SorafsAppealFinanceSettlement {
+    /// Exact governed asset definition accepted by the appeal-finance APIs.
+    #[config(default = "defaults::torii::sorafs_appeal_finance::asset_definition_id()")]
+    pub asset_definition_id: AssetDefinitionId,
+    /// Exact ledger scale bound to the governed asset definition.
+    #[config(default = "defaults::torii::sorafs_appeal_finance::ASSET_SCALE")]
+    pub asset_scale: u32,
+    /// Complete inline appeal pricing policy. Overrides replace the full policy atomically.
+    #[config(default = "SorafsAppealPricingPolicy::default()")]
+    pub pricing: SorafsAppealPricingPolicy,
+    /// Complete inline appeal settlement policy. Overrides replace the full policy atomically.
+    #[config(default = "SorafsAppealSettlementPolicy::default()")]
+    pub settlement: SorafsAppealSettlementPolicy,
     /// Non-secret identities of runtime-only HSM/KMS signer providers.
     #[config(default)]
     pub submitter_signers: Vec<SorafsAppealFinanceSignerBinding>,
@@ -17729,6 +17924,10 @@ pub struct SorafsAppealFinanceSettlement {
 impl Default for SorafsAppealFinanceSettlement {
     fn default() -> Self {
         Self {
+            asset_definition_id: defaults::torii::sorafs_appeal_finance::asset_definition_id(),
+            asset_scale: defaults::torii::sorafs_appeal_finance::ASSET_SCALE,
+            pricing: SorafsAppealPricingPolicy::default(),
+            settlement: SorafsAppealSettlementPolicy::default(),
             submitter_signers: Vec::new(),
             worker_scan_interval_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS,
@@ -17747,6 +17946,269 @@ impl Default for SorafsAppealFinanceSettlement {
     }
 }
 
+fn emit_sorafs_appeal_finance_error(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
+}
+
+fn is_canonical_sorafs_appeal_policy_version(value: &str) -> bool {
+    const MAX_VERSION_BYTES: usize = 128;
+
+    !value.is_empty()
+        && value.len() <= MAX_VERSION_BYTES
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+impl SorafsAppealPricingPolicy {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsAppealPricingPolicy {
+        const MAX_QUOTE_TTL_SECS: u64 = 24 * 60 * 60;
+        const MAX_PANEL_SIZE: u32 = 128;
+
+        if !is_canonical_sorafs_appeal_policy_version(&self.version) {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                "sorafs.appeal_finance_settlement.pricing.version must be 1..=128 bytes of canonical visible ASCII",
+            );
+        }
+        if !(1..=MAX_QUOTE_TTL_SECS).contains(&self.quote_ttl_secs) {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!(
+                    "sorafs.appeal_finance_settlement.pricing.quote_ttl_secs must be within 1..={MAX_QUOTE_TTL_SECS}"
+                ),
+            );
+        }
+        if !(1..=MAX_PANEL_SIZE).contains(&self.default_panel_size) {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!(
+                    "sorafs.appeal_finance_settlement.pricing.default_panel_size must be within 1..={MAX_PANEL_SIZE}"
+                ),
+            );
+        }
+        if self.urgency_multipliers.normal <= Numeric::zero() {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                "sorafs.appeal_finance_settlement.pricing.urgency_multipliers.normal must be greater than zero",
+            );
+        }
+        if self.urgency_multipliers.high <= Numeric::zero() {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                "sorafs.appeal_finance_settlement.pricing.urgency_multipliers.high must be greater than zero",
+            );
+        }
+
+        actual::SorafsAppealPricingPolicy {
+            version: self.version,
+            quote_ttl_secs: self.quote_ttl_secs,
+            default_panel_size: self.default_panel_size,
+            urgency_multipliers: actual::SorafsAppealUrgencyMultipliers {
+                normal: self.urgency_multipliers.normal,
+                high: self.urgency_multipliers.high,
+            },
+            classes: actual::SorafsAppealPricingClasses {
+                content: self.classes.content.parse("content", emitter),
+                access: self.classes.access.parse("access", emitter),
+                fraud: self.classes.fraud.parse("fraud", emitter),
+                other: self.classes.other.parse("other", emitter),
+            },
+        }
+    }
+}
+
+impl SorafsAppealPricingClassPolicy {
+    fn parse(
+        self,
+        class: &str,
+        emitter: &mut Emitter<ParseError>,
+    ) -> actual::SorafsAppealPricingClassPolicy {
+        let path = format!("sorafs.appeal_finance_settlement.pricing.classes.{class}");
+        if self.base_rate_xor.is_zero() {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.base_rate_xor must be greater than zero"),
+            );
+        }
+        if self.backlog_target == 0 {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.backlog_target must be greater than zero"),
+            );
+        }
+        if self.backlog_cap < Numeric::zero() {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.backlog_cap must not be negative"),
+            );
+        }
+        if self.size_divisor_mb <= Numeric::zero() {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.size_divisor_mb must be greater than zero"),
+            );
+        }
+        if self.size_cap < Numeric::zero() {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.size_cap must not be negative"),
+            );
+        }
+        if self.max_deposit_xor.is_zero() {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.max_deposit_xor must be greater than zero"),
+            );
+        }
+        if self.max_deposit_xor < self.min_deposit_xor {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.max_deposit_xor must be greater than or equal to min_deposit_xor"),
+            );
+        }
+        if self.surge_multiplier <= Numeric::zero() {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.surge_multiplier must be greater than zero"),
+            );
+        }
+
+        actual::SorafsAppealPricingClassPolicy {
+            base_rate_xor: self.base_rate_xor,
+            backlog_target: self.backlog_target,
+            backlog_cap: self.backlog_cap,
+            size_divisor_mb: self.size_divisor_mb,
+            size_cap: self.size_cap,
+            min_deposit_xor: self.min_deposit_xor,
+            max_deposit_xor: self.max_deposit_xor,
+            surge_multiplier: self.surge_multiplier,
+        }
+    }
+}
+
+impl SorafsAppealSettlementPolicy {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsAppealSettlementPolicy {
+        const MAX_PANEL_SIZE: u32 = 128;
+
+        if !is_canonical_sorafs_appeal_policy_version(&self.version) {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                "sorafs.appeal_finance_settlement.settlement.version must be 1..=128 bytes of canonical visible ASCII",
+            );
+        }
+        if !(1..=MAX_PANEL_SIZE).contains(&self.default_panel_size) {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!(
+                    "sorafs.appeal_finance_settlement.settlement.default_panel_size must be within 1..={MAX_PANEL_SIZE}"
+                ),
+            );
+        }
+        if self
+            .panel_rewards
+            .stipend_per_juror_xor
+            .as_quantity()
+            .try_mul_decimal(&Numeric::from(self.default_panel_size))
+            .and_then(|total| total.try_add(self.panel_rewards.case_bonus_xor.as_quantity()))
+            .is_err()
+        {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                "sorafs.appeal_finance_settlement.settlement.panel_rewards must remain representable at default_panel_size",
+            );
+        }
+
+        actual::SorafsAppealSettlementPolicy {
+            version: self.version,
+            default_panel_size: self.default_panel_size,
+            panel_rewards: actual::SorafsAppealPanelRewards {
+                stipend_per_juror_xor: self.panel_rewards.stipend_per_juror_xor,
+                case_bonus_xor: self.panel_rewards.case_bonus_xor,
+            },
+            rules: actual::SorafsAppealSettlementRules {
+                decisions: actual::SorafsAppealDecisionRules {
+                    uphold: self
+                        .rules
+                        .decisions
+                        .uphold
+                        .parse("rules.decisions.uphold", emitter),
+                    overturn: self
+                        .rules
+                        .decisions
+                        .overturn
+                        .parse("rules.decisions.overturn", emitter),
+                    modify: self
+                        .rules
+                        .decisions
+                        .modify
+                        .parse("rules.decisions.modify", emitter),
+                },
+                withdrawn_before_panel: self
+                    .rules
+                    .withdrawn_before_panel
+                    .parse("rules.withdrawn_before_panel", emitter),
+                withdrawn_after_panel: self
+                    .rules
+                    .withdrawn_after_panel
+                    .parse("rules.withdrawn_after_panel", emitter),
+                frivolous: self.rules.frivolous.parse("rules.frivolous", emitter),
+                escalated: self.rules.escalated.parse("rules.escalated", emitter),
+            },
+        }
+    }
+}
+
+impl SorafsAppealSettlementRule {
+    fn parse(
+        self,
+        rule: &str,
+        emitter: &mut Emitter<ParseError>,
+    ) -> actual::SorafsAppealSettlementRule {
+        let path = format!("sorafs.appeal_finance_settlement.settlement.{rule}");
+        let zero = Numeric::zero();
+        let one = Numeric::one();
+        if self.refund_rate < zero || self.refund_rate > one {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.refund_rate must be between zero and one"),
+            );
+        }
+        if self.treasury_rate < zero || self.treasury_rate > one {
+            emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.treasury_rate must be between zero and one"),
+            );
+        }
+        match self.refund_rate.try_decimal_add(&self.treasury_rate) {
+            Ok(total) if total <= one => {}
+            Ok(_) => emit_sorafs_appeal_finance_error(
+                emitter,
+                format!("{path}.refund_rate plus treasury_rate must not exceed one"),
+            ),
+            Err(error) => emit_sorafs_appeal_finance_error(
+                emitter,
+                format!(
+                    "{path}.refund_rate plus treasury_rate must be exactly representable: {error}"
+                ),
+            ),
+        }
+
+        actual::SorafsAppealSettlementRule {
+            refund_rate: self.refund_rate,
+            treasury_rate: self.treasury_rate,
+        }
+    }
+}
+
 impl SorafsAppealFinanceSettlement {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsAppealFinanceSettlement {
         const MAX_SIGNERS: usize = 128;
@@ -17757,13 +18219,43 @@ impl SorafsAppealFinanceSettlement {
         const MAX_CHECKPOINT_BYTES: u64 = 512 * 1024 * 1024;
 
         let emit = |emitter: &mut Emitter<ParseError>, message: String| {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message));
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message));
         };
+        let canonical_asset_definition_id =
+            defaults::torii::sorafs_appeal_finance::asset_definition_id();
+        if self.asset_definition_id != canonical_asset_definition_id {
+            emit(
+                emitter,
+                format!(
+                    "sorafs.appeal_finance_settlement.asset_definition_id must equal the canonical V1 appeal asset `{canonical_asset_definition_id}`"
+                ),
+            );
+        }
+        if self.asset_scale != defaults::torii::sorafs_appeal_finance::ASSET_SCALE {
+            emit(
+                emitter,
+                format!(
+                    "sorafs.appeal_finance_settlement.asset_scale must equal the canonical V1 XOR scale {}",
+                    defaults::torii::sorafs_appeal_finance::ASSET_SCALE
+                ),
+            );
+        }
+        let pricing = self.pricing.parse(emitter);
+        let settlement = self.settlement.parse(emitter);
+        if pricing.default_panel_size != settlement.default_panel_size {
+            emit(
+                emitter,
+                format!(
+                    "sorafs.appeal_finance_settlement pricing and settlement default_panel_size values must match (pricing {}, settlement {})",
+                    pricing.default_panel_size, settlement.default_panel_size
+                ),
+            );
+        }
         if self.submitter_signers.len() > MAX_SIGNERS {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.appeal_finance_settlement.submitter_signers must contain at most {MAX_SIGNERS} entries"
+                    "sorafs.appeal_finance_settlement.submitter_signers must contain at most {MAX_SIGNERS} entries"
                 ),
             );
         }
@@ -17777,7 +18269,7 @@ impl SorafsAppealFinanceSettlement {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.appeal_finance_settlement.submitter_signers[{index}].handle must be unique canonical visible ASCII"
+                        "sorafs.appeal_finance_settlement.submitter_signers[{index}].handle must be unique canonical visible ASCII"
                     ),
                 );
             }
@@ -17791,7 +18283,7 @@ impl SorafsAppealFinanceSettlement {
                     emit(
                         emitter,
                         format!(
-                            "torii.sorafs.appeal_finance_settlement.submitter_signers[{index}].public_key_hex must be a canonical lowercase Ed25519 public key"
+                            "sorafs.appeal_finance_settlement.submitter_signers[{index}].public_key_hex must be a canonical lowercase Ed25519 public key"
                         ),
                     );
                     None
@@ -17805,7 +18297,7 @@ impl SorafsAppealFinanceSettlement {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.appeal_finance_settlement.submitter_signers[{index}] must have a nonzero valid_from_block_height and a later revocation height"
+                        "sorafs.appeal_finance_settlement.submitter_signers[{index}] must have a nonzero valid_from_block_height and a later revocation height"
                     ),
                 );
             }
@@ -17814,7 +18306,7 @@ impl SorafsAppealFinanceSettlement {
                     emit(
                         emitter,
                         format!(
-                            "torii.sorafs.appeal_finance_settlement.submitter_signers[{index}] authority does not match public_key_hex"
+                            "sorafs.appeal_finance_settlement.submitter_signers[{index}] authority does not match public_key_hex"
                         ),
                     );
                 }
@@ -17843,7 +18335,7 @@ impl SorafsAppealFinanceSettlement {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.appeal_finance_settlement signer windows overlap for authority `{authority}`"
+                        "sorafs.appeal_finance_settlement signer windows overlap for authority `{authority}`"
                     ),
                 );
             }
@@ -17866,7 +18358,7 @@ impl SorafsAppealFinanceSettlement {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.appeal_finance_settlement.{field} must be within 1..={MAX_ENTRIES}"
+                        "sorafs.appeal_finance_settlement.{field} must be within 1..={MAX_ENTRIES}"
                     ),
                 );
             }
@@ -17876,7 +18368,7 @@ impl SorafsAppealFinanceSettlement {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.appeal_finance_settlement.worker_scan_interval_ms must be within 1ms..={}ms",
+                    "sorafs.appeal_finance_settlement.worker_scan_interval_ms must be within 1ms..={}ms",
                     MAX_SCAN_INTERVAL.as_millis()
                 ),
             );
@@ -17887,7 +18379,7 @@ impl SorafsAppealFinanceSettlement {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.appeal_finance_settlement.worker_max_retry_attempts must be within 1..={MAX_RETRY_ATTEMPTS}"
+                    "sorafs.appeal_finance_settlement.worker_max_retry_attempts must be within 1..={MAX_RETRY_ATTEMPTS}"
                 ),
             );
         }
@@ -17897,11 +18389,15 @@ impl SorafsAppealFinanceSettlement {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.appeal_finance_settlement.worker_checkpoint_max_bytes must be within {MIN_CHECKPOINT_BYTES}..={MAX_CHECKPOINT_BYTES}"
+                    "sorafs.appeal_finance_settlement.worker_checkpoint_max_bytes must be within {MIN_CHECKPOINT_BYTES}..={MAX_CHECKPOINT_BYTES}"
                 ),
             );
         }
         actual::SorafsAppealFinanceSettlement {
+            asset_definition_id: self.asset_definition_id,
+            asset_scale: self.asset_scale,
+            pricing,
+            settlement,
             submitter_signers,
             worker_scan_interval,
             worker_max_retry_attempts: self.worker_max_retry_attempts,
@@ -18013,7 +18509,7 @@ impl SorafsPopCredentialService {
         const MAX_FINALIZED_TIME_SKEW_SECS: u64 = 5 * 60;
 
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
 
         fn clean_text(value: &str) -> bool {
@@ -18063,7 +18559,7 @@ impl SorafsPopCredentialService {
             if authority_fields_present {
                 emit(
                     emitter,
-                    "torii.sorafs.storage.pop_credentials authority fields must be absent when disabled",
+                    "sorafs.storage.pop_credentials authority fields must be absent when disabled",
                 );
             }
             return None;
@@ -18071,7 +18567,7 @@ impl SorafsPopCredentialService {
         if !storage_enabled {
             emit(
                 emitter,
-                "torii.sorafs.storage.pop_credentials.enabled requires storage.enabled",
+                "sorafs.storage.pop_credentials.enabled requires storage.enabled",
             );
         }
         if self.issuer_state_dir.as_os_str().is_empty()
@@ -18082,31 +18578,31 @@ impl SorafsPopCredentialService {
         {
             emit(
                 emitter,
-                "torii.sorafs.storage.pop_credentials issuer_state_dir and wallet_state_dir must be distinct non-empty absolute paths",
+                "sorafs.storage.pop_credentials issuer_state_dir and wallet_state_dir must be distinct non-empty absolute paths",
             );
         }
 
         let issuer_policy_digest = parse_digest(
             emitter,
-            "torii.sorafs.storage.pop_credentials.issuer_policy_digest_hex",
+            "sorafs.storage.pop_credentials.issuer_policy_digest_hex",
             self.issuer_policy_digest_hex.as_deref(),
         );
         let issuer_public_key = parse_digest(
             emitter,
-            "torii.sorafs.storage.pop_credentials.issuer_public_key_hex",
+            "sorafs.storage.pop_credentials.issuer_public_key_hex",
             self.issuer_public_key_hex.as_deref(),
         );
         for (path, value) in [
             (
-                "torii.sorafs.storage.pop_credentials.issuer_id",
+                "sorafs.storage.pop_credentials.issuer_id",
                 self.issuer_id.as_deref(),
             ),
             (
-                "torii.sorafs.storage.pop_credentials.issuer_hsm_key_id",
+                "sorafs.storage.pop_credentials.issuer_hsm_key_id",
                 self.issuer_hsm_key_id.as_deref(),
             ),
             (
-                "torii.sorafs.storage.pop_credentials.enrollment_recipient_key_id",
+                "sorafs.storage.pop_credentials.enrollment_recipient_key_id",
                 self.enrollment_recipient_key_id.as_deref(),
             ),
         ] {
@@ -18123,7 +18619,7 @@ impl SorafsPopCredentialService {
         {
             emit(
                 emitter,
-                "torii.sorafs.storage.pop_credentials.issuer_public_key_hex is not a valid Ed25519 public key",
+                "sorafs.storage.pop_credentials.issuer_public_key_hex is not a valid Ed25519 public key",
             );
         }
 
@@ -18137,15 +18633,13 @@ impl SorafsPopCredentialService {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.pop_credentials.approval_signers[{index}].signer_id must be canonical and strictly ordered"
+                        "sorafs.storage.pop_credentials.approval_signers[{index}].signer_id must be canonical and strictly ordered"
                     ),
                 );
             }
             let public_key = parse_digest(
                 emitter,
-                &format!(
-                    "torii.sorafs.storage.pop_credentials.approval_signers[{index}].public_key_hex"
-                ),
+                &format!("sorafs.storage.pop_credentials.approval_signers[{index}].public_key_hex"),
                 Some(&signer.public_key_hex),
             );
             if let Some(public_key) = public_key {
@@ -18153,14 +18647,14 @@ impl SorafsPopCredentialService {
                     emit(
                         emitter,
                         format!(
-                            "torii.sorafs.storage.pop_credentials.approval_signers[{index}].public_key_hex is not a valid Ed25519 public key"
+                            "sorafs.storage.pop_credentials.approval_signers[{index}].public_key_hex is not a valid Ed25519 public key"
                         ),
                     );
                 }
                 if !public_keys.insert(public_key) {
                     emit(
                         emitter,
-                        "torii.sorafs.storage.pop_credentials approval public keys must be distinct",
+                        "sorafs.storage.pop_credentials approval public keys must be distinct",
                     );
                 }
                 approval_signers.push(actual::SorafsPopApprovalSigner {
@@ -18173,7 +18667,7 @@ impl SorafsPopCredentialService {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.pop_credentials.approval_signers[{index}].revoked_at_epoch must be nonzero"
+                        "sorafs.storage.pop_credentials.approval_signers[{index}].revoked_at_epoch must be nonzero"
                     ),
                 );
             }
@@ -18182,7 +18676,7 @@ impl SorafsPopCredentialService {
         if self.approval_quorum < 2 || usize::from(self.approval_quorum) > approval_signers.len() {
             emit(
                 emitter,
-                "torii.sorafs.storage.pop_credentials.approval_quorum must require at least two and not exceed the governed signer count",
+                "sorafs.storage.pop_credentials.approval_quorum must require at least two and not exceed the governed signer count",
             );
         }
         for (field, value) in [
@@ -18195,7 +18689,7 @@ impl SorafsPopCredentialService {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.pop_credentials.{field} must be within 1..={MAX_COLLECTION}"
+                        "sorafs.storage.pop_credentials.{field} must be within 1..={MAX_COLLECTION}"
                     ),
                 );
             }
@@ -18203,14 +18697,14 @@ impl SorafsPopCredentialService {
         if self.max_submission_attempts == 0 {
             emit(
                 emitter,
-                "torii.sorafs.storage.pop_credentials.max_submission_attempts must be nonzero",
+                "sorafs.storage.pop_credentials.max_submission_attempts must be nonzero",
             );
         }
         if self.worker_interval_ms == 0 || self.worker_interval_ms > MAX_WORKER_INTERVAL_MS {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.pop_credentials.worker_interval_ms must be within 1..={MAX_WORKER_INTERVAL_MS}"
+                    "sorafs.storage.pop_credentials.worker_interval_ms must be within 1..={MAX_WORKER_INTERVAL_MS}"
                 ),
             );
         }
@@ -18218,7 +18712,7 @@ impl SorafsPopCredentialService {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.pop_credentials.max_finalized_time_skew_secs must be within 0..={MAX_FINALIZED_TIME_SKEW_SECS}"
+                    "sorafs.storage.pop_credentials.max_finalized_time_skew_secs must be within 0..={MAX_FINALIZED_TIME_SKEW_SECS}"
                 ),
             );
         }
@@ -18324,14 +18818,14 @@ impl SorafsModerationOrchestrator {
         const MAX_WORKER_INTERVAL_MS: u64 = 60 * 60 * 1_000;
 
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
 
         if !self.enabled {
             if self.maintenance_authority.is_some() {
                 emit(
                     emitter,
-                    "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be absent when disabled",
+                    "sorafs.storage.moderation_orchestrator.maintenance_authority must be absent when disabled",
                 );
             }
             return None;
@@ -18339,7 +18833,7 @@ impl SorafsModerationOrchestrator {
         if !storage_enabled {
             emit(
                 emitter,
-                "torii.sorafs.storage.moderation_orchestrator.enabled requires storage.enabled",
+                "sorafs.storage.moderation_orchestrator.enabled requires storage.enabled",
             );
         }
         if !self.checkpoint_path.is_absolute()
@@ -18353,7 +18847,7 @@ impl SorafsModerationOrchestrator {
         {
             emit(
                 emitter,
-                "torii.sorafs.storage.moderation_orchestrator.checkpoint_path must be an absolute file path without dot components",
+                "sorafs.storage.moderation_orchestrator.checkpoint_path must be an absolute file path without dot components",
             );
         }
         for (field, value) in [
@@ -18368,7 +18862,7 @@ impl SorafsModerationOrchestrator {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.moderation_orchestrator.{field} must be within 1..={MAX_COLLECTION}"
+                        "sorafs.storage.moderation_orchestrator.{field} must be within 1..={MAX_COLLECTION}"
                     ),
                 );
             }
@@ -18376,14 +18870,14 @@ impl SorafsModerationOrchestrator {
         if self.max_submit_attempts == 0 {
             emit(
                 emitter,
-                "torii.sorafs.storage.moderation_orchestrator.max_submit_attempts must be nonzero",
+                "sorafs.storage.moderation_orchestrator.max_submit_attempts must be nonzero",
             );
         }
         if self.checkpoint_max_bytes.0 == 0 || self.checkpoint_max_bytes.0 > MAX_CHECKPOINT_BYTES {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.moderation_orchestrator.checkpoint_max_bytes must be within 1..={MAX_CHECKPOINT_BYTES}"
+                    "sorafs.storage.moderation_orchestrator.checkpoint_max_bytes must be within 1..={MAX_CHECKPOINT_BYTES}"
                 ),
             );
         }
@@ -18391,7 +18885,7 @@ impl SorafsModerationOrchestrator {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.moderation_orchestrator.worker_interval_ms must be within 1..={MAX_WORKER_INTERVAL_MS}"
+                    "sorafs.storage.moderation_orchestrator.worker_interval_ms must be within 1..={MAX_WORKER_INTERVAL_MS}"
                 ),
             );
         }
@@ -18399,21 +18893,21 @@ impl SorafsModerationOrchestrator {
         let Some(authority_literal) = self.maintenance_authority.as_deref() else {
             emit(
                 emitter,
-                "torii.sorafs.storage.moderation_orchestrator.maintenance_authority is required when enabled",
+                "sorafs.storage.moderation_orchestrator.maintenance_authority is required when enabled",
             );
             return None;
         };
         let Ok(decoded_account) = AccountId::parse_encoded(authority_literal) else {
             emit(
                 emitter,
-                "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
+                "sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
             );
             return None;
         };
         if decoded_account.canonical() != authority_literal {
             emit(
                 emitter,
-                "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
+                "sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
             );
             return None;
         }
@@ -18537,7 +19031,7 @@ impl SorafsEvidenceViewerConfig {
         const MAX_COLLECTION: u32 = 1_000_000;
 
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
 
         let runtime_fields_present = [
@@ -18553,7 +19047,7 @@ impl SorafsEvidenceViewerConfig {
             if runtime_fields_present.iter().any(|present| *present) {
                 emit(
                     emitter,
-                    "torii.sorafs.storage.evidence_viewer runtime identities and WebAuthn policy must be absent when disabled",
+                    "sorafs.storage.evidence_viewer runtime identities and WebAuthn policy must be absent when disabled",
                 );
             }
             return None;
@@ -18561,7 +19055,7 @@ impl SorafsEvidenceViewerConfig {
         if !storage_enabled {
             emit(
                 emitter,
-                "torii.sorafs.storage.evidence_viewer.enabled requires storage.enabled",
+                "sorafs.storage.evidence_viewer.enabled requires storage.enabled",
             );
         }
         if !self.checkpoint_path.is_absolute()
@@ -18575,21 +19069,21 @@ impl SorafsEvidenceViewerConfig {
         {
             emit(
                 emitter,
-                "torii.sorafs.storage.evidence_viewer.checkpoint_path must be an absolute file path without dot components",
+                "sorafs.storage.evidence_viewer.checkpoint_path must be an absolute file path without dot components",
             );
         }
         if self.checkpoint_max_bytes.0 == 0 || self.checkpoint_max_bytes.0 > MAX_CHECKPOINT_BYTES {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.evidence_viewer.checkpoint_max_bytes must be within 1..={MAX_CHECKPOINT_BYTES}"
+                    "sorafs.storage.evidence_viewer.checkpoint_max_bytes must be within 1..={MAX_CHECKPOINT_BYTES}"
                 ),
             );
         }
         if self.session_ttl_ms == 0 || self.session_ttl_ms > MAX_SESSION_TTL_MS {
             emit(
                 emitter,
-                "torii.sorafs.storage.evidence_viewer.session_ttl_ms must be within 1..=900000",
+                "sorafs.storage.evidence_viewer.session_ttl_ms must be within 1..=900000",
             );
         }
         if self.grant_ttl_ms == 0
@@ -18600,14 +19094,14 @@ impl SorafsEvidenceViewerConfig {
         {
             emit(
                 emitter,
-                "torii.sorafs.storage.evidence_viewer challenge/grant/retention intervals are inconsistent",
+                "sorafs.storage.evidence_viewer challenge/grant/retention intervals are inconsistent",
             );
         }
         if self.max_range_bytes.0 == 0 || self.max_range_bytes.0 > MAX_RANGE_BYTES {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.evidence_viewer.max_range_bytes must be within 1..={MAX_RANGE_BYTES}"
+                    "sorafs.storage.evidence_viewer.max_range_bytes must be within 1..={MAX_RANGE_BYTES}"
                 ),
             );
         }
@@ -18621,7 +19115,7 @@ impl SorafsEvidenceViewerConfig {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.evidence_viewer.{field} must be within 1..={MAX_COLLECTION}"
+                        "sorafs.storage.evidence_viewer.{field} must be within 1..={MAX_COLLECTION}"
                     ),
                 );
             }
@@ -18631,7 +19125,7 @@ impl SorafsEvidenceViewerConfig {
             if !is_canonical_webauthn_rp_id(&rp_id) {
                 emit(
                     emitter,
-                    "torii.sorafs.storage.evidence_viewer.webauthn_rp_id must be one canonical DNS relying-party id",
+                    "sorafs.storage.evidence_viewer.webauthn_rp_id must be one canonical DNS relying-party id",
                 );
                 None
             } else {
@@ -18641,7 +19135,7 @@ impl SorafsEvidenceViewerConfig {
         if webauthn_rp_id.is_none() {
             emit(
                 emitter,
-                "torii.sorafs.storage.evidence_viewer.webauthn_rp_id is required when enabled",
+                "sorafs.storage.evidence_viewer.webauthn_rp_id is required when enabled",
             );
         }
         let mut origins = self.webauthn_allowed_origins;
@@ -18659,7 +19153,7 @@ impl SorafsEvidenceViewerConfig {
         {
             emit(
                 emitter,
-                "torii.sorafs.storage.evidence_viewer.webauthn_allowed_origins must contain 1..=16 unique canonical HTTPS origins",
+                "sorafs.storage.evidence_viewer.webauthn_allowed_origins must contain 1..=16 unique canonical HTTPS origins",
             );
         }
 
@@ -18667,9 +19161,7 @@ impl SorafsEvidenceViewerConfig {
             let Some(value) = value else {
                 emit(
                     emitter,
-                    format!(
-                        "torii.sorafs.storage.evidence_viewer.{field} is required when enabled"
-                    ),
+                    format!("sorafs.storage.evidence_viewer.{field} is required when enabled"),
                 );
                 return None;
             };
@@ -18677,7 +19169,7 @@ impl SorafsEvidenceViewerConfig {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.evidence_viewer.{field} must be a canonical production runtime handle"
+                        "sorafs.storage.evidence_viewer.{field} must be a canonical production runtime handle"
                     ),
                 );
                 return None;
@@ -18694,7 +19186,7 @@ impl SorafsEvidenceViewerConfig {
                 if !is_canonical_nonzero_ed25519_public_key_hex(&value) {
                     emit(
                         emitter,
-                        "torii.sorafs.storage.evidence_viewer.receipt_signer_public_key_hex must be canonical lowercase non-zero 32-byte hex",
+                        "sorafs.storage.evidence_viewer.receipt_signer_public_key_hex must be canonical lowercase non-zero 32-byte hex",
                     );
                     return None;
                 }
@@ -18704,7 +19196,7 @@ impl SorafsEvidenceViewerConfig {
                 if PublicKey::from_bytes(Algorithm::Ed25519, &public_key).is_err() {
                     emit(
                         emitter,
-                        "torii.sorafs.storage.evidence_viewer.receipt_signer_public_key_hex is not a valid Ed25519 public key",
+                        "sorafs.storage.evidence_viewer.receipt_signer_public_key_hex is not a valid Ed25519 public key",
                     );
                     return None;
                 }
@@ -18713,7 +19205,7 @@ impl SorafsEvidenceViewerConfig {
         if receipt_signer_public_key.is_none() {
             emit(
                 emitter,
-                "torii.sorafs.storage.evidence_viewer.receipt_signer_public_key_hex is required when enabled",
+                "sorafs.storage.evidence_viewer.receipt_signer_public_key_hex is required when enabled",
             );
         }
 
@@ -18938,7 +19430,7 @@ impl SorafsProviderIngestRuntimeConfig {
         const ESTIMATED_OUTBOX_ENTRY_OVERHEAD_BYTES: u64 = 2 * 1024;
 
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
 
         let authority_fields_present = [
@@ -18949,7 +19441,7 @@ impl SorafsProviderIngestRuntimeConfig {
             if authority_fields_present.iter().any(|present| *present) {
                 emit(
                     emitter,
-                    "torii.sorafs.storage.provider_ingest_runtime runtime provider handles must be absent when disabled",
+                    "sorafs.storage.provider_ingest_runtime runtime provider handles must be absent when disabled",
                 );
             }
             return None;
@@ -18957,13 +19449,13 @@ impl SorafsProviderIngestRuntimeConfig {
         if !storage_enabled {
             emit(
                 emitter,
-                "torii.sorafs.storage.provider_ingest_runtime.enabled requires storage.enabled",
+                "sorafs.storage.provider_ingest_runtime.enabled requires storage.enabled",
             );
         }
         if provider_id.is_none_or(|provider| provider.as_bytes() == &[0; 32]) {
             emit(
                 emitter,
-                "torii.sorafs.storage.provider_ingest_runtime.enabled requires a canonical non-zero storage.provider_id_hex",
+                "sorafs.storage.provider_ingest_runtime.enabled requires a canonical non-zero storage.provider_id_hex",
             );
         }
 
@@ -18978,7 +19470,7 @@ impl SorafsProviderIngestRuntimeConfig {
                         emit(
                             emitter,
                             format!(
-                                "torii.sorafs.storage.provider_ingest_runtime.{field} must be a production opaque handle of 1..=256 visible ASCII bytes without whitespace or test/null markers"
+                                "sorafs.storage.provider_ingest_runtime.{field} must be a production opaque handle of 1..=256 visible ASCII bytes without whitespace or test/null markers"
                             ),
                         );
                         None
@@ -18988,7 +19480,7 @@ impl SorafsProviderIngestRuntimeConfig {
                     emit(
                         emitter,
                         format!(
-                            "torii.sorafs.storage.provider_ingest_runtime.{field} is required when enabled"
+                            "sorafs.storage.provider_ingest_runtime.{field} is required when enabled"
                         ),
                     );
                     None
@@ -19009,7 +19501,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.scan_interval_ms must be within {MIN_SCAN_INTERVAL_MS}..={MILLISECONDS_PER_DAY}"
+                    "sorafs.storage.provider_ingest_runtime.scan_interval_ms must be within {MIN_SCAN_INTERVAL_MS}..={MILLISECONDS_PER_DAY}"
                 ),
             );
         }
@@ -19017,7 +19509,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.max_page_rows must be within 1..={MAX_PAGE_ROWS}"
+                    "sorafs.storage.provider_ingest_runtime.max_page_rows must be within 1..={MAX_PAGE_ROWS}"
                 ),
             );
         }
@@ -19025,7 +19517,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.max_pages_per_tick must be within 1..={MAX_PAGES_PER_TICK}"
+                    "sorafs.storage.provider_ingest_runtime.max_pages_per_tick must be within 1..={MAX_PAGES_PER_TICK}"
                 ),
             );
         }
@@ -19035,7 +19527,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.max_source_jobs_per_tick must be within 1..={MAX_SOURCE_JOBS_PER_TICK}"
+                    "sorafs.storage.provider_ingest_runtime.max_source_jobs_per_tick must be within 1..={MAX_SOURCE_JOBS_PER_TICK}"
                 ),
             );
         }
@@ -19043,7 +19535,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.max_source_providers must be within 1..={MAX_SOURCE_PROVIDERS}"
+                    "sorafs.storage.provider_ingest_runtime.max_source_providers must be within 1..={MAX_SOURCE_PROVIDERS}"
                 ),
             );
         }
@@ -19067,7 +19559,7 @@ impl SorafsProviderIngestRuntimeConfig {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.provider_ingest_runtime.{field} must be within 1..={MILLISECONDS_PER_DAY}"
+                        "sorafs.storage.provider_ingest_runtime.{field} must be within 1..={MILLISECONDS_PER_DAY}"
                     ),
                 );
             }
@@ -19076,7 +19568,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.max_snapshot_rows must be within 1..={MAX_SNAPSHOT_ROWS}"
+                    "sorafs.storage.provider_ingest_runtime.max_snapshot_rows must be within 1..={MAX_SNAPSHOT_ROWS}"
                 ),
             );
         }
@@ -19084,7 +19576,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.max_snapshot_bytes must be within 1..={MAX_RESOURCE_BYTES}"
+                    "sorafs.storage.provider_ingest_runtime.max_snapshot_bytes must be within 1..={MAX_RESOURCE_BYTES}"
                 ),
             );
         }
@@ -19094,7 +19586,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.max_finalized_lag_blocks must be within 1..={MAX_FINALIZED_LAG_BLOCKS}"
+                    "sorafs.storage.provider_ingest_runtime.max_finalized_lag_blocks must be within 1..={MAX_FINALIZED_LAG_BLOCKS}"
                 ),
             );
         }
@@ -19103,7 +19595,7 @@ impl SorafsProviderIngestRuntimeConfig {
         if page_capacity.is_none_or(|rows| rows > self.max_snapshot_rows) {
             emit(
                 emitter,
-                "torii.sorafs.storage.provider_ingest_runtime max_page_rows * max_pages_per_tick must fit max_snapshot_rows",
+                "sorafs.storage.provider_ingest_runtime max_page_rows * max_pages_per_tick must fit max_snapshot_rows",
             );
         }
         let estimated_snapshot_bytes = u64::try_from(self.max_snapshot_rows)
@@ -19112,7 +19604,7 @@ impl SorafsProviderIngestRuntimeConfig {
         if estimated_snapshot_bytes.is_none_or(|bytes| bytes > self.max_snapshot_bytes.0) {
             emit(
                 emitter,
-                "torii.sorafs.storage.provider_ingest_runtime max_snapshot_rows estimated capacity must fit max_snapshot_bytes",
+                "sorafs.storage.provider_ingest_runtime max_snapshot_rows estimated capacity must fit max_snapshot_bytes",
             );
         }
 
@@ -19121,7 +19613,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.outbox.max_active_entries must be within 1..={MAX_OUTBOX_ENTRIES}"
+                    "sorafs.storage.provider_ingest_runtime.outbox.max_active_entries must be within 1..={MAX_OUTBOX_ENTRIES}"
                 ),
             );
         }
@@ -19129,7 +19621,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.outbox.max_terminal_entries must be within 1..={MAX_OUTBOX_ENTRIES}"
+                    "sorafs.storage.provider_ingest_runtime.outbox.max_terminal_entries must be within 1..={MAX_OUTBOX_ENTRIES}"
                 ),
             );
         }
@@ -19137,7 +19629,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.outbox.max_attempts must be within 1..={MAX_ATTEMPTS}"
+                    "sorafs.storage.provider_ingest_runtime.outbox.max_attempts must be within 1..={MAX_ATTEMPTS}"
                 ),
             );
         }
@@ -19146,7 +19638,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.outbox.checkpoint_max_bytes must be within 1..={MAX_RESOURCE_BYTES}"
+                    "sorafs.storage.provider_ingest_runtime.outbox.checkpoint_max_bytes must be within 1..={MAX_RESOURCE_BYTES}"
                 ),
             );
         }
@@ -19159,7 +19651,7 @@ impl SorafsProviderIngestRuntimeConfig {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.provider_ingest_runtime.outbox.{field} must be within 1..={MILLISECONDS_PER_DAY}"
+                        "sorafs.storage.provider_ingest_runtime.outbox.{field} must be within 1..={MILLISECONDS_PER_DAY}"
                     ),
                 );
             }
@@ -19167,13 +19659,13 @@ impl SorafsProviderIngestRuntimeConfig {
         if self.source_lease_renew_interval_ms >= outbox.source_lease_ttl_ms {
             emit(
                 emitter,
-                "torii.sorafs.storage.provider_ingest_runtime.source_lease_renew_interval_ms must be less than outbox.source_lease_ttl_ms",
+                "sorafs.storage.provider_ingest_runtime.source_lease_renew_interval_ms must be less than outbox.source_lease_ttl_ms",
             );
         }
         if outbox.retry_base_delay_ms > outbox.retry_max_delay_ms {
             emit(
                 emitter,
-                "torii.sorafs.storage.provider_ingest_runtime.outbox.retry_base_delay_ms must not exceed retry_max_delay_ms",
+                "sorafs.storage.provider_ingest_runtime.outbox.retry_base_delay_ms must not exceed retry_max_delay_ms",
             );
         }
         if outbox.terminal_retention_blocks == 0
@@ -19182,7 +19674,7 @@ impl SorafsProviderIngestRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.outbox.terminal_retention_blocks must be within 1..={MAX_TERMINAL_RETENTION_BLOCKS}"
+                    "sorafs.storage.provider_ingest_runtime.outbox.terminal_retention_blocks must be within 1..={MAX_TERMINAL_RETENTION_BLOCKS}"
                 ),
             );
         }
@@ -19192,21 +19684,21 @@ impl SorafsProviderIngestRuntimeConfig {
         {
             emit(
                 emitter,
-                "torii.sorafs.storage.provider_ingest_runtime.outbox.max_signed_transaction_bytes must be non-zero and must not exceed checkpoint_max_bytes or 1073741824 bytes",
+                "sorafs.storage.provider_ingest_runtime.outbox.max_signed_transaction_bytes must be non-zero and must not exceed checkpoint_max_bytes or 1073741824 bytes",
             );
         }
         if outbox.max_status_page_size == 0 || outbox.max_status_page_size > MAX_STATUS_PAGE_SIZE {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.provider_ingest_runtime.outbox.max_status_page_size must be within 1..={MAX_STATUS_PAGE_SIZE}"
+                    "sorafs.storage.provider_ingest_runtime.outbox.max_status_page_size must be within 1..={MAX_STATUS_PAGE_SIZE}"
                 ),
             );
         }
         if self.max_source_jobs_per_tick > outbox.max_active_entries {
             emit(
                 emitter,
-                "torii.sorafs.storage.provider_ingest_runtime.max_source_jobs_per_tick must not exceed outbox.max_active_entries",
+                "sorafs.storage.provider_ingest_runtime.max_source_jobs_per_tick must not exceed outbox.max_active_entries",
             );
         }
         let worst_case_outbox_bytes = u64::try_from(outbox.max_active_entries)
@@ -19229,7 +19721,7 @@ impl SorafsProviderIngestRuntimeConfig {
         if worst_case_outbox_bytes.is_none_or(|bytes| bytes > outbox.checkpoint_max_bytes.0) {
             emit(
                 emitter,
-                "torii.sorafs.storage.provider_ingest_runtime worst-case active transaction and terminal tombstone capacity must fit outbox.checkpoint_max_bytes",
+                "sorafs.storage.provider_ingest_runtime worst-case active transaction and terminal tombstone capacity must fit outbox.checkpoint_max_bytes",
             );
         }
 
@@ -19355,7 +19847,7 @@ impl SorafsHedgingBillingRuntimeConfig {
         const MAX_WORK_PER_TICK: u32 = 4_096;
 
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
 
         fn absolute_leaf(path: &Path) -> bool {
@@ -19383,7 +19875,7 @@ impl SorafsHedgingBillingRuntimeConfig {
             if authority_fields_present.iter().any(|present| *present) {
                 emit(
                     emitter,
-                    "torii.sorafs.storage.hedging_billing_runtime policy and authority bindings must be absent when disabled",
+                    "sorafs.storage.hedging_billing_runtime policy and authority bindings must be absent when disabled",
                 );
             }
             return None;
@@ -19391,13 +19883,13 @@ impl SorafsHedgingBillingRuntimeConfig {
         if !storage_enabled {
             emit(
                 emitter,
-                "torii.sorafs.storage.hedging_billing_runtime.enabled requires storage.enabled",
+                "sorafs.storage.hedging_billing_runtime.enabled requires storage.enabled",
             );
         }
         if !absolute_leaf(&self.state_dir) {
             emit(
                 emitter,
-                "torii.sorafs.storage.hedging_billing_runtime.state_dir must be an absolute private directory without dot components",
+                "sorafs.storage.hedging_billing_runtime.state_dir must be an absolute private directory without dot components",
             );
         }
         let service_policy_path = self.service_policy_path.and_then(|path| {
@@ -19406,7 +19898,7 @@ impl SorafsHedgingBillingRuntimeConfig {
             } else {
                 emit(
                     emitter,
-                    "torii.sorafs.storage.hedging_billing_runtime.service_policy_path must be an absolute public policy file without dot components",
+                    "sorafs.storage.hedging_billing_runtime.service_policy_path must be an absolute public policy file without dot components",
                 );
                 None
             }
@@ -19414,13 +19906,13 @@ impl SorafsHedgingBillingRuntimeConfig {
         if service_policy_path.is_none() {
             emit(
                 emitter,
-                "torii.sorafs.storage.hedging_billing_runtime.service_policy_path is required when enabled",
+                "sorafs.storage.hedging_billing_runtime.service_policy_path is required when enabled",
             );
         }
         if feed_trust_policy_path.is_none_or(|path| !absolute_leaf(path)) {
             emit(
                 emitter,
-                "torii.sorafs.storage.hedging_billing_runtime.enabled requires an absolute hedging_feed_trust_policy_path without dot components",
+                "sorafs.storage.hedging_billing_runtime.enabled requires an absolute hedging_feed_trust_policy_path without dot components",
             );
         }
 
@@ -19433,7 +19925,7 @@ impl SorafsHedgingBillingRuntimeConfig {
                 {
                     emit(
                         emitter,
-                        "torii.sorafs.storage.hedging_billing_runtime.service_policy_digest_hex must be canonical lowercase non-zero 32-byte hex",
+                        "sorafs.storage.hedging_billing_runtime.service_policy_digest_hex must be canonical lowercase non-zero 32-byte hex",
                     );
                     return None;
                 }
@@ -19443,7 +19935,7 @@ impl SorafsHedgingBillingRuntimeConfig {
                 if digest == [0; 32] {
                     emit(
                         emitter,
-                        "torii.sorafs.storage.hedging_billing_runtime.service_policy_digest_hex must be non-zero",
+                        "sorafs.storage.hedging_billing_runtime.service_policy_digest_hex must be non-zero",
                     );
                     None
                 } else {
@@ -19453,7 +19945,7 @@ impl SorafsHedgingBillingRuntimeConfig {
         if service_policy_digest.is_none() {
             emit(
                 emitter,
-                "torii.sorafs.storage.hedging_billing_runtime.service_policy_digest_hex is required when enabled",
+                "sorafs.storage.hedging_billing_runtime.service_policy_digest_hex is required when enabled",
             );
         }
 
@@ -19468,7 +19960,7 @@ impl SorafsHedgingBillingRuntimeConfig {
                         emit(
                             emitter,
                             format!(
-                                "torii.sorafs.storage.hedging_billing_runtime.{field} must be a production opaque handle of 1..=256 visible ASCII bytes without whitespace or test/null markers"
+                                "sorafs.storage.hedging_billing_runtime.{field} must be a production opaque handle of 1..=256 visible ASCII bytes without whitespace or test/null markers"
                             ),
                         );
                         None
@@ -19478,7 +19970,7 @@ impl SorafsHedgingBillingRuntimeConfig {
                     emit(
                         emitter,
                         format!(
-                            "torii.sorafs.storage.hedging_billing_runtime.{field} is required when enabled"
+                            "sorafs.storage.hedging_billing_runtime.{field} is required when enabled"
                         ),
                     );
                     None
@@ -19519,7 +20011,7 @@ impl SorafsHedgingBillingRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.hedging_billing_runtime.poll_interval_ms must be within {MIN_POLL_INTERVAL_MS}..={MAX_POLL_INTERVAL_MS}"
+                    "sorafs.storage.hedging_billing_runtime.poll_interval_ms must be within {MIN_POLL_INTERVAL_MS}..={MAX_POLL_INTERVAL_MS}"
                 ),
             );
         }
@@ -19538,7 +20030,7 @@ impl SorafsHedgingBillingRuntimeConfig {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.hedging_billing_runtime.{field} must be within 1..={MAX_WORK_PER_TICK}"
+                        "sorafs.storage.hedging_billing_runtime.{field} must be within 1..={MAX_WORK_PER_TICK}"
                     ),
                 );
             }
@@ -19546,7 +20038,7 @@ impl SorafsHedgingBillingRuntimeConfig {
         if self.max_finalized_lag_blocks == 0 || self.max_finalized_lag_blocks > 10_000 {
             emit(
                 emitter,
-                "torii.sorafs.storage.hedging_billing_runtime.max_finalized_lag_blocks must be within 1..=10000",
+                "sorafs.storage.hedging_billing_runtime.max_finalized_lag_blocks must be within 1..=10000",
             );
         }
 
@@ -19711,7 +20203,7 @@ impl SorafsReputationRuntimeConfig {
         const MAX_PUBLICATION_CHECKPOINT_BYTES: u64 = 32 * 1024 * 1024;
 
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
 
         let authority_fields_present = [
@@ -19728,7 +20220,7 @@ impl SorafsReputationRuntimeConfig {
             if authority_fields_present.iter().any(|present| *present) {
                 emit(
                     emitter,
-                    "torii.sorafs.storage.reputation_runtime authority bindings must be absent when disabled",
+                    "sorafs.storage.reputation_runtime authority bindings must be absent when disabled",
                 );
             }
             return None;
@@ -19736,7 +20228,7 @@ impl SorafsReputationRuntimeConfig {
         if !storage_enabled {
             emit(
                 emitter,
-                "torii.sorafs.storage.reputation_runtime.enabled requires storage.enabled",
+                "sorafs.storage.reputation_runtime.enabled requires storage.enabled",
             );
         }
         if !self.state_dir.is_absolute()
@@ -19750,7 +20242,7 @@ impl SorafsReputationRuntimeConfig {
         {
             emit(
                 emitter,
-                "torii.sorafs.storage.reputation_runtime.state_dir must be an absolute private directory without dot components",
+                "sorafs.storage.reputation_runtime.state_dir must be an absolute private directory without dot components",
             );
         }
         match trust_policy_path {
@@ -19765,28 +20257,28 @@ impl SorafsReputationRuntimeConfig {
                     }) => {}
             _ => emit(
                 emitter,
-                "torii.sorafs.storage.reputation_runtime.enabled requires an absolute reputation_trust_policy_path without dot components",
+                "sorafs.storage.reputation_runtime.enabled requires an absolute reputation_trust_policy_path without dot components",
             ),
         }
 
         let window_start_height = self.window_start_height.unwrap_or_else(|| {
             emit(
                 emitter,
-                "torii.sorafs.storage.reputation_runtime.window_start_height is required when enabled",
+                "sorafs.storage.reputation_runtime.window_start_height is required when enabled",
             );
             0
         });
         let window_end_height = self.window_end_height.unwrap_or_else(|| {
             emit(
                 emitter,
-                "torii.sorafs.storage.reputation_runtime.window_end_height is required when enabled",
+                "sorafs.storage.reputation_runtime.window_end_height is required when enabled",
             );
             0
         });
         if window_start_height == 0 || window_end_height < window_start_height {
             emit(
                 emitter,
-                "torii.sorafs.storage.reputation_runtime window must start above zero and end at or after its start",
+                "sorafs.storage.reputation_runtime window must start above zero and end at or after its start",
             );
         }
 
@@ -19798,7 +20290,7 @@ impl SorafsReputationRuntimeConfig {
                     emit(
                         emitter,
                         format!(
-                            "torii.sorafs.storage.reputation_runtime.{field} must be a production opaque handle of 1..=256 visible ASCII bytes without whitespace or test/null markers"
+                            "sorafs.storage.reputation_runtime.{field} must be a production opaque handle of 1..=256 visible ASCII bytes without whitespace or test/null markers"
                         ),
                     );
                     None
@@ -19809,7 +20301,7 @@ impl SorafsReputationRuntimeConfig {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.reputation_runtime.{field} is required when enabled"
+                        "sorafs.storage.reputation_runtime.{field} is required when enabled"
                     ),
                 );
                 None
@@ -19844,7 +20336,7 @@ impl SorafsReputationRuntimeConfig {
                 {
                     emit(
                         emitter,
-                        "torii.sorafs.storage.reputation_runtime.governance_publisher_peer_id must be 1..=128 visible ASCII bytes without whitespace",
+                        "sorafs.storage.reputation_runtime.governance_publisher_peer_id must be 1..=128 visible ASCII bytes without whitespace",
                     );
                     None
                 } else {
@@ -19854,7 +20346,7 @@ impl SorafsReputationRuntimeConfig {
         if governance_publisher_peer_id.is_none() {
             emit(
                 emitter,
-                "torii.sorafs.storage.reputation_runtime.governance_publisher_peer_id is required when enabled",
+                "sorafs.storage.reputation_runtime.governance_publisher_peer_id is required when enabled",
             );
         }
 
@@ -19863,7 +20355,7 @@ impl SorafsReputationRuntimeConfig {
                 if !is_canonical_nonzero_ed25519_public_key_hex(&value) {
                     emit(
                         emitter,
-                        "torii.sorafs.storage.reputation_runtime.governance_publisher_public_key_hex must be canonical lowercase non-zero 32-byte hex",
+                        "sorafs.storage.reputation_runtime.governance_publisher_public_key_hex must be canonical lowercase non-zero 32-byte hex",
                     );
                     return None;
                 }
@@ -19873,7 +20365,7 @@ impl SorafsReputationRuntimeConfig {
                 if PublicKey::from_bytes(Algorithm::Ed25519, &public_key).is_err() {
                     emit(
                         emitter,
-                        "torii.sorafs.storage.reputation_runtime.governance_publisher_public_key_hex is not a valid Ed25519 public key",
+                        "sorafs.storage.reputation_runtime.governance_publisher_public_key_hex is not a valid Ed25519 public key",
                     );
                     return None;
                 }
@@ -19882,7 +20374,7 @@ impl SorafsReputationRuntimeConfig {
         if governance_publisher_public_key.is_none() {
             emit(
                 emitter,
-                "torii.sorafs.storage.reputation_runtime.governance_publisher_public_key_hex is required when enabled",
+                "sorafs.storage.reputation_runtime.governance_publisher_public_key_hex is required when enabled",
             );
         }
 
@@ -19890,7 +20382,7 @@ impl SorafsReputationRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.reputation_runtime.poll_interval_ms must be within {MIN_POLL_INTERVAL_MS}..={MAX_POLL_INTERVAL_MS}"
+                    "sorafs.storage.reputation_runtime.poll_interval_ms must be within {MIN_POLL_INTERVAL_MS}..={MAX_POLL_INTERVAL_MS}"
                 ),
             );
         }
@@ -19898,7 +20390,7 @@ impl SorafsReputationRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.reputation_runtime.page_items must be within 1..={MAX_PAGE_ITEMS}"
+                    "sorafs.storage.reputation_runtime.page_items must be within 1..={MAX_PAGE_ITEMS}"
                 ),
             );
         }
@@ -19906,7 +20398,7 @@ impl SorafsReputationRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.reputation_runtime.max_pages_per_batch must be within {MIN_COMPLETE_BATCH_PAGES}..={MAX_PAGES_PER_BATCH}"
+                    "sorafs.storage.reputation_runtime.max_pages_per_batch must be within {MIN_COMPLETE_BATCH_PAGES}..={MAX_PAGES_PER_BATCH}"
                 ),
             );
         }
@@ -19932,7 +20424,7 @@ impl SorafsReputationRuntimeConfig {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.storage.reputation_runtime.{field} must be within 1..={maximum}"
+                        "sorafs.storage.reputation_runtime.{field} must be within 1..={maximum}"
                     ),
                 );
             }
@@ -19943,7 +20435,7 @@ impl SorafsReputationRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.reputation_runtime.ingest_checkpoint_max_bytes must be within {MIN_CHECKPOINT_BYTES}..={MAX_INGEST_CHECKPOINT_BYTES}"
+                    "sorafs.storage.reputation_runtime.ingest_checkpoint_max_bytes must be within {MIN_CHECKPOINT_BYTES}..={MAX_INGEST_CHECKPOINT_BYTES}"
                 ),
             );
         }
@@ -19953,7 +20445,7 @@ impl SorafsReputationRuntimeConfig {
             emit(
                 emitter,
                 format!(
-                    "torii.sorafs.storage.reputation_runtime.publication_checkpoint_max_bytes must be within {MIN_CHECKPOINT_BYTES}..={MAX_PUBLICATION_CHECKPOINT_BYTES}"
+                    "sorafs.storage.reputation_runtime.publication_checkpoint_max_bytes must be within {MIN_CHECKPOINT_BYTES}..={MAX_PUBLICATION_CHECKPOINT_BYTES}"
                 ),
             );
         }
@@ -19972,7 +20464,7 @@ impl SorafsReputationRuntimeConfig {
         if weight_total != 10_000 {
             emit(
                 emitter,
-                "torii.sorafs.storage.reputation_runtime governed weights must total exactly 10000 basis points",
+                "sorafs.storage.reputation_runtime governed weights must total exactly 10000 basis points",
             );
         }
 
@@ -20788,42 +21280,44 @@ fn is_canonical_webauthn_origin(value: &str, rp_id: &str) -> bool {
 
 impl SorafsStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsStorage {
-        let provider_id = self.provider_id_hex.as_deref().and_then(|raw| {
-            if raw.len() != 64
-                || raw
-                    .bytes()
-                    .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
-            {
-                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                    "torii.sorafs.storage.provider_id_hex must be 64 lowercase hex characters",
-                ));
-                return None;
-            }
-            let decoded = hex::decode(raw).expect("validated lowercase provider hex");
-            let mut provider = [0_u8; 32];
-            provider.copy_from_slice(&decoded);
-            if provider == [0; 32] {
-                emitter.emit(
-                    Report::new(ParseError::InvalidToriiConfig)
-                        .attach("torii.sorafs.storage.provider_id_hex must be nonzero"),
-                );
-                return None;
-            }
-            Some(ProviderId::new(provider))
-        });
+        let provider_id =
+            self.provider_id_hex.as_deref().and_then(|raw| {
+                if raw.len() != 64
+                    || raw
+                        .bytes()
+                        .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+                {
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                        "sorafs.storage.provider_id_hex must be 64 lowercase hex characters",
+                    ));
+                    return None;
+                }
+                let decoded = hex::decode(raw).expect("validated lowercase provider hex");
+                let mut provider = [0_u8; 32];
+                provider.copy_from_slice(&decoded);
+                if provider == [0; 32] {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSorafsConfig)
+                            .attach("sorafs.storage.provider_id_hex must be nonzero"),
+                    );
+                    return None;
+                }
+                Some(ProviderId::new(provider))
+            });
         if self.pdp_sample_window == 0
             || self.pdp_sample_window > defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX
         {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
-                "torii.sorafs.storage.pdp_sample_window must be within 1..={}, got {}",
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                "sorafs.storage.pdp_sample_window must be within 1..={}, got {}",
                 defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX,
                 self.pdp_sample_window
             )));
         }
         if self.pdp_tree_memory_limit_bytes.0 == 0 {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                "torii.sorafs.storage.pdp_tree_memory_limit_bytes must be greater than zero",
-            ));
+            emitter
+                .emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage.pdp_tree_memory_limit_bytes must be greater than zero",
+                ));
         }
         let moderation_screening_authority_bundle_digest =
             self.moderation_screening_authority_bundle_digest_hex
@@ -20834,8 +21328,8 @@ impl SorafsStorage {
                             !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte)
                         })
                     {
-                        emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                            "torii.sorafs.storage.moderation_screening_authority_bundle_digest_hex must be 64 lowercase hex characters",
+                        emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                            "sorafs.storage.moderation_screening_authority_bundle_digest_hex must be 64 lowercase hex characters",
                         ));
                         return None;
                     }
@@ -20843,8 +21337,8 @@ impl SorafsStorage {
                     let mut digest = [0_u8; 32];
                     digest.copy_from_slice(&decoded);
                     if digest.iter().all(|byte| *byte == 0) {
-                        emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                            "torii.sorafs.storage.moderation_screening_authority_bundle_digest_hex must be nonzero",
+                        emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                            "sorafs.storage.moderation_screening_authority_bundle_digest_hex must be nonzero",
                         ));
                         return None;
                     }
@@ -20852,41 +21346,41 @@ impl SorafsStorage {
                 });
         if self.moderation_screening_enabled {
             if !self.enabled {
-                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                    "torii.sorafs.storage.moderation_screening_enabled requires storage.enabled",
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage.moderation_screening_enabled requires storage.enabled",
                 ));
             }
             match self.moderation_screening_authority_bundle_path.as_deref() {
                 None => {
-                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                        "torii.sorafs.storage.moderation_screening_authority_bundle_path is required when moderation screening is enabled",
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                        "sorafs.storage.moderation_screening_authority_bundle_path is required when moderation screening is enabled",
                     ));
                 }
                 Some(path) if !path.is_absolute() => {
-                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                        "torii.sorafs.storage.moderation_screening_authority_bundle_path must be absolute",
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                        "sorafs.storage.moderation_screening_authority_bundle_path must be absolute",
                     ));
                 }
                 Some(_) => {}
             }
             if moderation_screening_authority_bundle_digest.is_none() {
-                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                    "torii.sorafs.storage.moderation_screening_authority_bundle_digest_hex is required when moderation screening is enabled",
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage.moderation_screening_authority_bundle_digest_hex is required when moderation screening is enabled",
                 ));
             }
         }
         if let Some(handle) = self.governance_dag_signer_handle.as_deref()
             && !is_canonical_runtime_handle(handle)
         {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                "torii.sorafs.storage.governance_dag_signer_handle must be 1..=256 visible ASCII bytes without whitespace",
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage.governance_dag_signer_handle must be 1..=256 visible ASCII bytes without whitespace",
             ));
         }
         if let Some(public_key) = self.governance_dag_publisher_public_key_hex.as_deref()
             && !is_canonical_nonzero_ed25519_public_key_hex(public_key)
         {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                "torii.sorafs.storage.governance_dag_publisher_public_key_hex must be canonical lowercase non-zero 32-byte hex",
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage.governance_dag_publisher_public_key_hex must be canonical lowercase non-zero 32-byte hex",
             ));
         }
         let runtime_signer_fields = [
@@ -20897,8 +21391,8 @@ impl SorafsStorage {
         if runtime_signer_fields.iter().any(|present| *present)
             && !runtime_signer_fields.iter().all(|present| *present)
         {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                "torii.sorafs.storage signed Governance DAG publication requires publisher peer id, signer handle, and publisher public key together",
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage signed Governance DAG publication requires publisher peer id, signer handle, and publisher public key together",
             ));
         }
         let pop_credentials = self.pop_credentials.parse(self.enabled, emitter);
@@ -21076,7 +21570,7 @@ impl Default for SorafsGovernanceDagService {
 impl SorafsGovernanceDagService {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsGovernanceDagService {
         let emit = |emitter: &mut Emitter<ParseError>, message: String| {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message));
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message));
         };
         for (field, value) in [
             ("poll_interval_secs", self.poll_interval_secs),
@@ -21309,7 +21803,7 @@ impl SorafsGovernanceDagServiceRoot {
             .parse(&mut emitter);
         if service.enabled && source_dir.is_none() {
             emitter.emit(
-                Report::new(ParseError::InvalidToriiConfig).attach(
+                Report::new(ParseError::InvalidSorafsConfig).attach(
                     "sorafs.storage.governance_dag_dir is required when governance_dag_service is enabled",
                 ),
             );
@@ -21522,22 +22016,23 @@ impl SorafsPdpProviderPolicy {
         use defaults::sorafs::storage::pdp_provider as pdp;
 
         if self.max_pending_records == 0 || self.max_terminal_records == 0 {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                "torii.sorafs.storage.pdp_provider record limits must be greater than zero",
-            ));
+            emitter.emit(
+                Report::new(ParseError::InvalidSorafsConfig)
+                    .attach("sorafs.storage.pdp_provider record limits must be greater than zero"),
+            );
         }
         if self.challenge_max_bytes.0 == 0
             || self.challenge_max_bytes.0 > pdp::CHALLENGE_MAX_BYTES.0
         {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
-                "torii.sorafs.storage.pdp_provider.challenge_max_bytes must be within 1..={}, got {}",
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                "sorafs.storage.pdp_provider.challenge_max_bytes must be within 1..={}, got {}",
                 pdp::CHALLENGE_MAX_BYTES.0,
                 self.challenge_max_bytes.0
             )));
         }
         if self.proof_max_bytes.0 == 0 || self.proof_max_bytes.0 > pdp::PROOF_MAX_BYTES.0 {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
-                "torii.sorafs.storage.pdp_provider.proof_max_bytes must be within 1..={}, got {}",
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                "sorafs.storage.pdp_provider.proof_max_bytes must be within 1..={}, got {}",
                 pdp::PROOF_MAX_BYTES.0,
                 self.proof_max_bytes.0
             )));
@@ -21547,16 +22042,16 @@ impl SorafsPdpProviderPolicy {
             .0
             .checked_add(self.proof_max_bytes.0);
         if minimum_checkpoint_bytes.is_none_or(|minimum| self.checkpoint_max_bytes.0 < minimum) {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                "torii.sorafs.storage.pdp_provider.checkpoint_max_bytes must fit one maximum challenge and proof",
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage.pdp_provider.checkpoint_max_bytes must fit one maximum challenge and proof",
             ));
         }
         if self.min_response_window_secs == 0
             || self.max_response_window_secs < self.min_response_window_secs
             || self.terminal_retention_secs < self.max_response_window_secs
         {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                "torii.sorafs.storage.pdp_provider response and terminal-retention windows are inconsistent",
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage.pdp_provider response and terminal-retention windows are inconsistent",
             ));
         }
         actual::SorafsPdpProviderPolicy {
@@ -21679,7 +22174,7 @@ impl SorafsOrderbookWorkerConfig {
         if !(worker::SCAN_INTERVAL_MIN_MS..=worker::SCAN_INTERVAL_MAX_MS)
             .contains(&scan_interval_ms)
         {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                 "sorafs.storage.orderbook_worker.scan_interval_ms must be within {}..={}, got {scan_interval_ms}",
                 worker::SCAN_INTERVAL_MIN_MS,
                 worker::SCAN_INTERVAL_MAX_MS,
@@ -21687,13 +22182,13 @@ impl SorafsOrderbookWorkerConfig {
         }
         let match_batch_limit = self.match_batch_limit.get();
         if match_batch_limit > ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1 {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                 "sorafs.storage.orderbook_worker.match_batch_limit must not exceed {ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1}, got {match_batch_limit}"
             )));
         }
         let maintenance_batch_limit = self.maintenance_batch_limit.get();
         if maintenance_batch_limit > ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1 {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                 "sorafs.storage.orderbook_worker.maintenance_batch_limit must not exceed {ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1}, got {maintenance_batch_limit}"
             )));
         }
@@ -21720,7 +22215,7 @@ impl SorafsOrderbookWorkerConfig {
             ),
         ] {
             if value > maximum {
-                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                     "sorafs.storage.orderbook_worker.{field} must not exceed {maximum}, got {value}"
                 )));
             }
@@ -21728,7 +22223,7 @@ impl SorafsOrderbookWorkerConfig {
         if !(worker::CHECKPOINT_MIN_BYTES..=worker::CHECKPOINT_MAX_BYTES_LIMIT)
             .contains(&self.checkpoint_max_bytes.0)
         {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                 "sorafs.storage.orderbook_worker.checkpoint_max_bytes must be within {}..={}, got {}",
                 worker::CHECKPOINT_MIN_BYTES,
                 worker::CHECKPOINT_MAX_BYTES_LIMIT,
@@ -21807,7 +22302,7 @@ impl SorafsReserveWorkerConfig {
         if !(worker::SCAN_INTERVAL_MIN_MS..=worker::SCAN_INTERVAL_MAX_MS)
             .contains(&scan_interval_ms)
         {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                 "sorafs.storage.reserve_worker.scan_interval_ms must be within {}..={}, got {scan_interval_ms}",
                 worker::SCAN_INTERVAL_MIN_MS,
                 worker::SCAN_INTERVAL_MAX_MS,
@@ -21815,7 +22310,7 @@ impl SorafsReserveWorkerConfig {
         }
         let scan_batch_limit = self.scan_batch_limit.get();
         if scan_batch_limit > worker::SCAN_BATCH_LIMIT_MAX {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                 "sorafs.storage.reserve_worker.scan_batch_limit must not exceed {}, got {scan_batch_limit}",
                 worker::SCAN_BATCH_LIMIT_MAX,
             )));
@@ -21843,7 +22338,7 @@ impl SorafsReserveWorkerConfig {
             ),
         ] {
             if value > maximum {
-                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                     "sorafs.storage.reserve_worker.{field} must not exceed {maximum}, got {value}"
                 )));
             }
@@ -21851,7 +22346,7 @@ impl SorafsReserveWorkerConfig {
         if !(worker::CHECKPOINT_MIN_BYTES..=worker::CHECKPOINT_MAX_BYTES_LIMIT)
             .contains(&self.checkpoint_max_bytes.0)
         {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                 "sorafs.storage.reserve_worker.checkpoint_max_bytes must be within {}..={}, got {}",
                 worker::CHECKPOINT_MIN_BYTES,
                 worker::CHECKPOINT_MAX_BYTES_LIMIT,
@@ -21999,7 +22494,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
             left
         }
         let invalid = |message: String, emitter: &mut Emitter<ParseError>| {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message));
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message));
         };
         let parse_digest = |raw: &str, field: &str, emitter: &mut Emitter<ParseError>| {
             if raw.len() != 64
@@ -22009,7 +22504,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
             {
                 invalid(
                     format!(
-                        "torii.sorafs.storage.privacy_aggregates.{field} must be 64 lowercase hex characters"
+                        "sorafs.storage.privacy_aggregates.{field} must be 64 lowercase hex characters"
                     ),
                     emitter,
                 );
@@ -22020,7 +22515,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
             digest.copy_from_slice(&decoded);
             if digest == [0; 32] {
                 invalid(
-                    format!("torii.sorafs.storage.privacy_aggregates.{field} must be nonzero"),
+                    format!("sorafs.storage.privacy_aggregates.{field} must be nonzero"),
                     emitter,
                 );
                 return None;
@@ -22033,15 +22528,13 @@ impl SorafsPrivacyAggregateScheduleConfig {
             || self.aggregate_id_prefix.chars().any(char::is_control)
         {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates.aggregate_id_prefix is invalid"
-                    .to_string(),
+                "sorafs.storage.privacy_aggregates.aggregate_id_prefix is invalid".to_string(),
                 emitter,
             );
         }
         if self.cycle_seconds == 0 {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates.cycle_seconds must be positive"
-                    .to_string(),
+                "sorafs.storage.privacy_aggregates.cycle_seconds must be positive".to_string(),
                 emitter,
             );
         }
@@ -22050,7 +22543,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
                 || self.first_cycle_start_unix % self.cycle_seconds.max(1) != 0)
         {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates.first_cycle_start_unix must be nonzero and cycle-aligned when enabled"
+                "sorafs.storage.privacy_aggregates.first_cycle_start_unix must be nonzero and cycle-aligned when enabled"
                     .to_string(),
                 emitter,
             );
@@ -22060,7 +22553,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
             "differential_privacy" | "suppression" | "differential_privacy_with_suppression"
         ) {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates.privacy_mode is invalid".to_string(),
+                "sorafs.storage.privacy_aggregates.privacy_mode is invalid".to_string(),
                 emitter,
             );
         }
@@ -22069,14 +22562,14 @@ impl SorafsPrivacyAggregateScheduleConfig {
             || gcd(self.epsilon_numerator, self.epsilon_denominator) != 1
         {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates epsilon must be a reduced positive rational"
+                "sorafs.storage.privacy_aggregates epsilon must be a reduced positive rational"
                     .to_string(),
                 emitter,
             );
         }
         if self.per_subject_metric_cap == 0 || self.suppression_threshold == 0 {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates contribution cap and suppression threshold must be positive"
+                "sorafs.storage.privacy_aggregates contribution cap and suppression threshold must be positive"
                     .to_string(),
                 emitter,
             );
@@ -22091,7 +22584,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
             || self.composition_budget_max_publications > 4_096
         {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates composition budget is invalid".to_string(),
+                "sorafs.storage.privacy_aggregates composition budget is invalid".to_string(),
                 emitter,
             );
         }
@@ -22109,7 +22602,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
         let mut population_digests = BTreeSet::new();
         if self.population_inventory.len() > 256 {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates.population_inventory exceeds 256 entries"
+                "sorafs.storage.privacy_aggregates.population_inventory exceeds 256 entries"
                     .to_string(),
                 emitter,
             );
@@ -22121,8 +22614,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
                 && !population.label.chars().any(char::is_control);
             if !valid_label {
                 invalid(
-                    "torii.sorafs.storage.privacy_aggregates population label is invalid"
-                        .to_string(),
+                    "sorafs.storage.privacy_aggregates population label is invalid".to_string(),
                     emitter,
                 );
             }
@@ -22141,7 +22633,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
                 || !population_digests.insert(digest)
             {
                 invalid(
-                    "torii.sorafs.storage.privacy_aggregates.population_inventory must be unique and sorted"
+                    "sorafs.storage.privacy_aggregates.population_inventory must be unique and sorted"
                         .to_string(),
                     emitter,
                 );
@@ -22156,8 +22648,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
         let mut previous_metric_key: Option<String> = None;
         if self.metric_schema.len() > 256 {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates.metric_schema exceeds 256 entries"
-                    .to_string(),
+                "sorafs.storage.privacy_aggregates.metric_schema exceeds 256 entries".to_string(),
                 emitter,
             );
         }
@@ -22172,8 +22663,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
                 && !metric.unit.chars().any(char::is_control);
             if !valid_key || !valid_unit {
                 invalid(
-                    "torii.sorafs.storage.privacy_aggregates metric schema text is invalid"
-                        .to_string(),
+                    "sorafs.storage.privacy_aggregates metric schema text is invalid".to_string(),
                     emitter,
                 );
             }
@@ -22182,7 +22672,7 @@ impl SorafsPrivacyAggregateScheduleConfig {
                 .is_some_and(|previous| previous >= &metric.key)
             {
                 invalid(
-                    "torii.sorafs.storage.privacy_aggregates.metric_schema must be unique and sorted"
+                    "sorafs.storage.privacy_aggregates.metric_schema must be unique and sorted"
                         .to_string(),
                     emitter,
                 );
@@ -22195,28 +22685,28 @@ impl SorafsPrivacyAggregateScheduleConfig {
         }
         if self.enabled && policy_digest.is_none() {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates.policy_digest_hex is required when enabled"
+                "sorafs.storage.privacy_aggregates.policy_digest_hex is required when enabled"
                     .to_string(),
                 emitter,
             );
         }
         if self.enabled && query_id.is_none() {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates.query_id_hex is required when enabled"
+                "sorafs.storage.privacy_aggregates.query_id_hex is required when enabled"
                     .to_string(),
                 emitter,
             );
         }
         if self.enabled && population_inventory.is_empty() {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates.population_inventory is required when enabled"
+                "sorafs.storage.privacy_aggregates.population_inventory is required when enabled"
                     .to_string(),
                 emitter,
             );
         }
         if self.enabled && metric_schema.is_empty() {
             invalid(
-                "torii.sorafs.storage.privacy_aggregates.metric_schema is required when enabled"
+                "sorafs.storage.privacy_aggregates.metric_schema is required when enabled"
                     .to_string(),
                 emitter,
             );
@@ -22496,6 +22986,7 @@ mod sorafs_repair_gc_tests {
             worker_max_completed: 256,
             worker_max_dead_letters: 32,
             worker_checkpoint_max_bytes: 8 * 1024 * 1024,
+            ..SorafsAppealFinanceSettlement::default()
         };
 
         let mut emitter = Emitter::new();
@@ -22522,6 +23013,137 @@ mod sorafs_repair_gc_tests {
             std::time::Duration::from_millis(30_000)
         );
         assert_eq!(actual.worker_max_retry_attempts, 3);
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_defaults_bind_exact_baseline_asset_and_policies() {
+        let mut emitter = Emitter::new();
+        let actual = SorafsAppealFinanceSettlement::default().parse(&mut emitter);
+        assert!(emitter.into_result().is_ok());
+
+        assert_eq!(actual.asset_definition_id.to_string(), "xor#sora.universal");
+        assert_eq!(actual.asset_scale, 9);
+        assert_eq!(actual.pricing.version, "baseline-v1");
+        assert_eq!(actual.pricing.quote_ttl_secs, 900);
+        assert_eq!(actual.pricing.default_panel_size, 7);
+        assert_eq!(actual.pricing.urgency_multipliers.normal.to_string(), "1");
+        assert_eq!(actual.pricing.urgency_multipliers.high.to_string(), "1.2");
+
+        let classes = &actual.pricing.classes;
+        for (class, expected) in [
+            (
+                &classes.content,
+                ("150", 50, "1", "100", "2", "100", "2500"),
+            ),
+            (&classes.access, ("200", 30, "1", "50", "2", "100", "2500")),
+            (&classes.fraud, ("500", 20, "1", "50", "2", "100", "5000")),
+            (&classes.other, ("120", 40, "1", "100", "2", "100", "2500")),
+        ] {
+            assert_eq!(class.base_rate_xor.to_string(), expected.0);
+            assert_eq!(class.backlog_target, expected.1);
+            assert_eq!(class.backlog_cap.to_string(), expected.2);
+            assert_eq!(class.size_divisor_mb.to_string(), expected.3);
+            assert_eq!(class.size_cap.to_string(), expected.4);
+            assert_eq!(class.min_deposit_xor.to_string(), expected.5);
+            assert_eq!(class.max_deposit_xor.to_string(), expected.6);
+            assert_eq!(class.surge_multiplier.to_string(), "1");
+        }
+
+        assert_eq!(actual.settlement.version, "baseline-v1");
+        assert_eq!(actual.settlement.default_panel_size, 7);
+        assert_eq!(
+            actual
+                .settlement
+                .panel_rewards
+                .stipend_per_juror_xor
+                .to_string(),
+            "25"
+        );
+        assert_eq!(
+            actual.settlement.panel_rewards.case_bonus_xor.to_string(),
+            "10"
+        );
+        let rules = &actual.settlement.rules;
+        for (rule, expected) in [
+            (&rules.decisions.uphold, ("0", "1")),
+            (&rules.decisions.overturn, ("1", "0")),
+            (&rules.decisions.modify, ("1", "0")),
+            (&rules.withdrawn_before_panel, ("0.9", "0")),
+            (&rules.withdrawn_after_panel, ("0", "1")),
+            (&rules.frivolous, ("0.5", "0.5")),
+            (&rules.escalated, ("0", "0")),
+        ] {
+            assert_eq!(rule.refund_rate.to_string(), expected.0);
+            assert_eq!(rule.treasury_rate.to_string(), expected.1);
+        }
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_policy_overrides_reach_actual_config() {
+        let mut config = SorafsAppealFinanceSettlement::default();
+        config.pricing.version = "pricing-v2".to_owned();
+        config.pricing.quote_ttl_secs = 1_200;
+        config.pricing.classes.content.base_rate_xor =
+            "175.25".parse().expect("canonical XOR quantity");
+        config.settlement.version = "settlement-v2".to_owned();
+        config.settlement.rules.decisions.overturn.refund_rate =
+            "0.75".parse().expect("canonical rate");
+        config.settlement.rules.decisions.overturn.treasury_rate =
+            "0.25".parse().expect("canonical rate");
+
+        let mut emitter = Emitter::new();
+        let actual = config.parse(&mut emitter);
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(actual.pricing.version, "pricing-v2");
+        assert_eq!(actual.pricing.quote_ttl_secs, 1_200);
+        assert_eq!(
+            actual.pricing.classes.content.base_rate_xor.to_string(),
+            "175.25"
+        );
+        assert_eq!(actual.settlement.version, "settlement-v2");
+        assert_eq!(
+            actual
+                .settlement
+                .rules
+                .decisions
+                .overturn
+                .refund_rate
+                .to_string(),
+            "0.75"
+        );
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_rejects_invalid_asset_and_policy_bounds() {
+        let mut config = SorafsAppealFinanceSettlement::default();
+        config.asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("xor", "universal").expect("domain id"),
+            "other".parse().expect("asset definition name"),
+        );
+        config.asset_scale = 8;
+        config.pricing.quote_ttl_secs = 0;
+        config.pricing.classes.content.base_rate_xor = XorQuantity::zero();
+        config.settlement.rules.decisions.uphold.refund_rate = Numeric::one();
+
+        let mut emitter = Emitter::new();
+        let _ = config.parse(&mut emitter);
+        assert!(
+            emitter.into_result().is_err(),
+            "wrong XOR asset/scale, unbounded pricing, and over-allocated settlement must fail closed"
+        );
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_rejects_mismatched_default_panel_sizes() {
+        let mut config = SorafsAppealFinanceSettlement::default();
+        config.settlement.default_panel_size = config.pricing.default_panel_size + 1;
+
+        let mut emitter = Emitter::new();
+        let _ = config.parse(&mut emitter);
+        assert!(
+            emitter.into_result().is_err(),
+            "pricing and settlement must not derive different default panel sizes"
+        );
     }
 
     #[test]
@@ -22558,18 +23180,60 @@ mod sorafs_repair_gc_tests {
 
     #[test]
     fn sorafs_appeal_finance_settlement_rejects_retired_private_key_field() {
-        let retired = r#"{
-            "submitter_private_keys":[],
-            "worker_scan_interval_ms":30000,
-            "worker_max_retry_attempts":3,
-            "worker_max_pending":4096,
-            "worker_max_completed":16384,
-            "worker_max_dead_letters":1024,
-            "worker_checkpoint_max_bytes":67108864
-        }"#;
+        use iroha_config_base::toml::TomlSource;
+
+        let outer: toml::Table =
+            toml::from_str("submitter_private_keys = []").expect("parse retired outer field");
+        let outer_error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(outer))
+            .read_and_complete::<SorafsAppealFinanceSettlement>()
+            .expect_err("retired configured private keys must be unknown");
         assert!(
-            norito::json::from_str::<SorafsAppealFinanceSettlement>(retired).is_err(),
-            "retired configured private keys must be rejected as an unknown V1 field"
+            format!("{outer_error:?}").contains("submitter_private_keys"),
+            "unexpected outer-field error: {outer_error:?}"
+        );
+
+        let key_pair = KeyPair::try_from_seed(vec![0xAA; 32], Algorithm::Ed25519)
+            .expect("derive signer fixture");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
+        let valid_without_height: toml::Table = toml::from_str(&format!(
+            r#"
+submitter_signers = [{{
+    handle = "pkcs11://appeal-settlement"
+    authority = "{authority}"
+    public_key_hex = "{public_key_hex}"
+}}]
+"#,
+        ))
+        .expect("parse signer with default activation height");
+        let decoded = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(valid_without_height))
+            .read_and_complete::<SorafsAppealFinanceSettlement>()
+            .expect("signer activation height defaults inside vector decoding");
+        assert_eq!(decoded.submitter_signers[0].valid_from_block_height, 1);
+
+        let nested: toml::Table = toml::from_str(&format!(
+            r#"
+submitter_signers = [{{
+    handle = "pkcs11://appeal-settlement"
+    authority = "{authority}"
+    public_key_hex = "{}"
+    valid_from_block_height = 1
+    retired_private_key_hex = "{}"
+}}]
+"#,
+            public_key_hex,
+            "11".repeat(32),
+        ))
+        .expect("parse retired signer field");
+        let nested_error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(nested))
+            .read_and_complete::<SorafsAppealFinanceSettlement>()
+            .expect_err("retired signer private key must be unknown");
+        assert!(
+            format!("{nested_error:?}").contains("retired_private_key_hex"),
+            "unexpected signer-field error: {nested_error:?}"
         );
     }
 
@@ -22662,7 +23326,7 @@ impl SorafsPor {
             vrf_retention_epochs: self.vrf_retention_epochs,
             vrf_max_clock_skew_secs: self.vrf_max_clock_skew_secs,
             auditor_signature_threshold: NonZeroU16::new(self.auditor_signature_threshold)
-                .expect("torii.sorafs_por.auditor_signature_threshold must be non-zero"),
+                .expect("sorafs.por.auditor_signature_threshold must be non-zero"),
         }
     }
 }
@@ -22738,17 +23402,16 @@ impl SorafsPorDrand {
             if value.is_empty() {
                 return [0; N];
             }
-            let bytes = hex::decode(value).unwrap_or_else(|err| {
-                panic!("torii.sorafs.por.drand.{field} is invalid hex: {err}")
-            });
+            let bytes = hex::decode(value)
+                .unwrap_or_else(|err| panic!("sorafs.por.drand.{field} is invalid hex: {err}"));
             assert_eq!(
                 hex::encode(&bytes),
                 value,
-                "torii.sorafs.por.drand.{field} must be canonical lowercase hex"
+                "sorafs.por.drand.{field} must be canonical lowercase hex"
             );
             bytes.try_into().unwrap_or_else(|bytes: Vec<u8>| {
                 panic!(
-                    "torii.sorafs.por.drand.{field} must be {N} bytes, found {}",
+                    "sorafs.por.drand.{field} must be {N} bytes, found {}",
                     bytes.len()
                 )
             })
@@ -22901,8 +23564,8 @@ impl SorafsStreamTokenConfig {
             .as_deref()
             .and_then(|value| {
                 if !is_canonical_nonzero_ed25519_public_key_hex(value) {
-                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                        "torii.sorafs.storage.stream_tokens.signer_public_key_hex must be canonical lowercase non-zero 32-byte hex",
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                        "sorafs.storage.stream_tokens.signer_public_key_hex must be canonical lowercase non-zero 32-byte hex",
                     ));
                     return None;
                 }
@@ -22911,8 +23574,8 @@ impl SorafsStreamTokenConfig {
                     .try_into()
                     .expect("validated 32-byte Ed25519 public key");
                 if PublicKey::from_bytes(Algorithm::Ed25519, &bytes).is_err() {
-                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                        "torii.sorafs.storage.stream_tokens.signer_public_key_hex is not a valid Ed25519 public key",
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                        "sorafs.storage.stream_tokens.signer_public_key_hex is not a valid Ed25519 public key",
                     ));
                     return None;
                 }
@@ -22922,32 +23585,31 @@ impl SorafsStreamTokenConfig {
         if self.enabled {
             if !storage_enabled {
                 emitter.emit(
-                    Report::new(ParseError::InvalidToriiConfig).attach(
-                        "torii.sorafs.storage.stream_tokens.enabled requires storage.enabled",
-                    ),
+                    Report::new(ParseError::InvalidSorafsConfig)
+                        .attach("sorafs.storage.stream_tokens.enabled requires storage.enabled"),
                 );
             }
             match self.signer_handle.as_deref() {
                 Some(handle) if is_production_runtime_handle(handle) => {}
                 Some(_) => {
-                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                        "torii.sorafs.storage.stream_tokens.signer_handle must be a production runtime handle with 1..=256 visible ASCII bytes and no whitespace",
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                        "sorafs.storage.stream_tokens.signer_handle must be a production runtime handle with 1..=256 visible ASCII bytes and no whitespace",
                     ));
                 }
                 None => {
-                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                        "torii.sorafs.storage.stream_tokens.signer_handle is required when issuance is enabled",
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                        "sorafs.storage.stream_tokens.signer_handle is required when issuance is enabled",
                     ));
                 }
             }
             if self.signer_public_key_hex.is_none() {
-                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                    "torii.sorafs.storage.stream_tokens.signer_public_key_hex is required when issuance is enabled",
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage.stream_tokens.signer_public_key_hex is required when issuance is enabled",
                 ));
             }
         } else if self.signer_handle.is_some() || self.signer_public_key_hex.is_some() {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
-                "torii.sorafs.storage.stream_tokens signer binding is forbidden while issuance is disabled",
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage.stream_tokens signer binding is forbidden while issuance is disabled",
             ));
         }
 
@@ -23570,7 +24232,7 @@ impl Default for SorafsGatewayCompliance {
 impl SorafsGatewayCompliance {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SorafsGatewayCompliance> {
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
 
         fn canonical_token(value: &str) -> bool {
@@ -23693,7 +24355,7 @@ impl SorafsGatewayCompliance {
             {
                 emit(
                     emitter,
-                    "torii.sorafs.gateway.compliance authority, feed, and checkpoint fields must be absent when disabled",
+                    "sorafs.gateway.compliance authority, feed, and checkpoint fields must be absent when disabled",
                 );
             }
             return None;
@@ -23715,14 +24377,14 @@ impl SorafsGatewayCompliance {
             _ => {
                 emit(
                     emitter,
-                    "torii.sorafs.gateway.compliance.checkpoint_path must be an absolute file path without dot components",
+                    "sorafs.gateway.compliance.checkpoint_path must be an absolute file path without dot components",
                 );
                 None
             }
         };
         let policy_id = parse_digest(
             emitter,
-            "torii.sorafs.gateway.compliance.policy_id_hex",
+            "sorafs.gateway.compliance.policy_id_hex",
             self.policy_id_hex.as_deref(),
         );
         let region_id = match self.region_id.as_deref() {
@@ -23730,7 +24392,7 @@ impl SorafsGatewayCompliance {
             _ => {
                 emit(
                     emitter,
-                    "torii.sorafs.gateway.compliance.region_id must be one canonical non-secret identifier",
+                    "sorafs.gateway.compliance.region_id must be one canonical non-secret identifier",
                 );
                 None
             }
@@ -23740,30 +24402,30 @@ impl SorafsGatewayCompliance {
             _ => {
                 emit(
                     emitter,
-                    "torii.sorafs.gateway.compliance.gateway_id must be one canonical non-secret identifier",
+                    "sorafs.gateway.compliance.gateway_id must be one canonical non-secret identifier",
                 );
                 None
             }
         };
         let catalog_signers = parse_signers(
             emitter,
-            "torii.sorafs.gateway.compliance.catalog_signers",
+            "sorafs.gateway.compliance.catalog_signers",
             &self.catalog_signers,
         );
         let gateway_signers = parse_signers(
             emitter,
-            "torii.sorafs.gateway.compliance.gateway_signers",
+            "sorafs.gateway.compliance.gateway_signers",
             &self.gateway_signers,
         );
         validate_revocations(
             emitter,
-            "torii.sorafs.gateway.compliance.revoked_catalog_signer_ids",
+            "sorafs.gateway.compliance.revoked_catalog_signer_ids",
             &self.revoked_catalog_signer_ids,
             &catalog_signers,
         );
         validate_revocations(
             emitter,
-            "torii.sorafs.gateway.compliance.revoked_gateway_signer_ids",
+            "sorafs.gateway.compliance.revoked_gateway_signer_ids",
             &self.revoked_gateway_signer_ids,
             &gateway_signers,
         );
@@ -23778,7 +24440,7 @@ impl SorafsGatewayCompliance {
         }) {
             emit(
                 emitter,
-                "torii.sorafs.gateway.compliance.gateway_id must name one active configured gateway signer",
+                "sorafs.gateway.compliance.gateway_id must name one active configured gateway signer",
             );
         }
         for (path, threshold, signers, revoked) in [
@@ -23800,7 +24462,7 @@ impl SorafsGatewayCompliance {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.gateway.compliance.{path} must be nonzero and not exceed active signer count"
+                        "sorafs.gateway.compliance.{path} must be nonzero and not exceed active signer count"
                     ),
                 );
             }
@@ -23815,7 +24477,7 @@ impl SorafsGatewayCompliance {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.gateway.compliance.feeds[{feed_index}].feed_id must be canonical and strictly ordered"
+                        "sorafs.gateway.compliance.feeds[{feed_index}].feed_id must be canonical and strictly ordered"
                     ),
                 );
             }
@@ -23829,7 +24491,7 @@ impl SorafsGatewayCompliance {
                     emit(
                         emitter,
                         format!(
-                            "torii.sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}].hostname must be lowercase and strictly ordered"
+                            "sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}].hostname must be lowercase and strictly ordered"
                         ),
                     );
                 }
@@ -23838,7 +24500,7 @@ impl SorafsGatewayCompliance {
                     if let Some(pin) = parse_digest(
                         emitter,
                         &format!(
-                            "torii.sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}].accepted_spki_sha256_hex[{pin_index}]"
+                            "sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}].accepted_spki_sha256_hex[{pin_index}]"
                         ),
                         Some(pin),
                     ) {
@@ -23849,7 +24511,7 @@ impl SorafsGatewayCompliance {
                     emit(
                         emitter,
                         format!(
-                            "torii.sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}] requires at least one SPKI pin"
+                            "sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}] requires at least one SPKI pin"
                         ),
                     );
                 }
@@ -23857,7 +24519,7 @@ impl SorafsGatewayCompliance {
                     emit(
                         emitter,
                         format!(
-                            "torii.sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}] SPKI pins must be strictly ordered"
+                            "sorafs.gateway.compliance.feeds[{feed_index}].hosts[{host_index}] SPKI pins must be strictly ordered"
                         ),
                     );
                 }
@@ -23871,7 +24533,7 @@ impl SorafsGatewayCompliance {
                 emit(
                     emitter,
                     format!(
-                        "torii.sorafs.gateway.compliance.feeds[{feed_index}] requires at least one HTTPS host"
+                        "sorafs.gateway.compliance.feeds[{feed_index}] requires at least one HTTPS host"
                     ),
                 );
             }
@@ -23886,7 +24548,7 @@ impl SorafsGatewayCompliance {
         if feeds.is_empty() {
             emit(
                 emitter,
-                "torii.sorafs.gateway.compliance.feeds must not be empty when enabled",
+                "sorafs.gateway.compliance.feeds must not be empty when enabled",
             );
         }
 
@@ -23903,7 +24565,7 @@ impl SorafsGatewayCompliance {
         {
             emit(
                 emitter,
-                "torii.sorafs.gateway.compliance feed fetch bounds are invalid",
+                "sorafs.gateway.compliance feed fetch bounds are invalid",
             );
         }
         if self.max_clock_skew > Duration::from_secs(3_600)
@@ -23922,7 +24584,7 @@ impl SorafsGatewayCompliance {
         {
             emit(
                 emitter,
-                "torii.sorafs.gateway.compliance freshness/history bounds are invalid",
+                "sorafs.gateway.compliance freshness/history bounds are invalid",
             );
         }
 
@@ -24109,7 +24771,7 @@ impl SorafsDiscovery {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsDiscovery {
         let admission = self.admission.into_actual(emitter);
         if self.discovery_enabled && admission.is_none() {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
                 "sorafs.discovery.discovery_enabled requires a configured admission trust policy",
             ));
         }
@@ -24169,7 +24831,7 @@ impl SorafsAdmissionConfig {
         let Some(envelopes_dir) = self.envelopes_dir else {
             if !self.trusted_council_keys.is_empty() || self.signature_threshold != 0 {
                 emitter.emit(
-                    Report::new(ParseError::InvalidToriiConfig)
+                    Report::new(ParseError::InvalidSorafsConfig)
                         .attach("sorafs.discovery.admission trust policy requires envelopes_dir"),
                 );
             }
@@ -24178,7 +24840,7 @@ impl SorafsAdmissionConfig {
         let mut valid = true;
         if self.trusted_council_keys.is_empty() {
             emitter.emit(
-                Report::new(ParseError::InvalidToriiConfig)
+                Report::new(ParseError::InvalidSorafsConfig)
                     .attach("sorafs.discovery.admission.trusted_council_keys must not be empty"),
             );
             valid = false;
@@ -24189,7 +24851,7 @@ impl SorafsAdmissionConfig {
             .cloned()
             .collect::<BTreeSet<_>>();
         if unique_keys.len() != self.trusted_council_keys.len() {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
                 "sorafs.discovery.admission.trusted_council_keys must not contain duplicates",
             ));
             valid = false;
@@ -24198,13 +24860,13 @@ impl SorafsAdmissionConfig {
             match key.try_algorithm() {
                 Ok(Algorithm::Ed25519) => {}
                 Ok(algorithm) => {
-                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                         "sorafs.discovery.admission.trusted_council_keys[{index}] uses {algorithm:?}; only Ed25519 keys are accepted"
                     )));
                     valid = false;
                 }
                 Err(error) => {
-                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
                         "sorafs.discovery.admission.trusted_council_keys[{index}] is malformed: {error}"
                     )));
                     valid = false;
@@ -24213,13 +24875,13 @@ impl SorafsAdmissionConfig {
         }
         let Some(signature_threshold) = NonZeroUsize::new(self.signature_threshold) else {
             emitter.emit(
-                Report::new(ParseError::InvalidToriiConfig)
+                Report::new(ParseError::InvalidSorafsConfig)
                     .attach("sorafs.discovery.admission.signature_threshold must be non-zero"),
             );
             return None;
         };
         if signature_threshold.get() > unique_keys.len() {
-            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
                 "sorafs.discovery.admission.signature_threshold exceeds trusted_council_keys",
             ));
             valid = false;
@@ -25298,6 +25960,61 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<super::Root>()
             .expect("load minimal user config")
+    }
+
+    fn sorafs_table_mut(table: &mut Table) -> &mut Table {
+        table
+            .entry("sorafs")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sorafs table")
+    }
+
+    #[test]
+    fn top_level_sorafs_policy_override_reaches_actual_config() {
+        let mut table = base_table();
+        let sorafs = sorafs_table_mut(&mut table);
+        let appeal_finance = sorafs
+            .entry("appeal_finance_settlement")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("appeal finance table");
+        appeal_finance.insert("worker_max_retry_attempts".into(), Value::Integer(17));
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual
+                .torii
+                .sorafs_appeal_finance_settlement
+                .worker_max_retry_attempts,
+            17
+        );
+    }
+
+    #[test]
+    fn legacy_torii_sorafs_config_path_is_rejected() {
+        let mut table = base_table();
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        let mut appeal_finance = Table::new();
+        appeal_finance.insert("worker_max_retry_attempts".into(), Value::Integer(17));
+        let mut legacy_sorafs = Table::new();
+        legacy_sorafs.insert(
+            "appeal_finance_settlement".into(),
+            Value::Table(appeal_finance),
+        );
+        torii.insert("sorafs".into(), Value::Table(legacy_sorafs));
+
+        let error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<super::Root>()
+            .expect_err("legacy torii.sorafs path must be unknown");
+        assert!(
+            format!("{error:?}").contains("sorafs"),
+            "unexpected legacy-path error: {error:?}"
+        );
     }
 
     fn nexus_table_mut(table: &mut Table) -> &mut Table {
@@ -26755,6 +27472,7 @@ publish_delay_seconds = 17
             Value::Integer(0),
         );
         network.insert("idle_timeout_ms".into(), Value::Integer(0));
+        network.insert("reply_writer_flush_timeout_ms".into(), Value::Integer(0));
         let actual = load_root(table);
         let min = StdDuration::from_millis(100);
         assert_eq!(actual.block_sync.gossip_period, min);
@@ -26777,6 +27495,49 @@ publish_delay_seconds = 17
         assert_eq!(actual.network.peer_gossip_period, min);
         assert_eq!(actual.network.peer_gossip_max_period, min);
         assert_eq!(actual.network.idle_timeout, min);
+        assert_eq!(actual.network.reply_writer_flush_timeout, min);
+    }
+
+    #[test]
+    fn network_reply_writer_flush_timeout_defaults_and_parses() {
+        let default = load_root(base_table());
+        assert_eq!(
+            default.network.reply_writer_flush_timeout,
+            defaults::network::REPLY_WRITER_FLUSH_TIMEOUT
+        );
+
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert(
+            "reply_writer_flush_timeout_ms".into(),
+            Value::Integer(1_234),
+        );
+        let configured = load_root(table);
+        assert_eq!(
+            configured.network.reply_writer_flush_timeout,
+            StdDuration::from_millis(1_234)
+        );
+
+        let mut table = base_table();
+        table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table")
+            .insert(
+                "reply_writer_flush_timeout_ms".into(),
+                Value::Integer(i64::MAX),
+            );
+        let configured = load_root(table);
+        assert_eq!(
+            configured.network.reply_writer_flush_timeout,
+            StdDuration::from_millis(
+                u64::try_from(i64::MAX).expect("positive i64 maximum fits u64"),
+            ),
+            "the largest TOML integer timeout must not overflow deadline construction"
+        );
     }
 
     #[test]
@@ -28214,17 +28975,31 @@ mod settlement_offline_tests {
     use super::*;
 
     #[test]
-    fn offline_parse_preserves_unconfigured_kagemusha_defaults() {
+    fn offline_parse_defaults_to_mandatory_escrow() {
         let mut emitter = Emitter::new();
         let actual = Offline::default().parse(&mut emitter);
 
         assert!(emitter.into_result().is_ok());
+        assert!(actual.escrow_required);
         assert!(actual.kagemusha_release_policy_path.is_none());
         assert!(actual.kagemusha_artifact_dir.is_none());
         assert_eq!(
             actual.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
         );
+    }
+
+    #[test]
+    fn offline_parse_rejects_false_escrow_opt_out() {
+        let mut emitter = Emitter::new();
+        let actual = Offline {
+            escrow_required: false,
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
+        assert!(!actual.escrow_required);
     }
 
     #[test]

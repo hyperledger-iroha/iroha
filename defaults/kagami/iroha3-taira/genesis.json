@@ -196,7 +196,7 @@
               "metadata": {},
               "mintable": "Infinitely",
               "spec": {
-                "scale": null
+                "scale": 9
               },
               "name": "xor"
             }

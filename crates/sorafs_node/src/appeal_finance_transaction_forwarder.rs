@@ -14,7 +14,7 @@ use std::{
 };
 
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
-use iroha_crypto::numeric::Quantity;
+use iroha_crypto::numeric::{Quantity, XorQuantity};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -525,6 +525,10 @@ pub enum AppealFinanceTransactionDeadLetterReasonV1 {
     RetryExhausted,
     /// Finalized cursor forked or moved backwards.
     StaleFinalizedCursor,
+    /// The governed appeal-finance policy changed before submission.
+    PolicySuperseded,
+    /// The durable reconciliation context is malformed or noncanonical.
+    InvalidContext,
 }
 
 /// Payload-free terminal delivery.
@@ -578,6 +582,8 @@ enum StoredDeadLetterReasonV1 {
     TransactionRejected,
     RetryExhausted,
     StaleFinalizedCursor,
+    PolicySuperseded,
+    InvalidContext,
 }
 
 impl From<StoredDeadLetterReasonV1> for AppealFinanceTransactionDeadLetterReasonV1 {
@@ -587,6 +593,8 @@ impl From<StoredDeadLetterReasonV1> for AppealFinanceTransactionDeadLetterReason
             StoredDeadLetterReasonV1::TransactionRejected => Self::TransactionRejected,
             StoredDeadLetterReasonV1::RetryExhausted => Self::RetryExhausted,
             StoredDeadLetterReasonV1::StaleFinalizedCursor => Self::StaleFinalizedCursor,
+            StoredDeadLetterReasonV1::PolicySuperseded => Self::PolicySuperseded,
+            StoredDeadLetterReasonV1::InvalidContext => Self::InvalidContext,
         }
     }
 }
@@ -1332,6 +1340,44 @@ impl AppealFinanceTransactionForwarder {
         self.commit_candidate(&mut state, candidate)
     }
 
+    /// Dead-letter an operation whose bound governed policy is no longer active.
+    pub fn mark_policy_superseded(
+        &self,
+        operation_id: [u8; 32],
+        observed_cursor: AppealFinanceFinalizedCursorV1,
+    ) -> Result<(), AppealFinanceTransactionForwarderError> {
+        let mut state = self.lock_state()?;
+        let mut candidate = state.checkpoint.clone();
+        let position = pending_position(&candidate, operation_id)?;
+        validate_observed_cursor(&candidate.pending[position], observed_cursor)?;
+        self.move_to_dead_letter(
+            &mut candidate,
+            position,
+            StoredDeadLetterReasonV1::PolicySuperseded,
+            observed_cursor,
+        )?;
+        self.commit_candidate(&mut state, candidate)
+    }
+
+    /// Dead-letter a malformed or noncanonical durable reconciliation context.
+    pub fn mark_invalid_context(
+        &self,
+        operation_id: [u8; 32],
+        observed_cursor: AppealFinanceFinalizedCursorV1,
+    ) -> Result<(), AppealFinanceTransactionForwarderError> {
+        let mut state = self.lock_state()?;
+        let mut candidate = state.checkpoint.clone();
+        let position = pending_position(&candidate, operation_id)?;
+        validate_observed_cursor(&candidate.pending[position], observed_cursor)?;
+        self.move_to_dead_letter(
+            &mut candidate,
+            position,
+            StoredDeadLetterReasonV1::InvalidContext,
+            observed_cursor,
+        )?;
+        self.commit_candidate(&mut state, candidate)
+    }
+
     /// Dead-letter a finalized cursor rollback or same-height fork.
     pub fn mark_stale_finalized_cursor(
         &self,
@@ -1667,6 +1713,12 @@ impl PreparedOperation {
     }
 }
 
+fn validate_xor_quantity(amount: &Quantity) -> Result<(), AppealFinanceTransactionForwarderError> {
+    XorQuantity::try_from_quantity(amount.clone())
+        .map(|_| ())
+        .map_err(|_| AppealFinanceTransactionForwarderError::InvalidOperation)
+}
+
 fn validate_operation(
     operation: &AppealFinanceOperationV1,
     authority: &AccountId,
@@ -1674,6 +1726,7 @@ fn validate_operation(
 ) -> Result<(), AppealFinanceTransactionForwarderError> {
     match operation {
         AppealFinanceOperationV1::Open(instruction) => {
+            validate_xor_quantity(instruction.amount())?;
             if expected_record.is_some()
                 || instruction.amount().is_zero()
                 || instruction.evidence_hashes().len() > 128
@@ -1688,6 +1741,10 @@ fn validate_operation(
             let Some(record) = expected_record else {
                 return Err(AppealFinanceTransactionForwarderError::InvalidOperation);
             };
+            validate_xor_quantity(instruction.amount())?;
+            validate_xor_quantity(instruction.expected_remaining_amount())?;
+            validate_xor_quantity(&record.amount)?;
+            validate_xor_quantity(&record.remaining_amount)?;
             let required_authority = record
                 .release_authority
                 .as_ref()
@@ -1709,6 +1766,8 @@ fn validate_operation(
             let Some(record) = expected_record else {
                 return Err(AppealFinanceTransactionForwarderError::InvalidOperation);
             };
+            validate_xor_quantity(&record.amount)?;
+            validate_xor_quantity(&record.remaining_amount)?;
             if record.id != *instruction.escrow_id()
                 || record.kind != AssetEscrowKind::Lock
                 || record.status != AssetEscrowStatus::Locked
@@ -2798,6 +2857,83 @@ mod tests {
         ))
     }
 
+    #[test]
+    fn appeal_finance_operations_reject_non_xor_precision_before_queueing() {
+        let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
+        let invalid_xor: Quantity = "0.0000000001"
+            .parse()
+            .expect("generic quantity permits scale ten");
+        let open_context = AppealFinanceTransactionContextV1 {
+            chain_id: ChainId::from("appeal-finance-forwarder-test"),
+            finalized_cursor: cursor(7, 7),
+            expected_record: None,
+            reconciliation_context: vec![0xA1, 0x00],
+        };
+        let open = AppealFinanceOperationV1::Open(OpenAssetLock::new(
+            escrow_id(),
+            asset_definition(),
+            account(2),
+            invalid_xor.clone(),
+        ));
+        assert!(matches!(
+            forwarder.enqueue_unsigned_operation(account(1), open, &open_context),
+            Err(AppealFinanceTransactionForwarderError::InvalidOperation)
+        ));
+
+        let invalid_drawdown = AppealFinanceOperationV1::Drawdown(DrawdownAssetLock::new(
+            escrow_id(),
+            invalid_xor.clone(),
+            Quantity::from(100_u32),
+        ));
+        assert!(matches!(
+            forwarder.enqueue_unsigned_operation(account(4), invalid_drawdown, &drawdown_context()),
+            Err(AppealFinanceTransactionForwarderError::InvalidOperation)
+        ));
+
+        let invalid_precondition = AppealFinanceOperationV1::Drawdown(DrawdownAssetLock::new(
+            escrow_id(),
+            Quantity::from(60_u32),
+            invalid_xor.clone(),
+        ));
+        assert!(matches!(
+            forwarder.enqueue_unsigned_operation(
+                account(4),
+                invalid_precondition,
+                &drawdown_context()
+            ),
+            Err(AppealFinanceTransactionForwarderError::InvalidOperation)
+        ));
+
+        let mut poisoned_record = active_record();
+        poisoned_record.amount = invalid_xor.clone();
+        let poisoned_drawdown_context = AppealFinanceTransactionContextV1 {
+            expected_record: Some(poisoned_record),
+            ..drawdown_context()
+        };
+        assert!(matches!(
+            forwarder.enqueue_unsigned_operation(
+                account(4),
+                drawdown_operation(),
+                &poisoned_drawdown_context
+            ),
+            Err(AppealFinanceTransactionForwarderError::InvalidOperation)
+        ));
+
+        let mut poisoned_record = active_record();
+        poisoned_record.remaining_amount = invalid_xor;
+        let poisoned_cancel_context = AppealFinanceTransactionContextV1 {
+            expected_record: Some(poisoned_record),
+            ..drawdown_context()
+        };
+        let cancel = AppealFinanceOperationV1::Cancel(CancelAssetLock::new(escrow_id()));
+        assert!(matches!(
+            forwarder.enqueue_unsigned_operation(account(1), cancel, &poisoned_cancel_context),
+            Err(AppealFinanceTransactionForwarderError::InvalidOperation)
+        ));
+
+        assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
+    }
+
     fn signed_bytes(
         signer: &KeyPair,
         authority: AccountId,
@@ -3085,6 +3221,37 @@ mod tests {
         assert_eq!(
             forwarder.dead_letters(8).unwrap()[0].reason,
             AppealFinanceTransactionDeadLetterReasonV1::StaleFinalizedCursor
+        );
+    }
+
+    #[test]
+    fn superseded_policy_and_invalid_context_are_distinct_terminal_reasons() {
+        let superseded = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
+        let superseded_id = superseded
+            .enqueue_unsigned_operation(account(4), drawdown_operation(), &drawdown_context())
+            .unwrap()
+            .operation_id();
+        superseded
+            .mark_policy_superseded(superseded_id, cursor(8, 8))
+            .unwrap();
+        assert!(superseded.pending_after(None, 8).unwrap().is_empty());
+        assert_eq!(
+            superseded.dead_letters(8).unwrap()[0].reason,
+            AppealFinanceTransactionDeadLetterReasonV1::PolicySuperseded
+        );
+
+        let invalid = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
+        let invalid_id = invalid
+            .enqueue_unsigned_operation(account(4), drawdown_operation(), &drawdown_context())
+            .unwrap()
+            .operation_id();
+        invalid
+            .mark_invalid_context(invalid_id, cursor(8, 9))
+            .unwrap();
+        assert!(invalid.pending_after(None, 8).unwrap().is_empty());
+        assert_eq!(
+            invalid.dead_letters(8).unwrap()[0].reason,
+            AppealFinanceTransactionDeadLetterReasonV1::InvalidContext
         );
     }
 

@@ -193,6 +193,10 @@ pub mod uri {
         crate::route_catalog::fees::SPONSOR_PROGRAM_BY_ID_PATH;
     /// Health URI is used to handle incoming Healthcheck requests.
     pub const HEALTH: &str = "/health";
+    /// Process-only liveness URI.
+    pub const LIVEZ: &str = "/livez";
+    /// Complete protocol readiness URI.
+    pub const READYZ: &str = "/readyz";
     /// URI used to fetch a window of block headers (newest first, optional `from`/`limit`).
     pub const LEDGER_HEADERS: &str = "/v1/ledger/headers";
     /// URI used to fetch the execution state root for a block height.

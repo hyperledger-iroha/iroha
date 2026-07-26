@@ -844,6 +844,8 @@ pub struct SoraFsAppealFinanceSettlementReceiptV1 {
     pub generated_at_unix_ms: u64,
     /// Appeal finance config version used to derive the plan.
     pub appeal_finance_config_version: String,
+    /// Canonical digest of the governed appeal finance policy used to derive the plan.
+    pub appeal_finance_policy_digest: [u8; 32],
     /// Final appeal outcome used by settlement calculation.
     pub outcome: SoraFsAppealFinanceOutcomeV1,
     /// Canonical escrow id as lowercase hexadecimal.
@@ -922,6 +924,11 @@ impl SoraFsAppealFinanceSettlementReceiptV1 {
             &self.appeal_finance_config_version,
             SoraFsAppealFinanceSettlementReceiptValidationError::MissingFinanceConfigVersion,
         )?;
+        if self.appeal_finance_policy_digest == [0u8; 32] {
+            return Err(
+                SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinancePolicyDigest,
+            );
+        }
         validate_receipt_hex(
             &self.escrow_id_hex,
             "escrow_id_hex",
@@ -3434,6 +3441,9 @@ pub enum SoraFsAppealFinanceSettlementReceiptValidationError {
     /// Missing finance config version.
     #[error("SoraFS appeal finance settlement receipt config version is required")]
     MissingFinanceConfigVersion,
+    /// Governed appeal finance policy digest is all zero.
+    #[error("SoraFS appeal finance settlement receipt policy digest must not be zero")]
+    InvalidFinancePolicyDigest,
     /// Missing escrow id.
     #[error("SoraFS appeal finance settlement receipt escrow id is required")]
     MissingEscrowId,
@@ -5601,6 +5611,7 @@ mod tests {
             round_id: Some("round-1".to_string()),
             generated_at_unix_ms: 1_800_000_032_000,
             appeal_finance_config_version: "baseline-v1".to_string(),
+            appeal_finance_policy_digest: [0x44; 32],
             outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
             escrow_id_hex: "11".repeat(32),
             payer_account: "payer-account".to_string(),
@@ -5684,6 +5695,20 @@ mod tests {
                 field: "reconciliation_digest_hex",
                 expected_bytes: 32,
             }
+        );
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_rejects_zero_policy_digest() {
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.appeal_finance_policy_digest = [0; 32];
+
+        let err = receipt
+            .validate()
+            .expect_err("zero governed policy digest rejected");
+        assert_eq!(
+            err,
+            SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinancePolicyDigest
         );
     }
 

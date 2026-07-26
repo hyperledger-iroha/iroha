@@ -142,6 +142,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>,
     dispatch_instruction::<iroha_data_model::isi::alias_setup::RebindAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>,
+    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease>,
+    dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountAliasBinding>,
     dispatch_instruction::<iroha_data_model::isi::InvalidInstruction>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::CreateKaigi>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::JoinKaigi>,
@@ -225,9 +227,13 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsProofOutcomeSignerPolicy>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsProofOutcome>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy>,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy
+    >,
     dispatch_instruction::<iroha_data_model::isi::sorafs::AppendSorafsPorReputationJournalEntry>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry>,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry
+    >,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList>,

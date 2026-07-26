@@ -81,7 +81,7 @@ THEOREM AsyncNextPreservesDecisionCertifiedRequestCompleteness ==
   /\ AsyncNext
   => DecisionCertifiedRequestCompletenessInvariant'
 BY DecisionRecoveryCertificateHasResponsiveRemoteBodySource,
-   PersistDecisionRecoveryUsesCompletionFetchBody,
+   PersistDecisionRecoveryUsesBodyStateCompletion,
    CompletionDeferralRetainsCandidate,
    ExactDurableDecisionRecoveryLifecycleTransition,
    IsaT(600)

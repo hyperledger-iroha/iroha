@@ -96,6 +96,19 @@ profile = "writer"
 expose_operator_routes = false
 allow_tool_prefixes = ["iroha."]
 
+[torii.kagemusha_commands]
+enabled = true
+private_key = "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
+minimum_xor_balance = "1"
+max_tx_value = "1000000000"
+
+[settlement.offline]
+escrow_required = true
+escrow_accounts = { "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" = "REPLACE_WITH_TAIRA_OFFLINE_ESCROW_ACCOUNT" }
+kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"
+kagemusha_artifact_dir = "/var/lib/iroha/kagemusha/v4"
+kagemusha_max_decoded_bytes = 268435456
+
 [torii.account_onboarding]
 authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
 private_key_file = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
@@ -105,7 +118,7 @@ fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdb
 
 [[torii.account_onboarding.credentials]]
 id = "REPLACE_WITH_TAIRA_ONBOARDING_CREDENTIAL_ID"
-scope = { domain = "REPLACE_WITH_TAIRA_ONBOARDING_SCOPE" }
+scope = { dataspace = "REPLACE_WITH_TAIRA_ONBOARDING_SCOPE" }
 token_hash = "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
 
 [torii.faucet]

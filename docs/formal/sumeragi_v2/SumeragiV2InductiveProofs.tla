@@ -1339,18 +1339,47 @@ THEOREM InitEstablishesStrongInductiveInvariant ==
 BY InitAtEstablishesStrongInductiveInvariant DEF Init
 
 (***************************************************************************
-Historical locked-Commit authorization is already forced by two reducer
-clauses.  A lower-view pending Commit cannot use CurrentOpenPrepareForCommit,
-and every non-strict timeout/Commit pair covered by durable timeout protection
-must therefore carry installed-TC authorization.
+Exact same-round LockAndCommit admission is forced by the pending-write and
+timeout-protection invariants. Installed TC provenance has no Commit-creation
+branch; its high is consumed only by later proposal justification.
 ***************************************************************************)
+THEOREM PendingLockCommitUsesExactCurrentRound ==
+  PendingVoteWritesAuthorized
+    => \A request \in pendingLockCommit:
+         /\ request.vote.view = nodeView[request.node]
+         /\ CurrentOpenPrepareForCommit(request.node, request.qc)
+BY SMT DEF PendingVoteWritesAuthorized, CurrentOpenPrepareForCommit
+
+THEOREM DurableTimeoutProtectionIsDirect ==
+  DurableTimeoutsProtectCommits
+    => \A timeoutVote \in timeoutIntents,
+          commitVote \in commitIntents:
+         (/\ timeoutVote.signer \in Honest
+          /\ commitVote.signer = timeoutVote.signer
+          /\ commitVote.context = timeoutVote.context
+          /\ commitVote.phase = "Commit"
+          /\ commitVote.view <= timeoutVote.view)
+           => TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
+BY DEF DurableTimeoutsProtectCommits, TimeoutIntentProtectsCommits,
+       TimeoutVoteProtectsCommitSet
+
+THEOREM ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization ==
+  ReducerProvenanceInvariant
+    => SameRoundLockAndCommitAuthorizationInvariant
+BY PendingLockCommitUsesExactCurrentRound,
+   DurableTimeoutProtectionIsDirect
+   DEF ReducerProvenanceInvariant,
+       SameRoundLockAndCommitAuthorizationInvariant
+
+\* Compatibility theorems for downstream proof steps. Their conclusions are
+\* aliases of the exact same-round invariant and contain no historical branch.
 THEOREM PendingLowerLockCommitRequiresHistoricalTcAuthorization ==
   PendingVoteWritesAuthorized
     => \A request \in pendingLockCommit:
          request.vote.view < nodeView[request.node]
            => HistoricalLockedPrepareForCommit(request.node, request.qc)
-BY SMT
-   DEF PendingVoteWritesAuthorized, CurrentOpenPrepareForCommit
+BY PendingLockCommitUsesExactCurrentRound
+   DEF HistoricalLockedPrepareForCommit
 
 THEOREM DurableTimeoutProtectionSuppliesInstalledTcAuthorization ==
   DurableTimeoutsProtectCommits
@@ -1363,22 +1392,19 @@ THEOREM DurableTimeoutProtectionSuppliesInstalledTcAuthorization ==
           /\ commitVote.view <= timeoutVote.view
           /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote))
            => InstalledTcAuthorizesCommitVote(commitVote)
-BY SMT
-   DEF DurableTimeoutsProtectCommits, TimeoutIntentProtectsCommits,
-       TimeoutVoteProtectsCommitSet
+BY DurableTimeoutProtectionIsDirect
+   DEF InstalledTcAuthorizesCommitVote
 
 THEOREM ReducerProvenanceImpliesHistoricalLockedCommitAuthorization ==
   ReducerProvenanceInvariant
     => HistoricalLockedCommitAuthorizationInvariant
-BY PendingLowerLockCommitRequiresHistoricalTcAuthorization,
-   DurableTimeoutProtectionSuppliesInstalledTcAuthorization
-   DEF ReducerProvenanceInvariant,
-       HistoricalLockedCommitAuthorizationInvariant
+BY ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization
+   DEF HistoricalLockedCommitAuthorizationInvariant
 
 THEOREM ReducerProvenanceImpliesHistoricalTcLockedCommitAuthorization ==
   ReducerProvenanceInvariant
     => HistoricalTcLockedCommitAuthorizationInvariant
-BY ReducerProvenanceImpliesHistoricalLockedCommitAuthorization
+BY ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization
    DEF HistoricalTcLockedCommitAuthorizationInvariant
 
 THEOREM UnchangedPendingVoteWriteVarsPreservesAuthorization ==
@@ -1430,6 +1456,9 @@ PROOF
          DEF PendingVoteWritesAuthorized, PrepareCarriesHigherSafeQc
     <2>3. (\A request \in pendingLockCommit:
              /\ request.node \in Honest
+             /\ request.vote =
+                  Vote(context, request.qc.view, "Commit",
+                       request.qc.subject, request.node)
              /\ request.vote.phase = "Commit"
              /\ request.vote.signer = request.node
              /\ request.vote.context = context
@@ -2091,7 +2120,18 @@ THEOREM FetchCertifiedBodyPreservesStrongInvariant ==
     StrongInductiveInvariant /\ FetchCertifiedBody(node, qc)
       => StrongInductiveInvariant'
 BY ProofRelevantStutterPreservesStrongInvariant
-   DEF FetchCertifiedBody, ProofRelevantVars, ValidatedBodiesSound,
+   DEF FetchCertifiedBody, InstallCertifiedBodyEffect,
+       ProofRelevantVars, ValidatedBodiesSound,
+       StrongInductiveInvariant, Safety, TypeInvariant
+
+THEOREM AcceptCertifiedResponseCapabilityPreservesStrongInvariant ==
+  \A node, roundView, subject:
+    StrongInductiveInvariant
+      /\ AcceptCertifiedResponseCapability(node, roundView, subject)
+      => StrongInductiveInvariant'
+BY ProofRelevantStutterPreservesStrongInvariant
+   DEF AcceptCertifiedResponseCapability, InstallCertifiedBodyEffect,
+       ProofRelevantVars, ValidatedBodiesSound,
        StrongInductiveInvariant, Safety, TypeInvariant
 
 THEOREM DropProposalPreservesStrongInvariant ==
@@ -2174,6 +2214,41 @@ BY SMTT(120), Isa
        DurableLockRecoveryProvenanceInvariant,
        ExactLockedCommitIntents, PersistInstallTC,
        ResultingInstallLockRank, ResultingInstallLockSubject
+
+(***************************************************************************
+InstallTimeout is a generation boundary in the production reducer:
+`Continuation::InstallTimeout` clears `body_work` before publishing EnterView
+or recovery Fetch effects.  These leaves pin the corresponding source
+semantics: the installing node has no old volatile validation receipt, while
+other reducers' receipts and the validation type/soundness invariants remain
+intact.
+***************************************************************************)
+THEOREM PersistInstallTCClearsInstallingNodeValidationReceipts ==
+  \A request:
+    PersistInstallTC(request)
+      => /\ validatedBodies' =
+               {validation \in validatedBodies:
+                  validation.node # request.node}
+         /\ \A validation \in validatedBodies':
+              validation.node # request.node
+BY Isa DEF PersistInstallTC
+
+THEOREM PersistInstallTCPreservesOtherNodeValidationReceipts ==
+  \A request, validation:
+    /\ PersistInstallTC(request)
+    /\ validation.node # request.node
+    => (validation \in validatedBodies'
+          <=> validation \in validatedBodies)
+BY Isa DEF PersistInstallTC
+
+THEOREM PersistInstallTCPreservesValidationReceiptTypeAndSoundness ==
+  \A request:
+    /\ TypeInvariant
+    /\ PersistInstallTC(request)
+    => /\ validatedBodies' \subseteq ValidationRecordSet
+       /\ ValidatedBodiesSound(validatedBodies', ValidSubjects)
+BY Isa
+   DEF TypeInvariant, PersistInstallTC, ValidatedBodiesSound
 
 THEOREM AdvanceContextPreservesDurableLockRecoveryProvenance ==
   \A subject:
@@ -2309,6 +2384,9 @@ PROOF
         <4> QED BY <4>1
       <3>3. \A request \in pendingLockCommit':
                /\ request.node \in Honest
+               /\ request.vote =
+                    Vote(context', request.qc.view, "Commit",
+                         request.qc.subject, request.node)
                /\ request.vote.phase = "Commit"
                /\ request.vote.signer = request.node
                /\ request.vote.context = context'
@@ -2330,6 +2408,9 @@ PROOF
                /\ CanAppendVote(commitIntents', request.vote)
         <4>1. ASSUME NEW request \in pendingLockCommit'
                PROVE /\ request.node \in Honest
+                     /\ request.vote =
+                          Vote(context', request.qc.view, "Commit",
+                               request.qc.subject, request.node)
                      /\ request.vote.phase = "Commit"
                      /\ request.vote.signer = request.node
                      /\ request.vote.context = context'
@@ -2360,6 +2441,9 @@ PROOF
           <5>3. request \in pendingLockCommit
             BY <1>1, <4>1 DEF ProofRelevantWithoutDurableVars
           <5>4. /\ request.node \in Honest
+                 /\ request.vote =
+                      Vote(context, request.qc.view, "Commit",
+                           request.qc.subject, request.node)
                  /\ request.vote.phase = "Commit"
                  /\ request.vote.signer = request.node
                  /\ request.vote.context = context
@@ -2389,6 +2473,9 @@ PROOF
                  /\ commitIntents' = commitIntents
             BY <1>1 DEF ProofRelevantWithoutDurableVars
           <5>6. /\ request.node \in Honest
+                 /\ request.vote =
+                      Vote(context', request.qc.view, "Commit",
+                           request.qc.subject, request.node)
                  /\ request.vote.phase = "Commit"
                  /\ request.vote.signer = request.node
                  /\ request.vote.context = context'
@@ -3396,6 +3483,9 @@ PROOF
         <4> QED BY <4>1
       <3>6. \A pending \in pendingLockCommit':
                /\ pending.node \in Honest
+               /\ pending.vote =
+                    Vote(context', pending.qc.view, "Commit",
+                         pending.qc.subject, pending.node)
                /\ pending.vote.phase = "Commit"
                /\ pending.vote.signer = pending.node
                /\ pending.vote.context = context'
@@ -3686,6 +3776,9 @@ PROOF
                PrepareCarriesHigherSafeQc
       <3>3. \A pending \in pendingLockCommit':
                      /\ pending.node \in Honest
+                     /\ pending.vote =
+                          Vote(context', pending.qc.view, "Commit",
+                               pending.qc.subject, pending.node)
                      /\ pending.vote.phase = "Commit"
                      /\ pending.vote.signer = pending.node
                      /\ pending.vote.context = context'
@@ -3707,6 +3800,9 @@ PROOF
                      /\ CanAppendVote(commitIntents', pending.vote)
         <4>1. ASSUME NEW pending \in pendingLockCommit'
                PROVE /\ pending.node \in Honest
+                     /\ pending.vote =
+                          Vote(context', pending.qc.view, "Commit",
+                               pending.qc.subject, pending.node)
                      /\ pending.vote.phase = "Commit"
                      /\ pending.vote.signer = pending.node
                      /\ pending.vote.context = context'
@@ -3743,6 +3839,9 @@ PROOF
           <5>3. pending.node # request.node
             BY <5>1, <5>2, DistinctUniqueRequestsHaveDistinctNodes
           <5>4. /\ pending.node \in Honest
+                /\ pending.vote =
+                     Vote(context, pending.qc.view, "Commit",
+                          pending.qc.subject, pending.node)
                 /\ pending.vote.phase = "Commit"
                 /\ pending.vote.signer = pending.node
                 /\ pending.vote.context = context
@@ -4226,10 +4325,10 @@ PROOF
         BY <3>2, <3>3, BackedCertificateIsValidAndAvailable
       <3> QED BY <3>1, <3>4
          DEF CertificateValidityAndAvailability, CertifiedBodyAvailable
-    <2>3. CASE HistoricalLockedPrepareSource(node, qc)
+    <2>3. CASE LockedPrepareRecoverySource(node, qc)
       <3>1. /\ qc \in prepareQCs
             /\ qc.context = context
-        BY <2>3 DEF HistoricalLockedPrepareSource
+        BY <2>3 DEF LockedPrepareRecoverySource
       <3>2. /\ HistoricalQcValid(qc)
             /\ CertificateBackedBy(CurrentEpoch, qc, prepareIntents)
             /\ HonestIntentSound(prepareIntents, durableBodies,
@@ -4682,6 +4781,9 @@ PROOF
                PrepareCarriesHigherSafeQc
       <3>4. \A request \in pendingLockCommit':
                /\ request.node \in Honest
+               /\ request.vote =
+                    Vote(context', request.qc.view, "Commit",
+                         request.qc.subject, request.node)
                /\ request.vote.phase = "Commit"
                /\ request.vote.signer = request.node
                /\ request.vote.context = context'
@@ -4704,6 +4806,9 @@ PROOF
                /\ CanAppendVote(commitIntents', request.vote)
         <4>1. ASSUME NEW request \in pendingLockCommit'
                PROVE /\ request.node \in Honest
+                     /\ request.vote =
+                          Vote(context', request.qc.view, "Commit",
+                               request.qc.subject, request.node)
                      /\ request.vote.phase = "Commit"
                      /\ request.vote.signer = request.node
                      /\ request.vote.context = context'
@@ -4729,6 +4834,9 @@ PROOF
           <5>1. request \in pendingLockCommit
             BY <3>2, <4>1
           <5>2. /\ request.node \in Honest
+                 /\ request.vote =
+                      Vote(context, request.qc.view, "Commit",
+                           request.qc.subject, request.node)
                  /\ request.vote.phase = "Commit"
                  /\ request.vote.signer = request.node
                  /\ request.vote.context = context
@@ -4907,6 +5015,9 @@ PROOF
                  PrepareCarriesHigherSafeQc
         <4>3. \A request \in pendingLockCommit':
                  /\ request.node \in Honest
+                 /\ request.vote =
+                      Vote(context', request.qc.view, "Commit",
+                           request.qc.subject, request.node)
                  /\ request.vote.phase = "Commit"
                  /\ request.vote.signer = request.node
                  /\ request.vote.context = context'
@@ -4929,6 +5040,9 @@ PROOF
                  /\ CanAppendVote(commitIntents', request.vote)
           <5>1. ASSUME NEW request \in pendingLockCommit'
                  PROVE /\ request.node \in Honest
+                       /\ request.vote =
+                            Vote(context', request.qc.view, "Commit",
+                                 request.qc.subject, request.node)
                        /\ request.vote.phase = "Commit"
                        /\ request.vote.signer = request.node
                        /\ request.vote.context = context'
@@ -4954,6 +5068,9 @@ PROOF
             <6>1. request \in pendingLockCommit
               BY <3>1, <5>1
             <6>2. /\ request.node \in Honest
+                   /\ request.vote =
+                        Vote(context, request.qc.view, "Commit",
+                             request.qc.subject, request.node)
                    /\ request.vote.phase = "Commit"
                    /\ request.vote.signer = request.node
                    /\ request.vote.context = context
@@ -5272,6 +5389,9 @@ PROOF
                    PrepareCarriesHigherSafeQc
           <5>3. \A request \in pendingLockCommit':
                    /\ request.node \in Honest
+                   /\ request.vote =
+                        Vote(context', request.qc.view, "Commit",
+                             request.qc.subject, request.node)
                    /\ request.vote.phase = "Commit"
                    /\ request.vote.signer = request.node
                    /\ request.vote.context = context'
@@ -5294,6 +5414,9 @@ PROOF
                    /\ CanAppendVote(commitIntents', request.vote)
             <6>1. ASSUME NEW request \in pendingLockCommit'
                    PROVE /\ request.node \in Honest
+                         /\ request.vote =
+                              Vote(context', request.qc.view, "Commit",
+                                   request.qc.subject, request.node)
                          /\ request.vote.phase = "Commit"
                          /\ request.vote.signer = request.node
                          /\ request.vote.context = context'
@@ -5319,6 +5442,9 @@ PROOF
               <7>1. request \in pendingLockCommit
                 BY <3>1, <6>1
               <7>2. /\ request.node \in Honest
+                     /\ request.vote =
+                          Vote(context, request.qc.view, "Commit",
+                               request.qc.subject, request.node)
                      /\ request.vote.phase = "Commit"
                      /\ request.vote.signer = request.node
                      /\ request.vote.context = context
@@ -5814,6 +5940,9 @@ PROOF
                                     PrepareCarriesHigherSafeQc
       <3>5. \A pending \in pendingLockCommit':
                /\ pending.node \in Honest
+               /\ pending.vote =
+                    Vote(context', pending.qc.view, "Commit",
+                         pending.qc.subject, pending.node)
                /\ pending.vote.phase = "Commit"
                /\ pending.vote.signer = pending.node
                /\ pending.vote.context = context'
@@ -6149,6 +6278,9 @@ PROOF
                PrepareCarriesHigherSafeQc
       <3>4. \A pending \in pendingLockCommit':
                      /\ pending.node \in Honest
+                     /\ pending.vote =
+                          Vote(context', pending.qc.view, "Commit",
+                               pending.qc.subject, pending.node)
                      /\ pending.vote.phase = "Commit"
                      /\ pending.vote.signer = pending.node
                      /\ pending.vote.context = context'
@@ -6170,6 +6302,9 @@ PROOF
                      /\ CanAppendVote(commitIntents', pending.vote)
         <4>1. ASSUME NEW pending \in pendingLockCommit'
                PROVE /\ pending.node \in Honest
+                     /\ pending.vote =
+                          Vote(context', pending.qc.view, "Commit",
+                               pending.qc.subject, pending.node)
                      /\ pending.vote.phase = "Commit"
                      /\ pending.vote.signer = pending.node
                      /\ pending.vote.context = context'
@@ -6205,6 +6340,9 @@ PROOF
           <5>3. pending.node # request.node
             BY <5>1, <5>2, DistinctUniqueRequestsHaveDistinctNodes
           <5>4. /\ pending.node \in Honest
+                /\ pending.vote =
+                     Vote(context, pending.qc.view, "Commit",
+                          pending.qc.subject, pending.node)
                 /\ pending.vote.phase = "Commit"
                 /\ pending.vote.signer = pending.node
                 /\ pending.vote.context = context
@@ -6557,19 +6695,16 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM ByzantineBroadcastTimeoutPreservesStrongInvariant ==
-  \A signer, roundView, highRank, highSubject:
+  \A signer, roundView, highestPrepare:
     StrongInductiveInvariant
-      /\ ByzantineBroadcastTimeout(signer, roundView,
-                                   highRank, highSubject)
+      /\ ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
       => StrongInductiveInvariant'
 PROOF
   <1>1. ASSUME NEW signer,
               NEW roundView,
-              NEW highRank,
-              NEW highSubject,
+              NEW highestPrepare,
               StrongInductiveInvariant,
-              ByzantineBroadcastTimeout(signer, roundView,
-                                         highRank, highSubject)
+              ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
          PROVE StrongInductiveInvariant'
     <2>1. signer \notin Honest
       BY <1>1 DEF ByzantineBroadcastTimeout, Byzantine
@@ -6581,8 +6716,7 @@ PROOF
            DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
                HonestTimeoutTransportBacked
       <3>2. \A envelope \in BroadcastTimeouts(
-                    TimeoutVote(context, roundView, signer,
-                                highRank, highSubject)):
+                    TimeoutVote(context, roundView, signer, highestPrepare)):
                envelope.vote.signer \notin Honest
         BY <2>1 DEF BroadcastTimeouts, TimeoutEnvelope, TimeoutVote
       <3>3. \A envelope \in timeoutNetwork':
@@ -7349,6 +7483,9 @@ PROOF
                  /\ pending.vote.context = pending.qc.context
                  /\ pending.vote.view = pending.qc.view
                  /\ pending.vote.subject = pending.qc.subject
+                 /\ pending.vote =
+                      Vote(context, pending.qc.view, "Commit",
+                           pending.qc.subject, pending.node)
                  /\ pending.qc.phase = "Prepare"
                  /\ pending.qc \in prepareQCs
                  /\ pending.vote.subject \in ValidSubjects
@@ -7376,6 +7513,9 @@ PROOF
                   /\ pending.vote.context = pending.qc.context
                   /\ pending.vote.view = pending.qc.view
                   /\ pending.vote.subject = pending.qc.subject
+                  /\ pending.vote =
+                       Vote(context, pending.qc.view, "Commit",
+                            pending.qc.subject, pending.node)
                   /\ pending.qc.phase = "Prepare"
                   /\ pending.qc \in prepareQCs
                   /\ \/ CurrentOpenPrepareForCommit(
@@ -7603,6 +7743,9 @@ PROOF
       <3> QED BY <3>1, <3>2 DEF CanAppendVote, CommitVote, Vote
     <2>3. /\ Request \in LockCommitWalSet
           /\ Request.node \in Honest
+          /\ Request.vote =
+               Vote(context, Request.qc.view, "Commit",
+                    Request.qc.subject, Request.node)
           /\ Request.vote.phase = "Commit"
           /\ Request.vote.signer = Request.node
           /\ Request.vote.context = context
@@ -7704,6 +7847,9 @@ PROOF
         BY <1>1 DEF BeginLockCommit, Request
       <3>3. \A pending \in pendingLockCommit':
                /\ pending.node \in Honest
+               /\ pending.vote =
+                    Vote(context', pending.qc.view, "Commit",
+                         pending.qc.subject, pending.node)
                /\ pending.vote.phase = "Commit"
                /\ pending.vote.signer = pending.node
                /\ pending.vote.context = context'
@@ -7725,6 +7871,9 @@ PROOF
                /\ CanAppendVote(commitIntents', pending.vote)
         <4>1. ASSUME NEW pending \in pendingLockCommit'
                PROVE /\ pending.node \in Honest
+                     /\ pending.vote =
+                          Vote(context', pending.qc.view, "Commit",
+                               pending.qc.subject, pending.node)
                      /\ pending.vote.phase = "Commit"
                      /\ pending.vote.signer = pending.node
                      /\ pending.vote.context = context'
@@ -7748,6 +7897,9 @@ PROOF
             BY <3>2, <4>1
           <5>2. CASE pending \in pendingLockCommit
             <6>1. /\ pending.node \in Honest
+                  /\ pending.vote =
+                       Vote(context, pending.qc.view, "Commit",
+                            pending.qc.subject, pending.node)
                   /\ pending.vote.phase = "Commit"
                   /\ pending.vote.signer = pending.node
                   /\ pending.vote.context = context
@@ -7966,6 +8118,9 @@ PROOF
           /\ request.node \in Honest
           /\ request.qc \in prepareQCs
           /\ request.qc.phase = "Prepare"
+          /\ request.vote =
+               Vote(context, request.qc.view, "Commit",
+                    request.qc.subject, request.node)
           /\ request.vote.phase = "Commit"
           /\ request.vote.signer = request.node
           /\ request.vote.context = context
@@ -7993,6 +8148,9 @@ PROOF
       <3>3. /\ request.node \in Honest
             /\ request.qc \in prepareQCs
             /\ request.qc.phase = "Prepare"
+            /\ request.vote =
+                 Vote(context, request.qc.view, "Commit",
+                      request.qc.subject, request.node)
             /\ request.vote.phase = "Commit"
             /\ request.vote.signer = request.node
         BY <3>1, <3>2 DEF PendingVoteWritesAuthorized
@@ -8428,6 +8586,9 @@ PROOF
                  /\ pending.vote.context = pending.qc.context
                  /\ pending.vote.view = pending.qc.view
                  /\ pending.vote.subject = pending.qc.subject
+                 /\ pending.vote =
+                      Vote(context', pending.qc.view, "Commit",
+                           pending.qc.subject, pending.node)
                  /\ pending.qc.phase = "Prepare"
                  /\ pending.qc \in prepareQCs'
                  /\ \/ CurrentOpenPrepareForCommit(
@@ -8450,6 +8611,9 @@ PROOF
                        /\ pending.vote.context = pending.qc.context
                        /\ pending.vote.view = pending.qc.view
                        /\ pending.vote.subject = pending.qc.subject
+                       /\ pending.vote =
+                            Vote(context', pending.qc.view, "Commit",
+                                 pending.qc.subject, pending.node)
                        /\ pending.qc.phase = "Prepare"
                        /\ pending.qc \in prepareQCs'
                        /\ \/ CurrentOpenPrepareForCommit(
@@ -8481,6 +8645,9 @@ PROOF
                   /\ pending.vote.context = pending.qc.context
                   /\ pending.vote.view = pending.qc.view
                   /\ pending.vote.subject = pending.qc.subject
+                  /\ pending.vote =
+                       Vote(context, pending.qc.view, "Commit",
+                            pending.qc.subject, pending.node)
                   /\ pending.qc.phase = "Prepare"
                   /\ pending.qc \in prepareQCs
                   /\ \/ CurrentOpenPrepareForCommit(
@@ -11315,8 +11482,7 @@ PROOF
     <2> DEFINE SelectedSubject == TcHighSubject(Certificate)
     <2> DEFINE StableVars ==
           <<height, context, contextHistory, up, gst, availableBodies,
-            durableBodies, retainedLockedBodies, validatedBodies,
-            invalidBodies, seenProposals,
+            durableBodies, retainedLockedBodies, invalidBodies, seenProposals,
             receivedQCs, receivedTimeoutVotes, receivedTCs,
             proposalIntents, prepareIntents, commitIntents, timeoutIntents,
             prepareQCs, commitQCs, formedTCs, pendingProposal,
@@ -11392,6 +11558,10 @@ PROOF
         BY <1>1 DEF StrongInductiveInvariant, Safety
       <3>2. UNCHANGED StableVars
         BY <1>1 DEF PersistInstallTC, StableVars
+      <3>2a. /\ validatedBodies' \subseteq ValidationRecordSet
+              /\ ValidatedBodiesSound(validatedBodies', ValidSubjects)
+        BY <1>1, <3>1,
+           PersistInstallTCPreservesValidationReceiptTypeAndSoundness
       <3>3. /\ nodeView' =
                    [nodeView EXCEPT ![Node] = Certificate.view + 1]
             /\ generation' =
@@ -11500,8 +11670,8 @@ PROOF
           BY <1>1
              DEF PersistInstallTC, Node, Certificate
         <4> QED BY <4>1, <4>3, <4>4, Isa
-      <3> QED BY <3>1, <3>2, <3>4, <3>5, <3>6, <3>8, <3>10,
-                   <3>11, Isa
+      <3> QED BY <3>1, <3>2, <3>2a, <3>4, <3>5, <3>6, <3>8,
+                   <3>10, <3>11, Isa
          DEF TypeInvariant, StableVars
     <2>5. LockBelowHighest'
       <3>1. /\ lockRank' =
@@ -11821,6 +11991,9 @@ PROOF
         <4> QED BY <4>1
       <3>10. \A other \in pendingLockCommit':
                 /\ other.node \in Honest
+                /\ other.vote =
+                     Vote(context', other.qc.view, "Commit",
+                          other.qc.subject, other.node)
                 /\ other.vote.phase = "Commit"
                 /\ other.vote.signer = other.node
                 /\ other.vote.context = context'
@@ -11842,6 +12015,9 @@ PROOF
                 /\ CanAppendVote(commitIntents', other.vote)
         <4>1. ASSUME NEW other \in pendingLockCommit'
                PROVE /\ other.node \in Honest
+                     /\ other.vote =
+                          Vote(context', other.qc.view, "Commit",
+                               other.qc.subject, other.node)
                      /\ other.vote.phase = "Commit"
                      /\ other.vote.signer = other.node
                      /\ other.vote.context = context'
@@ -11864,6 +12040,9 @@ PROOF
           <5>1. other \in AllPendingRequests'
             BY <4>1 DEF AllPendingRequests
           <5>2. /\ other.node \in Honest
+                /\ other.vote =
+                     Vote(context, other.qc.view, "Commit",
+                          other.qc.subject, other.node)
                 /\ other.vote.phase = "Commit"
                 /\ other.vote.signer = other.node
                 /\ other.vote.context = context
@@ -13061,6 +13240,7 @@ BY SMT,
    BeginInstallTCPreservesStrongInvariant,
    PersistInstallTCPreservesStrongInvariant,
    FetchCertifiedBodyPreservesStrongInvariant,
+   AcceptCertifiedResponseCapabilityPreservesStrongInvariant,
    ApplyDecisionPreservesStrongInvariant,
    CrashOrRestartPreservesStrongInvariant,
    ResumeProposalPreservesStrongInvariant,

@@ -214,6 +214,56 @@ run_case effective-lock-future-completion-bug \
   effective_lock_future_completion_bug.cfg 12 \
   "Invariant BuggyFutureCompletionFailsClosed is violated by the initial state"
 
+run_case locked-assembly-retention-old \
+  SumeragiV2LockedAssemblyRetentionMutation.tla \
+  locked_assembly_retention_old.cfg 12 \
+  "Invariant AssemblyOwnershipPreserved is violated." \
+  "State 2: <DispatchRuntimeHead" \
+  "2 states generated, 2 distinct states found, 0 states left on queue."
+run_case locked-assembly-retention-fixed \
+  SumeragiV2LockedAssemblyRetentionMutation.tla \
+  locked_assembly_retention_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "2 states generated, 2 distinct states found, 0 states left on queue." \
+  "depth of the complete state graph search is 2"
+
+run_case locked-body-reproposal-high-fixed \
+  SumeragiV2LockedBodyReproposalMutation.tla \
+  locked_body_reproposal_high_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "4 states generated, 2 distinct states found, 0 states left on queue."
+run_case locked-body-reproposal-conflict-fixed \
+  SumeragiV2LockedBodyReproposalMutation.tla \
+  locked_body_reproposal_conflict_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "4 states generated, 2 distinct states found, 0 states left on queue."
+run_case locked-body-reproposal-no-high-bug \
+  SumeragiV2LockedBodyReproposalMutation.tla \
+  locked_body_reproposal_no_high_bug.cfg 12 \
+  "Invariant LaterHighReproposalAccepted is violated." \
+  "2 states generated, 2 distinct states found, 0 states left on queue."
+run_case locked-body-reproposal-equal-rank-bug \
+  SumeragiV2LockedBodyReproposalMutation.tla \
+  locked_body_reproposal_equal_rank_bug.cfg 12 \
+  "Invariant EqualRankConflictRejected is violated." \
+  "2 states generated, 2 distinct states found, 0 states left on queue."
+
+run_case historical-locked-recovery-fixed \
+  SumeragiV2HistoricalLockedRecoveryMutation.tla \
+  historical_locked_recovery_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "6 states generated, 3 distinct states found, 0 states left on queue."
+run_case historical-locked-recovery-installed-only-bug \
+  SumeragiV2HistoricalLockedRecoveryMutation.tla \
+  historical_locked_recovery_installed_only.cfg 12 \
+  "Invariant RecoveryOwnedAfterNoHighCarry is violated." \
+  "4 states generated, 3 distinct states found, 0 states left on queue."
+run_case historical-locked-recovery-fresh-commit-bug \
+  SumeragiV2HistoricalLockedRecoveryMutation.tla \
+  historical_locked_recovery_fresh_commit_bug.cfg 12 \
+  "Invariant ExactIntentDoesNotAuthorizeFreshCommit is violated." \
+  "4 states generated, 3 distinct states found, 0 states left on queue."
+
 run_case ownership-invariant-n1 \
   SumeragiV2OwnershipInvariantCheck.tla ownership_n1.cfg 0 \
   "Model checking completed. No error has been found." \
@@ -224,6 +274,12 @@ run_case reply-route-fixed \
   SumeragiV2ReplyRouteOwnershipMutation.tla reply_route_fixed.cfg 0 \
   "Model checking completed. No error has been found." \
   "16 states generated, 16 distinct states found"
+run_case reply-route-close-lifecycle-fixed \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_close_lifecycle_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "21 states generated, 21 distinct states found" \
+  "depth of the complete state graph search is 21"
 run_case reply-route-cursor-reset-bug \
   SumeragiV2ReplyRouteOwnershipMutation.tla \
   reply_route_cursor_reset_bug.cfg 12 \
@@ -233,7 +289,8 @@ run_case reply-route-source-replacement-bug \
   SumeragiV2ReplyRouteOwnershipMutation.tla \
   reply_route_source_replacement_bug.cfg 12 \
   "Invariant RouteMutationSafety is violated." \
-  "attempts = { [ connectionTenure |-> 1"
+  "phase = 15" \
+  "attempts = { [ semantic |-> \"request-a\""
 run_case reply-route-target-substitution-bug \
   SumeragiV2ReplyRouteOwnershipMutation.tla \
   reply_route_target_substitution_bug.cfg 12 \
@@ -281,19 +338,19 @@ run_case reply-route-pipeline-replay-step-bug \
   SumeragiV2ReplyRoutePipelineMutation.tla \
   reply_route_pipeline_replay_step_bug.cfg 13 \
   "Action property MutationPipeline!ReplyTenureAwareReplay is violated." \
-  "15 states generated, 14 distinct states found" \
+  "18 states generated, 14 distinct states found" \
   "phase = 34"
 run_case reply-route-pipeline-source-isolation-bug \
   SumeragiV2ReplyRoutePipelineMutation.tla \
   reply_route_pipeline_source_isolation_bug.cfg 13 \
   "Action property MutationPipeline!ReplySourceIsolation is violated." \
-  "14 states generated, 13 distinct states found" \
+  "17 states generated, 13 distinct states found" \
   "phase = 35"
 run_case reply-route-pipeline-unfair-attach-bug \
   SumeragiV2ReplyRoutePipelineMutation.tla \
   reply_route_pipeline_unfair_attach_bug.cfg 13 \
   "Temporal properties were violated." \
-  "2 states generated, 2 distinct states found" \
+  "3 states generated, 2 distinct states found" \
   "State 3: Stuttering"
 run_case reply-route-pipeline-fifo-bypass-bug \
   SumeragiV2ReplyRoutePipelineMutation.tla \
@@ -329,13 +386,13 @@ run_case reply-route-pipeline-source-class-writer-fixed \
   SumeragiV2ReplyRoutePipelineMutation.tla \
   reply_route_pipeline_source_class_writer_fixed.cfg 0 \
   "Model checking completed. No error has been found." \
-  "14 states generated, 13 distinct states found" \
+  "16 states generated, 13 distinct states found" \
   "depth of the complete state graph search is 13"
 run_case reply-route-pipeline-cross-semantic-close-cycle-bug \
   SumeragiV2ReplyRoutePipelineMutation.tla \
   reply_route_pipeline_cross_semantic_close_cycle_bug.cfg 13 \
   "Temporal properties were violated." \
-  "14 states generated, 13 distinct states found" \
+  "16 states generated, 13 distinct states found" \
   "Back to state 7"
 
-echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, ownership, replay/isolation, and per-source reply-route/pipeline mutation matrix passed"
+echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, locked assembly/body reproposal/recovery, ownership, replay/isolation, and per-source reply-route/pipeline mutation matrix passed"

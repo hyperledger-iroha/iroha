@@ -767,12 +767,12 @@ fn apply_overrides(
     );
 
     if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
-        let mut sorafs = table(config, "torii.sorafs");
-        sorafs.insert(
-            "admission_envelopes_dir".into(),
+        let mut admission = table(config, "sorafs.discovery.admission");
+        admission.insert(
+            "envelopes_dir".into(),
             TomlValue::String("sorafs_admission".into()),
         );
-        torii.insert("sorafs".into(), TomlValue::Table(sorafs));
+        set_table(config, "sorafs.discovery.admission", admission);
     }
     set_table(config, "torii", torii);
 

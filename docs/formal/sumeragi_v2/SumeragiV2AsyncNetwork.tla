@@ -27,18 +27,23 @@ fixed/adaptive binaries require a version or configuration-fingerprint gate
 before the temporal theorem applies to a deployment.
 
 The hidden transport carries actual Core network envelopes into a distinct
-model of `FairV2Ingress`.  Every recipient has one lane for each frozen-roster
-validator plus one aggregate untrusted lane.  Admission is bounded by one
-total capacity while preserving the empty-lane, Progress, TimeoutVote, shared
-TransportCompletion, and post-service continuation potential; non-empty lanes
-are serviced by the exact ready-queue rotation used in Rust.  `Chunk` and
-`CertifiedResponse` share one TransportCompletion owner per authenticated
-resource hop.  A non-roster hop may carry a completion whose semantic origin is
-in the roster, so the aggregate untrusted lane owns its own completion slot and
-a separate generic continuation without borrowing any validator's owners.  A
-source may borrow idle message capacity but cannot consume another source's
-reservations.  Each validator source also isolates the fixed valid-timeout-vote
-byte reserve from all other wire traffic.
+model of `FairV2Ingress`.  `ValidatorIds` is the finite configured universe of
+authenticated peers and ingress sources; `CurrentVoters` is only its
+positive-power voting subset.  Every recipient has one lane for each configured
+authenticated peer plus one aggregate untrusted lane.  Admission is bounded by
+one total capacity while preserving the empty-lane, Progress, TimeoutVote,
+shared physical completion, and post-service continuation potential; non-empty
+lanes are serviced by the exact ready-queue rotation used in Rust.  `Chunk` and
+`CertifiedResponse` have distinct logical classes but share one physical
+completion owner per lane.  Every preauthenticated certified response is
+charged to the aggregate untrusted lane regardless of its relay hop.  A
+zero-power or non-roster authenticated hop otherwise spends one of the same N
+bounded source lanes and acquires no consensus authority.  An unattributed
+relay may also use the aggregate untrusted lane, whose completion slot and
+generic continuation never borrow an authenticated peer's owners.  A source
+may borrow idle message capacity but cannot consume another source's
+reservations.  Each authenticated validator source also isolates the fixed
+valid-timeout-vote byte reserve from all other wire traffic.
 The full canonical-wire TransportCompletion byte ceiling is intentionally
 abstract here and is linked to the exact count/byte mutation refinement in
 `SumeragiV2EffectCapacityOuterTransportMutation`; this module makes no byte
@@ -50,9 +55,16 @@ lane-local wire ceilings; that class/byte correspondence is an explicit
 production-refinement premise rather than a theorem of this byte-abstract
 module.
 
-`AsyncNetworkItem.source` is the authenticated resource-owning hop.  Canonical
-request identity deliberately excludes that source and every process-local
-route ordinal.  `SumeragiV2AsyncNetworkReplyRoutes!AsyncProductionSpec`
+`AsyncNetworkItem.source` is the authenticated transport/relay hop.  A
+historical response separately carries the authenticated archive server, the
+exact signed-request hash, and one frozen certificate signer citation.  Every
+fully authenticated certified response is charged to the aggregate untrusted
+physical ingress lane independently of that relay hop; all other traffic is
+charged to `item.source`.  The outer response remains the reducer candidate's
+protected evidence even though the payload delivered to Core is the certified
+body.  Canonical request identity excludes the response hop and every
+process-local route ordinal.
+`SumeragiV2AsyncNetworkReplyRoutes!AsyncProductionSpec`
 composes a bounded per-authenticated-source ownership machine with this
 consensus scheduler: each source has an
 independent message/chunk cursor and tenure-bound ticket, while immutable
@@ -72,12 +84,13 @@ acknowledgement.  This is another unassigned production-refinement proposition,
 not a consequence of the abstract packet fairness actions.
 
 Post-GST historical catch-up is also exact scheduler ownership.  A responsive
-validator with no local Decision may be opened as one explicit recovery target
-only when a current responsive server already holds the applied Commit receipt.
-The target then uses its own fair runner, certificate discovery, I/O worker,
-and bidirectional bounded packet corridor; the exact Apply command retires that
-ownership atomically.  Observer recovery therefore does not broaden any normal
-current-voter consensus action.
+peer with no local Decision may be opened as one explicit recovery target only
+when a responsive authenticated archive already holds the applied Commit
+receipt.  The target then uses its own fair runner, certificate discovery, I/O
+worker, and bidirectional bounded packet corridor; the exact Apply command
+retires that ownership atomically.  Applied zero-power peers may continue to
+drain authenticated historical requests and run the bounded Serve I/O lane,
+but they never enter a current-voter RunNode, vote, or QC domain.
 
 Most importantly, this module has no shadow decision, application, vote,
 view-change, or chain-rollover transition.  A serviced reducer command invokes
@@ -122,7 +135,7 @@ AsyncReducerKinds ==
    "PersistPrepare", "SignVote", "FormPrepareQC", "BeginObservePrepare",
    "PersistObservePrepare", "BeginLockCommit", "PersistLockCommit",
    "FormCommitQC", "BeginDecision", "PersistDecision", "BeginTimeout",
-     "PersistTimeout", "SignTimeout", "FormTC", "BeginInstallTC",
+   "PersistTimeout", "SignTimeout", "BeginInstallTC",
    "PersistInstallTC", "RequestCertifiedBody", "FetchCertifiedBody", "Apply"}
 AsyncWorkKinds == AsyncCompletionTags \cup AsyncDeliveryKinds \cup AsyncReducerKinds
 AsyncCommandClasses == {"Normal", "Progress", "Completion"}
@@ -131,23 +144,34 @@ AsyncControlKinds ==
   {"Proposal", "PrepareVote", "CommitVote", "PrepareQC", "CommitQC",
    "TimeoutVote", "TimeoutCertificate"}
 AsyncInstallRetainedControlKinds ==
-  {"CommitVote", "CommitQC", "TimeoutCertificate"}
+  {"CommitVote", "PrepareQC", "CommitQC", "TimeoutCertificate"}
 
 NoAsyncChunk == 0
 AsyncChunks == 1..AsyncChunkCount
 AsyncHeartbeatSubject == CHOOSE subject \in ValidSubjects: TRUE
 AsyncUntrustedSource == N
-AsyncIngressSources == ValidatorIds \cup {AsyncUntrustedSource}
+
+\* `N` counts every configured authenticated peer, not only the current
+\* positive-power roster.  Archive servers consume those same finite source
+\* identities.  Only malformed or unattributed relay traffic may name the one
+\* aggregate untrusted signature owner.
+AsyncArchiveServerIds == ValidatorIds
+AsyncCertifiedResponseSignatureOwners ==
+  AsyncArchiveServerIds \cup {AsyncUntrustedSource}
+AsyncIngressSources ==
+  AsyncArchiveServerIds \cup {AsyncUntrustedSource}
 
 AsyncReplyRequestKinds ==
   {"CertifiedRequest", "CommitCertificateRequest"}
 
 AsyncReplySourceOrder == [index \in 1..N |-> index - 1]
-AsyncReplySourceCapacity == Cardinality(ValidatorIds)
+AsyncReplySourceCapacity == Cardinality(AsyncArchiveServerIds)
 
 \* The same 4N+2 ingress geometry which protects every authenticated source's
 \* exact-output occurrence must contain at least one route owner per source.
-\* This is a configuration equation, not an eviction fallback.
+\* CurrentVoters may be a strict subset of those N peers; zero-power archives
+\* do not add another lane or an unbounded source class.  This is a
+\* configuration equation, not an eviction fallback.
 AsyncReplyExactOutputCorridorCapacity ==
   (AsyncIngressCapacity - 2) \div 4
 
@@ -295,16 +319,183 @@ AsyncReplyRequestEnvelopeSet ==
    subject: Subjects, chunk: {NoAsyncChunk},
    nonce: 0..(AsyncIngressCapacity - 1)]
 
-AsyncReplySemanticIdentity(kind, envelope) ==
-  [kind |-> kind, envelope |-> envelope]
-
-AsyncReplySemanticIdentities ==
-  {AsyncReplySemanticIdentity(kind, envelope):
-     kind \in AsyncReplyRequestKinds,
-     envelope \in AsyncReplyRequestEnvelopeSet}
+\* Commit-certificate discovery emits one canonical request per requester;
+\* fanout routing is outside its signed identity.  The heartbeat subject and
+\* zero nonce are the finite stand-ins for that exact wire request.
+AsyncCommitCertificateRequestEnvelopeSet ==
+  [recipient: ValidatorIds, height: Heights, view: Views,
+   subject: {AsyncHeartbeatSubject}, chunk: {NoAsyncChunk}, nonce: {0}]
 
 AsyncNetworkItem(kind, source, envelope) ==
   [kind |-> kind, source |-> source, envelope |-> envelope]
+
+AsyncCertifiedRequestPreimage(requester, qc) ==
+  [round |-> [height |-> qc.context.height, view |-> qc.view],
+   subject |-> qc.subject,
+   certificate |-> qc,
+   requester |-> requester]
+
+AsyncCertifiedRequestSignature(requester, qc, signatureNonce) ==
+  [signer |-> requester,
+   preimage |-> AsyncCertifiedRequestPreimage(requester, qc),
+   nonce |-> signatureNonce]
+
+AsyncCertifiedSignedRequest(requester, qc, signatureNonce) ==
+  [preimage |-> AsyncCertifiedRequestPreimage(requester, qc),
+   signature |->
+     AsyncCertifiedRequestSignature(requester, qc, signatureNonce)]
+
+AsyncCertifiedRequestHashOf(requester, qc, signatureNonce) ==
+  [exactSignedRequest |->
+     AsyncCertifiedSignedRequest(requester, qc, signatureNonce)]
+
+AsyncCertifiedRequestEnvelope(route, requester, qc, signatureNonce) ==
+  [recipient |-> route,
+   height |-> qc.context.height,
+   view |-> qc.view,
+   subject |-> qc.subject,
+   requester |-> requester,
+   certificate |-> qc,
+   signatureNonce |-> signatureNonce]
+
+AsyncCertifiedRequestHash(request) ==
+  AsyncCertifiedRequestHashOf(
+    request.envelope.requester,
+    request.envelope.certificate,
+    request.envelope.signatureNonce)
+
+AsyncCertifiedRequestItems ==
+  {AsyncNetworkItem(
+     "CertifiedRequest", requester,
+     AsyncCertifiedRequestEnvelope(route, requester, qc, signatureNonce)):
+     requester \in ValidatorIds,
+     route \in AsyncArchiveServerIds,
+     qc \in QcRecordSet,
+     signatureNonce \in 0..(AsyncIngressCapacity - 1)}
+
+AsyncCertifiedRequestHashes ==
+  {AsyncCertifiedRequestHash(request):
+     request \in AsyncCertifiedRequestItems}
+
+AsyncCommitCertificateRequestItems ==
+  {AsyncNetworkItem("CommitCertificateRequest", source, envelope):
+     source \in ValidatorIds,
+     envelope \in AsyncCommitCertificateRequestEnvelopeSet}
+
+(***************************************************************************
+Reply-route ownership keeps the physical recipient as its separate `owner`.
+Certified-body request semantics therefore project only the exact signed
+request hash, so every physical archive fanout occurrence competes for the
+same semantic attempt.  Commit-certificate discovery retains its established
+full-envelope semantics.
+***************************************************************************)
+AsyncReplySemanticIdentity(kind, envelope) ==
+  IF kind = "CertifiedRequest"
+  THEN [kind |-> kind,
+        requestHash |->
+          AsyncCertifiedRequestHashOf(
+            envelope.requester, envelope.certificate,
+            envelope.signatureNonce)]
+  ELSE [kind |-> kind, envelope |-> envelope]
+
+AsyncReplySemanticIdentities ==
+  {AsyncReplySemanticIdentity(
+     "CertifiedRequest", request.envelope):
+     request \in AsyncCertifiedRequestItems}
+  \cup
+  {AsyncReplySemanticIdentity("CommitCertificateRequest", envelope):
+     envelope \in AsyncCommitCertificateRequestEnvelopeSet}
+
+(***************************************************************************
+The production request hash covers the exact signed request: round, subject,
+the full frozen QC, requester, and signature.  The physical archive route is
+an outer fanout coordinate and is deliberately absent from that projection.
+The finite signature nonce distinguishes arbitrary signed-request witnesses;
+honest constructors use zero.  The logical registration key below remains the
+separate Rust conflict index `(round, subject, requester)`.
+***************************************************************************)
+AsyncCertifiedRequestRegistrationIdentity(request) ==
+  [context |-> request.envelope.certificate.context,
+   requester |-> request.source,
+   height |-> request.envelope.height,
+   view |-> request.envelope.view,
+   subject |-> request.envelope.subject]
+
+(***************************************************************************
+Rust keeps a logical conflict index beside the exact-hash lookup: one logical
+`(round, subject, requester)` key may own several physical route aliases, but
+all such aliases must name the same exact signed request hash.  These
+set-level predicates make that constraint proof-visible without adding state.
+***************************************************************************)
+AsyncCertifiedRequestsIn(items) ==
+  {request \in items: request.kind = "CertifiedRequest"}
+
+AsyncCertifiedRequestAliasesCompatible(left, right) ==
+  \/ AsyncCertifiedRequestRegistrationIdentity(left)
+       # AsyncCertifiedRequestRegistrationIdentity(right)
+  \/ AsyncCertifiedRequestHash(left) = AsyncCertifiedRequestHash(right)
+
+AsyncCertifiedRequestLogicalIndexConsistent(items) ==
+  \A left, right \in AsyncCertifiedRequestsIn(items):
+    AsyncCertifiedRequestAliasesCompatible(left, right)
+
+AsyncCertifiedRequestSetsCompatible(existing, incoming) ==
+  \A left \in AsyncCertifiedRequestsIn(existing),
+     right \in AsyncCertifiedRequestsIn(incoming):
+    AsyncCertifiedRequestAliasesCompatible(left, right)
+
+AsyncCommitCertificateRequestRegistrationIdentity(request) ==
+  [context |-> context,
+   requester |-> request.source,
+   height |-> request.envelope.height]
+
+AsyncCertifiedCitedResponder(request) ==
+  IF request.envelope.certificate.signers # {}
+  THEN CHOOSE signer \in request.envelope.certificate.signers: TRUE
+  ELSE request.envelope.requester
+
+AsyncCertifiedResponseEnvelope(
+    request, archiveServer, citedResponder, signatureOwner) ==
+  [recipient |-> request.envelope.requester,
+   height |-> request.envelope.height,
+   view |-> request.envelope.view,
+   subject |-> request.envelope.subject,
+   requestHash |-> AsyncCertifiedRequestHash(request),
+   archiveServer |-> archiveServer,
+   citedResponder |-> citedResponder,
+   signatureOwner |-> signatureOwner]
+
+AsyncCommitCertificateResponseEnvelope(request, qc) ==
+  [recipient |-> request.source, request |-> request, qc |-> qc]
+
+(***************************************************************************
+The aggregate untrusted ingress lane owns a TransportCompletion slot.  Its
+synthetic certified response remains structurally typed, but its verified
+signature owner is the untrusted aggregate rather than the claimed archive
+server.  It therefore cannot authenticate an archive claim even if its exact
+request hash happens to match an outstanding request.
+***************************************************************************)
+AsyncUntrustedCompletionQcWitness ==
+  CHOOSE qc \in QcRecordSet: TRUE
+
+AsyncUntrustedCompletionRequestWitness(recipient, nonce) ==
+  AsyncNetworkItem(
+    "CertifiedRequest", recipient,
+    AsyncCertifiedRequestEnvelope(
+      recipient, recipient, AsyncUntrustedCompletionQcWitness, nonce))
+
+AsyncUntrustedTransportCompletionItem(kind, recipient, nonce) ==
+  LET bodyEnvelope ==
+        AsyncBodyEnvelope(recipient, context.height, nodeView[recipient],
+                          AsyncHeartbeatSubject, NoAsyncChunk, nonce)
+      request ==
+        AsyncUntrustedCompletionRequestWitness(recipient, nonce)
+  IN IF kind = "CertifiedResponse"
+     THEN AsyncNetworkItem(
+            "CertifiedResponse", AsyncUntrustedSource,
+            AsyncCertifiedResponseEnvelope(
+              request, recipient, recipient, AsyncUntrustedSource))
+     ELSE AsyncNetworkItem(kind, AsyncUntrustedSource, bodyEnvelope)
 
 AsyncNetworkItems ==
   {AsyncNetworkItem("Proposal", envelope.proposal.proposer, envelope):
@@ -321,16 +512,33 @@ AsyncNetworkItems ==
           envelope \in TimeoutEnvelopeSet}
   \cup {AsyncNetworkItem("TimeoutCertificate", source, envelope):
           source \in ValidatorIds, envelope \in TcEnvelopeSet}
+  \cup AsyncCertifiedRequestItems
+  \cup AsyncCommitCertificateRequestItems
   \cup {AsyncNetworkItem(kind, source, envelope):
-          kind \in {"CertifiedRequest", "CommitCertificateRequest",
-                    "NormalJunk", "ProgressJunk"},
+          kind \in {"NormalJunk", "ProgressJunk"},
           source \in ValidatorIds, envelope \in AsyncBodyEnvelopeSet}
-  \cup {AsyncNetworkItem(kind, source, envelope):
-          kind \in {"Chunk", "CertifiedResponse"},
+  \cup {AsyncNetworkItem("Chunk", source, envelope):
           source \in AsyncIngressSources,
           envelope \in AsyncBodyEnvelopeSet}
-  \cup {AsyncNetworkItem("CommitCertificateResponse", source, envelope):
-          source \in ValidatorIds, envelope \in QcEnvelopeSet}
+  \cup {AsyncNetworkItem(
+           "CertifiedResponse", source,
+           AsyncCertifiedResponseEnvelope(
+             request, archiveServer,
+             AsyncCertifiedCitedResponder(request),
+             archiveServer)):
+          source \in AsyncIngressSources,
+          archiveServer \in AsyncArchiveServerIds,
+          request \in AsyncCertifiedRequestItems}
+  \cup {AsyncUntrustedTransportCompletionItem(
+           "CertifiedResponse", recipient, nonce):
+          recipient \in ValidatorIds,
+          nonce \in 0..(AsyncIngressCapacity - 1)}
+  \cup {AsyncNetworkItem(
+          "CommitCertificateResponse", source,
+           AsyncCommitCertificateResponseEnvelope(request, qc)):
+          source \in AsyncIngressSources,
+          request \in AsyncCommitCertificateRequestItems,
+          qc \in QcRecordSet}
   \cup {AsyncNetworkItem("Noise", source, envelope):
           source \in AsyncIngressSources, envelope \in AsyncBodyEnvelopeSet}
 
@@ -489,24 +697,98 @@ AsyncTcEnvelopeTyped(envelope) ==
   /\ envelope.recipient \in ValidatorIds
   /\ AsyncTcRecordTyped(envelope.tc)
 
+(***************************************************************************
+The commit-certificate request has a canonical route-independent wire shape:
+the heartbeat subject, zero chunk, and zero nonce are part of the signed
+request identity.  Generic body-envelope typing is therefore insufficient for
+this request kind even though it has the same record domain.
+***************************************************************************)
+AsyncCommitCertificateRequestEnvelopeTyped(envelope) ==
+  /\ AsyncBodyEnvelopeTyped(envelope)
+  /\ envelope.subject = AsyncHeartbeatSubject
+  /\ envelope.chunk = NoAsyncChunk
+  /\ envelope.nonce = 0
+
+AsyncReplyRequestItemTyped(item, kind) ==
+  /\ DOMAIN item = {"kind", "source", "envelope"}
+  /\ kind \in AsyncReplyRequestKinds
+  /\ item.kind = kind
+  /\ item.source \in ValidatorIds
+  /\ IF kind = "CertifiedRequest"
+     THEN /\ DOMAIN item.envelope =
+               {"recipient", "height", "view", "subject", "requester",
+                "certificate", "signatureNonce"}
+          /\ item.envelope.recipient \in AsyncArchiveServerIds
+          /\ item.envelope.requester = item.source
+          /\ item.envelope.certificate \in QcRecordSet
+          /\ item.envelope.height =
+               item.envelope.certificate.context.height
+          /\ item.envelope.view = item.envelope.certificate.view
+          /\ item.envelope.subject = item.envelope.certificate.subject
+          /\ item.envelope.signatureNonce
+               \in 0..(AsyncIngressCapacity - 1)
+     ELSE AsyncCommitCertificateRequestEnvelopeTyped(item.envelope)
+
+AsyncCertifiedResponseEnvelopeTyped(envelope) ==
+  /\ DOMAIN envelope =
+       {"recipient", "height", "view", "subject", "requestHash",
+        "archiveServer", "citedResponder", "signatureOwner"}
+  /\ envelope.recipient \in ValidatorIds
+  /\ envelope.height \in Heights
+  /\ envelope.view \in Views
+  /\ envelope.subject \in Subjects
+  /\ envelope.requestHash \in AsyncCertifiedRequestHashes
+  /\ envelope.archiveServer \in AsyncArchiveServerIds
+  /\ envelope.citedResponder \in ValidatorIds
+  /\ envelope.signatureOwner
+       \in AsyncCertifiedResponseSignatureOwners
+
+AsyncCommitCertificateResponseEnvelopeTyped(envelope) ==
+  /\ DOMAIN envelope = {"recipient", "request", "qc"}
+  /\ AsyncReplyRequestItemTyped(
+       envelope.request, "CommitCertificateRequest")
+  /\ envelope.recipient = envelope.request.source
+  /\ envelope.qc \in QcRecordSet
+
 AsyncItemTyped(item) ==
   /\ DOMAIN item = {"kind", "source", "envelope"}
   /\ item.kind \in AsyncNetworkKinds
   /\ item.source \in AsyncIngressSources
-  /\ (item.kind \notin {"Noise", "Chunk", "CertifiedResponse"}
+  /\ (item.kind \notin
+        {"Noise", "Chunk", "CertifiedResponse",
+         "CommitCertificateResponse"}
         => item.source \in ValidatorIds)
   /\ item.envelope.recipient \in ValidatorIds
-  /\ CASE item.kind = "Proposal" -> item.envelope \in ProposalEnvelopeSet
+  /\ CASE item.kind = "Proposal" ->
+            /\ item.envelope \in ProposalEnvelopeSet
+            /\ item.source = item.envelope.proposal.proposer
        [] item.kind \in {"PrepareVote", "CommitVote"} ->
-            item.envelope \in VoteEnvelopeSet
+            /\ item.envelope \in VoteEnvelopeSet
+            /\ item.source = item.envelope.vote.signer
+            /\ item.kind =
+                 IF item.envelope.vote.phase = "Prepare"
+                 THEN "PrepareVote"
+                 ELSE "CommitVote"
        [] item.kind \in {"PrepareQC", "CommitQC"} ->
-            item.envelope \in QcEnvelopeSet
-       [] item.kind = "TimeoutVote" -> item.envelope \in TimeoutEnvelopeSet
+            /\ item.envelope \in QcEnvelopeSet
+            /\ item.kind =
+                 IF item.envelope.qc.phase = "Prepare"
+                 THEN "PrepareQC"
+                 ELSE "CommitQC"
+       [] item.kind = "TimeoutVote" ->
+            /\ item.envelope \in TimeoutEnvelopeSet
+            /\ item.source = item.envelope.vote.signer
        [] item.kind = "TimeoutCertificate" ->
             AsyncTcEnvelopeTyped(item.envelope)
+       [] item.kind \in AsyncReplyRequestKinds ->
+            AsyncReplyRequestItemTyped(item, item.kind)
+       [] item.kind = "CertifiedResponse" ->
+            AsyncCertifiedResponseEnvelopeTyped(item.envelope)
        [] item.kind = "CommitCertificateResponse" ->
-            item.envelope \in QcEnvelopeSet
-       [] OTHER -> AsyncBodyEnvelopeTyped(item.envelope)
+            AsyncCommitCertificateResponseEnvelopeTyped(item.envelope)
+       [] OTHER ->
+            /\ item.kind \in {"Chunk", "NormalJunk", "ProgressJunk", "Noise"}
+            /\ AsyncBodyEnvelopeTyped(item.envelope)
 
 AsyncEvidenceTyped(evidence) ==
   \/ evidence = NoAsyncItem
@@ -589,6 +871,7 @@ VARIABLES
   asyncNodeServiceDeadlines,
   asyncIoServiceDeadlines,
   asyncSentItems, asyncRetainedControl, asyncActiveRequests,
+  asyncCertifiedResponseClaim,
   asyncTransport,
   asyncIngressLanes,
   asyncIngressReady,
@@ -614,7 +897,8 @@ AsyncSchedulerVars ==
     asyncCausalQueues, asyncOutstandingTags,
     asyncNodeDeadlines, asyncRetransmitDeadlines,
     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
-    asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
+    asyncSentItems, asyncRetainedControl, asyncActiveRequests,
+    asyncCertifiedResponseClaim, asyncTransport,
     asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
     asyncHistoricalRecoveryTargets>>
 
@@ -632,7 +916,8 @@ AsyncSchedulerExceptHistoricalRecoveryTargets ==
     asyncCausalQueues, asyncOutstandingTags,
     asyncNodeDeadlines, asyncRetransmitDeadlines,
     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
-    asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
+    asyncSentItems, asyncRetainedControl, asyncActiveRequests,
+    asyncCertifiedResponseClaim, asyncTransport,
     asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
 
 AsyncRecoveryLifecycleVars ==
@@ -646,7 +931,7 @@ AsyncRecoveryVars ==
   <<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration,
     asyncRecoveryReplayQueue, asyncHistoricalLockRestartAuthorities>>
 
-AsyncAllVars == <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>
+AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars>>
 
 AsyncIoVars ==
   <<asyncIoQueues, asyncOutstandingWork, asyncIoReadyCompletions,
@@ -705,6 +990,7 @@ AsyncGenesisResponsiveVoters ==
 AsyncNormalLimit ==
   AsyncQueueCapacity - AsyncProgressReserve - AsyncCompletionReserve
 AsyncProgressLimit == AsyncQueueCapacity - AsyncCompletionReserve
+AsyncOrdinaryCompletionLimit == AsyncQueueCapacity - 1
 
 AsyncQueueDepth(node) == Len(asyncCommandQueues[node])
 
@@ -782,7 +1068,10 @@ CanEnqueueClass(node, commandClass) ==
     [] commandClass = "Progress" ->
          AsyncQueueDepth(node) < AsyncProgressLimit
     [] commandClass = "Completion" ->
-         AsyncQueueDepth(node) < AsyncQueueCapacity
+         AsyncQueueDepth(node) < AsyncOrdinaryCompletionLimit
+
+CanEnqueueCertifiedResponse(node) ==
+  AsyncQueueDepth(node) < AsyncQueueCapacity
 
 SequenceSet(sequence) == {sequence[index]: index \in 1..Len(sequence)}
 
@@ -813,15 +1102,18 @@ ResponsiveReplayScheduledCandidates(node) ==
 CandidateScheduledIn(candidate, commandQueues,
                      deferredCompletionQueues, deferredProgressQueues,
                      deferredNormalQueues, causalQueues, outstandingWork) ==
+  \* Keep every prefix UNION parenthesized.  Without these parentheses TLA+
+  \* parses the old surface form as UNION({command queue sets} \cup
+  \* UNION(...)), rather than as the union of the four candidate carriers.
   candidate \in
-    UNION {SequenceSet(commandQueues[node]): node \in ValidatorIds}
-      \cup UNION
-          {SequenceSet(deferredCompletionQueues[node])
-             \cup SequenceSet(deferredProgressQueues[node])
-             \cup SequenceSet(deferredNormalQueues[node]):
-             node \in ValidatorIds}
-      \cup UNION {SequenceSet(causalQueues[node]): node \in ValidatorIds}
-      \cup UNION {outstandingWork[node]: node \in ValidatorIds}
+    (UNION {SequenceSet(commandQueues[node]): node \in ValidatorIds})
+      \cup (UNION
+            {SequenceSet(deferredCompletionQueues[node])
+               \cup SequenceSet(deferredProgressQueues[node])
+               \cup SequenceSet(deferredNormalQueues[node]):
+               node \in ValidatorIds})
+      \cup (UNION {SequenceSet(causalQueues[node]): node \in ValidatorIds})
+      \cup (UNION {outstandingWork[node]: node \in ValidatorIds})
 
 CandidateScheduled(candidate) ==
   CandidateScheduledIn(
@@ -855,8 +1147,7 @@ HistoricalLockRestartAuthoritySourceKernel(
           /\ installed.node = authority.node
           /\ installed.tc.context = qc.context
           /\ installed.tc.view >= qc.view
-          /\ TcHighRank(installed.tc) = qc.view
-          /\ TcHighSubject(installed.tc) = qc.subject
+          /\ installed.tc.highestPrepareQc = qc
      \/ \E vote \in currentCommitIntents:
           /\ vote.signer = authority.node
           /\ vote.context = currentContext
@@ -1072,6 +1363,31 @@ NodeHasApplication(node) ==
     /\ application.qc.context = context
     /\ application.qc.phase = "Commit"
 
+(***************************************************************************
+Archive-service identities are deliberately separate from voting identities.
+The production archive snapshot may contain authenticated zero-power or
+non-roster peers.  This model relies for post-GST service only on the
+Responsive members which are up and already hold the exact applied receipt.
+Neither set is used by any vote, QC, pacemaker, or ordinary RunNode action.
+***************************************************************************)
+AsyncResponsiveArchiveServers ==
+  Responsive \cap AsyncArchiveServerIds
+
+AsyncResponsiveOnlineArchiveServers ==
+  AsyncResponsiveArchiveServers \cap up
+
+AsyncResponsiveAppliedArchiveServers ==
+  {node \in AsyncResponsiveOnlineArchiveServers:
+     NodeHasApplication(node)}
+
+AsyncArchiveIoServiceNodes ==
+  AsyncCurrentResponsiveVoters
+    \cup AsyncResponsiveAppliedArchiveServers
+
+AsyncTimedServiceNodes ==
+  AsyncArchiveIoServiceNodes
+    \cup asyncHistoricalRecoveryTargets
+
 ConcreteDecisionNodes ==
   {node \in AsyncCurrentResponsiveVoters: NodeHasDecision(node)}
 
@@ -1117,13 +1433,35 @@ and successful validation schedules a second prepare attempt.
 CausalCandidate(commandClass, kind, command) ==
   AsyncCandidateFrom(commandClass, kind, command)
 
+CausalCandidateWithEvidence(commandClass, kind, command, evidence) ==
+  AsyncCandidateWithIdentity(
+    commandClass, kind, command.node, context.height, command.view,
+    command.subject, NoAsyncItem,
+    command.consumerContext, command.consumerView,
+    command.consumerGeneration, evidence,
+    command.bodyIdentity, command.manifestIdentity,
+    command.commitmentIdentity)
+
 RetainedBodyRebindCandidate(command) ==
   CausalCandidate("Completion", "RebindRetainedBody", command)
+
+InstallTcEvidenceMatches(command, tc) ==
+  \/ command.evidence = tc
+  \/ \E item \in AsyncNetworkItems:
+       /\ command.evidence = item
+       /\ item.kind = "TimeoutCertificate"
+       /\ item.envelope.tc = tc
+
+InstallTcFromEvidence(command) ==
+  IF command.evidence \in TcRecordSet
+  THEN command.evidence
+  ELSE command.evidence.envelope.tc
 
 InstallRequests(command) ==
   {installRequest \in pendingInstallTC:
     /\ command.node = installRequest.node
-    /\ command.view = installRequest.tc.view}
+    /\ command.view = installRequest.tc.view
+    /\ InstallTcEvidenceMatches(command, installRequest.tc)}
 
 InstallCommitSignRequests(command) ==
   {signRequest \in VoteSignSet:
@@ -1146,31 +1484,23 @@ InstallCommitSignSuccessor(command) ==
        signRequest.vote.subject, signRequest.vote.subject)
 
 (***************************************************************************
-Production retains the full `durable.locked()` PrepareQC.  This Core model
-abstracts a TC's high certificate to rank/subject, so select one exact matching
-QcRecord and freeze it into the recovery candidate's evidence.  Distinguishing
-different signer-set encodings of the same certified rank/subject remains a
-separate TC/QC production-refinement obligation; no liveness-only state is
-introduced here to pretend that projection has already been proved.
+Production retains the full `durable.locked()` PrepareQC.  The TC and durable
+lock now carry that same QcRecord, so recovery takes the exact resulting value
+directly.  No rank/subject search or signer-set tie breaker is admissible.
 ***************************************************************************)
 
 InstallResultingLockedPrepareQCs(command) ==
-  {qc \in prepareQCs:
-    \E installRequest \in InstallRequests(command):
-      /\ qc.context = context
-      /\ qc.phase = "Prepare"
-      /\ qc.view = ResultingInstallLockRank(
-                       installRequest.node, installRequest.tc)
-      /\ qc.subject = ResultingInstallLockSubject(
-                          installRequest.node, installRequest.tc)
-      /\ \/ /\ qc.view = TcHighRank(installRequest.tc)
-                /\ qc.subject = TcHighSubject(installRequest.tc)
-         \/ HistoricalLockedPrepareRecoveryProvenance(
-              installRequest.node, qc)}
+  LET qc ==
+        ResultingInstallLockPrepareQc(
+          command.node, InstallTcFromEvidence(command))
+  IN IF InstallRequests(command) = {} \/ qc = NoPrepareQC
+     THEN {}
+     ELSE {qc}
 
 InstallLockedFetchSuccessor(command) ==
-  LET qc == CHOOSE candidateQc \in
-                     InstallResultingLockedPrepareQCs(command): TRUE
+  LET qc ==
+        ResultingInstallLockPrepareQc(
+          command.node, InstallTcFromEvidence(command))
   IN AsyncCandidateAtConsumer(
        "Completion", "FetchBody", command.node, qc.context.height,
        qc.view, qc.subject, NoAsyncItem, command.view + 1,
@@ -1200,10 +1530,10 @@ InstallProposalSubject(command) ==
   LET requests == InstallRequests(command)
   IN IF requests = {}
      THEN AsyncProposalSubject(command.node)
-     ELSE LET request == CHOOSE entry \in requests: TRUE
-              selectedRank == TcHighRank(request.tc)
+     ELSE LET tc == InstallTcFromEvidence(command)
+              selectedRank == TcHighRank(tc)
           IN IF selectedRank > highestRank[command.node]
-             THEN TcHighSubject(request.tc)
+             THEN TcHighSubject(tc)
              ELSE AsyncProposalSubject(command.node)
 
 InstallProposalSuccessor(command) ==
@@ -1239,7 +1569,7 @@ DecisionFetchFrontier(command) ==
     /\ command.evidence = qc
     /\ DecisionCertifiedBodyRecoveryAuthority(command.node, qc)
 
-HistoricalLockedFetchFrontier(command) ==
+LockedPrepareFetchFrontier(command) ==
   \E qc \in prepareQCs:
     /\ command.kind = "FetchBody"
     /\ command.node \in ValidatorIds
@@ -1247,11 +1577,11 @@ HistoricalLockedFetchFrontier(command) ==
     /\ command.view = qc.view
     /\ command.subject = qc.subject
     /\ command.evidence = qc
-    /\ HistoricalLockedPrepareSource(command.node, qc)
+    /\ LockedPrepareRecoverySource(command.node, qc)
 
 CertifiedRecoveryFetchFrontier(command) ==
   \/ DecisionFetchFrontier(command)
-  \/ HistoricalLockedFetchFrontier(command)
+  \/ LockedPrepareFetchFrontier(command)
 
 PersistDecisionRequests(command) ==
   {request \in pendingDecision:
@@ -1260,13 +1590,49 @@ PersistDecisionRequests(command) ==
     /\ request.qc.view = command.view
     /\ request.qc.subject = command.subject}
 
-PersistDecisionFetchSuccessor(command) ==
-  LET request == CHOOSE entry \in PersistDecisionRequests(command): TRUE
+PersistDecisionRequest(command) ==
+  CHOOSE request \in PersistDecisionRequests(command): TRUE
+
+PersistDecisionBody(command) ==
+  LET request == PersistDecisionRequest(command)
+      qc == request.qc
+  IN BodyRecord(request.node, qc.context, qc.view, qc.subject)
+
+PersistDecisionValidationHeld(command) ==
+  LET request == PersistDecisionRequest(command)
+      qc == request.qc
+  IN \E validation \in validatedBodies:
+       /\ validation.node = request.node
+       /\ validation.context = qc.context
+       /\ validation.view = qc.view
+       /\ validation.subject = qc.subject
+
+(***************************************************************************
+Decision persistence acknowledges the exact durable-body state observed by
+the reducer.  Missing, adapter-available, durable, and already-validated bodies
+continue respectively with Fetch, Store, Validate, and Apply.  Classifying the
+successor here is essential: sending a held-and-validated body through Fetch
+would stutter, enqueue a disabled Validate, and lose the Apply frontier.
+***************************************************************************)
+PersistDecisionRecoveryKind(command) ==
+  LET request == PersistDecisionRequest(command)
+      qc == request.qc
+  IN IF BodyHeldBy(durableBodies, request.node, qc.context,
+                   qc.view, qc.subject)
+     THEN IF PersistDecisionValidationHeld(command)
+          THEN "Apply"
+          ELSE "ValidateBody"
+     ELSE IF PersistDecisionBody(command) \in availableBodies
+          THEN "StoreBody"
+          ELSE "FetchBody"
+
+PersistDecisionRecoverySuccessor(command) ==
+  LET request == PersistDecisionRequest(command)
       qc == request.qc
   IN AsyncCandidateAtConsumer(
-       "Completion", "FetchBody", request.node, qc.context.height,
-       qc.view, qc.subject, NoAsyncItem, command.consumerView,
-       command.consumerGeneration, qc,
+       "Completion", PersistDecisionRecoveryKind(command),
+       request.node, qc.context.height, qc.view, qc.subject,
+       NoAsyncItem, command.consumerView, command.consumerGeneration, qc,
        qc.subject, qc.subject, qc.subject)
 
 (***************************************************************************
@@ -1285,8 +1651,34 @@ CausalSuccessorParentKinds ==
    "DeliverQC", "BeginObservePrepare", "PersistObservePrepare",
    "BeginLockCommit", "PersistLockCommit", "FormCommitQC",
    "BeginDecision", "PersistDecision", "BeginTimeout",
-   "PersistTimeout", "DeliverTimeout", "FormTC", "DeliverTC",
+   "PersistTimeout", "SignTimeout", "DeliverTimeout", "DeliverTC",
    "BeginInstallTC", "PersistInstallTC"}
+
+SignTimeoutRequests(command) ==
+  {request \in signTimeouts:
+    /\ command.node = request.node
+    /\ command.height = context.height
+    /\ command.view = request.vote.view
+    /\ command.subject = request.vote.highSubject}
+
+SignTimeoutFormsTC(command) ==
+  \E request \in SignTimeoutRequests(command):
+    /\ LocalTimeoutCompletionGuard(request)
+    /\ TimeoutReceiptFormsTC(request.node, request.vote)
+
+DeliverTimeoutFormsTC(command) ==
+  /\ command.kind = "DeliverTimeout"
+  /\ command.item.kind = "TimeoutVote"
+  /\ command.node = command.item.envelope.recipient
+  /\ TimeoutReceiptFormsTC(
+       command.node, command.item.envelope.vote)
+
+ExactFormedTcForTimeoutCommand(command) ==
+  IF command.kind = "SignTimeout"
+  THEN TimeoutCertificateAfterReceipt(
+         command.node, LocalTimeoutVoteFor(command.node))
+  ELSE TimeoutCertificateAfterReceipt(
+         command.node, command.item.envelope.vote)
 
 CommandSuccessors(command) ==
   CASE command.kind = "AssembleBody" ->
@@ -1318,7 +1710,7 @@ CommandSuccessors(command) ==
          <<CausalCandidate("Completion", "ValidateBody", command)>>
     [] command.kind = "ValidateBody" ->
          <<CausalCandidate("Normal", "BeginPrepare", command),
-           CausalCandidate("Progress", "BeginLockCommit", command),
+           CausalCandidate("Completion", "BeginLockCommit", command),
            CausalCandidate("Completion", "Apply", command)>>
     [] command.kind = "BeginPrepare" ->
          <<CausalCandidate("Completion", "PersistPrepare", command)>>
@@ -1330,13 +1722,18 @@ CommandSuccessors(command) ==
               THEN "FormPrepareQC" ELSE "FormCommitQC", command)>>
     [] command.kind = "DeliverQC" ->
          IF command.item.envelope.qc.phase = "Prepare"
-         THEN <<CausalCandidate("Progress", "BeginObservePrepare", command),
-                CausalCandidate("Progress", "BeginLockCommit", command)>>
+         THEN IF QcDeliveryCreatesReceipt(
+                   command.node, command.item.envelope.qc)
+              THEN <<CausalCandidate(
+                        "Progress", "BeginObservePrepare", command),
+                     CausalCandidate(
+                        "Completion", "BeginLockCommit", command)>>
+              ELSE <<>>
          ELSE <<CausalCandidate("Progress", "BeginDecision", command)>>
     [] command.kind = "BeginObservePrepare" ->
          <<CausalCandidate("Completion", "PersistObservePrepare", command)>>
     [] command.kind = "PersistObservePrepare" ->
-         <<CausalCandidate("Progress", "BeginLockCommit", command)>>
+         <<CausalCandidate("Completion", "BeginLockCommit", command)>>
     [] command.kind = "BeginLockCommit" ->
          <<CausalCandidate("Completion", "PersistLockCommit", command)>>
     [] command.kind = "PersistLockCommit" ->
@@ -1348,21 +1745,23 @@ CommandSuccessors(command) ==
     [] command.kind = "PersistDecision" ->
          IF PersistDecisionRequests(command) = {}
          THEN <<>>
-         ELSE <<PersistDecisionFetchSuccessor(command)>>
+         ELSE <<PersistDecisionRecoverySuccessor(command)>>
     [] command.kind = "BeginTimeout" ->
          <<CausalCandidate("Completion", "PersistTimeout", command)>>
     [] command.kind = "PersistTimeout" ->
          <<CausalCandidate("Completion", "SignTimeout", command)>>
-    \* Production consumes authenticated timeout traffic after Decision but
-    \* returns AlreadyDecided before admitting it.  Core removes the exact
-    \* network envelope without changing its receive pool, and the adapter
-    \* must therefore emit no FormTC/BeginInstallTC continuation.
-    [] command.kind = "DeliverTimeout" ->
-         IF NoDecisionForNode(command.node)
-         THEN <<CausalCandidate("Progress", "FormTC", command)>>
+    [] command.kind = "SignTimeout" ->
+         IF SignTimeoutFormsTC(command)
+         THEN <<CausalCandidateWithEvidence(
+                   "Completion", "PersistInstallTC", command,
+                   ExactFormedTcForTimeoutCommand(command))>>
          ELSE <<>>
-    [] command.kind = "FormTC" ->
-         <<CausalCandidate("Completion", "PersistInstallTC", command)>>
+    [] command.kind = "DeliverTimeout" ->
+         IF DeliverTimeoutFormsTC(command)
+         THEN <<CausalCandidateWithEvidence(
+                   "Completion", "PersistInstallTC", command,
+                   ExactFormedTcForTimeoutCommand(command))>>
+         ELSE <<>>
     [] command.kind = "DeliverTC" ->
          IF NoDecisionForNode(command.node)
          THEN <<CausalCandidate("Progress", "BeginInstallTC", command)>>
@@ -1415,9 +1814,11 @@ higher-view message (or the exact duplicate) replaces that class.
 
 Certified-body and commit-certificate discovery requests share an independent
 bounded request lifecycle.  They remain in `asyncActiveRequests` until a
-matching authenticated response is admitted and are retried beside, but never
-stored in, the control map.  Chunks, responses, and adversarial junk are
-one-shot authenticated emissions.
+matching authenticated response completes the outer ingress handoff and are
+retried beside, but never stored in, the control map.  A certified request is
+Ready until one exact route-neutral response projection acquires the global
+claim; the claim survives physical backpressure and retires with that request.
+Chunks, responses, and adversarial junk are one-shot authenticated emissions.
 ***************************************************************************)
 
 ProposalOutbox(request) ==
@@ -1463,12 +1864,30 @@ TcOutbox(node, tc) ==
                     TcEnvelope(recipient, tc)):
      recipient \in CurrentVoters}
 
+(***************************************************************************
+`Responsive` is the static authenticated peer set guaranteed online after
+GST.  It may strictly contain the positive-power roster, so the preferred
+signed archive fanout always includes zero-power/non-roster peers without
+granting them a vote.  The fanout identity is stable across availability
+changes; only the service proof relies on Responsive peers being online after
+GST.  The request's certified signer set is used solely when that static union
+would otherwise be empty.
+***************************************************************************)
+CertifiedArchiveRoutes(node, qc) ==
+  LET postGstRoutes ==
+        (CurrentVoters
+           \cup AsyncResponsiveArchiveServers) \ {node}
+      frozenQcFallback ==
+        (qc.signers \cap AsyncArchiveServerIds) \ {node}
+  IN IF postGstRoutes # {}
+     THEN postGstRoutes
+     ELSE frozenQcFallback
+
 CertifiedRequestOutbox(node, qc) ==
   {AsyncNetworkItem(
      "CertifiedRequest", node,
-     AsyncBodyEnvelope(source, context.height, qc.view, qc.subject,
-                       NoAsyncChunk, 0)):
-       source \in qc.signers \ {node}}
+     AsyncCertifiedRequestEnvelope(server, node, qc, 0)):
+       server \in CertifiedArchiveRoutes(node, qc)}
 
 CommitCertificateRequestOutbox(node) ==
   {AsyncNetworkItem(
@@ -1477,27 +1896,254 @@ CommitCertificateRequestOutbox(node) ==
                        AsyncHeartbeatSubject, NoAsyncChunk, 0)):
        server \in CurrentVoters \ {node}}
 
-CertifiedResponseItem(request) ==
+CertifiedResponseItem(via, archiveServer, request) ==
   AsyncNetworkItem(
-    "CertifiedResponse", request.envelope.recipient,
-    AsyncBodyEnvelope(request.source, request.envelope.height,
-                      request.envelope.view, request.envelope.subject,
-                      NoAsyncChunk, request.envelope.nonce))
+    "CertifiedResponse", via,
+    AsyncCertifiedResponseEnvelope(
+      request, archiveServer, AsyncCertifiedCitedResponder(request),
+      archiveServer))
+
+(***************************************************************************
+Response authentication binds the canonical signed wire identity, not its
+transport relay lane.  A production CertifiedBodyResponse has one canonical
+resultless body, a manifest rederived from those exact bytes, and a
+deterministic archive signature.  The collision-resistant subject and exact
+signed request hash therefore abstract the omitted byte/signature fields, so
+the record below is the model's full canonical-wire identity rather than a
+coarse routing projection.  The occurrence remains in append-only sent
+history after ingress retires every active request alias, so reducer execution
+can recheck the same production authentication token without reintroducing
+route authority.
+***************************************************************************)
+AsyncCertifiedResponseCanonicalWireIdentity(item) ==
+  [kind |-> item.kind,
+   envelope |-> item.envelope]
+
+\* Compatibility name retained for proof-ledger and mutation artifacts.
+AsyncCertifiedResponseAuthProjection(item) ==
+  AsyncCertifiedResponseCanonicalWireIdentity(item)
+
+CertifiedResponseAuthenticatedOccurrence(item) ==
+  /\ item.kind = "CertifiedResponse"
+  /\ item.envelope.signatureOwner = item.envelope.archiveServer
+  /\ \E sent \in asyncSentItems:
+       /\ sent.kind = "CertifiedResponse"
+       /\ AsyncCertifiedResponseCanonicalWireIdentity(sent)
+            = AsyncCertifiedResponseCanonicalWireIdentity(item)
+       /\ sent.envelope.signatureOwner = sent.envelope.archiveServer
+
+(***************************************************************************
+The active exact signed request is the per-request response authority.  Its
+hash is `Ready` until one fully authenticated response acquires the recipient-
+local route-neutral claim.  Each process owns an independent claim, matching
+the Rust ingress instance.  The claim stores the canonical signed-wire
+identity, so an exact response relayed through another transport hop coalesces
+with the same owner while a distinct archive response at that recipient does
+not.
+***************************************************************************)
+CertifiedRequestAuthority(item) ==
+  /\ item.kind = "CertifiedRequest"
+  /\ item.source = item.envelope.requester
+  /\ LET qc == item.envelope.certificate
+     IN /\ qc \in DecisionQcValues \cup prepareQCs
+        /\ CertifiedBodyRecoveryAuthority(item.envelope.requester, qc)
+        /\ item.envelope.height = qc.context.height
+        /\ item.envelope.view = qc.view
+        /\ item.envelope.subject = qc.subject
+
+CertifiedRequestAuthorized(item) ==
+  /\ CertifiedRequestAuthority(item)
+  /\ item.envelope.recipient
+       \in CertifiedArchiveRoutes(
+            item.envelope.requester, item.envelope.certificate)
+
+MatchingCertifiedRequests(response) ==
+  {request \in asyncActiveRequests:
+     /\ request.kind = "CertifiedRequest"
+     /\ AsyncCertifiedRequestHash(request) =
+          response.envelope.requestHash}
+
+MatchingSentCertifiedRequests(response) ==
+  {request \in asyncSentItems:
+     /\ request.kind = "CertifiedRequest"
+     /\ AsyncCertifiedRequestHash(request) =
+          response.envelope.requestHash}
+
+(***************************************************************************
+Publication is the one mutable recovery-authority check.  Once published, the
+exact signed request in append-only history is a frozen registration: later
+response admission/consumption checks its immutable certificate and signed
+bindings, not membership in a mutable lock/Decision pool.  View/Decision/Apply
+lifecycle actions explicitly retain, rebind, or retire the active
+registration and its linear claim.
+***************************************************************************)
+FrozenCertifiedRequestRegistration(request) ==
+  /\ request.kind = "CertifiedRequest"
+  /\ request \in asyncSentItems
+  /\ request.source = request.envelope.requester
+  /\ LET qc == request.envelope.certificate
+     IN /\ request.envelope.height = qc.context.height
+        /\ request.envelope.view = qc.view
+        /\ request.envelope.subject = qc.subject
+
+FrozenCertifiedResponseBinding(item, request) ==
+  /\ item.kind = "CertifiedResponse"
+  /\ FrozenCertifiedRequestRegistration(request)
+  /\ CertifiedResponseAuthenticatedOccurrence(item)
+  /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+  /\ AsyncCertifiedRequestHash(request) = item.envelope.requestHash
+  /\ request.envelope.requester = item.envelope.recipient
+  /\ request.envelope.height = item.envelope.height
+  /\ request.envelope.view = item.envelope.view
+  /\ request.envelope.subject = item.envelope.subject
+  /\ item.envelope.citedResponder
+       \in request.envelope.certificate.signers
+
+CertifiedResponseCapabilityAuthorized(item) ==
+  /\ item.kind = "CertifiedResponse"
+  /\ \E request \in MatchingSentCertifiedRequests(item):
+       FrozenCertifiedResponseBinding(item, request)
+
+IngressItemHasAuthenticatedHistory(item) ==
+  IF item.kind = "CertifiedResponse"
+  THEN CertifiedResponseAuthenticatedOccurrence(item)
+  ELSE item \in asyncSentItems
+
+CertifiedResponseAuthorized(item) ==
+  /\ item.kind = "CertifiedResponse"
+  /\ CertifiedResponseAuthenticatedOccurrence(item)
+  /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+  /\ MatchingCertifiedRequests(item) # {}
+  /\ \E request \in MatchingCertifiedRequests(item):
+       FrozenCertifiedResponseBinding(item, request)
+
+AsyncCertifiedResponseItems ==
+  {item \in AsyncNetworkItems: item.kind = "CertifiedResponse"}
+
+AsyncCertifiedResponseClaimValues ==
+  {AsyncCertifiedResponseCanonicalWireIdentity(item):
+     item \in AsyncCertifiedResponseItems}
+
+ActiveCertifiedRequestHashesIn(requests) ==
+  {AsyncCertifiedRequestHash(request):
+     request \in
+       {candidate \in requests: candidate.kind = "CertifiedRequest"}}
+
+ActiveCertifiedRequestHashes ==
+  ActiveCertifiedRequestHashesIn(asyncActiveRequests)
+
+(***************************************************************************
+Each process owns an independent `FairV2Ingress` instance and registers only
+the exact requests that it issued.  The generic aggregate-untrusted completion
+fence must therefore inspect the destination process's authorities, not the
+global union across validators.  Otherwise an unrelated request at one node
+would reject ordinary completion traffic at every other node.
+***************************************************************************)
+ActiveCertifiedRequestHashesAt(recipient) ==
+  {AsyncCertifiedRequestHash(request):
+     request \in
+       {candidate \in asyncActiveRequests:
+          /\ candidate.kind = "CertifiedRequest"
+          /\ candidate.envelope.requester = recipient}}
+
+CertifiedResponseAuthorityClaimed(requestHash) ==
+  \E projection \in asyncCertifiedResponseClaim:
+    projection.envelope.requestHash = requestHash
+
+CertifiedResponseAuthorityReady(requestHash) ==
+  /\ requestHash \in ActiveCertifiedRequestHashes
+  /\ ~CertifiedResponseAuthorityClaimed(requestHash)
+
+CertifiedResponseClaimsAt(recipient) ==
+  {projection \in asyncCertifiedResponseClaim:
+     projection.envelope.recipient = recipient}
+
+CertifiedResponseRecipientClaimAvailable(item) ==
+  /\ item.kind = "CertifiedResponse"
+  /\ CertifiedResponseClaimsAt(item.envelope.recipient) = {}
+
+CertifiedResponseClaimMatches(item) ==
+  /\ item.kind = "CertifiedResponse"
+  /\ AsyncCertifiedResponseCanonicalWireIdentity(item)
+       \in asyncCertifiedResponseClaim
+
+(***************************************************************************
+Admission performs the full mutable authority check exactly once and stores
+the authenticated signed-envelope projection as an opaque linear capability,
+matching Rust's `AuthenticatedCertifiedBodyResponse`.  Ingress handoff
+therefore rechecks the immutable signature/request binding and the still-live
+exact request, but does not re-evaluate lock/Decision authority which may
+advance while the token is queued.  The handoff atomically retires that request
+and physical claim, while the delayed candidate retains the frozen signed
+capability needed by `AcceptCertifiedResponseCapability`.  Other lifecycle
+retirement clears or filters the claim atomically, so no physical claim can
+outlive its exact active request authority.
+***************************************************************************)
+CertifiedResponseClaimAuthorized(item) ==
+  /\ item.kind = "CertifiedResponse"
+  /\ CertifiedResponseClaimMatches(item)
+  /\ CertifiedResponseAuthenticatedOccurrence(item)
+  /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+  /\ MatchingCertifiedRequests(item) # {}
+  /\ \E request \in MatchingCertifiedRequests(item):
+       FrozenCertifiedResponseBinding(item, request)
+
+CertifiedResponseClaimProjectionAuthenticated(projection) ==
+  \E item \in AsyncCertifiedResponseItems:
+    /\ AsyncCertifiedResponseCanonicalWireIdentity(item) = projection
+    /\ CertifiedResponseAuthenticatedOccurrence(item)
+    /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+    /\ MatchingCertifiedRequests(item) # {}
+    /\ \E request \in MatchingCertifiedRequests(item):
+         FrozenCertifiedResponseBinding(item, request)
+
+CertifiedResponseClaimForRequests(requests) ==
+  {projection \in asyncCertifiedResponseClaim:
+     projection.envelope.requestHash
+       \in ActiveCertifiedRequestHashesIn(requests)}
+
+ActiveRequestsWithoutNode(node) ==
+  {item \in asyncActiveRequests: item.source # node}
+
+FilterCertifiedResponseAuthority(nextRequests) ==
+  /\ asyncActiveRequests' = nextRequests
+  /\ asyncCertifiedResponseClaim' =
+       CertifiedResponseClaimForRequests(nextRequests)
+
+RetireNodeCertifiedResponseAuthority(node) ==
+  FilterCertifiedResponseAuthority(ActiveRequestsWithoutNode(node))
+
+CertifiedRequestSurvivesBodyCompletion(item, command) ==
+  \/ item.kind # "CertifiedRequest"
+  \/ item.source # command.node
+  \/ item.envelope.height # command.height
+  \/ item.envelope.view # command.view
+  \/ item.envelope.subject # command.subject
+
+RetireCompletedBodyCertifiedResponseAuthority(command) ==
+  FilterCertifiedResponseAuthority(
+    {item \in asyncActiveRequests:
+       CertifiedRequestSurvivesBodyCompletion(item, command)})
 
 CommitCertificateResponseItem(request, qc) ==
   AsyncNetworkItem(
-    "CommitCertificateResponse", request.envelope.recipient,
-    QcEnvelope(request.source, qc))
+    "CommitCertificateResponse", AsyncUntrustedSource,
+    AsyncCommitCertificateResponseEnvelope(request, qc))
 
 (***************************************************************************
 Production serves a certified request from the retained canonical body held
-by the addressed Commit-QC signer.  The validation cache is consumer-local
-pipeline state, not serving authority; requiring it here would suppress a
-response that `serve_certified_body` emits from the durable body store.
+by its addressed authenticated archive server.  The server may be zero-power,
+outside both the current voting roster and the frozen QC signer set.  The
+validation cache is consumer-local pipeline state, not serving authority;
+requiring it here would suppress a response that `serve_certified_body` emits
+from the durable body store.  Addressing constrains this honest constructor,
+not response acceptance: another archive's independently authenticated
+content-addressed response remains safe.
 ***************************************************************************)
-CertifiedServeCanRespond(request) ==
+CertifiedServeCanRespond(server, request) ==
   /\ request.kind = "CertifiedRequest"
-  /\ BodyHeldBy(durableBodies, request.envelope.recipient, context,
+  /\ request.envelope.recipient = server
+  /\ BodyHeldBy(durableBodies, server, request.envelope.certificate.context,
                 request.envelope.view, request.envelope.subject)
 
 CommitCertificateServeCanRespond(request) ==
@@ -1544,6 +2190,11 @@ ItemInScheduledDelivery(item) ==
     /\ candidate.item = item
     /\ CandidateConsumerCurrent(candidate)
 
+IngressResourceSource(item) ==
+  IF item.kind = "CertifiedResponse"
+  THEN AsyncUntrustedSource
+  ELSE item.source
+
 IngressLane(recipient, source) == asyncIngressLanes[recipient][source]
 
 IngressLaneDepth(recipient, source) == Len(IngressLane(recipient, source))
@@ -1557,12 +2208,11 @@ IngressDepth(recipient) ==
 The transport ingress class is deliberately broader than reducer delivery
 priority.  It is computed before payload authentication, so a Byzantine
 validator may occupy only its own source-scoped non-timeout Progress,
-TimeoutVote, and shared TransportCompletion reservations; the authenticated
+TimeoutVote, and shared physical completion reservations; the authenticated
 reducer still decides whether a Commit vote is the exact locked-round
 reconstruction witness.  Body and certificate recovery requests remain
-Progress.  `Chunk` and `CertifiedResponse` instead share the one completion
-owner whose consumption makes either recovery response structurally
-admissible behind generic pressure.
+Progress.  `CertifiedResponse` has a distinct logical class from generic
+`Chunk`, while both consume the same one physical completion owner.
 *)
 IngressTransportCompletionKinds == {"Chunk", "CertifiedResponse"}
 
@@ -1572,9 +2222,26 @@ IngressProgressKinds ==
    "CommitCertificateResponse"}
 
 IngressAdmissionClass(item) ==
-  IF item.kind \in IngressTransportCompletionKinds
-  THEN "TransportCompletion"
+  IF item.kind = "CertifiedResponse"
+  THEN "CertifiedResponse"
+  ELSE IF item.kind \in IngressTransportCompletionKinds
+       THEN "TransportCompletion"
   ELSE IF item.kind \in IngressProgressKinds THEN "Progress" ELSE "Auxiliary"
+
+IngressUsesPhysicalCompletionOwner(item) ==
+  IngressAdmissionClass(item)
+    \in {"CertifiedResponse", "TransportCompletion"}
+
+IngressCoalescingIdentity(item) ==
+  IF item.kind = "CertifiedResponse"
+  THEN AsyncCertifiedResponseAuthProjection(item)
+  ELSE item
+
+IngressHasCoalescingOwner(item) ==
+  \E queued \in SequenceSet(
+       IngressLane(
+         item.envelope.recipient, IngressResourceSource(item))):
+    IngressCoalescingIdentity(queued) = IngressCoalescingIdentity(item)
 
 IngressLaneHasNonTimeoutProgressIn(lanes, recipient, source) ==
   \E queued \in SequenceSet(lanes[recipient][source]):
@@ -1587,19 +2254,32 @@ IngressLaneHasTimeoutVoteIn(lanes, recipient, source) ==
 
 IngressLaneHasTransportCompletionIn(lanes, recipient, source) ==
   \E queued \in SequenceSet(lanes[recipient][source]):
-    IngressAdmissionClass(queued) = "TransportCompletion"
+    IngressUsesPhysicalCompletionOwner(queued)
 
 AsyncTimeoutVoteByteGateAllows(item) ==
   \/ item.kind # "TimeoutVote"
-  \/ item.source \notin ValidatorIds
+  \/ IngressResourceSource(item) \notin ValidatorIds
   \/ /\ AsyncValidTimeoutVoteWireByteBound <= AsyncTimeoutVoteByteReserve
      /\ ~IngressLaneHasTimeoutVoteIn(asyncIngressLanes,
-                                      item.envelope.recipient, item.source)
+                                      item.envelope.recipient,
+                                      IngressResourceSource(item))
 
 AsyncTransportCompletionOwnerGateAllows(item) ==
-  \/ IngressAdmissionClass(item) # "TransportCompletion"
+  \/ ~IngressUsesPhysicalCompletionOwner(item)
   \/ ~IngressLaneHasTransportCompletionIn(
-       asyncIngressLanes, item.envelope.recipient, item.source)
+       asyncIngressLanes, item.envelope.recipient,
+       IngressResourceSource(item))
+
+CertifiedResponseFreshClaimGateAllows(item) ==
+  \/ item.kind # "CertifiedResponse"
+  \/ /\ CertifiedResponseAuthorized(item)
+     /\ CertifiedResponseAuthorityReady(item.envelope.requestHash)
+     /\ CertifiedResponseRecipientClaimAvailable(item)
+
+AsyncUntrustedGenericCompletionGateAllows(item) ==
+  \/ IngressAdmissionClass(item) # "TransportCompletion"
+  \/ IngressResourceSource(item) # AsyncUntrustedSource
+  \/ ActiveCertifiedRequestHashesAt(item.envelope.recipient) = {}
 
 (*
 An empty source needs a first-message slot.  A validator separately reserves a
@@ -1673,7 +2353,8 @@ IngressProtectedSlotCountFor(lanes, recipient) ==
 
 IngressLanesAfterAdmission(item) ==
   [asyncIngressLanes EXCEPT
-     ![item.envelope.recipient][item.source] = Append(@, item)]
+     ![item.envelope.recipient][IngressResourceSource(item)] =
+       Append(@, item)]
 
 IngressProtectedSourcesAfterAdmission(item) ==
   IngressProtectedSourcesFor(
@@ -1692,6 +2373,8 @@ CanAdmitIngressItem(item) ==
        < IngressUsableCapacityAfterAdmission(item)
   /\ AsyncTimeoutVoteByteGateAllows(item)
   /\ AsyncTransportCompletionOwnerGateAllows(item)
+  /\ CertifiedResponseFreshClaimGateAllows(item)
+  /\ AsyncUntrustedGenericCompletionGateAllows(item)
 
 ItemInIngress(item) ==
   \E recipient \in ValidatorIds, source \in AsyncIngressSources:
@@ -1761,9 +2444,58 @@ InstalledControl(retained, node, items) ==
      item.source # node
        \/ ControlClass(item) \in AsyncInstallRetainedControlKinds}
 
+CurrentTimeoutControlFor(items, node) ==
+  LET currentClass == RetainedClassItems(items, node, "TimeoutVote")
+      exactCurrentClass ==
+        \A item \in currentClass:
+          /\ item.envelope.vote.context = context
+          /\ item.envelope.vote.height = height
+          /\ item.envelope.vote.view = nodeView[node]
+          /\ item.envelope.vote.signer = node
+  IN IF exactCurrentClass THEN currentClass ELSE {}
+
+ReseedExactHighestPrepareControl(retained, node, tc) ==
+  LET withoutOwnPrepare ==
+        retained \ RetainedClassItems(retained, node, "PrepareQC")
+      highestPrepare == ResultingInstallHighestPrepareQc(node, tc)
+  IN IF highestPrepare = NoPrepareQC
+     THEN withoutOwnPrepare
+     ELSE withoutOwnPrepare \cup QcOutbox(node, highestPrepare)
+
+(***************************************************************************
+InstallTimeout clears volatile local control, except that a strict same-round
+upgrade keeps the exact current TimeoutVote.  It then restores the complete
+durable highest PrepareQC object, replacing any equal-view/different-evidence
+occurrence rather than reconstructing it from rank and subject.
+***************************************************************************)
+InstalledControlAfterTC(retained, node, tc, items) ==
+  LET remembered == RememberedControl(retained, items)
+      installed ==
+        {item \in remembered:
+          item.source # node
+            \/ ControlClass(item) \in AsyncInstallRetainedControlKinds}
+      withCurrentTimeout ==
+        installed
+          \cup (IF StrictSameRoundTcUpgrade(node, tc)
+                THEN CurrentTimeoutControlFor(remembered, node)
+                ELSE {})
+  IN ReseedExactHighestPrepareControl(withCurrentTimeout, node, tc)
+
+(***************************************************************************
+Transport publication preserves the liveness consequence of the production
+per-source FIFO while an overdue head stops `asyncNow`.  The configured
+delivery bound is strictly positive, so every newly published packet has a
+deadline strictly after the current clock.  It therefore cannot join or
+recreate the current finite due prefix while that prefix keeps the clock
+fixed.  Packets published at the same clock value may be reordered
+nondeterministically inside their finite batch; this is conservative for the
+production FIFO, and the next clock advance makes them due normally.
+***************************************************************************)
+PacketForItem(item) ==
+  AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound)
+
 PacketsForItems(items) ==
-  {AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound):
-     item \in items}
+  {PacketForItem(item): item \in items}
 
 PublishControlItems(items) ==
   /\ items \subseteq {item \in AsyncNetworkItems:
@@ -1772,12 +2504,13 @@ PublishControlItems(items) ==
        RememberedControl(asyncRetainedControl, items)
   /\ asyncSentItems' = asyncSentItems \cup items
   /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
-  /\ UNCHANGED asyncActiveRequests
+  /\ UNCHANGED <<asyncActiveRequests, asyncCertifiedResponseClaim>>
 
 PublishEphemeralItems(items) ==
   /\ asyncSentItems' = asyncSentItems \cup items
   /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
-  /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests>>
+  /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests,
+                  asyncCertifiedResponseClaim>>
 
 PublishControlAndEphemeralItems(controlItems, ephemeralItems) ==
   /\ controlItems \subseteq {item \in AsyncNetworkItems:
@@ -1789,13 +2522,19 @@ PublishControlAndEphemeralItems(controlItems, ephemeralItems) ==
   /\ asyncTransport' =
        asyncTransport
          \cup PacketsForItems(controlItems \cup ephemeralItems)
-  /\ UNCHANGED asyncActiveRequests
+  /\ UNCHANGED <<asyncActiveRequests, asyncCertifiedResponseClaim>>
 
 PublishCertifiedRequests(items) ==
   /\ \A item \in items: item.kind = "CertifiedRequest"
+  \* Fail closed on a pre-existing conflict, an incoming conflict, or a
+  \* conflict between an active exact registration and the new fanout.
+  /\ AsyncCertifiedRequestLogicalIndexConsistent(asyncActiveRequests)
+  /\ AsyncCertifiedRequestLogicalIndexConsistent(items)
+  /\ AsyncCertifiedRequestSetsCompatible(asyncActiveRequests, items)
   /\ asyncActiveRequests' = asyncActiveRequests \cup items
   /\ asyncSentItems' = asyncSentItems \cup items
   /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
+  /\ UNCHANGED asyncCertifiedResponseClaim
   /\ UNCHANGED asyncRetainedControl
 
 PublishCommitCertificateRequests(items) ==
@@ -1803,15 +2542,25 @@ PublishCommitCertificateRequests(items) ==
   /\ asyncActiveRequests' = asyncActiveRequests \cup items
   /\ asyncSentItems' = asyncSentItems \cup items
   /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
+  /\ UNCHANGED asyncCertifiedResponseClaim
   /\ UNCHANGED asyncRetainedControl
 
 CertifiedRequestSurvivesInstall(item, node, tc) ==
   IF item.kind # "CertifiedRequest" \/ item.source # node
   THEN TRUE
-  ELSE /\ ResultingInstallLockRank(node, tc) # NoRank
-       /\ item.envelope.height = context.height
-       /\ item.envelope.view = ResultingInstallLockRank(node, tc)
-       /\ item.envelope.subject = ResultingInstallLockSubject(node, tc)
+  ELSE LET certificateRef ==
+             [context |-> item.envelope.certificate.context,
+              phase |-> item.envelope.certificate.phase,
+              view |-> item.envelope.certificate.view,
+              subject |-> item.envelope.certificate.subject]
+           resultingRef ==
+             [context |-> context,
+              phase |-> "Prepare",
+              view |-> ResultingInstallLockRank(node, tc),
+              subject |-> ResultingInstallLockSubject(node, tc)]
+       IN /\ ResultingInstallLockRank(node, tc) # NoRank
+          /\ item.envelope.height = context.height
+          /\ certificateRef = resultingRef
 
 PersistInstalledControl(node, items, broadcast) ==
   /\ asyncRetainedControl' =
@@ -1822,7 +2571,7 @@ PersistInstalledControl(node, items, broadcast) ==
        IF broadcast
        THEN asyncTransport \cup PacketsForItems(items)
        ELSE asyncTransport
-  /\ UNCHANGED asyncActiveRequests
+  /\ UNCHANGED <<asyncActiveRequests, asyncCertifiedResponseClaim>>
 
 (***************************************************************************
 Installing a TC replaces production's volatile body-work owner.  Retire only
@@ -1836,7 +2585,7 @@ lifecycle change without altering that helper's arity or meaning.
 ***************************************************************************)
 PersistInstalledControlAfterInstall(node, tc, items, broadcast) ==
   /\ asyncRetainedControl' =
-       InstalledControl(asyncRetainedControl, node, items)
+       InstalledControlAfterTC(asyncRetainedControl, node, tc, items)
   /\ asyncSentItems' =
        IF broadcast THEN asyncSentItems \cup items ELSE asyncSentItems
   /\ asyncTransport' =
@@ -1846,8 +2595,18 @@ PersistInstalledControlAfterInstall(node, tc, items, broadcast) ==
   /\ asyncActiveRequests' =
        {item \in asyncActiveRequests:
           CertifiedRequestSurvivesInstall(item, node, tc)}
+  /\ asyncCertifiedResponseClaim' =
+       CertifiedResponseClaimForRequests(asyncActiveRequests')
 
-PersistDecisionControl(items, broadcast) ==
+CertifiedRequestSurvivesDecision(item, node, qc) ==
+  IF item.source # node
+  THEN TRUE
+  ELSE /\ item.kind = "CertifiedRequest"
+       /\ item.envelope.height = qc.context.height
+       /\ item.envelope.view = qc.view
+       /\ item.envelope.subject = qc.subject
+
+PersistDecisionControl(node, qc, items, broadcast) ==
   /\ asyncRetainedControl' =
        RememberedControl(asyncRetainedControl, items)
   /\ asyncSentItems' =
@@ -1856,7 +2615,9 @@ PersistDecisionControl(items, broadcast) ==
        IF broadcast
        THEN asyncTransport \cup PacketsForItems(items)
        ELSE asyncTransport
-  /\ UNCHANGED asyncActiveRequests
+  /\ FilterCertifiedResponseAuthority(
+       {item \in asyncActiveRequests:
+          CertifiedRequestSurvivesDecision(item, node, qc)})
 
 TimeoutTagPresent(node) ==
   "TimeoutElapsed" \notin asyncOutstandingTags[node]
@@ -1900,8 +2661,7 @@ HistoricalRecoverySourceReady(node) ==
   /\ node \in Responsive \cap up
   /\ ~NodeHasDecision(node)
   /\ ~NodeHasApplication(node)
-  /\ \E server \in (AsyncCurrentResponsiveVoters \cap up) \ {node}:
-       NodeHasApplication(server)
+  /\ (AsyncResponsiveAppliedArchiveServers \ {node}) # {}
 
 OpenHistoricalRecovery(node) ==
   /\ gst
@@ -1940,6 +2700,286 @@ CommandMatches(command, node, roundView, subject) ==
   /\ command.height = context.height
   /\ command.view = roundView
   /\ command.subject = subject
+
+AssembleLocalBodyReady(node, subject) ==
+  LET roundView == nodeView[node]
+      body == BodyRecord(node, context, roundView, subject)
+      validation == ValidationRecord(node, context, roundView,
+                                      generation[node], subject)
+  IN /\ node \in Honest \cap up \cap CurrentVoters
+     /\ node = Leader(context, nodeView[node])
+     /\ subject \in ValidSubjects
+     /\ LocalBodyNotSupersededByDecision(node, roundView, subject)
+     /\ body \in BodyRecordSet
+     /\ validation \in ValidationRecordSet
+     /\ ~BodyHeldBy(durableBodies, node, context, roundView, subject)
+
+BeginLocalProposalReady(node, subject) ==
+  LET roundView == nodeView[node]
+      proposal == LocalProposalFor(node, subject)
+      request == ProposalWal(node, proposal)
+  IN /\ node \in Honest \cap up \cap CurrentVoters
+     /\ node = Leader(context, roundView)
+     /\ NodeIdle(node)
+     /\ (roundView = 0 \/ NodeInstalledTC(node, roundView - 1))
+     /\ BodyHeldBy(durableBodies, node, context, roundView, subject)
+     /\ BodyValidatedBy(validatedBodies, node, context, roundView,
+                        generation[node], subject)
+     /\ ProposalWireValidFor(node, proposal)
+     /\ LocalProposalReproposesJustifiedHigh(proposal)
+     /\ ~\E prior \in proposalIntents:
+           /\ prior.proposer = node
+           /\ prior.context = context
+           /\ prior.view = roundView
+     /\ proposal \notin proposalIntents
+     /\ request \in ProposalWalSet
+     /\ request \notin pendingProposal
+
+PersistProposalReady(request) ==
+  /\ request \in pendingProposal
+  /\ request.proposal \notin proposalIntents
+
+FetchBodyReady(node, proposal) ==
+  LET body == BodyRecord(node, context, proposal.view, proposal.subject)
+  IN /\ ProposalAt(node, proposal) \in seenProposals
+     /\ body \notin availableBodies
+     /\ body \in BodyRecordSet
+
+RebindRetainedBodyReady(node, proposal) ==
+  LET body == BodyRecord(node, context, proposal.view, proposal.subject)
+  IN /\ ProposalAt(node, proposal) \in seenProposals
+     /\ lockRank[node] # NoRank
+     /\ lockSubject[node] = proposal.subject
+     /\ RetainedLockedBodyHeldBy(retainedLockedBodies, node, context,
+                                  proposal.subject)
+     /\ body \notin availableBodies
+     /\ body \in BodyRecordSet
+
+StoreBodyReady(node, roundView, subject) ==
+  BodyRecord(node, context, roundView, subject) \in availableBodies
+
+ValidateBodyReady(node, proposal) ==
+  LET validation == ValidationRecord(node, context, proposal.view,
+                                      generation[node], proposal.subject)
+  IN /\ ProposalAt(node, proposal) \in seenProposals
+     /\ BodyHeldBy(durableBodies, node, context, proposal.view,
+                    proposal.subject)
+     /\ proposal.subject \in ValidSubjects
+     /\ validation \notin validatedBodies
+     /\ validation \in ValidationRecordSet
+
+ValidateDecidedBodyReady(node, qc) ==
+  LET validation == ValidationRecord(node, context, qc.view,
+                                      generation[node], qc.subject)
+      decision == [node |-> node, qc |-> qc]
+  IN /\ decision \in decisions
+     /\ qc.phase = "Commit"
+     /\ qc.context = context
+     /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+     /\ qc.subject \in ValidSubjects
+     /\ validation \notin validatedBodies
+     /\ validation \in ValidationRecordSet
+
+ValidateLockedBodyReady(node, qc) ==
+  LET validation == ValidationRecord(node, context, qc.view,
+                                      generation[node], qc.subject)
+  IN /\ node \in Honest \cap up \cap CurrentVoters
+     /\ HistoricalLockedPrepareSource(node, qc)
+     /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+     /\ qc.subject \in ValidSubjects
+     /\ validation \notin validatedBodies
+     /\ validation \in ValidationRecordSet
+
+RejectBodyReady(node, proposal) ==
+  LET body == BodyRecord(node, context, proposal.view, proposal.subject)
+  IN /\ ProposalAt(node, proposal) \in seenProposals
+     /\ BodyHeldBy(durableBodies, node, context, proposal.view,
+                    proposal.subject)
+     /\ proposal.subject \notin ValidSubjects
+     /\ body \in BodyRecordSet
+
+BeginPrepareReady(node, proposal) ==
+  LET request == PrepareRequestFor(node, proposal)
+  IN /\ node \in Honest \cap up \cap CurrentVoters
+     /\ NodeIdle(node)
+     /\ ProposalAt(node, proposal) \in seenProposals
+     /\ ProposalWireValidFor(node, proposal)
+     /\ PrepareSignerAvailability(durableBodies, validatedBodies, context,
+                                  proposal.view, generation,
+                                  proposal.subject, node)
+     /\ lockRank[node] < proposal.view
+     /\ ~NodeTimedOut(node, proposal.view)
+     /\ ~\E prior \in prepareIntents:
+           /\ prior.signer = node
+           /\ prior.context = context
+           /\ prior.view = proposal.view
+     /\ request \in PrepareWalSet
+
+PersistPrepareReady(request) ==
+  /\ request \in pendingPrepare
+  /\ request.vote \notin prepareIntents
+
+BeginObservePrepareReady(node, qc) ==
+  /\ QcAt(node, qc) \in receivedQCs
+  /\ qc.context = context
+  /\ qc.phase = "Prepare"
+  /\ qc.view <= nodeView[node]
+  /\ qc.view > highestRank[node]
+  /\ NodeIdle(node)
+
+PersistObservePrepareReady(request) ==
+  request \in pendingObservePrepare
+
+BeginLockCommitReady(node, qc) ==
+  LET vote == Vote(context, qc.view, "Commit", qc.subject, node)
+  IN /\ node \in Honest \cap up \cap CurrentVoters
+     /\ qc.context = context
+     /\ qc.phase = "Prepare"
+     /\ CurrentOpenPrepareForCommit(node, qc)
+     /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+     /\ BodyValidatedBy(validatedBodies, node, context, qc.view,
+                        generation[node], qc.subject)
+     /\ NodeIdle(node)
+     /\ qc.view >= lockRank[node]
+     /\ (qc.view = lockRank[node] => qc.subject = lockSubject[node])
+     /\ vote \notin commitIntents
+
+PersistLockCommitReady(request) ==
+  LET retained == RetainedLockedBodyRecord(
+                    request.node, request.qc.context, request.qc.subject)
+  IN /\ request \in pendingLockCommit
+     /\ request.vote \notin commitIntents
+     /\ BodyHeldBy(durableBodies, request.node, request.qc.context,
+                    request.qc.view, request.qc.subject)
+     /\ retained \in RetainedLockedBodyRecordSet
+
+FormCommitQCReady(node, roundView, subject) ==
+  LET signers == VoteSignersAt(node, roundView, "Commit", subject)
+      qc == QC(context, roundView, "Commit", subject, signers)
+  IN /\ node \in up
+     /\ CommitRoundAdmissible(node, roundView, subject)
+     /\ QcWireValid(qc)
+     /\ qc \in QcRecordSet
+     /\ NodeIdle(node)
+     /\ ~\E decision \in decisions:
+           /\ decision.node = node
+           /\ decision.qc.context = context
+
+BeginDecisionReady(node, qc) ==
+  /\ node \in ValidatorIds
+  /\ QcAt(node, qc) \in receivedQCs
+  /\ qc.context = context
+  /\ qc.phase = "Commit"
+  /\ NodeIdle(node)
+  /\ ~\E decision \in decisions:
+       /\ decision.node = node
+       /\ decision.qc.context = context
+
+PersistTimeoutReady(request) ==
+  /\ request \in pendingTimeout
+  /\ request.vote \notin timeoutIntents
+
+BeginInstallTCReady(node, tc) ==
+  /\ TcAt(node, tc) \in receivedTCs
+  /\ tc.view + 1 \in Views
+  /\ \/ tc.view >= nodeView[node]
+     \/ StrictSameRoundTcUpgrade(node, tc)
+  /\ NodeIdle(node)
+  /\ NoDecisionForNode(node)
+
+PersistInstallTCReady(request) ==
+  /\ request \in pendingInstallTC
+  /\ \/ request.tc.view >= nodeView[request.node]
+     \/ StrictSameRoundTcUpgrade(request.node, request.tc)
+
+CompleteProposalSignatureReady(request) ==
+  /\ request \in signProposals
+  /\ request.proposal.proposer = request.node
+  /\ request.proposal \in proposalIntents
+
+CompleteVoteSignatureReady(request) ==
+  /\ request \in signVotes
+  /\ request.vote.signer = request.node
+  /\ (request.vote \in prepareIntents \/ request.vote \in commitIntents)
+  /\ VoteRoundAdmissible(request.node, request.vote)
+
+FormPrepareQCReady(node, roundView, subject) ==
+  LET signers == VoteSignersAt(node, roundView, "Prepare", subject)
+      qc == QC(context, roundView, "Prepare", subject, signers)
+  IN /\ node \in up
+     /\ roundView = nodeView[node]
+     /\ QcWireValid(qc)
+     /\ qc \in QcRecordSet
+
+CompleteTimeoutSignatureReady(request) ==
+  LocalTimeoutCompletionGuard(request)
+
+PersistDecisionReady(request) == request \in pendingDecision
+
+FetchCertifiedBodyReady(node, qc) ==
+  LET body == BodyRecord(node, context, qc.view, qc.subject)
+  IN /\ CertifiedBodyRecoveryAuthority(node, qc)
+     /\ ~BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+     /\ body \in BodyRecordSet
+
+ApplyDecisionReady(node, qc) ==
+  LET application == [node |-> node, qc |-> qc]
+  IN /\ application \in decisions
+     /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+     /\ \E validation \in validatedBodies:
+           /\ validation.node = node
+           /\ validation.context = context
+           /\ validation.view = qc.view
+           /\ validation.subject = qc.subject
+     /\ application \notin applied
+
+DeliverProposalReady(envelope) ==
+  /\ envelope \in proposalNetwork
+  /\ envelope.recipient \in up
+  /\ ProposalWireValidFor(envelope.recipient, envelope.proposal)
+
+DeliverVoteReady(envelope) ==
+  LET received == VoteAt(envelope.recipient, envelope.vote)
+  IN /\ envelope \in voteNetwork
+     /\ envelope.recipient \in up
+     /\ envelope.vote.context = context
+     /\ envelope.vote.signer \in CurrentVoters
+     /\ VoteRoundAdmissible(envelope.recipient, envelope.vote)
+     /\ received \notin receivedVotes
+
+DeliverQCReady(envelope) ==
+  /\ envelope \in qcNetwork
+  /\ envelope.recipient \in up
+  /\ QcWireValid(envelope.qc)
+
+DeliverTimeoutReady(envelope) ==
+  TimeoutDeliveryGuard(envelope)
+
+DeliverTCReady(envelope) ==
+  /\ envelope \in tcNetwork
+  /\ envelope.recipient \in up
+  /\ TCValid(envelope.tc)
+
+(***************************************************************************
+BeginLockCommit consumes the exact PrepareQC which caused its causal work.
+Rank/subject equality is only a scheduling projection and cannot identify a
+certificate: different signer sets can certify the same projection.  Ordinary
+QC delivery retains the authenticated QC item, restart/install recovery
+retains the QcRecord itself, and certified-body recovery retains a response
+bound to the exact signed request whose certificate is that QcRecord.
+***************************************************************************)
+
+BeginLockCommandEvidenceMatches(command, qc) ==
+  \/ command.evidence = qc
+  \/ \E item \in AsyncNetworkItems:
+       /\ command.evidence = item
+       /\ \/ /\ item.kind = "PrepareQC"
+             /\ item.envelope.qc = qc
+          \/ /\ item.kind = "CertifiedResponse"
+             /\ CertifiedResponseCapabilityAuthorized(item)
+             /\ \E request \in MatchingSentCertifiedRequests(item):
+                  /\ FrozenCertifiedResponseBinding(item, request)
+                  /\ request.envelope.certificate = qc
 
 RegularCoreCommand(command) ==
   \/ /\ command.kind = "AssembleBody"
@@ -2004,6 +3044,7 @@ RegularCoreCommand(command) ==
   \/ /\ command.kind = "BeginLockCommit"
      /\ \E qc \in LockCommitQcValues:
           /\ CommandMatches(command, command.node, qc.view, qc.subject)
+          /\ BeginLockCommandEvidenceMatches(command, qc)
           /\ BeginLockCommit(command.node, qc)
   \/ /\ command.kind = "PersistLockCommit"
      /\ \E request \in pendingLockCommit:
@@ -2021,33 +3062,134 @@ RegularCoreCommand(command) ==
           /\ CommandMatches(command, request.node, request.vote.view,
                             request.vote.highSubject)
           /\ PersistTimeout(request)
-  \/ /\ command.kind = "FormTC"
-     /\ FormTC(command.node, command.view)
   \/ /\ command.kind = "BeginInstallTC"
      /\ \E tc \in ReceivedTcValues:
-          /\ command.node = command.node
           /\ command.view = tc.view
+          /\ InstallTcEvidenceMatches(command, tc)
           /\ BeginInstallTC(command.node, tc)
   \/ /\ command.kind = "FetchCertifiedBody"
      /\ command.item.kind = "CertifiedResponse"
      /\ command.item.envelope.recipient = command.node
      /\ command.item.envelope.view = command.view
      /\ command.item.envelope.subject = command.subject
-     /\ \E qc \in DecisionQcValues \cup prepareQCs:
+     /\ CertifiedResponseCapabilityAuthorized(command.item)
+     /\ AcceptCertifiedResponseCapability(
+          command.node, command.view, command.subject)
+
+RegularCoreCommandReady(command) ==
+  \/ /\ command.kind = "AssembleBody"
+     /\ CommandMatches(command, command.node, nodeView[command.node],
+                       command.subject)
+     /\ AssembleLocalBodyReady(command.node, command.subject)
+  \/ /\ command.kind = "BeginProposal"
+     /\ BeginLocalProposalReady(command.node, command.subject)
+  \/ /\ command.kind = "PersistProposal"
+     /\ \E request \in pendingProposal:
+          /\ CommandMatches(command, request.node, request.proposal.view,
+                            request.proposal.subject)
+          /\ PersistProposalReady(request)
+  \/ /\ command.kind = "FetchBody"
+     /\ ~CertifiedRecoveryFetchFrontier(command)
+     /\ HeldChunksFor(command.node, command.view, command.subject) =
+          AsyncChunks
+     /\ ~BodyHeldBy(durableBodies, command.node, context,
+                     command.view, command.subject)
+     /\ \E proposal \in SeenProposalValues:
+          /\ CommandMatches(command, command.node, proposal.view,
+                            proposal.subject)
+          /\ FetchBodyReady(command.node, proposal)
+  \/ /\ command.kind = "RebindRetainedBody"
+     /\ \E proposal \in SeenProposalValues:
+          /\ CommandMatches(command, command.node, proposal.view,
+                            proposal.subject)
+          /\ RebindRetainedBodyReady(command.node, proposal)
+  \/ /\ command.kind = "StoreBody"
+     /\ StoreBodyReady(command.node, command.view, command.subject)
+  \/ /\ command.kind = "ValidateBody"
+     /\ \/ \E proposal \in SeenProposalValues:
+               /\ CommandMatches(command, command.node, proposal.view,
+                                 proposal.subject)
+               /\ (ValidateBodyReady(command.node, proposal)
+                     \/ RejectBodyReady(command.node, proposal))
+        \/ \E qc \in DecisionQcValues:
+             /\ CommandMatches(command, command.node, qc.view, qc.subject)
+             /\ ValidateDecidedBodyReady(command.node, qc)
+        \/ \E qc \in prepareQCs:
+             /\ CommandMatches(command, command.node, qc.view, qc.subject)
+             /\ ValidateLockedBodyReady(command.node, qc)
+  \/ /\ command.kind = "BeginPrepare"
+     /\ \E proposal \in SeenProposalValues:
+          /\ CommandMatches(command, command.node, proposal.view,
+                            proposal.subject)
+          /\ BeginPrepareReady(command.node, proposal)
+  \/ /\ command.kind = "PersistPrepare"
+     /\ \E request \in pendingPrepare:
+          /\ CommandMatches(command, request.node, request.vote.view,
+                            request.vote.subject)
+          /\ PersistPrepareReady(request)
+  \/ /\ command.kind = "BeginObservePrepare"
+     /\ \E qc \in ReceivedQcValues:
           /\ CommandMatches(command, command.node, qc.view, qc.subject)
-          /\ CertifiedBodyRecoveryAuthority(command.node, qc)
-          /\ command.item.source \in qc.signers
-          /\ FetchCertifiedBody(command.node, qc)
+          /\ BeginObservePrepareReady(command.node, qc)
+  \/ /\ command.kind = "PersistObservePrepare"
+     /\ \E request \in pendingObservePrepare:
+          /\ CommandMatches(command, request.node, request.qc.view,
+                            request.qc.subject)
+          /\ PersistObservePrepareReady(request)
+  \/ /\ command.kind = "BeginLockCommit"
+     /\ \E qc \in LockCommitQcValues:
+          /\ CommandMatches(command, command.node, qc.view, qc.subject)
+          /\ BeginLockCommandEvidenceMatches(command, qc)
+          /\ BeginLockCommitReady(command.node, qc)
+  \/ /\ command.kind = "PersistLockCommit"
+     /\ \E request \in pendingLockCommit:
+          /\ CommandMatches(command, request.node, request.qc.view,
+                            request.qc.subject)
+          /\ PersistLockCommitReady(request)
+  \/ /\ command.kind = "FormCommitQC"
+     /\ FormCommitQCReady(command.node, command.view, command.subject)
+  \/ /\ command.kind = "BeginDecision"
+     /\ \E qc \in ReceivedQcValues:
+          /\ CommandMatches(command, command.node, qc.view, qc.subject)
+          /\ BeginDecisionReady(command.node, qc)
+  \/ /\ command.kind = "PersistTimeout"
+     /\ \E request \in pendingTimeout:
+          /\ CommandMatches(command, request.node, request.vote.view,
+                            request.vote.highSubject)
+          /\ PersistTimeoutReady(request)
+  \/ /\ command.kind = "BeginInstallTC"
+     /\ \E tc \in ReceivedTcValues:
+          /\ command.view = tc.view
+          /\ InstallTcEvidenceMatches(command, tc)
+          /\ BeginInstallTCReady(command.node, tc)
+  \/ /\ command.kind = "FetchCertifiedBody"
+     /\ command.item.kind = "CertifiedResponse"
+     /\ command.item.envelope.recipient = command.node
+     /\ command.item.envelope.view = command.view
+     /\ command.item.envelope.subject = command.subject
+     /\ CertifiedResponseCapabilityAuthorized(command.item)
+     /\ InstallCertifiedBodyEffectReady(
+          command.node, command.view, command.subject)
 
 AsyncAuxVars ==
   <<asyncOutstandingTags, asyncNodeDeadlines, asyncRetransmitDeadlines,
-    asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes, asyncIngressReady,
+    asyncSentItems, asyncRetainedControl, asyncActiveRequests,
+    asyncCertifiedResponseClaim, asyncTransport,
+    asyncIngressLanes, asyncIngressReady,
     asyncHeldChunks, asyncHistoricalRecoveryTargets
     >>
 
 ExecuteRegularCommand(command) ==
   /\ RegularCoreCommand(command)
-  /\ UNCHANGED AsyncAuxVars
+  /\ IF command.kind \in {"FetchBody", "RebindRetainedBody"}
+     THEN RetireCompletedBodyCertifiedResponseAuthority(command)
+     ELSE UNCHANGED <<asyncActiveRequests,
+                      asyncCertifiedResponseClaim>>
+  /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
+                 asyncRetransmitDeadlines, asyncSentItems,
+                 asyncRetainedControl, asyncTransport,
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
 
 ExecuteSignProposal(command) ==
   /\ command.kind = "SignProposal"
@@ -2108,6 +3250,7 @@ ExecutePersistInstall(command) ==
   /\ \E request \in pendingInstallTC:
        /\ command.node = request.node
        /\ command.view = request.tc.view
+       /\ InstallTcEvidenceMatches(command, request.tc)
        /\ PersistInstallTC(request)
        /\ PersistInstalledControlAfterInstall(
             request.node, request.tc,
@@ -2131,7 +3274,9 @@ ExecutePersistDecision(command) ==
                          request.qc.subject)
        /\ PersistDecision(request)
        /\ PersistDecisionControl(
-            QcOutbox(request.node, request.qc), request.rebroadcast)
+            request.node, request.qc,
+            QcOutbox(request.node, request.qc),
+            request.rebroadcast)
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines,
                  asyncIngressLanes, asyncIngressReady,
@@ -2166,7 +3311,8 @@ ExecuteDecisionFetch(command) ==
                     command.subject)
      THEN /\ UNCHANGED vars
           /\ UNCHANGED <<asyncSentItems, asyncRetainedControl,
-                          asyncActiveRequests, asyncTransport>>
+                          asyncActiveRequests,
+                          asyncCertifiedResponseClaim, asyncTransport>>
      ELSE \E qc \in DecisionQcValues \cup prepareQCs:
             /\ CommandMatches(command, command.node, qc.view, qc.subject)
             /\ command.evidence = qc
@@ -2186,8 +3332,10 @@ ExecuteApply(command) ==
        /\ ApplyDecision(command.node, qc)
   /\ asyncHistoricalRecoveryTargets' =
        asyncHistoricalRecoveryTargets \ {command.node}
+  /\ RetireNodeCertifiedResponseAuthority(command.node)
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
-                 asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
+                 asyncRetransmitDeadlines, asyncSentItems,
+                 asyncRetainedControl, asyncTransport,
                  asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
 
 ExecuteCoreDelivery(command) ==
@@ -2210,14 +3358,16 @@ ExecuteCoreDelivery(command) ==
             /\ item.kind = "TimeoutCertificate"
             /\ DeliverTC(item.envelope)
      /\ asyncRetainedControl' =
-          IF item.kind = "PrepareQC"
+          IF /\ item.kind = "PrepareQC"
+             /\ QcDeliveryCreatesReceipt(command.node, item.envelope.qc)
           THEN RememberedControl(
                  asyncRetainedControl,
                  QcOutbox(command.node, item.envelope.qc))
           ELSE asyncRetainedControl
      /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncSentItems,
-                    asyncActiveRequests, asyncTransport,
+                    asyncActiveRequests, asyncCertifiedResponseClaim,
+                    asyncTransport,
                     asyncIngressLanes, asyncIngressReady,
                     asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
@@ -2231,7 +3381,7 @@ ExecuteChunkDelivery(command) ==
      /\ item.envelope.chunk \in AsyncChunks
      /\ UNCHANGED vars
      /\ UNCHANGED <<asyncSentItems, asyncRetainedControl,
-                    asyncActiveRequests>>
+                    asyncActiveRequests, asyncCertifiedResponseClaim>>
      /\ asyncHeldChunks' =
           asyncHeldChunks \cup
             {AsyncChunkReceipt(command.node, item.envelope.view,
@@ -2253,7 +3403,7 @@ ExecuteRejectAuthenticatedJunk(command) ==
      /\ item.envelope.recipient = command.node
      /\ UNCHANGED vars
      /\ UNCHANGED <<asyncSentItems, asyncRetainedControl,
-                    asyncActiveRequests>>
+                    asyncActiveRequests, asyncCertifiedResponseClaim>>
      /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncTransport,
                     asyncIngressLanes, asyncIngressReady,
@@ -2315,7 +3465,7 @@ CompletionCausalAdmissionDebt(node) ==
 DiscardCommand(command) ==
   /\ UNCHANGED vars
   /\ UNCHANGED <<asyncSentItems, asyncRetainedControl,
-                 asyncActiveRequests>>
+                 asyncActiveRequests, asyncCertifiedResponseClaim>>
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines, asyncTransport,
                  asyncIngressLanes, asyncIngressReady,
@@ -2329,21 +3479,142 @@ which is required when this module is instantiated by a parameterized chain
 proof.  It avoids enumerating the full candidate carrier and leaves the exact
 twelve-arm production dispatch surface unchanged.
 ***************************************************************************)
-CommandExecutionEnabled(command) ==
+ExecuteRegularCommandReady(command) == RegularCoreCommandReady(command)
+
+ExecuteDecisionFetchReady(command) ==
+  CertifiedRecoveryFetchFrontier(command)
+
+ExecuteSignProposalReady(command) ==
+  /\ command.kind = "SignProposal"
+  /\ \E request \in signProposals:
+       LET controlItems == ProposalOutbox(request)
+       IN /\ CommandMatches(command, request.node, request.proposal.view,
+                             request.proposal.subject)
+          /\ CompleteProposalSignatureReady(request)
+          /\ controlItems \subseteq
+               {item \in AsyncNetworkItems:
+                  item.kind \in AsyncControlKinds}
+
+ExecuteSignVoteReady(command) ==
+  /\ command.kind = "SignVote"
+  /\ \E request \in signVotes:
+       /\ CommandMatches(command, request.node, request.vote.view,
+                         request.vote.subject)
+       /\ CompleteVoteSignatureReady(request)
+       /\ VoteOutbox(request) \subseteq
+            {item \in AsyncNetworkItems:
+               item.kind \in AsyncControlKinds}
+
+ExecuteFormPrepareQCReady(command) ==
+  LET signers == VoteSignersAt(command.node, command.view, "Prepare",
+                               command.subject)
+      qc == QC(context, command.view, "Prepare", command.subject, signers)
+      items == QcOutbox(command.node, qc)
+  IN /\ command.kind = "FormPrepareQC"
+     /\ FormPrepareQCReady(command.node, command.view, command.subject)
+     /\ items \subseteq
+          {item \in AsyncNetworkItems:
+             item.kind \in AsyncControlKinds}
+
+ExecuteSignTimeoutReady(command) ==
+  /\ command.kind = "SignTimeout"
+  /\ \E request \in signTimeouts:
+       /\ CommandMatches(command, request.node, request.vote.view,
+                         request.vote.highSubject)
+       /\ CompleteTimeoutSignatureReady(request)
+       /\ TimeoutOutbox(request) \subseteq
+            {item \in AsyncNetworkItems:
+               item.kind \in AsyncControlKinds}
+
+ExecutePersistInstallReady(command) ==
+  /\ command.kind = "PersistInstallTC"
+  /\ \E request \in pendingInstallTC:
+       /\ command.node = request.node
+       /\ command.view = request.tc.view
+       /\ InstallTcEvidenceMatches(command, request.tc)
+       /\ PersistInstallTCReady(request)
+
+ExecutePersistDecisionReady(command) ==
+  /\ command.kind = "PersistDecision"
+  /\ \E request \in pendingDecision:
+       /\ CommandMatches(command, request.node, request.qc.view,
+                         request.qc.subject)
+       /\ PersistDecisionReady(request)
+
+ExecuteRequestCertifiedBodyReady(command) ==
+  /\ command.kind = "RequestCertifiedBody"
+  /\ ~BodyHeldBy(durableBodies, command.node, context, command.view,
+                  command.subject)
+  /\ \E qc \in DecisionQcValues \cup prepareQCs:
+       /\ CommandMatches(command, command.node, qc.view, qc.subject)
+       /\ command.evidence = qc
+       /\ CertifiedBodyRecoveryAuthority(command.node, qc)
+       /\ \A item \in CertifiedRequestOutbox(command.node, qc):
+            item.kind = "CertifiedRequest"
+
+ExecuteApplyReady(command) ==
+  /\ command.kind = "Apply"
+  /\ \E qc \in DecisionQcValues:
+       /\ CommandMatches(command, command.node, qc.view, qc.subject)
+       /\ ApplyDecisionReady(command.node, qc)
+
+ExecuteCoreDeliveryReady(command) ==
+  LET item == command.item
+  IN /\ item \in asyncSentItems
+     /\ command.node = item.envelope.recipient
+     /\ \/ /\ command.kind = "DeliverProposal"
+            /\ item.kind = "Proposal"
+            /\ DeliverProposalReady(item.envelope)
+        \/ /\ command.kind = "DeliverVote"
+            /\ item.kind \in {"PrepareVote", "CommitVote"}
+            /\ DeliverVoteReady(item.envelope)
+        \/ /\ command.kind = "DeliverQC"
+            /\ item.kind \in {"PrepareQC", "CommitQC"}
+            /\ DeliverQCReady(item.envelope)
+        \/ /\ command.kind = "DeliverTimeout"
+            /\ item.kind = "TimeoutVote"
+            /\ DeliverTimeoutReady(item.envelope)
+        \/ /\ command.kind = "DeliverTC"
+            /\ item.kind = "TimeoutCertificate"
+            /\ DeliverTCReady(item.envelope)
+
+ExecuteChunkDeliveryReady(command) ==
+  LET item == command.item
+  IN /\ command.kind = "DeliverChunk"
+     /\ item \in asyncSentItems
+     /\ item.kind = "Chunk"
+     /\ item.envelope.recipient = command.node
+     /\ item.envelope.chunk \in AsyncChunks
+
+ExecuteRejectAuthenticatedJunkReady(command) ==
+  LET item == command.item
+  IN /\ \/ /\ command.kind = "RejectNormal"
+             /\ item.kind = "NormalJunk"
+        \/ /\ command.kind = "RejectProgress"
+             /\ item.kind = "ProgressJunk"
+     /\ item \in asyncSentItems
+     /\ item.envelope.recipient = command.node
+
+CommandExecutionReady(command) ==
   \E selectedCommand \in {command}:
-    \/ ENABLED ExecuteRegularCommand(selectedCommand)
-    \/ ENABLED ExecuteDecisionFetch(selectedCommand)
-    \/ ENABLED ExecuteSignProposal(selectedCommand)
-    \/ ENABLED ExecuteSignVote(selectedCommand)
-    \/ ENABLED ExecuteFormPrepareQC(selectedCommand)
-    \/ ENABLED ExecuteSignTimeout(selectedCommand)
-    \/ ENABLED ExecutePersistInstall(selectedCommand)
-    \/ ENABLED ExecutePersistDecision(selectedCommand)
-    \/ ENABLED ExecuteRequestCertifiedBody(selectedCommand)
-    \/ ENABLED ExecuteApply(selectedCommand)
-    \/ ENABLED ExecuteCoreDelivery(selectedCommand)
-    \/ ENABLED ExecuteChunkDelivery(selectedCommand)
-    \/ ENABLED ExecuteRejectAuthenticatedJunk(selectedCommand)
+    \/ ExecuteRegularCommandReady(selectedCommand)
+    \/ ExecuteDecisionFetchReady(selectedCommand)
+    \/ ExecuteSignProposalReady(selectedCommand)
+    \/ ExecuteSignVoteReady(selectedCommand)
+    \/ ExecuteFormPrepareQCReady(selectedCommand)
+    \/ ExecuteSignTimeoutReady(selectedCommand)
+    \/ ExecutePersistInstallReady(selectedCommand)
+    \/ ExecutePersistDecisionReady(selectedCommand)
+    \/ ExecuteRequestCertifiedBodyReady(selectedCommand)
+    \/ ExecuteApplyReady(selectedCommand)
+    \/ ExecuteCoreDeliveryReady(selectedCommand)
+    \/ ExecuteChunkDeliveryReady(selectedCommand)
+    \/ ExecuteRejectAuthenticatedJunkReady(selectedCommand)
+
+LocalAssemblyBusyDispatchAllowed(command) ==
+  /\ command.class = "Normal"
+  /\ command.kind = "AssembleBody"
+  /\ command.item = NoAsyncItem
 
 (***************************************************************************
 Every scheduler caller obtains the command from an AsyncCandidateTyped queue.
@@ -2353,8 +3624,10 @@ Cartesian carrier forces TLC to enumerate millions of irrelevant records.
 CommandDispatchable(command) ==
   /\ AsyncCandidateTyped(command)
   /\ CandidateConsumerCurrent(command)
-  /\ CommandExecutionEnabled(command)
-  /\ (NodeIdle(command.node) \/ command.class = "Completion")
+  /\ CommandExecutionReady(command)
+  /\ (NodeIdle(command.node)
+        \/ command.class = "Completion"
+        \/ LocalAssemblyBusyDispatchAllowed(command))
 
 HistoricalLockedCommitItem(item) ==
   IF item.kind = "CommitVote"
@@ -2407,6 +3680,12 @@ DeferredProgressAfter(node, command) ==
                THEN Append(queue, command)
                ELSE queue
 
+(***************************************************************************
+Admitting a Busy-rejected command creates an immediately owned deferred
+service turn.  Production tests the adapter queues directly on every runtime
+step, so the model debt bit must be armed by the admission itself; inheriting
+a stale FALSE bit would strand the new owner after the reducer becomes idle.
+***************************************************************************)
 DeferCommand(command) ==
   LET node == command.node
   IN /\ UNCHANGED vars
@@ -2429,11 +3708,14 @@ DeferCommand(command) ==
                            ELSE IF Len(@) < AsyncDeferredNormalCapacity
                                 THEN Append(@, command) ELSE @]
           ELSE asyncDeferredNormalQueues
-     /\ UNCHANGED <<asyncDeferredHandoffs, asyncNextDeferredClass,
-                    asyncDeferredDrainOwed,
-                    asyncOutstandingTags,
+     /\ UNCHANGED <<asyncDeferredHandoffs, asyncNextDeferredClass>>
+     /\ asyncDeferredDrainOwed' =
+          [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
+     /\ UNCHANGED <<asyncOutstandingTags,
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
-                    asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes,
+                    asyncSentItems, asyncRetainedControl,
+                    asyncActiveRequests, asyncCertifiedResponseClaim,
+                    asyncTransport, asyncIngressLanes,
                     asyncIngressReady, asyncHeldChunks,
                     asyncHistoricalRecoveryTargets
                     >>
@@ -2443,11 +3725,18 @@ DeferredQueueNonempty(node) ==
     \/ Len(asyncDeferredProgressQueues[node]) > 0
     \/ Len(asyncDeferredNormalQueues[node]) > 0
 
+DeferredWorkServiceable(node) ==
+  /\ asyncDeferredDrainOwed[node]
+  /\ DeferredQueueNonempty(node)
+  /\ NodeIdle(node)
+
 (***************************************************************************
 The adapter's deferred reducer inputs use the same three-class cyclic scan as
-the runtime command queue, but keep an independent cursor.  A selected class
-always advances the cursor, including the Busy case where production pushes
-the selected input back to the front of its class queue.
+the runtime command queue, but keep an independent cursor.  The production
+runtime invokes the selector only after both serialized Busy fences are open.
+The exact-handoff state remains part of the refinement carrier so the modular
+ownership proofs can distinguish an already selected occurrence, but a Busy
+node cannot create a fresh handoff by consuming a deferred-service turn.
 ***************************************************************************)
 DeferredClassQueue(node, commandClass) ==
   CASE commandClass = "Completion" -> asyncDeferredCompletionQueues[node]
@@ -2609,24 +3898,58 @@ OldestDueSourcePacket(recipient, source) ==
     \A other \in DueSourcePackets(recipient, source):
       packet.sentAt <= other.sentAt
 
+(***************************************************************************
+Policy rejection consumes one delivery attempt without granting queue
+ownership.  Invalid/stale responses are rejected before the physical gate.
+An authenticated response blocked by another live claim at the same recipient
+is finite backpressure, not rejection: its exact transport packet remains
+owned and retryable, matching `SumeragiIngressDisposition::Retry` and the
+caller-side retained queue.  Claims at other recipients are independent.
+Likewise, a live certified request at the packet recipient prevents fresh
+generic traffic from repeatedly refilling that process's aggregate untrusted
+completion owner.  Each such relayed occurrence is rejected rather than
+returned for retry, so an older caller-side per-source FIFO entry cannot
+remain ahead of the exact response forever.  Other recipients and direct
+validator completion lanes remain admissible, and a fresh relay occurrence
+can be admitted after the recipient's request authority retires.
+***************************************************************************)
+CertifiedResponsePacketPolicyRejected(item) ==
+  /\ item.kind = "CertifiedResponse"
+  /\ ~CertifiedResponseAuthorized(item)
+
+UntrustedGenericCompletionPacketPolicyRejected(item) ==
+  /\ IngressAdmissionClass(item) = "TransportCompletion"
+  /\ IngressResourceSource(item) = AsyncUntrustedSource
+  /\ ActiveCertifiedRequestHashesAt(item.envelope.recipient) # {}
+
+IngressPacketPolicyRejected(item) ==
+  \/ CertifiedResponsePacketPolicyRejected(item)
+  \/ UntrustedGenericCompletionPacketPolicyRejected(item)
+
 AdmitHiddenPacket(recipient, source) ==
   LET packet == OldestDueSourcePacket(recipient, source)
       item == packet.item
-      lane == IngressLane(recipient, source)
+      resourceSource == IngressResourceSource(item)
+      lane == IngressLane(recipient, resourceSource)
   IN /\ recipient \in up
      /\ ~ResponsiveReplayQuarantined(recipient)
      /\ DueSourcePackets(recipient, source) # {}
-     /\ item \notin SequenceSet(lane)
+     /\ ~IngressHasCoalescingOwner(item)
      /\ CanAdmitIngressItem(item)
      /\ asyncTransport' = asyncTransport \ {packet}
      /\ asyncIngressLanes' =
           [asyncIngressLanes EXCEPT
-             ![recipient][source] = Append(@, item)]
+             ![recipient][resourceSource] = Append(@, item)]
      /\ asyncIngressReady' =
           IF Len(lane) = 0
           THEN [asyncIngressReady EXCEPT
-                  ![recipient] = Append(@, source)]
+                  ![recipient] = Append(@, resourceSource)]
           ELSE asyncIngressReady
+     /\ asyncCertifiedResponseClaim' =
+          IF item.kind = "CertifiedResponse"
+          THEN asyncCertifiedResponseClaim
+                 \cup {AsyncCertifiedResponseCanonicalWireIdentity(item)}
+          ELSE asyncCertifiedResponseClaim
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
      /\ UNCHANGED AsyncLocalAdmissionVars
@@ -2641,10 +3964,11 @@ AdmitHiddenPacket(recipient, source) ==
                     >>
 
 (*
-FairV2Ingress coalesces an exact wire retransmission only while the same source
-still owns an identical queued envelope.  The packet occurrence is consumed,
-but the original lane position and enqueue ownership remain unchanged.  Once
-the queued occurrence is serviced, a later retransmission is fresh again.
+FairV2Ingress coalesces an exact wire retransmission while its normalized
+resource lane owns the same identity.  Certified responses use the
+route-neutral authenticated-envelope projection, so the same signed response
+coalesces across relay vias while that recipient's singleton claim remains
+unchanged.
 *)
 CoalesceHiddenPacket(recipient, source) ==
   LET packet == OldestDueSourcePacket(recipient, source)
@@ -2652,7 +3976,9 @@ CoalesceHiddenPacket(recipient, source) ==
   IN /\ recipient \in up
      /\ ~ResponsiveReplayQuarantined(recipient)
      /\ DueSourcePackets(recipient, source) # {}
-     /\ item \in SequenceSet(IngressLane(recipient, source))
+     /\ IngressHasCoalescingOwner(item)
+     /\ \/ item.kind # "CertifiedResponse"
+        \/ CertifiedResponseClaimMatches(item)
      /\ asyncTransport' = asyncTransport \ {packet}
      /\ UNCHANGED <<asyncIngressLanes, asyncIngressReady>>
      /\ UNCHANGED AsyncDeferredVars
@@ -2665,8 +3991,31 @@ CoalesceHiddenPacket(recipient, source) ==
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                     asyncSentItems, asyncRetainedControl,
-                    asyncActiveRequests, asyncHeldChunks,
+                    asyncActiveRequests, asyncCertifiedResponseClaim,
+                    asyncHeldChunks,
                     asyncHistoricalRecoveryTargets>>
+
+DropPolicyRejectedHiddenPacket(recipient, source) ==
+  LET packet == OldestDueSourcePacket(recipient, source)
+      item == packet.item
+  IN /\ recipient \in up
+     /\ ~ResponsiveReplayQuarantined(recipient)
+     /\ DueSourcePackets(recipient, source) # {}
+     /\ IngressPacketPolicyRejected(item)
+     /\ asyncTransport' = asyncTransport \ {packet}
+     /\ UNCHANGED <<asyncIngressLanes, asyncIngressReady>>
+     /\ UNCHANGED AsyncDeferredVars
+     /\ LeaveCausalQueues
+     /\ UNCHANGED AsyncLocalAdmissionVars
+     /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
+                    asyncNextCommandClass, asyncFifoOwed,
+                    asyncTimeoutEmitted, asyncRunnerPhase,
+                    asyncRunnerBudget, AsyncIoVars, asyncOutstandingTags,
+                    asyncNodeDeadlines, asyncRetransmitDeadlines,
+                    asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
+                    asyncSentItems, asyncRetainedControl,
+                    asyncActiveRequests, asyncCertifiedResponseClaim,
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
 AdmitFreshHiddenPacket(recipient, source) ==
   AdmitHiddenPacket(recipient, source)
@@ -2674,6 +4023,7 @@ AdmitFreshHiddenPacket(recipient, source) ==
 AdmitIngressPacket(recipient, source) ==
   \/ AdmitHiddenPacket(recipient, source)
   \/ CoalesceHiddenPacket(recipient, source)
+  \/ DropPolicyRejectedHiddenPacket(recipient, source)
 
 HeadIngressSource(node) == Head(asyncIngressReady[node])
 
@@ -2682,33 +4032,6 @@ HeadIngressItem(node) ==
 
 IngressItemAt(node, index) ==
   Head(IngressLane(node, asyncIngressReady[node][index]))
-
-CertifiedRequestAuthorized(item) ==
-  /\ item.kind = "CertifiedRequest"
-  /\ \E qc \in DecisionQcValues \cup prepareQCs:
-       /\ CertifiedBodyRecoveryAuthority(item.source, qc)
-       /\ item.envelope.height = qc.context.height
-       /\ qc.view = item.envelope.view
-       /\ qc.subject = item.envelope.subject
-       /\ item.envelope.recipient \in qc.signers
-
-MatchingCertifiedRequests(response) ==
-  {request \in asyncActiveRequests:
-     /\ request.kind = "CertifiedRequest"
-     /\ request.source = response.envelope.recipient
-     /\ request.envelope.height = response.envelope.height
-     /\ request.envelope.view = response.envelope.view
-     /\ request.envelope.subject = response.envelope.subject}
-
-CertifiedResponseAuthorized(item) ==
-  /\ item.kind = "CertifiedResponse"
-  /\ MatchingCertifiedRequests(item) # {}
-  /\ \E qc \in DecisionQcValues \cup prepareQCs:
-       /\ CertifiedBodyRecoveryAuthority(item.envelope.recipient, qc)
-       /\ item.envelope.height = qc.context.height
-       /\ item.envelope.view = qc.view
-       /\ item.envelope.subject = qc.subject
-       /\ item.source \in qc.signers
 
 CommitCertificateRequestAuthorized(item) ==
   /\ item.kind = "CommitCertificateRequest"
@@ -2720,23 +4043,46 @@ CommitCertificateRequestAuthorized(item) ==
 MatchingCommitCertificateRequests(response) ==
   {request \in asyncActiveRequests:
      /\ request.kind = "CommitCertificateRequest"
-     /\ request.source = response.envelope.recipient
-     /\ request.envelope.height = response.envelope.qc.context.height
-     /\ request.envelope.recipient = response.source}
+     /\ AsyncCommitCertificateRequestRegistrationIdentity(request)
+          = AsyncCommitCertificateRequestRegistrationIdentity(
+              response.envelope.request)}
 
 CommitCertificateResponseAuthorized(item) ==
   /\ item.kind = "CommitCertificateResponse"
-  /\ item.source \in CurrentVoters
+  /\ item.source \in AsyncIngressSources
+  /\ item.envelope.request \in asyncActiveRequests
+  /\ CommitCertificateRequestAuthorized(item.envelope.request)
   /\ item.envelope.qc \in commitQCs
   /\ item.envelope.qc.context = context
   /\ item.envelope.qc.phase = "Commit"
   /\ MatchingCommitCertificateRequests(item) # {}
 
+(***************************************************************************
+The authenticated archive hop is not a historical vote authority.  The
+synthetic Core envelope cites one frozen CommitQC signer, while the exact
+outer CommitCertificateResponse remains immutable candidate evidence.  This
+prevents key rotation from either excluding a valid archive server or
+retagging that server as a fictitious historical voter.
+***************************************************************************)
+HistoricalCommitQcSigner(response) ==
+  IF response.envelope.qc.signers # {}
+  THEN CHOOSE signer \in response.envelope.qc.signers: TRUE
+  ELSE 0
+
 DiscoveredCommitQcItem(response) ==
-  AsyncNetworkItem("CommitQC", response.source, response.envelope)
+  AsyncNetworkItem(
+    "CommitQC", HistoricalCommitQcSigner(response),
+    QcEnvelope(response.envelope.recipient, response.envelope.qc))
 
 CommitCertificateResponseCandidate(item) ==
-  DeliveryCandidate(DiscoveredCommitQcItem(item))
+  LET discovered == DiscoveredCommitQcItem(item)
+      node == discovered.envelope.recipient
+      subject == discovered.envelope.qc.subject
+  IN AsyncCandidateAtConsumer(
+       DeliveryClass(discovered), DeliveryKind(discovered), node,
+       DeliveryHeight(discovered), DeliveryView(discovered), subject,
+       discovered, nodeView[node], generation[node], item,
+       subject, subject, subject)
 
 CertifiedResponseCandidate(item) ==
   AsyncCandidate("Completion", "FetchCertifiedBody",
@@ -2749,14 +4095,42 @@ from its oldest entry to its newest and removes the first entry whose exact
 downstream predicate admits it.  Earlier blocked entries stay in place and
 the source consumes only one round-robin turn.  Keeping item admission
 separate from source selection prevents auxiliary I/O backpressure at a lane
-head from hiding later consensus/body progress from the same peer.  Response
-candidates require scheduler-wide freshness, including causal ownership, so
-the exact downstream candidate cannot be admitted into a second carrier.
+head from hiding later consensus/body progress from the same peer.
+
+One already-claimed certified response receives priority exactly when its
+downstream predicate admits it. Ordinary completions stop one slot below the
+physical runtime capacity, while only this authenticated response handoff may
+use the final slot. The priority therefore cannot be defeated by another
+completion source after a runtime service turn. A blocked claim receives no
+priority and therefore cannot head-of-line block unrelated traffic.
+
+If no claim is drainable, one pre-existing aggregate-untrusted shared
+completion owner receives one-shot priority while this recipient has a live
+exact request.  Production's first scan covers an unclaimed stale response
+and its second scan covers a generic transport completion; the formal set is
+their union.  The stale response drains through its failed claim check and the
+generic completion is transport-local.  Fresh aggregate-untrusted generic
+completions are policy rejected under that same local fence, so Byzantine
+traffic cannot renew this priority class.
+
+Response candidates require scheduler-wide freshness, including causal
+ownership, so the exact downstream candidate cannot be admitted into a second
+carrier. A fresh authenticated response completes an already-owned effect
+fetch and reserves its Completion command directly, matching
+`reserve_certified_body_available`; it does not create another I/O-work owner
+or an invented local-producer phase. Physical runtime fullness remains
+retryable backpressure, exactly as in production.
+
+Authenticated body chunks do not enter the reducer FIFO.  Production routes a
+`PayloadChunk` directly to the body/chunk transport, so an ingress chunk is
+always locally drainable and records its receipt without a scheduler-capacity
+or causal-admission gate.  Keeping that direct path explicit prevents an
+artificial Progress-queue blocker from defeating an exact response handoff.
 ***************************************************************************)
 IngressItemCanDrain(node, item) ==
   LET candidate == DeliveryCandidate(item)
   IN item.kind = "Noise"
-       \/ item \notin asyncSentItems
+       \/ ~IngressItemHasAuthenticatedHistory(item)
        \/ IF item.kind \in {"CertifiedRequest",
                              "CommitCertificateRequest"}
           THEN \/ ~(IF item.kind = "CertifiedRequest"
@@ -2764,13 +4138,13 @@ IngressItemCanDrain(node, item) ==
                     ELSE CommitCertificateRequestAuthorized(item))
                \/ /\ ~CompletionCausalAdmissionDebt(node)
                      /\ CanEnqueueIoClass(node, "Serve")
-          ELSE IF item.kind = "CertifiedResponse"
-               THEN \/ ~CertifiedResponseAuthorized(item)
+          ELSE IF item.kind = "Chunk"
+               THEN TRUE
+               ELSE IF item.kind = "CertifiedResponse"
+               THEN \/ ~CertifiedResponseClaimAuthorized(item)
                     \/ CandidateScheduled(
                          CertifiedResponseCandidate(item))
-                    \/ /\ ~CompletionCausalAdmissionDebt(node)
-                          /\ AsyncOutstandingWorkCount(node)
-                              < AsyncIoWorkCapacity
+                    \/ /\ CanEnqueueCertifiedResponse(node)
                           /\ ~CandidateScheduled(
                                CertifiedResponseCandidate(item))
                ELSE IF item.kind = "CommitCertificateResponse"
@@ -2789,9 +4163,30 @@ DrainableIngressLaneIndices(node, source) ==
   {index \in 1..Len(IngressLane(node, source)):
      IngressItemCanDrain(node, IngressLane(node, source)[index])}
 
+DrainableClaimedResponseLaneIndices(node, source) ==
+  {index \in DrainableIngressLaneIndices(node, source):
+     LET item == IngressLane(node, source)[index]
+     IN item.kind = "CertifiedResponse"
+          /\ CertifiedResponseClaimMatches(item)}
+
+DrainableRequestFencedCompletionLaneIndices(node, source) ==
+  {index \in DrainableIngressLaneIndices(node, source):
+     LET item == IngressLane(node, source)[index]
+     IN /\ source = AsyncUntrustedSource
+        /\ IngressUsesPhysicalCompletionOwner(item)
+        /\ ActiveCertifiedRequestHashesAt(node) # {}}
+
 FirstDrainableIngressLaneIndex(node, source) ==
-  CHOOSE index \in DrainableIngressLaneIndices(node, source):
-    \A other \in DrainableIngressLaneIndices(node, source): index <= other
+  LET claimed == DrainableClaimedResponseLaneIndices(node, source)
+      fenced ==
+        DrainableRequestFencedCompletionLaneIndices(node, source)
+      drainable == DrainableIngressLaneIndices(node, source)
+  IN IF claimed # {}
+     THEN CHOOSE index \in claimed: TRUE
+     ELSE IF fenced # {}
+          THEN CHOOSE index \in fenced: TRUE
+          ELSE CHOOSE index \in drainable:
+                 \A other \in drainable: index <= other
 
 IngressSourceCanDrain(node, source) ==
   DrainableIngressLaneIndices(node, source) # {}
@@ -2810,9 +4205,26 @@ DrainableIngressIndices(node) ==
   {index \in 1..Len(asyncIngressReady[node]):
      IngressSourceCanDrain(node, asyncIngressReady[node][index])}
 
+DrainableClaimedResponseReadyIndices(node) ==
+  {index \in DrainableIngressIndices(node):
+     DrainableClaimedResponseLaneIndices(
+       node, asyncIngressReady[node][index]) # {}}
+
+DrainableRequestFencedCompletionReadyIndices(node) ==
+  {index \in DrainableIngressIndices(node):
+     DrainableRequestFencedCompletionLaneIndices(
+       node, asyncIngressReady[node][index]) # {}}
+
 FirstDrainableIngressIndex(node) ==
-  CHOOSE index \in DrainableIngressIndices(node):
-    \A other \in DrainableIngressIndices(node): index <= other
+  LET claimed == DrainableClaimedResponseReadyIndices(node)
+      fenced == DrainableRequestFencedCompletionReadyIndices(node)
+      drainable == DrainableIngressIndices(node)
+  IN IF claimed # {}
+     THEN CHOOSE index \in claimed: TRUE
+     ELSE IF fenced # {}
+          THEN CHOOSE index \in fenced: TRUE
+          ELSE CHOOSE index \in drainable:
+                 \A other \in drainable: index <= other
 
 ReadyAfterSelectedDrain(node, index) ==
   LET ready == asyncIngressReady[node]
@@ -2840,9 +4252,10 @@ PopSelectedIngress(node, index, laneIndex) ==
 The serialized Rust ingress authenticates every reducer-directed envelope
 before comparing it with scheduler-owned authenticated envelopes.  An exact
 retransmission is consumed from transport without taking a second runtime
-slot, including while the first occurrence is deferred or causal; after the
-owning occurrence leaves, the same envelope may begin a new ownership interval
-and encounter generation-aware semantic admission.
+slot.  A certified-response claim survives the implementation's physical
+dequeue/backpressure/restore cycle; this abstraction represents that cycle as
+stutter and pops the response only at successful downstream handoff, where the
+request authority and claim retire atomically.
 ***************************************************************************)
 DrainFairIngressSelected(node) ==
   LET index == FirstDrainableIngressIndex(node)
@@ -2856,15 +4269,17 @@ DrainFairIngressSelected(node) ==
      /\ IF /\ item.kind = "CommitCertificateResponse"
               /\ item \in asyncSentItems
               /\ CommitCertificateResponseAuthorized(item)
-              /\ item.envelope \notin qcNetwork
-        THEN ImportAuthenticatedCommitCertificate(item.envelope)
+              /\ DiscoveredCommitQcItem(item).envelope \notin qcNetwork
+        THEN ImportAuthenticatedCommitCertificate(
+               DiscoveredCommitQcItem(item).envelope)
         ELSE UNCHANGED vars
-     /\ IF item.kind = "Noise" \/ item \notin asyncSentItems
+     /\ IF item.kind = "Noise" \/ ~IngressItemHasAuthenticatedHistory(item)
         THEN /\ UNCHANGED <<asyncCommandQueues,
                             asyncNextCommandClass>>
              /\ UNCHANGED AsyncIoVars
              /\ UNCHANGED <<asyncSentItems, asyncRetainedControl,
-                            asyncActiveRequests>>
+                            asyncActiveRequests,
+                            asyncCertifiedResponseClaim>>
         ELSE IF item.kind \in {"CertifiedRequest",
                                 "CommitCertificateRequest"}
              THEN IF (IF item.kind = "CertifiedRequest"
@@ -2882,35 +4297,37 @@ DrainFairIngressSelected(node) ==
                        /\ UNCHANGED <<asyncCommandQueues,
                                       asyncNextCommandClass, asyncSentItems,
                                       asyncRetainedControl,
-                                      asyncActiveRequests>>
+                                      asyncActiveRequests,
+                                      asyncCertifiedResponseClaim>>
                   ELSE /\ UNCHANGED <<asyncCommandQueues,
                                       asyncNextCommandClass, AsyncIoVars>>
                        /\ UNCHANGED <<asyncSentItems,
                                       asyncRetainedControl,
-                                      asyncActiveRequests>>
+                                      asyncActiveRequests,
+                                      asyncCertifiedResponseClaim>>
+             ELSE IF item.kind = "Chunk"
+                  THEN /\ UNCHANGED <<asyncCommandQueues,
+                                       asyncNextCommandClass, AsyncIoVars>>
+                       /\ UNCHANGED <<asyncSentItems,
+                                      asyncRetainedControl,
+                                      asyncActiveRequests,
+                                      asyncCertifiedResponseClaim>>
              ELSE IF item.kind = "CertifiedResponse"
-                  THEN IF CertifiedResponseAuthorized(item)
+                  THEN IF CertifiedResponseClaimAuthorized(item)
                        THEN LET completion ==
                                   CertifiedResponseCandidate(item)
                             IN /\ IF CandidateScheduled(completion)
                                   THEN UNCHANGED <<AsyncIoVars,
                                                     asyncCommandQueues,
                                                     asyncNextCommandClass>>
-                                  ELSE /\ asyncLocalReadyCompletions' =
-                                              [asyncLocalReadyCompletions EXCEPT
-                                                 ![node] = Append(@, completion)]
-                                       /\ asyncOutstandingWork' =
-                                              [asyncOutstandingWork EXCEPT
-                                                 ![node] = @ \cup {completion}]
-                                       /\ UNCHANGED <<asyncIoQueues,
-                                                       asyncIoReadyCompletions,
-                                                       asyncNextCompletionSource,
-                                                       asyncIoControlAvailable,
-                                                       asyncCommandQueues,
-                                                       asyncNextCommandClass>>
+                                  ELSE /\ EnqueueCandidate(completion)
+                                       /\ UNCHANGED AsyncIoVars
                                /\ asyncActiveRequests' =
                                     asyncActiveRequests \
                                       MatchingCertifiedRequests(item)
+                               /\ asyncCertifiedResponseClaim' =
+                                    CertifiedResponseClaimForRequests(
+                                      asyncActiveRequests')
                                /\ UNCHANGED <<asyncSentItems,
                                               asyncRetainedControl>>
                        ELSE /\ UNCHANGED <<asyncCommandQueues,
@@ -2918,7 +4335,8 @@ DrainFairIngressSelected(node) ==
                                            AsyncIoVars>>
                             /\ UNCHANGED <<asyncSentItems,
                                            asyncRetainedControl,
-                                           asyncActiveRequests>>
+                                           asyncActiveRequests,
+                                           asyncCertifiedResponseClaim>>
                   ELSE IF item.kind = "CommitCertificateResponse"
                        THEN IF CommitCertificateResponseAuthorized(item)
                             THEN LET discovered ==
@@ -2935,6 +4353,7 @@ DrainFairIngressSelected(node) ==
                                     /\ asyncActiveRequests' =
                                          asyncActiveRequests \
                                            MatchingCommitCertificateRequests(item)
+                                    /\ UNCHANGED asyncCertifiedResponseClaim
                                     /\ asyncSentItems' =
                                          asyncSentItems \cup {discovered}
                                     /\ UNCHANGED asyncRetainedControl
@@ -2943,7 +4362,8 @@ DrainFairIngressSelected(node) ==
                                                 AsyncIoVars>>
                                  /\ UNCHANGED <<asyncSentItems,
                                                 asyncRetainedControl,
-                                                asyncActiveRequests>>
+                                                asyncActiveRequests,
+                                                asyncCertifiedResponseClaim>>
                   ELSE /\ IF CandidateScheduled(candidate)
                           THEN UNCHANGED <<asyncCommandQueues,
                                            asyncNextCommandClass>>
@@ -2951,11 +4371,21 @@ DrainFairIngressSelected(node) ==
                        /\ UNCHANGED AsyncIoVars
                        /\ UNCHANGED <<asyncSentItems,
                                       asyncRetainedControl,
-                                      asyncActiveRequests>>
+                                      asyncActiveRequests,
+                                      asyncCertifiedResponseClaim>>
+     /\ asyncHeldChunks' =
+          IF /\ item.kind = "Chunk"
+             /\ IngressItemHasAuthenticatedHistory(item)
+             /\ item.envelope.chunk \in AsyncChunks
+          THEN asyncHeldChunks \cup
+                 {AsyncChunkReceipt(node, item.envelope.view,
+                                    item.envelope.subject,
+                                    item.envelope.chunk)}
+          ELSE asyncHeldChunks
      /\ UNCHANGED <<asyncFifoOwed, asyncTimeoutEmitted,
                     asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncTransport,
-                    asyncHeldChunks, asyncHistoricalRecoveryTargets
+                    asyncHistoricalRecoveryTargets
                     >>
 
 (***************************************************************************
@@ -3032,6 +4462,12 @@ DrainHistoricalIngressSelected(node) ==
                              asyncNextCompletionSource,
                              asyncIoControlAvailable>>
         ELSE UNCHANGED AsyncIoVars
+     /\ asyncCertifiedResponseClaim' =
+          IF item.kind = "CertifiedResponse"
+               /\ CertifiedResponseClaimMatches(item)
+          THEN asyncCertifiedResponseClaim \
+                 {AsyncCertifiedResponseCanonicalWireIdentity(item)}
+          ELSE asyncCertifiedResponseClaim
      /\ UNCHANGED <<vars, asyncCommandQueues, asyncNextCommandClass,
                     asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -3039,7 +4475,8 @@ DrainHistoricalIngressSelected(node) ==
                     asyncCausalQueues, asyncOutstandingTags,
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncSentItems, asyncRetainedControl,
-                    asyncActiveRequests, asyncTransport, asyncHeldChunks,
+                    asyncActiveRequests,
+                    asyncTransport, asyncHeldChunks,
                     asyncHistoricalRecoveryTargets>>
 
 AdmitCausalHead(node) ==
@@ -3073,7 +4510,9 @@ AdmitCausalHead(node) ==
                   /\ UNCHANGED AsyncIoVars
      /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
                     asyncOutstandingTags, asyncNodeDeadlines,
-                    asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
+                    asyncRetransmitDeadlines, asyncSentItems,
+                    asyncRetainedControl, asyncActiveRequests,
+                    asyncCertifiedResponseClaim, asyncTransport,
                     asyncIngressLanes, asyncIngressReady,
                     asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
@@ -3117,6 +4556,11 @@ sticky debt.  Non-Completion debt then reserves command capacity, while
 Completion debt still permits the exact producer retirement needed to free an
 outstanding-work slot.  Once the head is admissible, debt makes it the
 deterministic preferred source under the existing fair RunNode action.
+
+An authenticated certified-response retry does not fence local admission.
+Ordinary producer completions cannot consume its dedicated final runtime slot,
+so the existing finite local-turn budget can drain normally before the runner
+returns to prioritized ingress.
 ***************************************************************************)
 PreferredLocalSource(node) ==
   IF asyncCausalAdmissionOwed[node] = TRUE
@@ -3173,7 +4617,9 @@ AdmitProducerCompletion(node) ==
      /\ UNCHANGED <<asyncIoQueues, asyncIoControlAvailable>>
      /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
                     asyncOutstandingTags, asyncNodeDeadlines,
-                    asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
+                    asyncRetransmitDeadlines, asyncSentItems,
+                    asyncRetainedControl, asyncActiveRequests,
+                    asyncCertifiedResponseClaim, asyncTransport,
                     asyncIngressLanes, asyncIngressReady,
                     asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
@@ -3182,8 +4628,9 @@ ServiceIoWorkerWork(node) ==
       responseItems ==
         IF job.class # "Serve"
         THEN {}
-        ELSE IF CertifiedServeCanRespond(job.candidate.item)
-             THEN {CertifiedResponseItem(job.candidate.item)}
+        ELSE IF CertifiedServeCanRespond(node, job.candidate.item)
+             THEN {CertifiedResponseItem(
+                     AsyncUntrustedSource, node, job.candidate.item)}
              ELSE IF CommitCertificateServeCanRespond(job.candidate.item)
                   THEN CommitCertificateResponseItems(job.candidate.item)
                   ELSE {}
@@ -3222,7 +4669,7 @@ ServiceIoWorkerWork(node) ==
                     asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
 ServiceIoWorker(node) ==
-  /\ node \in AsyncCurrentResponsiveVoters
+  /\ node \in AsyncArchiveIoServiceNodes
   /\ ServiceIoWorkerWork(node)
 
 ServiceHistoricalRecoveryIoWorker(node) ==
@@ -3250,7 +4697,9 @@ EnqueueIoLocalControlWork(node) ==
                  asyncLocalReadyCompletions, asyncNextCompletionSource,
                  asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines, asyncNodeServiceDeadlines,
-                 asyncIoServiceDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
+                 asyncIoServiceDeadlines, asyncSentItems,
+                 asyncRetainedControl, asyncActiveRequests,
+                 asyncCertifiedResponseClaim, asyncTransport,
                  asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
                  asyncHistoricalRecoveryTargets>>
 
@@ -3279,7 +4728,8 @@ SendAllItems(node) ==
        asyncSentItems \cup RetainedControlEmissionItems(node)
   /\ asyncTransport' =
        asyncTransport \cup PacketsForItems(RetainedControlEmissionItems(node))
-  /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests>>
+  /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests,
+                  asyncCertifiedResponseClaim>>
 
 RetryableItems(node) ==
   RetainedControlEmissionItems(node) \cup ActiveRequestItems(node)
@@ -3289,11 +4739,13 @@ SendNodeRetransmissions(node) ==
   /\ asyncSentItems' = asyncSentItems \cup RetryableItems(node)
   /\ asyncTransport' =
        asyncTransport \cup PacketsForItems(RetryableItems(node))
-  /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests>>
+  /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests,
+                  asyncCertifiedResponseClaim>>
 
 NoSendItem ==
   UNCHANGED <<asyncSentItems, asyncRetainedControl,
-              asyncActiveRequests, asyncTransport>>
+              asyncActiveRequests, asyncCertifiedResponseClaim,
+              asyncTransport>>
 
 TimeoutCausalCommand(node) ==
   NoItemCandidate("Completion", "BeginTimeout", node, nodeView[node],
@@ -3339,10 +4791,7 @@ The same rigid-witness rule is required for the parameterized timeout action.
 Runtime callers select nodes from ValidatorIds, making this equivalent to the
 direct ENABLED BeginTimeout(node) test on every reachable state.
 ***************************************************************************)
-BeginTimeoutEnabled(node) ==
-  \E selectedNode \in ValidatorIds:
-    /\ selectedNode = node
-    /\ ENABLED BeginTimeout(selectedNode)
+BeginTimeoutEnabled(node) == BeginTimeoutReady(node)
 
 CommitCertificateDiscoveryStepWork(node) ==
   /\ node \in up
@@ -3396,7 +4845,9 @@ DirectTimeoutStep(node) ==
        ELSE asyncDeferredDrainOwed
   /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
                  asyncNodeDeadlines,
-                 asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
+                 asyncRetransmitDeadlines, asyncSentItems,
+                 asyncRetainedControl, asyncActiveRequests,
+                 asyncCertifiedResponseClaim, asyncTransport,
                  asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
                  asyncHistoricalRecoveryTargets>>
 
@@ -3459,7 +4910,9 @@ DeferredTimeoutStep(node) ==
   /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
                  asyncFifoOwed,
                  asyncTimeoutEmitted, asyncNodeDeadlines,
-                 asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
+                 asyncRetransmitDeadlines, asyncSentItems,
+                 asyncRetainedControl, asyncActiveRequests,
+                 asyncCertifiedResponseClaim, asyncTransport,
                  asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
                  asyncHistoricalRecoveryTargets>>
 
@@ -3536,7 +4989,7 @@ FifoRuntimeStep(node) ==
           ELSE asyncTimeoutEmitted
 
 DeferredDrainStep(node) ==
-  /\ asyncDeferredDrainOwed[node]
+  /\ DeferredWorkServiceable(node)
   /\ IF ~DeferredQueueNonempty(node)
      THEN /\ UNCHANGED <<vars, asyncCommandQueues,
                          asyncNextCommandClass, asyncFifoOwed,
@@ -3546,7 +4999,9 @@ DeferredDrainStep(node) ==
                          asyncDeferredHandoffs,
                          asyncNextDeferredClass, asyncOutstandingTags,
                          asyncNodeDeadlines, asyncRetransmitDeadlines,
-                         asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes,
+                         asyncSentItems, asyncRetainedControl,
+                         asyncActiveRequests, asyncCertifiedResponseClaim,
+                         asyncTransport, asyncIngressLanes,
                          asyncIngressReady, asyncHeldChunks,
                          asyncHistoricalRecoveryTargets>>
           /\ LeaveCausalQueues
@@ -3580,7 +5035,10 @@ DeferredDrainStep(node) ==
                                       asyncDeferredNormalQueues,
                                       asyncOutstandingTags,
                                       asyncNodeDeadlines,
-                                      asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests,
+                                      asyncRetransmitDeadlines,
+                                      asyncSentItems, asyncRetainedControl,
+                                      asyncActiveRequests,
+                                      asyncCertifiedResponseClaim,
                                       asyncTransport, asyncIngressLanes,
                                       asyncIngressReady, asyncHeldChunks,
                                       asyncHistoricalRecoveryTargets>>
@@ -3604,6 +5062,7 @@ DeferredDrainStep(node) ==
                                            asyncSentItems,
                                            asyncRetainedControl,
                                            asyncActiveRequests,
+                                           asyncCertifiedResponseClaim,
                                            asyncTransport,
                                            asyncIngressLanes,
                                            asyncIngressReady,
@@ -3634,42 +5093,44 @@ IdleRuntimeStep(node) ==
                  asyncTimeoutEmitted,
                  AsyncDeferredVars,
                  asyncOutstandingTags, asyncNodeDeadlines,
-                 asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
+                 asyncRetransmitDeadlines, asyncSentItems,
+                 asyncRetainedControl, asyncActiveRequests,
+                 asyncCertifiedResponseClaim, asyncTransport,
                  asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
                  asyncHistoricalRecoveryTargets>>
   /\ LeaveCausalQueues
   /\ asyncFifoOwed' = [asyncFifoOwed EXCEPT ![node] = FALSE]
 
 RuntimeStep(node) ==
-  \/ /\ asyncDeferredDrainOwed[node]
+  \/ /\ DeferredWorkServiceable(node)
         /\ DeferredDrainStep(node)
-  \/ /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ ~DeferredWorkServiceable(node)
         /\ DeferredTagExecutable(node)
         /\ DeferredTagStep(node)
-  \/ /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ ~DeferredWorkServiceable(node)
         /\ ~DeferredTagExecutable(node)
         /\ TimeoutDue(node)
         /\ DirectTimeoutStep(node)
-  \/ /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ ~DeferredWorkServiceable(node)
         /\ ~DeferredTagExecutable(node)
         /\ ~TimeoutDue(node)
         /\ NodeQueueNonempty(node)
         /\ asyncFifoOwed[node]
         /\ FifoRuntimeStep(node)
-  \/ /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ ~DeferredWorkServiceable(node)
         /\ ~DeferredTagExecutable(node)
         /\ ~TimeoutDue(node)
         /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
         /\ RetransmitDue(node)
         /\ DirectRetransmitStep(node)
-  \/ /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ ~DeferredWorkServiceable(node)
         /\ ~DeferredTagExecutable(node)
         /\ ~TimeoutDue(node)
         /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
         /\ ~RetransmitDue(node)
         /\ NodeQueueNonempty(node)
         /\ FifoRuntimeStep(node)
-  \/ /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ ~DeferredWorkServiceable(node)
         /\ ~DeferredTagExecutable(node)
         /\ ~TimeoutDue(node)
         /\ ~RetransmitDue(node)
@@ -3698,6 +5159,7 @@ LocalAdmissionStep(node) ==
                           asyncOutstandingTags, asyncNodeDeadlines,
                           asyncRetransmitDeadlines, asyncSentItems,
                           asyncRetainedControl, asyncActiveRequests,
+                          asyncCertifiedResponseClaim,
                           asyncTransport, asyncIngressLanes,
                           asyncIngressReady, asyncHeldChunks,
                           asyncHistoricalRecoveryTargets>>
@@ -3724,7 +5186,9 @@ IngressDrainStep(node) ==
                          asyncTimeoutEmitted, AsyncIoVars,
                          asyncOutstandingTags,
                          asyncNodeDeadlines, asyncRetransmitDeadlines,
-                         asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes,
+                         asyncSentItems, asyncRetainedControl,
+                         asyncActiveRequests, asyncCertifiedResponseClaim,
+                         asyncTransport, asyncIngressLanes,
                          asyncIngressReady, asyncHeldChunks,
                          asyncHistoricalRecoveryTargets
                          >>
@@ -3747,6 +5211,7 @@ RunNodeWork(node) ==
   /\ ~NodeHasApplication(node)
   /\ IF ResponsiveReplayQuarantined(node)
      THEN /\ ResponsiveReplayDraining(node)
+          /\ ~NodeIdle(node)
           /\ asyncIngressReady[node] = <<>>
           /\ \/ LocalAdmissionStep(node)
              \/ IngressDrainStep(node)
@@ -3790,12 +5255,13 @@ HistoricalIdleStep ==
                  asyncCausalQueues, asyncOutstandingTags,
                  asyncNodeDeadlines, asyncRetransmitDeadlines,
                  asyncSentItems, asyncRetainedControl,
-                 asyncActiveRequests, asyncTransport,
+                 asyncActiveRequests, asyncCertifiedResponseClaim,
+                 asyncTransport,
                  asyncIngressLanes, asyncIngressReady,
                  asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
 RunHistoricalServer(node) ==
-  /\ node \in AsyncCurrentResponsiveVoters \cap up
+  /\ node \in AsyncResponsiveAppliedArchiveServers
   /\ ~ResponsiveReplayQuarantined(node)
   /\ NodeHasApplication(node)
   /\ UNCHANGED AsyncLocalAdmissionVars
@@ -3904,6 +5370,21 @@ RestartDecisionReplay(node) ==
   IN <<RestartCandidate("Completion", "FetchBody", node,
                         qc.view, qc.subject, qc)>>
 
+RestartLockedPrepareQCs(node) ==
+  IF lockPrepareQc[node] = NoPrepareQC
+  THEN {}
+  ELSE {lockPrepareQc[node]}
+
+RestartLockedPrepareQC(node) ==
+  lockPrepareQc[node]
+
+RestartLockedBodyReplay(node) ==
+  IF RestartLockedPrepareQCs(node) = {}
+  THEN <<>>
+  ELSE LET qc == RestartLockedPrepareQC(node)
+       IN <<RestartCandidate("Completion", "FetchBody", node,
+                             qc.view, qc.subject, qc)>>
+
 RestartLockedCommitReplay(node) ==
   LET vote == RestartLockedCommitIntent(node)
   IN <<RestartCandidate("Completion", "SignVote", node,
@@ -3975,18 +5456,42 @@ RestartReplay(node) ==
   THEN <<>>
   ELSE IF RestartDecisions(node) # {}
   THEN RestartDecisionReplay(node)
-  ELSE LET signatures == RestartSignatureReplay(node)
+  ELSE LET locked == RestartLockedBodyReplay(node)
+           signatures == RestartSignatureReplay(node)
        IN IF Len(signatures) > 0
-          THEN <<Head(signatures)>>
-          ELSE RestartRunnerAssembly(node)
+          THEN locked \o <<Head(signatures)>>
+          ELSE IF Len(locked) > 0
+               THEN locked
+               ELSE RestartRunnerAssembly(node)
+
+(***************************************************************************
+While the first durable signature is active, the Fetch prefix may resolve a
+locally durable body and expose the deterministic Validate successor batch.
+These exact descendants remain quarantined with the recovering consumer; no
+unrelated ingress or timeout work may enter this corridor.
+***************************************************************************)
+RestartLockedBodyPipelineCandidate(node, candidate) ==
+  \E qc \in RestartLockedPrepareQCs(node):
+    /\ candidate.node = node
+    /\ candidate.height = qc.context.height
+    /\ candidate.view = qc.view
+    /\ candidate.subject = qc.subject
+    /\ candidate.evidence = qc
+    /\ CandidateConsumerCurrent(candidate)
+    /\ candidate.kind \in
+         {"FetchBody", "ValidateBody", "BeginPrepare",
+          "BeginLockCommit", "Apply"}
+
+RestartLockedCertifiedRequest(node, request) ==
+  /\ request.kind = "CertifiedRequest"
+  /\ request.source = node
+  /\ \E qc \in RestartLockedPrepareQCs(node):
+       request \in CertifiedRequestOutbox(node, qc)
 
 RestartHighestPrepareQCs(node) ==
-  {qc \in prepareQCs:
-     /\ highestRank[node] # NoRank
-     /\ qc.context = context
-     /\ qc.phase = "Prepare"
-     /\ qc.view = highestRank[node]
-     /\ qc.subject = highestSubject[node]}
+  IF highestPrepareQc[node] = NoPrepareQC
+  THEN {}
+  ELSE {highestPrepareQc[node]}
 
 RestartDecisionQCs(node) ==
   {decision.qc:
@@ -3999,14 +5504,14 @@ RestartInstalledTCs(node) ==
        installed.node = node /\ installed.tc.context = context}}
 
 RestartLastInstalledTCs(node) ==
-  {tc \in RestartInstalledTCs(node):
-     \A other \in RestartInstalledTCs(node): other.view <= tc.view}
+  IF lastInstalledTc[node] = NoTimeoutCertificate
+  THEN {}
+  ELSE {lastInstalledTc[node]}
 
 RestartHighestPrepareControl(node) ==
-  LET certificates == RestartHighestPrepareQCs(node)
-  IN IF certificates = {}
+  IF highestPrepareQc[node] = NoPrepareQC
      THEN {}
-     ELSE QcOutbox(node, CHOOSE qc \in certificates: TRUE)
+     ELSE QcOutbox(node, highestPrepareQc[node])
 
 RestartDecisionControl(node) ==
   LET certificates == RestartDecisionQCs(node)
@@ -4088,6 +5593,11 @@ ResetNodeSchedulerForRestart(node, replay) ==
   /\ asyncRetainedControl' = RestartRetainedControl(node)
   /\ asyncActiveRequests' =
        {item \in asyncActiveRequests: item.source # node}
+  \* Reconfiguration clears this node's physical ingress lanes and request
+  \* registrations.  Filter their claims atomically while preserving the
+  \* independent claims owned by other recipients.
+  /\ asyncCertifiedResponseClaim' =
+       CertifiedResponseClaimForRequests(asyncActiveRequests')
   /\ asyncTransport' = asyncTransport
   /\ asyncIngressLanes' =
        [asyncIngressLanes EXCEPT
@@ -4125,7 +5635,9 @@ PreGstLosePacket(packet) ==
                  asyncTimeoutEmitted, asyncRunnerPhase, asyncRunnerBudget,
                  AsyncIoVars, asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines, asyncNodeServiceDeadlines,
-                 asyncIoServiceDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncIngressLanes,
+                 asyncIoServiceDeadlines, asyncSentItems,
+                 asyncRetainedControl, asyncActiveRequests,
+                 asyncCertifiedResponseClaim, asyncIngressLanes,
                  asyncIngressReady, asyncHeldChunks,
                  asyncHistoricalRecoveryTargets
                  >>
@@ -4217,7 +5729,8 @@ DriveResponsiveReplayHead ==
                      asyncRetransmitDeadlines,
                      asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                      asyncSentItems, asyncRetainedControl,
-                     asyncActiveRequests, asyncTransport,
+                     asyncActiveRequests, asyncCertifiedResponseClaim,
+                     asyncTransport,
                      asyncIngressLanes, asyncIngressReady,
                      asyncHeldChunks, asyncHistoricalRecoveryTargets>>
      /\ AsyncRecoveryOuterFrame
@@ -4251,7 +5764,8 @@ FinishResponsiveReplay ==
                      asyncRetransmitDeadlines,
                      asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                      asyncSentItems, asyncRetainedControl,
-                     asyncActiveRequests, asyncTransport,
+                     asyncActiveRequests, asyncCertifiedResponseClaim,
+                     asyncTransport,
                      asyncIngressLanes, asyncIngressReady,
                      asyncHeldChunks, asyncHistoricalRecoveryTargets>>
      /\ AsyncRecoveryOuterFrame
@@ -4285,7 +5799,7 @@ InjectByzantineNoise(source, recipient, nonce) ==
         AsyncBodyEnvelope(recipient, context.height, nodeView[recipient],
                           AsyncHeartbeatSubject, NoAsyncChunk, nonce)
       item == AsyncNetworkItem("Noise", source, envelope)
-      packet == AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound)
+      packet == PacketForItem(item)
   IN /\ source \in (Byzantine(CurrentEpoch) \cap up)
                    \cup {AsyncUntrustedSource}
      /\ recipient \in CurrentVoters
@@ -4302,7 +5816,9 @@ InjectByzantineNoise(source, recipient, nonce) ==
                     asyncRunnerBudget, AsyncIoVars, asyncOutstandingTags,
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
-                    asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncIngressLanes, asyncIngressReady,
+                    asyncSentItems, asyncRetainedControl,
+                    asyncActiveRequests, asyncCertifiedResponseClaim,
+                    asyncIngressLanes, asyncIngressReady,
                     asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
@@ -4319,12 +5835,9 @@ multiplying equivalent fault states.  The production origin/via authentication
 premise remains an explicit refinement obligation.
 ***************************************************************************)
 InjectUntrustedTransportCompletion(kind, recipient, nonce) ==
-  LET envelope ==
-        AsyncBodyEnvelope(recipient, context.height, nodeView[recipient],
-                          AsyncHeartbeatSubject, NoAsyncChunk, nonce)
-      item == AsyncNetworkItem(
-                kind, AsyncUntrustedSource, envelope)
-      packet == AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound)
+  LET item ==
+        AsyncUntrustedTransportCompletionItem(kind, recipient, nonce)
+      packet == PacketForItem(item)
   IN /\ kind \in IngressTransportCompletionKinds
      /\ recipient \in CurrentVoters
      /\ nonce \in 0..(AsyncIngressCapacity - 1)
@@ -4342,7 +5855,8 @@ InjectUntrustedTransportCompletion(kind, recipient, nonce) ==
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                     asyncSentItems, asyncRetainedControl,
-                    asyncActiveRequests, asyncIngressLanes,
+                    asyncActiveRequests, asyncCertifiedResponseClaim,
+                    asyncIngressLanes,
                     asyncIngressReady, asyncHeldChunks,
                     asyncHistoricalRecoveryTargets>>
 
@@ -4351,7 +5865,7 @@ InjectAuthenticatedJunk(kind, source, recipient, nonce) ==
         AsyncBodyEnvelope(recipient, context.height, nodeView[recipient],
                           AsyncHeartbeatSubject, NoAsyncChunk, nonce)
       item == AsyncNetworkItem(kind, source, envelope)
-      packet == AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound)
+      packet == PacketForItem(item)
   IN /\ kind \in {"NormalJunk", "ProgressJunk"}
      /\ source \in Byzantine(CurrentEpoch) \cap up
      /\ recipient \in CurrentVoters
@@ -4360,7 +5874,8 @@ InjectAuthenticatedJunk(kind, source, recipient, nonce) ==
      /\ packet \notin asyncTransport
      /\ asyncSentItems' = asyncSentItems \cup {item}
      /\ asyncTransport' = asyncTransport \cup {packet}
-     /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests>>
+     /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests,
+                     asyncCertifiedResponseClaim>>
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
      /\ UNCHANGED AsyncLocalAdmissionVars
@@ -4376,19 +5891,21 @@ InjectAuthenticatedJunk(kind, source, recipient, nonce) ==
 
 InjectByzantineCertifiedRequest(source, recipient, qc, nonce) ==
   LET envelope ==
-        AsyncBodyEnvelope(recipient, context.height, qc.view, qc.subject,
-                          NoAsyncChunk, nonce)
+        AsyncCertifiedRequestEnvelope(recipient, source, qc, nonce)
       item == AsyncNetworkItem("CertifiedRequest", source, envelope)
-      packet == AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound)
+      packet == PacketForItem(item)
   IN /\ source \in Byzantine(CurrentEpoch) \cap up
-     /\ recipient \in qc.signers \cap AsyncCurrentResponsiveVoters
+     /\ recipient
+          \in CertifiedArchiveRoutes(source, qc)
+               \cap AsyncArchiveIoServiceNodes
      /\ qc \in commitQCs
      /\ nonce \in 0..(AsyncIngressCapacity - 1)
      /\ ~ItemScheduled(item)
      /\ packet \notin asyncTransport
      /\ asyncSentItems' = asyncSentItems \cup {item}
      /\ asyncTransport' = asyncTransport \cup {packet}
-     /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests>>
+     /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests,
+                     asyncCertifiedResponseClaim>>
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
      /\ UNCHANGED AsyncLocalAdmissionVars
@@ -4403,11 +5920,11 @@ InjectByzantineCertifiedRequest(source, recipient, qc, nonce) ==
                     >>
 
 AsyncByzantineProposal(signer, roundView, subject,
-                       justifyRank, justifySubject) ==
+                       timeoutCertificate, highestPrepare) ==
   LET proposal == Proposal(context, roundView, subject, signer,
-                           justifyRank, justifySubject)
+                           timeoutCertificate, highestPrepare)
   IN /\ ByzantineBroadcastProposal(signer, roundView, subject,
-                                    justifyRank, justifySubject)
+                                    timeoutCertificate, highestPrepare)
      /\ PublishEphemeralItems(ByzantineProposalOutbox(signer, proposal))
      /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<asyncNow, asyncCommandQueues,
@@ -4437,9 +5954,9 @@ AsyncByzantineVote(signer, roundView, phase, subject) ==
                     asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
-AsyncByzantineTimeout(signer, roundView, highRank, highSubject) ==
-  LET vote == TimeoutVote(context, roundView, signer, highRank, highSubject)
-  IN /\ ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject)
+AsyncByzantineTimeout(signer, roundView, highestPrepare) ==
+  LET vote == TimeoutVote(context, roundView, signer, highestPrepare)
+  IN /\ ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
      /\ PublishEphemeralItems(ByzantineTimeoutOutbox(signer, vote))
      /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<asyncNow, asyncCommandQueues,
@@ -4471,39 +5988,45 @@ AsyncFaultStep ==
        qc \in commitQCs, nonce \in 0..(AsyncIngressCapacity - 1):
        InjectByzantineCertifiedRequest(source, recipient, qc, nonce)
   \/ \E signer \in ValidatorIds, roundView \in Views,
-       subject \in Subjects, justifyRank \in Ranks,
-       justifySubject \in SubjectOrNone:
+       subject \in Subjects,
+       timeoutCertificate \in TimeoutCertificateOptionSet,
+       highestPrepare \in PrepareQcOptionSet:
        AsyncByzantineProposal(signer, roundView, subject,
-                              justifyRank, justifySubject)
+                              timeoutCertificate, highestPrepare)
   \/ \E signer \in ValidatorIds, roundView \in Views,
        phase \in Phases, subject \in Subjects:
        AsyncByzantineVote(signer, roundView, phase, subject)
   \/ \E signer \in ValidatorIds, roundView \in Views,
-       highRank \in Ranks, highSubject \in SubjectOrNone:
-       AsyncByzantineTimeout(signer, roundView, highRank, highSubject)
+       highestPrepare \in PrepareQcOptionSet:
+       AsyncByzantineTimeout(signer, roundView, highestPrepare)
 
 AsyncNetworkStep ==
   \E recipient \in ValidatorIds, source \in AsyncIngressSources:
     AdmitIngressPacket(recipient, source)
 
+(***************************************************************************
+The clock waits for bounded post-GST work between timed responsive service
+nodes.  A certified response can use an independent relay lane, so its
+authenticated envelope occurrence—not the outer `item.source`—places it in
+the same deadline corridor.  Commit-certificate responses retain their exact
+sent occurrence.  Unauthenticated aggregate-lane fault traffic cannot hold
+the clock indefinitely.
+***************************************************************************)
 OverdueResponsivePackets ==
   {packet \in asyncTransport:
-     /\ \/ /\ packet.item.source \in AsyncCurrentResponsiveVoters
-              /\ packet.item.envelope.recipient
-                   \in AsyncCurrentResponsiveVoters
-        \/ /\ HistoricalRecoveryTarget(packet.item.source)
-              /\ packet.item.envelope.recipient
-                   \in AsyncCurrentResponsiveVoters
-        \/ /\ packet.item.source \in AsyncCurrentResponsiveVoters
-              /\ HistoricalRecoveryTarget(
-                   packet.item.envelope.recipient)
+     /\ packet.item.envelope.recipient \in AsyncTimedServiceNodes
+     /\ \/ packet.item.source \in AsyncTimedServiceNodes
+        \/ /\ packet.item.kind
+                 \in {"CertifiedResponse",
+                      "CommitCertificateResponse"}
+              /\ IngressItemHasAuthenticatedHistory(packet.item)
      /\ packet.deadline <= asyncNow}
 
 AsyncTickEnabled ==
   \/ ~gst
   \/ /\ gst
      /\ OverdueResponsivePackets = {}
-     /\ \A node \in LocalRunnerServiceOwners:
+     /\ \A node \in AsyncTimedServiceNodes:
           /\ asyncNodeServiceDeadlines[node] > asyncNow
           /\ \/ AsyncIoQueueDepth(node) = 0
              \/ asyncIoServiceDeadlines[node] > asyncNow
@@ -4517,7 +6040,9 @@ AsyncNonClockVars ==
     asyncNextDeferredClass,
     asyncDeferredDrainOwed, asyncCausalQueues,
     asyncOutstandingTags, asyncNodeDeadlines, asyncRetransmitDeadlines,
-    asyncNodeServiceDeadlines, asyncIoServiceDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests,
+    asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
+    asyncSentItems, asyncRetainedControl, asyncActiveRequests,
+    asyncCertifiedResponseClaim,
     asyncTransport, asyncIngressLanes, asyncIngressReady,
     asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
@@ -4531,7 +6056,7 @@ AsyncRunnerStep ==
   \/ (\E node \in AsyncCurrentResponsiveVoters: RunNode(node))
   \/ (\E node \in asyncHistoricalRecoveryTargets:
         RunHistoricalRecoveryNode(node))
-  \/ (\E node \in AsyncCurrentResponsiveVoters:
+  \/ (\E node \in AsyncResponsiveAppliedArchiveServers:
         RunHistoricalServer(node))
 
 AsyncNonRunnerStep ==
@@ -4542,7 +6067,8 @@ AsyncNonRunnerStep ==
            DirectCommitCertificateDiscoveryStep(node))
      \/ (\E node \in asyncHistoricalRecoveryTargets:
            DirectHistoricalCommitCertificateDiscoveryStep(node))
-     \/ (\E node \in AsyncCurrentResponsiveVoters: ServiceIoWorker(node))
+     \/ (\E node \in AsyncArchiveIoServiceNodes:
+           ServiceIoWorker(node))
      \/ (\E node \in asyncHistoricalRecoveryTargets:
            ServiceHistoricalRecoveryIoWorker(node))
      \/ (\E node \in AsyncCurrentResponsiveVoters:
@@ -4619,9 +6145,9 @@ PostGstAdmitHiddenPacket(recipient, source) ==
 
 HistoricalRecoveryPacketCorridor(recipient, source) ==
   \/ /\ HistoricalRecoveryTarget(recipient)
-        /\ source \in AsyncCurrentResponsiveVoters
+        /\ source \in AsyncIngressSources
   \/ /\ HistoricalRecoveryTarget(source)
-        /\ recipient \in AsyncCurrentResponsiveVoters
+        /\ recipient \in AsyncArchiveIoServiceNodes
 
 PostGstAdmitHistoricalRecoveryPacket(recipient, source) ==
   /\ gst
@@ -4652,30 +6178,31 @@ AsyncFairActionAt(initialContext) ==
         PostGstOpenHistoricalRecovery(node))
   \/ (\E node \in Responsive:
         PostGstRunHistoricalRecoveryNode(node))
-  \/ (\E node \in AsyncVotersAt(initialContext):
+  \/ (\E node \in Responsive:
         PostGstRunHistoricalServer(node))
   \/ (\E node \in AsyncVotersAt(initialContext):
         PostGstCommitCertificateDiscovery(node))
   \/ (\E node \in Responsive:
         PostGstHistoricalCommitCertificateDiscovery(node))
-  \/ (\E node \in AsyncVotersAt(initialContext):
+  \/ (\E node \in Responsive:
         PostGstServiceIoWorker(node))
   \/ (\E node \in Responsive:
         PostGstServiceHistoricalRecoveryIoWorker(node))
-  \/ (\E recipient \in AsyncVotersAt(initialContext),
-         source \in AsyncVotersAt(initialContext):
+  \/ (\E recipient \in Responsive,
+         source \in AsyncIngressSources:
         PostGstAdmitHiddenPacket(recipient, source))
-  \/ (\E recipient \in ValidatorIds, source \in ValidatorIds:
+  \/ (\E recipient \in ValidatorIds, source \in AsyncIngressSources:
         PostGstAdmitHistoricalRecoveryPacket(recipient, source))
 
 AsyncFairnessAt(initialContext) ==
   /\ WF_AsyncAllVars(AsyncSetGST)
   /\ WF_AsyncAllVars(PreGstResponsiveRestart)
   /\ WF_AsyncAllVars(PreGstResponsiveReplay)
-  \* Signature replay executes through the ordinary serialized node runner
-  \* and completion I/O worker before the next durable intent may be installed
-  \* in Core.  GST remains disabled until that replay corridor drains, so its
-  \* I/O worker needs replay-scoped fairness independent of post-GST fairness.
+  \* The optional locked-body Fetch prefix and current signature execute through
+  \* the ordinary serialized node runner and completion I/O worker before the
+  \* next durable signature may be installed from the retained tail.  GST stays
+  \* disabled until that corridor drains, so its I/O worker needs replay-scoped
+  \* fairness independent of post-GST fairness.
   /\ WF_AsyncAllVars(ResponsiveReplayRunNode)
   /\ WF_AsyncAllVars(ResponsiveReplayServiceIoWorker)
   /\ WF_AsyncAllVars(DriveResponsiveReplayHead)
@@ -4687,20 +6214,20 @@ AsyncFairnessAt(initialContext) ==
        WF_AsyncAllVars(PostGstOpenHistoricalRecovery(node))
   /\ \A node \in Responsive:
        WF_AsyncAllVars(PostGstRunHistoricalRecoveryNode(node))
-  /\ \A node \in AsyncVotersAt(initialContext):
+  /\ \A node \in Responsive:
        WF_AsyncAllVars(PostGstRunHistoricalServer(node))
   /\ \A node \in AsyncVotersAt(initialContext):
        WF_AsyncAllVars(PostGstCommitCertificateDiscovery(node))
   /\ \A node \in Responsive:
        WF_AsyncAllVars(PostGstHistoricalCommitCertificateDiscovery(node))
-  /\ \A node \in AsyncVotersAt(initialContext):
+  /\ \A node \in Responsive:
        WF_AsyncAllVars(PostGstServiceIoWorker(node))
   /\ \A node \in Responsive:
        WF_AsyncAllVars(PostGstServiceHistoricalRecoveryIoWorker(node))
-  /\ \A recipient \in AsyncVotersAt(initialContext),
-       source \in AsyncVotersAt(initialContext):
+  /\ \A recipient \in Responsive,
+       source \in AsyncIngressSources:
        WF_AsyncAllVars(PostGstAdmitHiddenPacket(recipient, source))
-  /\ \A recipient \in ValidatorIds, source \in ValidatorIds:
+  /\ \A recipient \in ValidatorIds, source \in AsyncIngressSources:
        WF_AsyncAllVars(
          PostGstAdmitHistoricalRecoveryPacket(recipient, source))
 
@@ -4761,6 +6288,7 @@ AsyncTransportInit ==
   /\ asyncSentItems = {}
   /\ asyncRetainedControl = {}
   /\ asyncActiveRequests = {}
+  /\ asyncCertifiedResponseClaim = {}
   /\ asyncTransport = {}
   /\ asyncHeldChunks = {}
   /\ asyncHistoricalRecoveryTargets = {}
@@ -4815,6 +6343,26 @@ AsyncFiniteSpecAt(initialContext) ==
   AsyncFiniteInitAt(initialContext)
     /\ [][AsyncNext]_AsyncAllVars
     /\ AsyncFairnessAt(initialContext)
+
+(***************************************************************************
+PersistInstallTC is a checked transaction: an exhausted generation counter
+rejects before changing the durable snapshot.  Safety and refinement remain
+unconditional on AsyncSpecAt.  Progress is conditional on the explicit
+finite-resource premise below, which excludes only a pending install whose
+owner has already exhausted that counter; an install from MaxGeneration - 1
+to MaxGeneration remains admitted because the request is removed atomically.
+***************************************************************************)
+AsyncInstallGenerationBudget ==
+  \A request \in pendingInstallTC:
+    generation[request.node] < MaxGeneration
+
+AsyncLiveSpecAt(initialContext) ==
+  /\ AsyncSpecAt(initialContext)
+  /\ []AsyncInstallGenerationBudget
+
+AsyncFiniteLiveSpec ==
+  /\ AsyncFiniteSpec
+  /\ []AsyncInstallGenerationBudget
 
 (*
 Command-bearing queues are indexed by the validator that owns every candidate
@@ -4937,6 +6485,53 @@ SerializedBusyOwners ==
 SerializedBusyOwnershipInvariant ==
   RequestsUniqueByNode(SerializedBusyOwners)
 
+(***************************************************************************
+Every serialized Busy owner carries the exact guard required by its Core
+completion action.  Ownership alone is insufficient: a matching Completion
+candidate can otherwise reach the FIFO head while the corresponding action is
+disabled (for example, an already-materialized proposal intent or a stale
+InstallTC request).
+
+Readiness moves with serialized ownership.  In particular, preserving only
+the guards is not inductive when two owners for one node coexist: installing a
+TC can advance that node's view and invalidate a distinct vote-sign request.
+The combined kernel therefore keeps readiness and node uniqueness together.
+***************************************************************************)
+AsyncBusyReadinessInvariant ==
+  /\ \A request \in pendingProposal:
+       /\ request.proposal.proposer = request.node
+       /\ request.proposal.context = context
+       /\ request.proposal.view = nodeView[request.node]
+       /\ request.proposal \notin proposalIntents
+  /\ \A request \in pendingPrepare:
+       request.vote \notin prepareIntents
+  /\ \A request \in pendingLockCommit:
+       /\ request.vote \notin commitIntents
+       /\ BodyHeldBy(durableBodies, request.node, request.qc.context,
+                     request.qc.view, request.qc.subject)
+       /\ RetainedLockedBodyRecord(
+            request.node, request.qc.context, request.qc.subject)
+            \in RetainedLockedBodyRecordSet
+  /\ \A request \in pendingTimeout:
+       request.vote \notin timeoutIntents
+  /\ \A request \in pendingInstallTC:
+       request.tc.view >= nodeView[request.node]
+  /\ \A request \in signProposals:
+       /\ request.proposal.proposer = request.node
+       /\ request.proposal \in proposalIntents
+  /\ \A request \in signVotes:
+       /\ request.vote.signer = request.node
+       /\ (request.vote \in prepareIntents
+             \/ request.vote \in commitIntents)
+       /\ VoteRoundAdmissible(request.node, request.vote)
+  /\ \A request \in signTimeouts:
+       /\ request.vote.signer = request.node
+       /\ request.vote \in timeoutIntents
+
+AsyncSerializedBusyKernelInvariant ==
+  /\ SerializedBusyOwnershipInvariant
+  /\ AsyncBusyReadinessInvariant
+
 ActiveBusyCompletionCarrier ==
   QueuedCandidates \cup CausalCandidates \cup TrackedWorkCandidates
 
@@ -4998,6 +6593,18 @@ BusyCompletionCandidates(node) ==
               /\ candidate.subject = request.vote.highSubject}
 
 (***************************************************************************
+Checked generation overflow is a terminal resource condition for the pending
+InstallTC transaction, not an enabled completion.  The safety invariant keeps
+that condition explicit instead of pretending the reducer can execute a
+saturating partial install.  AsyncInstallGenerationBudget rules it out only
+for temporal progress claims.
+***************************************************************************)
+InstallGenerationExhausted(node) ==
+  \E request \in pendingInstallTC:
+    /\ request.node = node
+    /\ generation[node] = MaxGeneration
+
+(***************************************************************************
 A busy reducer is never justified by a completion stranded behind the
 production Busy-deferred head: its exact persistence/signature completion is
 owned by the active causal/I/O/runtime pipeline.  The completion is therefore
@@ -5006,7 +6613,8 @@ reachable without first asking the busy reducer to accept unrelated work.
 BusyCompletionWitnessInvariant ==
   \A node \in ValidatorIds:
     ~NodeIdle(node) =>
-      BusyCompletionCandidates(node) # {}
+      \/ BusyCompletionCandidates(node) # {}
+      \/ InstallGenerationExhausted(node)
 
 AsyncProgressOwnershipInvariant ==
   /\ AsyncLogicalCandidateOwnershipInvariant
@@ -5090,6 +6698,49 @@ AsyncTransportClockTypeInvariant ==
   /\ asyncNodeServiceDeadlines \in [ValidatorIds -> Nat]
   /\ asyncIoServiceDeadlines \in [ValidatorIds -> Nat]
 
+AsyncActiveRequestLogicalIndexConsistencyInvariant ==
+  AsyncCertifiedRequestLogicalIndexConsistent(asyncActiveRequests)
+
+AsyncCertifiedResponseClaimInvariant ==
+  /\ IsFiniteSet(asyncCertifiedResponseClaim)
+  /\ asyncCertifiedResponseClaim
+       \subseteq AsyncCertifiedResponseClaimValues
+  /\ \A recipient \in ValidatorIds:
+       Cardinality(CertifiedResponseClaimsAt(recipient)) <= 1
+  /\ \A projection \in asyncCertifiedResponseClaim:
+       CertifiedResponseClaimProjectionAuthenticated(projection)
+  /\ {projection.envelope.requestHash:
+        projection \in asyncCertifiedResponseClaim}
+       \subseteq ActiveCertifiedRequestHashes
+  /\ \A requestHash \in ActiveCertifiedRequestHashes:
+       \/ CertifiedResponseAuthorityReady(requestHash)
+       \/ CertifiedResponseAuthorityClaimed(requestHash)
+  /\ \A recipient \in ValidatorIds:
+       Cardinality(
+         {projection.envelope.requestHash:
+            projection \in CertifiedResponseClaimsAt(recipient)}) <= 1
+
+CertifiedResponseClaimIngressOwner(projection) ==
+  \E recipient \in ValidatorIds:
+    \E index \in 1..IngressLaneDepth(recipient, AsyncUntrustedSource):
+      LET item == IngressLane(recipient, AsyncUntrustedSource)[index]
+      IN /\ item.kind = "CertifiedResponse"
+         /\ item.envelope.recipient = recipient
+         /\ IngressResourceSource(item) = AsyncUntrustedSource
+         /\ AsyncCertifiedResponseCanonicalWireIdentity(item) = projection
+
+(***************************************************************************
+The Rust claim is not detached metadata: while it is live, one exact encoded
+response remains the physical owner of the normalized aggregate-untrusted
+completion slot.  Dequeue/backpressure/restore is abstracted as stutter, and
+successful handoff or lifecycle retirement clears the claim atomically.
+Stale duplicate occurrences may coexist, so this invariant requires an exact
+owner but deliberately does not claim uniqueness of queue occurrences.
+***************************************************************************)
+AsyncCertifiedResponseClaimIngressOwnershipInvariant ==
+  \A projection \in asyncCertifiedResponseClaim:
+    CertifiedResponseClaimIngressOwner(projection)
+
 AsyncTransportHistoryTypeInvariant ==
   /\ IsFiniteSet(asyncSentItems)
   /\ \A item \in asyncSentItems: AsyncItemTyped(item)
@@ -5112,6 +6763,8 @@ AsyncTransportHistoryTypeInvariant ==
        /\ AsyncItemTyped(item)
        /\ item.kind \in {"CertifiedRequest",
                           "CommitCertificateRequest"}
+  /\ AsyncActiveRequestLogicalIndexConsistencyInvariant
+  /\ AsyncCertifiedResponseClaimInvariant
 
 AsyncPacketContentTypeInvariant ==
   /\ IsFiniteSet(asyncTransport)
@@ -5175,7 +6828,8 @@ AsyncIngressContentTypeInvariant ==
                       IngressLane(recipient, source)[index])
                  /\ IngressLane(recipient, source)[index].envelope.recipient
                       = recipient
-                 /\ IngressLane(recipient, source)[index].source = source
+                 /\ IngressResourceSource(
+                      IngressLane(recipient, source)[index]) = source
 
 AsyncIngressTypeInvariant ==
   /\ AsyncIngressTopologyTypeInvariant
@@ -5214,17 +6868,21 @@ AsyncRecoveryTypeInvariant ==
         /\ Responsive \subseteq up
         /\ generation[asyncRecoveryNode] = asyncRecoveryGeneration
         /\ ~NodeHasApplication(asyncRecoveryNode)
+        /\ RestartDecisions(asyncRecoveryNode) = {}
         /\ asyncIngressReady[asyncRecoveryNode] = <<>>
         /\ \A source \in AsyncIngressSources:
              IngressLane(asyncRecoveryNode, source) = <<>>
         /\ \A request \in asyncActiveRequests:
-             request.source # asyncRecoveryNode
+             \/ request.source # asyncRecoveryNode
+             \/ RestartLockedCertifiedRequest(
+                  asyncRecoveryNode, request)
         /\ \A candidate \in
              ResponsiveReplayScheduledCandidates(asyncRecoveryNode):
-             /\ candidate.class = "Completion"
-             /\ candidate.kind
-                  \in {"SignProposal", "SignVote", "SignTimeout"}
-             /\ CandidateConsumerCurrent(candidate))
+             /\ CandidateConsumerCurrent(candidate)
+             /\ \/ candidate \in SequenceSet(
+                       RestartSignatureReplay(asyncRecoveryNode))
+                \/ RestartLockedBodyPipelineCandidate(
+                     asyncRecoveryNode, candidate))
   /\ (asyncRecoveryPhase = "Recovered" =>
         Responsive \subseteq up)
 
@@ -5274,6 +6932,8 @@ AsyncCompletionReserveInvariant ==
           => ~CanEnqueueClass(node, "Normal"))
     /\ (AsyncQueueDepth(node) >= AsyncProgressLimit
           => ~CanEnqueueClass(node, "Progress"))
+    /\ (AsyncQueueDepth(node) >= AsyncOrdinaryCompletionLimit
+          => ~CanEnqueueClass(node, "Completion"))
 
 AsyncIoReservationInvariant ==
   /\ AsyncIoWorkCapacity <= AsyncCompletionReserve

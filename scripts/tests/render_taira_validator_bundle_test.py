@@ -19,6 +19,9 @@ SPEC.loader.exec_module(MODULE)
 
 TAIRA_CONFIG_PATH = MODULE_PATH.parents[1] / "configs/soranexus/taira/config.toml"
 TAIRA_GENESIS_PATH = MODULE_PATH.parents[1] / "configs/soranexus/taira/genesis.json"
+TAIRA_SECRETS_EXAMPLE_PATH = (
+    MODULE_PATH.parents[1] / "configs/soranexus/taira/validator_secrets.example.toml"
+)
 TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 TAIRA_CHAIN_DISCRIMINANT = 369
 TAIRA_CITIZEN_ID = (
@@ -59,6 +62,20 @@ TAIRA_FEE_SPONSOR_SELECTORS = [
 COUNCIL_KEY_1 = "ed01202152F8D19B791D24453242E15F2EAB6CB7CFFA7B6A5ED30097960E069881DB12"
 COUNCIL_KEY_2 = "ed012022FC297792F0B6FFC0BFCFDB7EDB0C0AA14E025A365EC0E342E86E3829CB74B6"
 COUNCIL_KEY_3 = "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"
+
+
+def test_taira_templates_require_operator_provisioned_scale_2_ds_offline_binding() -> None:
+    config_text = TAIRA_CONFIG_PATH.read_text(encoding="utf-8")
+    secrets_text = TAIRA_SECRETS_EXAMPLE_PATH.read_text(encoding="utf-8")
+
+    assert "wonderland.universal" not in secrets_text
+    assert 'account_onboarding_scope_dataspace = "is"' in secrets_text
+    assert 'offline_asset_alias = "ds#boi.is"' in secrets_text
+    assert "offline_asset_scale = 2" in secrets_text
+    assert "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" in secrets_text
+    assert "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" in config_text
+    offline_section = config_text.split("[settlement.offline]", 1)[1].split("\n[", 1)[0]
+    assert TAIRA_GAS_ASSET_ID not in offline_section
 
 
 def test_taira_governance_timing_contract_is_release_pinned() -> None:
@@ -301,6 +318,17 @@ public_address = "https://taira-validator-1.sora.org"
 [torii.mcp]
 enabled = true
 
+[torii.kagemusha_commands]
+enabled = true
+private_key = "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
+
+[settlement.offline]
+escrow_required = true
+escrow_accounts = { "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" = "REPLACE_WITH_TAIRA_OFFLINE_ESCROW_ACCOUNT" }
+kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"
+kagemusha_artifact_dir = "/var/lib/iroha/kagemusha/v4"
+kagemusha_max_decoded_bytes = 268435456
+
 [nexus.registry]
 manifest_directory = "configs/soranexus/taira/manifests"
 cache_directory = "configs/soranexus/taira/manifests"
@@ -365,9 +393,14 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
         'account_onboarding_private_key = "bootstrap-private-key"',
         'account_onboarding_api_token = "bootstrap-api-token"',
         'account_onboarding_credential_id = "local-dev"',
-        'account_onboarding_scope_dataspace = "universal"',
+        'account_onboarding_scope_dataspace = "is"',
         'torii_faucet_authority = "faucet-authority"',
         'torii_faucet_private_key = "faucet-private-key"',
+        'kagemusha_commands_private_key = "kagemusha-commands-private-key"',
+        'offline_asset_alias = "ds#boi.is"',
+        f'offline_asset_definition_id = "{TAIRA_GAS_ASSET_ID}"',
+        "offline_asset_scale = 2",
+        f'offline_escrow_account = "{TAIRA_GENESIS_DEPLOYER_ID}"',
         'streaming_identity_public_key = "streaming-public-key"',
         'streaming_identity_private_key = "streaming-private-key"',
         f'sorafs_council_public_keys = ["{COUNCIL_KEY_1}", "{COUNCIL_KEY_2}", "{COUNCIL_KEY_3}"]',
@@ -416,8 +449,13 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert '{ public_key = "peer-2-public", pop_hex = "peer-2-pop" }' in config
     assert 'authority = "bootstrap-authority"' in config
     assert 'authority = "faucet-authority"' in config
+    assert 'private_key = "kagemusha-commands-private-key"' in config
+    assert (
+        f'escrow_accounts = {{ "{TAIRA_GAS_ASSET_ID}" = '
+        f'"{TAIRA_GENESIS_DEPLOYER_ID}" }}' in config
+    )
     assert 'id = "local-dev"' in config
-    assert 'scope = { dataspace = "universal" }' in config
+    assert 'scope = { dataspace = "is" }' in config
     assert MODULE._blake3_token_hash("bootstrap-api-token") in config
     assert "bootstrap-private-key" not in config
     assert "faucet-private-key" not in config
@@ -887,6 +925,76 @@ def test_secret_material_rejects_removed_or_incomplete_signer_shapes(
         assert "must configure both torii_faucet_authority" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("incomplete faucet signer material was accepted")
+
+
+def test_secret_material_requires_exact_scale_2_ds_offline_binding(
+    tmp_path: Path,
+) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    valid = secrets_path.read_text(encoding="utf-8")
+
+    mutations = (
+        (
+            valid.replace('offline_asset_alias = "ds#boi.is"\n', ""),
+            "offline cash configuration is mandatory",
+        ),
+        (
+            valid.replace(
+                f'offline_asset_definition_id = "{TAIRA_GAS_ASSET_ID}"',
+                'offline_asset_definition_id = "REPLACE_WITH_DS_ID"',
+            ),
+            "still contain placeholders",
+        ),
+        (
+            valid.replace('offline_asset_alias = "ds#boi.is"', 'offline_asset_alias = "xor#sora"'),
+            "registered ds#boi.is alias",
+        ),
+        (
+            valid.replace("offline_asset_scale = 2", "offline_asset_scale = 9"),
+            "offline_asset_scale must be 2",
+        ),
+        (
+            valid.replace(
+                f'offline_asset_definition_id = "{TAIRA_GAS_ASSET_ID}"',
+                'offline_asset_definition_id = "not-canonical"',
+            ),
+            "canonical asset definition id",
+        ),
+        (
+            valid.replace(
+                f'offline_escrow_account = "{TAIRA_GENESIS_DEPLOYER_ID}"',
+                'offline_escrow_account = "offline-escrow@boi.is"',
+            ),
+            "canonical Taira I105 account id",
+        ),
+    )
+    for index, (text, expected) in enumerate(mutations):
+        candidate = tmp_path / f"validator_secrets_{index}.toml"
+        candidate.write_text(text, encoding="utf-8")
+        try:
+            MODULE.load_secret_material(candidate)
+        except ValueError as error:
+            assert expected in str(error)
+        else:  # pragma: no cover - defensive assertion
+            raise AssertionError(f"renderer accepted offline mutation #{index}")
+
+
+def test_secret_material_rejects_wonderland_onboarding_scope(tmp_path: Path) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    text = secrets_path.read_text(encoding="utf-8").replace(
+        'account_onboarding_scope_dataspace = "is"',
+        'account_onboarding_scope_domain = "wonderland.universal"',
+    )
+    secrets_path.write_text(text, encoding="utf-8")
+
+    try:
+        MODULE.load_secret_material(secrets_path)
+    except ValueError as error:
+        assert "deployed `is` dataspace" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("renderer accepted the stale Wonderland onboarding scope")
 
 
 def test_main_supports_single_validator_render(tmp_path: Path) -> None:

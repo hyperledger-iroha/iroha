@@ -577,6 +577,203 @@ fn two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits() 
 }
 
 #[test]
+fn historical_prepare_qc_uses_current_consumer_tag_after_timeout_install() {
+    let mut simulation = Simulation::new(4, VotingMode::Permissioned, None);
+    let timeout = grouped_timeout(&simulation.context, 0, None);
+    let initial_tag = simulation.nodes[0].reducer.current_tag();
+    assert_eq!(
+        simulation.dispatch(
+            0,
+            Event::TimeoutCertificateReceived {
+                tag: initial_tag,
+                certificate: timeout,
+            },
+        ),
+        StepDisposition::Applied
+    );
+    assert_eq!(simulation.nodes[0].reducer.current_tag().view(), 1);
+
+    let subject = Subject::repeat(0x6f);
+    let historical = certificate(&simulation.context, 0, Phase::Prepare, subject);
+    let event = network_event(
+        &ConsensusMessageV2::QuorumCertificate(historical.clone()),
+        simulation.nodes[0].reducer.current_tag(),
+    );
+    assert!(matches!(
+        &event,
+        Event::QuorumCertificateReceived { tag, certificate }
+            if *tag == simulation.nodes[0].reducer.current_tag()
+                && certificate == &historical
+    ));
+    assert_eq!(
+        simulation.dispatch(0, event),
+        StepDisposition::Applied,
+        "an old certified round is payload evidence, not a stale consumer tag"
+    );
+    assert_eq!(
+        simulation.nodes[0]
+            .reducer
+            .durable_state()
+            .highest_prepare(),
+        Some(&historical)
+    );
+
+    let retransmit_tag = simulation.nodes[0].reducer.current_tag();
+    simulation.dispatch(
+        0,
+        Event::RetransmitElapsed {
+            tag: retransmit_tag,
+        },
+    );
+    assert!(simulation.network.iter().any(|envelope| {
+        envelope.from == 0
+            && matches!(
+                &envelope.message,
+                ConsensusMessageV2::QuorumCertificate(certificate)
+                    if certificate == &historical
+            )
+    }));
+}
+
+#[test]
+fn responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc() {
+    for mode in [VotingMode::Permissioned, VotingMode::Npos] {
+        let mut simulation = Simulation::new(4, mode, None);
+        let source = 0;
+        let lagger = 1;
+        let timeout = grouped_timeout(&simulation.context, 0, None);
+
+        simulation.install_tc(source, timeout.clone());
+        assert_eq!(simulation.nodes[source].reducer.current_tag().view(), 1);
+        assert_eq!(simulation.nodes[lagger].reducer.current_tag().view(), 0);
+
+        let subject = Subject::repeat(0x70);
+        let prepare = certificate(&simulation.context, 1, Phase::Prepare, subject);
+        let source_event = network_event(
+            &ConsensusMessageV2::QuorumCertificate(prepare.clone()),
+            simulation.nodes[source].reducer.current_tag(),
+        );
+        assert_eq!(
+            simulation.dispatch(source, source_event),
+            StepDisposition::Applied
+        );
+        assert_eq!(
+            simulation.nodes[source]
+                .reducer
+                .durable_state()
+                .highest_prepare(),
+            Some(&prepare)
+        );
+        assert!(simulation.nodes[source].wal.iter().any(|entry| matches!(
+            entry.record(),
+            WalRecord::ObservePrepare(certificate) if certificate == &prepare
+        )));
+        assert!(
+            simulation.nodes[source]
+                .reducer
+                .outbound_messages()
+                .any(|message| matches!(
+                    message,
+                    ConsensusMessageV2::QuorumCertificate(certificate)
+                        if certificate == &prepare
+                ))
+        );
+
+        let lagger_before = simulation.nodes[lagger].reducer.clone();
+        let lagger_wal_len = simulation.nodes[lagger].wal.len();
+        let future_event = network_event(
+            &ConsensusMessageV2::QuorumCertificate(prepare.clone()),
+            simulation.nodes[lagger].reducer.current_tag(),
+        );
+        assert_eq!(
+            simulation.dispatch(lagger, future_event),
+            StepDisposition::Ignored(IgnoreReason::IrrelevantView)
+        );
+        assert_eq!(&simulation.nodes[lagger].reducer, &lagger_before);
+        assert_eq!(simulation.nodes[lagger].wal.len(), lagger_wal_len);
+
+        let queued_before = simulation.network.len();
+        let lagger_tag = simulation.nodes[lagger].reducer.current_tag();
+        assert_eq!(
+            simulation.dispatch(lagger, Event::RetransmitElapsed { tag: lagger_tag }),
+            StepDisposition::Applied
+        );
+        assert_eq!(
+            simulation.network.len(),
+            queued_before,
+            "the ignored future QC must not acquire retransmission ownership"
+        );
+
+        simulation.install_tc(lagger, timeout);
+        assert_eq!(simulation.nodes[lagger].reducer.current_tag().view(), 1);
+        assert!(
+            simulation.nodes[lagger]
+                .reducer
+                .durable_state()
+                .highest_prepare()
+                .is_none()
+        );
+
+        let source_tag = simulation.nodes[source].reducer.current_tag();
+        assert_eq!(
+            simulation.dispatch(source, Event::RetransmitElapsed { tag: source_tag }),
+            StepDisposition::Applied
+        );
+        assert!(simulation.network.iter().any(|envelope| {
+            envelope.from == source
+                && envelope.to == lagger
+                && matches!(
+                    &envelope.message,
+                    ConsensusMessageV2::QuorumCertificate(certificate)
+                        if certificate == &prepare
+                )
+        }));
+        simulation.drain_network();
+
+        assert_eq!(
+            simulation.nodes[lagger]
+                .reducer
+                .durable_state()
+                .highest_prepare(),
+            Some(&prepare)
+        );
+        assert!(simulation.nodes[lagger].wal.iter().any(|entry| matches!(
+            entry.record(),
+            WalRecord::ObservePrepare(certificate) if certificate == &prepare
+        )));
+        assert!(
+            simulation.nodes[lagger]
+                .reducer
+                .outbound_messages()
+                .any(|message| matches!(
+                    message,
+                    ConsensusMessageV2::QuorumCertificate(certificate)
+                        if certificate == &prepare
+                ))
+        );
+
+        let lagger_tag = simulation.nodes[lagger].reducer.current_tag();
+        assert_eq!(
+            simulation.dispatch(lagger, Event::RetransmitElapsed { tag: lagger_tag }),
+            StepDisposition::Applied
+        );
+        assert_eq!(
+            simulation.nodes[lagger]
+                .reducer
+                .body_state(prepare.round(), subject),
+            BodyState::Validated
+        );
+        assert!(simulation.nodes[lagger].wal.iter().any(|entry| matches!(
+            entry.record(),
+            WalRecord::LockAndCommit {
+                prepare: locked,
+                ..
+            } if locked == &prepare
+        )));
+    }
+}
+
+#[test]
 fn asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies() {
     let mut simulation = Simulation::new(4, VotingMode::Npos, None);
     simulation.install_directed_partition([(2, 0), (2, 1), (3, 0), (3, 1)]);
@@ -797,8 +994,7 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
     // Validators that installed the lock in an earlier view retain and
     // retransmit that exact durable Commit intent across later TCs. Validators
     // learning the lock from `tc2` create their intent in view three.
-    let commit_views = [3, 1, 2, 3];
-    for (index, node) in simulation.nodes.iter().enumerate() {
+    for node in &simulation.nodes {
         assert_eq!(
             node.reducer
                 .durable_state()
@@ -806,20 +1002,12 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
                 .map(QuorumCertificate::reference),
             Some(prepare.reference())
         );
-        let pools = node.reducer.vote_pool_snapshots();
-        assert_eq!(pools.len(), 1);
-        assert_eq!(
-            pools[0].round,
-            Round::new(simulation.context.height(), commit_views[index]),
-            "the TC-selected Commit vote retains its durable finality round"
-        );
-        assert_eq!(
-            pools[0].proposal_round,
-            prepare.round(),
-            "the Commit vote retains the immutable Prepare origin"
-        );
-        assert_eq!(pools[0].phase, Phase::Commit);
-        assert_eq!(pools[0].subject, subject);
+        // Learning an old PrepareQC through a TC installs the lock and its
+        // exact body owner, but it cannot manufacture a post-timeout Commit
+        // intent for that closed round. These validators did not persist such
+        // an intent before timing out, so the old vote pool must remain empty;
+        // progress below comes from unchanged reproposal in view three.
+        assert!(node.reducer.vote_pool_snapshots().is_empty());
     }
 
     // One node receives a delayed CommitQC from view zero after advancing to
@@ -981,40 +1169,27 @@ fn simulator_signature(
 }
 
 fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
+    // Production authenticates and semantically filters the wire payload,
+    // then dispatches every admitted message with the reducer's current
+    // consumer tag.  The certified evidence retains its own historical round;
+    // putting that round in the event tag would incorrectly reject an old
+    // PrepareQC after a TC advanced the receiver, exactly when epidemic
+    // high-QC recovery needs it.
     match message {
         ConsensusMessageV2::Proposal(proposal) => Event::ProposalReceived {
-            tag: message_tag(current, proposal.proposal().round()),
+            tag: current,
             proposal: proposal.clone(),
         },
-        ConsensusMessageV2::Vote(vote) if vote.vote().phase() == Phase::Commit => {
-            // The production adapter admits the one exact durable locked-round
-            // Commit exception and retags it to the current consumer
-            // generation. Preserve that boundary here so a TC-reset pool can
-            // be reconstructed by an old-round retransmission.
-            Event::VoteReceived {
-                tag: current,
-                vote: vote.clone(),
-            }
-        }
         ConsensusMessageV2::Vote(vote) => Event::VoteReceived {
-            tag: message_tag(current, vote.vote().round()),
+            tag: current,
             vote: vote.clone(),
         },
-        ConsensusMessageV2::QuorumCertificate(certificate)
-            if certificate.phase() == Phase::Commit =>
-        {
-            // Old-view CommitQCs remain actionable in the current view.
-            Event::QuorumCertificateReceived {
-                tag: current,
-                certificate: certificate.clone(),
-            }
-        }
         ConsensusMessageV2::QuorumCertificate(certificate) => Event::QuorumCertificateReceived {
-            tag: message_tag(current, certificate.round()),
+            tag: current,
             certificate: certificate.clone(),
         },
         ConsensusMessageV2::TimeoutVote(vote) => Event::TimeoutVoteReceived {
-            tag: message_tag(current, vote.vote().round()),
+            tag: current,
             vote: vote.clone(),
         },
         ConsensusMessageV2::TimeoutCertificate(certificate) => {
@@ -1028,8 +1203,4 @@ fn network_event(message: &ConsensusMessageV2, current: EventTag) -> Event {
             panic!("transport payloads are handled outside the consensus reducer simulation")
         }
     }
-}
-
-fn message_tag(current: EventTag, round: Round) -> EventTag {
-    EventTag::new(round.height(), round.view(), current.generation())
 }

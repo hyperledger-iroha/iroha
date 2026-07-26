@@ -74,7 +74,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     addr::SocketAddr,
-    numeric::{Numeric, Quantity},
+    numeric::{Numeric, Quantity, XorQuantity},
     unique_vec::UniqueVec,
 };
 use norito::{codec::Encode, streaming::EntropyMode};
@@ -1779,6 +1779,8 @@ pub struct Network {
     pub require_sm_openssl_preview_match: bool,
     /// Idle connection timeout.
     pub idle_timeout: Duration,
+    /// Base deadline for an exact reply to await one peer writer's full flush.
+    pub reply_writer_flush_timeout: Duration,
     /// Delay outbound peer dials after startup.
     pub connect_startup_delay: Duration,
     /// Timeout applied to an individual outbound dial attempt (TCP/TLS/QUIC/WS).
@@ -2589,8 +2591,6 @@ pub struct Queue {
     pub expired_cull_interval: Duration,
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub expired_cull_batch: NonZeroUsize,
-    /// Whether local pending transaction routing plans are journaled for restart replay.
-    pub plan_journal_enabled: bool,
     /// Maximum queue-plan journal size before atomic compaction is considered.
     pub plan_journal_max_bytes: u64,
 }
@@ -5566,7 +5566,6 @@ impl Default for Queue {
             max_retained_bytes: defaults::queue::MAX_RETAINED_BYTES,
             expired_cull_interval: defaults::queue::EXPIRED_CULL_INTERVAL,
             expired_cull_batch: defaults::queue::EXPIRED_CULL_BATCH,
-            plan_journal_enabled: defaults::queue::PLAN_JOURNAL_ENABLED,
             plan_journal_max_bytes: defaults::queue::PLAN_JOURNAL_MAX_BYTES,
         }
     }
@@ -5700,8 +5699,6 @@ pub struct SumeragiV2RuntimeLimits {
     pub merge_sidecar_outbound_bytes_per_source: NonZeroUsize,
     /// Idempotency request gates retained for one authenticated source.
     pub merge_sidecar_server_request_gates_per_source: NonZeroUsize,
-    /// Lifetime of a completed/rejected server request gate.
-    pub merge_sidecar_server_request_gate_ttl: Duration,
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     pub pending_certified_merge_entry_capacity: NonZeroUsize,
     /// QueuePlan admission certificates retained before canonical carrier commitment.
@@ -5757,8 +5754,6 @@ impl Default for SumeragiV2RuntimeLimits {
                 defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE,
             merge_sidecar_server_request_gates_per_source:
                 defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE,
-            merge_sidecar_server_request_gate_ttl:
-                defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL,
             pending_certified_merge_entry_capacity:
                 defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
             pending_queue_plan_admission_capacity:
@@ -6170,20 +6165,6 @@ impl Sumeragi {
             merge_sidecar_server_request_gates_per_source,
             merge_sidecar_outbound_sessions_per_source,
         )?;
-        let merge_sidecar_server_request_gate_ttl_ms = canonical_duration_ms(
-            "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
-            self.limits.merge_sidecar_server_request_gate_ttl,
-        )?;
-        require_maximum(
-            "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
-            merge_sidecar_server_request_gate_ttl_ms,
-            defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL_MAX_MS,
-        )?;
-        require_minimum(
-            "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
-            merge_sidecar_server_request_gate_ttl_ms,
-            merge_sidecar_request_timeout_ms,
-        )?;
         let pending_certified_merge_entry_capacity = canonical_bounded_size(
             "sumeragi.limits.pending_certified_merge_entry_capacity",
             self.limits.pending_certified_merge_entry_capacity.get(),
@@ -6324,7 +6305,6 @@ impl Sumeragi {
                 merge_sidecar_outbound_sessions_per_source,
                 merge_sidecar_outbound_bytes_per_source,
                 merge_sidecar_server_request_gates_per_source,
-                merge_sidecar_server_request_gate_ttl_ms,
                 pending_certified_merge_entry_capacity,
                 pending_queue_plan_admission_capacity,
                 pending_control_sidecar_bytes,
@@ -6493,8 +6473,6 @@ pub struct SumeragiV2Limits {
     pub merge_sidecar_outbound_bytes_per_source: u64,
     /// Idempotency request gates retained for one authenticated source.
     pub merge_sidecar_server_request_gates_per_source: u64,
-    /// Lifetime of a completed/rejected server request gate.
-    pub merge_sidecar_server_request_gate_ttl_ms: u64,
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     pub pending_certified_merge_entry_capacity: u64,
     /// QueuePlan admission certificates retained before canonical carrier commitment.
@@ -8410,8 +8388,16 @@ impl Default for SorafsPorDrand {
 }
 
 /// SoraFS appeal-finance settlement submitter configuration.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SorafsAppealFinanceSettlement {
+    /// Exact governed asset definition accepted by the appeal-finance APIs.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Exact ledger scale bound to the governed asset definition.
+    pub asset_scale: u32,
+    /// Governed inline appeal pricing policy.
+    pub pricing: SorafsAppealPricingPolicy,
+    /// Governed inline appeal settlement policy.
+    pub settlement: SorafsAppealSettlementPolicy,
     /// Non-secret bindings for runtime-only HSM/KMS signer providers.
     pub submitter_signers: Vec<SorafsAppealFinanceSignerBinding>,
     /// Interval between worker reconciliation scans for follow-up settlement steps.
@@ -8426,6 +8412,319 @@ pub struct SorafsAppealFinanceSettlement {
     pub worker_max_dead_letters: usize,
     /// Maximum canonical checkpoint size.
     pub worker_checkpoint_max_bytes: u64,
+}
+
+impl Default for SorafsAppealFinanceSettlement {
+    fn default() -> Self {
+        Self {
+            asset_definition_id: defaults::torii::sorafs_appeal_finance::asset_definition_id(),
+            asset_scale: defaults::torii::sorafs_appeal_finance::ASSET_SCALE,
+            pricing: SorafsAppealPricingPolicy::default(),
+            settlement: SorafsAppealSettlementPolicy::default(),
+            submitter_signers: Vec::new(),
+            worker_scan_interval: Duration::from_millis(
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS,
+            ),
+            worker_max_retry_attempts:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS,
+            worker_max_pending:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_PENDING,
+            worker_max_completed:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_COMPLETED,
+            worker_max_dead_letters:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_DEAD_LETTERS,
+            worker_checkpoint_max_bytes:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES,
+        }
+    }
+}
+
+/// Canonical inline appeal pricing policy carried by the validated config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealPricingPolicy {
+    /// Governed policy version.
+    pub version: String,
+    /// Quote validity window in seconds.
+    pub quote_ttl_secs: u64,
+    /// Default moderation panel size used by pricing.
+    pub default_panel_size: u32,
+    /// Urgency multipliers.
+    pub urgency_multipliers: SorafsAppealUrgencyMultipliers,
+    /// Complete first-release appeal class inventory.
+    pub classes: SorafsAppealPricingClasses,
+}
+
+impl Default for SorafsAppealPricingPolicy {
+    fn default() -> Self {
+        Self {
+            version: defaults::torii::sorafs_appeal_finance::BASELINE_POLICY_VERSION.to_owned(),
+            quote_ttl_secs: defaults::torii::sorafs_appeal_finance::PRICING_QUOTE_TTL_SECS,
+            default_panel_size: defaults::torii::sorafs_appeal_finance::DEFAULT_PANEL_SIZE,
+            urgency_multipliers: SorafsAppealUrgencyMultipliers::default(),
+            classes: SorafsAppealPricingClasses::default(),
+        }
+    }
+}
+
+/// Canonical urgency multipliers for appeal pricing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealUrgencyMultipliers {
+    /// Multiplier applied to normal-urgency appeals.
+    pub normal: Numeric,
+    /// Multiplier applied to high-urgency appeals.
+    pub high: Numeric,
+}
+
+impl Default for SorafsAppealUrgencyMultipliers {
+    fn default() -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            normal: policy::numeric(policy::PRICING_URGENCY_NORMAL_MULTIPLIER),
+            high: policy::numeric(policy::PRICING_URGENCY_HIGH_MULTIPLIER),
+        }
+    }
+}
+
+/// Complete, closed first-release appeal pricing class inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealPricingClasses {
+    /// Content moderation appeals.
+    pub content: SorafsAppealPricingClassPolicy,
+    /// Access-policy appeals.
+    pub access: SorafsAppealPricingClassPolicy,
+    /// Fraud appeals.
+    pub fraud: SorafsAppealPricingClassPolicy,
+    /// Other governed appeals.
+    pub other: SorafsAppealPricingClassPolicy,
+}
+
+impl Default for SorafsAppealPricingClasses {
+    fn default() -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            content: SorafsAppealPricingClassPolicy::baseline(
+                policy::PRICING_CONTENT_BASE_RATE_XOR,
+                policy::PRICING_CONTENT_BACKLOG_TARGET,
+                policy::PRICING_CONTENT_BACKLOG_CAP,
+                policy::PRICING_CONTENT_SIZE_DIVISOR_MB,
+                policy::PRICING_CONTENT_SIZE_CAP,
+                policy::PRICING_CONTENT_MIN_DEPOSIT_XOR,
+                policy::PRICING_CONTENT_MAX_DEPOSIT_XOR,
+            ),
+            access: SorafsAppealPricingClassPolicy::baseline(
+                policy::PRICING_ACCESS_BASE_RATE_XOR,
+                policy::PRICING_ACCESS_BACKLOG_TARGET,
+                policy::PRICING_ACCESS_BACKLOG_CAP,
+                policy::PRICING_ACCESS_SIZE_DIVISOR_MB,
+                policy::PRICING_ACCESS_SIZE_CAP,
+                policy::PRICING_ACCESS_MIN_DEPOSIT_XOR,
+                policy::PRICING_ACCESS_MAX_DEPOSIT_XOR,
+            ),
+            fraud: SorafsAppealPricingClassPolicy::baseline(
+                policy::PRICING_FRAUD_BASE_RATE_XOR,
+                policy::PRICING_FRAUD_BACKLOG_TARGET,
+                policy::PRICING_FRAUD_BACKLOG_CAP,
+                policy::PRICING_FRAUD_SIZE_DIVISOR_MB,
+                policy::PRICING_FRAUD_SIZE_CAP,
+                policy::PRICING_FRAUD_MIN_DEPOSIT_XOR,
+                policy::PRICING_FRAUD_MAX_DEPOSIT_XOR,
+            ),
+            other: SorafsAppealPricingClassPolicy::baseline(
+                policy::PRICING_OTHER_BASE_RATE_XOR,
+                policy::PRICING_OTHER_BACKLOG_TARGET,
+                policy::PRICING_OTHER_BACKLOG_CAP,
+                policy::PRICING_OTHER_SIZE_DIVISOR_MB,
+                policy::PRICING_OTHER_SIZE_CAP,
+                policy::PRICING_OTHER_MIN_DEPOSIT_XOR,
+                policy::PRICING_OTHER_MAX_DEPOSIT_XOR,
+            ),
+        }
+    }
+}
+
+/// Canonical pricing parameters for one appeal class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealPricingClassPolicy {
+    /// Base XOR rate.
+    pub base_rate_xor: XorQuantity,
+    /// Backlog at which the backlog multiplier reaches one.
+    pub backlog_target: u32,
+    /// Additional backlog multiplier cap.
+    pub backlog_cap: Numeric,
+    /// Evidence-size divisor in MiB.
+    pub size_divisor_mb: Numeric,
+    /// Additional evidence-size multiplier cap.
+    pub size_cap: Numeric,
+    /// Minimum admitted appeal deposit.
+    pub min_deposit_xor: XorQuantity,
+    /// Maximum admitted appeal deposit.
+    pub max_deposit_xor: XorQuantity,
+    /// Governed class-level surge multiplier.
+    pub surge_multiplier: Numeric,
+}
+
+impl SorafsAppealPricingClassPolicy {
+    fn baseline(
+        base_rate_xor: &str,
+        backlog_target: u32,
+        backlog_cap: &str,
+        size_divisor_mb: &str,
+        size_cap: &str,
+        min_deposit_xor: &str,
+        max_deposit_xor: &str,
+    ) -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            base_rate_xor: policy::xor_quantity(base_rate_xor),
+            backlog_target,
+            backlog_cap: policy::numeric(backlog_cap),
+            size_divisor_mb: policy::numeric(size_divisor_mb),
+            size_cap: policy::numeric(size_cap),
+            min_deposit_xor: policy::xor_quantity(min_deposit_xor),
+            max_deposit_xor: policy::xor_quantity(max_deposit_xor),
+            surge_multiplier: policy::numeric(policy::PRICING_SURGE_MULTIPLIER),
+        }
+    }
+}
+
+/// Canonical inline appeal settlement policy carried by the validated config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealSettlementPolicy {
+    /// Governed policy version.
+    pub version: String,
+    /// Default moderation panel size used by settlement.
+    pub default_panel_size: u32,
+    /// Juror reward schedule.
+    pub panel_rewards: SorafsAppealPanelRewards,
+    /// Complete first-release settlement rule inventory.
+    pub rules: SorafsAppealSettlementRules,
+}
+
+impl Default for SorafsAppealSettlementPolicy {
+    fn default() -> Self {
+        Self {
+            version: defaults::torii::sorafs_appeal_finance::BASELINE_POLICY_VERSION.to_owned(),
+            default_panel_size: defaults::torii::sorafs_appeal_finance::DEFAULT_PANEL_SIZE,
+            panel_rewards: SorafsAppealPanelRewards::default(),
+            rules: SorafsAppealSettlementRules::default(),
+        }
+    }
+}
+
+/// Canonical appeal-panel reward schedule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealPanelRewards {
+    /// XOR stipend paid to each attending juror.
+    pub stipend_per_juror_xor: XorQuantity,
+    /// XOR bonus pool paid once per case.
+    pub case_bonus_xor: XorQuantity,
+}
+
+impl Default for SorafsAppealPanelRewards {
+    fn default() -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            stipend_per_juror_xor: policy::xor_quantity(policy::SETTLEMENT_STIPEND_PER_JUROR_XOR),
+            case_bonus_xor: policy::xor_quantity(policy::SETTLEMENT_CASE_BONUS_XOR),
+        }
+    }
+}
+
+/// Complete first-release appeal settlement rule inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealSettlementRules {
+    /// Rules for terminal moderation decisions.
+    pub decisions: SorafsAppealDecisionRules,
+    /// Rule applied before panel activation.
+    pub withdrawn_before_panel: SorafsAppealSettlementRule,
+    /// Rule applied after panel activation.
+    pub withdrawn_after_panel: SorafsAppealSettlementRule,
+    /// Rule applied to frivolous appeals.
+    pub frivolous: SorafsAppealSettlementRule,
+    /// Rule applied while an appeal remains escalated.
+    pub escalated: SorafsAppealSettlementRule,
+}
+
+impl Default for SorafsAppealSettlementRules {
+    fn default() -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            decisions: SorafsAppealDecisionRules::default(),
+            withdrawn_before_panel: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_WITHDRAWN_BEFORE_PANEL_REFUND_RATE,
+                policy::SETTLEMENT_WITHDRAWN_BEFORE_PANEL_TREASURY_RATE,
+            ),
+            withdrawn_after_panel: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_WITHDRAWN_AFTER_PANEL_REFUND_RATE,
+                policy::SETTLEMENT_WITHDRAWN_AFTER_PANEL_TREASURY_RATE,
+            ),
+            frivolous: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_FRIVOLOUS_REFUND_RATE,
+                policy::SETTLEMENT_FRIVOLOUS_TREASURY_RATE,
+            ),
+            escalated: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_ESCALATED_REFUND_RATE,
+                policy::SETTLEMENT_ESCALATED_TREASURY_RATE,
+            ),
+        }
+    }
+}
+
+/// Complete first-release decision settlement rule inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealDecisionRules {
+    /// Rule applied when the original decision is upheld.
+    pub uphold: SorafsAppealSettlementRule,
+    /// Rule applied when the original decision is overturned.
+    pub overturn: SorafsAppealSettlementRule,
+    /// Rule applied when the original decision is modified.
+    pub modify: SorafsAppealSettlementRule,
+}
+
+impl Default for SorafsAppealDecisionRules {
+    fn default() -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            uphold: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_UPHOLD_REFUND_RATE,
+                policy::SETTLEMENT_UPHOLD_TREASURY_RATE,
+            ),
+            overturn: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_OVERTURN_REFUND_RATE,
+                policy::SETTLEMENT_OVERTURN_TREASURY_RATE,
+            ),
+            modify: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_MODIFY_REFUND_RATE,
+                policy::SETTLEMENT_MODIFY_TREASURY_RATE,
+            ),
+        }
+    }
+}
+
+/// Canonical refund/treasury fractions for one appeal outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealSettlementRule {
+    /// Fraction of the deposit returned to the appellant.
+    pub refund_rate: Numeric,
+    /// Fraction of the deposit transferred to treasury.
+    pub treasury_rate: Numeric,
+}
+
+impl SorafsAppealSettlementRule {
+    fn baseline(refund_rate: &str, treasury_rate: &str) -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            refund_rate: policy::numeric(refund_rate),
+            treasury_rate: policy::numeric(treasury_rate),
+        }
+    }
 }
 
 /// Public identity of one appeal-finance runtime signer provider.
@@ -10644,7 +10943,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            escrow_required: false,
+            escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
@@ -12111,8 +12410,9 @@ mod tests {
     }
 
     #[test]
-    fn offline_defaults_leave_kagemusha_release_unconfigured() {
+    fn offline_defaults_require_escrow_even_before_release_configuration() {
         let offline = Offline::default();
+        assert!(offline.escrow_required);
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
         assert_eq!(
@@ -12229,10 +12529,6 @@ mod tests {
         assert_eq!(
             shared.limits.merge_sidecar_server_request_gates_per_source,
             4
-        );
-        assert_eq!(
-            shared.limits.merge_sidecar_server_request_gate_ttl_ms,
-            10_000
         );
         assert_eq!(shared.limits.pending_certified_merge_entry_capacity, 1_024);
         assert_eq!(shared.limits.pending_queue_plan_admission_capacity, 1_024);
@@ -12456,9 +12752,6 @@ mod tests {
                     + 1,
             )
             .expect("non-zero");
-        });
-        assert_config_change!("merge-sidecar request-gate TTL", |config: &mut Sumeragi| {
-            config.limits.merge_sidecar_server_request_gate_ttl += Duration::from_millis(1);
         });
         assert_config_change!(
             "pending certified merge entries",
@@ -12783,17 +13076,6 @@ mod tests {
             config,
             SumeragiV2ConfigError::LimitBelowMinimum {
                 field: "sumeragi.limits.merge_sidecar_server_request_gates_per_source",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_server_request_gate_ttl =
-            config.limits.merge_sidecar_request_timeout - Duration::from_millis(1);
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitBelowMinimum {
-                field: "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
                 ..
             }
         );

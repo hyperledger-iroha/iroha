@@ -21035,9 +21035,16 @@ mod tests {
             return None;
         }
         let body: norito::json::Value = json::from_slice(&request.body).ok()?;
-        let digest = body.get("manifest_digest_hex")?.as_str()?;
-        let digest = digest.to_ascii_lowercase();
-        (digest.len() == 64 && digest.chars().all(|ch| ch.is_ascii_hexdigit())).then_some(digest)
+        let manifest_payload = body.get("manifest_payload")?.as_str()?;
+        let manifest_bytes = base64::engine::general_purpose::STANDARD
+            .decode(manifest_payload)
+            .ok()?;
+        if base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) != manifest_payload {
+            return None;
+        }
+        let manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes).ok()?;
+        let digest = manifest.digest().ok()?;
+        Some(hex::encode(digest.as_bytes()))
     }
 
     fn mock_sorafs_pin_registry_response(
@@ -21067,18 +21074,40 @@ mod tests {
 
     #[test]
     fn mock_http_server_helpers_track_sorafs_pin_registration_digest() {
-        let digest = "A".repeat(64);
+        let manifest = ManifestBuilder::new()
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xA1; 32]))
+            .dag_codec(DagCodecId(0x71))
+            .chunking_profile(ChunkingProfileV1::from_descriptor(
+                chunker_registry::default_descriptor(),
+            ))
+            .chunk_digest_sha3_256([0xB2; 32])
+            .por_root([0xC3; 32])
+            .content_length(1)
+            .car_digest([0xD4; 32])
+            .car_size(1)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("build mock pin registration manifest");
+        let manifest_bytes = manifest.encode().expect("encode mock pin manifest");
+        let digest = hex::encode(
+            manifest
+                .digest()
+                .expect("digest mock pin manifest")
+                .as_bytes(),
+        );
+        let manifest_payload = base64::engine::general_purpose::STANDARD.encode(&manifest_bytes);
         let request = CapturedHttpRequest {
             method: "POST".to_owned(),
             path: "/v1/sorafs/pin/register".to_owned(),
-            body: json::to_vec(&norito::json!({ "manifest_digest_hex": digest }))
-                .expect("encode mock register body"),
+            body: json::to_vec(&norito::json!({
+                "manifest_payload": manifest_payload,
+            }))
+            .expect("encode mock register body"),
         };
-        let normalized_digest = digest.to_ascii_lowercase();
 
         assert_eq!(
             mock_sorafs_pin_register_digest(&request).as_deref(),
-            Some(normalized_digest.as_str())
+            Some(digest.as_str())
         );
 
         let mut registered_pin_manifests = BTreeSet::new();
@@ -21088,10 +21117,10 @@ mod tests {
             "unregistered mock pin records should return 404"
         );
 
-        registered_pin_manifests.insert(normalized_digest.clone());
+        registered_pin_manifests.insert(digest.clone());
         assert_eq!(
             mock_sorafs_pin_registry_path_is_registered(&path, &registered_pin_manifests),
-            Some(normalized_digest.as_str())
+            Some(digest.as_str())
         );
         assert!(
             mock_sorafs_pin_registry_response(&path, &registered_pin_manifests).is_some(),

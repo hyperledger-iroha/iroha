@@ -47,7 +47,7 @@ use norito::codec::{Decode as _, Encode as _};
 use parking_lot::Mutex;
 
 use crate::{
-    merge_sidecar::CertifiedMergeSidecarMessage,
+    merge_sidecar::{CertifiedMergeSidecarMessage, MAX_CERTIFIED_MERGE_CHUNK_BYTES},
     state::{State, StateReadOnly, StateView, WorldReadOnly},
 };
 
@@ -2313,8 +2313,9 @@ fn fair_v2_ingress_required_proposal_bytes(
         let signature_bytes = iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES;
         let manifest_bytes = fair_v2_ingress_required_manifest_bytes(layout)?;
 
-        // QuorumCertificate = certified Round + proposal-origin Round + phase
-        // + Subject + ExecutionCommitment + Vec<ValidatorIndex> + aggregate signature.
+        // QuorumCertificate = certified Round + its repeated strict-same-round
+        // proposal field + phase + Subject + ExecutionCommitment
+        // + Vec<ValidatorIndex> + aggregate signature.
         let signature_vector_bytes = signature_bytes.checked_add(8)?;
         let quorum_certificate_bytes =
             fair_v2_ingress_required_quorum_certificate_bytes(roster_len)?;
@@ -2443,6 +2444,74 @@ fn fair_v2_ingress_embedded_peer_id_bytes(raw_key_bytes: usize) -> Option<usize>
     fair_v2_ingress_framed_bytes(peer_id_bytes)
 }
 
+/// Exact canonical `NetworkMessage` bytes for one maximum sidecar chunk.
+///
+/// The checked calculation includes both embedded peer identities, the
+/// fixed-boundary 64-KiB byte sequence, `CertifiedMergeSidecarMessage::Chunk`,
+/// the shared `Arc` carrier, and `NetworkMessage::CertifiedMergeSidecar`.
+/// `raw_key_bytes` excludes the compact public-key algorithm tag.
+fn fair_v2_ingress_required_merge_sidecar_chunk_network_message_bytes_for_key(
+    raw_key_bytes: usize,
+) -> Option<usize> {
+    let fixed_u8_field = fair_v2_ingress_framed_bytes(1)?;
+    let fixed_u32_field = fair_v2_ingress_framed_bytes(4)?;
+    let fixed_u64_field = fair_v2_ingress_framed_bytes(8)?;
+    let hash_field = fair_v2_ingress_framed_bytes(CryptoHash::LENGTH)?;
+
+    // Both generation and stream epoch are transparent newtypes whose sole
+    // NonZeroU64 field is itself length-delimited by the derived struct codec.
+    let non_zero_u64_newtype_bytes = fair_v2_ingress_framed_bytes(8)?;
+    let non_zero_u64_newtype_field = fair_v2_ingress_framed_bytes(non_zero_u64_newtype_bytes)?;
+    let peer_id_field = fair_v2_ingress_embedded_peer_id_bytes(raw_key_bytes)?;
+    let byte_sequence_bytes = MAX_CERTIFIED_MERGE_CHUNK_BYTES.checked_add(8)?;
+    let byte_sequence_field = fair_v2_ingress_framed_bytes(byte_sequence_bytes)?;
+
+    let chunk_bytes = fixed_u8_field
+        .checked_add(non_zero_u64_newtype_field)?
+        .checked_add(non_zero_u64_newtype_field)?
+        .checked_add(fixed_u64_field)?
+        .checked_add(hash_field)?
+        .checked_add(hash_field)?
+        .checked_add(fixed_u64_field)?
+        .checked_add(fixed_u64_field)?
+        .checked_add(hash_field)?
+        .checked_add(peer_id_field)?
+        .checked_add(peer_id_field)?
+        .checked_add(fixed_u32_field)?
+        .checked_add(fixed_u32_field)?
+        .checked_add(byte_sequence_field)?;
+    let sidecar_message_bytes = fair_v2_ingress_framed_bytes(chunk_bytes)?.checked_add(4)?;
+
+    // Arc<T> writes one ownership prefix around T; the outer enum then frames
+    // that Arc field once more after its four-byte discriminant.
+    fair_v2_ingress_framed_bytes(fair_v2_ingress_framed_bytes(sidecar_message_bytes)?)?
+        .checked_add(4)
+}
+
+/// Exact plaintext direct P2P frame required by a maximum sidecar chunk.
+///
+/// Protocol-maximum public-key payloads cover the embedded requester and
+/// responder as well as the relay origin and target. Arithmetic failures map
+/// to `usize::MAX`, so context activation fails closed.
+fn fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes() -> usize {
+    let required = || -> Option<usize> {
+        let network_message_bytes =
+            fair_v2_ingress_required_merge_sidecar_chunk_network_message_bytes_for_key(
+                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
+            )?;
+        Some(
+            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
+                crate::NetworkMessage,
+            >(
+                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
+                Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
+                network_message_bytes,
+            ),
+        )
+    };
+    required().unwrap_or(usize::MAX)
+}
+
 /// Exact bare-envelope ceiling for progress-critical recovery requests.
 ///
 /// Certified-body recovery carries a maximal PrepareQC. Durable-certificate
@@ -2552,6 +2621,22 @@ fn fair_v2_ingress_required_transport_completion_bytes(
         Some(response_envelope.max(chunk_envelope))
     };
     required().unwrap_or(usize::MAX)
+}
+
+/// Exact BlockSync-topic P2P frame requirement for one frozen context.
+///
+/// Context-owned DA completion, lane-local completion, and the layout-neutral
+/// certified merge-sidecar chunk all share this transport partition.
+fn fair_v2_ingress_required_block_sync_p2p_frame_bytes(
+    layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
+) -> usize {
+    fair_v2_ingress_required_p2p_frame_bytes(fair_v2_ingress_required_transport_completion_bytes(
+        layout,
+    ))
+    .max(fair_v2_ingress_required_lane_p2p_frame_bytes(
+        MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES,
+    ))
+    .max(fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes())
 }
 
 #[derive(Debug)]
@@ -2958,17 +3043,13 @@ impl FairV2Ingress {
             fair_v2_ingress_required_recovery_request_bytes(chain_id, roster.len());
         let required_lane_progress_frame_bytes =
             fair_v2_ingress_required_lane_p2p_frame_bytes(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES);
-        let required_lane_completion_frame_bytes =
-            fair_v2_ingress_required_lane_p2p_frame_bytes(MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES);
         let required_consensus_frame_bytes =
             fair_v2_ingress_required_p2p_frame_bytes(required_recovery_request_bytes)
                 .max(required_lane_progress_frame_bytes);
         let required_control_frame_bytes =
             fair_v2_ingress_required_p2p_frame_bytes(required_control_message_bytes);
-        let required_block_sync_frame_bytes = fair_v2_ingress_required_p2p_frame_bytes(
-            fair_v2_ingress_required_transport_completion_bytes(layout),
-        )
-        .max(required_lane_completion_frame_bytes);
+        let required_block_sync_frame_bytes =
+            fair_v2_ingress_required_block_sync_p2p_frame_bytes(layout);
         let required_outbound_plaintext_frame_bytes = required_consensus_frame_bytes
             .max(required_control_frame_bytes)
             .max(required_block_sync_frame_bytes);
@@ -3250,6 +3331,15 @@ impl FairV2Ingress {
     /// Close admission before rollover or abnormal runner exit.
     pub(crate) fn close(&self) {
         self.state.lock().open = false;
+    }
+
+    /// Return whether one semantic peer belongs to the installed frozen roster.
+    ///
+    /// This is intentionally independent of the authenticated transport hop:
+    /// a roster requester may use an authenticated non-validator relay without
+    /// granting that relay semantic allocation authority.
+    fn frozen_roster_contains(&self, peer: &PeerId) -> bool {
+        self.state.lock().roster.contains(peer)
     }
 
     fn try_push(
@@ -4102,6 +4192,29 @@ impl SumeragiHandle {
         if !self.ingress_ready.load(Ordering::Acquire) {
             return SumeragiIngressDisposition::Retry(message);
         }
+        if let LaneRelayMessage::CertifiedMergeSidecar {
+            sender,
+            message: sidecar,
+            ..
+        } = &message
+        {
+            let allocating_requester = match sidecar {
+                CertifiedMergeSidecarMessage::Request(request) => Some(&request.requester),
+                CertifiedMergeSidecarMessage::Close(close) => Some(&close.requester),
+                CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::GenerationHint(_)
+                | CertifiedMergeSidecarMessage::Chunk(_) => None,
+            };
+            if allocating_requester.is_some_and(|requester| {
+                requester != sender || !self.block.frozen_roster_contains(sender)
+            }) {
+                iroha_logger::debug!(
+                    %sender,
+                    "rejecting non-roster certified merge-sidecar allocation before lane ingress"
+                );
+                return SumeragiIngressDisposition::Rejected(message);
+            }
+        }
         if let LaneRelayMessage::DrainVote { sender, vote } = &message
             && (sender != &vote.signer || vote.validate_ingress().is_err())
         {
@@ -4574,7 +4687,10 @@ mod authoritative_runtime_gate_tests {
             consensus_v2 as wire,
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeCommitteeSignature},
+        merge::{
+            LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeCommitteeSignature,
+            MergeLedgerEntry,
+        },
         nexus::{DataSpaceId, LaneId},
         peer::PeerId,
     };
@@ -5439,6 +5555,148 @@ mod authoritative_runtime_gate_tests {
         assert!(matches!(
             handle.try_incoming_lane_relay_owned(message),
             super::SumeragiIngressDisposition::Accepted
+        ));
+    }
+
+    #[test]
+    fn sidecar_allocations_require_roster_requester_before_lane_queue_admission() {
+        use std::num::NonZeroU64;
+
+        use crate::merge_sidecar::{
+            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarCloseV1,
+            CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+            CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
+            CertifiedMergeSidecarStreamEpochV1,
+        };
+
+        let ingress_capacity = super::fair_v2_ingress_required_capacity(1, None)
+            .expect("one-validator ingress geometry is representable");
+        assert_eq!(ingress_capacity, 6);
+        let (handle, ingress, relay_receiver) = test_sumeragi_handle(ingress_capacity);
+        let mut peers = validator_peers(3);
+        let roster_requester = peers.remove(0);
+        let outsider = peers.remove(0);
+        let hub = peers.remove(0);
+        ingress.close();
+        ingress
+            .configure_roster([roster_requester.clone()])
+            .expect("one frozen sidecar requester fits the ingress geometry");
+        ingress.open().expect("open the frozen sidecar roster");
+
+        let request_for = |requester: &PeerId| {
+            let mut request = CertifiedMergeSidecarRequestV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
+                stream_epoch: CertifiedMergeSidecarStreamEpochV1(NonZeroU64::MIN),
+                semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1(NonZeroU64::MIN),
+                closed_through: 0,
+                request_id: Hash::prehashed([0; Hash::LENGTH]),
+                entry_hash: HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
+                    b"early sidecar roster gate",
+                )),
+                encoded_len: 1,
+                epoch_id: 1,
+                reference_digest: Hash::new(b"early sidecar roster reference"),
+                requester: requester.clone(),
+                responder: roster_requester.clone(),
+            };
+            request.request_id = request.canonical_request_id();
+            request
+        };
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 4);
+
+        let outsider_request = request_for(&outsider);
+        let outsider_route = routes.mint_via(outsider.clone(), hub.clone());
+        let rejected =
+            handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
+                sender: outsider.clone(),
+                reply_route: Some(outsider_route),
+                message: CertifiedMergeSidecarMessage::Request(outsider_request.clone()),
+            });
+        assert!(matches!(
+            rejected,
+            super::SumeragiIngressDisposition::Rejected(
+                super::LaneRelayMessage::CertifiedMergeSidecar {
+                    sender,
+                    message: CertifiedMergeSidecarMessage::Request(request),
+                    ..
+                }
+            ) if sender == outsider && request == outsider_request
+        ));
+        assert!(
+            matches!(
+                relay_receiver.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "an outsider Request must allocate no lane-relay slot"
+        );
+
+        let mut outsider_close = CertifiedMergeSidecarCloseV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
+            stream_epoch: CertifiedMergeSidecarStreamEpochV1(NonZeroU64::MIN),
+            closed_through: 1,
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: outsider.clone(),
+            responder: roster_requester.clone(),
+        };
+        outsider_close.close_id = outsider_close.canonical_close_id();
+        let outsider_close_route = routes.mint_via(outsider.clone(), hub.clone());
+        assert!(matches!(
+            handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
+                sender: outsider.clone(),
+                reply_route: Some(outsider_close_route),
+                message: CertifiedMergeSidecarMessage::Close(outsider_close),
+            },),
+            super::SumeragiIngressDisposition::Rejected(_)
+        ));
+        assert!(
+            matches!(
+                relay_receiver.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "an outsider standalone Close must allocate no lane-relay slot"
+        );
+
+        let mismatched_request = request_for(&outsider);
+        let roster_route = routes.mint_via(roster_requester.clone(), hub.clone());
+        assert!(matches!(
+            handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
+                sender: roster_requester.clone(),
+                reply_route: Some(roster_route),
+                message: CertifiedMergeSidecarMessage::Request(mismatched_request),
+            },),
+            super::SumeragiIngressDisposition::Rejected(_)
+        ));
+        assert!(
+            matches!(
+                relay_receiver.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "a roster transport identity cannot allocate for another semantic requester"
+        );
+
+        let roster_request = request_for(&roster_requester);
+        let roster_route = routes.mint_via(roster_requester.clone(), hub.clone());
+        assert!(matches!(
+            handle.try_incoming_lane_relay_owned(super::LaneRelayMessage::CertifiedMergeSidecar {
+                sender: roster_requester.clone(),
+                reply_route: Some(roster_route),
+                message: CertifiedMergeSidecarMessage::Request(roster_request.clone()),
+            },),
+            super::SumeragiIngressDisposition::Accepted
+        ));
+        assert!(matches!(
+            relay_receiver
+                .try_recv()
+                .expect("a roster requester may use an authenticated non-roster relay"),
+            super::LaneRelayMessage::CertifiedMergeSidecar {
+                sender,
+                reply_route: Some(route),
+                message: CertifiedMergeSidecarMessage::Request(request),
+            } if sender == roster_requester
+                && request == roster_request
+                && route.is_authenticated_via(&hub)
         ));
     }
 
@@ -7343,6 +7601,184 @@ mod authoritative_runtime_gate_tests {
             ingress.try_push(InboundBlockMessage::new(response, Some(validator))),
             Ok(super::FairV2IngressPushDisposition::Enqueued)
         ));
+    }
+
+    #[test]
+    fn fair_v2_ingress_maximum_merge_sidecar_chunk_frame_matches_canonical_wire() {
+        use crate::merge_sidecar::{
+            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
+            CertifiedMergeSidecarMessage, CertifiedMergeSidecarSemanticSequenceV1,
+            CertifiedMergeSidecarServiceGenerationV1, CertifiedMergeSidecarStreamEpochV1,
+            MAX_CERTIFIED_MERGE_CHUNK_BYTES,
+        };
+
+        let peers = validator_peers(2);
+        let requester = peers.first().expect("requester fixture").clone();
+        let responder = peers.get(1).expect("responder fixture").clone();
+        let (_, requester_key_bytes) = requester
+            .public_key()
+            .try_to_bytes()
+            .expect("requester key is canonical");
+        let (_, responder_key_bytes) = responder
+            .public_key()
+            .try_to_bytes()
+            .expect("responder key is canonical");
+        assert_eq!(
+            requester_key_bytes.len(),
+            responder_key_bytes.len(),
+            "the exact fixture helper takes one shared embedded key width"
+        );
+
+        let message = crate::NetworkMessage::CertifiedMergeSidecar(Arc::new(
+            CertifiedMergeSidecarMessage::Chunk(CertifiedMergeSidecarChunkV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
+                stream_epoch: CertifiedMergeSidecarStreamEpochV1(std::num::NonZeroU64::MIN),
+                semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1(
+                    std::num::NonZeroU64::MAX,
+                ),
+                request_id: Hash::new(b"maximum-sidecar-request"),
+                entry_hash: HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
+                    b"maximum-sidecar-entry",
+                )),
+                encoded_len: u64::MAX,
+                epoch_id: u64::MAX,
+                reference_digest: Hash::new(b"maximum-sidecar-reference"),
+                requester: requester.clone(),
+                responder: responder.clone(),
+                chunk_index: u32::MAX,
+                chunk_count: u32::MAX,
+                bytes: vec![0xA5; MAX_CERTIFIED_MERGE_CHUNK_BYTES],
+            }),
+        ));
+        let required_network_message_bytes =
+            super::fair_v2_ingress_required_merge_sidecar_chunk_network_message_bytes_for_key(
+                requester_key_bytes.len(),
+            )
+            .expect("fixture wire geometry is representable");
+        assert_eq!(
+            message.encoded_len(),
+            required_network_message_bytes,
+            "allocation-free geometry must equal the maximum wrapped canonical chunk"
+        );
+
+        let exact_frame = iroha_p2p::network::data_frame_wire_len(
+            &responder,
+            Some(&requester),
+            u8::MAX,
+            iroha_p2p::network::message::Priority::High,
+            &message,
+        );
+        assert_eq!(
+            iroha_p2p::network::data_frame_wire_len_from_payload_len::<crate::NetworkMessage>(
+                &responder,
+                Some(&requester),
+                required_network_message_bytes,
+            ),
+            exact_frame,
+            "allocation-free P2P geometry must equal the encoded fixture frame"
+        );
+        assert!(
+            super::fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes() >= exact_frame,
+            "feature-independent maximum-key geometry must cover the concrete fixture"
+        );
+    }
+
+    #[test]
+    fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
+        let layout = wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::Plain,
+            chunk_size_bytes: 1,
+            data_shards: 0,
+            parity_shards: 0,
+            max_payload_size_bytes: 1,
+            max_chunk_count: 1,
+        };
+        let required_block_sync =
+            super::fair_v2_ingress_required_block_sync_p2p_frame_bytes(layout);
+        let required_sidecar =
+            super::fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes();
+        assert_ne!(required_sidecar, usize::MAX);
+        assert!(
+            required_block_sync >= required_sidecar,
+            "minimal DA geometry must retain the layout-neutral 64-KiB sidecar requirement"
+        );
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let chain_id = ChainId::from("minimal-sidecar-frame-test");
+        let required_control_message = super::fair_v2_ingress_required_proposal_bytes(layout, 1)
+            .max(super::fair_v2_ingress_required_commit_certificate_response_bytes(1));
+        let required_consensus = super::fair_v2_ingress_required_p2p_frame_bytes(
+            super::fair_v2_ingress_required_recovery_request_bytes(&chain_id, 1),
+        )
+        .max(super::fair_v2_ingress_required_lane_p2p_frame_bytes(
+            super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES,
+        ));
+        let required_control =
+            super::fair_v2_ingress_required_p2p_frame_bytes(required_control_message);
+        let required_outbound = iroha_p2p::frame_queue_charge(
+            required_consensus
+                .max(required_control)
+                .max(required_block_sync),
+        )
+        .expect("minimal-context outbound charge is representable");
+
+        let ordinary_bytes = super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES;
+        let completion_bytes = super::MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES;
+        let source_bytes = ordinary_bytes
+            .checked_add(completion_bytes)
+            .expect("test source geometry fits usize");
+        let byte_capacity = source_bytes
+            .checked_mul(2)
+            .expect("validator and anonymous partitions fit usize");
+        let ingress_with_transport_caps = |block_sync, outbound_high| {
+            super::FairV2Ingress::new_with_transport_frame_caps(
+                6,
+                byte_capacity,
+                source_bytes,
+                0,
+                completion_bytes,
+                required_consensus,
+                required_control,
+                block_sync,
+                outbound_high,
+            )
+        };
+
+        let exact = ingress_with_transport_caps(required_block_sync, required_outbound);
+        exact
+            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .expect("the exact transport frame caps must activate");
+        exact.open().expect("the exact transport caps must open");
+
+        let short = ingress_with_transport_caps(
+            required_block_sync
+                .checked_sub(1)
+                .expect("required frame is non-zero"),
+            required_outbound,
+        );
+        let error = short
+            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .expect_err("one byte below the exact BlockSync frame cap must fail closed");
+        assert_eq!(error.configured(), required_block_sync - 1);
+        assert_eq!(error.required(), required_block_sync);
+        assert_eq!(
+            error.kind,
+            super::FairV2IngressCapacityKind::BlockSyncFrameBytes
+        );
+        assert_eq!(short.open(), Err(error));
+
+        let outbound_short =
+            ingress_with_transport_caps(required_block_sync, required_outbound - 1);
+        let outbound_error = outbound_short
+            .configure_roster_for_context([validator], &chain_id, layout)
+            .expect_err("one byte below the exact outbound-high cap must fail closed");
+        assert_eq!(outbound_error.configured(), required_outbound - 1);
+        assert_eq!(outbound_error.required(), required_outbound);
+        assert_eq!(
+            outbound_error.kind,
+            super::FairV2IngressCapacityKind::OutboundHighFrameBytes
+        );
+        assert_eq!(outbound_short.open(), Err(outbound_error));
     }
 
     #[test]

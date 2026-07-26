@@ -281,19 +281,15 @@ impl V2FinalityArtifact {
     ///
     /// In addition to height and header-hash association, this binds the
     /// header's predecessor to the exact `CommitQC` subject and requires the
-    /// certificate's authenticated proposal-origin view to equal the header's
-    /// immutable origin view. The canonical genesis header is the sole
-    /// exception: its authenticated bytes fix `view_change_index` to zero
-    /// before consensus starts, so a first proposal delayed until a later view
-    /// cannot rewrite that field without changing the genesis block hash. A
-    /// locked block may still be certified in a later view because the
-    /// `CommitQC` certification round is ordered at or after its proposal round
-    /// by certificate validation.
+    /// authenticated decision round to cover the header's body-construction
+    /// view. An unchanged body may be re-proposed and
+    /// certified in a later round, but a certificate can never precede the
+    /// view committed inside the block header.
     ///
     /// # Errors
     ///
     /// Returns an error when internal validation fails or any height, hash,
-    /// predecessor, or proposal-origin view differs from the supplied header.
+    /// predecessor, or decision/header-view ordering differs from the supplied header.
     pub fn validate_for_header(
         &self,
         header: &BlockHeader,
@@ -302,32 +298,20 @@ impl V2FinalityArtifact {
         if self.subject.parent_block_hash != header.prev_block_hash() {
             return Err(V2FinalityValidationError::AssociatedParentBlockHashMismatch);
         }
-        if !self.proposal_origin_matches_header(header) {
-            return Err(V2FinalityValidationError::AssociatedProposalViewMismatch {
-                proposal: self.commit_qc.proposal_round.view,
+        if !self.decision_round_covers_header_view(header) {
+            return Err(V2FinalityValidationError::DecisionRoundBeforeBlockView {
+                decision: self.commit_qc.round.view,
                 block: header.view_change_index(),
             });
         }
         Ok(())
     }
 
-    /// Return whether the authenticated proposal origin is compatible with a
-    /// complete block header.
-    ///
-    /// Ordinary blocks bind the two views exactly. Height-one genesis is
-    /// authenticated out of band and has a canonical view-zero header before
-    /// the round timer starts; consensus may therefore first propose those
-    /// exact bytes after a timeout without relabelling the block.
+    /// Return whether the authenticated decision round covers the immutable
+    /// body-construction view carried by a complete block header.
     #[must_use]
-    pub(crate) fn proposal_origin_matches_header(&self, header: &BlockHeader) -> bool {
-        self.commit_qc.proposal_round.view == header.view_change_index()
-            || (self.height == 1
-                && header.height().get() == 1
-                && header.view_change_index() == 0
-                && header.prev_block_hash().is_none()
-                && self.subject.parent_block_hash.is_none()
-                && self.height_context.parent_commit_qc.is_none()
-                && self.height_context.snapshot_bootstrap.is_none())
+    pub(crate) fn decision_round_covers_header_view(&self, header: &BlockHeader) -> bool {
+        self.commit_qc.round.view >= header.view_change_index()
     }
 
     /// Verify the artifact's commit certificate against its frozen roster and
@@ -647,11 +631,10 @@ pub enum V2FinalityValidationError {
     AssociatedBlockHashMismatch,
     /// Artifact subject parent differs from the associated header predecessor.
     AssociatedParentBlockHashMismatch,
-    /// `CommitQC` proposal origin differs from the associated header's immutable origin view and
-    /// the header is not the canonical fixed-view genesis exception.
-    AssociatedProposalViewMismatch {
-        /// View carried by the `CommitQC` proposal round.
-        proposal: u64,
+    /// `CommitQC` decision round precedes the view committed by the associated header.
+    DecisionRoundBeforeBlockView {
+        /// View carried by the `CommitQC` round.
+        decision: u64,
         /// View carried by the canonical block header.
         block: u64,
     },
@@ -725,9 +708,9 @@ impl fmt::Display for V2FinalityValidationError {
             Self::AssociatedParentBlockHashMismatch => f.write_str(
                 "v2 finality subject parent does not match the canonical block predecessor",
             ),
-            Self::AssociatedProposalViewMismatch { proposal, block } => write!(
+            Self::DecisionRoundBeforeBlockView { decision, block } => write!(
                 f,
-                "v2 finality proposal origin view {proposal} does not match block origin view {block}"
+                "v2 finality decision round {decision} precedes block construction view {block}"
             ),
         }
     }
@@ -846,8 +829,7 @@ mod tests {
 
     fn artifact_bound_to_header(
         header_view: u64,
-        proposal_view: u64,
-        certificate_view: u64,
+        decision_view: u64,
     ) -> (V2FinalityArtifact, BlockHeader) {
         let mut artifact = artifact();
         let header = BlockHeader::new(
@@ -861,8 +843,8 @@ mod tests {
         artifact.subject.block_hash = header.hash();
         artifact.block_hash = artifact.subject.block_hash;
         artifact.commit_qc.subject = artifact.subject;
-        artifact.commit_qc.proposal_round.view = proposal_view;
-        artifact.commit_qc.round.view = certificate_view;
+        artifact.commit_qc.round.view = decision_view;
+        artifact.commit_qc.proposal_round = artifact.commit_qc.round;
         (artifact, header)
     }
 
@@ -880,25 +862,25 @@ mod tests {
     }
 
     #[test]
-    fn header_binding_requires_exact_origin_but_allows_later_certification() {
-        let (delayed, header) = artifact_bound_to_header(3, 3, 5);
+    fn header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round() {
+        let (delayed, header) = artifact_bound_to_header(3, 5);
         delayed
             .validate_for_header(&header)
-            .expect("later certification preserves the exact proposal origin");
+            .expect("a later same-round CommitQC can certify unchanged body bytes");
 
-        let (substituted, header) = artifact_bound_to_header(3, 2, 5);
+        let (substituted, header) = artifact_bound_to_header(3, 2);
         assert_eq!(
             substituted.validate_for_header(&header),
-            Err(V2FinalityValidationError::AssociatedProposalViewMismatch {
-                proposal: 2,
+            Err(V2FinalityValidationError::DecisionRoundBeforeBlockView {
+                decision: 2,
                 block: 3,
             })
         );
     }
 
     #[test]
-    fn genesis_header_binding_accepts_a_later_first_proposal_origin() {
-        let (delayed_genesis, header) = artifact_bound_to_header(0, 3, 5);
+    fn genesis_header_binding_accepts_a_later_first_decision_round() {
+        let (delayed_genesis, header) = artifact_bound_to_header(0, 3);
         delayed_genesis
             .validate_for_header(&header)
             .expect("canonical genesis bytes retain view zero across a delayed first proposal");

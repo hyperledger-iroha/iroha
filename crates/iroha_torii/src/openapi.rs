@@ -21682,6 +21682,7 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "object",
             "required": [
+                "cash_handoff_capability",
                 "required_bridge_abi_version", "max_hops",
                 "asset_definition_id", "asset_scale", "evaluated_block_height",
                 "evaluated_block_hash", "active_transfer_verifier",
@@ -21693,6 +21694,11 @@ fn openapi_schemas() -> Map {
             ],
             "additionalProperties": false,
             "properties": {
+                "cash_handoff_capability": {
+                    "type": "string",
+                    "enum": [(iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1)],
+                    "description": "Mandatory sender-final peer-cash contract: inputs and the exact outgoing payment are committed before handoff; acknowledgements are evidence receipts only and cannot accept, roll back, or claw back value."
+                },
                 "required_bridge_abi_version": {
                     "type": "integer",
                     "format": "uint32",
@@ -31517,6 +31523,7 @@ mod tests {
         assert_eq!(
             component_required(schemas, "OfflineReadiness"),
             [
+                "cash_handoff_capability",
                 "required_bridge_abi_version",
                 "max_hops",
                 "asset_definition_id",

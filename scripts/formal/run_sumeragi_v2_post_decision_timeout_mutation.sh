@@ -85,7 +85,7 @@ run_case fixed-post-decision-boundary post_decision_timeout_fixed.cfg 0 \
   "Model checking completed. No error has been found." \
   "<AttemptResumeTimeout" \
   "<AttemptBeginTimeout" \
-  "<AttemptFormTC" \
+  "<AttemptCompleteTimeoutSignature" \
   "<AttemptBeginInstallTC" \
   "<DeliverTimeout" \
   "<DeliverTC"
@@ -100,31 +100,38 @@ run_case missing-begin-timeout-guard \
   "Invariant NoTimeoutIntentAfterDecision is violated." \
   "State 4: <AttemptBeginTimeout"
 
-run_case missing-form-tc-guard post_decision_form_tc_guard_bug.cfg 12 \
-  "Invariant NoTCFormationAfterDecision is violated." \
-  "State 5: <AttemptFormTC"
+run_case missing-complete-timeout-guard \
+  post_decision_complete_timeout_guard_bug.cfg 12 \
+  "Invariant LocalTimeoutCompletionIsAtomicNoOp is violated." \
+  "State 5: <AttemptCompleteTimeoutSignature"
+
+run_case local-timeout-successor-after-decision \
+  post_decision_local_timeout_successor_bug.cfg 12 \
+  "Invariant LocalTimeoutCompletionHasNoCausalSuccessor is violated." \
+  "State 5: <AttemptCompleteTimeoutSignature"
 
 run_case missing-begin-install-tc-guard \
   post_decision_begin_install_tc_guard_bug.cfg 12 \
   "Invariant NoTCInstallAfterDecision is violated." \
-  "State 6: <AttemptBeginInstallTC"
+  "State 7: <AttemptBeginInstallTC"
 
 run_case timeout-admitted-after-decision post_decision_timeout_receive_bug.cfg 12 \
-  "Invariant TimeoutDeliveryConsumesWithoutAdmission is violated." \
-  "State 8: <DeliverTimeout"
+  "Invariant TimeoutDeliveryConsumesWithoutAtomicAdmission is violated." \
+  "State 9: <DeliverTimeout"
 
 run_case tc-admitted-after-decision post_decision_tc_receive_bug.cfg 12 \
   "Invariant TCDeliveryConsumesWithoutAdmission is violated." \
-  "State 11: <DeliverTC"
+  "State 12: <DeliverTC"
 
 run_case timeout-successor-after-decision \
   post_decision_timeout_successor_bug.cfg 12 \
   "Invariant TimeoutDeliveryHasNoCausalSuccessor is violated." \
-  "State 8: <DeliverTimeout"
+  "State 9: <DeliverTimeout"
 
 run_case tc-successor-after-decision post_decision_tc_successor_bug.cfg 12 \
   "Invariant TCDeliveryHasNoCausalSuccessor is violated." \
-  "State 11: <DeliverTC"
+  "State 12: <DeliverTC"
 
-echo "[tlc] post-Decision replay, BeginTimeout, FormTC, and BeginInstallTC guards reject all new work"
-echo "[tlc] authenticated TimeoutVote and TC envelopes are consumed without receive-pool admission or causal successors"
+echo "[tlc] post-Decision replay, BeginTimeout, atomic local completion, and BeginInstallTC guards reject all new work"
+echo "[tlc] local completion and authenticated TimeoutVote cannot admit a receipt, form a TC, open InstallTC, or publish PersistInstallTC"
+echo "[tlc] authenticated TC envelopes are consumed without receive-pool admission or BeginInstallTC successors"

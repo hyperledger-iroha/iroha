@@ -402,14 +402,122 @@ impl AppealPricingConfig {
             classes.insert(class, config);
         }
 
-        Ok(Self {
+        let config = Self {
             version,
             quote_ttl_secs,
             default_panel_size,
             urgency_normal_multiplier: urgency_normal,
             urgency_high_multiplier: urgency_high,
             classes,
-        })
+        };
+        config.validate_quote_domain()?;
+        Ok(config)
+    }
+
+    fn validate_quote_domain(&self) -> Result<(), AppealPricingManifestError> {
+        let maximum_input = Numeric::from(u32::MAX);
+        let xor_scale_factor = Numeric::from(
+            10_u64
+                .checked_pow(XOR_QUANTITY_SCALE)
+                .expect("nano-XOR scale factor fits u64"),
+        );
+        let maximum_panel_multiplier = maximum_input
+            .try_decimal_div_round(
+                &Numeric::from(self.default_panel_size),
+                APPEAL_CALCULATION_SCALE,
+                RoundingMode::NearestEven,
+            )
+            .map_err(|error| {
+                appeal_pricing_domain_error("maximum reachable panel multiplier", error)
+            })?;
+
+        for (class, class_config) in &self.classes {
+            let maximum_backlog_ratio = maximum_input
+                .try_decimal_div_round(
+                    &Numeric::from(class_config.backlog_target),
+                    APPEAL_CALCULATION_SCALE,
+                    RoundingMode::NearestEven,
+                )
+                .map_err(|error| {
+                    appeal_pricing_domain_error(
+                        &format!("classes.{class}.maximum reachable backlog ratio"),
+                        error,
+                    )
+                })?;
+            let maximum_backlog_multiplier = Numeric::one()
+                .try_decimal_add(&clamp_numeric(
+                    maximum_backlog_ratio,
+                    Numeric::zero(),
+                    class_config.backlog_cap.clone(),
+                ))
+                .map_err(|error| {
+                    appeal_pricing_domain_error(
+                        &format!("classes.{class}.maximum reachable backlog multiplier"),
+                        error,
+                    )
+                })?;
+            let maximum_size_ratio = maximum_input
+                .try_decimal_div_round(
+                    &class_config.size_divisor_mb,
+                    APPEAL_CALCULATION_SCALE,
+                    RoundingMode::NearestEven,
+                )
+                .map_err(|error| {
+                    appeal_pricing_domain_error(
+                        &format!("classes.{class}.maximum reachable size ratio"),
+                        error,
+                    )
+                })?;
+            let maximum_size_multiplier = Numeric::one()
+                .try_decimal_add(&clamp_numeric(
+                    maximum_size_ratio,
+                    Numeric::zero(),
+                    class_config.size_cap.clone(),
+                ))
+                .map_err(|error| {
+                    appeal_pricing_domain_error(
+                        &format!("classes.{class}.maximum reachable size multiplier"),
+                        error,
+                    )
+                })?;
+
+            for (urgency, urgency_multiplier) in [
+                ("normal", &self.urgency_normal_multiplier),
+                ("high", &self.urgency_high_multiplier),
+            ] {
+                let maximum_raw_deposit = class_config
+                    .base_rate_xor
+                    .try_product_decimals_round(
+                        [
+                            &maximum_backlog_multiplier,
+                            &maximum_size_multiplier,
+                            urgency_multiplier,
+                            &maximum_panel_multiplier,
+                            &class_config.surge_multiplier,
+                        ],
+                        XOR_QUANTITY_SCALE,
+                        RoundingMode::NearestEven,
+                    )
+                    .map_err(|error| {
+                        appeal_pricing_domain_error(
+                            &format!("classes.{class}.{urgency} maximum reachable raw deposit"),
+                            error,
+                        )
+                    })?;
+                maximum_raw_deposit
+                    .try_mul_decimal(&xor_scale_factor)
+                    .map_err(|error| {
+                        appeal_pricing_domain_error(
+                            &format!(
+                                "classes.{class}.{urgency} maximum reachable nano-XOR mantissa"
+                            ),
+                            error,
+                        )
+                    })?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Borrow a class configuration.
@@ -1244,6 +1352,15 @@ fn clamp_quantity(value: Quantity, min: Quantity, max: Quantity) -> Quantity {
     }
 }
 
+fn appeal_pricing_domain_error(
+    context: &str,
+    error: NumericOperationError,
+) -> AppealPricingManifestError {
+    AppealPricingManifestError::new(format!(
+        "appeal pricing manifest `{context}` is outside the bounded quote domain: {error}"
+    ))
+}
+
 /// Error returned when parsing a canonical XOR quantity literal.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("failed to parse `{label}` quantity `{raw}`: {reason}")]
@@ -1512,6 +1629,106 @@ mod tests {
             })
             .expect("quote");
         assert!(quote.deposit_xor > Quantity::zero());
+    }
+
+    #[test]
+    fn pricing_manifest_rejects_unrepresentable_reachable_raw_deposit() {
+        let manifest = norito::json!({
+            "version": "unsafe-wide-product",
+            "quote_ttl_secs": 900,
+            "default_panel_size": 1,
+            "urgency_multipliers": {
+                "normal": "1",
+                "high": "1"
+            },
+            "classes": {
+                "content": {
+                    "base_rate_xor": "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                    "backlog_target": 1,
+                    "backlog_cap": "0",
+                    "size_divisor_mb": "1",
+                    "size_cap": "0",
+                    "min_deposit_xor": "0",
+                    "max_deposit_xor": "1"
+                }
+            }
+        });
+        let error = AppealPricingConfig::from_manifest_value(&manifest)
+            .expect_err("policy whose reachable raw quote exceeds 512 bits must fail at load");
+        assert!(
+            error.to_string().contains("maximum reachable raw deposit"),
+            "unexpected validation error: {error}"
+        );
+    }
+
+    #[test]
+    fn pricing_manifest_reserves_mantissa_headroom_for_nano_xor_rounding() {
+        let manifest = norito::json!({
+            "version": "unsafe-nano-mantissa",
+            "quote_ttl_secs": 900,
+            "default_panel_size": 1,
+            "urgency_multipliers": {
+                "normal": "1",
+                "high": "1"
+            },
+            "classes": {
+                "content": {
+                    "base_rate_xor": "100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                    "backlog_target": 1,
+                    "backlog_cap": "0",
+                    "size_divisor_mb": "1",
+                    "size_cap": "0",
+                    "min_deposit_xor": "0",
+                    "max_deposit_xor": "1"
+                }
+            }
+        });
+        let error = AppealPricingConfig::from_manifest_value(&manifest)
+            .expect_err("policy must reserve 512-bit mantissa headroom at nano-XOR scale");
+        assert!(
+            error
+                .to_string()
+                .contains("maximum reachable nano-XOR mantissa"),
+            "unexpected validation error: {error}"
+        );
+    }
+
+    #[test]
+    fn pricing_manifest_bounds_caps_by_reachable_u32_inputs() {
+        let unreachable_cap = "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        let manifest = norito::json!({
+            "version": "reachable-input-bound",
+            "quote_ttl_secs": 900,
+            "default_panel_size": 1,
+            "urgency_multipliers": {
+                "normal": "1",
+                "high": "1"
+            },
+            "classes": {
+                "content": {
+                    "base_rate_xor": "1",
+                    "backlog_target": 1,
+                    "backlog_cap": unreachable_cap,
+                    "size_divisor_mb": "1",
+                    "size_cap": unreachable_cap,
+                    "min_deposit_xor": "0",
+                    "max_deposit_xor": "1"
+                }
+            }
+        });
+        let config = AppealPricingConfig::from_manifest_value(&manifest)
+            .expect("unreachable caps must not inflate the quote-domain bound");
+        let quote = config
+            .quote(AppealQuoteInput {
+                class: AppealClass::Content,
+                backlog: u32::MAX,
+                evidence_size_mb: u32::MAX,
+                urgency: AppealUrgency::High,
+                panel_size: u32::MAX,
+            })
+            .expect("maximum reachable quote must remain representable");
+        assert_eq!(quote.deposit_xor, Quantity::one());
+        assert!(quote.breakdown.raw_deposit_xor > quote.deposit_xor);
     }
 
     #[test]

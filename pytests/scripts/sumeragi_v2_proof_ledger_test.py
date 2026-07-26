@@ -32,6 +32,85 @@ def load_checker():
     return module
 
 
+def copy_transport_hardening_fixture(tmp_path: Path) -> None:
+    """Copy only production sources bound by the sidecar transport checker."""
+
+    for relative in (
+        Path("crates/iroha_core/src/lib.rs"),
+        Path("crates/iroha_core/src/merge_sidecar.rs"),
+        Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("crates/irohad/src/main.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+
+
+def copy_reply_writer_deadline_fixture(tmp_path: Path) -> None:
+    """Copy only sources bound by the exact-reply writer deadline checker."""
+
+    for relative in (
+        Path("crates/iroha_config/src/parameters/defaults.rs"),
+        Path("crates/iroha_config/src/parameters/actual.rs"),
+        Path("crates/iroha_config/src/parameters/user.rs"),
+        Path("crates/iroha_core/src/merge_sidecar.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("crates/iroha_p2p/src/network.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+
+
+def copy_reply_writer_deadline_formal_fixture(tmp_path: Path, module) -> Path:
+    """Copy the complete deadline proof and mutation corpus."""
+
+    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
+    formal_dir.mkdir(parents=True, exist_ok=True)
+    for name in module._REPLY_WRITER_DEADLINE_FORMAL_SOURCE_SHA256:
+        shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+    runner = Path(
+        "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh"
+    )
+    destination = tmp_path / runner
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_DIR / runner, destination)
+    return formal_dir
+
+
+def copy_typed_rollover_handoff_formal_fixture(tmp_path: Path, module) -> Path:
+    """Copy the complete typed rollover proof and mutation corpus."""
+
+    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
+    formal_dir.mkdir(parents=True, exist_ok=True)
+    for name in module._TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256:
+        shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+    runner = Path(
+        "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh"
+    )
+    destination = tmp_path / runner
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_DIR / runner, destination)
+    return formal_dir
+
+
+def copy_queue_plan_semantic_request_fixture(tmp_path: Path) -> None:
+    """Copy the shared QueuePlan identity kernel and every production consumer."""
+
+    for relative in (
+        Path("crates/iroha_core/src/torii_proxy.rs"),
+        Path("crates/iroha_core/src/queue.rs"),
+        Path("crates/iroha_core/src/queue/journal.rs"),
+        Path("crates/iroha_torii/src/lib.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+
+
 def copy_async_source_fidelity_fixture(
     tmp_path: Path, module, *formal_names: str
 ) -> Path:
@@ -327,6 +406,14 @@ def mutate_rust_item_source(
     path.write_text(source.replace(item.source, mutated_item, 1), encoding="utf-8")
 
 
+def mutate_source_once(path: Path, old: str, new: str) -> None:
+    """Replace one exact source fragment without selecting a Rust item."""
+
+    source = path.read_text(encoding="utf-8")
+    assert source.count(old) == 1, (path, old)
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+
 def mutate_rust_item_source_in_context(
     module,
     path: Path,
@@ -494,28 +581,67 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
     assert application["status"] == "specified_unproved"
     assert ledger["machine_checked_completion"] is False
 
+    by_id = {
+        obligation["id"]: obligation for obligation in ledger["obligations"]
+    }
+    typed_safety = by_id["typed-rollover-handoff-model-safety"]
+    assert typed_safety["module"] == "SumeragiV2TypedRolloverHandoffProofs"
+    assert typed_safety["symbol"] == (
+        "TypedRolloverSpecAlwaysSafe / "
+        "TypedRolloverNextSatisfiesActionSafety"
+    )
+    assert typed_safety["status"] == "specified_unproved"
+    assert "one-step kernel, not a temporal proof" in typed_safety["requirement"]
+    assert "do not prove Rust-to-TLA semantic refinement" in (
+        typed_safety["requirement"]
+    )
+
+    typed_liveness = by_id[
+        "typed-rollover-handoff-conditional-local-liveness"
+    ]
+    assert typed_liveness["module"] == (
+        "SumeragiV2TypedRolloverHandoffProofs"
+    )
+    assert typed_liveness["symbol"] == (
+        "ResponsiveChangedRosterRolloverLivenessFromWeakFairness"
+    )
+    assert typed_liveness["status"] == "specified_unproved"
+    assert "inductive eight-rank control partition" in (
+        typed_liveness["requirement"]
+    )
+    assert "fresh strict TLAPS remains required" in (
+        typed_liveness["requirement"]
+    )
+
     assert tuple(
         obligation["id"]
         for obligation in ledger["obligations"]
         if obligation["status"] == "specified_unproved"
     ) == (
         "effective-lock-body-acquisition-production-refinement",
-        "progress-witness-preservation",
         "progress-witness-production-refinement",
-        "protected-service-rank",
+        "adequate-leader-exact-closure-residual",
+        "exact-decision-off-scheduler-residual-convergence",
         "post-gst-deadlock-freedom",
         "post-gst-starvation-freedom",
         "timeout-view-liveness",
-        "locked-body-reproposal-liveness",
+        "locked-body-reproposal",
         "rotating-leader-liveness",
         "application-liveness",
         "successor-activation-starvation-freedom",
         "successor-activation-exact-recovery-production-refinement",
         "genesis-height-successor-handoff",
         "height-liveness",
+        "autoscale-lifecycle-production-refinement",
+        "native-application-evidence-production-refinement",
+        "autonomous-reservation-carrier-production-refinement",
+        "reply-writer-deadline-local-termination",
+        "reply-writer-conditional-responsive-cursor-liveness",
+        "reply-writer-responsive-strong-fairness-to-receipt",
+        "typed-rollover-handoff-model-safety",
+        "typed-rollover-handoff-conditional-local-liveness",
     )
     assert module.PROOF_STATUS_DEPENDENCIES == {
-        "timeout-protection": ("historical-tc-lock-commit",),
         "effective-lock-body-acquisition-production-refinement": (
             "effective-lock-body-acquisition-model",
         ),
@@ -576,7 +702,7 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
             "post-gst-deadlock-freedom",
             "post-gst-starvation-freedom",
         ),
-        "locked-body-reproposal-liveness": (
+        "locked-body-reproposal": (
             "effective-lock-body-acquisition-model",
             "effective-lock-body-acquisition-production-refinement",
             "async-fair-action-refinement",
@@ -591,7 +717,7 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
             "progress-witness-preservation",
             "post-gst-starvation-freedom",
             "timeout-view-liveness",
-            "locked-body-reproposal-liveness",
+            "locked-body-reproposal",
         ),
         "application-liveness": (
             "async-fair-action-refinement",
@@ -613,8 +739,110 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
             "application-liveness",
             "successor-activation-starvation-freedom",
         ),
+        "typed-rollover-handoff-conditional-local-liveness": (
+            "typed-rollover-handoff-model-safety",
+        ),
     }
     assert module._proof_status_dependency_errors(ledger["obligations"]) == []
+    obligations = ledger["obligations"]
+
+    assert len(obligations) == 64
+    assert (
+        module.MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS
+        == (
+            "adequate-leader-exact-closure-residual",
+            "exact-decision-off-scheduler-residual-convergence",
+            "autoscale-lifecycle-production-refinement",
+            "native-application-evidence-production-refinement",
+            "autonomous-reservation-carrier-production-refinement",
+            "reply-writer-deadline-local-termination",
+            "reply-writer-conditional-responsive-cursor-liveness",
+            "reply-writer-responsive-strong-fairness-to-receipt",
+            "typed-rollover-handoff-model-safety",
+            "typed-rollover-handoff-conditional-local-liveness",
+        )
+    )
+    assert len(module.MACHINE_CHECKED_COMPLETION_TARGET_IDS) == 54
+    assert (
+        set(module.MACHINE_CHECKED_COMPLETION_TARGET_IDS)
+        | set(module.MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS)
+        == set(module.REQUIRED_PROOF_OBLIGATION_INVENTORY)
+    )
+    assert (
+        set(module.MACHINE_CHECKED_COMPLETION_TARGET_IDS)
+        & set(module.MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS)
+        == set()
+    )
+    assert module.MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_COUNTS == {
+        "tlaps_proved": 44,
+        "cross_tool_proved": 3,
+        "specified_unproved": 0,
+        "trusted_contract": 6,
+        "out_of_scope": 1,
+    }
+    assert module._machine_checked_completion_contract_errors() == []
+
+    current_target_counts = {
+        status: sum(
+            by_id[obligation_id]["status"] == status
+            for obligation_id in (
+                module.MACHINE_CHECKED_COMPLETION_TARGET_IDS
+            )
+        )
+        for status in module.STATUS_VALUES
+    }
+    assert current_target_counts == {
+        "tlaps_proved": 35,
+        "cross_tool_proved": 0,
+        "specified_unproved": 12,
+        "trusted_contract": 6,
+        "out_of_scope": 1,
+    }
+    assert all(
+        by_id[obligation_id]["status"] == "specified_unproved"
+        for obligation_id in (
+            module.MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS
+        )
+    )
+
+    complete = copy.deepcopy(ledger)
+    complete["machine_checked_completion"] = True
+    for obligation in complete["obligations"]:
+        expected_status = (
+            module.MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_BY_ID.get(
+                obligation["id"]
+            )
+        )
+        if expected_status is not None:
+            obligation["status"] = expected_status
+    assert (
+        module._machine_checked_completion_status_errors(
+            complete["obligations"]
+        )
+        == []
+    )
+    complete_by_id = {
+        obligation["id"]: obligation
+        for obligation in complete["obligations"]
+    }
+    assert all(
+        complete_by_id[obligation_id]["status"] == "specified_unproved"
+        for obligation_id in (
+            module.MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS
+        )
+    )
+
+    complete_by_id["height-liveness"]["status"] = "specified_unproved"
+    errors = module._machine_checked_completion_status_errors(
+        complete["obligations"]
+    )
+    assert any(
+        "height-liveness expected tlaps_proved" in error
+        for error in errors
+    )
+    assert any(
+        "requires target status counts" in error for error in errors
+    )
 
 
 def test_every_declared_proof_dependency_fails_closed_on_early_promotion() -> None:
@@ -634,6 +862,27 @@ def test_every_declared_proof_dependency_fails_closed_on_early_promotion() -> No
             ) in errors
 
 
+def test_typed_rollover_deductive_liveness_remains_unproved_until_strict() -> None:
+    module = load_checker()
+    liveness = next(
+        obligation
+        for obligation in module.load_ledger()["obligations"]
+        if obligation["id"]
+        == "typed-rollover-handoff-conditional-local-liveness"
+    )
+    source = (
+        module.FORMAL_DIR / "SumeragiV2TypedRolloverHandoffProofs.tla"
+    ).read_text(encoding="utf-8")
+
+    assert liveness["status"] == "specified_unproved"
+    assert liveness["module"] in module.RELEASE_PROOF_MODULES
+    assert module._symbol_exists(source, liveness["symbol"])
+    assert module._symbol_exists(
+        source, liveness["symbol"], theorem_only=True
+    )
+    assert "fresh strict TLAPS remains required" in liveness["requirement"]
+
+
 @pytest.mark.parametrize(
     "dependent_id",
     (
@@ -644,7 +893,7 @@ def test_every_declared_proof_dependency_fails_closed_on_early_promotion() -> No
         "protected-service-rank",
         "post-gst-starvation-freedom",
         "timeout-view-liveness",
-        "locked-body-reproposal-liveness",
+        "locked-body-reproposal",
         "rotating-leader-liveness",
         "application-liveness",
     ),
@@ -664,82 +913,6 @@ def test_fairness_consuming_proof_cannot_precede_action_refinement(
         f"proof obligation {dependent_id} cannot be tlaps_proved before "
         "prerequisite async-fair-action-refinement is tlaps_proved"
     ) in errors
-
-
-def test_historical_tc_lock_commit_exception_is_exact_and_wal_backed() -> None:
-    module = load_checker()
-    core_source = (module.FORMAL_DIR / "SumeragiV2Core.tla").read_text()
-    async_source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text()
-
-    historical_source = module._top_level_operator_body(
-        core_source, "HistoricalLockedPrepareSource"
-    )
-    historical = module._top_level_operator_body(
-        core_source, "HistoricalLockedPrepareForCommit"
-    )
-    provenance = module._top_level_operator_body(
-        core_source, "HistoricalLockedPrepareRecoveryProvenance"
-    )
-    assert historical_source is not None
-    assert historical is not None
-    assert provenance is not None
-    source_body = " ".join(historical_source[0].split())
-    historical_body = " ".join(historical[0].split())
-    for required in (
-        "qc \\in prepareQCs",
-        "qc.view < nodeView[node]",
-        "qc.view = lockRank[node]",
-        "qc.subject = lockSubject[node]",
-    ):
-        assert required in source_body
-    assert "InstalledTcSelectsPrepareFor(node, qc)" in " ".join(
-        provenance[0].split()
-    )
-    assert "ExactLockedCommitIntents(node, qc.view, qc.subject) = {}" in (
-        historical_body
-    )
-    assert "NoHigherPrepareOriginKnown(node, qc)" in historical_body
-
-    origin_fence = module._top_level_operator_body(
-        core_source, "NoHigherPrepareOriginKnown"
-    )
-    assert origin_fence is not None
-    origin_body = " ".join(origin_fence[0].split())
-    assert "vote \\in prepareIntents" in origin_body
-    assert "vote.view > qc.view" in origin_body
-    assert "highestRank[node] > qc.view" in origin_body
-    assert "vote.subject" not in origin_body
-    assert "highestSubject" not in origin_body
-
-    begin = module._top_level_operator_body(core_source, "BeginLockCommit")
-    persist = module._top_level_operator_body(core_source, "PersistLockCommit")
-    assert begin is not None
-    assert persist is not None
-    begin_body = " ".join(begin[0].split())
-    persist_body = " ".join(persist[0].split())
-    assert "CurrentOpenPrepareForCommit(node, qc)" in begin_body
-    assert "HistoricalLockedPrepareForCommit(node, qc)" in begin_body
-    assert "pendingLockCommit' = pendingLockCommit \\cup {request}" in begin_body
-    assert "commitIntents' = commitIntents \\cup {request.vote}" in persist_body
-    assert "signVotes' = signVotes \\cup {signRequest}" in persist_body
-
-    successors = module._top_level_operator_body(async_source, "CommandSuccessors")
-    assert successors is not None
-    assert re.search(
-        r'command\.kind = "ValidateBody"\s*->\s*'
-        r'<<[^>]*CausalCandidate\("Progress", "BeginLockCommit", command\)',
-        async_source,
-        re.DOTALL,
-    )
-
-    by_id = {
-        obligation["id"]: obligation
-        for obligation in module.load_ledger()["obligations"]
-    }
-    assert by_id["historical-tc-lock-commit"]["status"] == "specified_unproved"
-    assert by_id["timeout-protection"]["status"] == "specified_unproved"
-
-
 def test_historical_timeout_authorization_is_derived_not_duplicated(
     tmp_path: Path,
 ) -> None:
@@ -807,7 +980,8 @@ def test_completion_claim_rejects_unproved_debt_without_release_mode() -> None:
 
     assert any(
         error.startswith(
-            "machine_checked_completion=true rejects specified_unproved obligations:"
+            "machine_checked_completion=true rejects specified_unproved "
+            "target obligations:"
         )
         for error in errors
     )
@@ -1003,7 +1177,10 @@ def test_release_gate_fails_closed_while_completion_is_false() -> None:
     result = module.validate_ledger(module.load_ledger(), release=True)
 
     assert "release gate requires machine_checked_completion=true" in result.errors
-    assert any("release gate rejects unproved obligation" in error for error in result.errors)
+    assert any(
+        "release gate rejects unproved target obligation" in error
+        for error in result.errors
+    )
     assert "release gate requires fresh TLAPS proof evidence" in result.errors
 
 
@@ -1011,8 +1188,13 @@ def complete_ledger(module):
     ledger = copy.deepcopy(module.load_ledger())
     ledger["machine_checked_completion"] = True
     for obligation in ledger["obligations"]:
-        if obligation["status"] == "specified_unproved":
-            obligation["status"] = "tlaps_proved"
+        expected_status = (
+            module.MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_BY_ID.get(
+                obligation["id"]
+            )
+        )
+        if expected_status is not None:
+            obligation["status"] = expected_status
     return ledger
 
 
@@ -1047,15 +1229,7 @@ def build_test_evidence(module, tmp_path: Path):
 def complete_cross_tool_ledger(module):
     """Return a synthetic complete ledger using the reviewed cross-tool status."""
 
-    ledger = copy.deepcopy(module.load_ledger())
-    ledger["machine_checked_completion"] = True
-    cross_tool_ids = set(module.CROSS_TOOL_REFINEMENT_BY_ID)
-    for obligation in ledger["obligations"]:
-        if obligation["id"] in cross_tool_ids:
-            obligation["status"] = "cross_tool_proved"
-        elif obligation["status"] == "specified_unproved":
-            obligation["status"] = "tlaps_proved"
-    return ledger
+    return complete_ledger(module)
 
 
 def build_cross_tool_fixture(module, tmp_path: Path):
@@ -1164,12 +1338,21 @@ def build_cross_tool_fixture(module, tmp_path: Path):
     for module_name, contracts in contracts_by_module.items():
         path = formal_dir / f"{module_name}.tla"
         source = path.read_text(encoding="utf-8")
+        original_source = source
+        inherited_source = "\n".join(
+            provider_source
+            for _, _, provider_source in module._cross_tool_tla_module_closure(
+                formal_dir, module_name
+            )
+        )
         model_side_declarations = ""
         for contract in contracts:
             premise = contract.tla_statement.split(" => ", maxsplit=1)[0]
             if module._expanded_tla_alias(
-                source, premise
-            ) == module._expanded_tla_alias(source, contract.ledger_symbol):
+                inherited_source, premise
+            ) == module._expanded_tla_alias(
+                inherited_source, contract.ledger_symbol
+            ):
                 synthetic = f"{contract.tla_theorem}SyntheticModelSide"
                 old = f"THEOREM {contract.ledger_symbol} ==\n  {premise}"
                 assert source.count(old) == 1
@@ -1190,9 +1373,16 @@ def build_cross_tool_fixture(module, tmp_path: Path):
             "PROOF\n"
             "  OBVIOUS\n"
             for contract in contracts
-            if module._top_level_theorem_body(source, contract.tla_theorem) is None
+            if module._top_level_theorem_body(
+                inherited_source, contract.tla_theorem
+            )
+            is None
         )
-        path.write_text(source[:end] + declarations + "\n====\n", encoding="utf-8")
+        if source != original_source or declarations:
+            path.write_text(
+                source[:end] + declarations + "\n====\n",
+                encoding="utf-8",
+            )
 
     verus_contract = module._verus_evidence_contract_module()
     production_sources = {
@@ -1493,14 +1683,11 @@ def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
         call_site.item_token_sha256 is not None
         for call_site in production_call_sites
     )
-    assert sealed_call_sites == 17
+    assert sealed_call_sites == 24
     promotion_errors = module._cross_tool_promotion_contract_errors(
         module.CROSS_TOOL_REFINEMENT_CONTRACTS
     )
-    assert len(promotion_errors) == 7
-    assert all(
-        "remains intentionally unfrozen" in error for error in promotion_errors
-    )
+    assert promotion_errors == []
     canonical_contracts = module.CROSS_TOOL_REFINEMENT_CONTRACTS
     first = canonical_contracts[0]
     tautological = module.CrossToolObligationContract(
@@ -1575,6 +1762,48 @@ def test_cross_tool_status_is_fail_closed_and_production_only() -> None:
         check_retired_paths=False,
     ).errors
     assert "proof ledger schema_version must equal 2" in errors
+
+
+def test_cross_tool_tla_inherited_providers_are_exact() -> None:
+    """Cross-tool evidence resolves physical providers through EXTENDS."""
+
+    module = load_checker()
+    expected = {
+        "effective-lock-body-acquisition-production-refinement": (
+            "SumeragiV2AsyncRankAndInitProofs",
+            "SumeragiV2AsyncStage4RefinementProofs",
+            "SumeragiV2AsyncStage4RefinementProofs",
+        ),
+        "progress-witness-production-refinement": (
+            "SumeragiV2AsyncRankAndInitProofs",
+            "SumeragiV2AsyncTemporalClosureProofs",
+            "SumeragiV2AsyncTemporalClosureProofs",
+        ),
+    }
+    for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS[:2]:
+        closure = module._cross_tool_tla_module_closure(
+            module.FORMAL_DIR, contract.module
+        )
+        premise = contract.tla_statement.split(" => ", maxsplit=1)[0]
+        premise_declaration = module._cross_tool_tla_declaration(
+            closure, premise, kind="operator"
+        )
+        ledger_declaration = module._cross_tool_tla_declaration(
+            closure,
+            contract.ledger_symbol,
+            kind=contract.ledger_declaration_kind,
+        )
+        theorem_declaration = module._cross_tool_tla_declaration(
+            closure, contract.tla_theorem, kind="theorem"
+        )
+        assert premise_declaration is not None
+        assert ledger_declaration is not None
+        assert theorem_declaration is not None
+        assert (
+            premise_declaration[0],
+            ledger_declaration[0],
+            theorem_declaration[0],
+        ) == expected[contract.obligation_id]
 
 
 def test_cross_tool_promotion_rejects_vacuity_kernel_only_and_missing_call_sites() -> None:
@@ -3650,18 +3879,40 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
     (
         ledger,
         formal_dir,
-        _,
+        baseline_tlaps_evidence,
         verus_evidence,
         cross_tool_evidence,
         workspace_manifest,
     ) = build_cross_tool_fixture(module, tmp_path)
     contract = module.CROSS_TOOL_REFINEMENT_CONTRACTS[0]
-    tla_path = formal_dir / f"{contract.module}.tla"
-    canonical_tla = tla_path.read_text(encoding="utf-8")
+    closure = module._cross_tool_tla_module_closure(formal_dir, contract.module)
+    premise = contract.tla_statement.split(" => ", maxsplit=1)[0]
+    premise_declaration = module._cross_tool_tla_declaration(
+        closure, premise, kind="operator"
+    )
+    ledger_declaration = module._cross_tool_tla_declaration(
+        closure,
+        contract.ledger_symbol,
+        kind=contract.ledger_declaration_kind,
+    )
+    theorem_declaration = module._cross_tool_tla_declaration(
+        closure, contract.tla_theorem, kind="theorem"
+    )
+    assert premise_declaration is not None
+    assert ledger_declaration is not None
+    assert theorem_declaration is not None
+    premise_path = premise_declaration[1]
+    ledger_path = ledger_declaration[1]
+    theorem_path = theorem_declaration[1]
+    canonical_sources = {
+        path: path.read_text(encoding="utf-8")
+        for path in {premise_path, ledger_path, theorem_path}
+    }
     log_dir = tmp_path / "target" / "formal" / "sumeragi_v2" / "tlaps"
 
     def fresh_tlaps_evidence():
-        manifest = module._formal_source_manifest(formal_dir, tmp_path)["sha256"]
+        source_manifest = module._formal_source_manifest(formal_dir, tmp_path)
+        manifest = source_manifest["sha256"]
         for name in module.RELEASE_PROOF_MODULES:
             (log_dir / f"{name}.preflight.log").write_text(
                 "frontend summary passed\n"
@@ -3673,18 +3924,29 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
                 f"{module._tlapm_runner_marker(name, manifest)}\n",
                 encoding="utf-8",
             )
-        return module.build_release_evidence(
-            tlapm_version=module.TLAPM_COMMIT[:7],
-            log_dir=log_dir,
-            formal_dir=formal_dir,
-            root_dir=tmp_path,
-        )
+        evidence = copy.deepcopy(baseline_tlaps_evidence)
+        evidence["source_manifest"] = source_manifest
+        for entry in evidence["modules"]:
+            name = entry["module"]
+            preflight_path = log_dir / f"{name}.preflight.log"
+            proof_path = log_dir / f"{name}.log"
+            entry["source_manifest_sha256"] = manifest
+            entry["preflight_log_sha256"] = module._sha256_file(preflight_path)
+            entry["log_sha256"] = module._sha256_file(proof_path)
+            entry["obligations_proved"] = 1
+        return evidence
+
+    def restore_provider_sources() -> None:
+        for path, source in canonical_sources.items():
+            path.write_text(source, encoding="utf-8")
 
     first_claim = contract.claims[0]
     premise_conjunct = f"/\\ {first_claim.constant} = TRUE"
-    assert canonical_tla.count(premise_conjunct) == 1
-    tla_path.write_text(
-        canonical_tla.replace(
+    canonical_premise_tla = canonical_sources[premise_path]
+    assert canonical_premise_tla.count(premise_conjunct) == 1
+    restore_provider_sources()
+    premise_path.write_text(
+        canonical_premise_tla.replace(
             premise_conjunct,
             f"/\\ {first_claim.constant}Substituted = TRUE",
             1,
@@ -3702,18 +3964,17 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
     )
     assert any("exact ordered claim mapping" in error for error in errors)
 
-    premise = contract.tla_statement.split(" => ", maxsplit=1)[0]
     nontrivial_ledger_statement = (
         f"{contract.ledger_symbol} ==\n"
         f"  /\\ {premise}\n"
         "  /\\ EffectiveLockAcquisitionModelObligation"
     )
-    alias_ledger_statement = (
-        f"{contract.ledger_symbol} ==\n  {premise}"
-    )
-    assert canonical_tla.count(nontrivial_ledger_statement) == 1
-    tla_path.write_text(
-        canonical_tla.replace(
+    alias_ledger_statement = f"{contract.ledger_symbol} ==\n  {premise}"
+    canonical_ledger_tla = canonical_sources[ledger_path]
+    assert canonical_ledger_tla.count(nontrivial_ledger_statement) == 1
+    restore_provider_sources()
+    ledger_path.write_text(
+        canonical_ledger_tla.replace(
             nontrivial_ledger_statement, alias_ledger_statement, 1
         ),
         encoding="utf-8",
@@ -3729,8 +3990,9 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
     )
     assert any("ledger operator" in error and "must state exactly" in error for error in errors)
 
-    tla_path.write_text(
-        canonical_tla.replace(
+    restore_provider_sources()
+    ledger_path.write_text(
+        canonical_ledger_tla.replace(
             f"{contract.ledger_symbol} ==",
             f"THEOREM {contract.ledger_symbol} ==",
             1,
@@ -3751,9 +4013,13 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
         for error in errors
     )
 
-    tla_path.write_text(
-        canonical_tla.replace(
-            "BY EffectiveLockAcquisitionModelObligation",
+    canonical_theorem_tla = canonical_sources[theorem_path]
+    exact_bridge_proof = "BY EffectiveLockAcquisitionModelObligation"
+    assert canonical_theorem_tla.count(exact_bridge_proof) == 1
+    restore_provider_sources()
+    theorem_path.write_text(
+        canonical_theorem_tla.replace(
+            exact_bridge_proof,
             "BY TRUE",
             1,
         ),
@@ -3770,9 +4036,10 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
     )
     assert any("exact model-obligation bridge proof" in error for error in errors)
 
-    tla_path.write_text(
+    restore_provider_sources()
+    theorem_path.write_text(
         mutate_tla_theorem(
-            canonical_tla,
+            canonical_theorem_tla,
             contract.tla_theorem,
             contract.ledger_symbol,
             premise,
@@ -3790,9 +4057,12 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
     )
     assert any("must state exactly" in error for error in errors)
 
-    tla_path.write_text(
-        canonical_tla.replace(
-            f"THEOREM {contract.tla_theorem} ==",
+    exact_theorem_declaration = f"THEOREM {contract.tla_theorem} =="
+    assert canonical_theorem_tla.count(exact_theorem_declaration) == 1
+    restore_provider_sources()
+    theorem_path.write_text(
+        canonical_theorem_tla.replace(
+            exact_theorem_declaration,
             f"THEOREM {contract.tla_theorem}Substituted ==",
             1,
         ),
@@ -3900,7 +4170,11 @@ def test_release_module_list_covers_every_present_module_with_theorems() -> None
         for name in module.RELEASE_PROOF_MODULES
         if (module.FORMAL_DIR / f"{name}.tla").is_file()
     }
-    source_fidelity_theorem_modules: set[str] = set()
+    present_non_release_modules = {
+        name
+        for name in module.NON_RELEASE_THEOREM_MODULES
+        if (module.FORMAL_DIR / f"{name}.tla").is_file()
+    }
     async_source = module.strip_tla_comments(
         (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text()
     )
@@ -3913,9 +4187,25 @@ def test_release_module_list_covers_every_present_module_with_theorems() -> None
         )
     )
 
-    assert theorem_modules == (
-        present_release_modules | source_fidelity_theorem_modules
+    assert set(module.RELEASE_PROOF_MODULES).isdisjoint(
+        module.NON_RELEASE_THEOREM_MODULES
     )
+    assert theorem_modules == (
+        present_release_modules | present_non_release_modules
+    )
+    for name, expected_theorems in module.NON_RELEASE_THEOREM_MODULES.items():
+        source = module.strip_tla_comments(
+            (module.FORMAL_DIR / f"{name}.tla").read_text()
+        )
+        actual_theorems = tuple(
+            re.findall(
+                r"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
+                r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
+                r"([A-Za-z_][A-Za-z0-9_]*)\b",
+                source,
+            )
+        )
+        assert actual_theorems == expected_theorems
     assert async_theorems == ()
 
 
@@ -3937,6 +4227,14 @@ def test_async_production_model_and_proofs_are_ci_gated() -> None:
     assert (
         "SumeragiV2AsyncNetworkReplyRouteProofs"
         in module.REQUIRED_MODEL_MODULES
+    )
+    assert "SumeragiV2ReplyWriterDeadline" in module.REQUIRED_MODEL_MODULES
+    assert "SumeragiV2ReplyWriterDeadlineProofs" in (
+        module.REQUIRED_MODEL_MODULES
+    )
+    assert "SumeragiV2TypedRolloverHandoff" in module.REQUIRED_MODEL_MODULES
+    assert "SumeragiV2TypedRolloverHandoffProofs" in (
+        module.REQUIRED_MODEL_MODULES
     )
     assert "SumeragiV2AsyncLivenessProofs" in module.REQUIRED_MODEL_MODULES
     assert (
@@ -3961,11 +4259,23 @@ def test_async_production_model_and_proofs_are_ci_gated() -> None:
         "SumeragiV2AsyncNetworkReplyRouteProofs"
         in module.RELEASE_PROOF_MODULES
     )
+    assert "SumeragiV2ReplyWriterDeadlineProofs" in (
+        module.RELEASE_PROOF_MODULES
+    )
+    assert "SumeragiV2TypedRolloverHandoffProofs" in (
+        module.RELEASE_PROOF_MODULES
+    )
     assert (
         "SumeragiV2AsyncFairnessRefinementProofs"
         in module.RELEASE_PROOF_MODULES
     )
-    assert "SumeragiV2AsyncLivenessProofs" in module.RELEASE_PROOF_MODULES
+    assert module.ASYNC_LIVENESS_FACADE not in module.RELEASE_PROOF_MODULES
+    assert tuple(
+        name
+        for name in module.RELEASE_PROOF_MODULES
+        if name in module.ASYNC_LIVENESS_PROOF_SHARDS
+    ) == module.ASYNC_LIVENESS_PROOF_SHARDS
+    assert module.ASYNC_LIVENESS_DEBT_SHARD not in module.RELEASE_PROOF_MODULES
     assert (
         "SumeragiV2AsyncHistoricalRecoveryLivenessProofs"
         in module.RELEASE_PROOF_MODULES
@@ -3991,7 +4301,7 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
 
     expected_status = {
         "timeout-wire-authorization": "tlaps_proved",
-        "historical-tc-lock-commit": "tlaps_proved",
+        "same-round-lock-and-commit-authorization": "tlaps_proved",
         "effective-lock-body-acquisition-model": "tlaps_proved",
         "effective-lock-body-acquisition-production-refinement": (
             "specified_unproved"
@@ -4023,7 +4333,7 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
     height["module"] = "SumeragiV2Proofs"
     errors = module._proof_obligation_architecture_errors(drifted, {})
     assert any(
-        "proof obligation height-liveness must use SumeragiV2ChainEpochRefinement"
+        "proof obligation height-liveness must use SumeragiV2ChainLivenessProofs"
         in error
         for error in errors
     )
@@ -4108,36 +4418,17 @@ def test_audited_progress_and_rank_leaves_are_tlaps_proved() -> None:
     obligations = ledger["obligations"]
     by_id = {obligation["id"]: obligation for obligation in obligations}
 
-    assert len(obligations) == 57
+    assert len(obligations) == 64
     assert sum(
         obligation["status"] == "tlaps_proved"
         for obligation in obligations
-    ) == 33
+    ) == 35
     assert sum(
         obligation["status"] == "specified_unproved"
         for obligation in obligations
-    ) == 17
+    ) == 22
     assert by_id["async-runner-scheduler-preservation"]["status"] == "tlaps_proved"
     assert by_id["async-type-invariant"]["status"] == "tlaps_proved"
-    multilane_debt = {
-        "autoscale-lifecycle-production-refinement": (
-            "SumeragiV2AutoscaleLifecycle",
-            "AutoscaleLifecycleProductionRefinementObligation",
-        ),
-        "native-application-evidence-production-refinement": (
-            "SumeragiV2NativeApplicationEvidence",
-            "NativeApplicationEvidenceProductionRefinementObligation",
-        ),
-        "autonomous-reservation-carrier-production-refinement": (
-            "SumeragiV2AutonomousReservationCarrier",
-            "AutonomousReservationCarrierProductionRefinementObligation",
-        ),
-    }
-    for obligation_id, (formal_module, symbol) in multilane_debt.items():
-        obligation = by_id[obligation_id]
-        assert obligation["module"] == formal_module
-        assert obligation["symbol"] == symbol
-        assert obligation["status"] == "specified_unproved"
     expected = {
         "async-progress-ownership-invariant": (
             "AsyncSpecAlwaysProgressOwnershipInvariant",
@@ -4154,6 +4445,10 @@ def test_audited_progress_and_rank_leaves_are_tlaps_proved() -> None:
         "protected-service-rank-stage5-consensus-fifo": (
             "ProtectedStage5RankProgressFromFairFifo",
             "Consensus-I/O FIFO position",
+        ),
+        "protected-service-rank": (
+            "ProtectedServiceRankProgressObligation",
+            "strict temporal proof",
         ),
     }
     for obligation_id, (symbol, requirement_fragment) in expected.items():
@@ -4710,7 +5005,7 @@ def test_causal_fifo_rank_mutation_source_fidelity_fails_closed(
         for obligation in module.load_ledger()["obligations"]
         if obligation["id"] == "protected-service-rank"
     )
-    assert obligation["status"] == "specified_unproved"
+    assert obligation["status"] == "tlaps_proved"
     assert "doubled causal FIFO position" in obligation["requirement"]
 
 
@@ -5324,7 +5619,7 @@ def test_post_decision_timeout_mutation_source_seal_covers_exact_corpus(
         tmp_path, module
     )
 
-    assert len(module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) == 10
+    assert len(module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) == 11
     assert (
         sum(
             name.endswith(".tla")
@@ -5337,9 +5632,9 @@ def test_post_decision_timeout_mutation_source_seal_covers_exact_corpus(
             name.endswith(".cfg")
             for name in module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS
         )
-        == 9
+        == 10
     )
-    assert len(module.POST_DECISION_TIMEOUT_MUTATION_SHA256) == 11
+    assert len(module.POST_DECISION_TIMEOUT_MUTATION_SHA256) == 12
     assert module._post_decision_timeout_mutation_source_fidelity_errors(
         formal_dir, repo_root
     ) == []
@@ -5389,7 +5684,7 @@ def test_post_decision_timeout_mutation_source_seal_rejects_missing_extra_and_sy
     repo_root, formal_dir = copy_post_decision_timeout_mutation_fixture(
         tmp_path, module
     )
-    missing = formal_dir / "post_decision_form_tc_guard_bug.cfg"
+    missing = formal_dir / "post_decision_complete_timeout_guard_bug.cfg"
     missing.unlink()
     errors = module._post_decision_timeout_mutation_source_fidelity_errors(
         formal_dir, repo_root
@@ -5429,7 +5724,7 @@ def test_post_decision_timeout_mutation_source_seal_rejects_missing_extra_and_sy
 def copy_certified_response_registration_fixture(
     tmp_path: Path, module
 ) -> tuple[Path, Path]:
-    """Copy the exact seven-file corpus and its production TLA+ seam."""
+    """Copy the exact nine-file corpus and its production TLA+ seam."""
 
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
@@ -5470,7 +5765,7 @@ def test_certified_response_registration_source_seal_covers_exact_corpus(
         tmp_path, module
     )
 
-    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS) == 6
+    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS) == 8
     assert (
         sum(
             name.endswith(".tla")
@@ -5483,9 +5778,9 @@ def test_certified_response_registration_source_seal_covers_exact_corpus(
             name.endswith(".cfg")
             for name in module.CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS
         )
-        == 5
+        == 7
     )
-    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_SHA256) == 7
+    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_SHA256) == 9
     assert (
         "_certified_response_registration_mutation_source_fidelity_errors"
         in module.validate_ledger.__code__.co_names
@@ -5717,7 +6012,7 @@ def test_certified_response_registration_runner_rejects_semantic_drift(
         ),
         (
             source.replace("run_case restart-fixed", "run_case duplicate-fixed", 1),
-            "must execute exactly five sealed cases in order",
+            "must execute exactly seven sealed cases in order",
         ),
         (
             source.replace(
@@ -5725,7 +6020,7 @@ def test_certified_response_registration_runner_rejects_semantic_drift(
                 "12 states generated, 11 distinct states found",
                 1,
             ),
-            "must report exactly 36 generated states",
+            "must report exactly 45 generated states",
         ),
     )
     for mutated_source, expected_error in mutations:
@@ -5805,7 +6100,8 @@ def test_certified_response_registration_source_fidelity_rejects_guard_and_order
         )
     )
     assert any(
-        "must require one exact live matching certified request" in error
+        "must require an authenticated sent occurrence, one exact "
+        "live request hash, and its frozen certificate binding" in error
         for error in errors
     ), errors
 
@@ -5837,8 +6133,10 @@ def test_certified_response_registration_source_fidelity_rejects_guard_and_order
     wrong_identity = mutate_tla_operator(
         source,
         "MatchingCertifiedRequests",
-        "request.envelope.subject = response.envelope.subject",
-        "request.envelope.subject # response.envelope.subject",
+        "AsyncCertifiedRequestHash(request) =\n"
+        "          response.envelope.requestHash",
+        "AsyncCertifiedRequestHash(request) #\n"
+        "          response.envelope.requestHash",
     )
     async_path.write_text(wrong_identity, encoding="utf-8")
     errors = (
@@ -5847,7 +6145,7 @@ def test_certified_response_registration_source_fidelity_rejects_guard_and_order
         )
     )
     assert any(
-        "must retain exact outstanding-request identity" in error
+        "must retain exact outstanding signed-request-hash identity" in error
         for error in errors
     ), errors
 
@@ -6004,6 +6302,14 @@ def test_successor_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "let (receipt, artifact, exact_output_handoff) = finality;",
+            "let (receipt, artifact) = finality;",
+            "successor startup must carry interrupted-tip or admitted discovered "
+            "CommitQC recovery and clear ordinary live finality",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "const fn retain_eager_block_sync(",
             "recovering_interrupted_tip || admitted_discovered_commit_qc",
             "{ let _ = admitted_discovered_commit_qc; recovering_interrupted_tip }",
@@ -6129,6 +6435,27 @@ def test_successor_production_source_is_bound() -> None:
             "v2_finality_artifact_with_receipt(durable_height)",
             "v2_finality_artifact(durable_height)",
             "recover_active_height complete-tip authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "    fn register_parent_qc(",
+            "if !reference.same_commit_decision(frozen) {",
+            "if false {",
+            "WireRegistry::register_parent_qc omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "    fn justification_to_core(",
+            ".map(|certificate| self.register_parent_qc(certificate))",
+            ".map(|certificate| self.qc_reference_to_core(&certificate.as_ref()))",
+            "WireRegistry::justification_to_core omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn verify_proposal_justification_authority(",
+            "(Some(certificate), Some(parent_verification)) => verify_quorum_certificate(",
+            "(Some(_), Some(_)) => Ok(",
+            "verify_proposal_justification_authority omits production refinement tokens",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
@@ -6312,23 +6639,23 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             .transpose()?;""",
             "let locked_subject = None;",
             "runner directive must project",
-        ),
-        (
-            "runner_fresh_fallback",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "schedule_local_proposal",
-            "if directive.locked_subject().is_some() {",
-            "if directive.locked_subject().is_none() {",
-            "locked directive must never fall through",
-        ),
-        (
-            "runner_subject_mismatch",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "submit_exact_body",
-            ".is_some_and(|locked| locked != subject)",
-            ".is_some_and(|locked| locked == subject)",
-            "exact-body submission must reject",
-        ),
+            ),
+            (
+                "runner_fresh_fallback",
+                "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                "schedule_local_proposal",
+                "if directive.locked_body().is_some() {",
+                "if directive.locked_body().is_none() {",
+                "locked directive must never fall through",
+            ),
+            (
+                "runner_subject_mismatch",
+                "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                "encode_exact_local_body",
+                "locked_subject.is_some_and(|locked| locked != subject)",
+                "locked_subject.is_some_and(|locked| locked == subject)",
+                "subject differs from the durable lock",
+            ),
         (
             "runner_disconnected_admission",
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -6355,6 +6682,1780 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         assert any(error_fragment in error for error in errors), errors
 
 
+def test_canonical_sidecar_request_identity_binds_generation_and_occurrence() -> None:
+    module = load_checker()
+
+    assert module._canonical_sidecar_request_identity_errors(ROOT_DIR) == []
+
+
+def test_transport_hardening_production_source_is_bound() -> None:
+    module = load_checker()
+
+    assert (
+        module._transport_hardening_production_source_fidelity_errors(ROOT_DIR)
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "item_name", "old", "new", "error_fragment"),
+    (
+        (
+            "crates/iroha_core/src/lib.rs",
+            "inbound_certified_merge_sidecar_topic",
+            "0..=3 => Ok(Topic::Consensus),",
+            "0..=2 => Ok(Topic::Consensus),",
+            "raw certified-sidecar tags 0 through 3 must be Consensus",
+        ),
+        (
+            "crates/iroha_core/src/lib.rs",
+            "inbound_certified_merge_sidecar_topic",
+            "4 => Ok(Topic::ConsensusChunk),",
+            "4 => Ok(Topic::Consensus),",
+            "tag 4 must be ConsensusChunk",
+        ),
+        (
+            "crates/iroha_core/src/lib.rs",
+            "inbound_certified_merge_sidecar_topic",
+            "_ => Err(norito::core::Error::Message(\n"
+            '            "unknown certified merge-sidecar discriminant".to_owned(),\n'
+            "        )),",
+            "_ => Ok(Topic::Consensus),",
+            "every unknown tag must fail closed",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "try_incoming_lane_relay_owned",
+            "requester != sender || !self.block.frozen_roster_contains(sender)",
+            "false",
+            "bind their semantic requester to the frozen roster before shared lane-queue admission",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "try_incoming_lane_relay_owned",
+            'iroha_logger::debug!(\n'
+            "                    %sender,\n"
+            '                    "rejecting non-roster certified merge-sidecar allocation before lane ingress"\n'
+            "                );\n"
+            "                return SumeragiIngressDisposition::Rejected(message);",
+            'iroha_logger::debug!(\n'
+            "                    %sender,\n"
+            '                    "rejecting non-roster certified merge-sidecar allocation before lane ingress"\n'
+            "                );\n"
+            "                let _ = &message;",
+            "frozen semantic Request/Close admission must precede the shared lane queue",
+        ),
+        (
+            "crates/irohad/src/main.rs",
+            "ingress_policy",
+            "iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)\n"
+            "                | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_) => {\n"
+            "                    IngressPolicy::limited()\n"
+            "                }",
+            "iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)\n"
+            "                | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_) => {\n"
+            "                    IngressPolicy::critical()\n"
+            "                }",
+            "rate-limit allocating Request/Close",
+        ),
+        (
+            "crates/irohad/src/main.rs",
+            "ingress_policy",
+            "iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "                | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => {\n"
+            "                    IngressPolicy::critical()\n"
+            "                }",
+            "iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "                | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => {\n"
+            "                    IngressPolicy::limited()\n"
+            "                }",
+            "protecting CloseAck/GenerationHint as critical",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "retire_unmaterialized_server_request",
+            "journal.persist(&projected)?;",
+            "let _ = journal.persist(&projected);",
+            "publish its complete projection before mutating either in-memory owner",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "retire_unmaterialized_server_request",
+            ".fold(stream.closed_through, u64::max);",
+            ".fold(0, u64::max);",
+            "recompute the exact retained stream high-water",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "retire_unmaterialized_server_request",
+            "candidate_key.1 != request.request_id",
+            "candidate_key.1 == request.request_id",
+            "recompute the exact retained stream high-water",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "retire_unmaterialized_server_request",
+            "durable_stream.highest_sequence = retained_highest_sequence;",
+            "durable_stream.highest_sequence = request.semantic_sequence.get();",
+            "lower its one stream high-water",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "service_next_certified_merge_sidecar_materialization",
+            'MergeSidecarError::Capacity("outbound response budget")',
+            "MergeSidecarError::Capacity(_)",
+            "only exact outbound response capacity and late exact-route retirement may cancel",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "service_next_certified_merge_sidecar_materialization",
+            "Ok(None) => {\n"
+            "                self.merge_sidecars\n"
+            "                    .retire_unmaterialized_server_request(&requester, &request)",
+            "Ok(None) => {\n"
+            "                self.merge_sidecars\n"
+            "                    .cancel_unmaterialized_server_request(&requester, &request)",
+            "every terminal Kura, metadata, or holder materialization failure must durably retire",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "service_next_certified_merge_sidecar_materialization",
+            ".is_some_and(|route| !route.is_active())",
+            ".is_some_and(|_| true)",
+            "only exact outbound response capacity and late exact-route retirement may cancel",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "service_next_certified_merge_sidecar_materialization",
+            "Err(V2LaneWorkError::RestartRequired)",
+            "Ok(false)",
+            "every other enqueue failure requires restart",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "frozen_roster_contains",
+            ".any(|entry| &entry.validator == peer)",
+            ".any(|entry| &entry.validator != peer)",
+            "must use the exact frozen HeightContext roster",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "accept_certified_merge_sidecar_request",
+            "if !self.frozen_roster_contains(&sender) {",
+            "if false && !self.frozen_roster_contains(&sender) {",
+            "Request semantic sender must belong to the frozen HeightContext roster",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "accept_certified_merge_sidecar_close",
+            "if !self.frozen_roster_contains(&sender) {",
+            "if false && !self.frozen_roster_contains(&sender) {",
+            "Close semantic sender must belong to the frozen HeightContext roster",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "accept_certified_merge_sidecar_request",
+            "let now = Instant::now();",
+            "if !self.frozen_roster_contains(reply_route.authenticated_source_peer()) {\n"
+            "            return Ok(V2LaneIngressOutcome::Rejected);\n"
+            "        }\n"
+            "        let now = Instant::now();",
+            "authenticated relay hub may remain outside",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "ensure_server_stream_slot",
+            'Err(MergeSidecarError::Capacity(\n'
+            '            "server semantic requester geometry",\n'
+            "        ))",
+            "self.roll_server_service_generation()?;\n"
+            "        Ok(())",
+            "stream-slot helper must reject immutable-capacity exhaustion without independently rolling",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "admit_server_request",
+            "self.roll_server_service_generation()?;",
+            'return Err(MergeSidecarError::Capacity(\n'
+            '                "server semantic requester geometry",\n'
+            "            ));",
+            "full responder table may roll only through checked terminal compaction",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "admit_server_request",
+            'return Err(MergeSidecarError::Capacity("server request gate geometry"));',
+            "self.roll_server_service_generation()?;\n"
+            '            return Err(MergeSidecarError::Capacity("server request gate geometry"));',
+            "Request pressure must reject at each explicit bound",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "admit_server_close",
+            "if !self.server_streams.contains_key(sender) {\n"
+            "            return Ok(close_ack());\n"
+            "        }",
+            "if !self.server_streams.contains_key(sender) {\n"
+            "            self.ensure_server_stream_slot(sender)?;\n"
+            "        }",
+            "unknown current-generation canonical Close must return its exact-route CloseAck before touching responder state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "admit_server_close",
+            "if close.closed_through < stream.closed_through {",
+            "if close.closed_through > stream.closed_through {",
+            "known Close streams must reject regressions",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "admit_server_close",
+            "let mut changed = false;",
+            "self.roll_server_service_generation()?;\n"
+            "        let mut changed = false;",
+            "Close admission must never trigger a service-generation rollover",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "require_peeked_lane_work_effect",
+            "drained.ok_or(V2RunnerError::RestartRequired)",
+            'Ok(drained.expect("peeked lane work disappeared"))',
+            "must return RestartRequired without panicking",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "dispatch_lane_work_effects",
+            "if !retain_active_owned_reply_routes(&mut next_effect) {\n"
+            "            let _ = "
+            "require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;",
+            "if !retain_active_owned_reply_routes(&mut next_effect) {\n"
+            "            let _ = lane_work\n"
+            "                .drain_effects(1)\n"
+            "                .pop()\n"
+            '                .expect("peeked lane work disappeared");',
+            "every successful lane-work peek must fail stop",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "fair_v2_ingress_required_merge_sidecar_chunk_network_message_bytes_for_key",
+            "MAX_CERTIFIED_MERGE_CHUNK_BYTES.checked_add(8)?",
+            "MAX_CERTIFIED_MERGE_CHUNK_BYTES.checked_add(7)?",
+            "explicitly include the maximum chunk byte sequence",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "fair_v2_ingress_required_block_sync_p2p_frame_bytes",
+            ".max(fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes())",
+            ".max(0)",
+            "BlockSync frame floor must include an explicit maximum certified-sidecar chunk",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "configure_roster_for_context",
+            "fair_v2_ingress_required_block_sync_p2p_frame_bytes(layout)",
+            "fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes()",
+            "context activation must install the complete BlockSync frame floor",
+        ),
+        (
+            "crates/irohad/src/main.rs",
+            "certified_merge_sidecar_ingress_reply_route",
+            "iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
+            "iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => {\n"
+            "            Some(reply_route)\n"
+            "        },",
+            "discard the process-local reply route only for route-free GenerationHint",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "generation_hint_post",
+            "reply_route: None,",
+            "reply_route: Some(todo!()),",
+            "GenerationHint must use route-free Consensus control traffic",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "admit_server_close",
+            "reply_route: reply_route.cloned(),",
+            "reply_route: None,",
+            "CloseAck must retain the exact authenticated Close reply route",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "retryable_sidecar_server_control_peer",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_none()",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_some()",
+            "GenerationHint remains route-free topology control",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "lane_work_effect_reply_routes_have_valid_shape",
+            "CertifiedMergeSidecarMessage::CloseAck(_)",
+            "CertifiedMergeSidecarMessage::Request(_)",
+            "Request, Close, and GenerationHint must use topology while CloseAck",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "lane_work_effect_reply_routes_are_valid",
+            "| CertifiedMergeSidecarMessage::GenerationHint(_) => reply_routes.is_none(),",
+            "| CertifiedMergeSidecarMessage::GenerationHint(_) => reply_routes.is_some(),",
+            "Request, Close, and GenerationHint must use topology while CloseAck",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "accept_certified_merge_sidecar_close_ack",
+            "if !reply_route.is_active() || reply_route.semantic_target() != &sender {",
+            "if false && (!reply_route.is_active() || reply_route.semantic_target() != &sender) {",
+            "CloseAck reply-route ingress must require one active route",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "accept_certified_merge_sidecar_generation_hint",
+            "if reply_route.is_some() {",
+            "if reply_route.is_none() {",
+            "GenerationHint ingress must reject process-local reply-route ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "post_certified_merge_sidecar_with_reply_routes",
+            "reply_routes.is_none()",
+            "reply_routes.is_some()",
+            "worker dispatch must keep Request, Close, and GenerationHint on topology",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "post_certified_merge_sidecar_with_reply_routes",
+            "CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {\n"
+            "                reply_routes.is_some()\n"
+            "            }",
+            "CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {\n"
+            "                reply_routes.is_none()\n"
+            "            }",
+            "CloseAck and Chunk retain exact reply routes",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "retryable_certified_sidecar_responder_control_target",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) => self\n"
+            "                    .targets\n"
+            "                    .iter()\n"
+            "                    .all(|route| matches!(&route.route, ExactTargetRoute::Topology)),",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) => self\n"
+            "                    .targets\n"
+            "                    .iter()\n"
+            "                    .all(|route| matches!(&route.route, ExactTargetRoute::Reply(_))),",
+            "distinguish exact-route CloseAck from topology GenerationHint",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "dispatch_lane_work_effect",
+            "reply_routes.is_none()",
+            "reply_routes.is_some()",
+            "runner dispatch must keep Request, Close, and GenerationHint on topology",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "dispatch_lane_work_effect",
+            "| CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),",
+            "| CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_none(),",
+            "CloseAck and Chunk retain exact reply routes",
+        ),
+    ),
+)
+def test_transport_hardening_production_source_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    item_name: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+) -> None:
+    module = load_checker()
+    copy_transport_hardening_fixture(tmp_path)
+    mutate_rust_item_source(
+        module,
+        tmp_path / relative_path,
+        item_name,
+        old,
+        new,
+    )
+
+    errors = module._transport_hardening_production_source_fidelity_errors(tmp_path)
+
+    assert any(error_fragment in error for error in errors), errors
+
+
+def test_reply_writer_deadline_production_source_is_bound() -> None:
+    module = load_checker()
+
+    assert (
+        module._reply_writer_deadline_production_source_fidelity_errors(ROOT_DIR)
+        == []
+    )
+
+
+def test_reply_writer_deadline_formal_source_is_bound() -> None:
+    module = load_checker()
+
+    assert (
+        module._reply_writer_deadline_formal_source_fidelity_errors(
+            module.FORMAL_DIR, ROOT_DIR
+        )
+        == []
+    )
+
+
+def test_typed_rollover_handoff_formal_source_is_bound() -> None:
+    module = load_checker()
+
+    assert (
+        module._typed_rollover_handoff_formal_source_fidelity_errors(
+            module.FORMAL_DIR, ROOT_DIR
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "old", "new", "error_fragment"),
+    (
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "  /\\ deadlineSet' = TRUE\n"
+            "  /\\ deadlineBudget' = ScaledDeadline(timeoutAttempt)\n"
+            "  /\\ deadlineOrigin' = 0",
+            "  /\\ deadlineSet' = FALSE\n"
+            "  /\\ deadlineBudget' = ScaledDeadline(timeoutAttempt)\n"
+            "  /\\ deadlineOrigin' = 0",
+            "FirstExactActorDispatch must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "                 timedOutCount, dispatchStarted, deadlineSet,\n"
+            "                 deadlineBudget, deadlineOrigin, deadlineDue, ackReady,\n"
+            "                 ackTimeoutAttempt, writerFlushObserved, ackPublished, routeWritable,\n"
+            "                 occurrenceConnection, currentConnection,\n"
+            "                 protectedReplacement>>",
+            "                 timedOutCount, dispatchStarted,\n"
+            "                 deadlineBudget, deadlineOrigin, deadlineDue, ackReady,\n"
+            "                 ackTimeoutAttempt, writerFlushObserved, ackPublished, routeWritable,\n"
+            "                 occurrenceConnection, currentConnection,\n"
+            "                 protectedReplacement>>",
+            "RetryFullPeerWriterQueue must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "  /\\ kind = \"ExactReply\" =>\n"
+            "       (writerFlushObserved <=> (ackReady \\/ ackPublished))",
+            "  /\\ kind = \"ExactReply\" =>\n"
+            "       (ackReady \\/ ackPublished)",
+            "FlushOutcomeInvariant must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "WriterFlushObservationOriginAction ==\n"
+            "  Next =>\n"
+            "    (/\\ ~writerFlushObserved\n"
+            "     /\\ writerFlushObserved'\n"
+            "     => PublishPeerWriterFlush)",
+            "WriterFlushObservationOriginAction ==\n"
+            "  Next => TRUE",
+            "WriterFlushObservationOriginAction must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "WriterFlushObservationMonotonicAction ==\n"
+            "  /\\ ReplyWriterDeadlineInvariant\n"
+            "  /\\ Next\n"
+            "  /\\ writerFlushObserved\n"
+            "  => writerFlushObserved'",
+            "WriterFlushObservationMonotonicAction ==\n"
+            "  TRUE",
+            "WriterFlushObservationMonotonicAction must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "ExactDeadlineDue ==\n"
+            "  /\\ ExactActive\n"
+            "  /\\ deadlineDue\n"
+            "  /\\ ~ackReady\n"
+            "  /\\ ~writerFlushObserved",
+            "ExactDeadlineDue ==\n"
+            "  /\\ ExactActive\n"
+            "  /\\ deadlineDue\n"
+            "  /\\ ~ackReady",
+            "ExactDeadlineDue must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "  /\\ WF_replyWriterDeadlineVars(PollPeerWriterFlush)\n\n"
+            "ResponsiveReplyWriterSpec ==",
+            "  /\\ WF_replyWriterDeadlineVars(PollPeerWriterFlush)\n"
+            "  /\\ SF_replyWriterDeadlineVars(PublishPeerWriterFlush)\n\n"
+            "ResponsiveReplyWriterSpec ==",
+            "ReplyWriterDeadlineSpec may not contain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "  /\\ SF_replyWriterDeadlineVars(AdmitPeerWriter)\n"
+            "  /\\ SF_replyWriterDeadlineVars(PublishPeerWriterFlush)",
+            "  /\\ SF_replyWriterDeadlineVars(AdmitPeerWriter)",
+            "ResponsiveReplyWriterSpec must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "  /\\ dispatchStarted\n"
+            "  /\\ ~ackReady\n"
+            "  /\\ occurrenceConnection = \"OldConnection\"\n"
+            "  /\\ phase' = \"Parked\"",
+            "  /\\ dispatchStarted\n"
+            "  /\\ occurrenceConnection = \"OldConnection\"\n"
+            "  /\\ phase' = \"Parked\"",
+            "RetireOldExactRoute must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "TerminalFenceReadyWinsEveryDestructiveExitAction ==\n"
+            "  ExactFlushReady =>\n"
+            "    /\\ ~ExpireExactDeadline\n"
+            "    /\\ ~ClosePeerWriter\n"
+            "    /\\ ~RetireOldExactRoute",
+            "TerminalFenceReadyWinsEveryDestructiveExitAction ==\n"
+            "  ExactFlushReady =>\n"
+            "    /\\ ~ExpireExactDeadline\n"
+            "    /\\ ClosePeerWriter\n"
+            "    /\\ ~RetireOldExactRoute",
+            "TerminalFenceReadyWinsEveryDestructiveExitAction must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "  /\\ ackReady\n"
+            "  /\\ ackTimeoutAttempt = timeoutAttempt\n"
+            "  /\\ writerFlushObserved",
+            "  /\\ ackReady\n"
+            "  /\\ writerFlushObserved",
+            "ExactFlushReady must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "FlushAttemptIdentityInvariant ==\n"
+            "  /\\ ackReady => ackTimeoutAttempt = timeoutAttempt\n"
+            "  /\\ ~ackReady => ackTimeoutAttempt = 0",
+            "FlushAttemptIdentityInvariant ==\n"
+            "  TRUE",
+            "FlushAttemptIdentityInvariant must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "WriterFlushAttemptIdentityAction ==\n"
+            "  PublishPeerWriterFlush =>\n"
+            "    ackTimeoutAttempt' = timeoutAttempt",
+            "WriterFlushAttemptIdentityAction ==\n"
+            "  TRUE",
+            "WriterFlushAttemptIdentityAction must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "THEOREM WriterFlushObservationComesOnlyFromPublish ==\n"
+            "  WriterFlushObservationOriginAction",
+            "THEOREM WriterFlushObservationMayBeForged ==\n"
+            "  WriterFlushObservationOriginAction",
+            "missing reviewed reply-writer deadline theorem "
+            "WriterFlushObservationComesOnlyFromPublish",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "THEOREM WriterFlushObservationIsNeverErased ==\n"
+            "  WriterFlushObservationMonotonicAction",
+            "THEOREM WriterFlushObservationMayBeErased ==\n"
+            "  WriterFlushObservationMonotonicAction",
+            "missing reviewed reply-writer deadline theorem "
+            "WriterFlushObservationIsNeverErased",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "THEOREM TerminalFenceReadyReceiptWinsEveryDestructiveExit ==\n"
+            "  TerminalFenceReadyWinsEveryDestructiveExitAction",
+            "THEOREM TerminalFenceMayLoseReadyReceipt ==\n"
+            "  TerminalFenceReadyWinsEveryDestructiveExitAction",
+            "missing reviewed reply-writer deadline theorem "
+            "TerminalFenceReadyReceiptWinsEveryDestructiveExit",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "THEOREM ResponsiveStrongFairnessToReceiptResidual ==\n"
+            "  ResponsiveReplyWriterSpec => ResponsiveWriterReceiptAssumption",
+            "THEOREM ResponsiveStrongFairnessToReceiptDebt ==\n"
+            "  ResponsiveReplyWriterSpec => ResponsiveWriterReceiptAssumption",
+            "missing reviewed reply-writer deadline theorem "
+            "ResponsiveStrongFairnessToReceiptResidual",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "BY ResponsiveStrongFairnessToReceiptObservation,\n"
+            "   ReplyWriterDeadlineSpecAlwaysInvariant,\n"
+            "   OutstandingReceiptObservationIsReady, PTL",
+            "BY PTL",
+            "ResponsiveStrongFairnessToReceiptResidual must retain deductive",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "THEOREM ResponsiveReplyWriterCursorLivenessFromStrongFairness ==\n"
+            "  ResponsiveReplyWriterSpec => ResponsiveReplyWriterCursorLiveness",
+            "THEOREM ResponsiveReplyWriterCursorLivenessWithoutFairness ==\n"
+            "  ResponsiveReplyWriterSpec => ResponsiveReplyWriterCursorLiveness",
+            "missing reviewed reply-writer deadline theorem "
+            "ResponsiveReplyWriterCursorLivenessFromStrongFairness",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "  /\\ ackPublished' = TRUE\n"
+            "  /\\ UNCHANGED <<kind, timeoutAttempt, timedOutCount, dispatchStarted,\n"
+            "                 dispatchRetries, ackReady, writerFlushObserved,",
+            "  /\\ ackPublished' = TRUE\n"
+            "  /\\ writerFlushObserved' = TRUE\n"
+            "  /\\ UNCHANGED <<kind, timeoutAttempt, timedOutCount, dispatchStarted,\n"
+            "                 dispatchRetries, ackReady,",
+            "TimeoutAsFlushed must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "  /\\ routeWritable' = FALSE\n"
+            "  /\\ ackReady' = FALSE\n"
+            "  /\\ ackTimeoutAttempt' = 0\n"
+            "  /\\ UNCHANGED <<kind, cursor, dispatchStarted, dispatchRetries,\n"
+            "                 writerFlushObserved, ackPublished, occurrenceConnection,",
+            "  /\\ routeWritable' = FALSE\n"
+            "  /\\ ackReady' = FALSE\n"
+            "  /\\ ackTimeoutAttempt' = 0\n"
+            "  /\\ writerFlushObserved' = FALSE\n"
+            "  /\\ UNCHANGED <<kind, cursor, dispatchStarted, dispatchRetries,\n"
+            "                 ackPublished, occurrenceConnection,",
+            "TimeoutBeatsReadyFlush must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            '   "RetireReadyFlush",',
+            '   "RetireReadyReceipt",',
+            "MutationModes must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            '   "CloseReadyFlushWithoutTerminalFence",',
+            '   "CloseReadyFlushWithTerminalFence",',
+            "MutationModes must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            '   "PublishWrongTimeoutAttempt",',
+            '   "PublishCurrentTimeoutAttempt",',
+            "MutationModes must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "PublishWrongTimeoutAttempt ==\n"
+            "  /\\ ExactActive\n"
+            "  /\\ phase = \"WriterPending\"\n"
+            "  /\\ timeoutAttempt > 0",
+            "PublishWrongTimeoutAttempt ==\n"
+            "  /\\ ExactActive\n"
+            "  /\\ phase = \"WriterPending\"\n"
+            "  /\\ timeoutAttempt = 0",
+            "PublishWrongTimeoutAttempt must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "CloseReadyFlushWithoutTerminalFence ==\n"
+            "  /\\ ExactFlushReady\n"
+            "  /\\ phase' = \"Parked\"",
+            "CloseReadyFlushWithoutTerminalFence ==\n"
+            "  /\\ ExactActive\n"
+            "  /\\ phase' = \"Parked\"",
+            "CloseReadyFlushWithoutTerminalFence must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "  /\\ ackReady' = FALSE\n"
+            "  /\\ ackTimeoutAttempt' = 0\n"
+            "  /\\ writerFlushObserved' = FALSE\n"
+            "  /\\ UNCHANGED <<kind, cursor, timeoutAttempt, timedOutCount,",
+            "  /\\ ackReady' = FALSE\n"
+            "  /\\ ackTimeoutAttempt' = 0\n"
+            "  /\\ UNCHANGED <<kind, cursor, timeoutAttempt, timedOutCount,",
+            "EraseReadyFlushWitness must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "MutationWriterFlushObservationMonotonicity ==\n"
+            "  [][MutationWriterFlushObservationMonotonicAction]"
+            "_replyWriterDeadlineVars",
+            "MutationWriterFlushObservationMonotonicity ==\n"
+            "  TRUE",
+            "MutationWriterFlushObservationMonotonicity must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "RetireReadyFlush ==\n"
+            "  /\\ ExactFlushReady\n"
+            "  /\\ occurrenceConnection = \"OldConnection\"",
+            "RetireReadyFlush ==\n"
+            "  /\\ ExactActive\n"
+            "  /\\ occurrenceConnection = \"OldConnection\"",
+            "RetireReadyFlush must retain",
+        ),
+        (
+            "docs/formal/sumeragi_v2/reply_writer_deadline_timeout_beats_flush_bug.cfg",
+            '  MutationMode = "TimeoutBeatsReadyFlush"',
+            '  MutationMode = "Fixed"',
+            "must match exact reviewed SHA-256",
+        ),
+        (
+            "docs/formal/sumeragi_v2/reply_writer_deadline_close_ready_flush_bug.cfg",
+            '  MutationMode = "CloseReadyFlushWithoutTerminalFence"',
+            '  MutationMode = "Fixed"',
+            "must match exact reviewed SHA-256",
+        ),
+        (
+            "docs/formal/sumeragi_v2/reply_writer_deadline_wrong_attempt_flush_bug.cfg",
+            '  MutationMode = "PublishWrongTimeoutAttempt"',
+            '  MutationMode = "Fixed"',
+            "must match exact reviewed SHA-256",
+        ),
+        (
+            "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+            '"retirement-beats-ready-flush|reply_writer_deadline_retire_ready_flush_bug.cfg|12|',
+            '"retirement-loses-ready-flush|reply_writer_deadline_retire_ready_flush_bug.cfg|12|',
+            "must list "
+            '"retirement-beats-ready-flush|reply_writer_deadline_retire_ready_flush_bug.cfg|12|',
+        ),
+        (
+            "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+            '"inactive-close-beats-ready-flush|reply_writer_deadline_close_ready_flush_bug.cfg|12|',
+            '"inactive-close-loses-ready-flush|reply_writer_deadline_close_ready_flush_bug.cfg|12|',
+            "must list "
+            '"inactive-close-beats-ready-flush|reply_writer_deadline_close_ready_flush_bug.cfg|12|',
+        ),
+        (
+            "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+            "reply_writer_deadline_erase_ready_witness_bug.cfg|13|",
+            "reply_writer_deadline_erase_ready_witness_bug.cfg|12|",
+            "must list "
+            '"erase-ready-flush-witness|reply_writer_deadline_erase_ready_witness_bug.cfg|13|',
+        ),
+        (
+            "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+            "SumeragiV2ReplyWriterDeadlineProofs; do",
+            "SumeragiV2ReplyWriterDeadlineMutation; do",
+            "must SANY-parse the proof module exactly once",
+        ),
+        (
+            "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+            "run_case deadline-local-termination-fixed \\\n"
+            "  SumeragiV2ReplyWriterDeadline.tla \\\n"
+            "  reply_writer_deadline_fixed.cfg 0 \\\n"
+            '  "Model checking completed. No error has been found." \\\n'
+            '  "331 states generated, 164 distinct states found, 0 states left on queue."',
+            "run_case deadline-local-termination-fixed \\\n"
+            "  SumeragiV2ReplyWriterDeadline.tla \\\n"
+            "  reply_writer_deadline_fixed.cfg 0 \\\n"
+            '  "Model checking completed. No error has been found." \\\n'
+            '  "330 states generated, 164 distinct states found, 0 states left on queue."',
+            "exact generated/distinct/depth markers",
+        ),
+    ),
+)
+def test_reply_writer_deadline_formal_source_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_reply_writer_deadline_formal_fixture(tmp_path, module)
+    mutate_source_once(tmp_path / relative_path, old, new)
+
+    errors = module._reply_writer_deadline_formal_source_fidelity_errors(
+        formal_dir, tmp_path
+    )
+
+    assert any(error_fragment in error for error in errors), errors
+
+
+def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+
+    for index, name in enumerate(
+        module._TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256
+    ):
+        case_root = tmp_path / f"formal-{index}"
+        formal_dir = copy_typed_rollover_handoff_formal_fixture(
+            case_root, module
+        )
+        path = formal_dir / name
+        path.write_bytes(path.read_bytes() + b"\n")
+
+        errors = module._typed_rollover_handoff_formal_source_fidelity_errors(
+            formal_dir, case_root
+        )
+
+        assert any(
+            f"{path}: typed rollover-handoff formal source must match exact "
+            "reviewed SHA-256" in error
+            for error in errors
+        ), (name, errors)
+
+    runner_root = tmp_path / "runner"
+    formal_dir = copy_typed_rollover_handoff_formal_fixture(
+        runner_root, module
+    )
+    runner = (
+        runner_root
+        / "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh"
+    )
+    runner.write_bytes(runner.read_bytes() + b"\n")
+
+    errors = module._typed_rollover_handoff_formal_source_fidelity_errors(
+        formal_dir, runner_root
+    )
+
+    assert any(
+        f"{runner}: typed rollover-handoff mutation runner must match exact "
+        "reviewed SHA-256" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "old", "new", "error_fragment"),
+    (
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "  /\\ FailureLatchInvariant\n"
+            "  /\\ LateOldCallbackIsolationInvariant",
+            "  /\\ FailureLatchInvariant",
+            "TypedRolloverSafetyInvariant must equal exact reviewed",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "    /\\ PredecessorMismatchCandidateStepSafety\n"
+            "    /\\ WrongSuccessorCandidateStepSafety",
+            "    /\\ PredecessorMismatchCandidateStepSafety",
+            "TypedRolloverNextSatisfiesActionSafety must state only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            r"        \/ ChangedRolloverRank7"
+            "\n"
+            r"        \/ ChangedRolloverRank8)",
+            r"        \/ ChangedRolloverRank7)",
+            "ChangedRolloverControlInvariant must equal exact reviewed",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "BY SMTT(180)\n"
+            "   DEF ChangedRolloverControlInvariant, PreValidationControl,",
+            "BY SMTT(179)\n"
+            "   DEF ChangedRolloverControlInvariant, PreValidationControl,",
+            "TypedRolloverNextPreservesControl proof must retain "
+            "reviewed tactic/composition fragments",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "ValidationCandidatePending ==\n"
+            r"  \/ foreignReceiptCandidatePresent"
+            "\n"
+            r'  \/ predecessorMismatchCandidateKind # "NoMismatch"'
+            "\n"
+            r"  \/ wrongSuccessorCandidatePresent",
+            "ValidationCandidatePending ==\n"
+            r"  \/ foreignReceiptCandidatePresent"
+            "\n"
+            r'  \/ predecessorMismatchCandidateKind # "NoMismatch"',
+            "ValidationCandidatePending must equal exact reviewed",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "    /\\ (wrongSuccessorCandidatePresent =>\n"
+            "          wrongSuccessorCandidatePresent' \\/ restartRequired')\n"
+            "BY TypedRolloverNextSatisfiesActionSafety, SMTT(30)",
+            "BY TypedRolloverNextSatisfiesActionSafety, SMTT(30)",
+            "ValidationCandidatesPersistOrFail must state only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "BY ValidationCandidatesLeadToRestart, PTL\n"
+            "   DEF ValidationCandidatePending",
+            "BY ValidationCandidatesLeadToRestart\n"
+            "   DEF ValidationCandidatePending",
+            "ValidationCandidateLeadsToRestart proof must retain "
+            "reviewed tactic/composition fragments",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "    /\\ (wrongSuccessorCandidatePresent =>\n"
+            "          ENABLED\n"
+            "            <<RejectWrongImmediateSuccessor>>_typedRolloverVars)",
+            "    /\\ (wrongSuccessorCandidatePresent =>\n"
+            "          ENABLED\n"
+            "            <<RejectSameContextForeignOwnerReceipt>>"
+            "_typedRolloverVars)",
+            "ValidationCandidateRejectActionsEnabled must state only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "  /\\ (<<RejectMismatchedPredecessorReceipt>>"
+            "_typedRolloverVars =>\n"
+            "        restartRequired')\n"
+            "  /\\ (<<RejectWrongImmediateSuccessor>>_typedRolloverVars =>\n"
+            "        restartRequired')\n"
+            "BY DEF RejectSameContextForeignOwnerReceipt,",
+            "  /\\ (<<RejectMismatchedPredecessorReceipt>>"
+            "_typedRolloverVars =>\n"
+            "        restartRequired')\n"
+            "BY DEF RejectSameContextForeignOwnerReceipt,",
+            "ValidationCandidateRejectActionsExit must state only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "  => []~ValidationCandidatePending\n"
+            "BY ValidationCandidateLeadsToRestart, PTL",
+            "  => <>~ValidationCandidatePending\n"
+            "BY ValidationCandidateLeadsToRestart, PTL",
+            "NoFailureExcludesValidationCandidates must state only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "BY ValidationCandidateLeadsToRestart, PTL\n"
+            "   DEF NoRolloverFailure",
+            "BY PTL\n"
+            "   DEF NoRolloverFailure",
+            "NoFailureExcludesValidationCandidates proof must retain exact "
+            "acyclic dependencies",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "ChangedRolloverRank8Exit ==\n"
+            r"  \/ ChangedRolloverRank7"
+            "\n"
+            r"  \/ ChangedRolloverRank7Exit",
+            "ChangedRolloverRank8Exit ==\n"
+            r"  \/ ChangedRolloverRank6"
+            "\n"
+            r"  \/ ChangedRolloverRank7Exit",
+            "ChangedRolloverRank8Exit must equal exact reviewed",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "    /\\ (ChangedRolloverRank7\n"
+            "          ~> ChangedRosterSuccessorActiveWithoutRestart)\n"
+            "    /\\ (ChangedRolloverRank8\n"
+            "          ~> ChangedRosterSuccessorActiveWithoutRestart)\n"
+            "BY ChangedRolloverRanksLeadToExit,",
+            "    /\\ (ChangedRolloverRank7\n"
+            "          ~> ChangedRosterSuccessorActiveWithoutRestart)\n"
+            "BY ChangedRolloverRanksLeadToExit,",
+            "FailureFreeChangedRolloverRanksLeadToGoal must state only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "   ChangedRolloverRankBracketClosure,\n"
+            "   ChangedRolloverRankFairActionsEnabled,\n"
+            "   ChangedRolloverRankFairActionsExit, PTL",
+            "   ChangedRolloverRankBracketClosure,\n"
+            "   ChangedRolloverRankFairActionsExit, PTL",
+            "ChangedRolloverRanksLeadToExit proof must retain exact "
+            "acyclic dependencies",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "    (ChangedRosterValidated\n"
+            "       ~> ChangedRosterSuccessorActiveWithoutRestart)\n"
+            "BY TypedRolloverSpecAlwaysControl,",
+            "    (ChangedRosterValidated ~> restartRequired)\n"
+            "BY TypedRolloverSpecAlwaysControl,",
+            "ConditionalResponsiveChangedRosterRolloverLiveness must "
+            "state only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "THEOREM ResponsiveChangedRosterRolloverLivenessFromWeakFairness ==\n"
+            "  ResponsiveTypedRolloverSpec =>\n"
+            "    ResponsiveChangedRosterRolloverLiveness\n"
+            "BY ConditionalResponsiveChangedRosterRolloverLiveness, PTL",
+            "THEOREM ResponsiveChangedRosterRolloverLivenessFromWeakFairness ==\n"
+            "  ResponsiveTypedRolloverSpec =>\n"
+            "    ChangedRosterSuccessorActiveWithoutRestart\n"
+            "BY ConditionalResponsiveChangedRosterRolloverLiveness, PTL",
+            "ResponsiveChangedRosterRolloverLivenessFromWeakFairness "
+            "must state only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "BY ConditionalResponsiveChangedRosterRolloverLiveness, PTL\n"
+            "   DEF ResponsiveChangedRosterRolloverLiveness,",
+            "BY ConditionalResponsiveChangedRosterRolloverLiveness\n"
+            "   DEF ResponsiveChangedRosterRolloverLiveness,",
+            "ResponsiveChangedRosterRolloverLivenessFromWeakFairness proof "
+            "must retain reviewed tactic/composition fragments",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "<1>25. CASE RejectWrongImmediateSuccessor",
+            "<1>25. CASE RejectWrongImmediateSuccessorMutant",
+            "must enumerate all 25 Next actions in reviewed order",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "NoRolloverFailure ==\n"
+            "  [](/\\ failureReason = \"None\"\n"
+            "     /\\ ~restartRequired)",
+            "NoRolloverFailure ==\n"
+            "  [](/\\ failureReason = \"None\"\n"
+            "     /\\ restartRequired)",
+            "NoRolloverFailure must equal exact reviewed",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "  /\\ WF_typedRolloverVars(TypedChangedRosterTransition)",
+            "  /\\ SF_typedRolloverVars(TypedChangedRosterTransition)",
+            "may use only the reviewed finite local weak-fair actions",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            '   \"LoseSameRosterRetry\"}',
+            '   \"LoseRetry\"}',
+            "MutationModes must equal exact reviewed",
+        ),
+        (
+            "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            "foreign-candidate-ignored|"
+            "typed_rollover_handoff_foreign_candidate_ignored_bug.cfg|13|",
+            "foreign-candidate-ignored|"
+            "typed_rollover_handoff_foreign_candidate_ignored_bug.cfg|12|",
+            "typed rollover-handoff mutation matrix must list",
+        ),
+        (
+            "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            "228 states generated, 131 distinct states found, "
+            "0 states left on queue.",
+            "228 states generated, 130 distinct states found, "
+            "0 states left on queue.",
+            "fixed typed rollover case must retain exact status/count/depth",
+        ),
+        (
+            "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            "  SumeragiV2TypedRolloverHandoffProofs; do",
+            "  SumeragiV2TypedRolloverHandoffMutation; do",
+            "must SANY-parse the base, mutation, and proof modules exactly once",
+        ),
+        (
+            "docs/formal/sumeragi_v2/typed_rollover_handoff_fixed.cfg",
+            "PROPERTY PredecessorMismatchCandidateActionProperty\n"
+            "PROPERTY WrongSuccessorCandidateActionProperty",
+            "PROPERTY PredecessorMismatchCandidateActionProperty",
+            "fixed typed rollover configuration must contain exactly",
+        ),
+    ),
+)
+def test_typed_rollover_handoff_semantic_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_typed_rollover_handoff_formal_fixture(tmp_path, module)
+    mutate_source_once(tmp_path / relative_path, old, new)
+
+    errors = module._typed_rollover_handoff_formal_source_fidelity_errors(
+        formal_dir, tmp_path
+    )
+
+    assert any(error_fragment in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("rank", "action", "replacement"),
+    (
+        (1, "TypedChangedRosterTransition", "CloseWorkerIngress"),
+        (2, "PersistNextServiceHighWater", "CloseWorkerIngress"),
+        (
+            3,
+            "ConsumeReceiptIntoRetainedMergeSidecars",
+            "CloseWorkerIngress",
+        ),
+        (4, "BeginExactSuccessorConstruction", "CloseWorkerIngress"),
+        (5, "SealAppliedHeightOutputHandoff", "CloseWorkerIngress"),
+        (6, "ClearOneWorkerExactOutput", "CloseWorkerIngress"),
+        (7, "ClearOneWorkerExactOutput", "CloseWorkerIngress"),
+        (8, "CloseWorkerIngress", "TypedChangedRosterTransition"),
+    ),
+)
+def test_typed_rollover_each_rank_fair_action_mapping_fails_closed(
+    tmp_path: Path,
+    rank: int,
+    action: str,
+    replacement: str,
+) -> None:
+    module = load_checker()
+    proof_relative = Path(
+        "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla"
+    )
+
+    enabled_root = tmp_path / "enabled"
+    enabled_formal_dir = copy_typed_rollover_handoff_formal_fixture(
+        enabled_root, module
+    )
+    if rank == 3:
+        enabled_fragment = (
+            f"  /\\ (ChangedRolloverRank{rank} =>\n"
+            "        ENABLED\n"
+            f"          <<{action}>>_typedRolloverVars)"
+        )
+    else:
+        enabled_fragment = (
+            f"  /\\ (ChangedRolloverRank{rank} =>\n"
+            f"        ENABLED <<{action}>>_typedRolloverVars)"
+        )
+    mutate_source_once(
+        enabled_root / proof_relative,
+        enabled_fragment,
+        enabled_fragment.replace(action, replacement, 1),
+    )
+    enabled_errors = (
+        module._typed_rollover_handoff_formal_source_fidelity_errors(
+            enabled_formal_dir, enabled_root
+        )
+    )
+    assert any(
+        "ChangedRolloverRankFairActionsEnabled must state only" in error
+        for error in enabled_errors
+    ), enabled_errors
+
+    exit_root = tmp_path / "exit"
+    exit_formal_dir = copy_typed_rollover_handoff_formal_fixture(
+        exit_root, module
+    )
+    exit_fragment = (
+        f"  /\\ (/\\ ChangedRolloverRank{rank}\n"
+        f"      /\\ <<{action}>>_typedRolloverVars\n"
+        f"      => ChangedRolloverRank{rank}Exit')"
+    )
+    mutate_source_once(
+        exit_root / proof_relative,
+        exit_fragment,
+        exit_fragment.replace(action, replacement, 1),
+    )
+    exit_errors = (
+        module._typed_rollover_handoff_formal_source_fidelity_errors(
+            exit_formal_dir, exit_root
+        )
+    )
+    assert any(
+        "ChangedRolloverRankFairActionsExit must state only" in error
+        for error in exit_errors
+    ), exit_errors
+
+
+def test_typed_rollover_handoff_rejects_unexpected_config(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_typed_rollover_handoff_formal_fixture(tmp_path, module)
+    unexpected = formal_dir / "typed_rollover_handoff_unreviewed_bug.cfg"
+    unexpected.write_text(
+        "SPECIFICATION MutationSpec\n"
+        'CONSTANT MutationMode = \"UntypedForce\"\n'
+        "CHECK_DEADLOCK FALSE\n",
+        encoding="utf-8",
+    )
+
+    errors = module._typed_rollover_handoff_formal_source_fidelity_errors(
+        formal_dir, tmp_path
+    )
+
+    assert any(
+        "typed rollover-handoff configuration inventory must equal" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "old", "new", "error_fragment"),
+    (
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "pub const REPLY_WRITER_FLUSH_TIMEOUT: Duration = Duration::from_secs(30);",
+            "pub const REPLY_WRITER_FLUSH_TIMEOUT: Duration = Duration::from_secs(0);",
+            "must default to 30 seconds",
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            "pub reply_writer_flush_timeout: Duration,",
+            "pub reply_writer_flush_timeout: Option<Duration>,",
+            "actual network config must retain",
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            '#[config(default = "defaults::network::REPLY_WRITER_FLUSH_TIMEOUT.into()")]\n'
+            "    pub reply_writer_flush_timeout_ms: DurationMs,",
+            '#[config(default = "defaults::network::IDLE_TIMEOUT.into()")]\n'
+            "    pub reply_writer_flush_timeout_ms: DurationMs,",
+            "must expose the exact-reply writer deadline with its production default",
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            "let reply_writer_flush_timeout = reply_writer_flush_timeout.get().max(min_interval);",
+            "let reply_writer_flush_timeout = reply_writer_flush_timeout.get();",
+            "must be clamped to the 100ms timer floor",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "struct PendingWriterFlush {\n"
+            "    receiver: tokio::sync::oneshot::Receiver<()>,\n"
+            "}",
+            "struct PendingWriterFlush {\n"
+            "    receiver: tokio::sync::oneshot::Receiver<()>,\n"
+            "    deadline: tokio::time::Instant,\n"
+            "}",
+            "must retain only its flush receiver",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "struct ExactReplyWriterDeadline {\n"
+            "    admitted_at: tokio::time::Instant,\n"
+            "    timeout: Duration,\n"
+            "}",
+            "struct ExactReplyWriterDeadline {\n"
+            "    admitted_at: tokio::time::Instant,\n"
+            "}",
+            "must retain its first-dispatch instant and scaled timeout",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "enum NetworkReplyFlushCompletion {\n"
+            "    Flushed,\n"
+            "    TimedOut,\n"
+            "}",
+            "enum NetworkReplyFlushCompletion {\n"
+            "    Flushed,\n"
+            "}",
+            "may explicitly publish only successful flush or timeout",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "impl<T> Drop for ReliableActorPending<T> {\n"
+            "    fn drop(&mut self) {\n"
+            "        let _ = self.release_all_with_terminal_fence();\n"
+            "    }\n"
+            "}",
+            "impl<T> Drop for ReliableActorPending<T> {\n"
+            "    fn drop(&mut self) {\n"
+            "        let _ = self.len;\n"
+            "    }\n"
+            "}",
+            "pending-queue Drop must fence every retained exact occurrence",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "let released_on_shutdown = safety_dispatch_pending\n"
+            "            .release_all_with_terminal_fence()\n"
+            "            .saturating_add(progress_dispatch_pending.release_all_with_terminal_fence());",
+            "let released_on_shutdown = safety_dispatch_pending.len()\n"
+            "            .saturating_add(progress_dispatch_pending.len());",
+            "graceful shutdown must fence local exact receivers",
+        ),
+    ),
+)
+def test_reply_writer_deadline_production_global_source_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+) -> None:
+    module = load_checker()
+    copy_reply_writer_deadline_fixture(tmp_path)
+    mutate_source_once(tmp_path / relative_path, old, new)
+
+    errors = module._reply_writer_deadline_production_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(error_fragment in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "item_name", "old", "new", "error_fragment"),
+    (
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "scaled_reply_writer_flush_timeout",
+            "timeout.checked_mul(2)",
+            "timeout.checked_mul(1)",
+            "saturating adaptive reply-writer timeout scaler",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "from_admitted_ticket",
+            "if ticket.shape.reply_writer_timeout_attempt.is_none()",
+            "if false",
+            "release-mode identity construction must reject a missing timeout attempt",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "same_ticket",
+            "&& self.shape == other.shape",
+            "&& true",
+            "admitted ticket equality must include the complete attempt-bearing shape",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "try_reserve_for_source",
+            "|| ticket.shape != shape",
+            "|| false",
+            "retry admission must reject a changed timeout-attempt-bearing shape",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "for_reply_at_attempt",
+            "reply_writer_timeout_attempt: Some(reply_writer_timeout_attempt),",
+            "reply_writer_timeout_attempt: Some(0),",
+            "attempt-aware test fixture must retain the requested timeout generation",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "post_reply_recoverable_with_flush_ack_inner",
+            "Some(reply_writer_timeout_attempt),\n"
+            "            Some(reply_flush_sender),",
+            "None,\n"
+            "            Some(reply_flush_sender),",
+            "production admission must bind the caller's timeout generation",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "dispatch_reliable_actor_message_inner",
+            "reply_writer_deadline.get_or_insert_with",
+            "reply_writer_deadline.insert",
+            "first actor dispatch must acquire one fixed",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "dispatch_reliable_actor_message_inner",
+            "ack_targets.sort();",
+            "ack_targets.reverse();",
+            "polled in deterministic order before route or timeout retirement",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "dispatch_reliable_actor_message_inner",
+            "if exact_reply_flushed {",
+            "if false {",
+            "ready exact receipt must publish Flushed",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "dispatch_reliable_actor_message_inner",
+            "let timed_out_reply_writer = reply_route.is_some()",
+            "let timed_out_reply_writer = reply_route.is_none()",
+            "only an exact reply may expire",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "dispatch_reliable_actor_message_inner",
+            "reply_flush_ack.send(NetworkReplyFlushCompletion::TimedOut)",
+            "reply_flush_ack.send(NetworkReplyFlushCompletion::Flushed)",
+            "must publish TimedOut rather than fabricate a flush",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "exact_reply_flush_wins_terminal_fence",
+            "pending.receiver.close();",
+            "let _ = &pending.receiver;",
+            "close-and-immediate-poll terminal fence",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "dispatch_reliable_actor_message_inner",
+            "after_initial_flush_poll();",
+            "let _ = after_initial_flush_poll;",
+            "deterministic test seam must run exactly after",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "release_cancelled_targets",
+            "entry.publish_ready_exact_reply_before_terminal_drop();",
+            "let _ = &entry.pending_flush_acks;",
+            "inactive pending cleanup must fence",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "release_all_with_terminal_fence",
+            "entry.publish_ready_exact_reply_before_terminal_drop();",
+            "let _ = &entry.pending_flush_acks;",
+            "shutdown cleanup must fence every pending exact occurrence",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "accept_reliable_actor_message",
+            "message.publish_ready_exact_reply_before_terminal_drop();",
+            "let _ = &message.pending_flush_acks;",
+            "early inactive-authority admission drop must use the terminal fence",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "expire_reply_writer_occurrence",
+            "if route.tenure.connection_id != connection_id {",
+            "if route.tenure.connection_id == connection_id {",
+            "exact accepting-connection timeout retirement",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "poll",
+            "Ok(NetworkReplyFlushCompletion::TimedOut) => {",
+            "Ok(NetworkReplyFlushCompletion::Flushed) => {",
+            "terminal reply-flush outcome classifier",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "new_targeted_broadcast",
+            "reply_writer_deadline: None,",
+            "reply_writer_deadline: Some(ExactReplyWriterDeadline {\n"
+            "                admitted_at: tokio::time::Instant::now(),\n"
+            "                timeout: Duration::ZERO,\n"
+            "            }),",
+            "topology actor-item constructor",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "retain_after_dispatch_attempt",
+            "reply_writer_deadline,\n"
+            "            reply_flush_ack,\n"
+            "        }",
+            "reply_writer_deadline: None,\n"
+            "            reply_flush_ack,\n"
+            "        }",
+            "full-queue actor-item retention",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "poll_reply_flushes",
+            "pending_flush.reply_writer_timeout_attempt != current_timeout_attempt",
+            "pending_flush.reply_writer_timeout_attempt != 0",
+            "terminal reply-flush polling must preserve one adaptive-attempt identity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "drive_with_budget_ack",
+            "|| flush_ack.identity().reply_writer_timeout_attempt()\n"
+            "                            != reply_writer_timeout_attempt",
+            "|| false",
+            "ordinary reply installation must reject an acknowledgement from another timeout generation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "handoff_applied_height_to_durable_reconstruction",
+            "|| pending_flush.reply_writer_timeout_attempt\n"
+            "                            != target.reply_writer_timeout_attempt",
+            "|| false",
+            "finality handoff must preserve target, retained occurrence, and acknowledgement timeout-attempt identity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "poll_reply_flushes",
+            "if matches!(status, NetworkReplyFlushAckStatus::TimedOut) {",
+            "if matches!(status, NetworkReplyFlushAckStatus::Closed) {",
+            "only TimedOut may grow",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "mark_admitted",
+            "target.reply_writer_timeout_attempt = 0;",
+            "target.reply_writer_timeout_attempt =\n"
+            "            target.reply_writer_timeout_attempt.saturating_add(1);",
+            "only successful cursor advance resets",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "ready_exact_reply_flush_wins_connection_replacement",
+            "async fn ready_exact_reply_flush_wins_connection_replacement()",
+            "async fn ready_exact_reply_flush_wins_connection_replacement_mutant()",
+            "ready_exact_reply_flush_wins_connection_replacement",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "terminal_fence_observes_deadline_flush_published_after_initial_poll",
+            "async fn terminal_fence_observes_deadline_flush_published_after_initial_poll()",
+            "async fn terminal_fence_deadline_gap_mutant()",
+            "terminal_fence_observes_deadline_flush_published_after_initial_poll",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "reply_flush_identity_requires_and_exposes_timeout_attempt",
+            "fn reply_flush_identity_requires_and_exposes_timeout_attempt()",
+            "fn reply_flush_identity_ignores_timeout_attempt_mutant()",
+            "reply_flush_identity_requires_and_exposes_timeout_attempt",
+        ),
+        (
+            "crates/iroha_p2p/src/network.rs",
+            "reply_flush_test_fixture_distinguishes_success_timeout_and_close",
+            "fn reply_flush_test_fixture_distinguishes_success_timeout_and_close()",
+            "fn reply_flush_test_fixture_merges_terminal_outcomes_mutant()",
+            "reply_flush_test_fixture_distinguishes_success_timeout_and_close",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance",
+            "fn reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance()",
+            "fn reply_flush_attempt_identity_mismatch_advances_mutant()",
+            "reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "sidecar_flush_admission_retains_timeout_attempt_identity",
+            "fn sidecar_flush_admission_retains_timeout_attempt_identity()",
+            "fn sidecar_flush_admission_drops_timeout_attempt_mutant()",
+            "sidecar_flush_admission_retains_timeout_attempt_identity",
+        ),
+    ),
+)
+def test_reply_writer_deadline_production_item_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    item_name: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+) -> None:
+    module = load_checker()
+    copy_reply_writer_deadline_fixture(tmp_path)
+    mutate_rust_item_source(
+        module,
+        tmp_path / relative_path,
+        item_name,
+        old,
+        new,
+    )
+
+    errors = module._reply_writer_deadline_production_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(error_fragment in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    "occurrence_coordinate",
+    (
+        "service_generation",
+        "stream_epoch",
+        "semantic_sequence",
+    ),
+)
+def test_canonical_sidecar_request_identity_rejects_unbound_occurrence_coordinate(
+    tmp_path: Path,
+    occurrence_coordinate: str,
+) -> None:
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/merge_sidecar.rs")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    shutil.copy2(ROOT_DIR / relative, path)
+    source = path.read_text(encoding="utf-8")
+    marker = "pub fn canonical_request_id(&self) -> Hash"
+    item_start = source.index(marker)
+    bound_coordinate = f"&{occurrence_coordinate},"
+    mutation = source.index(bound_coordinate, item_start)
+    path.write_text(
+        source[:mutation]
+        + "&version,"
+        + source[mutation + len(bound_coordinate) :],
+        encoding="utf-8",
+    )
+
+    errors = module._canonical_sidecar_request_identity_errors(tmp_path)
+
+    assert any(
+        "canonical semantic request identity must bind every immutable request "
+        "coordinate while excluding only the cumulative close floor" in error
+        for error in errors
+    ), errors
+
+
+def test_canonical_sidecar_request_identity_rejects_bound_close_floor(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/merge_sidecar.rs")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    shutil.copy2(ROOT_DIR / relative, path)
+    mutate_rust_item_source(
+        module,
+        path,
+        "canonical_request_id",
+        "&semantic_sequence,\n            self.entry_hash",
+        "&semantic_sequence,\n            &self.closed_through.to_le_bytes(),\n"
+        "            self.entry_hash",
+    )
+
+    errors = module._canonical_sidecar_request_identity_errors(tmp_path)
+
+    assert any(
+        "must exclude the monotonically advancing cumulative close floor" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_semantic_request_production_source_is_bound() -> None:
+    module = load_checker()
+    assert (
+        module._queue_plan_semantic_request_production_source_fidelity_errors(
+            ROOT_DIR
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "region_marker", "old", "new", "error_fragment"),
+    (
+        (
+            "crates/iroha_core/src/torii_proxy.rs",
+            "pub fn queue_plan_synced_request_id_from_chain_digest(",
+            "    Hash::new(\n"
+            "        norito::to_bytes(&(\n"
+            "            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,\n"
+            "            chain_id_digest,\n"
+            "            entrypoint_hash,\n"
+            "        ))\n"
+            "        .expect(\"deterministic QueuePlanSynced request identity must encode\"),\n"
+            "    )",
+            "    Hash::prehashed([7; Hash::LENGTH])",
+            "exact nonconstant chain-digest and entrypoint projection",
+        ),
+        (
+            "crates/iroha_core/src/torii_proxy.rs",
+            "pub fn queue_plan_synced_request_id_from_chain_digest(",
+            "            chain_id_digest,\n            entrypoint_hash,",
+            "            entrypoint_hash,\n            chain_id_digest,",
+            "exact nonconstant chain-digest and entrypoint projection",
+        ),
+        (
+            "crates/iroha_core/src/torii_proxy.rs",
+            "pub fn new(\n        chain_id: &ChainId,",
+            "request_id: queue_plan_synced_request_id_from_chain_digest(\n"
+            "                chain_id_digest,\n"
+            "                transaction.hash(),\n"
+            "            ),",
+            "request_id: Hash::new(b\"disconnected QueuePlan request\"),",
+            "constructor must derive the semantic request from the exact persisted inputs",
+        ),
+        (
+            "crates/iroha_core/src/torii_proxy.rs",
+            "pub fn validate_structure(&self)",
+            "        if self.request_id\n"
+            "            != queue_plan_synced_request_id_from_chain_digest(\n"
+            "                self.chain_id_digest,\n"
+            "                self.entrypoint_hash.clone(),\n"
+            "            )\n"
+            "        {\n"
+            "            return Err(\n"
+            "                \"QueuePlan admission binding has a noncanonical semantic request identity\"\n"
+            "                    .to_owned(),\n"
+            "            );\n"
+            "        }\n",
+            "",
+            "structural QueuePlan validation must recompute the exact durable semantic identity",
+        ),
+        (
+            "crates/iroha_core/src/torii_proxy.rs",
+            "pub fn validate_queue_plan_admission_certificate_for_chain_digest_v2(",
+            "    certificate.binding.validate_structure()?;",
+            "    let _ = &certificate.binding;",
+            "certificate validation must invoke canonical semantic-request validation",
+        ),
+        (
+            "crates/iroha_core/src/queue.rs",
+            "fn push_with_lane_internal_with_state_and_routing(",
+            "binding.validate_for_request(state.chain_id_ref(), tx.entrypoint(), &routing_plan)",
+            "binding.validate_for_transaction_and_plan(tx.entrypoint(), &routing_plan)",
+            "core strict QueuePlan admission must invoke request-bound semantic validation",
+        ),
+        (
+            "crates/iroha_core/src/queue/journal.rs",
+            "fn global_admission_binding(&self)",
+            "QueuePlanAdmissionBindingV2::try_from_durable_admission(&durable_admission)",
+            "QueuePlanAdmissionBindingV2::try_from_durable_admission_unchecked(&durable_admission)",
+            "journal replay must pass its durable identity through the shared binding validator",
+        ),
+        (
+            "crates/iroha_torii/src/lib.rs",
+            "fn queue_plan_synced_proxy_request_id_for_entrypoint(",
+            "    iroha_core::torii_proxy::queue_plan_synced_request_id(app.chain_id.as_ref(), entrypoint_hash)",
+            "    Hash::new(\n"
+            "        norito::to_bytes(&(\n"
+            "            \"torii:proxy:queue-plan-synced:v5\",\n"
+            "            app.chain_id.as_ref(),\n"
+            "            entrypoint_hash,\n"
+            "        ))\n"
+            "        .expect(\"encode local QueuePlan request projection\"),\n"
+            "    )",
+            "Torii must delegate QueuePlan semantic identity to the shared core kernel",
+        ),
+        (
+            "crates/iroha_torii/src/lib.rs",
+            "async fn execute_torii_transaction_via_proxy(",
+            "binding.validate_for_request(app.chain_id.as_ref(), &transaction, &routing_plan)",
+            "binding.validate_for_transaction_and_plan(&transaction, &routing_plan)",
+            "Torii QueuePlan execution must validate the shared semantic identity before dispatch",
+        ),
+    ),
+)
+def test_queue_plan_semantic_request_production_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    region_marker: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+) -> None:
+    module = load_checker()
+    copy_queue_plan_semantic_request_fixture(tmp_path)
+    path = tmp_path / relative_path
+    source = path.read_text(encoding="utf-8")
+    region_start = source.find(region_marker)
+    assert region_start >= 0
+    mutation = source.find(old, region_start)
+    assert mutation >= 0
+    next_item = re.search(
+        r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:async[ \t]+)?fn[ \t]+",
+        source[region_start + len(region_marker) :],
+    )
+    if next_item is not None:
+        next_item_start = region_start + len(region_marker) + next_item.start()
+        assert mutation < next_item_start, (
+            "mutation escaped the production Rust item selected by its region marker",
+            relative_path,
+            region_marker,
+            old,
+        )
+    path.write_text(
+        source[:mutation] + new + source[mutation + len(old) :],
+        encoding="utf-8",
+    )
+
+    errors = (
+        module._queue_plan_semantic_request_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+    assert any(error_fragment in error for error in errors), errors
+
+
 def test_exact_output_production_source_is_bound() -> None:
     module = load_checker()
     assert module._exact_output_production_source_fidelity_errors(ROOT_DIR) == []
@@ -6379,7 +8480,7 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn drain_outbound_chunks(",
+            "fn drain_outbound_chunks_inner(",
             "let message = Arc::clone(\n"
             "                            transfer\n"
             "                                .chunks\n"
@@ -6399,9 +8500,9 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn acknowledge_outbound_chunk(",
-            "if !admission.matches_materialized_chunk(expected_chunk) {",
-            "let _rebuilt_payload = expected_chunk.bytes.to_vec();\n"
-            "        if !admission.matches_materialized_chunk(expected_chunk) {",
+            "let projection = admission.projection();",
+            "let _rebuilt_payload = Vec::<u8>::new().to_vec();\n"
+            "        let projection = admission.projection();",
             "per-source sidecar drainage and acknowledgement must never reconstruct cached payload bytes",
         ),
         (
@@ -6426,25 +8527,25 @@ def test_exact_output_production_source_is_bound() -> None:
             "runner sidecar dispatch must preserve the exact peer, complete route set, and immutable message pointer",
         ),
         (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "const MAX_OUTBOUND_SESSIONS_PER_SOURCE",
-            "const MAX_OUTBOUND_SESSIONS_PER_SOURCE: usize = 2;",
-            "const MAX_OUTBOUND_SESSIONS_PER_SOURCE: usize = 3;",
-            "certified sidecar authenticated-source limits must remain exactly four gates, two sessions, and 16 MiB",
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE",
+            "nonzero!(2_usize)",
+            "nonzero!(3_usize)",
+            "certified sidecar per-source sessions must remain exactly two",
         ),
         (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "const MAX_OUTBOUND_BYTES_PER_SOURCE",
-            "const MAX_OUTBOUND_BYTES_PER_SOURCE: usize = 16 * 1024 * 1024;",
-            "const MAX_OUTBOUND_BYTES_PER_SOURCE: usize = 17 * 1024 * 1024;",
-            "certified sidecar authenticated-source limits must remain exactly four gates, two sessions, and 16 MiB",
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE",
+            "nonzero!(16_usize * 1024 * 1024)",
+            "nonzero!(17_usize * 1024 * 1024)",
+            "certified sidecar per-source bytes must remain exactly 16 MiB",
         ),
         (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "const MAX_SERVER_REQUEST_GATES_PER_SOURCE",
-            "const MAX_SERVER_REQUEST_GATES_PER_SOURCE: usize = 4;",
-            "const MAX_SERVER_REQUEST_GATES_PER_SOURCE: usize = 5;",
-            "certified sidecar authenticated-source limits must remain exactly four gates, two sessions, and 16 MiB",
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE",
+            "nonzero!(4_usize)",
+            "nonzero!(5_usize)",
+            "certified sidecar per-source request gates must remain exactly four",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -6455,46 +8556,56 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn poll_sidecar_flushes(",
+            "fn poll_reply_flushes(",
             ".bind_confirmed_worker_trace(flush_trace)",
             ".bind_confirmed_worker_trace(ProductionReliableFlushTraceProjection::default())",
             "a successful writer occurrence must bind its exact confirmed worker trace before lane admission",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn poll_sidecar_flushes(",
-            "NetworkReplyFlushAckStatus::Flushed => {\n"
-            "                    self.admitted_sidecar_chunks.push_back(completion.admission);\n"
-            "                }",
-            "NetworkReplyFlushAckStatus::Flushed => {}",
+            "fn poll_reply_flushes(",
+            "if let Some(admission) = pending_flush.sidecar_admission.take() {\n"
+            "                        self.admitted_sidecar_chunks.push_back(admission);\n"
+            "                    }",
+            "let _ = pending_flush.sidecar_admission.take();",
             "only a successful peer-writer flush may create a sidecar cursor receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn poll_sidecar_flushes(",
-            "NetworkReplyFlushAckStatus::Closed => {\n"
-            "                    // The sidecar transport still owns this unacknowledged",
-            "NetworkReplyFlushAckStatus::Closed => {\n"
-            "                    self.admitted_sidecar_chunks.push_back(completion.admission.clone());\n"
-            "                    // The sidecar transport still owns this unacknowledged",
+            "fn poll_reply_flushes(",
+            "let route_state = self\n"
+            "                        .fanouts",
+            "if let Some(admission) = pending_flush.sidecar_admission.take() {\n"
+            "                        self.admitted_sidecar_chunks.push_back(admission);\n"
+            "                    }\n"
+            "                    let route_state = self\n"
+            "                        .fanouts",
             "closed writer ownership must not manufacture a sidecar cursor receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn complete_sidecar_targets_with_retained_flush_ownership(",
-            "admission.matches_materialized_chunk(chunk)\n"
-            "                        && admission.is_bound_to_attempt(route)",
-            "admission.matches_materialized_chunk(chunk)",
-            "retained sidecar flush completion must match the immutable chunk and exact authenticated-source tenure",
+            "admission.matches_materialized_chunk(message) && admission.is_bound_to_source(route)",
+            "admission.matches_materialized_chunk(message)",
+            "retained sidecar flush completion must match the immutable chunk and exact authenticated source before advancing only that route",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn drive_with_budget_ack<Attempt>(",
-            "CertifiedMergeSidecarMessage::Request(_) => None,",
-            "CertifiedMergeSidecarMessage::Request(_) => {\n"
-            "                        panic!(\"request gained a flush receipt\")\n"
-            "                    },",
-            "only an immutable certified response chunk may retain the exact route",
+            "CertifiedMergeSidecarMessage::Request(_)\n"
+            "                    | CertifiedMergeSidecarMessage::Close(_)\n"
+            "                    | CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "                    | CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
+            "CertifiedMergeSidecarMessage::Request(_) => Some((\n"
+            "                        post.clone(),\n"
+            "                        reply_route.clone(),\n"
+            "                        message_cursor_before,\n"
+            "                        message_cursor_after,\n"
+            "                    )),\n"
+            "                    CertifiedMergeSidecarMessage::Close(_)\n"
+            "                    | CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "                    | CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
+            "only an immutable certified response chunk may create a writer-flush receipt from its exact route",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -6506,21 +8617,22 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn admit_network_exact_output(",
-            ".post_reply_recoverable_with_flush_ack(\n"
-            "                    post,\n"
-            "                    reply_route,\n"
-            "                    ticket,\n"
-            "                )?",
+            ".post_reply_recoverable_with_flush_ack_at_attempt(\n"
+            "                        post,\n"
+            "                        reply_route,\n"
+            "                        ticket,\n"
+            "                        reply_writer_timeout_attempt,\n"
+            "                    )?",
             ".post_reply_recoverable(post, reply_route, ticket)\n"
             "                .map(|()| None)?",
-            "production sidecar output must retain the exact writer-flush witness",
+            "production reply output must retain every exact writer-flush witness",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn admit_network_exact_output(",
             "Ok(ExactOutputAttemptOutcome::SidecarFlush(flush_ack))",
             "{ drop(flush_ack); Ok(ExactOutputAttemptOutcome::Admitted) }",
-            "production sidecar output must retain the exact writer-flush witness",
+            "production reply output must retain every exact writer-flush witness",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -6569,14 +8681,14 @@ def test_exact_output_production_source_is_bound() -> None:
             "enum ServerResponseCursor {",
             "Complete,",
             "PendingZero,",
-            "sidecar source cursors must distinguish pending chunk zero from terminal completion",
+            "sidecar gate history must preserve terminal completion across exact, later-delivery, and reconnected observations",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "fn prune_server_gates(",
-            "|| attempt.cursor != ServerResponseCursor::Complete",
-            "|| false",
-            "sidecar gate pruning must retain every incomplete source cursor as a bounded reservation while expiring only terminal no-outbound tombstones",
+            "let reclaimed = self.reclaim_inactive_outbound_attempts(now)?;",
+            "let reclaimed = 0;",
+            "sidecar gate pruning must preserve semantic ownership until an authenticated close floor retires it",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -6606,7 +8718,7 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn drain_outbound_chunks(",
+            "fn drain_outbound_chunks_inner(",
             "cursor = ServerResponseCursor::Complete;",
             "cursor = ServerResponseCursor::Pending(0);",
             "sidecar drainage must persist terminal completion rather than a replayable chunk-zero cursor",
@@ -6629,9 +8741,9 @@ def test_exact_output_production_source_is_bound() -> None:
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn admit_server_request(",
             "attempt.materialization_retryable = false;\n"
-            "                    return Ok(false);",
+            "                    return Ok(ServerRequestAdmission::Existing);",
             "attempt.materialization_retryable = true;\n"
-            "                    return Ok(false);",
+            "                    return Ok(ServerRequestAdmission::Existing);",
             "an exact, later-delivery, or reconnected completed source must remain terminal while only its observed route may update",
         ),
         (
@@ -6674,16 +8786,16 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn enqueue_response(",
-            "self.source_outbound_count(source) >= MAX_OUTBOUND_SESSIONS_PER_SOURCE",
-            "self.source_outbound_count(source) > MAX_OUTBOUND_SESSIONS_PER_SOURCE",
+            "self.source_outbound_count(source) >= self.limits.outbound_sessions_per_source",
+            "self.source_outbound_count(source) > self.limits.outbound_sessions_per_source",
             "sidecar materialization must preflight global and per-source session and byte bounds",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn enqueue_response(",
-            ".saturating_add(bytes.len())\n"
-            "                    > MAX_OUTBOUND_BYTES_PER_SOURCE",
-            ".saturating_add(bytes.len())\n                    > usize::MAX",
+            ".saturating_add(response_len)\n"
+            "                    > self.limits.outbound_bytes_per_source",
+            ".saturating_add(response_len)\n                    > usize::MAX",
             "sidecar materialization must preflight global and per-source session and byte bounds",
         ),
         (
@@ -6709,24 +8821,24 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn drain_outbound_chunks(",
+            "fn drain_outbound_chunks_inner(",
             "attempt.in_flight_chunk = Some(index);",
             "attempt.next_chunk = index.saturating_add(1);",
-            "sidecar drainage must preserve the exact source route and mark only an in-flight cursor",
+            "preserve the exact source route, and mark only an in-flight cursor",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn admit_server_request(",
-            "if existing.request_hash != request_hash {",
-            "if false && existing.request_hash != request_hash {",
-            "duplicate sidecar admission must preserve canonical request identity",
+            "!existing.request.same_occurrence_except_close_floor(request)",
+            "false && !existing.request.same_occurrence_except_close_floor(request)",
+            "duplicate sidecar admission must preserve canonical occurrence identity",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "fn alternate_source_is_authorized(",
             "match candidate {",
             "return true; match candidate {",
-            "alternate sidecar sources must share canonical request authority",
+            "alternate sidecar sources must retain live route authority without treating recovered peer ownership as a process-local capability",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -6738,10 +8850,8 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "fn cancel_unmaterialized_server_request(",
-            "attempt.materialization_authorized = false;\n"
-            "                attempt.authorized_materialization_route = None;\n"
-            "                attempt.materialization_retryable = true;",
-            "let _ = attempt;",
+            "Self::release_authorized_server_request_attempts(gate);",
+            "let _ = gate;",
             "failed sidecar materialization must preserve route/cursor history",
         ),
         (
@@ -6749,7 +8859,7 @@ def test_exact_output_production_source_is_bound() -> None:
             "pub(crate) fn admit_server_request(",
             "if !prior.materialization_retryable {",
             "if false && !prior.materialization_retryable {",
-            "an exact failed-materialization retry must consume only its source-local retry authorization",
+            "an exact failed-materialization retry must preserve only its source-local retryability and re-enter durable fair selection",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -6758,14 +8868,14 @@ def test_exact_output_production_source_is_bound() -> None:
             "            .current\n"
             "            .take()",
             "return; let attempt = assembly\n            .current\n            .take()",
-            "an unsent sidecar request must restore the exact holder cursor and retry rank",
+            "an unsent sidecar request must restore the exact holder cursor, close its durable sequence, and persist before retry",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "pub(crate) fn acknowledge_certified_merge_sidecar_chunk_admission(",
             "if acknowledged {",
             "if true {",
-            "lane work may schedule the next chunk only after the exact receipt advances",
+            "lane work may schedule the next chunk only after the exact receipt and next pending writer identity are durable",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -6793,8 +8903,17 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn push_merge_sidecar_post(",
-            "peer: post.peer,",
-            "peer: self.local_peer.clone(),",
+            "let MergeSidecarPost {\n"
+            "            peer,\n"
+            "            reply_route,\n"
+            "            message,\n"
+            "        } = post;",
+            "let MergeSidecarPost {\n"
+            "            peer: _,\n"
+            "            reply_route,\n"
+            "            message,\n"
+            "        } = post;\n"
+            "        let peer = self.local_peer.clone();",
             "lane sidecar post conversion must preserve the exact peer, bounded route authority, and message",
         ),
         (
@@ -6806,23 +8925,24 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn retain_active_owned_reply_routes(",
-            "routes.retain_active() != 0",
-            "routes.iter().any(iroha_p2p::network::NetworkReplyRoute::is_active)",
+            "fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(",
+            "let (retained, receipt) = routes.retain_active_with_receipt();",
+            "let retained = routes.retain_active();\n"
+            "    let receipt = NetworkReplyRouteHistoryReceipt::default();",
             "runner pruning must retain every live source attempt and its tombstones",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn is_pending(",
-            ".any(PendingExactFanout::has_dispatchable_target)",
-            ".all(PendingExactFanout::has_dispatchable_target)",
+            "fanout.has_dispatchable_target()",
+            "false",
             "pending exact output must include dispatchable fanouts, writer flushes, and undrained receipts without spinning on parked ownership",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn handoff_applied_height_to_durable_reconstruction(",
-            "self.flushing_sidecar_chunks.clear();",
-            "let _ = &self.flushing_sidecar_chunks;",
+            "self.admitted_sidecar_chunks.clear();",
+            "let _ = &self.admitted_sidecar_chunks;",
             "applied-height handoff must retire every volatile sidecar completion state",
         ),
         (
@@ -6907,22 +9027,26 @@ def test_exact_output_production_source_is_bound() -> None:
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             ".any(|route| route.same_delivery(candidate_route))",
             ".any(|route| route.same_source(candidate_route))",
-            "the authoritative merged route snapshot must select the exact delivery before immutable same-delivery and same-tenure classification",
+            "the authoritative merged route snapshot must reuse the immutable joint tenure/delivery freshness kernel",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "                    update,\n                });",
-            "                    update: NetworkReplyRouteSourceUpdate::Exact,\n                });",
+            "                        update,\n                    });",
+            "                        update: NetworkReplyRouteSourceUpdate::Exact,\n"
+            "                    });",
             "same-source coalescing must reject terminal-candidate cursor regression and restrict reactivation to a reconnected certified-sidecar chunk",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn commit_coalesce_plan(",
             "message_index: candidate_target.message_index,\n"
+            "                        reply_writer_timeout_attempt: candidate_target.reply_writer_timeout_attempt,\n"
             "                        current: None,",
-            "message_index: 0,\n                        current: None,",
-            "an appended source must preserve its candidate cursor and parked state while starting without actor-post or admission-ticket ownership",
+            "message_index: 0,\n"
+            "                        reply_writer_timeout_attempt: candidate_target.reply_writer_timeout_attempt,\n"
+            "                        current: None,",
+            "an appended source must preserve its candidate cursor and parked state while starting without actor-post, admission-ticket, or writer-flush ownership",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -6941,9 +9065,9 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "candidate_route.same_tenure(prior_route)",
-            "candidate_route.same_delivery(prior_route)",
-            "the authoritative merged route snapshot must select the exact delivery before immutable same-delivery and same-tenure classification",
+            ".source_update_from_snapshot(prior_route)",
+            ".source_update_from(prior_route)",
+            "the authoritative merged route snapshot must reuse the immutable joint tenure/delivery freshness kernel",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -7017,7 +9141,7 @@ def test_exact_output_production_source_is_bound() -> None:
             "pub(crate) fn start(",
             ".map(|entry| entry.validator.clone())",
             ".filter(|_| false).map(|entry| entry.validator.clone())",
-            "production derives route fanout through the shared checked configuration kernel",
+            "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -7112,7 +9236,7 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn handoff_applied_height_output_to_durable_reconstruction(",
+            "fn validate_applied_height_output_handoff_authority(",
             "|| receipt.artifact_hash() != HashOf::new(artifact)",
             "|| false",
             "applied-height handoff requires the exact Kura receipt and finality artifact",
@@ -7151,13 +9275,13 @@ def test_exact_output_production_source_is_bound() -> None:
             "block.header().height().get() != finality_artifact.height\n"
             "            || block.hash() != finality_artifact.block_hash",
             "false",
-            "lane authority builder must source its finalized body from the exact "
-            "canonical Kura block without treating external-only bodies as lane plans",
+            "lane authority builder must derive its bounded ordinary and autonomous "
+            "winner set from the exact canonical block",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "pub(crate) fn durable_lane_rollover_authority(",
-            "|| application_receipt.application_block_hash != finality_artifact.block_hash",
+            "|| receipt.application_block_hash != finality_artifact.block_hash",
             "|| false",
             "lane authority builder must bind every winner to the exact applied artifact",
         ),
@@ -7178,20 +9302,20 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn merge_optional_reply_routes(",
-            "let mut merged = queued.clone();",
+            "let mut merged = retained.clone();",
             "let mut merged = candidate.clone();",
-            "lane effect coalescence atomically commits canonical history maintenance",
+            "lane effect coalescence atomically commits canonical history maintenance and reports success only for a retained live candidate delivery",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn merge_optional_reply_routes(",
-            "merged.merge_observed(candidate)",
+            "merged.merge_observed_with_receipt(candidate)",
             "merged.merge(candidate)",
-            "lane coalescence must use the canonical atomic observed-history reconciliation kernel",
+            "lane effect coalescence atomically commits canonical history maintenance and reports success only for a retained live candidate delivery",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn merge_lane_work_effect_reply_routes(",
+            "fn merge_lane_work_effect_reply_routes_after_route_merge<AfterRouteMerge>(",
             "if !lane_work_effect_reply_routes_have_valid_shape(candidate) {",
             "if !lane_work_effect_reply_routes_are_valid(candidate) {",
             "inactive duplicates still reach maintenance",
@@ -7245,10 +9369,10 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "dispatch_lane_work_effect(services, next_effect)?;",
+            "match dispatch_lane_work_effect(services, next_effect)? {",
             "apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;",
             "let _ = (lane_work, services, limit);",
-            "runner lane dispatch must apply writer receipts after every exact handoff",
+            "runner lane dispatch must apply writer receipts after complete and source-retained exact handoffs",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -7264,7 +9388,7 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "pub(crate) fn persist_anchored_sessions(",
-            "self.hydrate_canonical_lane_artifacts();",
+            "self.hydrate_canonical_lane_artifacts()?;",
             "let _ = &self.lane_sessions;",
             "late canonical lane hydration must precede committed-session collection",
         ),
@@ -7287,8 +9411,8 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "if executor.ready_to_finish() {",
-            "lane_work.durable_lane_rollover_authority(&durable_artifact)?;",
-            "unreachable!(\"skip durable lane authority\");",
+            "lane_work.durable_lane_rollover_authority(&durable_artifact)?",
+            "None",
             "durable finality must retire the old exact-output corridor",
         ),
         (
@@ -7300,10 +9424,44 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn with_reply_source_capacity(",
-            "reply_source_capacity,\n            outbound_session_capacity,",
-            "reply_source_capacity,\n            outbound_session_capacity: 0,",
+            "pub(crate) fn with_limits_and_server_stream_capacity(",
+            "reply_source_capacity,\n"
+            "            server_roster_digest,\n"
+            "            server_stream_capacity,\n"
+            "            outbound_session_capacity,",
+            "reply_source_capacity,\n"
+            "            server_roster_digest,\n"
+            "            server_stream_capacity,\n"
+            "            outbound_session_capacity: 0,",
             "sidecar source geometry must reject zero and install every checked corridor bound",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn with_limits_and_server_stream_capacity(",
+            "tick_close_next: false,",
+            "tick_close_next: true,",
+            "sidecar request/close fairness must service an initial progress-bearing request before alternating closes",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn tick_bounded(",
+            "if self.timeout_retry_close_deferred {",
+            "if false {",
+            "a newly timed-out sidecar fetch may preempt administrative closure only once before retained Close debt wins the bounded service slot",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn begin_request_or_close(",
+            "self.timeout_retry_close_deferred = false;",
+            "let _ = &self.timeout_retry_close_deferred;",
+            "servicing a sidecar Close must discharge retained timeout-preemption debt",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn release_authorized_server_request_attempts(",
+            "matches!(attempt.cursor, ServerResponseCursor::Pending(_));",
+            "false;",
+            "transiently rejected response work must release materialization authority",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -7317,14 +9475,50 @@ def test_exact_output_production_source_is_bound() -> None:
             "if admitted_attempts.is_empty() && capacity_rejected_attempts.is_empty()",
             "Self::park_authorized_server_request_attempts(gate, now);",
             "let _ = (gate, now);",
-            "every rejected, capacity-partitioned, or materialized response must park source history",
+            "completed-race and admitted materialized response work must pass through terminal parking",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn retire_inactive_outbound_attempts(",
+            "pub(crate) fn enqueue_response(",
+            "attempt.materialization_retryable =\n"
+            "                matches!(attempt.cursor, ServerResponseCursor::Pending(_));",
+            "attempt.materialization_retryable = false;",
+            "partial materialization must keep capacity-partitioned pending sources retryable after shared bytes retire",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn reclaim_inactive_outbound_attempts(",
             "gate_attempt.cursor = ServerResponseCursor::Pending(resume_chunk);",
             "let _ = resume_chunk;",
-            "merge-sidecar source-isolated production seam",
+            "inactive sidecar parking must remain pending at the exact unacknowledged source cursor",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn reclaim_inactive_outbound_attempts(",
+            "journal.persist(&projected)?;",
+            "drop(projected);",
+            "inactive sidecar reclamation must publish every projected durable cursor before removing ephemeral writers or shared bytes",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn with_limits_and_server_stream_capacity(",
+            ".checked_mul(limits.outbound_sessions_per_source)",
+            ".saturating_mul(limits.outbound_sessions_per_source)",
+            "sidecar global capacity must be checked from the configured authenticated-source geometry",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn derive_server_request_capacities(",
+            ".checked_mul(reply_source_capacity)",
+            ".saturating_mul(reply_source_capacity)",
+            "sidecar responder gates and per-source attempts must use checked products of the immutable roster and authenticated-source geometry",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn next_server_request_materialization(",
+            "journal.persist(&projected)?;",
+            "drop(projected);",
+            "fair sidecar materialization must persist the selected requester cursor before granting any live terminating lookup authority",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -7335,10 +9529,791 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "attempt.queued = true;\n                self.outbound_order.push_back((key, source));",
+            "fn apply_reliable_flush_application(",
+            "attempt.queued = true;\n            transport\n"
+            "                .outbound_order\n"
+            "                .push_back((plan.gate.key.clone(), plan.gate.source.clone()));",
             "let _ = &attempt.queued;",
             "merge-sidecar source-isolated production seam",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn drain_outbound_chunks_durable(",
+            "self.persist_lifecycle_state()?;",
+            "let _ = &lifecycle_changed;",
+            "production sidecar drainage must durably publish every changed pending identity",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "#[cfg(test)]\n    fn drain_outbound_chunks(",
+            "#[cfg(test)]",
+            "#[cfg(any())]",
+            "raw non-durable sidecar drainage must remain exactly #[cfg(test)]",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize",
+            "MAX_VALIDATORS_PER_HEIGHT;",
+            "1;",
+            "certified merge semantic request history must have exactly one top-level protocol-roster bound",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct MergeSidecarRuntimeGeometryV2",
+            "semantic_peer_capacity: u64,",
+            "semantic_peer_capacity: u32,",
+            "durable sidecar geometry must advertise its validator-scoped semantic-peer bound",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn lifecycle_runtime_geometry_v2(",
+            "semantic_peer_capacity: as_u64(MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)?,",
+            "semantic_peer_capacity: as_u64(self.reply_source_capacity)?,",
+            "lifecycle geometry must fingerprint the validator-scoped semantic-peer bound independently of concurrent reply sources",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn lifecycle_max_snapshot_bytes_for_attempt_capacity(",
+            ".checked_mul(2)",
+            ".checked_mul(1)",
+            "lifecycle byte geometry must reserve requester and responder stream records for every semantic validator",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn advance_piggybacked_close_floor(",
+            "!retained_request.same_occurrence_except_close_floor(request)",
+            "retained_request.same_occurrence_except_close_floor(request)",
+            "accept only the same immutable occurrence and reject regression",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn advance_piggybacked_close_floor(",
+            "journal.persist(&projected)?;",
+            "drop(projected);",
+            "publish the sole V2 projection before updating live cancellation, gate, or transfer state without rematerializing",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "snapshot.request_streams.len() > MAX_CERTIFIED_MERGE_SEMANTIC_PEERS",
+            "snapshot.request_streams.len() > self.reply_source_capacity",
+            "lifecycle restoration must bound both semantic stream maps independently from concurrent authenticated-source gates",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn allocate_request_sequence(",
+            "&& reclaim.is_none()",
+            "&& reclaim.is_some()",
+            "requester-side holder rotation must reclaim only quiescent roster-bounded streams",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn ensure_server_stream_slot(",
+            "self.server_streams.len() < self.server_stream_capacity",
+            "self.server_streams.len() < self.server_request_gate_capacity",
+            "stream-slot helper must reject immutable-capacity exhaustion without independently rolling the generation",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn server_generation_is_terminal(",
+            "&& self.server_request_gates.is_empty()",
+            "|| self.server_request_gates.is_empty()",
+            "every stream terminal and every gate, transfer, flush-order, and pending-closure owner empty",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn server_generation_is_terminal(",
+            "&& self.pending_server_closures.is_empty()",
+            "|| self.pending_server_closures.is_empty()",
+            "every stream terminal and every gate, transfer, flush-order, and pending-closure owner empty",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn roll_server_service_generation(",
+            "self.server_streams.len() < self.server_stream_capacity",
+            "self.server_streams.len() <= self.server_stream_capacity",
+            "ordinary responder generation rollover must occur only for a full terminal table",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "self.roll_server_service_generation()?;",
+            'return Err(MergeSidecarError::Capacity(\n'
+            '                "server semantic requester geometry",\n'
+            "            ));",
+            "full responder table may roll only through checked terminal compaction",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_close(",
+            "if !self.server_streams.contains_key(sender) {\n"
+            "            return Ok(close_ack());\n"
+            "        }",
+            "if !self.server_streams.contains_key(sender) {\n"
+            "            let _ = close_ack();\n"
+            "        }",
+            "unknown current-generation Close must be acknowledged without allocating responder stream geometry",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn new(payload: MergeSidecarLifecyclePayloadV2)",
+            "let payload_hash = HashOf::new(&payload);",
+            "let payload_hash = HashOf::new(&());",
+            "merge-sidecar crash-safe lifecycle production seam",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn integrity_is_valid(&self)",
+            "self.payload_hash == HashOf::new(&self.payload)",
+            "self.payload_hash != HashOf::new(&self.payload)",
+            "the durable sidecar snapshot integrity check must bind the complete canonical payload",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn load(&self) -> Result<Option<MergeSidecarLifecycleSnapshotV2>",
+            "if !snapshot.integrity_is_valid() {",
+            "if false && !snapshot.integrity_is_valid() {",
+            "lifecycle recovery must accept only canonical integrity-bound V2 state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn load(&self) -> Result<Option<MergeSidecarLifecycleSnapshotV2>",
+            "decode_from_bytes::<MergeSidecarLifecycleSnapshotV2>",
+            "decode_from_bytes::<UnsupportedMergeSidecarLifecycleSnapshotV1>",
+            "production lifecycle recovery must never decode the legacy V1 negative-test fixture",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn legacy_lifecycle_v1_snapshot_is_rejected_without_migration(",
+            'error.contains("migration is not supported")',
+            'error.contains("payload digest mismatch") '
+            '/* error.contains("migration is not supported") */',
+            "the retired-layout regression must require an explicit no-migration recovery failure",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn source_gate_count(",
+            "retained.shares_budget_with(source)",
+            "!retained.shares_budget_with(source)",
+            "per-source sidecar gate accounting must share one stable authenticated-peer budget across every semantic origin",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn source_gate_count_after_close(",
+            "&key.0 != sender",
+            "&key.0 == sender",
+            "close-aware per-source gate accounting must retain every gate from another semantic origin",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "BTreeMap::<ServerRequestBudgetSource, usize>::new()",
+            "BTreeMap::<(PeerId, ServerRequestBudgetSource), usize>::new()",
+            "durable recovery must aggregate gate ownership by stable authenticated source rather than by semantic requester/source pairs",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "self.source_gate_count(&source)",
+            "self.server_request_gates.len()",
+            "alternate-source sidecar admission must retain route-set, global-gate, and per-source-gate bounds",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn fifth_gate_from_one_hub_is_rejected_while_another_hub_progresses(",
+            "for index in 0..MAX_SERVER_REQUEST_GATES_PER_SOURCE {",
+            "for index in 0..1 {",
+            "the exact source-cap regression must fill all four gates through one authenticated hub while varying semantic origins",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "if !snapshot.integrity_is_valid() {",
+            "if false && !snapshot.integrity_is_valid() {",
+            "lifecycle restoration must independently reject a stale typed payload digest before interpreting any semantic floor",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn persist(&self, snapshot: &MergeSidecarLifecycleSnapshotV2)",
+            "if !snapshot.integrity_is_valid() {",
+            "if false && !snapshot.integrity_is_valid() {",
+            "lifecycle publication must reject an in-memory snapshot whose typed payload digest is stale",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn persist(&self, snapshot: &MergeSidecarLifecycleSnapshotV2)",
+            "file.sync_all()",
+            "file.flush()",
+            "lifecycle publication must create and fsync one exclusive temporary file",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub enum CertifiedMergeSidecarMessage",
+            "GenerationHint(CertifiedMergeSidecarGenerationHintV1),",
+            "GenerationHint(CertifiedMergeSidecarCloseAckV1),",
+            "the certified sidecar wire enum must expose request, close, close acknowledgement, generation fence, and chunk as distinct exhaustive variants",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) enum ServerRequestAdmission",
+            "GenerationHint(MergeSidecarPost),",
+            "GenerationHint,",
+            "server request admission must explicitly distinguish materialization, existing ownership, and a stateless generation hint",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn canonical_hint_id(&self)",
+            "self.observed_message_hash.as_ref(),",
+            "&version,",
+            "the generation hint identity must bind both generations, the exact observed message, and both authenticated peers",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub struct CertifiedMergeSidecarSemanticSequenceV1",
+            "pub struct CertifiedMergeSidecarSemanticSequenceV1(pub NonZeroU64);",
+            "pub struct CertifiedMergeSidecarSemanticSequenceV1(pub u64);",
+            "every exact semantic occurrence coordinate must use a nonzero typed wire value",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub struct CertifiedMergeSidecarRequestV1",
+            "pub semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "pub semantic_sequence: u64,",
+            "Request wire occurrence must carry typed nonzero generation, epoch, and semantic sequence",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub struct CertifiedMergeSidecarChunkV1",
+            "pub semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "pub semantic_sequence: u64,",
+            "Chunk wire occurrence must copy the typed nonzero generation, epoch, and semantic sequence",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct ServerPendingChunkIdentity",
+            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "semantic_sequence: u64,",
+            "process-local pending flush identity must retain the typed nonzero request occurrence",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct ServerPendingChunkLifecycleV2",
+            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "semantic_sequence: u64,",
+            "the durable pending marker must bind the complete generation-scoped request, response, payload, and chunk identity",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct ServerRequestGate",
+            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "semantic_sequence: u64,",
+            "live responder gate must retain the full canonical request and every generation-scoped occurrence coordinate",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct ServerRequestGateLifecycleV2",
+            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "semantic_sequence: u64,",
+            "each durable responder gate must retain the full canonical request and every generation, epoch, sequence, source, and pending-marker coordinate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "struct CertifiedSidecarTransferIdentity",
+            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "semantic_sequence: u64,",
+            "worker exact-transfer identity must retain the typed nonzero sidecar occurrence",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct MergeSidecarLifecyclePayloadV2",
+            "server_service_generation: CertifiedMergeSidecarServiceGenerationV1,",
+            "server_service_generation: u64,",
+            "the sole V2 durable sidecar snapshot must bind canonical runtime and roster geometry",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn open(",
+            "for legacy in LEGACY_LIFECYCLE_JOURNAL_DIRS {",
+            "for legacy in [] {",
+            "lifecycle startup must fail closed on every legacy directory before opening or creating sole V2 state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn open(",
+            "if !directory_exists {\n"
+            "            fs::create_dir(&directory)",
+            "if directory_exists {\n"
+            "            fs::create_dir(&directory)",
+            "lifecycle startup must create and durably publish only the sole V2 state directory",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn open(",
+            'let snapshot = snapshot.ok_or_else(|| {\n'
+            "            MergeSidecarError::LifecycleJournal(\n"
+            '                "lifecycle journal state disappeared during recovery".to_owned(),',
+            "let snapshot = snapshot.unwrap_or_else(|| {\n"
+            "            MergeSidecarLifecycleSnapshotV2::new(todo!())",
+            "existing sole V2 directory loses its state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn load(&self) -> Result<Option<MergeSidecarLifecycleSnapshotV2>",
+            "snapshot.payload.version != LIFECYCLE_JOURNAL_VERSION_V2",
+            "snapshot.payload.version == LIFECYCLE_JOURNAL_VERSION_V2",
+            "lifecycle recovery must accept only canonical integrity-bound V2 state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "gate.request.request_id != gate.request.canonical_request_id()",
+            "false",
+            "responder recovery must recompute the full canonical request and bind its generation, epoch, and semantic sequence to the durable gate",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "gate.attempts.len() > source_capacity.unwrap_or(1)",
+            "false",
+            "responder recovery must reject a gate whose durable attempts exceed its authenticated route-set capacity",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "if source_capacity.is_none() && peer == gate.requester",
+            "if source_capacity.is_some() && peer == gate.requester",
+            "responder recovery must reject synthetic/authenticated source-kind drift and synthetic requester impersonation",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "usize::try_from(pending.chunk_count).ok() != Some(expected_chunk_count)",
+            "usize::try_from(pending.chunk_count).ok() != Some(index)",
+            "responder recovery must reject any pending marker whose generation-scoped request metadata or exact chunk geometry differs from its gate",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_generation_hint(",
+            "journal.persist(&snapshot)?;",
+            "drop(snapshot);",
+            "requester generation replacement must persist the new generation and unique epoch before retiring any process-local old-generation attempt",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn commit_server_service_generation_transition(",
+            "journal.persist(&snapshot)?;",
+            "drop(snapshot);",
+            "publish the incremented generation and empty responder tables in the sole V2 snapshot before mutating memory",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "request.service_generation > self.server_service_generation",
+            "request.service_generation < self.server_service_generation",
+            "a canonical future-generation request must be rejected while a stale-generation request returns a stateless exact hint before pruning, parking a route, or touching durable responder state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "request.service_generation < self.server_service_generation",
+            "request.service_generation > self.server_service_generation",
+            "a canonical future-generation request must be rejected while a stale-generation request returns a stateless exact hint before pruning, parking a route, or touching durable responder state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_close(",
+            "close.service_generation > self.server_service_generation",
+            "close.service_generation < self.server_service_generation",
+            "a canonical future-generation Close must be rejected while a stale-generation Close returns a stateless exact hint before allocating or mutating a responder stream",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_close(",
+            "close.service_generation < self.server_service_generation",
+            "close.service_generation > self.server_service_generation",
+            "a canonical future-generation Close must be rejected while a stale-generation Close returns a stateless exact hint before allocating or mutating a responder stream",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn sidecar_effect_slots(",
+            ".filter(|effect| retryable_sidecar_server_control_peer(effect).is_none())",
+            ".filter(|effect| retryable_sidecar_server_control_peer(effect).is_some())",
+            "reproducible responder controls must not consume progress reservations while all physical sidecar effects remain relay bounded",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn next_sidecar_effect_selection(",
+            ".position(|effect| retryable_sidecar_server_control_peer(effect).is_none())",
+            ".position(|effect| retryable_sidecar_server_control_peer(effect).is_some())",
+            "sidecar scheduling must prioritize progress while granting retryable responder control a bounded weighted turn",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 3;",
+            "const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 3;",
+            "const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 0;",
+            "the sidecar scheduler must give retryable responder control one bounded turn after exactly three progress-bearing drains",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn new_with_output_guard_and_transport(",
+            "MergeSidecarTransport::open_durable_with_server_stream_capacity(",
+            "MergeSidecarTransport::open_durable(",
+            "lane construction must derive the canonical responder roster and restore or open only its exact durable source and stream geometry",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn rehydrate_for_successor(",
+            "self.successor_context_id != successor.id()",
+            "self.successor_context_id == successor.id()",
+            "retained sidecar ownership must bind the exact successor context and consume its durable output handoff before roster-aware rehydration",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn new_with_output_guard_and_transport(",
+            "sidecar_progress_drain_credit: SIDECAR_PROGRESS_DRAIN_WEIGHT,",
+            "sidecar_progress_drain_credit: 0,",
+            "lane construction must initialize the bounded sidecar progress/control drain credit",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn next_sidecar_effect_selection(",
+            "if self.sidecar_progress_drain_credit == 0 {",
+            "if self.sidecar_progress_drain_credit > 0 {",
+            "sidecar scheduling must prioritize progress while granting retryable responder control a bounded weighted turn",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn retryable_sidecar_server_control_peer(",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_none()",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_some()",
+            "lane retryable responder controls must retain exact-route CloseAck and route-free GenerationHint as distinct shapes",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn retryable_sidecar_server_control_peer(",
+            "CertifiedMergeSidecarMessage::CloseAck(_) if reply_routes.is_some()",
+            "CertifiedMergeSidecarMessage::CloseAck(_) if reply_routes.is_none()",
+            "lane retryable responder controls must retain exact-route CloseAck and route-free GenerationHint as distinct shapes",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_post_or_restart(",
+            "if retryable_server_control {",
+            "if false && retryable_server_control {",
+            "reserved sidecar handoff may nonfatally drop only reproducible responder control or an inactive response, and must roll back an unsent request before fail-stop",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_effect(",
+            ".any(|queued| retryable_sidecar_server_control_peer(queued) == Some(peer))",
+            ".any(|queued| retryable_sidecar_server_control_peer(queued).is_some())",
+            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_effect(",
+            "if self.sidecar_effects.len() >= self.limits.relay_capacity.get() {",
+            "if self.sidecar_effects.len() > self.limits.relay_capacity.get() {",
+            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_effect(",
+            "if self.sidecar_effect_slots() == 0 {",
+            "if false && self.sidecar_effect_slots() == 0 {",
+            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_effect(",
+            ".rposition(|queued| retryable_sidecar_server_control_peer(queued).is_some())",
+            ".rposition(|queued| retryable_sidecar_server_control_peer(queued).is_none())",
+            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_effect(",
+            "self.sidecar_effect_keys\n"
+            "                    .remove(&lane_work_effect_key(&evicted));",
+            "let _ = evicted;",
+            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn next_effect(",
+            "self.next_sidecar_effect_selection()\n"
+            "                .and_then(|(index, _)| self.sidecar_effects.get(index))\n"
+            "                .cloned()",
+            "self.sidecar_effects.front().cloned()",
+            "lane effect peek must clone the exact weighted progress/control sidecar selection without consuming its credit",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn drain_effects(",
+            "let (index, retryable_control) = self\n"
+            "                    .next_sidecar_effect_selection()\n"
+            "                    .expect(\"sidecar effect selected only when present\");",
+            "let (index, retryable_control) = (0, false);",
+            "lane effect drain must transfer the same weighted selection as peek, retire its key, and update progress/control credit only after ownership transfer",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn drain_effects(",
+            "self.sidecar_progress_drain_credit = SIDECAR_PROGRESS_DRAIN_WEIGHT;",
+            "self.sidecar_progress_drain_credit = 0;",
+            "lane effect drain must transfer the same weighted selection as peek, retire its key, and update progress/control credit only after ownership transfer",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn drain_effects(",
+            "self.sidecar_progress_drain_credit.saturating_sub(1);",
+            "self.sidecar_progress_drain_credit.saturating_add(1);",
+            "lane effect drain must transfer the same weighted selection as peek, retire its key, and update progress/control credit only after ownership transfer",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_certified_merge_sidecar_request(",
+            "return Ok(if self.push_merge_sidecar_post(post) {",
+            "self.push_merge_sidecar_post_or_restart(post)?;\n"
+            "            return Ok(if true {",
+            "lane ingress must treat a stale-generation hint as bounded retryable output while persisting every materialize/existing gate before fair service",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_certified_merge_sidecar_close(",
+            "let _ = self.service_next_certified_merge_sidecar_materialization(now)?;",
+            "let _ = now;",
+            "an authenticated Close must expose its durable prefix, give fair pending materialization one turn, and preserve both progress and bounded retryable control outcomes",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn from_admitted_reply(",
+            "reply_writer_timeout_attempt: flush_identity.reply_writer_timeout_attempt(),",
+            "reply_writer_timeout_attempt: 0,",
+            "sidecar writer-flush admission must bind the opaque source, exact route, actor ticket and clone-shared claim with immutable payload and cursors",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "match attempt(post, ticket, &route, reply_writer_timeout_attempt) {",
+            "match attempt(post, ticket, &route, 0) {",
+            "worker dispatch must pass the target-local adaptive timeout attempt into actor admission",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "|| flush_ack.identity().reply_writer_timeout_attempt()\n"
+            "                            != reply_writer_timeout_attempt",
+            "|| flush_ack.identity().reply_writer_timeout_attempt()\n"
+            "                            != 0",
+            "ordinary reply cursor must remain unchanged while retaining its exact admission and writer-flush witness",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "if flush_ack.identity().reply_writer_timeout_attempt()\n"
+            "                        != reply_writer_timeout_attempt",
+            "if flush_ack.identity().reply_writer_timeout_attempt()\n"
+            "                        != 0",
+            "sidecar cursor may advance only after retaining its exact admission and writer-flush witness",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn poll_reply_flushes(",
+            "pending_flush.reply_writer_timeout_attempt != current_timeout_attempt",
+            "pending_flush.reply_writer_timeout_attempt != 0",
+            "terminal reply-flush polling must bind the mutable target, retained writer occurrence, and actor acknowledgement to one adaptive timeout attempt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn poll_reply_flushes(",
+            "!= pending_flush.reply_writer_timeout_attempt",
+            "!= current_timeout_attempt",
+            "terminal reply-flush polling must bind the mutable target, retained writer occurrence, and actor acknowledgement to one adaptive timeout attempt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn handoff_applied_height_to_durable_reconstruction(",
+            "!= target.reply_writer_timeout_attempt",
+            "!= 0",
+            "finality handoff must revalidate target, retained writer occurrence, and actor acknowledgement against the same adaptive timeout attempt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn handoff_applied_height_to_durable_reconstruction(",
+            "!= pending_flush.reply_writer_timeout_attempt",
+            "!= target.reply_writer_timeout_attempt",
+            "finality handoff must revalidate target, retained writer occurrence, and actor acknowledgement against the same adaptive timeout attempt",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn covers(&self, other: &Self)",
+            "self.requester == other.requester",
+            "self.requester != other.requester",
+            "sidecar close-prefix dominance must bind the requester",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_close(",
+            "return Ok(false);",
+            "return Err(MergeSidecarError::UnsolicitedResponse);",
+            "a canonical duplicate CloseAck may be a bounded no-op",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_close(",
+            "if ack.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1 {",
+            "if ack.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1 {",
+            "merge-sidecar crash-safe lifecycle production seam MergeSidecarTransport::acknowledge_close declaration and complete control flow must match the exact reviewed token digest",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn drain_closed_server_prefixes(",
+            "std::mem::take(&mut self.pending_server_closures)",
+            "self.pending_server_closures.clone()",
+            "merge transport must move every coalesced authenticated close prefix exactly once",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_certified_merge_sidecar_request(",
+            "let _ = self.apply_closed_server_prefixes();",
+            "let _ = false;",
+            "lane ingress must treat a stale-generation hint as bounded retryable output while persisting every materialize/existing gate before fair service",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_certified_merge_sidecar_close(",
+            "let close_progress = self.apply_closed_server_prefixes();",
+            "let close_progress = false;",
+            "an authenticated Close must expose its durable prefix",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn drain_closed_sidecar_prefixes(",
+            "std::mem::take(&mut self.closed_sidecar_prefixes)",
+            "self.closed_sidecar_prefixes.clone()",
+            "lane work must move each dominant close prefix exactly once",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn close_certified_sidecar_prefix(",
+            "&transfer.requester,",
+            "&prefix.requester,",
+            "worker close-prefix projection must bind the exact requester",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn close_certified_merge_sidecar_prefix(",
+            "pending.close_certified_sidecar_prefix(prefix)",
+            "Ok(0)",
+            "production close-prefix bridge must serialize",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn apply_certified_merge_sidecar_closed_prefixes(",
+            ".close_certified_merge_sidecar_prefix(&prefix)",
+            ".retry_pending_exact_output()",
+            "runner must move every lane close prefix into the worker exact-output owner before later dispatch",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn service_next_certified_merge_sidecar_materialization(",
+            ".next_server_request_materialization(now)",
+            ".authorized_server_request_materialization()",
+            "only the transport's durable fair materialization selection may cross into the terminating Kura lookup",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn retryable_certified_sidecar_responder_control_target(",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) => self\n"
+            "                    .targets\n"
+            "                    .iter()\n"
+            "                    .all(|route| matches!(&route.route, ExactTargetRoute::Topology)),",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) => false,",
+            "worker retryable responder control must use exact reply ownership for CloseAck and topology ownership for route-free GenerationHint",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn retryable_certified_sidecar_responder_control_target(",
+            "CertifiedMergeSidecarMessage::CloseAck(_) => self\n"
+            "                    .targets\n"
+            "                    .iter()\n"
+            "                    .all(|route| matches!(&route.route, ExactTargetRoute::Reply(_))),",
+            "CertifiedMergeSidecarMessage::CloseAck(_) => self\n"
+            "                    .targets\n"
+            "                    .iter()\n"
+            "                    .all(|route| matches!(&route.route, ExactTargetRoute::Topology)),",
+            "worker retryable responder control must use exact reply ownership for CloseAck and topology ownership for route-free GenerationHint",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn retains_retryable_sidecar_responder_control_for(",
+            "retained.retryable_certified_sidecar_responder_control_target()\n"
+            "                        == Some(candidate_target)",
+            "retained.retryable_certified_sidecar_responder_control_target()\n"
+            "                        .is_some()",
+            "worker responder-control suppression must require an already-retained retryable control for the same semantic target",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn retains_retryable_sidecar_responder_control_for(",
+            "== Some(candidate_target)",
+            "!= Some(candidate_target)",
+            "worker responder-control suppression must require an already-retained retryable control for the same semantic target",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn can_enqueue(&self, fanout: &PendingExactFanout)",
+            "if self.retains_retryable_sidecar_responder_control_for(fanout) {",
+            "if false && self.retains_retryable_sidecar_responder_control_for(fanout) {",
+            "lane-effect preflight must validate geometry, consume only a same-target duplicate responder control, and otherwise charge reservation capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn can_enqueue_owned_reply_transfer(",
+            "if self.retains_retryable_sidecar_responder_control_for(&fanout) {",
+            "if false && self.retains_retryable_sidecar_responder_control_for(&fanout) {",
+            "owned reply capacity preflight must consume only a same-target duplicate responder control without charging capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn enqueue_validated(",
+            "if self.retains_retryable_sidecar_responder_control_for(&fanout) {",
+            "if false && self.retains_retryable_sidecar_responder_control_for(&fanout) {",
+            "worker exact output may retain at most one retryable responder control per semantic target while preserving independent controls and ordinary progress for other targets",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_certified_merge_sidecar(",
+            "self.accept_certified_merge_sidecar_generation_hint(sender, reply_route, &hint)",
+            "Ok(V2LaneIngressOutcome::Rejected)",
+            "lane sidecar ingress must exhaustively route the authenticated generation hint alongside every request, close, acknowledgement, and chunk variant",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "| CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
+            "=> None,",
+            "only an immutable certified response chunk may create a writer-flush receipt from its exact route",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn post_certified_merge_sidecar_with_reply_routes(",
+            "CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {\n"
+            "                reply_routes.is_some()\n"
+            "            }",
+            "CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {\n"
+            "                reply_routes.is_none()\n"
+            "            }",
+            "worker sidecar dispatch must keep Request, Close, and GenerationHint on topology while CloseAck and Chunk retain exact reply routes",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn dispatch_lane_work_effect(",
+            "| CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),",
+            "| CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_none(),",
+            "runner sidecar dispatch must reject missing or extraneous route ownership",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -7528,6 +10503,57 @@ def test_exact_output_production_source_is_bound() -> None:
             "retained.merge_downstream(candidate)",
             "retained fair-ingress ownership must consume the strict receipt and yield the sole authoritative route snapshot",
         ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn target_reservation(",
+            "ExactTargetReservationKind::SidecarTopologyProgress",
+            "ExactTargetReservationKind::Reliable",
+            "reservation identity must isolate requester-owned topology progress from reliable reply-source ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn seal(&self) -> Result<(), String>",
+            ".compare_exchange(false, true, AtomicOrdering::AcqRel, AtomicOrdering::Acquire)",
+            ".compare_exchange(false, false, AtomicOrdering::AcqRel, AtomicOrdering::Acquire)",
+            "durable exact-output handoff must seal its unique service owner exactly once",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn seal_applied_height_output_handoff(",
+            "if pending.is_pending() {",
+            "if false && pending.is_pending() {",
+            "final exact-output handoff must validate durable authority, atomically empty the corridor, and one-shot seal every later enqueue",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn into_retained_merge_sidecars(",
+            ".is_bound_to_transport_owner(&self.exact_output_handoff_owner)",
+            ".matches_predecessor_context(&self.context)",
+            "lane rollover must consume only its paired service receipt for the exact predecessor artifact and immediate successor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn require_peeked_lane_work_effect(",
+            "drained.ok_or(V2RunnerError::RestartRequired)",
+            "drained.ok_or(V2RunnerError::Service(\"lost peek\".to_owned()))",
+            "runner lane dispatch must fail stop if its guarded peek loses the exact queued owner before drain",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn rehydrate_with_exact_geometry_after_durable_handoff(",
+            "drop(authority);\n"
+            "        self.rehydrate_with_exact_geometry(",
+            "drop(authority);\n"
+            "        self.rehydrate_with_exact_geometry_after_durable_handoff(",
+            "durable sidecar rehydration must consume the exact rollover authority and delegate to the ordinary terminal-checked geometry transition",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn transition_server_service_generation(",
+            "if !self.server_generation_is_terminal() {",
+            "if false && !self.server_generation_is_terminal() {",
+            "ordinary responder generation transition must prepare without mutation, reject nonterminal state, and only then commit the prepared fence",
+        ),
     ),
 )
 def test_exact_output_production_source_mutations_fail_closed(
@@ -7586,17 +10612,17 @@ def test_exact_output_production_source_mutations_fail_closed(
 
 def test_proofless_release_theorems_require_exact_explicit_debt() -> None:
     module = load_checker()
-    source = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+    source = r"""---- MODULE SumeragiV2AsyncTemporalClosureProofs ----
 THEOREM Complete == TRUE
 BY PTL
 THEOREM Pending == TRUE
 =============================================================================
 """
-    sources = {"SumeragiV2AsyncLivenessProofs": source}
+    sources = {"SumeragiV2AsyncTemporalClosureProofs": source}
     obligations = [
         {
             "id": "pending",
-            "module": "SumeragiV2AsyncLivenessProofs",
+            "module": "SumeragiV2AsyncTemporalClosureProofs",
             "symbol": "Pending",
             "status": "specified_unproved",
         }
@@ -7614,38 +10640,39 @@ THEOREM Pending == TRUE
     errors = module._proofless_release_theorem_errors(falsely_proved, sources)
     assert any("must be ledgered specified_unproved" in error for error in errors)
 
-    indented = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+    indented = r"""---- MODULE SumeragiV2AsyncTemporalClosureProofs ----
   THEOREM IndentedPending == TRUE
 =============================================================================
 """
     indented_obligation = [
         {
             "id": "indented-pending",
-            "module": "SumeragiV2AsyncLivenessProofs",
+            "module": "SumeragiV2AsyncTemporalClosureProofs",
             "symbol": "IndentedPending",
             "status": "specified_unproved",
         }
     ]
     assert (
         module._proofless_release_theorem_errors(
-            indented_obligation, {"SumeragiV2AsyncLivenessProofs": indented}
+            indented_obligation,
+            {"SumeragiV2AsyncTemporalClosureProofs": indented},
         )
         == []
     )
     errors = module._proofless_release_theorem_errors(
-        [], {"SumeragiV2AsyncLivenessProofs": indented}
+        [], {"SumeragiV2AsyncTemporalClosureProofs": indented}
     )
     assert any(
         "IndentedPending must have exactly one ledger entry" in error
         for error in errors
     )
 
-    local = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+    local = r"""---- MODULE SumeragiV2AsyncTemporalClosureProofs ----
 LOCAL THEOREM LocalPending == TRUE
 =============================================================================
 """
     errors = module._proofless_release_theorem_errors(
-        [], {"SumeragiV2AsyncLivenessProofs": local}
+        [], {"SumeragiV2AsyncTemporalClosureProofs": local}
     )
     assert any(
         "LocalPending must have exactly one ledger entry" in error
@@ -11372,6 +14399,10 @@ def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
     path = formal_dir / "ownership_n1.cfg"
     source = (module.FORMAL_DIR / path.name).read_text(encoding="utf-8")
     path.write_text(source, encoding="utf-8")
+    shutil.copyfile(
+        module.FORMAL_DIR / "SumeragiV2OwnershipInvariantCheck.tla",
+        formal_dir / "SumeragiV2OwnershipInvariantCheck.tla",
+    )
     assert module._ownership_n1_configuration_errors(formal_dir) == []
 
     path.write_text(
@@ -11434,6 +14465,74 @@ def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
             f"must assign {refinement_constant} = TRUE exactly once" in error
             for error in errors
         )
+
+    for old, new in (
+        ('  ValidSubjects = {"A"}\n', '  ValidSubjects = {"B"}\n'),
+        (
+            "  AcquisitionSubjects = {AcquisitionSubjectA}\n",
+            "  AcquisitionSubjects = {}\n",
+        ),
+        (
+            "  InitialAcquisitionSubject = AcquisitionSubjectA\n",
+            "  InitialAcquisitionSubject = AcquisitionSubjectB\n",
+        ),
+        ("  MaxAcquisitionId = 4\n", "  MaxAcquisitionId = 5\n"),
+    ):
+        path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        errors = module._ownership_n1_configuration_errors(formal_dir)
+        assert any(
+            "ownership search must retain exact closed assignment" in error
+            for error in errors
+        ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "OwnershipBoundedInit",
+            "  /\\ AcquisitionInit\n",
+            "",
+        ),
+        (
+            "OwnershipBoundedNext",
+            "  /\\ UNCHANGED acquisitionVars\n",
+            "  /\\ UNCHANGED AsyncAllVars\n",
+        ),
+        (
+            "OwnershipBoundedSpec",
+            "[][OwnershipBoundedNext]_OwnershipAllVars",
+            "[][OwnershipBoundedNext]_AsyncAllVars",
+        ),
+    ),
+)
+def test_ownership_n1_model_closes_inherited_acquisition_state(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    shutil.copyfile(
+        module.FORMAL_DIR / "ownership_n1.cfg",
+        formal_dir / "ownership_n1.cfg",
+    )
+    model_path = formal_dir / "SumeragiV2OwnershipInvariantCheck.tla"
+    model_source = (
+        module.FORMAL_DIR / "SumeragiV2OwnershipInvariantCheck.tla"
+    ).read_text(encoding="utf-8")
+    model_path.write_text(
+        mutate_tla_operator(model_source, symbol, old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._ownership_n1_configuration_errors(formal_dir)
+    assert any(
+        f"ownership model operator {symbol} must equal only" in error
+        for error in errors
+    ), errors
 
 
 def test_async_source_fidelity_pins_timeout_vote_byte_reserve(
@@ -11732,6 +14831,38 @@ def test_async_source_fidelity_pins_candidate_consumer_and_restart_state(
             expected_error,
             errors,
         )
+
+
+def test_async_source_fidelity_requires_parenthesized_candidate_carriers(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    assert module._async_source_fidelity_errors(formal_dir) == []
+    parenthesized = (
+        "    (UNION {SequenceSet(commandQueues[node]): node \\in ValidatorIds})\n"
+    )
+    assert parenthesized in source
+    path.write_text(
+        source.replace(
+            parenthesized,
+            "    UNION {SequenceSet(commandQueues[node]): node \\in ValidatorIds}\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "CandidateScheduledIn must equal only" in error for error in errors
+    ), errors
 
 
 def test_async_source_fidelity_pins_exact_restart_fifo_and_decision_frontier(
@@ -12148,12 +15279,16 @@ def test_async_source_fidelity_pins_exact_outer_frame_helpers(
 def local_runner_service_fixture(tmp_path: Path, module) -> Path:
     """Copy the exact formal and Rust sources owned by the runner contract."""
 
-    return copy_async_source_fidelity_fixture(
+    formal_dir = copy_async_source_fidelity_fixture(
         tmp_path,
         module,
         "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2AsyncLivenessProofs.tla",
     )
+    (formal_dir / "SumeragiV2AsyncLivenessProofs.tla").write_text(
+        module._async_liveness_source(module.FORMAL_DIR),
+        encoding="utf-8",
+    )
+    return formal_dir
 
 
 def test_local_runner_service_contract_source_fidelity_is_current(
@@ -12224,7 +15359,7 @@ def test_local_runner_service_contract_rejects_broadened_trust_boundary(
         (
             "SumeragiV2AsyncNetwork.tla",
             "AsyncTickEnabled",
-            "     /\\ \\A node \\in LocalRunnerServiceOwners:\n",
+            "     /\\ \\A node \\in AsyncTimedServiceNodes:\n",
             "     /\\ \\A node \\in AsyncCurrentResponsiveVoters:\n",
             "AsyncTickEnabled must project each independent local runner contract",
         ),
@@ -12268,7 +15403,8 @@ def test_local_runner_service_contract_rejects_disconnected_deadlock_obligation(
             source,
             "DeadlockFreedomObligation",
             "    DeadlockFreedomWithLocalWorkProperty(AsyncSpecAt(initialContext),\n"
-            "      AsyncTerminatingLocalWorkDecreaseStep)\n",
+            "      ENABLED PostGstProductiveStepWith(\n"
+            "        AsyncTerminatingLocalWorkDecreaseStep))\n",
             "    DeadlockFreedomProperty(AsyncSpecAt(initialContext))\n",
         ),
         encoding="utf-8",
@@ -12308,7 +15444,7 @@ def test_local_runner_service_contract_rejects_disconnected_deadlock_obligation(
             "                    let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
             "                    continue;\n",
             "                    continue;\n",
-            "all four serialized height-loop continue edges",
+            "all five serialized height-loop continue edges",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -13745,6 +16881,7 @@ ChainEpochTlcInvariant == TypeInvariant /\\ ChainEpochInvariant
         "asyncSentItems",
         "asyncRetainedControl",
         "asyncActiveRequests",
+        "asyncCertifiedResponseClaim",
         "asyncTransport",
         "asyncIngressLanes",
         "asyncIngressReady",
@@ -13853,7 +16990,7 @@ ChainEpochTlcInvariant == TypeInvariant /\\ ChainEpochInvariant
         "IndexedAsyncStateShape ==\n"
         "  /\\ Len(indexedAsyncState[initialContext]) = 3\n"
         "  /\\ Len(indexedAsyncState[initialContext][1]) = 46\n"
-        "  /\\ Len(indexedAsyncState[initialContext][2]) = 35\n"
+        "  /\\ Len(indexedAsyncState[initialContext][2]) = 36\n"
         "  /\\ Len(indexedAsyncState[initialContext][3]) = 5\n"
         "THEOREM IndexedInstanceVariablesAreExact ==\n"
         "  IndexedAsyncStateShape\n"
@@ -13993,8 +17130,8 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
             1,
         )
         .replace(
+            "Len(indexedAsyncState[initialContext][2]) = 36",
             "Len(indexedAsyncState[initialContext][2]) = 35",
-            "Len(indexedAsyncState[initialContext][2]) = 34",
             1,
         )
         .replace(
@@ -14196,8 +17333,8 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
 
     async_path.write_text(
         async_source.replace(
-            "AsyncAllVars == <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
-            "AsyncAllVars == <<vars, AsyncSchedulerVars>>",
+            "AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
+            "AsyncAllVars == <<gst, vars, AsyncSchedulerVars>>",
             1,
         ),
         encoding="utf-8",
@@ -14556,6 +17693,31 @@ def test_successor_stale_token_mutation_artifacts_are_required(
             "",
         ),
         (
+            "FixedRejectStaleSuccessorActivation",
+            '  /\\ lastTransition = "Initial"\n',
+            "",
+        ),
+        (
+            "FixedRejectStaleSuccessorActivation",
+            "  /\\ UNCHANGED <<activationStatus,\n",
+            "  /\\ UNCHANGED <<predecessorOwnership,\n",
+        ),
+        (
+            "InitialStaleRejectionIsEnabled",
+            "    => ENABLED FixedRejectStaleSuccessorActivation\n",
+            "    => ~ENABLED FixedRejectStaleSuccessorActivation\n",
+        ),
+        (
+            "FixedRejectPreservesStaleState",
+            "    => StaleAppliedTokenState\n",
+            "    => TRUE\n",
+        ),
+        (
+            "FixedMutationNext",
+            "  \\/ FixedRejectStaleSuccessorActivation\n",
+            "",
+        ),
+        (
             "BuggyBeginSuccessorActivation",
             "  /\\ ExactDurableParentApplicationWitness\n",
             "  /\\ ExactDurableParentApplicationWitness\n"
@@ -14615,6 +17777,14 @@ def test_successor_stale_token_mutation_model_mutations_fail_closed(
         (
             "successor_stale_token_fixed.cfg",
             "INVARIANT AppliedFailurePreservesRunningWitness\n",
+        ),
+        (
+            "successor_stale_token_fixed.cfg",
+            "INVARIANT InitialStaleRejectionIsEnabled\n",
+        ),
+        (
+            "successor_stale_token_fixed.cfg",
+            "INVARIANT FixedRejectPreservesStaleState\n",
         ),
         (
             "successor_stale_token_fixed.cfg",
@@ -16439,17 +19609,21 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     assert "old deferred-owner replacement mutation did not fail with TLC status 13" in runner
     assert "Back to state 3" in runner
     assert "deferred_cursor_old_status -eq 13" in runner
-    assert "deferred_busy_cursor_old_status -eq 13" in runner
+    assert "deferred_busy_priority_old_status -eq 13" in runner
     assert "deferred_handoff_rebusy_status -eq 13" in runner
     assert "deferred_handoff_rebusy_bug.cfg" in runner
     assert "deferred_handoff_exact.cfg" in runner
     assert "SumeragiV2DeferredHandoffMutation.tla" in runner
     assert "handoff-free deferred retry did not fail with TLC status 13" in runner
     assert "old strict deferred cursor mutation missed expected marker" in runner
-    assert "old Busy deferred cursor mutation missed expected marker" in runner
-    assert "busyAttemptParity = TRUE" in runner
+    assert "old Busy/deferred priority mutation missed expected marker" in runner
+    assert "attemptParity = TRUE" in runner
+    assert "deferred_busy_priority_bug.cfg" in runner
+    assert "deferred_busy_fence.cfg" in runner
+    assert "SumeragiV2DeferredBusyFenceMutation.tla" in runner
     assert "6 distinct states" in runner
-    assert "5 distinct states" in runner
+    assert "3 distinct states" in runner
+    assert "depth of the complete state graph search is 3" in runner
     assert "head_only_status -eq 13" in runner
     assert "old head-only ingress mutation did not fail with TLC status 13" in runner
     assert "State 2: Stuttering" in runner
@@ -16509,18 +19683,19 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     assert (formal_dir / "deferred_cursor_cyclic.cfg").read_text(
         encoding="utf-8"
     ).startswith("SPECIFICATION CyclicSpec\n")
-    busy_cursor_mutation = (
-        formal_dir / "SumeragiV2DeferredBusyCursorMutation.tla"
+    busy_fence_mutation = (
+        formal_dir / "SumeragiV2DeferredBusyFenceMutation.tla"
     ).read_text(encoding="utf-8")
-    assert "OldBusyService" in busy_cursor_mutation
-    assert "CyclicBusyService" in busy_cursor_mutation
-    assert "busyAttemptParity' = ~busyAttemptParity" in busy_cursor_mutation
-    assert (formal_dir / "deferred_busy_cursor_strict_bug.cfg").read_text(
+    assert "BusyDeferredRetry" in busy_fence_mutation
+    assert "ServiceOrdinaryCompletion" in busy_fence_mutation
+    assert "DrainDeferredProgress" in busy_fence_mutation
+    assert "attemptParity' = ~attemptParity" in busy_fence_mutation
+    assert (formal_dir / "deferred_busy_priority_bug.cfg").read_text(
         encoding="utf-8"
-    ).startswith("SPECIFICATION OldBusySpec\n")
-    assert (formal_dir / "deferred_busy_cursor_cyclic.cfg").read_text(
+    ).startswith("SPECIFICATION RetryPrioritySpec\n")
+    assert (formal_dir / "deferred_busy_fence.cfg").read_text(
         encoding="utf-8"
-    ).startswith("SPECIFICATION CyclicBusySpec\n")
+    ).startswith("SPECIFICATION FencedSpec\n")
     handoff_mutation = (
         formal_dir / "SumeragiV2DeferredHandoffMutation.tla"
     ).read_text(encoding="utf-8")
@@ -16685,7 +19860,7 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     assert "effective_lock_future_completion_bug.cfg 12" in progress_runner
     assert "ownership_n1.cfg 0" in progress_runner
     assert "983041 states generated, 99328 distinct states found" in progress_runner
-    assert "depth of the complete state graph search is 48" in progress_runner
+    assert "depth of the complete state graph search is 49" in progress_runner
 
     causal_debt = (formal_dir / "SumeragiV2CausalDebtMutation.tla").read_text(
         encoding="utf-8"
@@ -17550,7 +20725,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 515 tests",
+            "must contain exactly 704 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -17558,15 +20733,41 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=515",
-            "readonly expected_production_liveness_test_count=514",
-            "production liveness source count must be sealed as 515",
+            "readonly expected_production_liveness_test_count=704",
+            "readonly expected_production_liveness_test_count=701",
+            "production liveness source count must be sealed as 704",
         ),
         (
-            "  block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification\n"
-            "  block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin\n",
-            "  block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin\n"
-            "  block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification\n",
+            "readonly expected_multilane_focus_test_count=277",
+            "readonly expected_multilane_focus_test_count=276",
+            "multilane G-UNIT source count must be sealed as 277",
+        ),
+        (
+            '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
+            """'[:space:]')" != 278 ]]; then""",
+            '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
+            """'[:space:]')" != 277 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 277 focus rows",
+        ),
+        (
+            "  native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation\n"
+            "  native_amx::tests::signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation\n",
+            "  native_amx::tests::signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation\n"
+            "  native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
+            "  append_g_unit_inventory \\\n"
+            '    g-unit-iroha-core iroha_core "${required_multilane_core_focus_tests[@]}"',
+            "  append_g_unit_inventory \\\n"
+            '    g-unit-iroha-core iroha_p2p "${required_multilane_core_focus_tests[@]}"',
+            "G-UNIT leg g-unit-iroha-core must append the exact",
+        ),
+        (
+            "  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin\n"
+            "  block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round\n",
+            "  block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round\n"
+            "  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin\n",
             "canonical module/test inventory SHA-256",
         ),
         (
@@ -17610,6 +20811,8 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -17639,6 +20842,8 @@ def test_production_release_inventory_seals_later_genesis_proposal_origin(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -17661,10 +20866,10 @@ def test_production_release_inventory_seals_later_genesis_proposal_origin(
         / "finality.rs"
     )
     source = finality_path.read_text(encoding="utf-8")
-    exact_call = "artifact_bound_to_header(0, 3, 5)"
+    exact_call = "artifact_bound_to_header(3, 5)"
     assert source.count(exact_call) == 1
     finality_path.write_text(
-        source.replace(exact_call, "artifact_bound_to_header(0, 2, 5)", 1),
+        source.replace(exact_call, "artifact_bound_to_header(4, 5)", 1),
         encoding="utf-8",
     )
 
@@ -17688,6 +20893,8 @@ def test_production_release_inventory_seals_contention_tolerant_restart_deadline
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -17733,6 +20940,8 @@ def test_production_release_inventory_seals_successor_parent_binding(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -17758,6 +20967,13 @@ def test_production_release_inventory_seals_successor_parent_binding(
             "let admitted = adapter\n            .receive_authenticated(authenticated)",
             "let admitted = adapter\n            .receive_authenticated(proposal)",
         ),
+        (
+            "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter",
+            "adapter.authenticate(conflicting_proposal_message),\n"
+            "            Err(AdapterError::ConflictingExecutionCommitment)",
+            "adapter.authenticate(conflicting_proposal_message),\n"
+            "            Err(AdapterError::MissingExecutionCommitment)",
+        ),
     )
     for test_name, old, new in mutations:
         assert canonical_source.count(old) == 1, old
@@ -17778,16 +20994,29 @@ def test_production_release_inventory_seals_successor_parent_binding(
     ("relative", "old", "new"),
     (
         (
+            Path("docs/formal/sumeragi_v2/README.md"),
+            "current inventory therefore contains 704 tests across 38 modules.\n"
+            "Together with the source-sealed command and tooling legs, the pre-network\n"
+            "corridor contains 81 legs.",
+            "current inventory therefore contains 704 tests across 38 modules.\n"
+            "Together with the source-sealed command and tooling legs, the pre-network\n"
+            "corridor contains 80 legs.",
+        ),
+        (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
-            "yielding the current 515-test, 38-module, 78-leg\ninventory",
-            "yielding the current 515-test, 38-module, 77-leg\ninventory",
+            "the current 704-test, 38-module inventory. The complete source-sealed\n"
+            "pre-network corridor\n"
+            "contains 81 legs",
+            "the current 704-test, 38-module inventory. The complete source-sealed\n"
+            "pre-network corridor\n"
+            "contains 80 legs",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "receipt binds the 78 pre-network corridor legs and\n"
-            "their exact 515-test inventory",
-            "receipt binds the 77 pre-network corridor legs and\n"
-            "their exact 515-test inventory",
+            "current source-bound inventory therefore contains 704 exact tests "
+            "across\n38 modules and 81 pre-network legs.",
+            "current source-bound inventory therefore contains 704 exact tests "
+            "across\n38 modules and 80 pre-network legs.",
         ),
     ),
 )
@@ -17804,6 +21033,8 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -17833,27 +21064,61 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 515",
-            "_PRODUCTION_TEST_COUNT = 514",
-            "production test count must equal the exact shell inventory count 515",
+            "_PRODUCTION_TEST_COUNT = 704",
+            "_PRODUCTION_TEST_COUNT = 701",
+            "production test count must equal the exact shell inventory count 704",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-merge-sidecar", "merge_sidecar::tests", 30),',
-            '("production-merge-sidecar", "merge_sidecar::tests", 29),',
+            '        "sumeragi::authoritative_runtime_gate_tests",\n'
+            "        32,\n"
+            "    ),",
+            '        "sumeragi::authoritative_runtime_gate_tests",\n'
+            "        31,\n"
+            "    ),",
             "production module receipt tuple must equal the exact shell",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 53),',
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 52),',
+            '("production-merge-sidecar", "merge_sidecar::tests", 102),',
+            '("production-merge-sidecar", "merge_sidecar::tests", 101),',
+            "production module receipt tuple must equal the exact shell",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 51),',
+            '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 50),',
+            "production module receipt tuple must equal the exact shell",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 77),',
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 76),',
+            "production module receipt tuple must equal the exact shell",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-runner", "sumeragi::v2_runner::tests", 30),',
+            '("production-v2-runner", "sumeragi::v2_runner::tests", 29),',
+            "production module receipt tuple must equal the exact shell",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '        "production-irohad-network-relay",\n'
+            '        "network_relay_tests",\n'
+            "        3,\n"
+            "    ),",
+            '        "production-irohad-network-relay",\n'
+            '        "network_relay_tests",\n'
+            "        2,\n"
+            "    ),",
             "production module receipt tuple must equal the exact shell",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=78",
-            "  readonly expected_corridor_leg_count=77",
-            "sealed at 78 legs",
+            "  readonly expected_corridor_leg_count=81",
+            "  readonly expected_corridor_leg_count=80",
+            "sealed at 81 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
@@ -17881,6 +21146,8 @@ def test_production_release_inventory_rejects_receipt_and_command_drift(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -18158,6 +21425,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in error
         for error in errors
     ), errors
+    release_fidelity_path.write_text(canonical_release, encoding="utf-8")
 
     runner_path = ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
     bash = Path(shutil.which("bash") or "").resolve(strict=True)
@@ -18214,12 +21482,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "let wal_path =",
         "SumeragiV2Adapter::open",
         "ProductionV2Services::start",
-        "V2LaneWorkAdapter::new_with_output_guard",
+        "V2LaneWorkAdapter::new_with_output_guard_and_transport",
     ):
         assert runner_platform_gate < run_inner.index(side_effect)
-    lane_constructor = lane_work_source[
-        lane_work_source.index("    pub(crate) fn new_with_output_guard(") :
-    ]
+    lane_constructor_start = lane_work_source.index(
+        "    pub(crate) fn new_with_output_guard_and_transport("
+    )
+    lane_constructor = lane_work_source[lane_constructor_start:]
     lane_platform_gate = lane_constructor.index(
         "        require_validator_storage_platform("
     )
@@ -18267,7 +21536,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
 
     retirement_item = module.rust_items(
         canonical_lane_geometry,
-        "ensure_first_release_lane_retirement_admissible_locked",
+        "ensure_first_release_lane_retirement_admissible_with_certified_locked",
     )
     assert len(retirement_item) == 1
     retirement_item_source = retirement_item[0].source
@@ -18284,7 +21553,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     def mutate_fixed_progress_pairs(old: str, new: str) -> None:
         assert canonical_fixed_pairs.count(old) == 1, old
         mutate_lane_geometry_item(
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             canonical_fixed_pairs,
             canonical_fixed_pairs.replace(old, new, 1),
         )
@@ -18323,7 +21592,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
 
     lane_geometry_mutations = (
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             "    &fixed_progress_pairs,\n",
             "    &fixed_progress_pairs[..4],\n",
             "all fixed retirement progress pairs must recover before the "
@@ -18374,7 +21643,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "per-height names",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             """            if !native_amx_retained_windows_are_complete(
                 &native_manifest_heights,
                 &native_receipt_heights,
@@ -18385,14 +21654,14 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "live Native AMX evidence must form a complete retained suffix",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             "match native_receipt_heights.last().copied() {",
             "match native_receipt_heights.first().copied() {",
             "live Native AMX latest lookup must select the highest retained "
             "receipt",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             "manifest.leaf.lane_id != entry.lane_id",
             "manifest.leaf.lane_id == entry.lane_id",
             "live Native AMX manifests must join the active route, incarnation, "
@@ -18406,7 +21675,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "and canonical finality",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             """                return Err(Error::IO(
                     std::io::Error::new(
                         ErrorKind::InvalidData,
@@ -18421,7 +21690,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "artifact after the complete allowlist",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             """                if Self::parse_native_amx_evidence_path(&path)?.is_some() {
                     continue;
                 }
@@ -18743,7 +22012,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             p2p_network_source,
         ),
         (
-            "network::tests::",
+            "network::handle_update_tests::",
             "targetized_broadcast_coalesces_only_the_same_digest_and_membership",
             p2p_network_source,
         ),
@@ -18795,30 +22064,38 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             for test_name in (
                 "exact_active_delivery_retry_preserves_decreasing_chunk_rank",
                 "alternate_source_progress_and_reconnect_preserve_independent_cursors",
-                "equal_ordinal_different_tenure_alternate_source_is_rejected_atomically",
-                "inactive_source_teardown_releases_budget_and_reconnect_resumes_cursor",
+                "reused_actor_ordinals_under_different_tenures_are_rejected_atomically",
+                "reply_unwritable_route_parks_inflight_materialization_without_bytes",
                 "later_delivery_preserves_the_current_source_cursor",
                 "later_delivery_while_chunk_is_in_flight_waits_for_flush_before_next_emit",
                 "late_old_exact_item_receipt_completes_reconnected_attempt_once",
-                "later_delivery_updates_pending_work_without_losing_materialized_output",
-                "reconnect_during_materialization_keeps_old_authorization_but_emits_new_tenure",
-                "conflicting_server_request_id_reuse_is_rejected_before_materialization",
-                "failed_materialization_releases_rate_gate_for_exact_retry",
+                "later_delivery_during_materialization_keeps_exact_authorized_route",
+                "writable_reconnect_during_materialization_keeps_exact_authorized_tenure",
+                "equal_sequence_with_different_semantic_identity_is_rejected_before_materialization",
+                "transient_materialization_release_keeps_exact_retry",
                 "response_materialization_requires_and_consumes_its_exact_admission_gate",
                 "inactive_reply_route_is_rejected_before_server_gate_admission",
                 "completed_source_later_and_reconnect_stay_terminal_while_sibling_progresses",
-                "exact_delivery_retry_rematerializes_after_rate_gate_expiry",
+                "exact_delivery_retry_stays_terminal_beyond_retired_ttl_horizon",
+                "request_stream_close_floor_advances_only_over_a_contiguous_terminal_prefix",
+                "authenticated_close_floor_retires_covered_output_and_rejects_replay_or_regression",
+                "authenticated_source_quota_rejects_origin_churn_and_preserves_other_source",
+                "rejected_request_does_not_consume_server_stream_state",
                 "completed_source_does_not_block_a_new_alternate_source",
                 "configured_route_source_capacity_bounds_semantic_attempts",
                 "configured_source_geometry_reserves_more_than_eight_independent_attempts",
+                "durable_responder_restart_preserves_same_hub_gate_budget",
                 "fifth_gate_from_one_hub_is_rejected_while_another_hub_progresses",
+                "quiescent_multi_source_pressure_never_rolls_or_bypasses_source_caps",
+                "legacy_lifecycle_v1_snapshot_is_rejected_without_migration",
                 "third_session_from_one_hub_is_rejected_while_another_hub_progresses",
                 "source_byte_overflow_is_rejected_while_another_hub_progresses",
                 "completed_short_session_replacement_cannot_starve_an_older_long_session",
+                "unsent_request_restores_holder_and_backoff_state",
+                "idle_request_retry_starts_strictly_after_the_fairness_cursor",
                 "route_retirement_between_admission_and_enqueue_releases_all_response_reservations",
                 "saturated_materializer_does_not_erase_same_request_alternate_session",
                 "saturated_materializer_does_not_erase_same_request_alternate_bytes",
-                "partitioned_materialization_preserves_rejected_source_resume_cursor",
                 "sidecar_flush_refinement_advances_only_exact_source_chunk",
             )
         ),
@@ -18890,7 +22167,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures",
                 "closed_sidecar_reconnect_is_capacity_checked_then_retries_current_item",
                 "later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_attempts_progress",
-                "mixed_source_retry_retains_terminal_flush_target_without_resetting_live_siblings",
+                    "mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblings",
                 "inactive_reply_target_tombstone_rejects_cross_source_equal_ordinal_collision",
                 "owned_reply_history_merge_retries_candidate_retirement_after_prune",
                 "newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source",
@@ -18931,7 +22208,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "reply_flush_test_fixture_binds_exact_canonical_post_and_opaque_actor",
                 "reply_flush_ack_cancellation_between_precheck_and_budget_lock_returns_none",
                 "retired_reply_tenure_closes_flush_ack_without_false_completion",
-                "reply_flush_test_fixture_controls_success_and_close_without_false_receipts",
+                "reply_flush_test_fixture_distinguishes_success_timeout_and_close",
                 "reply_flush_ack_completes_only_after_peer_writer_flush",
             )
         ),
@@ -18958,8 +22235,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "test_control_hold_release_preserves_live_route_and_retires_canceled_reentry",
             irohad_main_source,
         ),
+        (
+            "network_relay_tests::",
+            "certified_merge_sidecar_close_is_limited_but_responder_controls_are_critical",
+            irohad_main_source,
+        ),
     )
-    assert len(route_completion_inventory_additions) == 114
+    assert len(route_completion_inventory_additions) == 123
     source_geometry_inventory_additions = (
         (
             "sumeragi::authoritative_runtime_gate_tests::",
@@ -19105,14 +22387,19 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ),
     )
     assert len(latest_h_geometry_and_daemon_inventory_additions) == 12
-    production_inventory_additions = (
-        new_production_inventory_additions
-        + macro_step_production_inventory_additions
-        + latest_production_inventory_additions
-        + route_completion_inventory_additions
-        + source_geometry_inventory_additions
-        + route_lifecycle_inventory_additions
-        + latest_h_geometry_and_daemon_inventory_additions
+    production_inventory_additions = tuple(
+        item
+        for item in (
+            new_production_inventory_additions
+            + macro_step_production_inventory_additions
+            + latest_production_inventory_additions
+            + route_completion_inventory_additions
+            + source_geometry_inventory_additions
+            + route_lifecycle_inventory_additions
+            + latest_h_geometry_and_daemon_inventory_additions
+        )
+        if f"{item[0]}{item[1]}"
+        not in module._PRODUCTION_LIVENESS_RETIRED_REGRESSIONS
     )
     for _, test_name, source in production_inventory_additions:
         assert source.count(f"fn {test_name}(") == 1
@@ -19240,10 +22527,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 515
-    assert len(set(production_inventory)) == 515
-    assert "readonly expected_production_liveness_test_count=515" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 515" in receipt_source
+    assert len(production_inventory) == 704
+    assert len(set(production_inventory)) == 704
+    assert "readonly expected_production_liveness_test_count=704" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 704" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -19253,7 +22540,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 515
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 704
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -19261,7 +22548,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert (
         len(receipt_module._corridor_legs())
         == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
-        == 78
+        == 81
     )
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
@@ -19335,17 +22622,17 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "tests::relay_fairness::"
         "real_inner_ingress_retry_preserves_a_copies_and_bounds_b_service_rank",
         "block::consensus_v2::finality::tests::"
-        "genesis_header_binding_accepts_a_later_first_proposal_origin",
-        "sumeragi_v2_runner::prepare_qc_split_tests::"
-        "restart_scenario_uses_a_contention_tolerant_view_zero_deadline",
+        "header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round",
+        "sumeragi::v2_core::tests::"
+        "future_prepare_qc_is_transactionally_ignored_without_retransmit_ownership",
         "sumeragi::v2::tests::"
-        "successor_core_context_preserves_the_parent_certificate_binding",
+        "successor_context_requires_the_durable_cryptographic_parent",
         "sumeragi::v2_lane_work::tests::"
-        "decided_lane_ownership_blocks_rollover_until_its_session_is_durable",
+        "late_old_sidecar_flush_removes_only_reconnected_source_retry",
         "sumeragi::v2_recovery::tests::"
-        "finality_complete_tip_with_incomplete_lane_completion_reopens_same_height",
+        "finalized_tip_derives_one_idempotent_successor_context",
         "sumeragi::v2_runner::tests::"
-        "terminal_ingress_discards_commit_discovery_and_losing_current_body_requests",
+        "exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift",
     ):
         assert required_test in production_inventory
     assert (
@@ -19760,8 +23047,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "--lib -- --test-threads=1", unit_ignored_inventory
     )
     assert unit_branch < unit_inventory < unit_ignored_inventory < unit_run
-    assert "expected exactly 118 Sumeragi v2 reducer unit tests" in harness_source
-    assert "reducer unit gate requires all 118 tests to be runnable" in harness_source
+    assert "expected exactly 137 Sumeragi v2 reducer unit tests" in harness_source
+    assert "reducer unit gate requires all 137 tests to be runnable" in harness_source
 
     replay_branch = harness_source.index("--model-replay)")
     replay_inventory = harness_source.index("model_replay_test_list=", replay_branch)
@@ -20021,6 +23308,8 @@ def test_workspace_excluded_harness_names_every_required_fast_simulation() -> No
     expected = {
         "lossy_offline_leader_simulations_commit_for_4_7_and_10_validators",
         "two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits",
+        "historical_prepare_qc_uses_current_consumer_tag_after_timeout_install",
+        "responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc",
         "asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies",
         "leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum",
         "leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum",
@@ -20040,11 +23329,86 @@ def test_workspace_excluded_harness_names_every_required_fast_simulation() -> No
     assert listed == expected
     assert 'ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"' in source
     assert "--list --ignored" in source
-    assert "expected exactly nine fast and one ignored" in source
+    assert "expected exactly eleven fast and one ignored" in source
     assert "expected six Sumeragi v2 network simulations" not in source
     assert "--unit" in source
     assert "--model-replay" in source
     assert "--chaos-100k" in source
+
+
+def test_ledger_validator_enforces_replay_trace_source_fidelity() -> None:
+    module = load_checker()
+    assert module._replay_trace_source_fidelity_errors() == []
+
+    checker_source = SCRIPT.read_text(encoding="utf-8")
+    validate_body = checker_source.split("def validate_ledger(", 1)[1].split(
+        "\ndef ",
+        1,
+    )[0]
+    assert (
+        validate_body.count(
+            "errors.extend(_replay_trace_source_fidelity_errors(ROOT_DIR))"
+        )
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new", "semantic_error"),
+    (
+        (
+            Path("crates/iroha_sumeragi_core/tests/model_trace_replay.rs"),
+            "if action == ModelAction::DeliverQc {",
+            "if false {",
+            None,
+        ),
+        (
+            Path("crates/iroha_sumeragi_core/tests/model_trace_replay.rs"),
+            "assert_eq!(steps.len(), 100);",
+            "assert_eq!(steps.len(), 99);",
+            "the exact 100-action assertion",
+        ),
+        (
+            Path(
+                "crates/iroha_sumeragi_core/tests/fixtures/tlc_replay_witness.tsv"
+            ),
+            "100\tPersistDecision\t2\t-\t1\tCommit\tA\n",
+            "",
+            "exactly 100 actions",
+        ),
+    ),
+)
+def test_replay_trace_source_fidelity_mutations_fail_closed(
+    tmp_path: Path,
+    relative: Path,
+    old: str,
+    new: str,
+    semantic_error: str | None,
+) -> None:
+    module = load_checker()
+    for sealed_relative in module.REPLAY_TRACE_SOURCE_SHA256:
+        source = ROOT_DIR / sealed_relative
+        destination = tmp_path / sealed_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+
+    target = tmp_path / relative
+    source = target.read_text(encoding="utf-8")
+    assert source.count(old) == 1
+    target.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = module._replay_trace_source_fidelity_errors(tmp_path)
+    assert any(
+        "replay trace source must match exact reviewed SHA-256" in error
+        for error in errors
+    ), errors
+
+    if semantic_error is not None:
+        module.REPLAY_TRACE_SOURCE_SHA256[str(relative)] = hashlib.sha256(
+            target.read_bytes()
+        ).hexdigest()
+        errors = module._replay_trace_source_fidelity_errors(tmp_path)
+        assert any(semantic_error in error for error in errors), errors
 
 
 @pytest.mark.parametrize(
@@ -21088,7 +24452,6 @@ MERGE_RUNTIME_PROJECTED_FIELDS = (
     "merge_sidecar_outbound_sessions_per_source",
     "merge_sidecar_outbound_bytes_per_source",
     "merge_sidecar_server_request_gates_per_source",
-    "merge_sidecar_server_request_gate_ttl_ms",
     "pending_certified_merge_entry_capacity",
     "pending_queue_plan_admission_capacity",
     "pending_control_sidecar_bytes",
@@ -21106,7 +24469,7 @@ def test_merge_runtime_config_v6_inventory_is_static_and_current() -> None:
         projected_field
         for projected_field, *_rest in module.MERGE_RUNTIME_CONFIG_FIELDS
     ) == MERGE_RUNTIME_PROJECTED_FIELDS
-    assert len(module.MERGE_RUNTIME_CONFIG_FIELDS) == 17
+    assert len(module.MERGE_RUNTIME_CONFIG_FIELDS) == 16
     assert (
         checker_source.count(
             '"pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;"'
@@ -21123,6 +24486,65 @@ def test_merge_runtime_config_v6_source_binding_accepts_repository() -> None:
     module = load_checker()
 
     assert module._merge_runtime_config_production_source_fidelity_errors() == []
+
+
+@pytest.mark.parametrize(
+    ("relative", "injected"),
+    (
+        (
+            Path("crates/iroha_config/src/parameters/actual.rs"),
+            "\nfn retired_ttl_config_mutant() {\n"
+            "    let merge_sidecar_server_request_gate_ttl_ms = 1_u64;\n"
+            "    drop(merge_sidecar_server_request_gate_ttl_ms);\n"
+            "}\n",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            "\nfn retired_ttl_runner_mutant() {\n"
+            "    let merge_sidecar_server_request_gate_ttl = "
+            "core::time::Duration::from_secs(1);\n"
+            "    drop(merge_sidecar_server_request_gate_ttl);\n"
+            "}\n",
+        ),
+        (
+            Path("crates/iroha_core/src/merge_sidecar.rs"),
+            "\nconst SERVER_REQUEST_GATE_TTL: u64 = 1;\n",
+        ),
+    ),
+)
+def test_merge_runtime_config_v6_rejects_reintroduced_wall_clock_gate_ttl(
+    tmp_path: Path,
+    relative: Path,
+    injected: str,
+) -> None:
+    repo_root = copy_merge_runtime_config_fixture(tmp_path)
+    path = repo_root / relative
+    canonical_source = path.read_text(encoding="utf-8")
+    module = load_checker()
+    assert (
+        module._retired_sidecar_gate_ttl_source_errors(
+            path,
+            canonical_source,
+            str(relative),
+        )
+        == []
+    )
+    path.write_text(
+        canonical_source + injected,
+        encoding="utf-8",
+    )
+
+    errors = module._retired_sidecar_gate_ttl_source_errors(
+        path,
+        path.read_text(encoding="utf-8"),
+        str(relative),
+    )
+
+    assert any(
+        "retired wall-clock sidecar gate TTL must remain absent from production"
+        in error
+        for error in errors
+    ), errors
 
 
 @pytest.mark.parametrize("field", MERGE_RUNTIME_PROJECTED_FIELDS)
@@ -21148,7 +24570,7 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
     errors = merge_runtime_config_errors(repo_root)
 
     assert any(
-        "shared fingerprint projection carries all 17 config-v6 merge fields"
+        "shared fingerprint projection carries all 16 config-v6 merge fields"
         in error
         for error in errors
     ), errors
@@ -21190,7 +24612,7 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
             "limits: actual::SumeragiV2RuntimeLimits {",
             ".merge_sidecar_inbound_session_capacity,",
             ".merge_sidecar_inbound_sessions_per_peer,",
-            "user parsing maps all 17 config-v6 merge fields without substitution",
+            "user parsing maps all 16 config-v6 merge fields without substitution",
         ),
         (
             "crates/iroha_config/src/parameters/actual.rs",
@@ -21210,10 +24632,35 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "merge_sidecars: MergeSidecarTransport::with_limits(",
+            "None => MergeSidecarTransport::open_durable_with_server_stream_capacity(",
             "limits.merge_sidecar_limits,",
             "MergeSidecarLimits::defaults(),",
-            "adapter installs fingerprinted merge-sidecar limits in live transport",
+            "adapter must derive the canonical responder roster and restore or open only its exact durable source, stream, and roster geometry",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "let mut adapter = Self {",
+            "merge_sidecars,\n"
+            "            exact_output_handoff_owner,\n"
+            "            authenticated_merge_qcs:",
+            "merge_sidecars,\n"
+            "            authenticated_merge_qcs:",
+            "adapter hands the exact rehydrated sidecar transport into the live production field",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn with_limits_and_server_stream_capacity(",
+            "Self::derive_server_request_capacities(\n"
+            "                reply_source_capacity,\n"
+            "                limits,\n"
+            "                server_stream_capacity,\n"
+            "            )?",
+            "Self::derive_server_request_capacities(\n"
+            "                reply_source_capacity,\n"
+            "                limits,\n"
+            "                MAX_CERTIFIED_MERGE_SEMANTIC_PEERS,\n"
+            "            )?",
+            "live sidecar transport derives checked source-partition capacities",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -21499,8 +24946,10 @@ def test_transport_geometry_source_fidelity_rejects_source_owner_mutants(
         ),
         (
             "submit_progress_message_to_source",
-            "ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(None),",
-            "ProgressLeaseAttempt::SameRequestAlreadyOwned => "
+            "ProgressLeaseAttempt::SameRequestAlreadyOwned\n"
+            "            | ProgressLeaseAttempt::CancelledMembership => return Ok(None),",
+            "ProgressLeaseAttempt::SameRequestAlreadyOwned\n"
+            "            | ProgressLeaseAttempt::CancelledMembership => "
             "return Ok(Some(NetworkActorAdmittedTicketIdentity::forged())),",
             (
                 "same-request and cancelled admission return no new ticket identity, "
@@ -21852,17 +25301,17 @@ def test_transport_geometry_rejects_ordinal_equivalent_weak_authority_mutant(
             "target: Some(reply_route.semantic_target().clone()),",
             (
                 "reply admission accounts by authenticated delivery peer and "
-                "transfers its exact flush sender"
+                "transfers its exact timeout attempt and flush sender"
             ),
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
             "release_cancelled_targets",
-            "entries.retain(|entry| !entry.cancelled_progress_authority());",
-            "entries.retain(|_entry| true);",
+            "entry.publish_ready_exact_reply_before_terminal_drop();",
+            "let _unfenced = &entry;",
             (
-                "authority cancellation releases exact target deliveries and "
-                "scheduler membership"
+                "authority cancellation terminal-fences exact reply receipts before "
+                "releasing target deliveries and scheduler membership"
             ),
         ),
         (
@@ -21889,25 +25338,35 @@ def test_transport_geometry_rejects_ordinal_equivalent_weak_authority_mutant(
         (
             Path("crates/iroha_p2p/src/network.rs"),
             "run",
-            "let _ = self.cancel_all_reply_route_tenures();",
-            "let _uncancelled = &self.reply_route_tenures;",
-            "normal actor exit publishes exact route and waiter cancellation before terminating",
+            "let released_on_shutdown = safety_dispatch_pending\n"
+            "            .release_all_with_terminal_fence()\n"
+            "            .saturating_add(progress_dispatch_pending.release_all_with_terminal_fence());",
+            "let released_on_shutdown = safety_dispatch_pending\n"
+            "            .release_cancelled_targets()\n"
+            "            .saturating_add(progress_dispatch_pending.release_cancelled_targets());",
+            (
+                "normal actor exit terminal-fences pending exact receipts and publishes "
+                "route cancellation before terminating or aborting peer writers"
+            ),
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "cancel_reply_route_tenure",
+            "finish_reply_route_tenure",
             "tenure.cancel();",
             "let _uncancelled = &tenure;",
-            "connection retirement cancels the exact route and every bound waiter",
+            (
+                "receiver drain completion revokes the exact delivery tenure and "
+                "clears its termination fence"
+            ),
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "dispatch_reliable_actor_message",
+            "dispatch_reliable_actor_message_inner",
             "if !current_writer || !current_tenure {",
             "if !current_writer && !current_tenure {",
             (
-                "reply dispatch requires the exact current writer tenure or retires "
-                "its owner"
+                "reply dispatch terminal-fences a ready old occurrence before retiring "
+                "substituted writer tenure"
             ),
         ),
         (
@@ -22115,42 +25574,56 @@ def test_transport_geometry_source_fidelity_rejects_retired_generation_terminolo
         (
             "post_reply_recoverable",
             "self.post_reply_recoverable_with_flush_ack(msg, reply_route, ticket)\n"
-            "            .map(drop)",
-            "self.post_reply_recoverable_with_flush_ack_inner(\n"
-            "                msg, reply_route, ticket, || {},\n"
-            "            )\n"
-            "            .map(drop)",
+            "            .map(|flush_ack| match flush_ack {\n"
+            "                Some(_flush_ack) => NetworkReplyAdmissionOutcome::Admitted,\n"
+            "                None => NetworkReplyAdmissionOutcome::ReplyWriterUnavailable,\n"
+            "            })",
+            "self.post_reply_recoverable_with_flush_ack(msg, reply_route, ticket)\n"
+            "            .map(|_flush_ack| NetworkReplyAdmissionOutcome::Admitted)",
             (
-                "legacy unit-returning reply admission delegates to the flush-aware "
-                "path before discarding its caller witness"
+                "reply admission distinguishes transferred writer ownership from a "
+                "delivery-active but unwritable route"
             ),
         ),
         (
             "post_reply_recoverable_with_flush_ack",
-            "self.post_reply_recoverable_with_flush_ack_inner("
-            "msg, reply_route, ticket, || {})",
+            "self.post_reply_recoverable_with_flush_ack_at_attempt("
+            "msg, reply_route, ticket, 0)",
             "Ok(None)",
             (
-                "public reply completion admission delegates without bypassing the "
-                "shared preflight and budget path"
+                "public reply completion admission delegates at attempt zero without "
+                "bypassing the shared preflight and budget path"
             ),
         ),
         (
             "post_reply_recoverable_with_flush_ack_inner",
-            "Some(reply_flush_sender),",
+            "Some(reply_writer_timeout_attempt),\n"
+            "            Some(reply_flush_sender),",
+            "None,\n"
+            "            Some(reply_flush_sender),",
+            (
+                "reply admission accounts by authenticated delivery peer and "
+                "transfers its exact timeout attempt and flush sender"
+            ),
+        ),
+        (
+            "post_reply_recoverable_with_flush_ack_inner",
+            "Some(reply_writer_timeout_attempt),\n"
+            "            Some(reply_flush_sender),",
+            "Some(reply_writer_timeout_attempt),\n"
             "None,",
             (
                 "reply admission accounts by authenticated delivery peer and "
-                "transfers its exact flush sender"
+                "transfers its exact timeout attempt and flush sender"
             ),
         ),
         (
             "post_reply_recoverable_with_flush_ack_inner",
             "let identity = NetworkReplyFlushIdentity::from_admitted_ticket(ticket)\n"
-            "                    .expect(\"reply admission must retain exact reply authority\");\n"
+            "                    .expect(\"validated reply admission must retain its exact reply shape\");\n"
             "                NetworkReplyFlushAck::new(identity, reply_flush_receiver)",
             "let identity = NetworkReplyFlushIdentity::from_admitted_ticket(ticket)\n"
-            "                    .expect(\"reply admission must retain exact reply authority\");\n"
+            "                    .expect(\"validated reply admission must retain its exact reply shape\");\n"
             "                NetworkReplyFlushAck::new(forged_identity, reply_flush_receiver)",
             (
                 "only a newly admitted exact ticket yields its immutable reply identity "
@@ -22159,54 +25632,98 @@ def test_transport_geometry_source_fidelity_rejects_retired_generation_terminolo
         ),
         (
             "submit_progress_message_to_source",
-            "AdmittedNetworkMessage::new_targeted_post("
-            "message, lease, authority, reply_flush_ack)",
-            "AdmittedNetworkMessage::new_targeted_post("
-            "message, lease, authority, None)",
+            "AdmittedNetworkMessage::new_targeted_post(\n"
+            "                message,\n"
+            "                lease,\n"
+            "                authority,\n"
+            "                reply_writer_timeout_attempt,\n"
+            "                reply_flush_ack,\n"
+            "            )",
+            "AdmittedNetworkMessage::new_targeted_post(\n"
+            "                message,\n"
+            "                lease,\n"
+            "                authority,\n"
+            "                None,\n"
+            "                reply_flush_ack,\n"
+            "            )",
             (
-                "accepted direct replies transfer their exact flush sender while "
-                "broadcasts cannot impersonate one"
+                "accepted direct replies transfer their exact timeout attempt and flush "
+                "sender while broadcasts cannot impersonate either"
             ),
         ),
         (
             "broadcast_recoverable",
-            "target.actor_ticket.take(),\n                None,",
-            "target.actor_ticket.take(),\n                Some(reply_flush_sender),",
+            "target.actor_ticket.take(),\n"
+            "                None,\n"
+            "                None,",
+            "target.actor_ticket.take(),\n"
+            "                Some(0),\n"
+            "                None,",
             (
                 "broadcast fanout admits each active topology authority through an "
-                "isolated target source without a reply completion"
+                "isolated target source without a timeout attempt or reply completion"
             ),
         ),
         (
             "into_dispatch_parts",
-            "pending_flush_acks,\n            progress_authority,\n            reply_flush_ack,\n        )",
-            "pending_flush_acks,\n            progress_authority,\n            None,\n        )",
-            "dispatch tuple exports the exact reply completion sender without dropping it",
-        ),
-        (
-            "retain_after_dispatch_attempt",
-            "pending_flush_acks,\n            reply_flush_ack,",
-            "pending_flush_acks,\n            reply_flush_ack: None,",
-            "incomplete dispatch retains the exact reply completion sender without reconstructing authority",
-        ),
-        (
-            "dispatch_reliable_actor_message",
-            "if transferred {",
-            "if true {",
+            "pending_flush_acks,\n"
+            "            progress_authority,\n"
+            "            reply_writer_timeout_attempt,\n"
+            "            reply_writer_deadline,\n"
+            "            reply_flush_ack,\n"
+            "        )",
+            "pending_flush_acks,\n"
+            "            progress_authority,\n"
+            "            None,\n"
+            "            reply_writer_deadline,\n"
+            "            reply_flush_ack,\n"
+            "        )",
             (
-                "actor reply completion succeeds only after all exact writer flushes "
-                "and survives every retry"
+                "dispatch tuple exports timeout attempt, fixed deadline, and exact reply "
+                "completion sender without dropping them"
             ),
         ),
         (
-            "dispatch_reliable_actor_message",
-            "pending_flush_acks,\n                progress_authority,\n"
-            "                reply_flush_ack,\n            ))",
-            "pending_flush_acks,\n                progress_authority,\n"
-            "                None,\n            ))",
+            "retain_after_dispatch_attempt",
+            "pending_flush_acks,\n"
+            "            reply_writer_timeout_attempt,\n"
+            "            reply_writer_deadline,\n"
+            "            reply_flush_ack,",
+            "pending_flush_acks,\n"
+            "            reply_writer_timeout_attempt: None,\n"
+            "            reply_writer_deadline,\n"
+            "            reply_flush_ack,",
             (
-                "actor reply completion succeeds only after all exact writer flushes "
-                "and survives every retry"
+                "incomplete dispatch retains timeout attempt, fixed deadline, and exact "
+                "reply completion sender without reconstructing authority"
+            ),
+        ),
+        (
+            "dispatch_reliable_actor_message_inner",
+            "if transferred {",
+            "if true {",
+            (
+                "typed actor reply completion succeeds only after all exact writer "
+                "flushes while timeout attempt and fixed deadline survive every retry"
+            ),
+        ),
+        (
+            "dispatch_reliable_actor_message_inner",
+            "pending_flush_acks,\n"
+            "                progress_authority,\n"
+            "                reply_writer_timeout_attempt,\n"
+            "                reply_writer_deadline,\n"
+            "                reply_flush_ack,\n"
+            "            ))",
+            "pending_flush_acks,\n"
+            "                progress_authority,\n"
+            "                None,\n"
+            "                reply_writer_deadline,\n"
+            "                reply_flush_ack,\n"
+            "            ))",
+            (
+                "typed actor reply completion succeeds only after all exact writer "
+                "flushes while timeout attempt and fixed deadline survive every retry"
             ),
         ),
         (
@@ -22214,8 +25731,8 @@ def test_transport_geometry_source_fidelity_rejects_retired_generation_terminolo
             "self.terminal = Some(NetworkReplyFlushAckStatus::Closed);",
             "self.terminal = Some(NetworkReplyFlushAckStatus::Flushed);",
             (
-                "only a successful writer signal yields Flushed while closure remains "
-                "a distinct terminal failure"
+                "typed writer completion keeps successful flush, explicit timeout, and "
+                "ordinary closure distinct"
             ),
         ),
     ),
@@ -22257,11 +25774,17 @@ def test_transport_geometry_source_fidelity_rejects_reply_flush_ack_mutants(
             Path("crates/iroha_p2p/src/network.rs"),
             "new_targeted_post",
             (("impl", "<", "T", ">", "AdmittedNetworkMessage", "<", "T", ">"),),
-            "pending_flush_acks: HashMap::new(),\n            reply_flush_ack,",
-            "pending_flush_acks: HashMap::new(),\n            reply_flush_ack: None,",
+            "pending_flush_acks: HashMap::new(),\n"
+            "            reply_writer_timeout_attempt,\n"
+            "            reply_writer_deadline: None,\n"
+            "            reply_flush_ack,",
+            "pending_flush_acks: HashMap::new(),\n"
+            "            reply_writer_timeout_attempt: None,\n"
+            "            reply_writer_deadline: None,\n"
+            "            reply_flush_ack,",
             (
-                "targeted actor-post construction keeps the reply completion "
-                "beside its exact lease and authority"
+                "targeted actor-post construction keeps timeout identity, deadline state, "
+                "and reply completion beside its exact lease and authority"
             ),
         ),
         (
@@ -23195,3 +26718,1357 @@ def test_productive_liveness_mutations_are_pinned() -> None:
     assert (formal_dir / "productive_deadlock_fixed.cfg").read_text(
         encoding="utf-8"
     ).startswith("CONSTANT ProductiveRepair = TRUE\n")
+
+
+def test_exact_local_proposal_timeout_kernel_and_verus_proofs_are_source_bound(
+    tmp_path: Path,
+) -> None:
+    """Constants, disconnected proofs, stale replay, and call bypasses fail."""
+
+    module = load_checker()
+    assert module._local_proposal_timeout_source_fidelity_errors(ROOT_DIR) == []
+    source_paths = (
+        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/wal.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/tests.rs"),
+        Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+    )
+
+    def copy_fixture(case: str) -> Path:
+        repo_root = tmp_path / case
+        for relative in source_paths:
+            destination = repo_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / relative, destination)
+        return repo_root
+
+    item_mutants = (
+        (
+            "constant_production_result",
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "local_proposal_timeout_justification_is_exact",
+            "local_proposal_timeout_justification_body!(projection, zero, one, absent_evidence)",
+            "true",
+            "production exact timeout-justification kernel",
+        ),
+        (
+            "altered_concrete_projection",
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "local_proposal_timeout_projection",
+            "proposal_timeout == durable_timeout",
+            "proposal_timeout != durable_timeout",
+            "projection builder",
+        ),
+        (
+            "wal_adapter_disconnected",
+            "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
+            "is_exact_local_proposal_timeout_justification",
+            "refinement::local_proposal_timeout_justification_is_exact(",
+            "false || refinement::local_proposal_timeout_justification_is_exact(",
+            "durable-state exact timeout adapter",
+        ),
+        (
+            "stale_wal_proposal_replay",
+            "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
+            "apply_in_place",
+            "&& self.is_exact_local_proposal_timeout_justification(",
+            "&& true || self.is_exact_local_proposal_timeout_justification(",
+            "ProposalIntent WAL replay gate",
+        ),
+        (
+            "live_proposal_call_removed",
+            "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+            "on_local_proposal_ready",
+            "if !self\n"
+            "                .durable\n"
+            "                .is_exact_local_proposal_timeout_justification(",
+            "if false && !self\n"
+            "                .durable\n"
+            "                .is_exact_local_proposal_timeout_justification(",
+            "live local-proposal construction",
+        ),
+        (
+            "retransmission_call_removed",
+            "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+            "durable_proposal_is_active",
+            "ProposalJustification::Timeout(certificate) => durable",
+            "ProposalJustification::Timeout(certificate) => true || durable",
+            "durable proposal retransmission authorization",
+        ),
+        (
+            "recovery_filter_removed",
+            "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+            "on_resume_after_replay",
+            ".filter(|proposal| Self::durable_proposal_is_active(&self.durable, proposal))",
+            ".filter(|_| true)",
+            "WAL replay resumption filter",
+        ),
+        (
+            "verus_ensures_true",
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "verified_local_proposal_timeout_justification_is_exact",
+            "accepted == local_proposal_timeout_justification_is_exact(projection)",
+            "true",
+            "Verus executable-kernel equivalence theorem",
+        ),
+        (
+            "verus_executable_proof_disconnected",
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "verified_local_proposal_timeout_justification_is_exact",
+            "let accepted = local_proposal_timeout_justification_body!(",
+            "let accepted = true || local_proposal_timeout_justification_body!(",
+            "Verus executable-kernel equivalence theorem",
+        ),
+        (
+            "verus_latest_postcondition_weakened",
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "exact_local_proposal_timeout_justification_binds_latest_durable_tc",
+            "projection.current_view > 0,",
+            "true,",
+            "Verus latest-durable-timeout consequence theorem",
+        ),
+        (
+            "verus_wal_guard_disconnected",
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "wal_frame_admissible",
+            "&& local_proposal_timeout_justification_is_exact(",
+            "&& true || local_proposal_timeout_justification_is_exact(",
+            "Verus ProposalIntent WAL guard",
+        ),
+        (
+            "stale_recovery_regression",
+            "crates/iroha_core/src/sumeragi/v2_core/tests.rs",
+            "recovery_uses_same_round_timeout_upgrade_as_exact_local_proposal_justification",
+            "Err(ReducerError::Replay(ReplayError::InvalidProposalIntent))",
+            "Ok(_)",
+            "exact-timeout WAL recovery regression",
+        ),
+    )
+    for case, relative, item, old, new, expected in item_mutants:
+        repo_root = copy_fixture(case)
+        mutate_rust_item_source(module, repo_root / relative, item, old, new)
+        errors = module._local_proposal_timeout_source_fidelity_errors(
+            repo_root
+        )
+        assert any(expected in error for error in errors), errors
+
+    repo_root = copy_fixture("verus_wal_consequence_disconnected")
+    path = repo_root / "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+    source = path.read_text(encoding="utf-8")
+    old = """if view > 0 {
+                exact_local_proposal_timeout_justification_binds_latest_durable_tc(
+                    timeout_justification,
+                );
+            }"""
+    assert source.count(old) == 1
+    path.write_text(source.replace(old, "if view > 0 {}", 1), encoding="utf-8")
+    errors = module._local_proposal_timeout_source_fidelity_errors(repo_root)
+    assert any(
+        "Verus WAL consequence must call the nontrivial latest-timeout theorem"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_installed_tc_selector_proof_and_call_paths_are_source_bound(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The exact last-installed certificate, PrepareQC, and callers stay connected."""
+
+    module = load_checker()
+    assert module._installed_tc_selector_source_fidelity_errors(
+        module.FORMAL_DIR
+    ) == []
+    formal_names = (
+        "SumeragiV2Core.tla",
+        "SumeragiV2Inductive.tla",
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2InstalledTcSelectorProofs.tla",
+    )
+
+    def copy_fixture(case: str) -> Path:
+        formal_dir = tmp_path / case
+        formal_dir.mkdir()
+        for name in formal_names:
+            shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+        return formal_dir
+
+    operator_mutants = (
+        (
+            "proposal_tc_retargeted",
+            "SumeragiV2Core.tla",
+            "LocalProposalJustification",
+            "tc == lastInstalledTc[node]",
+            "tc == NoTimeoutCertificate",
+            "direct selector call path",
+        ),
+        (
+            "proposal_prepare_qc_reconstructed",
+            "SumeragiV2Core.tla",
+            "ProposalJustified",
+            "proposal.highestPrepareQc =\n"
+            "          lastInstalledTc[node].highestPrepareQc",
+            "proposal.highestPrepareQc = NoPrepareQC",
+            "full-certificate identity",
+        ),
+        (
+            "proof_selector_chooses_history",
+            "SumeragiV2InstalledTcSelectorProofs.tla",
+            "ExactSelectedInstalledTcForRound",
+            "LastInstalledTcEntry(node)",
+            "CHOOSE installed \\in installedTCs: TRUE",
+            "direct selector call path",
+        ),
+        (
+            "restart_uses_history",
+            "SumeragiV2AsyncNetwork.tla",
+            "RestartLastInstalledTCs",
+            "ELSE {lastInstalledTc[node]}",
+            "ELSE RestartInstalledTCs(node)",
+            "direct selector call path",
+        ),
+        (
+            "proof_drops_prepare_qc_identity",
+            "SumeragiV2InstalledTcSelectorProofs.tla",
+            "InstalledTcExactSelectionInvariant",
+            "lastInstalledTc[node].highestPrepareQc\n"
+            "              \\in PrepareQcOptionSet",
+            "PrepareQcRank(lastInstalledTc[node].highestPrepareQc)\n"
+            "              \\in Ranks",
+            "full-certificate identity",
+        ),
+    )
+    for case, filename, symbol, old, new, expected in operator_mutants:
+        formal_dir = copy_fixture(case)
+        path = formal_dir / filename
+        path.write_text(
+            mutate_tla_operator(
+                path.read_text(encoding="utf-8"), symbol, old, new
+            ),
+            encoding="utf-8",
+        )
+        errors = module._installed_tc_selector_source_fidelity_errors(
+            formal_dir
+        )
+        assert any(expected in error for error in errors), errors
+
+    formal_dir = copy_fixture("retired_history_selector_reintroduced")
+    core = formal_dir / "SumeragiV2Core.tla"
+    source = core.read_text(encoding="utf-8")
+    core.write_text(
+        source.replace(
+            "\nLocalProposalJustification(node) ==",
+            "\nInstalledTcAtLeastAsRecent(candidate, other) == TRUE\n\n"
+            "LocalProposalJustification(node) ==",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._installed_tc_selector_source_fidelity_errors(formal_dir)
+    assert any(
+        "retired history/rank installed-TC selector symbols are prohibited"
+        in error
+        for error in errors
+    ), errors
+
+    formal_dir = copy_fixture("tautological_uniqueness_theorem")
+    proof = formal_dir / "SumeragiV2InstalledTcSelectorProofs.tla"
+    proof.write_text(
+        mutate_tla_theorem(
+            proof.read_text(encoding="utf-8"),
+            "ExactInstalledTcSelectorIsUnique",
+            "IN /\\ selected \\in current\n"
+            "            /\\ \\A other \\in current: other = selected\n"
+            "            /\\ selected.tc = lastInstalledTc[node]\n"
+            "            /\\ selected.tc.highestPrepareQc =\n"
+            "                 lastInstalledTc[node].highestPrepareQc",
+            "IN TRUE",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._installed_tc_selector_source_fidelity_errors(formal_dir)
+    assert any(
+        "nontrivial selector uniqueness/proposal postcondition" in error
+        for error in errors
+    ), errors
+
+    formal_dir = copy_fixture("omitted_proof_module")
+    (formal_dir / "SumeragiV2InstalledTcSelectorProofs.tla").unlink()
+    errors = module._installed_tc_selector_source_fidelity_errors(formal_dir)
+    assert any("selector source must be a regular file" in error for error in errors)
+
+    monkeypatch.setattr(
+        module,
+        "RELEASE_PROOF_MODULES",
+        tuple(
+            name
+            for name in module.RELEASE_PROOF_MODULES
+            if name != "SumeragiV2InstalledTcSelectorProofs"
+        ),
+    )
+    errors = module._installed_tc_selector_source_fidelity_errors(
+        module.FORMAL_DIR
+    )
+    assert any("release proof inventory must execute" in error for error in errors)
+
+
+def test_local_runner_service_contract_rejects_split_deadlock_call_symbol(
+    tmp_path: Path,
+) -> None:
+    """Whitespace tolerance must not concatenate a malformed call symbol."""
+
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "DeadlockFreedomObligation",
+            "      ENABLED PostGstProductiveStepWith(\n"
+            "        AsyncTerminatingLocalWorkDecreaseStep))\n",
+            "      ENABLED PostGstProductiveStep With(\n"
+            "        AsyncTerminatingLocalWorkDecreaseStep))\n",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._local_runner_service_contract_source_fidelity_errors(
+        module.load_ledger(),
+        repo_root=tmp_path,
+        formal_dir=formal_dir,
+    )
+    assert any(
+        "DeadlockFreedomObligation must bind the exact per-validator" in error
+        for error in errors
+    ), errors
+
+    architecture_errors = module._proof_obligation_architecture_errors(
+        module.load_ledger()["obligations"],
+        {"SumeragiV2AsyncLivenessProofs": path.read_text(encoding="utf-8")},
+    )
+    assert any(
+        "DeadlockFreedomObligation must state only" in error
+        for error in architecture_errors
+    ), architecture_errors
+
+
+def test_locked_assembly_retention_mutation_is_source_bound_and_complete(
+    tmp_path: Path,
+) -> None:
+    """The Busy assembly dispatch repair and red/green pair must remain exact."""
+
+    module = load_checker()
+
+    def copy_fixture(case: str) -> tuple[Path, Path, Path, Path]:
+        repo_root = tmp_path / case
+        formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
+        formal_dir.mkdir(parents=True)
+        for name in module._LOCKED_ASSEMBLY_RETENTION_MUTATION_SOURCE_SHA256:
+            shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+        async_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+        shutil.copy2(
+            module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla", async_path
+        )
+        runner = (
+            repo_root
+            / "scripts"
+            / "formal"
+            / "run_sumeragi_v2_progress_mutations.sh"
+        )
+        runner.parent.mkdir(parents=True)
+        shutil.copy2(
+            ROOT_DIR
+            / "scripts"
+            / "formal"
+            / "run_sumeragi_v2_progress_mutations.sh",
+            runner,
+        )
+        return repo_root, formal_dir, async_path, runner
+
+    repo_root, formal_dir, _, _ = copy_fixture("exact")
+    assert module._locked_assembly_retention_mutation_errors(
+        formal_dir, repo_root
+    ) == []
+
+    repo_root, formal_dir, async_path, _ = copy_fixture("kernel-drift")
+    source = async_path.read_text(encoding="utf-8")
+    async_path.write_text(
+        mutate_tla_operator(
+            source,
+            "LocalAssemblyBusyDispatchAllowed",
+            '"AssembleBody"',
+            '"BeginPrepare"',
+        ),
+        encoding="utf-8",
+    )
+    errors = module._locked_assembly_retention_mutation_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        "LocalAssemblyBusyDispatchAllowed must equal the exact "
+        "locked-assembly Busy dispatch contract" in error
+        for error in errors
+    ), errors
+
+    repo_root, formal_dir, async_path, _ = copy_fixture("disconnected-kernel")
+    source = async_path.read_text(encoding="utf-8")
+    async_path.write_text(
+        mutate_tla_operator(
+            source,
+            "CommandDispatchable",
+            "\\/ LocalAssemblyBusyDispatchAllowed(command)",
+            "\\/ FALSE",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._locked_assembly_retention_mutation_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        "CommandDispatchable must equal the exact locked-assembly Busy "
+        "dispatch contract" in error
+        for error in errors
+    ), errors
+
+    repo_root, formal_dir, _, _ = copy_fixture("config-drift")
+    config = formal_dir / "locked_assembly_retention_old.cfg"
+    source = config.read_text(encoding="utf-8")
+    assert source.count("AllowBusyLockedAssembly = FALSE") == 1
+    config.write_text(
+        source.replace(
+            "AllowBusyLockedAssembly = FALSE",
+            "AllowBusyLockedAssembly = TRUE",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._locked_assembly_retention_mutation_errors(
+        formal_dir, repo_root
+    )
+    assert any("must match exact reviewed SHA-256" in error for error in errors)
+
+    runner_mutants = (
+        (
+            "wrong-status",
+            "locked_assembly_retention_fixed.cfg 0",
+            "locked_assembly_retention_fixed.cfg 12",
+            "locked-assembly-retention-fixed exactly once with status 0",
+        ),
+        (
+            "weakened-marker",
+            '"State 2: <DispatchRuntimeHead"',
+            '"State 2: <DispatchRuntimeHeadMaybe"',
+            "locked-assembly-retention-old must require exact markers",
+        ),
+    )
+    for case, old, new, expected_error in runner_mutants:
+        repo_root, formal_dir, _, runner = copy_fixture(case)
+        source = runner.read_text(encoding="utf-8")
+        assert source.count(old) == 1, old
+        runner.write_text(source.replace(old, new, 1), encoding="utf-8")
+        errors = module._locked_assembly_retention_mutation_errors(
+            formal_dir, repo_root
+        )
+        assert any(expected_error in error for error in errors), errors
+
+    repo_root, formal_dir, _, runner = copy_fixture("reordered-pair")
+    source = runner.read_text(encoding="utf-8")
+    old_start = source.index("run_case locked-assembly-retention-old")
+    fixed_start = source.index("run_case locked-assembly-retention-fixed")
+    next_start = source.index("run_case locked-body-reproposal", fixed_start)
+    old_block = source[old_start:fixed_start]
+    fixed_block = source[fixed_start:next_start]
+    runner.write_text(
+        source[:old_start] + fixed_block + old_block + source[next_start:],
+        encoding="utf-8",
+    )
+    errors = module._locked_assembly_retention_mutation_errors(
+        formal_dir, repo_root
+    )
+    assert any("must keep old-before-fixed order" in error for error in errors)
+
+
+def test_locked_body_reproposal_mutation_matrix_is_source_bound_and_complete(
+    tmp_path: Path,
+) -> None:
+    """The strict same-round red/green matrix must remain exact and runnable."""
+
+    module = load_checker()
+
+    def copy_fixture(case: str) -> tuple[Path, Path, Path]:
+        repo_root = tmp_path / case
+        formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
+        formal_dir.mkdir(parents=True)
+        for name in module._LOCKED_BODY_REPROPOSAL_MUTATION_SOURCE_SHA256:
+            shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+        runner = (
+            repo_root
+            / "scripts"
+            / "formal"
+            / "run_sumeragi_v2_progress_mutations.sh"
+        )
+        runner.parent.mkdir(parents=True)
+        shutil.copy2(
+            ROOT_DIR
+            / "scripts"
+            / "formal"
+            / "run_sumeragi_v2_progress_mutations.sh",
+            runner,
+        )
+        return repo_root, formal_dir, runner
+
+    repo_root, formal_dir, _ = copy_fixture("exact")
+    assert module._locked_body_reproposal_mutation_runner_errors(
+        formal_dir, repo_root
+    ) == []
+
+    repo_root, formal_dir, _ = copy_fixture("config-drift")
+    config = formal_dir / "historical_locked_recovery_fresh_commit_bug.cfg"
+    source = config.read_text(encoding="utf-8")
+    assert source.count("AllowFreshHistoricalCommitBug = TRUE") == 1
+    config.write_text(
+        source.replace(
+            "AllowFreshHistoricalCommitBug = TRUE",
+            "AllowFreshHistoricalCommitBug = FALSE",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._locked_body_reproposal_mutation_runner_errors(
+        formal_dir, repo_root
+    )
+    assert any("must match exact reviewed SHA-256" in error for error in errors)
+
+    runner_mutants = (
+        (
+            "wrong-status",
+            "locked_body_reproposal_high_fixed.cfg 0",
+            "locked_body_reproposal_high_fixed.cfg 12",
+            "locked-body-reproposal-high-fixed exactly once with status 0",
+        ),
+        (
+            "weakened-marker",
+            '"Invariant LaterHighReproposalAccepted is violated."',
+            '"Invariant LaterHighReproposalAccepted might be violated."',
+            "locked-body-reproposal-no-high-bug must require exact markers",
+        ),
+        (
+            "missing-fresh-commit",
+            "run_case historical-locked-recovery-fresh-commit-bug \\\n"
+            "  SumeragiV2HistoricalLockedRecoveryMutation.tla \\\n"
+            "  historical_locked_recovery_fresh_commit_bug.cfg 12 \\\n"
+            '  "Invariant ExactIntentDoesNotAuthorizeFreshCommit is violated." \\\n'
+            '  "4 states generated, 3 distinct states found, 0 states left on queue."\n',
+            "",
+            "historical-locked-recovery-fresh-commit-bug exactly once with status 12",
+        ),
+    )
+    for case, old, new, expected_error in runner_mutants:
+        repo_root, formal_dir, runner = copy_fixture(case)
+        source = runner.read_text(encoding="utf-8")
+        assert source.count(old) == 1, old
+        runner.write_text(source.replace(old, new, 1), encoding="utf-8")
+        errors = module._locked_body_reproposal_mutation_runner_errors(
+            formal_dir, repo_root
+        )
+        assert any(expected_error in error for error in errors), errors
+
+
+def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
+    tmp_path: Path,
+) -> None:
+    """Omitted, invented, and alternate evidence remain pinned in both tests."""
+
+    module = load_checker()
+    source_paths = (
+        Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+    )
+    test_context = (
+        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+    )
+
+    def copy_fixture(case: str) -> Path:
+        repo_root = tmp_path / case
+        for relative in source_paths:
+            destination = repo_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / relative, destination)
+        return repo_root
+
+    wire_mutants = (
+        (
+            "wire_invented_rejection_neutralized",
+            """assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification),
+            "a proposal cannot invent a repeated high absent from its TC"
+        );""",
+            """assert_eq!(
+            proposal.validate(&context),
+            Ok(()),
+            "a proposal cannot invent a repeated high absent from its TC"
+        );""",
+            "wire regression must reject an invented repeated PrepareQC",
+        ),
+        (
+            "wire_omitted_rejection_neutralized",
+            """assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification),
+            "a proposal cannot omit the exact high selected by its TC"
+        );""",
+            """assert_eq!(
+            proposal.validate(&context),
+            Ok(()),
+            "a proposal cannot omit the exact high selected by its TC"
+        );""",
+            "wire regression must reject an omitted repeated PrepareQC",
+        ),
+        (
+            "wire_alternate_evidence_rejection_neutralized",
+            """assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification),
+            "the repeated high must preserve the TC-selected full evidence"
+        );""",
+            """assert_eq!(
+            proposal.validate(&context),
+            Ok(()),
+            "the repeated high must preserve the TC-selected full evidence"
+        );""",
+            "wire regression must reject same-reference alternate PrepareQC evidence",
+        ),
+    )
+    wire_path = Path("crates/iroha_data_model/src/block/consensus_v2.rs")
+    wire_item = "timeout_proposal_accepts_only_the_selected_prepare_subject"
+    for case, old, new, expected in wire_mutants:
+        repo_root = copy_fixture(case)
+        mutate_rust_item_source_in_context(
+            module,
+            repo_root / wire_path,
+            wire_item,
+            test_context,
+            old,
+            new,
+        )
+        errors = module._proposal_timeout_exactness_source_fidelity_errors(
+            repo_root
+        )
+        assert any(expected in error for error in errors), errors
+
+    def remove_adapter_case(
+        repo_root: Path, start: str, end: str
+    ) -> None:
+        path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+        source = path.read_text(encoding="utf-8")
+        items = [
+            item
+            for item in module.rust_items(
+                source,
+                "locked_subject_reproposal_and_strict_higher_prepare_are_safe",
+            )
+            if item.brace_context == test_context
+        ]
+        assert len(items) == 1
+        item = items[0]
+        start_offset = item.source.index(start)
+        end_offset = item.source.index(end, start_offset)
+        mutated_item = item.source[:start_offset] + item.source[end_offset:]
+        assert source.count(item.source) == 1
+        path.write_text(
+            source.replace(item.source, mutated_item, 1), encoding="utf-8"
+        )
+
+    adapter_mutants = (
+        (
+            "adapter_omitted_rejection_removed",
+            "        let mut missing_repeated_high = prepared_proposal.clone();",
+            "        let mut invented_repeated_high = prepared_proposal.clone();",
+            "adapter regression must reject omitted evidence at safe-value admission",
+        ),
+        (
+            "adapter_invented_rejection_removed",
+            "        let mut invented_repeated_high = prepared_proposal.clone();",
+            "        let mut alternate_evidence = prepared_proposal.clone();",
+            "adapter regression must reject invented evidence at safe-value admission",
+        ),
+        (
+            "adapter_alternate_evidence_rejection_removed",
+            "        let mut alternate_evidence = prepared_proposal.clone();",
+            "        let mut equal_rank = prepared_proposal.clone();",
+            "adapter regression must reject same-reference alternate evidence at safe-value admission",
+        ),
+    )
+    for case, start, end, expected in adapter_mutants:
+        repo_root = copy_fixture(case)
+        remove_adapter_case(repo_root, start, end)
+        errors = module._proposal_timeout_exactness_source_fidelity_errors(
+            repo_root
+        )
+        assert any(expected in error for error in errors), errors
+
+
+def test_proposal_timeout_full_evidence_production_gates_are_source_bound(
+    tmp_path: Path,
+) -> None:
+    """Every production consumer must compare full repeated PrepareQC evidence."""
+
+    module = load_checker()
+    assert (
+        module._proposal_timeout_exactness_source_fidelity_errors(ROOT_DIR)
+        == []
+    )
+    source_paths = (
+        Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+    )
+
+    def copy_fixture(case: str) -> Path:
+        repo_root = tmp_path / case
+        for relative in source_paths:
+            destination = repo_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / relative, destination)
+        return repo_root
+
+    production_mutants = (
+        (
+            "proposal_validate_reference_only",
+            Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
+            "validate",
+            (("impl", "Proposal"),),
+            "selected_highest != timeout.highest_prepare_qc.as_ref()",
+            """selected_highest.map(QuorumCertificate::as_ref)
+                    != timeout
+                        .highest_prepare_qc
+                        .as_ref()
+                        .map(QuorumCertificate::as_ref)""",
+            "Proposal::validate must compare the complete TC-selected",
+        ),
+        (
+            "wire_registry_reference_only",
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            "justification_to_core",
+            (("impl", "WireRegistry"),),
+            "selected != timeout.highest_prepare_qc.as_ref()",
+            """selected.map(wire::QuorumCertificate::as_ref)
+                    != timeout
+                        .highest_prepare_qc
+                        .as_ref()
+                        .map(wire::QuorumCertificate::as_ref)""",
+            "WireRegistry must reject unequal complete PrepareQC evidence",
+        ),
+        (
+            "safe_value_reference_only",
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            "proposal_is_safe_for_lock",
+            (),
+            "selected == highest",
+            "selected.as_ref() == highest.as_ref()",
+            "safe-value admission must compare the complete selected PrepareQC",
+        ),
+    )
+    for case, relative, item, context, old, new, expected in production_mutants:
+        repo_root = copy_fixture(case)
+        mutate_rust_item_source_in_context(
+            module,
+            repo_root / relative,
+            item,
+            context,
+            old,
+            new,
+        )
+        errors = module._proposal_timeout_exactness_source_fidelity_errors(
+            repo_root
+        )
+        assert any(expected in error for error in errors), errors
+
+
+def test_protected_service_rank_aggregate_cannot_drop_exact_leaf(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "proof_coverage.json",
+        "SumeragiV2AsyncLivenessProofs.tla",
+        "SumeragiV2LivenessProofs.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "ProtectedServiceRankProgressObligation",
+            "ProtectedStage6RankProgressFromFairCausalAdmissionObligation",
+            "ProtectedStage4RankProgressFromFairScheduler",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_proof_architecture_errors(formal_dir)
+
+    assert any(
+        "ProtectedServiceRankProgressObligation must retain exact "
+        "protected-rank proof dependency "
+        "'ProtectedStage6RankProgressFromFairCausalAdmissionObligation' once; "
+        "found 0"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("current_id", "retired_id", "retired_symbol"),
+    (
+        (
+            "same-round-lock-and-commit-authorization",
+            "historical-tc-lock-commit",
+            "HistoricalTcLockedCommitAuthorizationObligation",
+        ),
+        (
+            "locked-body-reproposal",
+            "locked-body-reproposal-liveness",
+            "LockedBodyReproposalProgressObligation",
+        ),
+    ),
+)
+def test_reviewed_obligation_inventory_rejects_retired_lock_mappings(
+    current_id: str,
+    retired_id: str,
+    retired_symbol: str,
+) -> None:
+    """Legacy IDs cannot reauthorize split-round Commit or vacuous liveness."""
+
+    module = load_checker()
+    ledger = copy.deepcopy(module.load_ledger())
+    obligation = next(
+        item for item in ledger["obligations"] if item["id"] == current_id
+    )
+    obligation["id"] = retired_id
+    obligation["symbol"] = retired_symbol
+    obligation["status"] = "tlaps_proved"
+
+    errors = module.validate_ledger(ledger).errors
+
+    assert any(
+        f"proof ledger is missing reviewed obligation {current_id}" in error
+        for error in errors
+    ), errors
+    assert retired_id not in module.REQUIRED_PROOF_OBLIGATION_INVENTORY
+
+
+def test_same_round_lock_and_commit_authorization_rejects_fresh_historical_commit(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    core_source = (module.FORMAL_DIR / "SumeragiV2Core.tla").read_text()
+    inductive_source = (module.FORMAL_DIR / "SumeragiV2Inductive.tla").read_text()
+
+    historical_source = module._top_level_operator_body(
+        core_source, "HistoricalLockedPrepareSource"
+    )
+    historical = module._top_level_operator_body(
+        core_source, "HistoricalLockedPrepareForCommit"
+    )
+    provenance = module._top_level_operator_body(
+        core_source, "HistoricalLockedPrepareRecoveryProvenance"
+    )
+    assert historical_source is not None
+    assert historical is not None
+    assert provenance is not None
+    source_body = " ".join(historical_source[0].split())
+    historical_body = " ".join(historical[0].split())
+    for required in (
+        "qc \\in prepareQCs",
+        "qc.view < nodeView[node]",
+        "qc.view = lockRank[node]",
+        "qc.subject = lockSubject[node]",
+    ):
+        assert required in source_body
+    assert "InstalledTcSelectsPrepareFor(node, qc)" in " ".join(
+        provenance[0].split()
+    )
+    assert historical_body == "FALSE"
+
+    begin = module._top_level_operator_body(
+        core_source, "BeginLockCommit", preserve_string_contents=True
+    )
+    persist = module._top_level_operator_body(
+        core_source, "PersistLockCommit", preserve_string_contents=True
+    )
+    assert begin is not None
+    assert persist is not None
+    begin_body = " ".join(begin[0].split())
+    persist_body = " ".join(persist[0].split())
+    assert "CurrentOpenPrepareForCommit(node, qc)" in begin_body
+    assert "HistoricalLockedPrepareForCommit(node, qc)" not in begin_body
+    assert 'Vote(context, qc.view, "Commit", qc.subject, node)' in begin_body
+    assert "pendingLockCommit' = pendingLockCommit \\cup {request}" in begin_body
+    assert "commitIntents' = commitIntents \\cup {request.vote}" in persist_body
+    assert "signVotes' = signVotes \\cup {signRequest}" in persist_body
+
+    authorization = module._top_level_operator_body(
+        inductive_source, "SameRoundLockAndCommitAuthorizationInvariant"
+    )
+    assert authorization is not None
+    authorization_body = " ".join(authorization[0].split())
+    assert "request.vote.view = nodeView[request.node]" in authorization_body
+    assert (
+        "CurrentOpenPrepareForCommit(request.node, request.qc)"
+        in authorization_body
+    )
+    assert "TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)" in (
+        authorization_body
+    )
+
+    by_id = {
+        obligation["id"]: obligation
+        for obligation in module.load_ledger()["obligations"]
+    }
+    assert by_id["same-round-lock-and-commit-authorization"]["status"] == (
+        "tlaps_proved"
+    )
+    assert by_id["timeout-protection"]["status"] == "tlaps_proved"
+
+    # The promoted theorem stays source-bound and non-vacuous. In particular,
+    # disconnecting the exact-current-round helper from its defining predicate
+    # is rejected independently of the complete-file seal.
+    module = load_checker()
+    assert module._same_round_strict_tla_source_fidelity_errors(
+        module.FORMAL_DIR
+    ) == []
+    mutations = (
+        (
+            "missing_current_open_dependency",
+            "SumeragiV2InductiveProofs.tla",
+            "PendingLockCommitUsesExactCurrentRound",
+            ", CurrentOpenPrepareForCommit",
+            "",
+            "PendingLockCommitUsesExactCurrentRound must retain the exact reviewed",
+            True,
+        ),
+        (
+            "disconnected_wrapper",
+            "SumeragiV2Proofs.tla",
+            "SameRoundLockAndCommitAuthorizationObligation",
+            "ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization",
+            "DurableTimeoutProtectionIsDirect",
+            "SameRoundLockAndCommitAuthorizationObligation must retain the "
+            "exact reviewed",
+            True,
+        ),
+        (
+            "tautological_property",
+            "SumeragiV2Proofs.tla",
+            "SameRoundLockAndCommitAuthorizationProperty",
+            "specification => []SameRoundLockAndCommitAuthorizationInvariant",
+            "specification => []TRUE",
+            "must equal only the exact non-vacuous property",
+            False,
+        ),
+        (
+            "weakened_current_round",
+            "SumeragiV2Core.tla",
+            "CurrentOpenPrepareForCommit",
+            "qc.view = nodeView[node]",
+            "qc.view <= nodeView[node]",
+            "CurrentOpenPrepareForCommit must equal only the exact reviewed",
+            False,
+        ),
+        (
+            "disconnected_inductive_invariant",
+            "SumeragiV2Inductive.tla",
+            "SameRoundLockAndCommitAuthorizationInvariant",
+            "CurrentOpenPrepareForCommit(request.node, request.qc)",
+            "TRUE",
+            "SameRoundLockAndCommitAuthorizationInvariant must equal only the "
+            "exact reviewed",
+            False,
+        ),
+    )
+    for case, name, symbol, old, new, error_fragment, theorem in mutations:
+        formal_dir = tmp_path / case
+        formal_dir.mkdir()
+        for source_name in (
+            *module._SAME_ROUND_STRICT_TLA_SOURCE_SHA256,
+            "SumeragiV2Core.tla",
+            "SumeragiV2Inductive.tla",
+        ):
+            shutil.copy2(module.FORMAL_DIR / source_name, formal_dir / source_name)
+        path = formal_dir / name
+        source = path.read_text(encoding="utf-8")
+        mutate = mutate_tla_theorem if theorem else mutate_tla_operator
+        path.write_text(mutate(source, symbol, old, new), encoding="utf-8")
+        errors = module._same_round_strict_tla_source_fidelity_errors(formal_dir)
+        assert any(error_fragment in error for error in errors), errors
+
+
+def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """Shared vote/Commit kernels cannot be bypassed in production or Verus."""
+
+    module = load_checker()
+    assert module._same_round_semantic_kernel_source_fidelity_errors(ROOT_DIR) == []
+    source_paths = tuple(
+        Path(relative)
+        for relative in module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256
+    )
+    mutations = (
+        (
+            "vote_signer_reintroduced",
+            Path("crates/iroha_core/src/sumeragi/v2_core/types.rs"),
+            "same_statement",
+            "vote_statement_identity_equal_body!(",
+            "self.signer == other.signer && vote_statement_identity_equal_body!(",
+            "Vote::same_statement must invoke the shared identity kernel without signer",
+        ),
+        (
+            "commit_phase_weakened",
+            Path("crates/iroha_core/src/sumeragi/v2_core/types.rs"),
+            "same_commit_decision",
+            "self.phase == Phase::Commit",
+            "self.phase == Phase::Prepare",
+            "same_commit_decision must require Commit phase",
+        ),
+        (
+            "vote_call_disconnected",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_vote",
+            "vote.same_statement(intent)",
+            "vote.signer() == intent.signer()",
+            "Commit vote admission must compare the exact signer-independent statement",
+        ),
+        (
+            "prepare_lock_veto_reintroduced",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_commit_certificate",
+            "let effect = self.start_persistence(",
+            """if self.durable.locked().is_some_and(|locked| {
+            locked.subject() != certificate.subject()
+        }) {
+            return Err(ReducerError::ConflictingDecision);
+        }
+        let effect = self.start_persistence(""",
+            "Commit admission must let the first validated CommitQC supersede any Prepare lock",
+        ),
+        (
+            "wal_prepare_lock_veto_reintroduced",
+            Path("crates/iroha_core/src/sumeragi/v2_core/wal.rs"),
+            "apply_in_place",
+            "if let Some(existing) = &self.decision {",
+            """if self.locked.as_ref().is_some_and(|locked| {
+                    locked.subject() != certificate.subject()
+                }) {
+                    return Err(ReplayError::InvalidCertificate);
+                }
+                if let Some(existing) = &self.decision {""",
+            "WAL Decision replay must let the first validated CommitQC supersede any Prepare lock",
+        ),
+        (
+            "effect_prepare_lock_veto_reintroduced",
+            Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+            "reconcile_decision_work",
+            "match self.protected_decision {",
+            """if self
+            .protected_lock
+            .is_some_and(|(_, locked_subject)| locked_subject != decision_subject)
+        {
+            return Err(EffectExecutorError::Contract(
+                "durable Decision differs from protected lock".to_owned(),
+            ));
+        }
+        match self.protected_decision {""",
+            "effect reconciliation must let the first durable Decision supersede any protected Prepare lock",
+        ),
+        (
+            "production_gate_disconnected",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "accepts",
+            "accepts_facts(transition_facts(projection))",
+            "true",
+            "production commit gate must consume facts derived from the exact projection",
+        ),
+        (
+            "strict_upgrade_kernel_constant_result",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "strict_same_round_timeout_upgrade_is_allowed",
+            "strict_same_round_timeout_upgrade_body!(projection, zero, one)",
+            "true",
+            "the executable strict timeout-upgrade kernel must invoke the shared proof body",
+        ),
+        (
+            "strict_upgrade_lock_rank_weakened",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "strict_same_round_timeout_upgrade_body",
+            "projection.selected_prepare_view > projection.locked_prepare_view",
+            "projection.selected_prepare_view >= projection.locked_prepare_view",
+            "production and Verus must share one nontrivial strict same-round timeout-upgrade predicate",
+        ),
+        (
+            "enter_view_retranscribes_upgrade",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "enter_view_projection_gate_body",
+            "$projection.before_tag.view <= $projection.after_tag.view",
+            "$projection.before_tag.view <= timeout.view",
+            "EnterView must consume the admitted monotonic post-view instead of transcribing a second strict-upgrade predicate",
+        ),
+        (
+            "live_timeout_admission_bypasses_kernel",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_timeout_certificate",
+            """!self
+                .durable
+                .is_strict_same_round_timeout_upgrade(&certificate)""",
+            "false",
+            "live timeout-certificate admission must invoke the durable source-shared strict-upgrade adapter",
+        ),
+        (
+            "timeout_ack_classification_bypasses_kernel",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_persisted",
+            """self
+                    .durable
+                    .is_strict_same_round_timeout_upgrade(certificate)""",
+            "certificate.highest_prepare().is_some()",
+            "InstallTimeout acknowledgement must classify the exact strict same-round lock-only upgrade before applying durable state",
+        ),
+        (
+            "ack_refinement_skips_durable_apply",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "acknowledgement_is_exact",
+            """.apply(&self.context, self.local_validator, &pending.entry)
+            .is_err()""",
+            ".apply(&self.context, self.local_validator, &pending.entry)\n            .is_ok()",
+            "the acknowledgement refinement must re-run the source-shared durable WAL admission before accepting EnterView effects",
+        ),
+        (
+            "wal_upgrade_adapter_uses_view_only_owner",
+            Path("crates/iroha_core/src/sumeragi/v2_core/wal.rs"),
+            "is_strict_same_round_timeout_upgrade",
+            "installed.round() == certificate.round()",
+            "installed.round().view() == certificate.round().view()",
+            "the durable adapter must project exact installed-round identity into the shared strict-upgrade kernel",
+        ),
+        (
+            "wal_replay_bypasses_upgrade_kernel",
+            Path("crates/iroha_core/src/sumeragi/v2_core/wal.rs"),
+            "apply_in_place",
+            "self.is_strict_same_round_timeout_upgrade(certificate)",
+            "certificate.highest_prepare().is_some()",
+            "WAL replay must classify strict timeout upgrades only through the shared durable adapter",
+        ),
+        (
+            "verus_upgrade_kernel_disconnected",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "strict_same_round_timeout_upgrade",
+            "strict_same_round_timeout_upgrade_body!(",
+            "true || strict_same_round_timeout_upgrade_body!(",
+            "Verus must instantiate the shared strict timeout-upgrade body from its primitive WAL projection",
+        ),
+        (
+            "strict_same_round_timeout_pool_erased",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_persisted",
+            "if strict_same_round_timeout_upgrade {",
+            "if false && strict_same_round_timeout_upgrade {",
+            "strict same-round InstallTimeout must preserve only the exact current-round timeout pool and formed marker",
+        ),
+            (
+                "strict_same_round_timeout_control_dropped",
+                Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+                "on_persisted",
+                "| OutboundControlClass::TimeoutVote",
+                "| OutboundControlClass::CommitQc",
+                "active exact TimeoutVote and highest PrepareQC control owners",
+        ),
+        (
+            "same_size_timeout_pool_substitution_accepted",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "transition_branch_constraints_body",
+            "$facts.timeout_vote_pool_unchanged",
+            "true",
+            "the production gate must reject same-size timeout-pool substitution and advancing-view retention",
+        ),
+        (
+            "timeout_control_substitution_accepted",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "transition_branch_constraints_body",
+            "$facts.timeout_control_unchanged",
+            "true",
+            "the production gate must preserve exact timeout-control identity across a lock-only install and require absence after advance",
+        ),
+        (
+            "advancing_timeout_control_retention_accepted",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "transition_branch_constraints_body",
+            "$facts.timeout_control_after_absent",
+            "true",
+            "the production gate must preserve exact timeout-control identity across a lock-only install and require absence after advance",
+        ),
+        (
+            "timeout_control_key_projection_retargeted",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "transition_projection",
+            """timeout_control_before: self
+                .outbound_control
+                .get(&OutboundControlClass::TimeoutVote),""",
+            """timeout_control_before: self
+                .outbound_control
+                .get(&OutboundControlClass::CommitQc),""",
+            "the transition projection must preserve direct timeout-control key occupancy and full message identity",
+        ),
+        (
+            "verus_timeout_owner_projection_disconnected",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "verified_delta_facts_from_projection",
+            "transition_delta_facts_from_projection_body!(",
+            "transition_facts_from_components_body!(",
+            "Verus must prove the executable delta facts through the same timeout-owner projection used by production",
+        ),
+        (
+            "verus_timeout_owner_extensionality_omitted",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "production_delta_facts_equal",
+            "&& left.timeout_control_after_absent == right.timeout_control_after_absent",
+            "&& true",
+            "Verus transition-fact extensionality must include every timeout-owner delta field",
+        ),
+        (
+            "verus_same_round_timeout_pool_forced_empty",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "production_action_preserves_volatile_bounds",
+            """&& (if facts.install_view_unchanged {
+                    facts.timeout_vote_pool_unchanged
+                        && facts.volatile_after.timeout_vote_pools
+                            == facts.volatile_before.timeout_vote_pools
+                        && facts.volatile_after.timeout_vote_entries
+                            == facts.volatile_before.timeout_vote_entries
+                } else {
+                    facts.volatile_after.timeout_vote_pools == 0
+                        && facts.volatile_after.timeout_vote_entries == 0
+                })""",
+            """&& facts.volatile_after.timeout_vote_pools == 0
+                && facts.volatile_after.timeout_vote_entries == 0""",
+            "Verus volatile preservation must distinguish lock-only timeout ownership from advancing-view reset",
+        ),
+        (
+            "verus_advancing_timeout_control_retention_accepted",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "production_action_preserves_volatile_bounds",
+            """&& (if facts.install_view_unchanged {
+                    facts.timeout_control_unchanged
+                } else {
+                    facts.timeout_control_after_absent
+                })""",
+            "&& true",
+            "Verus volatile preservation must prove exact timeout control retention or advancing-view absence",
+        ),
+        (
+            "verus_vote_tautology",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "same_vote_statement",
+            "vote_statement_identity_equal_body!(",
+            "true || vote_statement_identity_equal_body!(",
+            "Verus vote identity must invoke the shared production macro",
+        ),
+    )
+    for case, relative, item, old, new, error_fragment in mutations:
+        repo_root = tmp_path / case
+        for source_path in source_paths:
+            destination = repo_root / source_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / source_path, destination)
+        path = repo_root / relative
+        source = path.read_text(encoding="utf-8")
+        marker = f"macro_rules! {item} {{"
+        start = source.find(marker)
+        if start >= 0:
+            assert source.count(old) == 1, (item, old)
+            mutation = source.find(old)
+            assert mutation > start, (item, old)
+            path.write_text(
+                source[:mutation] + new + source[mutation + len(old) :],
+                encoding="utf-8",
+            )
+        else:
+            mutate_rust_item_source(module, path, item, old, new)
+        errors = module._same_round_semantic_kernel_source_fidelity_errors(
+            repo_root
+        )
+        assert any(error_fragment in error for error in errors), errors
+
+
+def test_atomic_timeout_completion_contract_rejects_split_or_stale_projection(
+    tmp_path: Path,
+) -> None:
+    """The local timeout receipt, TC formation, and readiness stay atomic."""
+
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    paths = {
+        name: formal_dir / name
+        for name in ("SumeragiV2Core.tla", "SumeragiV2AsyncNetwork.tla")
+    }
+    canonical = {}
+    for name, destination in paths.items():
+        source = (module.FORMAL_DIR / name).read_text(encoding="utf-8")
+        destination.write_text(source, encoding="utf-8")
+        canonical[name] = source
+
+    assert module._atomic_timeout_completion_source_fidelity_errors(formal_dir) == []
+
+    mutations = (
+        (
+            "SumeragiV2Core.tla",
+            "     /\\ vote.highestPrepareQc = highestPrepareQc[node]\n",
+            "",
+            "LocalTimeoutCompletionGuard must equal only",
+        ),
+        (
+            "SumeragiV2Core.tla",
+            "     /\\ ExactPrepareQcMatchesRef(\n"
+            "          vote.highestPrepareQc, vote.highRank, vote.highSubject)\n",
+            "     /\\ AuthenticatedHighRef(vote.highRank, vote.highSubject)\n",
+            "LocalTimeoutCompletionGuard must equal only",
+        ),
+        (
+            "SumeragiV2Core.tla",
+            "  IN /\\ LocalTimeoutCompletionGuard(request)\n",
+            "  IN /\\ TRUE\n",
+            "CompleteTimeoutSignature must invoke",
+        ),
+        (
+            "SumeragiV2Core.tla",
+            "      /\\ entry.node = node\n"
+            "      /\\ entry.vote.context = context\n"
+            "      /\\ entry.vote.view = roundView}}\n",
+            "      /\\ entry.node = node\n"
+            "      /\\ entry.vote.view = roundView}}\n",
+            "TimeoutVotesIn must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "CompleteTimeoutSignatureReady(request) ==\n"
+            "  LocalTimeoutCompletionGuard(request)\n",
+            "CompleteTimeoutSignatureReady(request) == TRUE\n",
+            "CompleteTimeoutSignatureReady must equal only",
+        ),
+    )
+    for name, needle, replacement, expected_error in mutations:
+        source = canonical[name]
+        assert source.count(needle) == 1, needle
+        paths[name].write_text(
+            source.replace(needle, replacement, 1), encoding="utf-8"
+        )
+        errors = module._atomic_timeout_completion_source_fidelity_errors(
+            formal_dir
+        )
+        assert any(expected_error in error for error in errors), errors
+        paths[name].write_text(source, encoding="utf-8")

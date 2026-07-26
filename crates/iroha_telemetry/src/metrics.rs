@@ -24,7 +24,7 @@ use iroha_config::{
     },
 };
 use iroha_data_model::{
-    block::consensus::PERMISSIONED_TAG,
+    block::consensus_v2::PERMISSIONED_TAG,
     da::types::DaRentQuote,
     prelude::Quantity,
     soranet::privacy_metrics::{
@@ -32,6 +32,7 @@ use iroha_data_model::{
     },
 };
 use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
+use iroha_torii_shared::offline_api::OfflineStatus;
 use norito::{
     core::DecodeFromSlice,
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -5627,6 +5628,10 @@ pub struct Status {
     /// Stack sizing/configuration snapshot.
     #[norito(default)]
     pub stack: StackStatus,
+    /// Complete mandatory offline-cash readiness across configured escrow assets.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub offline: Option<OfflineStatus>,
     /// Summary of the consensus snapshot (leader, QCs, queue state).
     #[norito(skip_serializing_if = "Option::is_none")]
     pub sumeragi: Option<SumeragiConsensusStatus>,
@@ -5717,6 +5722,9 @@ struct StatusPayload {
     crypto: CryptoStatus,
     #[norito(default)]
     stack: StackStatus,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    offline: Option<OfflineStatus>,
     #[norito(skip_serializing_if = "Option::is_none")]
     sumeragi: Option<SumeragiConsensusStatus>,
     governance: GovernanceStatus,
@@ -5766,6 +5774,7 @@ impl From<&Status> for StatusPayload {
             da_reschedule_total: status.da_reschedule_total,
             crypto: status.crypto.clone(),
             stack: status.stack,
+            offline: status.offline.clone(),
             sumeragi: status.sumeragi.clone(),
             governance: status.governance.clone(),
             teu_lane_commit: status.teu_lane_commit.clone(),
@@ -5806,6 +5815,7 @@ impl From<StatusPayload> for Status {
             da_reschedule_total: payload.da_reschedule_total,
             crypto: payload.crypto,
             stack: payload.stack,
+            offline: payload.offline,
             sumeragi: payload.sumeragi,
             governance: payload.governance,
             teu_lane_commit: payload.teu_lane_commit,
@@ -6582,6 +6592,7 @@ impl From<&Metrics> for Status {
                     .clone(),
             },
             stack: stack_settings_snapshot().into(),
+            offline: None,
             sumeragi: Some(build_sumeragi_status(value)),
             governance: build_governance_status(value),
             teu_lane_commit: collect_teu_lane_commit(value),

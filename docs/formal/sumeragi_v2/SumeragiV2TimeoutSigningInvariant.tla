@@ -116,6 +116,7 @@ BY IsaT(120)
        BeginDecision, PersistDecision, BeginTimeout,
        ByzantineBroadcastTimeout, DeliverTimeout, FormTC, DeliverTC,
        BeginInstallTC, PersistInstallTC, FetchCertifiedBody,
+       AcceptCertifiedResponseCapability, InstallCertifiedBodyEffect,
        ApplyDecision, Restart, ResumeProposal, ResumeVote, DropProposal
 
 THEOREM TimeoutSigningMutationPreservesProvenance ==

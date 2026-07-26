@@ -309,6 +309,12 @@ object SumeragiV2Wire {
     ) : WireValue() {
         private val signatureValue = signature.copyOf()
 
+        init {
+            require(proposalRound == round) {
+                "Prepare/Commit vote proposal round must match its round"
+            }
+        }
+
         fun signature(): ByteArray = signatureValue.copyOf()
 
         override fun encode(): ByteArray = struct(
@@ -346,6 +352,12 @@ object SumeragiV2Wire {
         @JvmField val subject: BlockSubject,
         @JvmField val executionCommitment: ExecutionCommitment,
     ) : WireValue() {
+        init {
+            require(proposalRound == round) {
+                "Prepare/Commit certificate reference proposal round must match its round"
+            }
+        }
+
         override fun encode(): ByteArray = struct(
             round.encode(),
             proposalRound.encode(),
@@ -386,6 +398,9 @@ object SumeragiV2Wire {
         private val aggregateSignatureValue = aggregateSignature.copyOf()
 
         init {
+            require(proposalRound == round) {
+                "Prepare/Commit certificate proposal round must match its round"
+            }
             requireStrictlyIncreasing(this.signers, "quorum certificate signers")
         }
 
@@ -824,12 +839,12 @@ object SumeragiV2Wire {
         }
     }
 
-    /** Certified body response. */
+    /** Archive-signed certified body response with a distinct frozen-QC signer citation. */
     class CertifiedBodyResponse(
         @JvmField val requestHash: Hash32,
         @JvmField val manifest: PayloadManifest,
         body: ByteArray,
-        @JvmField val responder: Long,
+        @JvmField val citedResponder: Long,
         signature: ByteArray,
     ) : WireValue() {
         private val bodyValue = body.copyOf()
@@ -842,7 +857,7 @@ object SumeragiV2Wire {
             requestHash.bytes(),
             manifest.encode(),
             byteVector(bodyValue),
-            u32(responder),
+            u32(citedResponder),
             byteVector(signatureValue),
         )
 
@@ -855,7 +870,9 @@ object SumeragiV2Wire {
                             PayloadManifest.decode(it.remainingBytes())
                         },
                         reader.field("body_response.body") { it.byteVectorOnly("body_response.body") },
-                        reader.field("body_response.responder") { it.u32Only("body_response.responder") },
+                        reader.field("body_response.cited_responder") {
+                            it.u32Only("body_response.cited_responder")
+                        },
                         reader.field("body_response.signature") {
                             it.byteVectorOnly("body_response.signature")
                         },
@@ -1276,6 +1293,12 @@ object SumeragiV2Wire {
         @JvmField val minSigners: Long,
         @JvmField val totalPower: Long,
     ) : WireValue() {
+        init {
+            require(proposalRound == round) {
+                "Prepare/Commit quorum status proposal round must match its round"
+            }
+        }
+
         override fun encode(): ByteArray = struct(
             round.encode(),
             proposalRound.encode(),
@@ -1391,13 +1414,8 @@ object SumeragiV2Wire {
                 require(origin.view <= round.view) {
                     "Outbound intent proposal round cannot be in a later view"
                 }
-                if (kind == OutboundIntentKind.PROPOSAL ||
-                    kind == OutboundIntentKind.PREPARE_VOTE ||
-                    kind == OutboundIntentKind.PREPARE_QC
-                ) {
-                    require(origin == round) {
-                        "Prepare/proposal outbound intent origin must match its round"
-                    }
+                require(origin == round) {
+                    "Proposal/Prepare/Commit outbound intent origin must match its round"
                 }
             }
         }

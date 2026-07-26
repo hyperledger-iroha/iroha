@@ -231,9 +231,6 @@ WitnessNext ==
        WitnessMark("DeliverTimeout", envelope.recipient, envelope.vote.signer,
                    envelope.vote.view, WitnessNoText, WitnessNoText,
                    DeliverTimeout(envelope))
-  \/ \E node \in ValidatorIds, roundView \in Views:
-       WitnessMark("FormTC", node, WitnessNoNumber, roundView, WitnessNoText,
-                   WitnessNoText, FormTC(node, roundView))
   \/ \E envelope \in tcNetwork:
        WitnessMark("DeliverTC", envelope.recipient, WitnessNoNumber,
                    envelope.tc.view, WitnessNoText, WitnessNoText,

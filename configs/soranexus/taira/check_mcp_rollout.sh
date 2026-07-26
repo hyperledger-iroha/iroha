@@ -20,6 +20,8 @@ ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
 ROLLOUT_CANARY_FAUCET_ASSET_ID="${ROLLOUT_CANARY_FAUCET_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+OFFLINE_ASSET_DEFINITION_ID="${OFFLINE_ASSET_DEFINITION_ID:-}"
+OFFLINE_EXPECTED_IDENTITY_PATH="${OFFLINE_EXPECTED_IDENTITY_PATH:-}"
 ROLLOUT_CANARY_FEE_PROGRAM_ID="${ROLLOUT_CANARY_FEE_PROGRAM_ID:-testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default}"
 ROLLOUT_CANARY_FEE_PROGRAM_REVISION="${ROLLOUT_CANARY_FEE_PROGRAM_REVISION:-1}"
 ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
@@ -28,6 +30,7 @@ POST_CANARY_STATUS_RECHECK_DELAY_SECONDS="${POST_CANARY_STATUS_RECHECK_DELAY_SEC
 MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS="${MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS:-5}"
 MCP_ROLLOUT_CURL_MAX_TIME_SECONDS="${MCP_ROLLOUT_CURL_MAX_TIME_SECONDS:-20}"
 MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
+TAIRA_RELEASE_VALIDATOR_COUNT=4
 VALIDATOR_PROGRESS_SAMPLES="${VALIDATOR_PROGRESS_SAMPLES:-3}"
 VALIDATOR_PROGRESS_DELAY_SECONDS="${VALIDATOR_PROGRESS_DELAY_SECONDS:-2}"
 VALIDATOR_ALIGNMENT_ATTEMPTS="${VALIDATOR_ALIGNMENT_ATTEMPTS:-10}"
@@ -38,6 +41,7 @@ SKIP_LOCAL=0
 SKIP_PUBLIC=0
 SKIP_WRITE_CANARY=0
 REQUIRE_ALL_VALIDATORS=0
+REQUIRE_EXACT_GIT_SHA=0
 IROHA_RUNNER=()
 CHECKED_LABELS=()
 CHECKED_ROOTS=()
@@ -56,6 +60,8 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--write-config PATH] [--write-target local|public|URL]
                             [--faucet-asset-id ASSET_DEFINITION_ID]
                             [--fee-program PROGRAM_ID] [--fee-program-revision REVISION]
+                            [--offline-asset-definition-id ASSET_DEFINITION_ID]
+                            [--offline-expected-identity ABSOLUTE_JSON_PATH]
                             [--iroha-bin PATH] [--resolve-host HOST:IP|HOST:PORT:IP]
                             [--curl-connect-timeout-seconds N]
                             [--curl-max-time-seconds N]
@@ -68,6 +74,10 @@ For a single public-node devex check, prefer the first-class CLI:
 
 The check fails unless:
   - GET /v1/mcp returns HTTP 200 with a capabilities payload
+  - GET /v1/offline/readiness returns the exact ABI-21/V4 `cash_handoff_v1`
+    contract for the configured scale-2 Digital Shekel asset, five distinct
+    active roles, the operator-reviewed authenticated release identity, a
+    constructed backend, recursive lineage, ready=true, and no blockers
   - POST /v1/mcp initialize returns HTTP 200
   - POST /v1/mcp notifications/initialized returns HTTP 202 with an empty body
   - POST /v1/mcp tools/list returns HTTP 200
@@ -84,7 +94,13 @@ The check fails unless:
     handler (the no-hash probe returns HTTP 400), while the retired
     /v1/transactions/status alias remains unmounted (HTTP 404)
   - when validator roots are supplied, every labeled validator reports the same
-    protocol/build/config/context/commit tuple across repeated advancing samples
+    protocol/build/config/context/commit tuple and the same exact live offline
+    block/release identity across repeated advancing samples
+  - public rollout mode is fail-closed: exactly four distinct validator roots,
+    --require-all-validators, a full 40-character expected git SHA, and at
+    least three advancing fleet samples are mandatory. For non-release local
+    diagnostics use --skip-public; for one-node public diagnosis use
+    `iroha taira doctor`, which cannot produce cutover evidence.
   - direct public Torii ingress also exposes SCCP, ZK, bridge, validator-set,
     public-lane, contract, and Musubi routes on the same node URL
 
@@ -259,6 +275,22 @@ while [[ $# -gt 0 ]]; do
       ROLLOUT_CANARY_FEE_PROGRAM_REVISION="$2"
       shift 2
       ;;
+    --offline-asset-definition-id)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --offline-asset-definition-id" >&2
+        exit 1
+      }
+      OFFLINE_ASSET_DEFINITION_ID="$2"
+      shift 2
+      ;;
+    --offline-expected-identity)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --offline-expected-identity" >&2
+        exit 1
+      }
+      OFFLINE_EXPECTED_IDENTITY_PATH="$2"
+      shift 2
+      ;;
     --expected-git-sha)
       [[ $# -ge 2 ]] || {
         echo "missing value for --expected-git-sha" >&2
@@ -319,6 +351,40 @@ if [[ $SKIP_LOCAL -eq 1 && $SKIP_PUBLIC -eq 1 ]]; then
   echo "nothing to check: both local and public checks were skipped" >&2
   exit 1
 fi
+
+if [[ ! "$OFFLINE_ASSET_DEFINITION_ID" =~ ^[1-9A-HJ-NP-Za-km-z]{28,29}$ ]]; then
+  echo "--offline-asset-definition-id must be one canonical unprefixed Base58 asset-definition ID" >&2
+  exit 1
+fi
+
+if [[ -z "$OFFLINE_EXPECTED_IDENTITY_PATH" ]]; then
+  echo "--offline-expected-identity is mandatory and must name the external operator-reviewed release identity" >&2
+  exit 1
+fi
+python3 - "$OFFLINE_EXPECTED_IDENTITY_PATH" "$REPO_ROOT" <<'PY'
+import pathlib
+import sys
+
+configured, repo_root = sys.argv[1:]
+path = pathlib.Path(configured).expanduser()
+if not path.is_absolute():
+    raise SystemExit("--offline-expected-identity must be an absolute path")
+try:
+    resolved = path.resolve(strict=True)
+except OSError as error:
+    raise SystemExit(f"operator-reviewed offline identity is unavailable: {error}") from error
+if not resolved.is_file():
+    raise SystemExit("operator-reviewed offline identity path must name a regular file")
+try:
+    resolved.relative_to(pathlib.Path(repo_root).resolve(strict=True))
+except ValueError:
+    pass
+else:
+    raise SystemExit("operator-reviewed offline identity must remain outside the source repository")
+size = resolved.stat().st_size
+if size <= 0 or size > 65_536:
+    raise SystemExit("operator-reviewed offline identity is empty or exceeds 65536 bytes")
+PY
 
 if [[ -n "$EXPECTED_TAIRA_GIT_SHA" ]]; then
   if [[ ! "$EXPECTED_TAIRA_GIT_SHA" =~ ^[0-9A-Fa-f]{7,40}$ ]]; then
@@ -498,6 +564,26 @@ mcp_root_from_url() {
 }
 
 parse_validator_roots
+
+if [[ $SKIP_PUBLIC -eq 0 ]]; then
+  if [[ $REQUIRE_ALL_VALIDATORS -ne 1 ]]; then
+    echo "public Taira rollout requires --require-all-validators; use --skip-public for local diagnostics" >&2
+    exit 1
+  fi
+  if [[ $VALIDATOR_ROOT_COUNT -ne $TAIRA_RELEASE_VALIDATOR_COUNT ]]; then
+    echo "public Taira rollout requires exactly ${TAIRA_RELEASE_VALIDATOR_COUNT} distinct --validator-root LABEL=URL arguments; received ${VALIDATOR_ROOT_COUNT}" >&2
+    exit 1
+  fi
+  if [[ ! "$EXPECTED_TAIRA_GIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "public Taira rollout requires --expected-git-sha with the exact full 40-character commit" >&2
+    exit 1
+  fi
+  if [[ $VALIDATOR_PROGRESS_SAMPLES -lt 3 ]]; then
+    echo "public Taira rollout requires at least three advancing validator fleet samples" >&2
+    exit 1
+  fi
+  REQUIRE_EXACT_GIT_SHA=1
+fi
 
 build_curl_resolve_args() {
   local url="$1"
@@ -882,7 +968,7 @@ check_status_snapshot() {
     sed -n '1,20p' "$last_headers" >&2 || true
     exit 1
   fi
-  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" <<'PY'
+  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" <<'PY'
 import json
 import re
 import sys
@@ -890,6 +976,7 @@ import sys
 label = sys.argv[1]
 path = sys.argv[2]
 expected_git_sha = sys.argv[5].strip()
+require_exact_git_sha = sys.argv[6] == "1"
 with open(path, "r", encoding="utf-8") as handle:
     payload = json.load(handle)
 
@@ -925,7 +1012,14 @@ if expected_git_sha:
             file=sys.stderr,
         )
         sys.exit(1)
-    if not (
+    if require_exact_git_sha and build_git_sha != expected_git_sha:
+        print(
+            f"{label}: /status build git SHA {build_git_sha} does not exactly match "
+            f"release commit {expected_git_sha}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not require_exact_git_sha and not (
         build_git_sha.startswith(expected_git_sha)
         or expected_git_sha.startswith(build_git_sha)
     ):
@@ -1279,14 +1373,325 @@ check_sumeragi_snapshot_with_retry() {
   return 1
 }
 
+check_offline_readiness() {
+  local label="$1"
+  local root="$2"
+  local encoded_asset readiness_url
+  encoded_asset="$(python3 - "$OFFLINE_ASSET_DEFINITION_ID" <<'PY'
+import sys
+import urllib.parse
+
+print(urllib.parse.quote(sys.argv[1], safe=""))
+PY
+)"
+  readiness_url="$(normalize_root_url "$root")/v1/offline/readiness?asset_definition_id=${encoded_asset}"
+  echo "==> ${label}: GET ${readiness_url}" >&2
+  http_request GET "$readiness_url"
+  if [[ "$last_status" != "200" ]]; then
+    echo "${label}: mandatory offline readiness failed with HTTP ${last_status}" >&2
+    sed -n '1,80p' "$last_body" >&2 || true
+    return 1
+  fi
+
+  python3 - "$label" "$last_body" "$OFFLINE_EXPECTED_IDENTITY_PATH" "$OFFLINE_ASSET_DEFINITION_ID" <<'PY'
+import json
+import re
+import sys
+
+label, path, expected_path, expected_asset_definition_id = sys.argv[1:]
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member {key!r}")
+        result[key] = value
+    return result
+
+try:
+    with open(path, "r", encoding="utf-8") as stream:
+        payload = json.load(stream, object_pairs_hook=reject_duplicate_keys)
+except (OSError, ValueError, json.JSONDecodeError) as error:
+    raise SystemExit(f"{label}: offline readiness gate failed: invalid response JSON: {error}") from error
+try:
+    with open(expected_path, "r", encoding="utf-8") as stream:
+        expected_identity = json.load(stream, object_pairs_hook=reject_duplicate_keys)
+except (OSError, ValueError, json.JSONDecodeError) as error:
+    raise SystemExit(
+        f"{label}: offline readiness gate failed: invalid operator-reviewed identity: {error}"
+    ) from error
+
+def fail(message):
+    raise SystemExit(f"{label}: offline readiness gate failed: {message}")
+
+ROLE_FIELDS = {
+    "active_transfer_verifier": (
+        "halo2/ipa",
+        "confidential_transfer_v2_verifier_record",
+        "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+    ),
+    "active_topup_shield_verifier": (
+        "halo2/ipa",
+        "kagemusha_topup_shield_v2_verifier_record",
+        "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+    ),
+    "active_unshield_verifier": (
+        "halo2/ipa",
+        "confidential_unshield_v3_verifier_record",
+        "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+    ),
+    "active_recursive_step_eq_verifier": (
+        "halo2/ipa",
+        "kagemusha_recursive_step_eq_v4_verifier_record",
+        "kagemusha-recursive-spend-step-eq-compact-layout-v5",
+    ),
+    "active_recursive_step_ep_verifier": (
+        "halo2/ipa",
+        "kagemusha_recursive_step_ep_v4_verifier_record",
+        "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
+    ),
+}
+VERIFIER_KEYS = {
+    "id",
+    "version",
+    "circuit_id",
+    "commitment",
+    "public_inputs_schema_hash",
+    "max_proof_bytes",
+    "activation_height",
+    "withdrawal_height",
+}
+PROJECTED_VERIFIER_KEYS = {
+    "backend",
+    "name",
+    "version",
+    "circuit_id",
+    "commitment",
+    "public_inputs_schema_hash",
+    "max_proof_bytes",
+    "activation_height",
+    "withdrawal_height",
+}
+ARTIFACT_KEYS = {
+    "generation",
+    "manifest_sha256",
+    "release_policy_sha256",
+    "release_attestation_sha256",
+    "activation_height",
+    "withdrawal_height",
+    "max_proof_bytes",
+    "asset_scale",
+}
+EXPECTED_KEYS = {
+    "cash_handoff_capability",
+    "required_bridge_abi_version",
+    "max_hops",
+    "asset_definition_id",
+    "asset_scale",
+    "artifact_set",
+    "verifiers",
+}
+
+def is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+def is_positive_int(value):
+    return is_int(value) and value > 0
+
+def is_nonzero_sha256(value):
+    return (
+        isinstance(value, str)
+        and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+        and set(value) != {"0"}
+    )
+
+def validate_artifact(artifact, *, context):
+    if not isinstance(artifact, dict) or set(artifact) != ARTIFACT_KEYS:
+        fail(f"{context} artifact_set has a non-canonical field set")
+    generation = artifact.get("generation")
+    if not isinstance(generation, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", generation) is None:
+        fail(f"{context} artifact_set.generation is invalid")
+    digests = tuple(
+        artifact.get(field)
+        for field in (
+            "manifest_sha256",
+            "release_policy_sha256",
+            "release_attestation_sha256",
+        )
+    )
+    if not all(is_nonzero_sha256(value) for value in digests):
+        fail(f"{context} artifact_set contains an invalid digest")
+    if len(set(digests)) != 3:
+        fail(f"{context} artifact_set digests are not distinct")
+    activation = artifact.get("activation_height")
+    withdrawal = artifact.get("withdrawal_height")
+    if not is_positive_int(activation) or not is_positive_int(withdrawal) or withdrawal <= activation:
+        fail(f"{context} artifact_set lifecycle is invalid")
+    if not is_positive_int(artifact.get("max_proof_bytes")):
+        fail(f"{context} artifact_set.max_proof_bytes is invalid")
+    if artifact.get("asset_scale") != 2:
+        fail(f"{context} artifact_set.asset_scale is not exact Digital Shekel scale 2")
+
+def validate_projected_verifiers(verifiers, artifact, *, context, evaluated_height=None):
+    if not isinstance(verifiers, dict) or set(verifiers) != set(ROLE_FIELDS):
+        fail(f"{context} verifier identity must contain all five exact roles")
+    identities = []
+    commitments = []
+    schemas = []
+    for field, expected_role in ROLE_FIELDS.items():
+        verifier = verifiers.get(field)
+        if not isinstance(verifier, dict) or set(verifier) != PROJECTED_VERIFIER_KEYS:
+            fail(f"{context} {field} has a non-canonical field set")
+        actual_role = (verifier.get("backend"), verifier.get("name"), verifier.get("circuit_id"))
+        if actual_role != expected_role:
+            fail(f"{context} {field} does not use the governed verifier identity")
+        if not is_positive_int(verifier.get("version")):
+            fail(f"{context} {field}.version is invalid")
+        if not is_nonzero_sha256(verifier.get("commitment")):
+            fail(f"{context} {field}.commitment is invalid")
+        if not is_nonzero_sha256(verifier.get("public_inputs_schema_hash")):
+            fail(f"{context} {field}.public_inputs_schema_hash is invalid")
+        if not is_positive_int(verifier.get("max_proof_bytes")):
+            fail(f"{context} {field}.max_proof_bytes is invalid")
+        activation = verifier.get("activation_height")
+        withdrawal = verifier.get("withdrawal_height")
+        if not is_int(activation) or activation < 0:
+            fail(f"{context} {field}.activation_height is invalid")
+        if withdrawal is not None and (not is_positive_int(withdrawal) or withdrawal <= activation):
+            fail(f"{context} {field}.withdrawal_height is invalid")
+        if evaluated_height is not None and (
+            activation > evaluated_height
+            or (withdrawal is not None and withdrawal <= evaluated_height)
+        ):
+            fail(f"{context} {field} is not active at the evaluated block")
+        identities.append((verifier["backend"], verifier["name"]))
+        commitments.append(verifier["commitment"])
+        schemas.append(verifier["public_inputs_schema_hash"])
+    if len(set(identities)) != 5 or len(set(commitments)) != 5 or len(set(schemas)) != 5:
+        fail(f"{context} five verifier identities are not cryptographically distinct")
+    for field in ("active_recursive_step_eq_verifier", "active_recursive_step_ep_verifier"):
+        verifier = verifiers[field]
+        if (
+            verifier["activation_height"] != artifact["activation_height"]
+            or verifier["withdrawal_height"] != artifact["withdrawal_height"]
+            or verifier["max_proof_bytes"] != artifact["max_proof_bytes"]
+        ):
+            fail(f"{context} {field} is not bound to artifact_set")
+
+if not isinstance(expected_identity, dict) or set(expected_identity) != EXPECTED_KEYS:
+    fail("operator-reviewed identity has a non-canonical field set")
+if expected_identity.get("cash_handoff_capability") != "cash_handoff_v1":
+    fail("operator-reviewed identity is not cash_handoff_v1")
+if expected_identity.get("required_bridge_abi_version") != 21:
+    fail("operator-reviewed identity is not exact ABI-21")
+if expected_identity.get("max_hops") != 8:
+    fail("operator-reviewed identity does not use max_hops 8")
+if expected_identity.get("asset_definition_id") != expected_asset_definition_id:
+    fail("operator-reviewed identity is not bound to --offline-asset-definition-id")
+if expected_identity.get("asset_scale") != 2:
+    fail("operator-reviewed identity is not bound to scale-2 Digital Shekel")
+expected_artifact = expected_identity.get("artifact_set")
+validate_artifact(expected_artifact, context="operator-reviewed")
+validate_projected_verifiers(
+    expected_identity.get("verifiers"),
+    expected_artifact,
+    context="operator-reviewed",
+)
+
+if payload.get("cash_handoff_capability") != "cash_handoff_v1":
+    fail("cash_handoff_capability is not cash_handoff_v1")
+if payload.get("required_bridge_abi_version") != 21:
+    fail("required_bridge_abi_version is not exact ABI-21")
+if payload.get("max_hops") != 8:
+    fail("max_hops is not the first-release bound 8")
+if payload.get("asset_definition_id") != expected_asset_definition_id:
+    fail("asset_definition_id does not match the requested Digital Shekel definition")
+scale = payload.get("asset_scale")
+if scale != 2:
+    fail("asset_scale is not exact Digital Shekel scale 2")
+height = payload.get("evaluated_block_height")
+block_hash = payload.get("evaluated_block_hash")
+if not is_positive_int(height):
+    fail("evaluated_block_height is not positive")
+if not isinstance(block_hash, str) or re.fullmatch(r"[0-9a-f]{64}", block_hash) is None:
+    fail("evaluated_block_hash is not canonical lowercase SHA-256")
+
+artifact = payload.get("artifact_set")
+validate_artifact(artifact, context="live")
+if not artifact["activation_height"] <= height < artifact["withdrawal_height"]:
+    fail("live artifact_set is outside its issuance window")
+projected_verifiers = {}
+for field in ROLE_FIELDS:
+    verifier = payload.get(field)
+    if not isinstance(verifier, dict) or set(verifier) != VERIFIER_KEYS:
+        fail(f"live {field} has a non-canonical field set")
+    identifier = verifier.get("id")
+    if not isinstance(identifier, dict) or set(identifier) != {"backend", "name"}:
+        fail(f"live {field}.id has a non-canonical field set")
+    projected_verifiers[field] = {
+        "backend": identifier.get("backend"),
+        "name": identifier.get("name"),
+        "version": verifier.get("version"),
+        "circuit_id": verifier.get("circuit_id"),
+        "commitment": verifier.get("commitment"),
+        "public_inputs_schema_hash": verifier.get("public_inputs_schema_hash"),
+        "max_proof_bytes": verifier.get("max_proof_bytes"),
+        "activation_height": verifier.get("activation_height"),
+        "withdrawal_height": verifier.get("withdrawal_height"),
+    }
+validate_projected_verifiers(
+    projected_verifiers,
+    artifact,
+    context="live",
+    evaluated_height=height,
+)
+if payload.get("proof_backend_available") is not True:
+    fail("proof backend is unavailable")
+if payload.get("recursive_lineage_supported") is not True:
+    fail("recursive lineage is unavailable")
+if payload.get("ready") is not True:
+    fail("ready is not true")
+if payload.get("blockers") != []:
+    fail(f"blockers are not empty: {payload.get('blockers')!r}")
+
+observed_identity = {
+    "cash_handoff_capability": payload["cash_handoff_capability"],
+    "required_bridge_abi_version": payload["required_bridge_abi_version"],
+    "max_hops": payload["max_hops"],
+    "asset_definition_id": payload["asset_definition_id"],
+    "asset_scale": payload["asset_scale"],
+    "artifact_set": artifact,
+    "verifiers": projected_verifiers,
+}
+if observed_identity != expected_identity:
+    fail("live release identity does not match the external operator-reviewed identity")
+
+print(
+    json.dumps(
+        {
+            "asset_definition_id": payload.get("asset_definition_id"),
+            "block_height": height,
+            "block_hash": block_hash,
+            "release_identity": observed_identity,
+        },
+        sort_keys=True,
+    )
+)
+PY
+}
+
 capture_validator_fleet_sample() {
-  local records_file status_copy
+  local records_file status_copy offline_summary
   local idx label root
   records_file="$(mktemp)"
 
   for idx in "${!VALIDATOR_ROOTS[@]}"; do
     label="${VALIDATOR_LABELS[$idx]}"
     root="${VALIDATOR_ROOTS[$idx]}"
+    if ! offline_summary="$(check_offline_readiness "validator ${label}" "$root")"; then
+      rm -f "$records_file"
+      return 1
+    fi
     echo "==> validator ${label}: GET ${root}/status" >&2
     http_request GET "${root}/status"
     if [[ "$last_status" != "200" ]]; then
@@ -1305,16 +1710,23 @@ capture_validator_fleet_sample() {
       return 1
     fi
 
-    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" >>"$records_file" <<'PY'
+    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$offline_summary" >>"$records_file" <<'PY'
 import json
 import re
 import sys
 
-label, status_path, sumeragi_path, expected_sha = sys.argv[1:]
+label, status_path, sumeragi_path, expected_sha, require_exact_raw, offline_summary_raw = sys.argv[1:]
+require_exact_sha = require_exact_raw == "1"
 with open(status_path, "r", encoding="utf-8") as handle:
     node_status = json.load(handle)
 with open(sumeragi_path, "r", encoding="utf-8") as handle:
     status = json.load(handle)
+try:
+    offline_summary = json.loads(offline_summary_raw)
+except json.JSONDecodeError as error:
+    raise SystemExit(
+        f"validator {label}: offline readiness did not produce a canonical identity summary: {error}"
+    ) from error
 
 required = (
     "node_fingerprint",
@@ -1339,6 +1751,31 @@ for name in ("height", "view", "leader", "last_committed_height"):
         raise SystemExit(f"validator {label}: invalid {name}: {value!r}")
 context = status["height_context"]
 
+offline_height = offline_summary.get("block_height")
+offline_hash = offline_summary.get("block_hash")
+offline_release = offline_summary.get("release_identity")
+if not isinstance(offline_height, int) or isinstance(offline_height, bool) or offline_height <= 0:
+    raise SystemExit(f"validator {label}: offline identity summary has an invalid block height")
+if not isinstance(offline_hash, str) or re.fullmatch(r"[0-9a-f]{64}", offline_hash) is None:
+    raise SystemExit(f"validator {label}: offline identity summary has an invalid block hash")
+if not isinstance(offline_release, dict):
+    raise SystemExit(f"validator {label}: offline identity summary omitted release_identity")
+if offline_height != status["last_committed_height"]:
+    raise SystemExit(
+        f"validator {label}: offline readiness block height {offline_height} does not match "
+        f"the durable committed height {status['last_committed_height']}"
+    )
+committed_subject = status.get("last_committed_subject")
+committed_hash = committed_subject.get("block_hash") if isinstance(committed_subject, dict) else None
+if isinstance(committed_hash, str) and committed_hash.lower().startswith("hash:"):
+    committed_hash = committed_hash[5:]
+if not isinstance(committed_hash, str) or re.fullmatch(r"[0-9A-Fa-f]{64}", committed_hash) is None:
+    raise SystemExit(f"validator {label}: durable committed subject omitted a canonical block hash")
+if offline_hash != committed_hash.lower():
+    raise SystemExit(
+        f"validator {label}: offline readiness block hash does not match the durable committed subject"
+    )
+
 if expected_sha:
     build = node_status.get("build") or {}
     published = next(
@@ -1351,7 +1788,14 @@ if expected_sha:
     )
     if published is None or re.fullmatch(r"[0-9a-f]{7,40}", published) is None:
         raise SystemExit(f"validator {label}: /status omitted a valid build git SHA")
-    if not (published.startswith(expected_sha) or expected_sha.startswith(published)):
+    if require_exact_sha and published != expected_sha:
+        raise SystemExit(
+            f"validator {label}: build git SHA {published} does not exactly match "
+            f"release commit {expected_sha}"
+        )
+    if not require_exact_sha and not (
+        published.startswith(expected_sha) or expected_sha.startswith(published)
+    ):
         raise SystemExit(
             f"validator {label}: build git SHA {published} does not match {expected_sha}"
         )
@@ -1374,6 +1818,9 @@ record = {
     "committed_height": status["last_committed_height"],
     "committed_subject": canonical(status.get("last_committed_subject")),
     "commit_qc": canonical(status.get("last_commit_qc")),
+    "offline_block_height": offline_height,
+    "offline_block_hash": offline_hash,
+    "offline_release": canonical(offline_release),
 }
 print(json.dumps(record, ensure_ascii=True, sort_keys=True))
 PY
@@ -1410,6 +1857,9 @@ for record in records[1:]:
         "mode",
         "validator_count",
         "quorum",
+        "offline_block_height",
+        "offline_block_hash",
+        "offline_release",
         "committed_height",
         "committed_subject",
         "commit_qc",
@@ -1432,6 +1882,9 @@ summary = {
     "committed_height": baseline["committed_height"],
     "committed_subject": baseline["committed_subject"],
     "commit_qc": baseline["commit_qc"],
+    "offline_block_height": baseline["offline_block_height"],
+    "offline_block_hash": baseline["offline_block_hash"],
+    "offline_release": baseline["offline_release"],
     "nodes": sorted(nodes),
 }
 print(json.dumps(summary, ensure_ascii=True, sort_keys=True))
@@ -1468,9 +1921,18 @@ import sys
 
 previous = json.loads(sys.argv[1])
 current = json.loads(sys.argv[2])
-for field in ("build", "config", "nodes"):
+for field in ("build", "config", "nodes", "offline_release"):
     if current[field] != previous[field]:
         raise SystemExit(f"validator fleet changed {field} between progress samples")
+if current["offline_block_height"] <= previous["offline_block_height"]:
+    raise SystemExit(
+        "validator fleet offline readiness did not advance a common evaluated block: "
+        f"{current['offline_block_height']} <= {previous['offline_block_height']}"
+    )
+if current["offline_block_hash"] == previous["offline_block_hash"]:
+    raise SystemExit(
+        "validator fleet offline readiness advanced height without changing its block hash"
+    )
 if current["committed_height"] <= previous["committed_height"]:
     raise SystemExit(
         "validator fleet did not advance a common committed height: "
@@ -1590,6 +2052,7 @@ check_endpoint() {
   check_tool_input_schemas "$label"
 
   root_url="$(mcp_root_from_url "$url")"
+  check_offline_readiness "$label" "$root_url"
   CHECKED_LABELS+=("$label")
   CHECKED_ROOTS+=("$root_url")
   if [[ -n "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then
@@ -2046,8 +2509,6 @@ recheck_status_targets_after_write_canary() {
   done
 }
 
-check_validator_fleet
-
 if [[ $SKIP_LOCAL -eq 0 ]]; then
   check_endpoint "local" "$LOCAL_MCP_URL"
 fi
@@ -2056,6 +2517,8 @@ if [[ $SKIP_PUBLIC -eq 0 ]]; then
   check_endpoint "public" "$PUBLIC_MCP_URL"
 fi
 
+check_validator_fleet
+
 if [[ -n "$WRITE_CONFIG" ]]; then
   run_write_canary "$(resolve_write_target_url)"
   recheck_status_targets_after_write_canary
@@ -2063,4 +2526,8 @@ elif [[ $SKIP_PUBLIC -eq 0 ]]; then
   echo "read-only checks passed; signed write canary was explicitly skipped" >&2
 fi
 
-echo "Taira MCP rollout checks passed."
+if [[ $SKIP_PUBLIC -eq 1 ]]; then
+  echo "Taira MCP local diagnostic checks passed; this is not public cutover evidence."
+else
+  echo "Taira MCP rollout checks passed."
+fi

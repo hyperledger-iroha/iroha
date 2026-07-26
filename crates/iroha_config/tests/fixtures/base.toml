@@ -34,9 +34,3 @@ known_capabilities = ["torii_gateway", "chunk_range_fetch", "vendor_reserved"]
 envelopes_dir = "tests/fixtures/sorafs_admission"
 trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
 signature_threshold = 1
-
-[torii.sorafs.quota]
-capacity_declaration_window_secs = 3600
-capacity_telemetry_window_secs = 900
-capacity_dispute_window_secs = 1800
-por_submission_window_secs = 900

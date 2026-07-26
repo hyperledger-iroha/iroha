@@ -3366,9 +3366,9 @@ fn validate_completion_signing_context(
 ) -> Result<(), ProviderIngestOutboxError> {
     context.baseline_finalized_cursor.validate()?;
     if context.completion_epoch == 0
-        || context.expected_payload.chain != context.chain_id
-        || context.expected_payload.authority != context.provider_owner
-        || context.expected_payload.time_to_live_ms.is_none()
+        || context.expected_payload.chain() != &context.chain_id
+        || context.expected_payload.authority() != &context.provider_owner
+        || context.expected_payload.time_to_live().is_none()
     {
         return Err(ProviderIngestOutboxError::InvalidSigningContext);
     }
@@ -3382,7 +3382,7 @@ fn validate_completion_signing_context(
     validate_completion_instruction(
         authorization,
         context.completion_epoch,
-        &context.expected_payload.instructions,
+        context.expected_payload.instructions(),
     )
     .map_err(|_| ProviderIngestOutboxError::InvalidSigningContext)
 }
@@ -3402,9 +3402,9 @@ fn validate_completion_instruction(
         .as_any()
         .downcast_ref::<CompleteReplicationOrder>()
         .ok_or(ProviderIngestOutboxError::InvalidSignedTransaction)?;
-    if completion.order_id.as_bytes() != &authorization.order_id
-        || completion.provider_id.as_bytes() != &authorization.provider_id
-        || completion.completion_epoch != completion_epoch
+    if completion.order_id().as_bytes() != &authorization.order_id
+        || completion.provider_id().as_bytes() != &authorization.provider_id
+        || *completion.completion_epoch() != completion_epoch
     {
         return Err(ProviderIngestOutboxError::InvalidSignedTransaction);
     }

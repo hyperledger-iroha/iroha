@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-25
+Last updated: 2026-07-26
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -22,15 +22,38 @@ Native/retirement/consensus/recovery failures, including exact deterministic
 merge-carrier header admission and adjacent SoraFS repair decoding boundaries.
 This focused repair evidence does not replace the outstanding archived
 `G-UNIT`, real-network, soak, scale, or source-sealed final gates below.
+The first-release queue-plan restart boundary now reconciles reservation
+Commit barriers against exact globally certified V4 journal bindings, and the
+journal-disabled startup path is retired. Full queue-hash/coordinator identity,
+semantic request-kernel validation, atomic constant-scan batch cleanup,
+mandatory first-release journaling, and successful backpressure refresh are
+now pinned across restart. Its twenty-one newly pinned regressions raise the
+pending G-UNIT execution inventory to 277 exact tests. The fresh 24-test
+queue/configuration slice is green; the complete 277-test archived execution
+receipt is still outstanding.
 
 The remaining work is evidence-driven and must stay in order:
 
-- Finish `G-UNIT` with a fresh archived run of all 123 source-bound focused
-  tests (54 core multilane tests, 38 core queue-journal tests, seven
-  `iroha_data_model` tests, 22 Torii tests, and two integration-support-library
-  tests), then complete and archive the exact Rust-owned 34-control corpus
-  replay across OpenAPI, both Python
-  surfaces, JavaScript source/distribution, Swift, Kotlin, and Java for
+- Finish the current source-bound test freeze for the sole first-release
+  merge-sidecar lifecycle. Wire version 1 must bind positive responder
+  generation, requester epoch, and per-stream semantic sequence coordinates
+  while excluding only monotonic `closed_through` from request identity.
+  `GenerationHint` must remain authenticated route-free Consensus control.
+  `MergeSidecarLifecycleSnapshotV2` must remain the only durable schema, with
+  V1 rejected and the checked generation increment plus empty responder state
+  persisted atomically. Generation rollover is permitted only for necessary
+  unified server-table compaction after every old stream, gate, transfer, and
+  flush is terminal. Historical test receipts and inventory seals predate this
+  final refactor and do not attest it. Re-run the focused and complete
+  merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
+  proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
+  mutations before promotion, then finish the remaining production inventory
+  legs and archived G-UNIT execution.
+- Finish `G-UNIT` with a fresh archived run of all 277 source-bound focused tests
+  across core multilane and queue-journal code, `iroha_data_model`, Torii, and
+  the integration-support library, then complete and archive the Rust-owned
+  control-corpus replay across OpenAPI, both Python surfaces, JavaScript
+  source/distribution, Swift, Kotlin, and Java for
   `ML-API-04`/`G-SDK`. The standalone OpenAPI replay is already fresh at
   `4/4`; it is not the remaining SDK blocker.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
@@ -42,12 +65,34 @@ The remaining work is evidence-driven and must stay in order:
   result, then run the source-sealed full workspace build, test, strict Clippy,
   formatting, SDK, formal, and legacy-codec gates for `G-FINAL`.
 
-Fresh bounded formal support is available for source manifest
+Prior bounded formal support remains recorded for source manifest
 `af1361d00f08bbf340c57e6b4992c0a8166a7e9e67f9f4c5771827ce5c69e7a6`:
 direct TLC positives, all 27 named mutations, and all three Apalache v0.52.2
 bounds passed after installing the checksum-pinned TLAPM standard library.
-`G-FORMAL` remains open until a clean aggregate release receipt archives the
-result; these bounded model checks are not deductive proof evidence.
+That archived manifest does not attest the current generation-fencing source.
+`G-FORMAL` remains open pending proof-ledger/checker reconciliation, strict
+TLAPS, pinned Verus, the remaining mutation matrices, and a clean aggregate
+release receipt. The current pinned-seed TLC witness and all eight
+production-reducer replay tests are fresh and green at exactly 100 normalized
+actions; that trace result alone does not promote a theorem. In particular,
+`AdequateLeaderExactClosureResidualObligation` and
+`ExactDecisionOffSchedulerResidualConvergenceObligation` remain explicit
+proofless residuals. Adequate-leader closure still needs full-`AsyncNext`
+scheduler-origin preservation, four fixed-target physical handoff families,
+and a non-circular anchored semantic rank. Exact-decision closure still needs
+the request clock/runtime, request head/gate, request ingress-runner, and
+response deadline-prefix leaves; the normal ingress proof must also bound
+claimed-response priority so broad runner fairness cannot starve the target.
+The independent
+`ResponsiveStrongFairnessToReceiptResidual` now has a SANY-clean proof script
+that derives receipt publication from responsive strong fairness, but it and
+the composed cursor theorem remain `specified_unproved` until fresh strict
+TLAPS succeeds. Bounded model checks are not deductive proof evidence.
+Typed rollover safety and its conditional temporal obligation likewise remain
+`specified_unproved` pending fresh current-source strict TLAPS. No conditional
+completion is claimed while the rotating-leader dependency remains unproved;
+recovery, network/writer progress, repeated rollover, and production refinement
+remain outside its scope.
 
 ## SoraFS V1 production closure
 
@@ -25263,9 +25308,12 @@ the exact runner route bridges and missing-route rejections for
 durable lane certificates and certified sidecar chunks, plus the four-gate,
 two-session, 16-MiB per-source sidecar cap and same-hub overflow isolation
 tests. The added authenticated-source limit and pre-cap alternate-route
-regressions are not covered by that historical 50/50 receipt. Outstanding
-release work for this
-slice is to execute those complete source-sealed suites, add a
+regressions are not covered by that historical 50/50 receipt. The current
+closure journals requester and responder lifecycle state under Kura, preserves
+authenticated-source budgets and cursors across restart/height rollover, and
+fail-stops request, queued-chunk, timeout, Close, and CloseAck output when that
+journal cannot advance. Outstanding release work for this slice is to execute
+those complete source-sealed suites, add a
 four-validator signed-observer slow-reader flood during view change/body
 recovery, discharge the remaining formal obligations, and run the sealed
 network, chaos, and 24-hour soak gates.
@@ -25724,8 +25772,8 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 53 pre-network legs and their exact
-477-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
+704-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -25771,9 +25819,13 @@ transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
 (305/305), its strong caller and bracket (63/63), the exact type obligation
 (16/16), and the named always-strong wrapper (10/10).
 
-The 54-entry ledger contains 33 `tlaps_proved`, 14 `specified_unproved`, 6
+The 64-entry ledger contains 35 `tlaps_proved`, 22 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
-remains false. Outstanding release work:
+remains false. In particular,
+`AdequateLeaderExactClosureResidualObligation` and
+`ExactDecisionOffSchedulerResidualConvergenceObligation` remain explicit
+proofless residuals; neither may be promoted through assumption, circular
+reuse, or a vacuous wrapper. Outstanding release work:
 
 The async deadlock decomposition now scopes local runner-service debt to the
 exact active responsive and historical-recovery owners. Keep that deadline as
@@ -25791,16 +25843,30 @@ runtime premise on the final signed source.
   7,826-obligation induction and 565-obligation downstream Core receipt is
   historical evidence for the superseded transition relation and cannot
   promote the current source;
-- execute the fresh source-sealed 515-test, 38-module, 71-leg pre-network
-  corridor. Its proposal-origin additions cover strict same-round TC
+- execute a freshly reconstructed source-sealed pre-network corridor for the
+  final lifecycle tree. The historical 704-test, 38-module, 81-leg seal
+  predates this refactor and cannot attest it. Its proposal-origin and
+  per-source route-attempt coverage includes
+  strict same-round TC
   upgrade/replay, exact locked-Commit recovery ownership, multi-carrier ingress,
-  and persistence failure. Its final six regressions cover canonical view-zero
+  persistence failure, certified sidecar Close/CloseAck critical ingress,
+  unsent-request restoration, request-first fairness-cursor service, and
+  validator-roster-bounded semantic history independent of active connection
+  capacity.
+  Its final six regressions cover canonical view-zero
   genesis bytes first proposed in a later round, the contention-tolerant restart
   deadline, the successor's frozen predecessor CommitQC binding, Kura-first lane
   rollover, incomplete-tip recovery, and terminal ingress filtering. Inventory
   presence is not execution evidence;
-- mechanize the complete typed applied-height handoff rather than promoting its
-  source tests to a liveness proof. Production independently rereads exact Kura
+- complete the remaining production-refinement and temporal proof for the typed
+  applied-height handoff. Historical strict and bounded receipts predate the
+  sole-V2 compaction/persistence relation and a fresh strict run is still
+  required. The conditional rollover obligation remains
+  `specified_unproved`; no deductive completion is claimed while its final
+  persistence relation and the rotating-leader dependency remain unproved. It
+  does not prove recovery, network/writer progress, repeated rollover, or
+  production refinement.
+  Production independently rereads exact Kura
   sources for historical CommitQC, body, and lane-certificate responses; binds
   current-height global V2 output to the finality artifact; binds winning lane
   output to its durable Kura certificate/application receipt while revalidating
@@ -26025,7 +26091,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  515-test target above supersedes that checkpoint. The 30-module pre-network
+  704-test target above supersedes that checkpoint. The 38-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

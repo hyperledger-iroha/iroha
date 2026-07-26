@@ -79079,6 +79079,7 @@ pub async fn handle_status(
     tail: Option<&str>,
     nexus_enabled: bool,
     nexus_routing_policy: Option<&ActualLaneRoutingPolicy>,
+    offline: Option<iroha_torii_shared::offline_api::OfflineStatus>,
 ) -> Result<Response> {
     iroha_logger::debug!(
         tail = tail.unwrap_or(""),
@@ -79099,6 +79100,7 @@ pub async fn handle_status(
     } else if let Some(policy) = nexus_routing_policy {
         status.nexus = Some(NexusStatus::from_routing_policy(policy));
     }
+    status.offline = offline;
     if let Some(handle) = telemetry.telemetry() {
         status.sorafs_micropayments = handle.sorafs_micropayment_samples();
     }
@@ -79240,6 +79242,11 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
             }
             _ => None,
         },
+        "offline" => {
+            let offline = status.offline.as_ref()?;
+            let value = norito::json::to_value(offline).ok()?;
+            json_value_by_segments(value, segments)
+        }
         "governance" if segments.next().is_none() => {
             norito::json::to_value(&status.governance).ok()
         }
@@ -79314,6 +79321,25 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
         },
         _ => None,
     }
+}
+
+#[cfg(feature = "telemetry")]
+#[allow(single_use_lifetimes)]
+fn json_value_by_segments<'a>(
+    mut value: norito::json::Value,
+    segments: impl Iterator<Item = &'a str>,
+) -> Option<norito::json::Value> {
+    for segment in segments {
+        value = match value {
+            norito::json::Value::Object(map) => map.get(segment)?.clone(),
+            norito::json::Value::Array(values) => {
+                let index = segment.parse::<usize>().ok()?;
+                values.get(index)?.clone()
+            }
+            _ => return None,
+        };
+    }
+    Some(value)
 }
 
 #[cfg(feature = "telemetry")]
@@ -79556,7 +79582,7 @@ mod tests {
         });
 
         let path = format!("sorafs_micropayments/{provider_hex}");
-        let response = super::handle_status(&telemetry, None, Some(&path), true, None)
+        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None)
             .await
             .expect("status tail succeeds");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
@@ -79616,6 +79642,7 @@ mod tests {
             None,
             true,
             Some(&policy),
+            None,
         )
         .await
         .expect("status succeeds");
@@ -79655,13 +79682,107 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn status_root_and_tail_include_typed_offline_readiness() {
+        use http_body_util::BodyExt;
+        use iroha_torii_shared::offline_api::{
+            OfflineReadiness, OfflineReadinessBlocker, OfflineStatus,
+        };
+
+        let telemetry = MaybeTelemetry::for_tests();
+        let asset = OfflineReadiness {
+            cash_handoff_capability: "cash_handoff_v1".to_owned(),
+            required_bridge_abi_version: 21,
+            max_hops: 8,
+            asset_definition_id: "ds#boi.is".to_owned(),
+            asset_scale: Some(2),
+            evaluated_block_height: 42,
+            evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: None,
+            active_topup_shield_verifier: None,
+            active_unshield_verifier: None,
+            active_recursive_step_eq_verifier: None,
+            active_recursive_step_ep_verifier: None,
+            artifact_set: None,
+            proof_backend_available: false,
+            recursive_lineage_supported: false,
+            ready: false,
+            blockers: vec![OfflineReadinessBlocker {
+                code: "transfer_verifier_unavailable".to_owned(),
+                message: "test fixture".to_owned(),
+            }],
+        };
+        let offline = OfflineStatus {
+            mandatory: true,
+            cash_handoff_capability: "cash_handoff_v1".to_owned(),
+            required_bridge_abi_version: 21,
+            max_hops: 8,
+            ready: false,
+            assets: vec![asset],
+            blockers: Vec::new(),
+        };
+
+        let response = super::handle_status(
+            &telemetry,
+            Some(axum::http::HeaderValue::from_static("application/json")),
+            None,
+            true,
+            None,
+            Some(offline.clone()),
+        )
+        .await
+        .expect("status succeeds");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect status body")
+            .to_bytes();
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode status payload");
+        let projected = payload.get("offline").expect("offline projection");
+        assert_eq!(
+            projected
+                .get("cash_handoff_capability")
+                .and_then(norito::json::Value::as_str),
+            Some("cash_handoff_v1")
+        );
+        assert_eq!(
+            projected
+                .get("required_bridge_abi_version")
+                .and_then(norito::json::Value::as_u64),
+            Some(21)
+        );
+
+        let response = super::handle_status(
+            &telemetry,
+            None,
+            Some("offline/assets/0/asset_definition_id"),
+            true,
+            None,
+            Some(offline),
+        )
+        .await
+        .expect("offline status tail succeeds");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect status tail")
+            .to_bytes();
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode status tail");
+        assert_eq!(payload.as_str(), Some("ds#boi.is"));
+    }
+
     #[cfg(feature = "telemetry")]
     #[tokio::test]
     async fn status_tail_rejects_nexus_fields_when_disabled() {
         let telemetry = MaybeTelemetry::for_tests();
-        let err = super::handle_status(&telemetry, None, Some("teu_lane_commit"), false, None)
-            .await
-            .expect_err("lane-specific tails must be rejected when nexus is disabled");
+        let err =
+            super::handle_status(&telemetry, None, Some("teu_lane_commit"), false, None, None)
+                .await
+                .expect_err("lane-specific tails must be rejected when nexus is disabled");
         assert!(matches!(err, Error::StatusSegmentNotFound(_)));
     }
 
@@ -79930,6 +80051,7 @@ mod tests {
             )),
             None,
             true,
+            None,
             None,
         )
         .await

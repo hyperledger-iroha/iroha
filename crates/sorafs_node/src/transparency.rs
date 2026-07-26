@@ -414,6 +414,10 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         "appeal_finance_config_version".to_string(),
         receipt.appeal_finance_config_version.clone(),
     );
+    metadata.insert(
+        "appeal_finance_policy_digest_hex".to_string(),
+        hex::encode(receipt.appeal_finance_policy_digest),
+    );
     metadata.insert("amount_xor".to_string(), receipt.amount_xor.to_string());
     metadata.insert(
         "configured_signer_count".to_string(),
@@ -435,10 +439,6 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         metadata.insert("round_id".to_string(), round_id.clone());
     }
     let metadata = metadata_vec(metadata);
-    let policy_digest = hex_32_to_digest(
-        &receipt.reconciliation_digest_hex,
-        "appeal finance settlement reconciliation digest",
-    )?;
     let entry = TransparencyLedgerSourceEntry {
         event_id: format!(
             "appeal-finance-settlement:{}",
@@ -456,7 +456,7 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         ),
         payload_digest,
         summary_digest: source_summary_digest("appeal_finance_settlement_receipt", &metadata),
-        policy_digest: Some(policy_digest),
+        policy_digest: Some(receipt.appeal_finance_policy_digest),
         evidence_uris: Vec::new(),
         metadata,
     };
@@ -3822,30 +3822,6 @@ fn unix_ms_to_secs(unix_ms: u64) -> Result<u64, String> {
     Ok(unix)
 }
 
-fn hex_32_to_digest(
-    value: &str,
-    field: &'static str,
-) -> Result<[u8; 32], TransparencySourceEntryAdapterError> {
-    let decoded = hex::decode(value).map_err(|err| {
-        TransparencySourceEntryAdapterError::InvalidAppealFinanceSettlementReceipt {
-            message: format!("{field} must be lowercase 32-byte hex: {err}"),
-        }
-    })?;
-    let digest: [u8; 32] = decoded.try_into().map_err(|_| {
-        TransparencySourceEntryAdapterError::InvalidAppealFinanceSettlementReceipt {
-            message: format!("{field} must be 32 bytes"),
-        }
-    })?;
-    if digest.iter().all(|byte| *byte == 0) {
-        return Err(
-            TransparencySourceEntryAdapterError::InvalidAppealFinanceSettlementReceipt {
-                message: format!("{field} must be non-zero"),
-            },
-        );
-    }
-    Ok(digest)
-}
-
 fn gar_enforcement_action_label(action: &GarEnforcementActionV1) -> &'static str {
     match action {
         GarEnforcementActionV1::PurgeStaticZone => "purge_static_zone",
@@ -4148,6 +4124,7 @@ mod tests {
             round_id: Some("round-1".to_string()),
             generated_at_unix_ms: 1_800_000_032_000,
             appeal_finance_config_version: "baseline-v1".to_string(),
+            appeal_finance_policy_digest: [0x44; 32],
             outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
             escrow_id_hex: "11".repeat(32),
             payer_account: "payer-account".to_string(),
@@ -5227,11 +5204,23 @@ mod tests {
             receipt_entry.kind,
             ModerationLedgerEntryKindV1::AppealOutcome
         );
-        assert_eq!(receipt_entry.policy_digest, Some([0x33; 32]));
+        assert_eq!(receipt_entry.policy_digest, Some([0x44; 32]));
         assert_eq!(receipt_entry.subject, "case-42:treasury-release");
+        assert!(receipt_entry.metadata.iter().any(|item| {
+            item.key == "appeal_finance_policy_digest_hex"
+                && item.value == hex::encode(receipt.appeal_finance_policy_digest)
+        }));
         receipt_entry
             .validate()
             .expect("appeal settlement entry validates");
+
+        let mut tampered_receipt = receipt.clone();
+        tampered_receipt.appeal_finance_policy_digest[0] ^= 0x01;
+        let tampered_entry = appeal_finance_settlement_receipt_source_entry(&tampered_receipt)
+            .expect("non-zero tampered policy digest remains structurally valid");
+        assert_ne!(tampered_entry.policy_digest, receipt_entry.policy_digest);
+        assert_ne!(tampered_entry.payload_digest, receipt_entry.payload_digest);
+        assert_ne!(tampered_entry.summary_digest, receipt_entry.summary_digest);
     }
 
     #[test]

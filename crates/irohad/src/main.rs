@@ -2799,8 +2799,13 @@ impl ConsensusIngressLimiter {
             iroha_core::NetworkMessage::SumeragiControlFlow(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::LaneDrainVote(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
-                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
+                | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_) => {
                     IngressPolicy::limited()
+                }
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_)
+                | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => {
+                    IngressPolicy::critical()
                 }
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
                     IngressPolicy::bulk()
@@ -3383,6 +3388,19 @@ fn obsolete_sumeragi_relay_terminal_meta(
         .map(|(kind, height, view)| (kind, height, view, SumeragiRelayTerminalOutcome::Delivered))
 }
 
+fn certified_merge_sidecar_ingress_reply_route(
+    message: &iroha_core::merge_sidecar::CertifiedMergeSidecarMessage,
+    reply_route: iroha_p2p::network::NetworkReplyRoute,
+) -> Option<iroha_p2p::network::NetworkReplyRoute> {
+    match message {
+        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => None,
+        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
+        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_)
+        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_)
+        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => Some(reply_route),
+    }
+}
+
 impl NetworkRelayShared {
     fn prepare_sumeragi_relay_work(
         &self,
@@ -3650,14 +3668,18 @@ impl NetworkRelayShared {
                     Arc::unwrap_or_clone(signature),
                 )),
             ),
-            CertifiedMergeSidecar(message) => (
-                SumeragiRelayClass::Lane,
-                PreparedSumeragiRelayItem::Lane(LaneRelayMessage::CertifiedMergeSidecar {
-                    sender: peer_id.clone(),
-                    reply_route: Some(reply_route),
-                    message: Arc::unwrap_or_clone(message),
-                }),
-            ),
+            CertifiedMergeSidecar(message) => {
+                let reply_route =
+                    certified_merge_sidecar_ingress_reply_route(message.as_ref(), reply_route);
+                (
+                    SumeragiRelayClass::Lane,
+                    PreparedSumeragiRelayItem::Lane(LaneRelayMessage::CertifiedMergeSidecar {
+                        sender: peer_id.clone(),
+                        reply_route,
+                        message: Arc::unwrap_or_clone(message),
+                    }),
+                )
+            }
             NativeAmx(message) => (
                 SumeragiRelayClass::Lane,
                 PreparedSumeragiRelayItem::Lane(LaneRelayMessage::NativeAmx {
@@ -4871,6 +4893,15 @@ impl NetworkRelayShared {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
                     ("CertifiedMergeSidecarRequest", None, None)
                 }
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_) => {
+                    ("CertifiedMergeSidecarClose", None, None)
+                }
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_) => {
+                    ("CertifiedMergeSidecarCloseAck", None, None)
+                }
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => {
+                    ("CertifiedMergeSidecarGenerationHint", None, None)
+                }
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
                     ("CertifiedMergeSidecarChunk", None, None)
                 }
@@ -5519,7 +5550,7 @@ impl NetworkRelayShared {
 
 #[cfg(test)]
 mod network_relay_tests {
-    use std::time::Duration;
+    use std::{num::NonZeroU64, time::Duration};
 
     use iroha_config::{
         client_api::{SoranetHandshakePowSummary, SoranetHandshakePuzzleSummary},
@@ -6435,6 +6466,63 @@ mod network_relay_tests {
         )))
     }
 
+    fn certified_merge_sidecar_control_messages() -> (
+        iroha_core::NetworkMessage,
+        iroha_core::NetworkMessage,
+        iroha_core::NetworkMessage,
+    ) {
+        use iroha_core::merge_sidecar::{
+            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarCloseAckV1,
+            CertifiedMergeSidecarCloseV1, CertifiedMergeSidecarGenerationHintV1,
+            CertifiedMergeSidecarMessage, CertifiedMergeSidecarServiceGenerationV1,
+            CertifiedMergeSidecarStreamEpochV1,
+        };
+
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let responder = PeerId::new(KeyPair::random().public_key().clone());
+        let stream_epoch = CertifiedMergeSidecarStreamEpochV1(
+            NonZeroU64::new(1).expect("sidecar control stream epoch is non-zero"),
+        );
+        let service_generation = CertifiedMergeSidecarServiceGenerationV1::INITIAL;
+        let close_id = Hash::prehashed([0x6C; 32]);
+        let close = iroha_core::NetworkMessage::CertifiedMergeSidecar(std::sync::Arc::new(
+            CertifiedMergeSidecarMessage::Close(CertifiedMergeSidecarCloseV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                service_generation,
+                stream_epoch,
+                closed_through: 7,
+                close_id,
+                requester: requester.clone(),
+                responder: responder.clone(),
+            }),
+        ));
+        let ack = iroha_core::NetworkMessage::CertifiedMergeSidecar(std::sync::Arc::new(
+            CertifiedMergeSidecarMessage::CloseAck(CertifiedMergeSidecarCloseAckV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                service_generation,
+                stream_epoch,
+                closed_through: 7,
+                close_id,
+                requester: requester.clone(),
+                responder: responder.clone(),
+            }),
+        ));
+        let hint = iroha_core::NetworkMessage::CertifiedMergeSidecar(std::sync::Arc::new(
+            CertifiedMergeSidecarMessage::GenerationHint(CertifiedMergeSidecarGenerationHintV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                observed_generation: service_generation,
+                current_generation: CertifiedMergeSidecarServiceGenerationV1(
+                    NonZeroU64::new(2).expect("sidecar control successor generation is non-zero"),
+                ),
+                observed_message_hash: Hash::new(b"sidecar control observed message"),
+                hint_id: Hash::new(b"sidecar control generation Hint"),
+                requester,
+                responder,
+            }),
+        ));
+        (close, ack, hint)
+    }
+
     fn limited_msg() -> iroha_core::NetworkMessage {
         iroha_core::NetworkMessage::Health
     }
@@ -6843,6 +6931,107 @@ mod network_relay_tests {
         assert_eq!(
             ConsensusIngressLimiter::ingress_policy(&drain_vote).rate_class,
             Some(IngressRateClass::Critical)
+        );
+    }
+
+    #[test]
+    fn certified_merge_sidecar_close_is_limited_but_responder_controls_are_critical() {
+        let (close, close_ack, generation_hint) = certified_merge_sidecar_control_messages();
+
+        let close_policy = ConsensusIngressLimiter::ingress_policy(&close);
+        assert_eq!(close_policy.rate_class, Some(IngressRateClass::Limited));
+        assert!(close_policy.apply_penalty);
+
+        for message in [&close_ack, &generation_hint] {
+            let policy = ConsensusIngressLimiter::ingress_policy(message);
+            assert_eq!(policy.rate_class, Some(IngressRateClass::Critical));
+            assert!(!policy.apply_penalty);
+        }
+    }
+
+    #[test]
+    fn certified_merge_sidecar_generation_hint_alone_drops_ingress_reply_route() {
+        use iroha_core::merge_sidecar::{
+            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
+            CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+            CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
+            CertifiedMergeSidecarStreamEpochV1,
+        };
+        use iroha_p2p::network::NetworkReplyRouteTestFixture;
+
+        let (close, close_ack, generation_hint) = certified_merge_sidecar_control_messages();
+        let into_sidecar = |message| {
+            let iroha_core::NetworkMessage::CertifiedMergeSidecar(message) = message else {
+                panic!("fixture must contain a certified merge-sidecar message");
+            };
+            std::sync::Arc::unwrap_or_clone(message)
+        };
+        let close = into_sidecar(close);
+        let close_ack = into_sidecar(close_ack);
+        let generation_hint = into_sidecar(generation_hint);
+
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let responder = PeerId::new(KeyPair::random().public_key().clone());
+        let stream_epoch = CertifiedMergeSidecarStreamEpochV1(
+            NonZeroU64::new(1).expect("sidecar stream epoch is non-zero"),
+        );
+        let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"sidecar route entry"));
+        let reference_digest = Hash::new(b"sidecar route reference");
+        let mut request = CertifiedMergeSidecarRequestV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
+            stream_epoch,
+            semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1(
+                NonZeroU64::new(1).expect("sidecar semantic sequence is non-zero"),
+            ),
+            closed_through: 0,
+            request_id: Hash::prehashed([0; Hash::LENGTH]),
+            entry_hash,
+            encoded_len: 1,
+            epoch_id: 1,
+            reference_digest,
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        request.request_id = request.canonical_request_id();
+        let chunk = CertifiedMergeSidecarChunkV1 {
+            version: request.version,
+            service_generation: request.service_generation,
+            stream_epoch: request.stream_epoch,
+            semantic_sequence: request.semantic_sequence,
+            request_id: request.request_id,
+            entry_hash: request.entry_hash,
+            encoded_len: request.encoded_len,
+            epoch_id: request.epoch_id,
+            reference_digest: request.reference_digest,
+            requester,
+            responder,
+            chunk_index: 0,
+            chunk_count: 1,
+            bytes: vec![0xA5],
+        };
+
+        let authenticated_via = PeerId::new(KeyPair::random().public_key().clone());
+        let semantic_sender = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(authenticated_via);
+        for message in [
+            CertifiedMergeSidecarMessage::Request(request),
+            close,
+            close_ack,
+            CertifiedMergeSidecarMessage::Chunk(chunk),
+        ] {
+            let route = routes.mint(semantic_sender.clone());
+            let retained =
+                super::certified_merge_sidecar_ingress_reply_route(&message, route.clone())
+                    .expect("non-Hint sidecar traffic keeps its authenticated reply route");
+            assert!(retained.same_delivery(&route));
+        }
+
+        let hint_route = routes.mint(semantic_sender);
+        assert!(
+            super::certified_merge_sidecar_ingress_reply_route(&generation_hint, hint_route)
+                .is_none(),
+            "GenerationHint is Consensus control traffic without reply authority"
         );
     }
 
@@ -7299,8 +7488,14 @@ fn authorize_kura_runtime_start(
 
 fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &Config) {
     // These fields are process-local execution policy and do not touch Kura-owned geometry.
+    // Settlement must be installed before replay because configured offline
+    // assets and every top-up/redemption transition resolve policy through
+    // `State::settlement`. Installing it only after the mandatory readiness
+    // gate would validate an empty/default catalog and replay historical
+    // offline transitions under the wrong policy.
     state.set_crypto(config.crypto.clone());
     state.set_pipeline(config.pipeline.clone());
+    state.set_settlement(config.settlement.clone());
 }
 
 fn apply_state_geometry_config_before_kura_replay(
@@ -7945,6 +8140,15 @@ impl Iroha {
         let mut supervisor = Supervisor::new();
         let startup_trace_started_at = Instant::now();
         log_startup_trace("irohad.start.enter", startup_trace_started_at);
+        iroha_torii::ensure_mandatory_offline_configuration(
+            &config.settlement.offline,
+            config.torii.kagemusha_commands.as_ref(),
+        )
+        .map_err(|error| {
+            Report::new(StartError::InitKura).attach(format!(
+                "mandatory offline cash configuration failed: {error}"
+            ))
+        })?;
 
         // Log detailed backtraces if a lock-order deadlock occurs so we can
         // diagnose stalls during long-running scenarios (e.g., integration tests).
@@ -8197,7 +8401,9 @@ impl Iroha {
             config.settlement.offline.kagemusha_artifact_dir.as_deref(),
         ) {
             (None, None) => {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
+                return Err(Report::new(StartError::InitKura).attach(
+                    "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
+                ));
             }
             (Some(policy_path), Some(artifact_dir)) => {
                 iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
@@ -8433,17 +8639,16 @@ impl Iroha {
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
         {
-            let world = state.world.view();
-            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-            iroha_core::smartcontracts::isi::offline::ensure_kagemusha_active_release_material_v4(
-                &world,
-                &state.kagemusha_release_catalog,
-                height,
+            iroha_torii::ensure_mandatory_offline_startup_readiness(
+                &state,
+                &config.common.chain,
+                &config.settlement.offline,
+                config.torii.kagemusha_commands.as_ref(),
+                &config.nexus.fees.fee_asset_id,
             )
             .map_err(|error| {
-                Report::new(StartError::InitKura).attach(format!(
-                    "active Kagemusha V4 release material is unavailable: {error}"
-                ))
+                Report::new(StartError::InitKura)
+                    .attach(format!("mandatory offline cash readiness failed: {error}"))
             })?;
         }
         // No Kura writer is live while trust selection or replay can still fail. Only the fully
@@ -8555,8 +8760,8 @@ impl Iroha {
         }
         // Independent lane producers transfer FIFO ownership before they
         // publish any payload bytes. Install and replay that durable ownership
-        // journal before the ordinary queue-plan journal can reinsert pending
-        // transactions, regardless of whether plan journaling is enabled.
+        // journal before the mandatory ordinary queue-plan journal can reinsert
+        // pending transactions.
         let lane_reservation_journal_path = config
             .kura
             .store_dir
@@ -8583,12 +8788,6 @@ impl Iroha {
             "lane queue reservation journal installed"
         );
 
-        if !config.queue.plan_journal_enabled {
-            return Err(Report::new(StartError::InitKura).attach(
-                "queue.plan_journal_enabled=false is unsupported: production transaction \
-                 acknowledgement requires durable pending-plan recovery",
-            ));
-        }
         let journal_path = config
             .kura
             .store_dir
@@ -9148,7 +9347,6 @@ impl Iroha {
         let sumeragi_cfg = config.sumeragi.clone();
         let fraud_cfg = config.fraud_monitoring.clone();
         let zk_cfg = config.zk.clone();
-        let settlement_cfg = config.settlement.clone();
         let gov_cfg = config.gov.clone();
         let oracle_cfg = config.oracle.clone();
         let streaming_cfg = config.streaming.clone();
@@ -9164,7 +9362,9 @@ impl Iroha {
         state.set_oracle(oracle_cfg);
         state.set_streaming(streaming_cfg);
         state.set_fraud_monitoring(fraud_cfg);
-        state.set_settlement(settlement_cfg);
+        // Settlement was installed before Kura replay and authenticated by the
+        // mandatory offline gate. Do not replace that post-replay snapshot
+        // after Kura has started.
         state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
         log_startup_trace(
@@ -14183,7 +14383,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn installs_actual_zk_config_for_fresh_state_before_kura_replay() {
+        fn installs_actual_zk_and_settlement_config_before_kura_replay() {
             let config_table = toml::toml! {
                 chain = "00000000-0000-0000-0000-000000000000"
                 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
@@ -14214,6 +14414,16 @@ mod tests {
                 std::num::NonZeroU64::new(7).expect("nonzero message cap");
             config.zk.sccp.max_pending_outbound_payload_bytes =
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
+            let offline_asset_definition_id = AssetDefinitionId::new(
+                iroha_data_model::domain::DomainId::try_new("boi", "is")
+                    .expect("offline asset domain"),
+                "ds".parse().expect("offline asset name"),
+            );
+            let offline_escrow_account_id = iroha_test_samples::ALICE_ID.clone();
+            config.settlement.offline.escrow_accounts.insert(
+                offline_asset_definition_id.clone(),
+                offline_escrow_account_id.clone(),
+            );
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -14221,6 +14431,7 @@ mod tests {
 
             install_zk_config_before_kura_replay(&mut state, &config)
                 .expect("fresh state accepts actual ZK configuration");
+            apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
 
             let installed = state.zk_snapshot();
             assert_eq!(
@@ -14230,6 +14441,15 @@ mod tests {
             assert_eq!(
                 installed.sccp.max_pending_outbound_payload_bytes,
                 config.zk.sccp.max_pending_outbound_payload_bytes
+            );
+            assert_eq!(
+                state
+                    .settlement()
+                    .offline
+                    .escrow_accounts
+                    .get(&offline_asset_definition_id),
+                Some(&offline_escrow_account_id),
+                "the exact offline escrow catalog must be installed before Kura replay",
             );
         }
     }
@@ -15043,6 +15263,262 @@ mod tests {
                     .expect("four-source forwarder must not panic"),
                 RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::High)
             ));
+        }
+
+        #[cfg(feature = "test-network-message-control")]
+        #[tokio::test]
+        async fn hold_release_same_source_reconnect_retires_old_delivery_without_rebinding_new_route()
+         {
+            let (_control_dir, controller) = crate::consensus_message_control::Controller::<
+                NetworkReplyRoute,
+                HeldSumeragiRelayOwnership,
+            >::for_tests();
+            let source_credits = SumeragiRelaySourceCredits::new(relay_geometry(1, 1, 1));
+
+            controller.drain_subsequent_messages_for_tests();
+            let peer = sample_peer();
+            let mut fixture =
+                NetworkReplyRouteTestFixture::with_source_capacity(peer.id().clone(), 4);
+            let upstream = Arc::new(Semaphore::new(2));
+
+            let old_route = fixture.mint(peer.id().clone());
+            let mut old_relay = RelayWorkItem::new(peer.clone(), v2_vote_msg(), 101);
+            old_relay
+                .reattach_reply_route(old_route.clone())
+                .expect("old fixture route reattaches to its exact occurrence");
+            old_relay.retain_authenticated_source_credit(
+                Arc::clone(&upstream)
+                    .try_acquire_owned()
+                    .expect("old upstream source credit remains"),
+            );
+            let (
+                old_peer,
+                old_authenticated_via,
+                old_message,
+                old_size_bytes,
+                old_reply_route,
+                old_p2p_guard,
+            ) = old_relay.into_parts_with_reply_route();
+            let source = SumeragiRelaySource {
+                class: SumeragiRelayClass::V2,
+                via: old_authenticated_via.clone(),
+            };
+            let old_daemon_credit = source_credits
+                .try_acquire(&source)
+                .expect("old daemon source credit remains");
+            let (old_completion, old_outcome) = oneshot::channel();
+            assert!(matches!(
+                prepare_sumeragi_relay_work_boundary(
+                    Some(&controller),
+                    false,
+                    SumeragiRelayPreparationParts {
+                        peer: old_peer,
+                        authenticated_via: old_authenticated_via,
+                        message: old_message,
+                        size_bytes: old_size_bytes,
+                        reply_route: old_reply_route,
+                        ownership: HeldSumeragiRelayOwnership {
+                            retention_guard: SumeragiRelayRetention {
+                                source: source.clone(),
+                                geometry: source_credits.geometry(),
+                                _p2p: old_p2p_guard,
+                                _daemon_source_credit: old_daemon_credit,
+                            },
+                            completion: Some(old_completion),
+                        },
+                    },
+                ),
+                SumeragiRelayPreparationBoundary::Held
+            ));
+
+            let reconnect_route = fixture.mint(peer.id().clone());
+            assert!(old_route.same_source(&reconnect_route));
+            assert!(!old_route.same_tenure(&reconnect_route));
+            assert_eq!(
+                reconnect_route.source_update_from(&old_route),
+                Ok(iroha_p2p::network::NetworkReplyRouteSourceUpdate::Reconnected)
+            );
+            let mut reconnect_relay = RelayWorkItem::new(peer, v2_vote_msg(), 102);
+            reconnect_relay
+                .reattach_reply_route(reconnect_route.clone())
+                .expect("reconnect fixture route reattaches to its exact occurrence");
+            reconnect_relay.retain_authenticated_source_credit(
+                Arc::clone(&upstream)
+                    .try_acquire_owned()
+                    .expect("reconnect upstream source credit remains"),
+            );
+            let (
+                reconnect_peer,
+                reconnect_authenticated_via,
+                reconnect_message,
+                reconnect_size_bytes,
+                reconnect_reply_route,
+                reconnect_p2p_guard,
+            ) = reconnect_relay.into_parts_with_reply_route();
+            let reconnect_source = SumeragiRelaySource {
+                class: SumeragiRelayClass::V2,
+                via: reconnect_authenticated_via.clone(),
+            };
+            assert_eq!(reconnect_source, source);
+            let reconnect_daemon_credit = source_credits
+                .try_acquire(&reconnect_source)
+                .expect("reconnect daemon source credit remains");
+            let (reconnect_completion, reconnect_outcome) = oneshot::channel();
+            assert!(matches!(
+                prepare_sumeragi_relay_work_boundary(
+                    Some(&controller),
+                    false,
+                    SumeragiRelayPreparationParts {
+                        peer: reconnect_peer,
+                        authenticated_via: reconnect_authenticated_via,
+                        message: reconnect_message,
+                        size_bytes: reconnect_size_bytes,
+                        reply_route: reconnect_reply_route,
+                        ownership: HeldSumeragiRelayOwnership {
+                            retention_guard: SumeragiRelayRetention {
+                                source: reconnect_source.clone(),
+                                geometry: source_credits.geometry(),
+                                _p2p: reconnect_p2p_guard,
+                                _daemon_source_credit: reconnect_daemon_credit,
+                            },
+                            completion: Some(reconnect_completion),
+                        },
+                    },
+                ),
+                SumeragiRelayPreparationBoundary::Held
+            ));
+            assert_eq!(upstream.available_permits(), 0);
+            assert_eq!(source_credits.available_permits(&source), 0);
+
+            assert!(fixture.retire(&old_route));
+            assert!(!old_route.is_active());
+            assert!(reconnect_route.is_active());
+
+            let held_old = controller
+                .next_release()
+                .expect("take old held release")
+                .expect("old held occurrence is releasable");
+            assert!(
+                held_old
+                    .reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_delivery(&old_route))
+            );
+            assert!(
+                !held_old
+                    .reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_tenure(&reconnect_route))
+            );
+            let mut old_reattach_called = false;
+            let (old_sequence, old_ownership) = match rehydrate_held_sumeragi_relay_work(
+                held_old,
+                |peer, message, size_bytes, route| {
+                    old_reattach_called = true;
+                    let mut released = RelayWorkItem::new(peer, message, size_bytes);
+                    released.reattach_reply_route(route)?;
+                    Ok(released)
+                },
+            ) {
+                HeldSumeragiReentry::RetireStale {
+                    sequence,
+                    ownership,
+                } => (sequence, ownership),
+                HeldSumeragiReentry::Ready { .. } | HeldSumeragiReentry::Reject { .. } => {
+                    panic!("the held old tenure must retire instead of using the reconnect route")
+                }
+            };
+            assert!(
+                !old_reattach_called,
+                "stale held work must retire before any route reattachment"
+            );
+            controller
+                .complete_release(
+                    old_sequence,
+                    consensus_message_control::ReleaseOutcome::Retired,
+                )
+                .expect("record old-tenure retirement before releasing its exact token");
+            finish_sumeragi_relay_terminal(
+                SumeragiRelayTerminalOutcome::Retired,
+                old_ownership.retention_guard,
+                old_ownership.completion,
+            );
+            assert_eq!(
+                old_outcome.await.expect("old completion remains live"),
+                SumeragiRelayTerminalOutcome::Retired
+            );
+            assert_eq!(upstream.available_permits(), 1);
+            assert_eq!(source_credits.available_permits(&source), 1);
+
+            let held_reconnect = controller
+                .next_release()
+                .expect("take reconnect held release")
+                .expect("reconnect held occurrence is releasable");
+            assert!(
+                held_reconnect
+                    .reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_delivery(&reconnect_route))
+            );
+            assert!(
+                !held_reconnect
+                    .reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_tenure(&old_route))
+            );
+            let (reconnect_sequence, released, reconnect_ownership) =
+                match rehydrate_held_sumeragi_relay_work(
+                    held_reconnect,
+                    |peer, message, size_bytes, route| {
+                        let mut released = RelayWorkItem::new(peer, message, size_bytes);
+                        released.reattach_reply_route(route)?;
+                        Ok(released)
+                    },
+                ) {
+                    HeldSumeragiReentry::Ready {
+                        sequence,
+                        class: SumeragiRelayClass::V2,
+                        work,
+                        ownership,
+                    } => (sequence, work, ownership),
+                    HeldSumeragiReentry::Ready { .. }
+                    | HeldSumeragiReentry::RetireStale { .. }
+                    | HeldSumeragiReentry::Reject { .. } => {
+                        panic!("the live reconnect must rehydrate with its own exact route")
+                    }
+                };
+            assert!(
+                released
+                    .reply_route()
+                    .is_some_and(|route| route.same_delivery(&reconnect_route))
+            );
+            assert_eq!(released.authenticated_via(), &source.via);
+            drop(released);
+            controller
+                .complete_release(
+                    reconnect_sequence,
+                    consensus_message_control::ReleaseOutcome::Delivered,
+                )
+                .expect("record reconnect delivery before releasing its exact token");
+            finish_sumeragi_relay_terminal(
+                SumeragiRelayTerminalOutcome::Delivered,
+                reconnect_ownership.retention_guard,
+                reconnect_ownership.completion,
+            );
+            assert_eq!(
+                reconnect_outcome
+                    .await
+                    .expect("reconnect completion remains live"),
+                SumeragiRelayTerminalOutcome::Delivered
+            );
+            assert_eq!(upstream.available_permits(), 2);
+            assert_eq!(source_credits.available_permits(&source), 2);
+            assert!(
+                controller
+                    .next_release()
+                    .expect("completed drain remains healthy")
+                    .is_none()
+            );
         }
 
         #[cfg(feature = "test-network-message-control")]

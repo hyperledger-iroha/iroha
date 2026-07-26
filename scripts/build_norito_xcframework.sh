@@ -1160,6 +1160,66 @@ cat > "$PUBLISH_MANIFEST" <<EOF
 EOF
 echo "[+] Wrote staged artifact manifest: $PUBLISH_MANIFEST" >&2
 ln -s "$CANONICAL_MANIFEST_RELATIVE_TARGET" "$PUBLISH_MANIFEST_LINK"
+PUBLISH_PROSPECTIVE_LOADER="$PUBLISH_ROOT/.NoritoBridge.prospective.NativeBridge.swift"
+run_isolated_python - \
+  "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
+  "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift" \
+  "$PUBLISH_PROSPECTIVE_LOADER" \
+  "$IOS_HASH" "$SIM_HASH" "$MAC_HASH" <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+
+seal_script = Path(sys.argv[1]).resolve(strict=True)
+source_loader = Path(sys.argv[2]).resolve(strict=True)
+output_loader = Path(sys.argv[3])
+hashes = {
+    "ios-arm64": sys.argv[4],
+    "ios-arm64_x86_64-simulator": sys.argv[5],
+    "macos-arm64": sys.argv[6],
+}
+if any(len(value) != 64 or any(character not in "0123456789abcdef" for character in value) for value in hashes.values()):
+    raise SystemExit("artifact builder produced a non-canonical slice digest")
+spec = importlib.util.spec_from_file_location("norito_bridge_source_seal", seal_script)
+if spec is None or spec.loader is None:
+    raise SystemExit("unable to load NoritoBridge source-seal rules")
+seal = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = seal
+spec.loader.exec_module(seal)
+contents = source_loader.read_bytes()
+seal.normalize_swift_native_bridge_hash_pins(contents)
+
+
+def replace_digest(match):
+    key = match.group("key").decode("ascii")
+    return (
+        match.group("prefix")
+        + b'"'
+        + match.group("key")
+        + b'": "'
+        + hashes[key].encode("ascii")
+        + b'"'
+        + match.group("suffix")
+    )
+
+
+projected = seal.SWIFT_NATIVE_BRIDGE_HASH_PIN.sub(replace_digest, contents)
+if seal.normalize_swift_native_bridge_hash_pins(projected) != seal.normalize_swift_native_bridge_hash_pins(contents):
+    raise SystemExit("prospective loader changed content beyond the slice digests")
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+descriptor = os.open(output_loader, flags, 0o600)
+try:
+    with os.fdopen(descriptor, "wb", closefd=False) as handle:
+        handle.write(projected)
+        handle.flush()
+        os.fsync(handle.fileno())
+finally:
+    os.close(descriptor)
+PY
 
 run_isolated_python - \
   "$PUBLISH_XCFRAMEWORK" "$PUBLISH_MANIFEST" \
@@ -1342,9 +1402,13 @@ assert_bridge_source_seal "staged artifact validation"
 if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
   MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
     MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
+    MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
+    MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
 else
   MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
+    MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
+    MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
 fi
 

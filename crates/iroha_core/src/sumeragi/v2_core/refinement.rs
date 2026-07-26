@@ -14,11 +14,11 @@
 // create a second, unverified calling relation solely to silence this lint.
 #![allow(clippy::large_types_passed_by_value)]
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::{
-    ContextId, Digest, DurableState, HeightContext, Reducer, Subject, ValidatorId,
-    reducer::PendingPersistence,
+    ConsensusMessageV2, ContextId, Digest, DurableState, HeightContext, Reducer, Round,
+    SignedTimeoutVote, Subject, TimeoutCertificate, ValidatorId, reducer::PendingPersistence,
 };
 
 /// Maximum number of effects one reducer input can emit.
@@ -684,6 +684,240 @@ macro_rules! canonical_identity_is_zero_body {
             && $identity.word2 == 0u64
             && $identity.word3 == 0u64
     }};
+}
+
+// Exact signable-vote statement identity shared by production and Verus.
+// Authenticated signer identity is deliberately absent: distinct roster
+// members must be able to contribute signatures to one semantic statement.
+// Signature and roster validation remain independent ingress obligations.
+macro_rules! vote_statement_identity_equal_body {
+    (
+        $left_context:expr,
+        $left_height:expr,
+        $left_view:expr,
+        $left_proposal_height:expr,
+        $left_proposal_view:expr,
+        $left_phase:expr,
+        $left_subject:expr,
+        $right_context:expr,
+        $right_height:expr,
+        $right_view:expr,
+        $right_proposal_height:expr,
+        $right_proposal_view:expr,
+        $right_phase:expr,
+        $right_subject:expr $(,)?
+    ) => {{
+        $left_context == $right_context
+            && $left_height == $right_height
+            && $left_view == $right_view
+            && $left_proposal_height == $right_proposal_height
+            && $left_proposal_view == $right_proposal_view
+            && $left_phase == $right_phase
+            && $left_subject == $right_subject
+    }};
+}
+
+// Stable certificate body identity used only after the caller has validated
+// the certificate phase. Reproposal/finality rounds and signer evidence are
+// representation details; context, height, and subject are semantic.
+macro_rules! certificate_height_subject_identity_equal_body {
+    (
+        $left_context:expr,
+        $left_height:expr,
+        $left_subject:expr,
+        $right_context:expr,
+        $right_height:expr,
+        $right_subject:expr $(,)?
+    ) => {{
+        $left_context == $right_context
+            && $left_height == $right_height
+            && $left_subject == $right_subject
+    }};
+}
+
+// One fixed-width predicate decides whether an already-installed timeout
+// round may be replayed as a lock-only upgrade. Production WAL replay,
+// reducer admission/acknowledgement, and the Verus WAL relation instantiate
+// this exact expression from their primitive projections. Keeping the
+// subtraction form inside the kernel is essential: it expresses the exact
+// predecessor relation without overflowing fixed-width production views and
+// remains the same expression over Verus mathematical integers.
+macro_rules! strict_same_round_timeout_upgrade_body {
+    ($projection:expr, $zero:expr, $one:expr) => {{
+        let projection = $projection;
+        projection.current_view > $zero
+            && projection.timeout_view == projection.current_view - $one
+            && projection.installed_same_round
+            && projection.selected_prepare_present
+            && (!projection.highest_prepare_present
+                || projection.selected_prepare_view > projection.highest_prepare_view)
+            && (!projection.locked_prepare_present
+                || projection.selected_prepare_view > projection.locked_prepare_view)
+    }};
+}
+
+/// Primitive production projection for a strict same-round timeout upgrade.
+///
+/// The caller derives presence and exact installed-round identity from the
+/// authenticated certificate and durable state. The pure kernel below owns
+/// every rank, predecessor, and overflow comparison.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StrictSameRoundTimeoutUpgradeProjection {
+    pub(crate) current_view: u64,
+    pub(crate) timeout_view: u64,
+    pub(crate) installed_same_round: bool,
+    pub(crate) selected_prepare_present: bool,
+    pub(crate) selected_prepare_view: u64,
+    pub(crate) highest_prepare_present: bool,
+    pub(crate) highest_prepare_view: u64,
+    pub(crate) locked_prepare_present: bool,
+    pub(crate) locked_prepare_view: u64,
+}
+
+/// Decide whether a second certificate for the installed timeout round may
+/// update only the durable lock while retaining the current view.
+#[must_use]
+pub(crate) const fn strict_same_round_timeout_upgrade_is_allowed(
+    projection: StrictSameRoundTimeoutUpgradeProjection,
+) -> bool {
+    let zero: u64 = 0;
+    let one: u64 = 1;
+    strict_same_round_timeout_upgrade_body!(projection, zero, one)
+}
+
+// A locally generated proposal in a non-zero view must carry the exact latest
+// durable timeout certificate, rather than merely some valid certificate for
+// the predecessor round. The full concrete equality classification below
+// binds otherwise-unbounded group/signature evidence; the remaining primitive
+// fields make every consensus-relevant projection explicit to both production
+// and Verus.
+macro_rules! local_proposal_timeout_justification_body {
+    ($projection:expr, $zero:expr, $one:expr, $absent_evidence:expr) => {{
+        let projection = $projection;
+        projection.current_view > $zero
+            && projection.proposal_view == projection.current_view
+            && projection.proposal_timeout_context_id == projection.expected_context_id
+            && projection.durable_timeout_context_id == projection.expected_context_id
+            && projection.proposal_timeout_height == projection.expected_height
+            && projection.durable_timeout_height == projection.expected_height
+            && projection.proposal_timeout_view == projection.current_view - $one
+            && projection.durable_timeout_view == projection.current_view - $one
+            && projection.proposal_timeout_group_count > $zero
+            && projection.proposal_timeout_group_count == projection.durable_timeout_group_count
+            && projection.proposal_timeout_high_present == projection.durable_timeout_high_present
+            && (!projection.proposal_timeout_high_present
+                || (projection.proposal_timeout_high_view == projection.durable_timeout_high_view
+                    && projection.proposal_timeout_high_subject
+                        == projection.durable_timeout_high_subject))
+            && projection.proposal_timeout_evidence_identity != $absent_evidence
+            && projection.proposal_timeout_evidence_identity
+                == projection.durable_timeout_evidence_identity
+    }};
+}
+
+/// Fixed-width production projection of one local proposal's timeout
+/// justification and the latest certificate reconstructed from the safety
+/// WAL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LocalProposalTimeoutJustificationProjection {
+    pub(crate) expected_context_id: ContextId,
+    pub(crate) expected_height: u64,
+    pub(crate) current_view: u64,
+    pub(crate) proposal_view: u64,
+    pub(crate) proposal_timeout_context_id: ContextId,
+    pub(crate) proposal_timeout_height: u64,
+    pub(crate) proposal_timeout_view: u64,
+    pub(crate) proposal_timeout_group_count: u64,
+    pub(crate) proposal_timeout_high_present: bool,
+    pub(crate) proposal_timeout_high_view: u64,
+    pub(crate) proposal_timeout_high_subject: Subject,
+    pub(crate) proposal_timeout_evidence_identity: u8,
+    pub(crate) durable_timeout_context_id: ContextId,
+    pub(crate) durable_timeout_height: u64,
+    pub(crate) durable_timeout_view: u64,
+    pub(crate) durable_timeout_group_count: u64,
+    pub(crate) durable_timeout_high_present: bool,
+    pub(crate) durable_timeout_high_view: u64,
+    pub(crate) durable_timeout_high_subject: Subject,
+    pub(crate) durable_timeout_evidence_identity: u8,
+}
+
+const LOCAL_PROPOSAL_TIMEOUT_EVIDENCE_MATCHED: u8 = 1;
+const LOCAL_PROPOSAL_TIMEOUT_EVIDENCE_FOREIGN: u8 = 2;
+
+fn local_proposal_timeout_projection(
+    expected_context_id: ContextId,
+    expected_height: u64,
+    current_view: u64,
+    proposal_view: u64,
+    proposal_timeout: &TimeoutCertificate,
+    durable_timeout: &TimeoutCertificate,
+) -> LocalProposalTimeoutJustificationProjection {
+    let proposal_high = proposal_timeout.highest_prepare();
+    let durable_high = durable_timeout.highest_prepare();
+    LocalProposalTimeoutJustificationProjection {
+        expected_context_id,
+        expected_height,
+        current_view,
+        proposal_view,
+        proposal_timeout_context_id: proposal_timeout.context_id(),
+        proposal_timeout_height: proposal_timeout.round().height(),
+        proposal_timeout_view: proposal_timeout.round().view(),
+        proposal_timeout_group_count: u64::try_from(proposal_timeout.groups().len())
+            .unwrap_or(u64::MAX),
+        proposal_timeout_high_present: proposal_high.is_some(),
+        proposal_timeout_high_view: proposal_high
+            .map_or(0, |certificate| certificate.round().view()),
+        proposal_timeout_high_subject: proposal_high
+            .map_or_else(Subject::default, |certificate| certificate.subject()),
+        proposal_timeout_evidence_identity: if proposal_timeout == durable_timeout {
+            LOCAL_PROPOSAL_TIMEOUT_EVIDENCE_MATCHED
+        } else {
+            LOCAL_PROPOSAL_TIMEOUT_EVIDENCE_FOREIGN
+        },
+        durable_timeout_context_id: durable_timeout.context_id(),
+        durable_timeout_height: durable_timeout.round().height(),
+        durable_timeout_view: durable_timeout.round().view(),
+        durable_timeout_group_count: u64::try_from(durable_timeout.groups().len())
+            .unwrap_or(u64::MAX),
+        durable_timeout_high_present: durable_high.is_some(),
+        durable_timeout_high_view: durable_high.map_or(0, |certificate| certificate.round().view()),
+        durable_timeout_high_subject: durable_high
+            .map_or_else(Subject::default, |certificate| certificate.subject()),
+        durable_timeout_evidence_identity: LOCAL_PROPOSAL_TIMEOUT_EVIDENCE_MATCHED,
+    }
+}
+
+/// Decide whether a non-zero-view local proposal carries the exact latest
+/// timeout certificate recovered from durable state.
+///
+/// Full certificate equality, including every timeout group and signature
+/// share, is classified inside this function. Callers provide certificates,
+/// never a precomputed authorization bit.
+#[must_use]
+pub(crate) fn local_proposal_timeout_justification_is_exact(
+    expected_context_id: ContextId,
+    expected_height: u64,
+    current_view: u64,
+    proposal_view: u64,
+    proposal_timeout: &TimeoutCertificate,
+    durable_timeout: Option<&TimeoutCertificate>,
+) -> bool {
+    let Some(durable_timeout) = durable_timeout else {
+        return false;
+    };
+    let projection = local_proposal_timeout_projection(
+        expected_context_id,
+        expected_height,
+        current_view,
+        proposal_view,
+        proposal_timeout,
+        durable_timeout,
+    );
+    let zero: u64 = 0;
+    let one: u64 = 1;
+    let absent_evidence: u8 = 0;
+    local_proposal_timeout_justification_body!(projection, zero, one, absent_evidence)
 }
 
 // These expressions are instantiated by both the executable production
@@ -1358,10 +1592,11 @@ macro_rules! pending_projection_equal_body {
 }
 
 // A boundary tag names the reducer owner of the WAL operation, while the
-// pending projection names the round carried by the record.  Those rounds are
-// intentionally distinct for a future TC, a historical locked Commit, and a
-// Decision learned outside the local view.  Keep their shared identity exact
-// here and check the record/owner round relation separately below.
+// pending projection names the round carried by the record. Those rounds are
+// intentionally distinct for a future TC, an immediate-predecessor TC carrying
+// a strictly higher PrepareQC, and a Decision learned outside the local view.
+// Every Vote/QC nevertheless binds one same-round proposal; keep that identity
+// exact below even when the local owner has advanced farther.
 macro_rules! pending_projection_matches_boundary_body {
     ($pending:expr, $boundary:expr) => {{
         $boundary.subject.present
@@ -1382,12 +1617,9 @@ macro_rules! pending_round_can_begin_body {
             && match $pending.record_kind {
                 refinement_tag_value!(WAL_RECORD_PROPOSAL_INTENT)
                 | refinement_tag_value!(WAL_RECORD_PREPARE_INTENT)
+                | refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
                 | refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT) => $pending.view == $owner.view,
-                refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE)
-                | refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT) => $pending.view <= $owner.view,
-                // A second certificate for the immediately preceding timeout
-                // round may reveal a strictly higher PrepareQC while keeping
-                // the reducer in the already-installed successor view.
+                refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE) => $pending.view <= $owner.view,
                 refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) => {
                     $pending.view < u64::MAX
                         && ($pending.view >= $owner.view || $pending.view + 1u64 == $owner.view)
@@ -1432,7 +1664,7 @@ macro_rules! wal_record_proposal_round_is_exact_body {
             refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT) => {
                 $pending.proposal_present
                     && $pending.proposal_height == $pending.height
-                    && $pending.proposal_view <= $pending.view
+                    && $pending.proposal_view == $pending.view
                     && $boundary.auxiliary_present
                     && $boundary.auxiliary_context_id == $boundary.context_id
                     && $boundary.auxiliary_height == $pending.proposal_height
@@ -1445,7 +1677,7 @@ macro_rules! wal_record_proposal_round_is_exact_body {
             refinement_tag_value!(WAL_RECORD_DECISION) => {
                 $pending.proposal_present
                     && $pending.proposal_height == $pending.height
-                    && $pending.proposal_view <= $pending.view
+                    && $pending.proposal_view == $pending.view
             }
             refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT)
             | refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) => {
@@ -1455,6 +1687,29 @@ macro_rules! wal_record_proposal_round_is_exact_body {
             }
             _ => false,
         }
+    }};
+}
+
+// An InstallTimeout record may be owned by its timeout round or by the
+// immediate successor while an alternate TC supplies a newly learned high
+// PrepareQC. Keep that predecessor exception tied to the full, internally
+// same-round Prepare certificate projection; a no-high replay cannot mint the
+// exceptional owner relation.
+macro_rules! install_timeout_boundary_is_exact_body {
+    ($boundary:expr, $pending:expr, $owner:expr) => {{
+        let immediate_predecessor = $pending.view < $owner.view;
+        (!immediate_predecessor || $boundary.auxiliary_present)
+            && (if $boundary.auxiliary_present {
+                $boundary.auxiliary_context_id == $boundary.context_id
+                    && $boundary.auxiliary_height == $pending.height
+                    && $boundary.auxiliary_view <= $pending.view
+                    && $boundary.auxiliary_proposal_height == $boundary.auxiliary_height
+                    && $boundary.auxiliary_proposal_view == $boundary.auxiliary_view
+                    && $boundary.auxiliary_phase == 1u8
+                    && $boundary.subject.subject == $boundary.auxiliary_subject
+            } else {
+                true
+            })
     }};
 }
 
@@ -1567,25 +1822,32 @@ macro_rules! tag_projection_equal_body {
 // The expression is shared verbatim with Verus and derives exactness from
 // primitive round, context, subject, signer, and persistence observations.
 // A durable timeout is deliberately admissible only for a historical lock:
-// it witnesses that the current finality view closed before LockAndCommit
-// could be appended and that the next certified view transition can retry the
-// immutable proposal origin. It never authorizes a Commit in the closed view.
+// it witnesses either a still-closing view or an installed predecessor TC
+// from which the immutable locked body can be re-proposed in the current
+// view. It never authorizes a Commit whose proposal origin is a closed view.
 macro_rules! locked_commit_progress_witness_body {
     ($projection:expr) => {{
-        let lock_is_active = $projection.locked_context_id == $projection.context_id
-            && $projection.locked_height == $projection.current_height;
+        let lock_is_active =
+            canonical_identity_equal_body!($projection.locked_context_id, $projection.context_id)
+                && $projection.locked_height == $projection.current_height;
         let lock_is_historical =
             lock_is_active && $projection.locked_view < $projection.current_view;
         let commit_is_exact = lock_is_active
             && $projection.commit_intent_present
             && $projection.local_validator_present
-            && $projection.commit_context_id == $projection.context_id
+            && canonical_identity_equal_body!(
+                $projection.commit_context_id,
+                $projection.context_id
+            )
             && $projection.commit_height == $projection.current_height
-            && $projection.commit_view >= $projection.locked_view
+            && $projection.commit_view == $projection.locked_view
             && $projection.commit_proposal_height == $projection.locked_height
             && $projection.commit_proposal_view == $projection.locked_view
             && $projection.commit_phase == 2u8
-            && $projection.commit_subject == $projection.locked_subject
+            && canonical_identity_equal_body!(
+                $projection.commit_subject,
+                $projection.locked_subject
+            )
             && $projection.commit_signer == $projection.local_validator
             && ($projection.commit_signature_pending || $projection.commit_pooled);
         let pending_lock_and_commit_is_exact = lock_is_active
@@ -1594,23 +1856,48 @@ macro_rules! locked_commit_progress_witness_body {
             && $projection.pending.record_kind == refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT)
             && $projection.pending.continuation == refinement_tag_value!(CONTINUATION_SIGN)
             && $projection.pending.persistence_id > 0u64
-            && $projection.pending.context_id == $projection.context_id
+            && canonical_identity_equal_body!(
+                $projection.pending.context_id,
+                $projection.context_id
+            )
             && $projection.pending.height == $projection.current_height
             && $projection.pending.view == $projection.current_view
+            && $projection.current_view == $projection.locked_view
             && $projection.pending.proposal_present
             && $projection.pending.proposal_height == $projection.locked_height
             && $projection.pending.proposal_view == $projection.locked_view
-            && $projection.pending.subject == $projection.locked_subject;
+            && canonical_identity_equal_body!(
+                $projection.pending.subject,
+                $projection.locked_subject
+            );
         let durable_timeout_is_exact = !$projection.commit_intent_present
             && lock_is_historical
             && $projection.local_validator_present
             && $projection.timeout_intent_present
             && $projection.timeout_intent_durable
-            && $projection.timeout_context_id == $projection.context_id
+            && canonical_identity_equal_body!(
+                $projection.timeout_context_id,
+                $projection.context_id
+            )
             && $projection.timeout_height == $projection.current_height
             && $projection.timeout_view == $projection.current_view
             && $projection.timeout_signer == $projection.local_validator;
-        commit_is_exact || pending_lock_and_commit_is_exact || durable_timeout_is_exact
+        let durable_reproposal_is_exact = !$projection.commit_intent_present
+            && lock_is_historical
+            && $projection.local_validator_present
+            && $projection.installed_timeout_present
+            && $projection.installed_timeout_durable
+            && canonical_identity_equal_body!(
+                $projection.installed_timeout_context_id,
+                $projection.context_id
+            )
+            && $projection.installed_timeout_height == $projection.current_height
+            && $projection.installed_timeout_view < u64::MAX
+            && $projection.installed_timeout_view + 1u64 == $projection.current_view;
+        commit_is_exact
+            || pending_lock_and_commit_is_exact
+            || durable_timeout_is_exact
+            || durable_reproposal_is_exact
     }};
 }
 
@@ -1698,13 +1985,11 @@ macro_rules! production_durable_intent_trace_body {
                     && (if $projection.boundary_claimed.record_kind
                         == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT)
                     {
-                        if $projection.boundary_claimed.auxiliary_present {
-                            $projection.boundary_claimed.auxiliary_phase == 1u8
-                                && $projection.boundary_claimed.subject.subject
-                                    == $projection.boundary_claimed.auxiliary_subject
-                        } else {
-                            true
-                        }
+                        install_timeout_boundary_is_exact_body!(
+                            $projection.boundary_claimed,
+                            $projection.pending_after,
+                            $projection.owner_tag_after
+                        )
                     } else {
                         true
                     })
@@ -1793,6 +2078,17 @@ macro_rules! production_durable_intent_trace_body {
                         $projection.pending_before,
                         $projection.boundary_claimed
                     )
+                    && (if $projection.boundary_claimed.record_kind
+                        == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT)
+                    {
+                        install_timeout_boundary_is_exact_body!(
+                            $projection.boundary_claimed,
+                            $projection.pending_before,
+                            $projection.owner_tag_before
+                        )
+                    } else {
+                        true
+                    })
                     && (if $projection.boundary_claimed.record_kind
                         == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT)
                     {
@@ -1913,9 +2209,8 @@ macro_rules! production_decision_identity_is_canonical_body {
             refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
         ) && $decision.height > 0u64
             && $decision.proposal_height == $decision.height
-            && $decision.proposal_view <= $decision.view
+            && $decision.proposal_view == $decision.view
             && ($decision.phase == 1u8 || $decision.phase == 2u8)
-            && ($decision.phase != 1u8 || $decision.proposal_view == $decision.view)
             && canonical_identity_is_typed_body!(
                 $decision.subject,
                 refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
@@ -1944,15 +2239,17 @@ macro_rules! production_decision_identity_is_canonical_body {
     }};
 }
 
+// Semantic Commit identity is independent of the same-round QC that witnessed
+// it. Canonicality above still requires each individual QC to use one round;
+// equality here retains every immutable body and execution commitment while
+// deliberately excluding both certificate/proposal round fields.
 macro_rules! production_decision_identity_equal_body {
     ($left:expr, $right:expr) => {{
         production_decision_identity_is_canonical_body!($left)
             && production_decision_identity_is_canonical_body!($right)
             && canonical_identity_equal_body!($left.context_id, $right.context_id)
             && $left.height == $right.height
-            && $left.view == $right.view
             && $left.proposal_height == $right.proposal_height
-            && $left.proposal_view == $right.proposal_view
             && $left.phase == $right.phase
             && canonical_identity_equal_body!($left.subject, $right.subject)
             && canonical_identity_equal_body!($left.block_hash, $right.block_hash)
@@ -2222,6 +2519,9 @@ macro_rules! production_reliable_flush_trace_body {
                 refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
                 refinement_tag_value!(IDENTITY_KIND_SIDECAR_REQUEST)
             )
+            && $projection.service_generation > 0u64
+            && $projection.stream_epoch > 0u64
+            && $projection.semantic_sequence > 0u64
             && canonical_identity_is_typed_body!(
                 $projection.entry_hash,
                 refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
@@ -2333,6 +2633,9 @@ macro_rules! production_reliable_flush_application_body {
                 refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
                 refinement_tag_value!(IDENTITY_KIND_SIDECAR_REQUEST)
             )
+            && $projection.service_generation > 0u64
+            && $projection.stream_epoch > 0u64
+            && $projection.semantic_sequence > 0u64
             && canonical_identity_is_typed_body!(
                 $projection.entry_hash,
                 refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
@@ -2365,6 +2668,12 @@ macro_rules! production_reliable_flush_application_body {
                 refinement_tag_value!(IDENTITY_KIND_SIDECAR_PAYLOAD)
             )
             && canonical_identity_equal_body!($projection.request_id, $projection.marker_request_id)
+            && $projection.marker_service_generation > 0u64
+            && $projection.marker_stream_epoch > 0u64
+            && $projection.marker_semantic_sequence > 0u64
+            && $projection.service_generation == $projection.marker_service_generation
+            && $projection.stream_epoch == $projection.marker_stream_epoch
+            && $projection.semantic_sequence == $projection.marker_semantic_sequence
             && canonical_identity_equal_body!($projection.entry_hash, $projection.marker_entry_hash)
             && $projection.encoded_len == $projection.marker_encoded_len
             && $projection.epoch_id == $projection.marker_epoch_id
@@ -2598,12 +2907,28 @@ macro_rules! production_reliable_flush_two_phase_link_body {
             && $worker.ticket_id == $application.ticket_id
             && $worker.ticket_rank == $application.ticket_rank
             && $worker.ticket_topic == $application.ticket_topic
+            && $worker.reply_writer_timeout_attempt == $application.reply_writer_timeout_attempt
             && canonical_identity_equal_body!(
                 $worker.canonical_request_digest,
                 $application.canonical_request_digest
             )
             && $worker.stream_wire_bytes == $application.stream_wire_bytes
             && canonical_identity_equal_body!($worker.request_id, $application.request_id)
+            && $worker.service_generation > 0u64
+            && $application.service_generation > 0u64
+            && $application.marker_service_generation > 0u64
+            && $worker.service_generation == $application.service_generation
+            && $worker.service_generation == $application.marker_service_generation
+            && $worker.stream_epoch > 0u64
+            && $application.stream_epoch > 0u64
+            && $application.marker_stream_epoch > 0u64
+            && $worker.stream_epoch == $application.stream_epoch
+            && $worker.stream_epoch == $application.marker_stream_epoch
+            && $worker.semantic_sequence > 0u64
+            && $application.semantic_sequence > 0u64
+            && $application.marker_semantic_sequence > 0u64
+            && $worker.semantic_sequence == $application.semantic_sequence
+            && $worker.semantic_sequence == $application.marker_semantic_sequence
             && canonical_identity_equal_body!($worker.entry_hash, $application.entry_hash)
             && $worker.encoded_len == $application.encoded_len
             && $worker.epoch_id == $application.epoch_id
@@ -2655,8 +2980,9 @@ macro_rules! production_application_trace_body {
                 $projection.context_id
             )
             && $projection.validated_body.height == $projection.context_height
-            // Proposal origin and finality round are distinct. The body must
-            // match the CommitQC's authenticated immutable origin exactly.
+            // Each CommitQC binds its proposal and vote to one exact round.
+            // A later unchanged-body reproposal therefore carries a newly
+            // validated body for that later round rather than a split-round QC.
             && $projection.validated_body.view
                 == $projection.commit_qc.decision.proposal_view
             && canonical_identity_equal_body!(
@@ -2893,7 +3219,7 @@ macro_rules! wal_retirement_authorized_body {
             && $decision_context == $decision_certificate_context
             && $decision_height == $decision_certificate_height
             && $decision_height == $decision_proposal_height
-            && $decision_proposal_view <= $decision_certificate_view
+            && $decision_proposal_view == $decision_certificate_view
             && $decision_subject == $decision_certificate_subject
     }};
 }
@@ -3239,10 +3565,12 @@ pub struct ProductionDurableIntentTraceProjection {
 
 /// Primitive ownership facts for one validated, undecided durable lock.
 ///
-/// The kernel accepts an active exact Commit, an exact pending
-/// `LockAndCommit`, or an exact acknowledged timeout for the current view.
-/// The last form is a recovery witness only: the reducer still refuses to
-/// append or sign a Commit after that timeout closes the view.
+/// The kernel accepts an active same-round Commit, an exact pending
+/// `LockAndCommit`, an acknowledged timeout which is still closing the
+/// current view, or the durable predecessor TC which authorizes exact locked
+/// body re-proposal. A durable Commit from the old lock round may be
+/// retransmitted, but timeout forms are recovery witnesses only: the reducer
+/// never appends or signs a fresh Commit for a closed proposal round.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LockedCommitProgressWitnessProjection {
     pub(crate) context_id: CanonicalIdentityProjection,
@@ -3272,6 +3600,11 @@ pub struct LockedCommitProgressWitnessProjection {
     pub(crate) timeout_height: u64,
     pub(crate) timeout_view: u64,
     pub(crate) timeout_signer: ValidatorId,
+    pub(crate) installed_timeout_present: bool,
+    pub(crate) installed_timeout_durable: bool,
+    pub(crate) installed_timeout_context_id: CanonicalIdentityProjection,
+    pub(crate) installed_timeout_height: u64,
+    pub(crate) installed_timeout_view: u64,
 }
 
 /// Check that a validated lock retains one exact durable progress witness.
@@ -3416,6 +3749,11 @@ pub struct ProductionTwoStageRelayRetryTraceProjection {
 }
 
 /// Primitive per-source sidecar-flush cursor movement.
+///
+/// `stream_epoch` retains the non-zero durable request-stream incarnation,
+/// `service_generation` binds it to one responder service lifetime, and
+/// `semantic_sequence` identifies the occurrence within that stream. All
+/// three are independent of the merge reference's `epoch_id`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionReliableFlushTraceProjection {
     pub(crate) status: u8,
@@ -3433,9 +3771,13 @@ pub struct ProductionReliableFlushTraceProjection {
     pub(crate) ticket_id: u64,
     pub(crate) ticket_rank: u64,
     pub(crate) ticket_topic: u8,
+    pub(crate) reply_writer_timeout_attempt: u8,
     pub(crate) canonical_request_digest: CanonicalIdentityProjection,
     pub(crate) stream_wire_bytes: u64,
     pub(crate) request_id: CanonicalIdentityProjection,
+    pub(crate) service_generation: u64,
+    pub(crate) stream_epoch: u64,
+    pub(crate) semantic_sequence: u64,
     pub(crate) entry_hash: CanonicalIdentityProjection,
     pub(crate) encoded_len: u64,
     pub(crate) epoch_id: u64,
@@ -3462,7 +3804,9 @@ pub struct ProductionReliableFlushTraceProjection {
 /// Identity fields mirror the worker projection so the formal harness can
 /// prove a non-vacuous two-phase link. The source-key, delivery-route, and
 /// writer-occurrence identities are process-local only and never enter wire,
-/// persistence, or consensus state. `marker_*` fields are independently
+/// persistence, or consensus state. `service_generation`, `stream_epoch`, and
+/// `semantic_sequence` are captured from the admitted occurrence, while their
+/// `marker_*` counterparts and the other marker fields are independently
 /// observed from the retained byte-free gate marker. Sibling state is both
 /// compared as exact records by production and committed to a fixed-width,
 /// domain-separated projection; it is never reduced to lane counts.
@@ -3482,9 +3826,13 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub(crate) ticket_id: u64,
     pub(crate) ticket_rank: u64,
     pub(crate) ticket_topic: u8,
+    pub(crate) reply_writer_timeout_attempt: u8,
     pub(crate) canonical_request_digest: CanonicalIdentityProjection,
     pub(crate) stream_wire_bytes: u64,
     pub(crate) request_id: CanonicalIdentityProjection,
+    pub(crate) service_generation: u64,
+    pub(crate) stream_epoch: u64,
+    pub(crate) semantic_sequence: u64,
     pub(crate) entry_hash: CanonicalIdentityProjection,
     pub(crate) encoded_len: u64,
     pub(crate) epoch_id: u64,
@@ -3500,6 +3848,9 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub(crate) chunk_cursor_before: u64,
     pub(crate) chunk_cursor_after: u64,
     pub(crate) marker_request_id: CanonicalIdentityProjection,
+    pub(crate) marker_service_generation: u64,
+    pub(crate) marker_stream_epoch: u64,
+    pub(crate) marker_semantic_sequence: u64,
     pub(crate) marker_entry_hash: CanonicalIdentityProjection,
     pub(crate) marker_encoded_len: u64,
     pub(crate) marker_epoch_id: u64,
@@ -3661,7 +4012,12 @@ pub struct EnterViewProjection {
     pub(crate) durable_timeout_after: TimeoutIdentityProjection,
     pub(crate) effect_timeout: TimeoutIdentityProjection,
     pub(crate) local_lock_before: CertificateIdentityProjection,
+    pub(crate) local_highest_before: CertificateIdentityProjection,
+    pub(crate) incoming_highest_for_control: CertificateIdentityProjection,
     pub(crate) durable_lock_after: CertificateIdentityProjection,
+    pub(crate) durable_highest_after: CertificateIdentityProjection,
+    pub(crate) prepare_control_slot_present_after: bool,
+    pub(crate) retained_prepare_qc_after: CertificateIdentityProjection,
     pub(crate) effect_protected_lock: CertificateIdentityProjection,
     pub(crate) following_fetch_lock: CertificateIdentityProjection,
     pub(crate) enter_count: u64,
@@ -4088,6 +4444,12 @@ pub struct TransitionProjection<'a> {
     pub(crate) validator_count: u64,
     pub(crate) volatile_before: VolatileSummary,
     pub(crate) volatile_after: VolatileSummary,
+    pub(crate) timeout_votes_before: &'a BTreeMap<Round, BTreeMap<ValidatorId, SignedTimeoutVote>>,
+    pub(crate) timeout_votes_after: &'a BTreeMap<Round, BTreeMap<ValidatorId, SignedTimeoutVote>>,
+    pub(crate) formed_timeouts_before: &'a BTreeSet<Round>,
+    pub(crate) formed_timeouts_after: &'a BTreeSet<Round>,
+    pub(crate) timeout_control_before: Option<&'a ConsensusMessageV2>,
+    pub(crate) timeout_control_after: Option<&'a ConsensusMessageV2>,
     pub(crate) boundary_claimed: BoundaryCapabilityKey,
     pub(crate) boundary_granted: BoundaryCapabilityKey,
     pub(crate) enter_view: EnterViewProjection,
@@ -4123,7 +4485,54 @@ struct TransitionFacts {
     acknowledge_persist_exact: bool,
     application_transition_exact: bool,
     acknowledgement_continuation: u8,
+    install_view_unchanged: bool,
+    timeout_vote_pool_unchanged: bool,
+    formed_timeouts_unchanged: bool,
+    timeout_control_unchanged: bool,
+    timeout_control_after_absent: bool,
     enter_view_exact: bool,
+    effects: EffectTrace,
+}
+
+/// Classification fields derived independently of durable/effect deltas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+struct TransitionClassificationFacts {
+    before_invariant: bool,
+    after_invariant: bool,
+    context_unchanged: bool,
+    whole_state_unchanged: bool,
+    tag_matches: bool,
+    busy_fence_open: bool,
+    event_kind: u8,
+    action_kind: u8,
+    wal_record_kind: u8,
+    signed_message_kind: u8,
+    replay_effect_kind: u8,
+    validator_count: u64,
+}
+
+/// Durable, volatile, capability, and effect fields derived independently of
+/// transition classification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+struct TransitionDeltaFacts {
+    volatile_before: VolatileSummary,
+    volatile_after: VolatileSummary,
+    durable_unchanged: bool,
+    pending_unchanged: bool,
+    generation_unchanged: bool,
+    application_unchanged: bool,
+    begin_persist_exact: bool,
+    acknowledge_persist_exact: bool,
+    application_transition_exact: bool,
+    acknowledgement_continuation: u8,
+    install_view_unchanged: bool,
+    timeout_vote_pool_unchanged: bool,
+    formed_timeouts_unchanged: bool,
+    timeout_control_unchanged: bool,
+    timeout_control_after_absent: bool,
+    replay_boundary_exact: bool,
     effects: EffectTrace,
 }
 
@@ -4414,9 +4823,9 @@ macro_rules! volatile_summary_well_formed_body {
         $validator_count > 0u64
             && $validator_count <= u64::MAX / 2u64
             // At most two active phase pools are kept: current Prepare plus
-            // either current Commit or the exact historical locked Commit.
-            // A newly durable lock retires the superseded historical pool
-            // before its current-round Commit signature can complete.
+            // either its same-round Commit or a durable same-round Commit
+            // retained from an older lock round. A newly durable lock retires
+            // the superseded older pool before its Commit signature completes.
             && $summary.vote_pools <= 2u64
             && $summary.vote_entries >= $summary.vote_pools
             && $summary.vote_entries <= $validator_count * 2u64
@@ -4664,6 +5073,29 @@ macro_rules! certificate_identity_equal_body {
     }};
 }
 
+// Compare the complete fixed-width certificate material while deliberately
+// ignoring `evidence_class`. The same concrete incoming certificate can be
+// labelled INCOMING in the lock projection and LOCAL in the high-QC
+// projection when it is also the pre-install durable high. All signer,
+// quorum, phase, context, and subject fields must still agree.
+macro_rules! certificate_identity_same_material_body {
+    ($left:expr, $right:expr) => {{
+        certificate_identity_is_canonical_body!($left)
+            && certificate_identity_is_canonical_body!($right)
+            && $left.present == $right.present
+            && (!$left.present
+                || (canonical_identity_equal_body!($left.context_id, $right.context_id)
+                    && $left.height == $right.height
+                    && $left.view == $right.view
+                    && $left.phase == $right.phase
+                    && canonical_identity_equal_body!($left.subject, $right.subject)
+                    && $left.signer_bitmap == $right.signer_bitmap
+                    && $left.signer_bitmap_count == $right.signer_bitmap_count
+                    && $left.signer_count == $right.signer_count
+                    && $left.voting_power == $right.voting_power))
+    }};
+}
+
 macro_rules! timeout_identity_equal_body {
     ($left:expr, $right:expr) => {{
         certificate_identity_is_canonical_body!($left.highest_prepare)
@@ -4690,6 +5122,43 @@ macro_rules! prepare_identity_in_context_body {
                     && $certificate.height == $height
                     && $certificate.phase == 1u8
                     && $certificate.view <= $maximum_view))
+    }};
+}
+
+// Preserve the reducer's one exact durable-high PrepareQC control owner across
+// the post-WAL InstallTimeout seam. Highest and lock are intentionally
+// separate: an observed PrepareQC may be strictly above the current lock.
+// Every compared position is projected from a concrete certificate, so
+// deleting the reseed, retaining a stale QC, or substituting equal-reference
+// evidence fails this shared production/Verus relation.
+macro_rules! enter_view_high_prepare_qc_control_identity_body {
+    ($projection:expr) => {{
+        let timeout_high = $projection.pending_record_timeout.highest_prepare;
+        let local = $projection.local_highest_before;
+        let incoming = $projection.incoming_highest_for_control;
+        let selected = if !local.present {
+            incoming
+        } else if !incoming.present || incoming.view <= local.view {
+            local
+        } else {
+            incoming
+        };
+        certificate_identity_is_canonical_body!(local)
+            && (!local.present
+                || local.evidence_class == refinement_tag_value!(CERTIFICATE_EVIDENCE_LOCAL))
+            && certificate_identity_same_material_body!(incoming, timeout_high)
+            && (!incoming.present
+                || (if local.present && certificate_identity_same_material_body!(incoming, local) {
+                    incoming.evidence_class == refinement_tag_value!(CERTIFICATE_EVIDENCE_LOCAL)
+                } else {
+                    incoming.evidence_class == refinement_tag_value!(CERTIFICATE_EVIDENCE_INCOMING)
+                }))
+            && certificate_identity_equal_body!($projection.durable_highest_after, selected)
+            && $projection.prepare_control_slot_present_after == selected.present
+            && certificate_identity_equal_body!(
+                $projection.retained_prepare_qc_after,
+                $projection.durable_highest_after
+            )
     }};
 }
 
@@ -4750,21 +5219,22 @@ macro_rules! enter_view_projection_gate_body {
             } else {
                 incoming
             };
-            let strict_same_round_upgrade = timeout.view < u64::MAX
-                && timeout.view + 1u64 == $projection.before_tag.view
-                && incoming.present
-                && (!local.present || incoming.view > local.view);
             $projection.enter_count == 1u64
                 && enter_view_locked_prepare_qc_identity_body!($projection)
+                && enter_view_high_prepare_qc_control_identity_body!($projection)
                 && $projection.pending_record_kind == 6u8
                 && $projection.pending_continuation == 2u8
                 && timeout.present
                 && canonical_identity_equal_body!(timeout.context_id, $projection.context_id)
                 && timeout.height == $projection.before_tag.height
                 && $projection.after_tag.height == $projection.before_tag.height
-                && ($projection.before_tag.view <= timeout.view || strict_same_round_upgrade)
                 && timeout.view < u64::MAX
                 && $projection.after_tag.view == timeout.view + 1u64
+                // The exact WAL-application boundary separately invokes the
+                // shared strict-upgrade kernel. This effect relation therefore
+                // checks only the resulting monotonic view, never a second
+                // transcription of the admission predicate.
+                && $projection.before_tag.view <= $projection.after_tag.view
                 && $projection.before_tag.generation < u64::MAX
                 && $projection.after_tag.generation == $projection.before_tag.generation + 1u64
                 && prepare_identity_in_context_body!(
@@ -4775,6 +5245,18 @@ macro_rules! enter_view_projection_gate_body {
                 )
                 && prepare_identity_in_context_body!(
                     incoming,
+                    $projection.context_id,
+                    $projection.before_tag.height,
+                    timeout.view
+                )
+                && prepare_identity_in_context_body!(
+                    $projection.local_highest_before,
+                    $projection.context_id,
+                    $projection.before_tag.height,
+                    $projection.before_tag.view
+                )
+                && prepare_identity_in_context_body!(
+                    $projection.incoming_highest_for_control,
                     $projection.context_id,
                     $projection.before_tag.height,
                     timeout.view
@@ -4792,11 +5274,11 @@ macro_rules! enter_view_projection_gate_body {
     }};
 }
 
-// Derive every safety/action boolean consumed by the legacy relation from
-// concrete primitive state, boundary, and capability projections.  Production
-// and Verus instantiate this exact expression with different identity types.
-macro_rules! transition_facts_from_projection_body {
-    ($projection:expr, $facts_type:ident) => {{
+// Derive the durable, volatile, capability, and effect portion of the checked
+// transition facts. Production and Verus instantiate this exact expression
+// with their corresponding primitive projection types.
+macro_rules! transition_delta_facts_from_projection_body {
+    ($projection:expr, $delta_type:ident) => {{
         let boundary_exact = $projection.boundary_claimed.kind != 0u8
             && boundary_capability_equal_body!(
                 $projection.boundary_claimed,
@@ -4813,16 +5295,58 @@ macro_rules! transition_facts_from_projection_body {
             $projection.application_before,
             $projection.application_after
         );
+        let acknowledgement_continuation = if acknowledge_persist_exact {
+            $projection.boundary_claimed.continuation
+        } else {
+            0u8
+        };
+        let install_view_unchanged = acknowledge_persist_exact
+            && acknowledgement_continuation == refinement_tag_value!(CONTINUATION_INSTALL_TIMEOUT)
+            && $projection.enter_view.active
+            && $projection.enter_view.before_tag.view == $projection.enter_view.after_tag.view;
+        let timeout_vote_pool_unchanged =
+            $projection.timeout_votes_before == $projection.timeout_votes_after;
+        let formed_timeouts_unchanged =
+            $projection.formed_timeouts_before == $projection.formed_timeouts_after;
+        let timeout_control_unchanged =
+            $projection.timeout_control_before == $projection.timeout_control_after;
+        let timeout_control_after_absent = $projection.timeout_control_after.is_none();
+        $delta_type {
+            volatile_before: $projection.volatile_before,
+            volatile_after: $projection.volatile_after,
+            durable_unchanged,
+            pending_unchanged,
+            generation_unchanged,
+            application_unchanged,
+            begin_persist_exact,
+            acknowledge_persist_exact,
+            application_transition_exact: application_unchanged || application_boundary_exact,
+            acknowledgement_continuation,
+            install_view_unchanged,
+            timeout_vote_pool_unchanged,
+            formed_timeouts_unchanged,
+            timeout_control_unchanged,
+            timeout_control_after_absent,
+            replay_boundary_exact,
+            effects: $projection.effects,
+        }
+    }};
+}
+
+// Derive invariant, fence, and action-classification fields from primitive
+// state plus the exact delta facts above.
+macro_rules! transition_classification_facts_from_projection_body {
+    ($projection:expr, $delta:expr, $classification_type:ident) => {{
         let state_unchanged = $projection.before_state == $projection.after_state;
-        let action_kind = if begin_persist_exact {
+        let action_kind = if $delta.begin_persist_exact {
             1u8
-        } else if acknowledge_persist_exact {
+        } else if $delta.acknowledge_persist_exact {
             2u8
         } else if state_unchanged && $projection.effects.len == 0u8 {
             0u8
-        } else if !application_unchanged {
+        } else if !$delta.application_unchanged {
             5u8
-        } else if replay_boundary_exact {
+        } else if $delta.replay_boundary_exact {
             6u8
         } else if $projection.event_kind >= 8u8 && $projection.event_kind <= 10u8 {
             3u8
@@ -4841,13 +5365,8 @@ macro_rules! transition_facts_from_projection_body {
         let tag_matches = $projection.event_tag.height == $projection.height_before
             && $projection.event_tag.view == $projection.view_before
             && $projection.event_tag.generation == $projection.generation_before;
-        let wal_record_kind = if begin_persist_exact || acknowledge_persist_exact {
+        let wal_record_kind = if $delta.begin_persist_exact || $delta.acknowledge_persist_exact {
             $projection.boundary_claimed.record_kind
-        } else {
-            0u8
-        };
-        let acknowledgement_continuation = if acknowledge_persist_exact {
-            $projection.boundary_claimed.continuation
         } else {
             0u8
         };
@@ -4856,15 +5375,12 @@ macro_rules! transition_facts_from_projection_body {
         } else {
             $projection.awaiting_message_kind
         };
-        let replay_effect_kind = if replay_boundary_exact {
+        let replay_effect_kind = if $delta.replay_boundary_exact {
             $projection.boundary_claimed.replay_effect_kind
         } else {
             0u8
         };
-        let enter_view_exact = enter_view_projection_gate_body!($projection.enter_view)
-            && $projection.enter_view.enter_count == effect_count_body!($projection.effects, 8u8)
-            && $projection.enter_view.fetch_count == effect_count_body!($projection.effects, 2u8);
-        $facts_type {
+        $classification_type {
             before_invariant: safety_projection_accepts_body!($projection.safety_before),
             after_invariant: safety_projection_accepts_body!($projection.safety_after),
             context_unchanged: $projection.context_before == $projection.context_after
@@ -4881,19 +5397,66 @@ macro_rules! transition_facts_from_projection_body {
             signed_message_kind,
             replay_effect_kind,
             validator_count: $projection.validator_count,
-            volatile_before: $projection.volatile_before,
-            volatile_after: $projection.volatile_after,
-            durable_unchanged,
-            pending_unchanged,
-            generation_unchanged,
-            application_unchanged,
-            begin_persist_exact,
-            acknowledge_persist_exact,
-            application_transition_exact: application_unchanged || application_boundary_exact,
-            acknowledgement_continuation,
-            enter_view_exact,
-            effects: $projection.effects,
         }
+    }};
+}
+
+// Compose independently derived facts without recomputing any predicate.
+macro_rules! transition_facts_from_components_body {
+    ($classification:expr, $delta:expr, $enter_view_exact:expr, $facts_type:ident) => {{
+        $facts_type {
+            before_invariant: $classification.before_invariant,
+            after_invariant: $classification.after_invariant,
+            context_unchanged: $classification.context_unchanged,
+            whole_state_unchanged: $classification.whole_state_unchanged,
+            tag_matches: $classification.tag_matches,
+            busy_fence_open: $classification.busy_fence_open,
+            event_kind: $classification.event_kind,
+            action_kind: $classification.action_kind,
+            wal_record_kind: $classification.wal_record_kind,
+            signed_message_kind: $classification.signed_message_kind,
+            replay_effect_kind: $classification.replay_effect_kind,
+            validator_count: $classification.validator_count,
+            volatile_before: $delta.volatile_before,
+            volatile_after: $delta.volatile_after,
+            durable_unchanged: $delta.durable_unchanged,
+            pending_unchanged: $delta.pending_unchanged,
+            generation_unchanged: $delta.generation_unchanged,
+            application_unchanged: $delta.application_unchanged,
+            begin_persist_exact: $delta.begin_persist_exact,
+            acknowledge_persist_exact: $delta.acknowledge_persist_exact,
+            application_transition_exact: $delta.application_transition_exact,
+            acknowledgement_continuation: $delta.acknowledgement_continuation,
+            install_view_unchanged: $delta.install_view_unchanged,
+            timeout_vote_pool_unchanged: $delta.timeout_vote_pool_unchanged,
+            formed_timeouts_unchanged: $delta.formed_timeouts_unchanged,
+            timeout_control_unchanged: $delta.timeout_control_unchanged,
+            timeout_control_after_absent: $delta.timeout_control_after_absent,
+            enter_view_exact: $enter_view_exact,
+            effects: $delta.effects,
+        }
+    }};
+}
+
+// Derive every safety/action fact consumed by the production relation from
+// concrete primitive state, boundary, and capability projections.
+macro_rules! transition_facts_from_projection_body {
+    (
+        $projection:expr,
+        $facts_type:ident,
+        $classification_type:ident,
+        $delta_type:ident $(,)?
+    ) => {{
+        let delta = transition_delta_facts_from_projection_body!($projection, $delta_type);
+        let classification = transition_classification_facts_from_projection_body!(
+            $projection,
+            delta,
+            $classification_type
+        );
+        let enter_view_exact = enter_view_projection_gate_body!($projection.enter_view)
+            && $projection.enter_view.enter_count == effect_count_body!($projection.effects, 8u8)
+            && $projection.enter_view.fetch_count == effect_count_body!($projection.effects, 2u8);
+        transition_facts_from_components_body!(classification, delta, enter_view_exact, $facts_type)
     }};
 }
 
@@ -5189,31 +5752,71 @@ macro_rules! transition_branch_constraints_body {
                             && $facts.volatile_after.pending_prepare == 0u64
                             && $facts.volatile_after.vote_pools == 0u64
                             && $facts.volatile_after.vote_entries == 0u64
+                            && (if $facts.install_view_unchanged {
+                                $facts.timeout_vote_pool_unchanged
+                                    && $facts.volatile_after.timeout_vote_pools
+                                    == $facts.volatile_before.timeout_vote_pools
+                                    && $facts.volatile_after.timeout_vote_entries
+                                        == $facts.volatile_before.timeout_vote_entries
+                            } else {
+                                $facts.volatile_after.timeout_vote_pools == 0u64
+                                    && $facts.volatile_after.timeout_vote_entries == 0u64
+                            })
+                            && $facts.volatile_after.formed_certificates == 0u64
+                            && (if $facts.install_view_unchanged {
+                                $facts.formed_timeouts_unchanged
+                                    && $facts.volatile_after.formed_timeouts
+                                    == $facts.volatile_before.formed_timeouts
+                            } else {
+                                $facts.volatile_after.formed_timeouts == 0u64
+                            })
+                            && (if $facts.install_view_unchanged {
+                                $facts.timeout_control_unchanged
+                            } else {
+                                $facts.timeout_control_after_absent
+                            })
+                            && $facts.volatile_after.known_prepare <= 2u64
+                            // Install retains/reseeds one exact durable
+                            // PrepareQC beside the CommitVote, installed TC,
+                            // and (for a strict same-round upgrade) the
+                            // current TimeoutVote.
+                            && $facts.volatile_after.outbound_control <= 4u64
+                    }
+                    3 => {
+                        $facts.generation_unchanged
+                            && $sign_count == 0u64
+                            && $enter_count == 0u64
+                            // A durable Decision is the sole terminal owner.
+                            // Its acknowledgement retires every speculative
+                            // proposal, vote, timeout, and signature owner
+                            // while preserving (or creating) exactly one body
+                            // pipeline for the certified decision.
+                            && !$facts.volatile_after.candidate_present
+                            && $facts.volatile_after.body_work == 1u64
+                            && $facts.volatile_after.pending_prepare == 0u64
+                            && $facts.volatile_after.known_prepare == 0u64
+                            && $facts.volatile_after.vote_pools == 0u64
+                            && $facts.volatile_after.vote_entries == 0u64
                             && $facts.volatile_after.timeout_vote_pools == 0u64
                             && $facts.volatile_after.timeout_vote_entries == 0u64
                             && $facts.volatile_after.formed_certificates == 0u64
                             && $facts.volatile_after.formed_timeouts == 0u64
-                            && $facts.volatile_after.known_prepare <= 2u64
-                            && $facts.volatile_after.outbound_control <= 3u64
-                    }
-                    3 => {
-                        $facts.generation_unchanged
-                            && $enter_count == 0u64
+                            && $facts.volatile_after.outbound_control == 1u64
+                            && $facts.volatile_after.signature_queue == 0u64
+                            && !$facts.volatile_after.awaiting_signature
+                            && $facts.volatile_after.durable_signable_limit == 0u64
                             && (($apply_count == 1u64 && $fetch_count == 0u64)
                                 || ($apply_count == 0u64 && $fetch_count == 1u64)
                                 // A CommitQC may arrive after the exact body
                                 // has entered StoreBody or validation.  That
-                                // generation-tagged pipeline remains the sole
-                                // continuation, so issuing a second fetch here
-                                // would race useful work and can exhaust the
-                                // bounded adapter.  A zero-effect Decision ack
-                                // is accepted only while body work already
-                                // exists and its cardinality is unchanged.
+                                // exact generation-tagged entry remains the
+                                // sole continuation after every competing
+                                // entry is retired.
                                 || ($apply_count == 0u64
                                     && $fetch_count == 0u64
                                     && $facts.volatile_before.body_work > 0u64
                                     && $facts.volatile_after.body_work
-                                        == $facts.volatile_before.body_work))
+                                        <= $facts.volatile_before.body_work))
                     }
                     _ => false,
                 })
@@ -5293,6 +5896,7 @@ pub(crate) const fn production_enter_view_uses_post_install_effective_lock_kerne
 ) -> bool {
     effective_lock_trace_claim_body!(trace, 1u8)
         && enter_view_locked_prepare_qc_identity_body!(enter_view)
+        && enter_view_high_prepare_qc_control_identity_body!(enter_view)
 }
 
 /// Validate monotonic exact body-pipeline ownership.
@@ -5351,7 +5955,8 @@ pub(crate) const fn production_startup_failure_and_restart_refines_indexed_lifec
     production_startup_failure_and_restart_trace_body!(projection)
 }
 
-/// Validate one authenticated historical CommitQC's exact reducer admission.
+/// Validate one authenticated, internally same-round historical CommitQC's
+/// exact reducer admission. Historical refers only to the local reducer view.
 pub(crate) const fn production_historical_certificate_trace_refines_indexed_async_kernel(
     projection: ProductionHistoricalCertificateTraceProjection,
 ) -> bool {
@@ -5575,7 +6180,12 @@ fn accepts_facts(facts: TransitionFacts) -> bool {
 
 /// Derive the complete checked relation from concrete primitive projections.
 fn transition_facts(projection: TransitionProjection<'_>) -> TransitionFacts {
-    transition_facts_from_projection_body!(projection, TransitionFacts)
+    transition_facts_from_projection_body!(
+        projection,
+        TransitionFacts,
+        TransitionClassificationFacts,
+        TransitionDeltaFacts,
+    )
 }
 
 /// Execute the verified transition kernel used as the production commit gate.
@@ -5626,6 +6236,266 @@ mod tests {
 
     fn successor_identity(domain: u8, kind: u8, byte: u8) -> CanonicalIdentityProjection {
         CanonicalIdentityProjection::from_bytes(domain, kind, [byte; 32])
+    }
+
+    fn retirement_projection_accepts(
+        decision_view: u64,
+        decision_proposal_view: u64,
+        receipt_view: u64,
+        receipt_proposal_view: u64,
+    ) -> bool {
+        wal_retirement_authorized_body!(
+            true,
+            true,
+            true,
+            1u64,
+            9u64,
+            7u64,
+            1u64,
+            9u64,
+            decision_view,
+            9u64,
+            decision_proposal_view,
+            2u8,
+            2u8,
+            7u64,
+            1u64,
+            9u64,
+            7u64,
+            1u64,
+            9u64,
+            receipt_view,
+            9u64,
+            receipt_proposal_view,
+            2u8,
+            7u64,
+        )
+    }
+
+    fn assert_strict_same_round_timeout_upgrade_kernel_boundaries() {
+        let admitted = StrictSameRoundTimeoutUpgradeProjection {
+            current_view: 6,
+            timeout_view: 5,
+            installed_same_round: true,
+            selected_prepare_present: true,
+            selected_prepare_view: 4,
+            highest_prepare_present: true,
+            highest_prepare_view: 3,
+            locked_prepare_present: true,
+            locked_prepare_view: 3,
+        };
+        assert!(strict_same_round_timeout_upgrade_is_allowed(admitted));
+
+        assert!(!strict_same_round_timeout_upgrade_is_allowed(
+            StrictSameRoundTimeoutUpgradeProjection {
+                current_view: 7,
+                ..admitted
+            }
+        ));
+        assert!(!strict_same_round_timeout_upgrade_is_allowed(
+            StrictSameRoundTimeoutUpgradeProjection {
+                current_view: 0,
+                timeout_view: u64::MAX,
+                ..admitted
+            }
+        ));
+        assert!(!strict_same_round_timeout_upgrade_is_allowed(
+            StrictSameRoundTimeoutUpgradeProjection {
+                installed_same_round: false,
+                ..admitted
+            }
+        ));
+        assert!(!strict_same_round_timeout_upgrade_is_allowed(
+            StrictSameRoundTimeoutUpgradeProjection {
+                selected_prepare_present: false,
+                ..admitted
+            }
+        ));
+        assert!(!strict_same_round_timeout_upgrade_is_allowed(
+            StrictSameRoundTimeoutUpgradeProjection {
+                highest_prepare_view: admitted.selected_prepare_view,
+                ..admitted
+            }
+        ));
+        assert!(!strict_same_round_timeout_upgrade_is_allowed(
+            StrictSameRoundTimeoutUpgradeProjection {
+                locked_prepare_view: admitted.selected_prepare_view,
+                ..admitted
+            }
+        ));
+        assert!(strict_same_round_timeout_upgrade_is_allowed(
+            StrictSameRoundTimeoutUpgradeProjection {
+                highest_prepare_present: false,
+                locked_prepare_present: false,
+                ..admitted
+            }
+        ));
+    }
+
+    #[test]
+    fn strict_same_round_refinement_kernels_reject_split_round_mutations() {
+        assert_strict_same_round_timeout_upgrade_kernel_boundaries();
+
+        let pending = PendingProjection {
+            record_kind: WAL_RECORD_LOCK_AND_COMMIT,
+            continuation: CONTINUATION_SIGN,
+            persistence_id: 1,
+            height: 9,
+            view: 4,
+            proposal_present: true,
+            proposal_height: 9,
+            proposal_view: 4,
+            ..PendingProjection::default()
+        };
+        let boundary = BoundaryCapabilityKey {
+            auxiliary_present: true,
+            auxiliary_height: 9,
+            auxiliary_view: 4,
+            auxiliary_proposal_height: 9,
+            auxiliary_proposal_view: 4,
+            auxiliary_phase: 1,
+            ..BoundaryCapabilityKey::none()
+        };
+        assert!(wal_record_proposal_round_is_exact_body!(
+            WAL_RECORD_LOCK_AND_COMMIT,
+            pending,
+            boundary
+        ));
+
+        let split_lock = PendingProjection {
+            proposal_view: 3,
+            ..pending
+        };
+        let split_lock_boundary = BoundaryCapabilityKey {
+            auxiliary_view: 3,
+            auxiliary_proposal_view: 3,
+            ..boundary
+        };
+        assert!(!wal_record_proposal_round_is_exact_body!(
+            WAL_RECORD_LOCK_AND_COMMIT,
+            split_lock,
+            split_lock_boundary
+        ));
+
+        let decision = PendingProjection {
+            record_kind: WAL_RECORD_DECISION,
+            continuation: CONTINUATION_DECIDE,
+            ..pending
+        };
+        assert!(wal_record_proposal_round_is_exact_body!(
+            WAL_RECORD_DECISION,
+            decision,
+            BoundaryCapabilityKey::none()
+        ));
+        assert!(!wal_record_proposal_round_is_exact_body!(
+            WAL_RECORD_DECISION,
+            PendingProjection {
+                proposal_view: 3,
+                ..decision
+            },
+            BoundaryCapabilityKey::none()
+        ));
+    }
+
+    #[test]
+    fn wal_retirement_authorization_rejects_split_round_decision_and_receipt() {
+        assert!(retirement_projection_accepts(4, 4, 4, 4));
+        assert!(!retirement_projection_accepts(4, 3, 4, 3));
+        assert!(!retirement_projection_accepts(4, 4, 5, 5));
+    }
+
+    #[test]
+    fn semantic_commit_decision_identity_ignores_only_qc_rounds() {
+        let context = successor_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            0x11,
+        );
+        let subject = successor_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+            0x21,
+        );
+        let old_round = ProductionDecisionIdentityProjection {
+            context_id: context,
+            height: 9,
+            view: 2,
+            proposal_height: 9,
+            proposal_view: 2,
+            phase: 2,
+            subject,
+            block_hash: successor_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_BLOCK_HEADER,
+                0x31,
+            ),
+            payload_hash: successor_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CANONICAL_PAYLOAD,
+                0x41,
+            ),
+            execution_commitment: successor_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_EXECUTION_COMMITMENT,
+                0x51,
+            ),
+            executed_block_wire_hash: successor_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+                0x61,
+            ),
+        };
+        let later_reproposal = ProductionDecisionIdentityProjection {
+            view: 5,
+            proposal_view: 5,
+            ..old_round
+        };
+        assert!(production_decision_identity_is_canonical_body!(old_round));
+        assert!(production_decision_identity_is_canonical_body!(
+            later_reproposal
+        ));
+        assert!(production_decision_identity_equal_body!(
+            old_round,
+            later_reproposal
+        ));
+
+        let split_round = ProductionDecisionIdentityProjection {
+            proposal_view: 4,
+            ..later_reproposal
+        };
+        assert!(!production_decision_identity_is_canonical_body!(
+            split_round
+        ));
+        assert!(!production_decision_identity_equal_body!(
+            old_round,
+            split_round
+        ));
+
+        let altered_subject = ProductionDecisionIdentityProjection {
+            subject: successor_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+                0x22,
+            ),
+            ..later_reproposal
+        };
+        assert!(!production_decision_identity_equal_body!(
+            old_round,
+            altered_subject
+        ));
+
+        let altered_execution = ProductionDecisionIdentityProjection {
+            execution_commitment: successor_identity(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_EXECUTION_COMMITMENT,
+                0x52,
+            ),
+            ..later_reproposal
+        };
+        assert!(!production_decision_identity_equal_body!(
+            old_round,
+            altered_execution
+        ));
     }
 
     fn durable_predecessor(byte: u8) -> ProductionDurablePredecessorIdentityProjection {
@@ -6125,6 +6995,26 @@ mod tests {
         }
     }
 
+    fn durable_reproposal_progress_witness() -> LockedCommitProgressWitnessProjection {
+        LockedCommitProgressWitnessProjection {
+            context_id: progress_identity(1),
+            current_height: 7,
+            current_view: 3,
+            local_validator_present: true,
+            local_validator: ValidatorId::repeat(4),
+            locked_context_id: progress_identity(1),
+            locked_height: 7,
+            locked_view: 1,
+            locked_subject: progress_identity(2),
+            installed_timeout_present: true,
+            installed_timeout_durable: true,
+            installed_timeout_context_id: progress_identity(1),
+            installed_timeout_height: 7,
+            installed_timeout_view: 2,
+            ..LockedCommitProgressWitnessProjection::default()
+        }
+    }
+
     #[test]
     fn locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations() {
         let timeout = durable_timeout_progress_witness();
@@ -6150,9 +7040,45 @@ mod tests {
         volatile_timeout.timeout_intent_durable = false;
         assert!(!locked_commit_progress_witness_is_valid(volatile_timeout));
 
+        let reproposal = durable_reproposal_progress_witness();
+        assert!(locked_commit_progress_witness_is_valid(reproposal));
+
+        let mut absent_reproposal = reproposal;
+        absent_reproposal.installed_timeout_present = false;
+        assert!(!locked_commit_progress_witness_is_valid(absent_reproposal));
+
+        let mut volatile_reproposal = reproposal;
+        volatile_reproposal.installed_timeout_durable = false;
+        assert!(!locked_commit_progress_witness_is_valid(
+            volatile_reproposal
+        ));
+
+        let mut foreign_reproposal_context = reproposal;
+        foreign_reproposal_context.installed_timeout_context_id = progress_identity(9);
+        assert!(!locked_commit_progress_witness_is_valid(
+            foreign_reproposal_context
+        ));
+
+        let mut foreign_reproposal_height = reproposal;
+        foreign_reproposal_height.installed_timeout_height += 1;
+        assert!(!locked_commit_progress_witness_is_valid(
+            foreign_reproposal_height
+        ));
+
+        let mut stale_reproposal = reproposal;
+        stale_reproposal.installed_timeout_view -= 1;
+        assert!(!locked_commit_progress_witness_is_valid(stale_reproposal));
+
+        let mut nonhistorical_reproposal = reproposal;
+        nonhistorical_reproposal.locked_view = nonhistorical_reproposal.current_view;
+        assert!(!locked_commit_progress_witness_is_valid(
+            nonhistorical_reproposal
+        ));
+
         let mut pending = timeout;
         pending.timeout_intent_present = false;
         pending.timeout_intent_durable = false;
+        pending.current_view = pending.locked_view;
         pending.pending = PendingProjection {
             record_kind: WAL_RECORD_LOCK_AND_COMMIT,
             continuation: CONTINUATION_SIGN,
@@ -6166,6 +7092,13 @@ mod tests {
             subject: pending.locked_subject,
         };
         assert!(locked_commit_progress_witness_is_valid(pending));
+
+        let mut closed_origin_pending = pending;
+        closed_origin_pending.current_view += 1;
+        closed_origin_pending.pending.view = closed_origin_pending.current_view;
+        assert!(!locked_commit_progress_witness_is_valid(
+            closed_origin_pending
+        ));
 
         let mut nonexact_pending = pending;
         nonexact_pending.pending.proposal_view += 1;
@@ -6181,6 +7114,7 @@ mod tests {
         let mut commit = timeout;
         commit.timeout_intent_present = false;
         commit.timeout_intent_durable = false;
+        commit.current_view = commit.locked_view;
         commit.commit_intent_present = true;
         commit.commit_context_id = commit.context_id;
         commit.commit_height = commit.current_height;
@@ -6192,6 +7126,13 @@ mod tests {
         commit.commit_signer = commit.local_validator;
         commit.commit_signature_pending = true;
         assert!(locked_commit_progress_witness_is_valid(commit));
+
+        let mut closed_origin_commit = commit;
+        closed_origin_commit.current_view += 1;
+        closed_origin_commit.commit_view = closed_origin_commit.current_view;
+        assert!(!locked_commit_progress_witness_is_valid(
+            closed_origin_commit
+        ));
 
         let mut nonexact_commit = commit;
         nonexact_commit.commit_subject.word0 ^= 1;
@@ -6589,19 +7530,23 @@ mod tests {
     }
 
     #[test]
-    fn later_view_lock_and_commit_binds_finality_owner_and_proposal_origin() {
+    fn lock_and_commit_requires_one_current_vote_and_proposal_round() {
         let begin = lock_and_commit_begin_trace();
         assert!(production_durable_intent_trace_refines_progress_witness_kernel(begin));
 
-        let mut origin_as_lifecycle_round = begin;
-        origin_as_lifecycle_round.pending_after.view = begin.pending_after.proposal_view;
-        origin_as_lifecycle_round.effects.slot0.requested.view = begin.pending_after.proposal_view;
-        origin_as_lifecycle_round.effects.slot0.granted.view = begin.pending_after.proposal_view;
+        let mut split_round = begin;
+        split_round.pending_after.proposal_view -= 1;
+        split_round.boundary_claimed.proposal_view -= 1;
+        split_round.boundary_claimed.auxiliary_view -= 1;
+        split_round.boundary_claimed.auxiliary_proposal_view -= 1;
+        split_round.boundary_granted = split_round.boundary_claimed;
+        split_round.effects.slot0.requested.proposal_view -= 1;
+        split_round.effects.slot0.requested.auxiliary_view -= 1;
+        split_round.effects.slot0.requested.auxiliary_proposal_view -= 1;
+        split_round.effects.slot0.granted = split_round.effects.slot0.requested;
         assert!(
-            !production_durable_intent_trace_refines_progress_witness_kernel(
-                origin_as_lifecycle_round
-            ),
-            "the pending WAL owner is the Commit finality round, not its proposal origin"
+            !production_durable_intent_trace_refines_progress_witness_kernel(split_round),
+            "a new Commit cannot combine the current vote round with an older proposal round"
         );
 
         let mut substituted_primary_origin = begin;
@@ -6656,7 +7601,7 @@ mod tests {
             !production_durable_intent_trace_refines_progress_witness_kernel(
                 substituted_ack_origin
             ),
-            "acknowledgement must retain the proposal origin from the pending record"
+            "acknowledgement must retain the same-round proposal field from the pending record"
         );
     }
 
@@ -6775,6 +7720,42 @@ mod tests {
         begin.effects.slot0.granted = begin.effects.slot0.requested;
         assert!(production_durable_intent_trace_refines_progress_witness_kernel(begin));
 
+        let immediate_predecessor_view = begin.owner_tag_before.view - 1;
+        let mut predecessor_begin = begin;
+        predecessor_begin.pending_after.view = immediate_predecessor_view;
+        predecessor_begin.boundary_claimed.auxiliary_view = immediate_predecessor_view;
+        predecessor_begin.boundary_claimed.auxiliary_proposal_view = immediate_predecessor_view;
+        predecessor_begin.boundary_granted = predecessor_begin.boundary_claimed;
+        predecessor_begin.effects.slot0.requested.view = immediate_predecessor_view;
+        predecessor_begin.effects.slot0.requested.auxiliary_view = immediate_predecessor_view;
+        predecessor_begin
+            .effects
+            .slot0
+            .requested
+            .auxiliary_proposal_view = immediate_predecessor_view;
+        predecessor_begin.effects.slot0.granted = predecessor_begin.effects.slot0.requested;
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(predecessor_begin),
+            "an exact immediate-predecessor TC with a same-round high PrepareQC is owned"
+        );
+
+        let mut predecessor_without_high = predecessor_begin;
+        predecessor_without_high.boundary_claimed.auxiliary_present = false;
+        predecessor_without_high.boundary_granted = predecessor_without_high.boundary_claimed;
+        predecessor_without_high
+            .effects
+            .slot0
+            .requested
+            .auxiliary_present = false;
+        predecessor_without_high.effects.slot0.granted =
+            predecessor_without_high.effects.slot0.requested;
+        assert!(
+            !production_durable_intent_trace_refines_progress_witness_kernel(
+                predecessor_without_high
+            ),
+            "a no-high predecessor TC cannot claim the exceptional owner relation"
+        );
+
         let mut missing_high_prepare_subject = begin;
         missing_high_prepare_subject
             .effects
@@ -6831,6 +7812,35 @@ mod tests {
             durable_sequence_after: begin.durable_sequence_before + 1,
         };
         assert!(production_durable_intent_trace_refines_progress_witness_kernel(acknowledge));
+
+        let predecessor_successor = TagProjection {
+            height: predecessor_begin.owner_tag_before.height,
+            view: predecessor_begin.owner_tag_before.view,
+            generation: predecessor_begin.owner_tag_before.generation + 1,
+        };
+        let mut predecessor_acknowledge_boundary = predecessor_begin.boundary_claimed;
+        predecessor_acknowledge_boundary.kind = BOUNDARY_ACKNOWLEDGE_WAL;
+        predecessor_acknowledge_boundary.tag = predecessor_successor;
+        let predecessor_acknowledge = ProductionDurableIntentTraceProjection {
+            event_tag: predecessor_begin.owner_tag_before,
+            owner_tag_before: predecessor_begin.owner_tag_before,
+            owner_tag_after: predecessor_successor,
+            event_kind: EVENT_PERSISTED,
+            event_persistence_id: predecessor_begin.pending_after.persistence_id,
+            pending_before: predecessor_begin.pending_after,
+            pending_after: PendingProjection::default(),
+            boundary_claimed: predecessor_acknowledge_boundary,
+            boundary_granted: predecessor_acknowledge_boundary,
+            effects: EffectTrace::empty(),
+            durable_sequence_before: predecessor_begin.durable_sequence_before,
+            durable_sequence_after: predecessor_begin.durable_sequence_before + 1,
+        };
+        assert!(
+            production_durable_intent_trace_refines_progress_witness_kernel(
+                predecessor_acknowledge
+            ),
+            "acknowledging an immediate-predecessor TC changes generation, not view"
+        );
 
         let mut wrong_successor = acknowledge;
         wrong_successor.owner_tag_after.view -= 1;
@@ -6934,44 +7944,44 @@ mod tests {
         assert!(recovery.expected_height - recovery.state_height <= 1);
         assert_eq!(recovery.durable_body.height, recovery.frozen_height);
         assert_eq!(recovery.stage, 1);
-        let historical_body = ProductionDurableBodyIdentityProjection {
+        let split_round_body = ProductionDurableBodyIdentityProjection {
             view: 2,
             ..durable_body
         };
-        let historical_commit_qc = ProductionQuorumCertificateIdentityProjection {
+        let split_round_commit_qc = ProductionQuorumCertificateIdentityProjection {
             decision: ProductionDecisionIdentityProjection {
                 proposal_view: 2,
                 ..decision
             },
             ..commit_qc
         };
-        assert!(production_decision_trace_refines_recovery_witness_kernel(
+        assert!(!production_decision_trace_refines_recovery_witness_kernel(
             ProductionDecisionRecoveryTraceProjection {
-                commit_qc: historical_commit_qc,
+                commit_qc: split_round_commit_qc,
                 manifest_round: TagProjection {
                     view: 2,
                     ..recovery.manifest_round
                 },
-                durable_body: historical_body,
-                validated_body: historical_body,
+                durable_body: split_round_body,
+                validated_body: split_round_body,
                 ..recovery
             }
         ));
         assert!(!production_decision_trace_refines_recovery_witness_kernel(
             ProductionDecisionRecoveryTraceProjection {
-                commit_qc: historical_commit_qc,
+                commit_qc: split_round_commit_qc,
                 manifest_round: TagProjection {
                     view: 3,
                     ..recovery.manifest_round
                 },
-                durable_body: historical_body,
-                validated_body: historical_body,
+                durable_body: split_round_body,
+                validated_body: split_round_body,
                 ..recovery
             }
         ));
         assert!(!production_decision_trace_refines_recovery_witness_kernel(
             ProductionDecisionRecoveryTraceProjection {
-                commit_qc: historical_commit_qc,
+                commit_qc: split_round_commit_qc,
                 manifest_round: TagProjection {
                     view: 5,
                     ..recovery.manifest_round
@@ -6984,6 +7994,30 @@ mod tests {
                     view: 5,
                     ..durable_body
                 },
+                ..recovery
+            }
+        ));
+        let reproposal_commit_qc = ProductionQuorumCertificateIdentityProjection {
+            decision: ProductionDecisionIdentityProjection {
+                view: 5,
+                proposal_view: 5,
+                ..decision
+            },
+            ..commit_qc
+        };
+        let reproposal_body = ProductionDurableBodyIdentityProjection {
+            view: 5,
+            ..durable_body
+        };
+        assert!(production_decision_trace_refines_recovery_witness_kernel(
+            ProductionDecisionRecoveryTraceProjection {
+                commit_qc: reproposal_commit_qc,
+                manifest_round: TagProjection {
+                    view: 5,
+                    ..recovery.manifest_round
+                },
+                durable_body: reproposal_body,
+                validated_body: reproposal_body,
                 ..recovery
             }
         ));
@@ -7090,6 +8124,7 @@ mod tests {
             ticket_id: 3,
             ticket_rank: 1,
             ticket_topic: 3,
+            reply_writer_timeout_attempt: 4,
             canonical_request_digest: identity(
                 IDENTITY_DOMAIN_PAYLOAD,
                 IDENTITY_KIND_REPLY_PAYLOAD,
@@ -7097,6 +8132,9 @@ mod tests {
             ),
             stream_wire_bytes: 512,
             request_id: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST, 24),
+            service_generation: 6,
+            stream_epoch: 5,
+            semantic_sequence: 7,
             entry_hash: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_MERGE_ENTRY, 25),
             encoded_len: 256,
             epoch_id: 4,
@@ -7130,6 +8168,30 @@ mod tests {
         assert!(flush.chunk_index < flush.chunk_count);
         assert_eq!(flush.chunk_cursor_before, flush.chunk_index);
         assert!(flush.flushing_after <= flush.capacity);
+        assert!(
+            !production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                ProductionReliableFlushTraceProjection {
+                    stream_epoch: 0,
+                    ..flush
+                }
+            )
+        );
+        assert!(
+            !production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                ProductionReliableFlushTraceProjection {
+                    semantic_sequence: 0,
+                    ..flush
+                }
+            )
+        );
+        assert!(
+            !production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                ProductionReliableFlushTraceProjection {
+                    service_generation: 0,
+                    ..flush
+                }
+            )
+        );
         assert!(
             !production_reliable_flush_trace_refines_outbound_ownership_kernel(
                 ProductionReliableFlushTraceProjection {
@@ -7174,9 +8236,13 @@ mod tests {
             ticket_id: flush.ticket_id,
             ticket_rank: flush.ticket_rank,
             ticket_topic: flush.ticket_topic,
+            reply_writer_timeout_attempt: flush.reply_writer_timeout_attempt,
             canonical_request_digest: flush.canonical_request_digest,
             stream_wire_bytes: flush.stream_wire_bytes,
             request_id: flush.request_id,
+            service_generation: flush.service_generation,
+            stream_epoch: flush.stream_epoch,
+            semantic_sequence: flush.semantic_sequence,
             entry_hash: flush.entry_hash,
             encoded_len: flush.encoded_len,
             epoch_id: flush.epoch_id,
@@ -7192,6 +8258,9 @@ mod tests {
             chunk_cursor_before: flush.chunk_cursor_before,
             chunk_cursor_after: flush.chunk_cursor_after,
             marker_request_id: flush.request_id,
+            marker_service_generation: flush.service_generation,
+            marker_stream_epoch: flush.stream_epoch,
+            marker_semantic_sequence: flush.semantic_sequence,
             marker_entry_hash: flush.entry_hash,
             marker_encoded_len: flush.encoded_len,
             marker_epoch_id: flush.epoch_id,
@@ -7250,6 +8319,208 @@ mod tests {
         assert!(production_reliable_flush_application_refines_source_lane_kernel(lane_application));
         assert!(production_reliable_flush_two_phase_link_kernel(
             flush,
+            lane_application
+        ));
+        let disconnected_application_timeout_attempt =
+            ProductionReliableFlushApplicationProjection {
+                reply_writer_timeout_attempt: lane_application
+                    .reply_writer_timeout_attempt
+                    .saturating_add(1),
+                ..lane_application
+            };
+        assert!(
+            production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_application_timeout_attempt
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_application_timeout_attempt
+        ));
+        let disconnected_worker_timeout_attempt = ProductionReliableFlushTraceProjection {
+            reply_writer_timeout_attempt: flush.reply_writer_timeout_attempt.saturating_add(1),
+            ..flush
+        };
+        assert!(
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                disconnected_worker_timeout_attempt
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            disconnected_worker_timeout_attempt,
+            lane_application
+        ));
+
+        let zero_stream_epoch_application = ProductionReliableFlushApplicationProjection {
+            stream_epoch: 0,
+            marker_stream_epoch: 0,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                zero_stream_epoch_application
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            ProductionReliableFlushTraceProjection {
+                stream_epoch: 0,
+                ..flush
+            },
+            zero_stream_epoch_application
+        ));
+        let disconnected_marker_stream_epoch = ProductionReliableFlushApplicationProjection {
+            marker_stream_epoch: lane_application.marker_stream_epoch + 1,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_marker_stream_epoch
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_marker_stream_epoch
+        ));
+        let disconnected_occurrence_stream_epoch = ProductionReliableFlushApplicationProjection {
+            stream_epoch: lane_application.stream_epoch + 1,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_occurrence_stream_epoch
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_occurrence_stream_epoch
+        ));
+        let disconnected_worker_stream_epoch = ProductionReliableFlushTraceProjection {
+            stream_epoch: flush.stream_epoch + 1,
+            ..flush
+        };
+        assert!(
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                disconnected_worker_stream_epoch
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            disconnected_worker_stream_epoch,
+            lane_application
+        ));
+
+        let zero_service_generation_application = ProductionReliableFlushApplicationProjection {
+            service_generation: 0,
+            marker_service_generation: 0,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                zero_service_generation_application
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            ProductionReliableFlushTraceProjection {
+                service_generation: 0,
+                ..flush
+            },
+            zero_service_generation_application
+        ));
+        let disconnected_marker_service_generation = ProductionReliableFlushApplicationProjection {
+            marker_service_generation: lane_application.marker_service_generation + 1,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_marker_service_generation
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_marker_service_generation
+        ));
+        let disconnected_occurrence_service_generation =
+            ProductionReliableFlushApplicationProjection {
+                service_generation: lane_application.service_generation + 1,
+                ..lane_application
+            };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_occurrence_service_generation
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_occurrence_service_generation
+        ));
+        let disconnected_worker_service_generation = ProductionReliableFlushTraceProjection {
+            service_generation: flush.service_generation + 1,
+            ..flush
+        };
+        assert!(
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                disconnected_worker_service_generation
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            disconnected_worker_service_generation,
+            lane_application
+        ));
+
+        let zero_semantic_sequence_application = ProductionReliableFlushApplicationProjection {
+            semantic_sequence: 0,
+            marker_semantic_sequence: 0,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                zero_semantic_sequence_application
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            ProductionReliableFlushTraceProjection {
+                semantic_sequence: 0,
+                ..flush
+            },
+            zero_semantic_sequence_application
+        ));
+        let disconnected_marker_semantic_sequence = ProductionReliableFlushApplicationProjection {
+            marker_semantic_sequence: lane_application.marker_semantic_sequence + 1,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_marker_semantic_sequence
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_marker_semantic_sequence
+        ));
+        let disconnected_occurrence_semantic_sequence =
+            ProductionReliableFlushApplicationProjection {
+                semantic_sequence: lane_application.semantic_sequence + 1,
+                ..lane_application
+            };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_occurrence_semantic_sequence
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_occurrence_semantic_sequence
+        ));
+        let disconnected_worker_semantic_sequence = ProductionReliableFlushTraceProjection {
+            semantic_sequence: flush.semantic_sequence + 1,
+            ..flush
+        };
+        assert!(
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                disconnected_worker_semantic_sequence
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            disconnected_worker_semantic_sequence,
             lane_application
         ));
 
@@ -7349,18 +8620,35 @@ mod tests {
         assert_eq!(application.artifact_height, application.context_height);
         assert_eq!(application.completion_work_id, application.task_work_id);
         assert_eq!(application.artifact_context_id, application.context_id);
-        let historical_application = ProductionApplicationTraceProjection {
-            commit_qc: historical_commit_qc,
+        let split_round_application = ProductionApplicationTraceProjection {
+            commit_qc: split_round_commit_qc,
             validated_body: ProductionDurableBodyIdentityProjection {
                 view: 2,
                 ..application.validated_body
             },
-            kura_decision: historical_commit_qc.decision,
-            artifact_commit_qc: historical_commit_qc,
+            kura_decision: split_round_commit_qc.decision,
+            artifact_commit_qc: split_round_commit_qc,
             ..application
         };
         assert!(
-            production_application_trace_refines_decision_completion_kernel(historical_application)
+            !production_application_trace_refines_decision_completion_kernel(
+                split_round_application
+            )
+        );
+        let reproposal_application = ProductionApplicationTraceProjection {
+            commit_qc: reproposal_commit_qc,
+            validated_body: ProductionDurableBodyIdentityProjection {
+                view: 5,
+                ..application.validated_body
+            },
+            // A prior same-body decision is semantically equivalent even
+            // though the exact later QC remains the application artifact.
+            kura_decision: decision,
+            artifact_commit_qc: reproposal_commit_qc,
+            ..application
+        };
+        assert!(
+            production_application_trace_refines_decision_completion_kernel(reproposal_application)
         );
         assert!(
             !production_application_trace_refines_decision_completion_kernel(
@@ -7666,22 +8954,22 @@ mod tests {
 
     fn lock_and_commit_begin_trace() -> ProductionDurableIntentTraceProjection {
         let mut trace = durable_begin_trace();
-        let origin_view = trace.owner_tag_before.view - 1;
+        let proposal_view = trace.owner_tag_before.view;
         trace.event_kind = 10;
         trace.pending_after.record_kind = WAL_RECORD_LOCK_AND_COMMIT;
         trace.pending_after.proposal_present = true;
         trace.pending_after.proposal_height = trace.owner_tag_before.height;
-        trace.pending_after.proposal_view = origin_view;
+        trace.pending_after.proposal_view = proposal_view;
         trace.boundary_claimed.record_kind = WAL_RECORD_LOCK_AND_COMMIT;
         trace.boundary_claimed.proposal_present = true;
         trace.boundary_claimed.proposal_height = trace.owner_tag_before.height;
-        trace.boundary_claimed.proposal_view = origin_view;
+        trace.boundary_claimed.proposal_view = proposal_view;
         trace.boundary_claimed.auxiliary_present = true;
         trace.boundary_claimed.auxiliary_context_id = trace.boundary_claimed.context_id;
         trace.boundary_claimed.auxiliary_height = trace.owner_tag_before.height;
-        trace.boundary_claimed.auxiliary_view = origin_view;
+        trace.boundary_claimed.auxiliary_view = proposal_view;
         trace.boundary_claimed.auxiliary_proposal_height = trace.owner_tag_before.height;
-        trace.boundary_claimed.auxiliary_proposal_view = origin_view;
+        trace.boundary_claimed.auxiliary_proposal_view = proposal_view;
         trace.boundary_claimed.auxiliary_phase = 1;
         trace.boundary_claimed.auxiliary_subject = trace.boundary_claimed.subject.subject;
         trace.boundary_granted = trace.boundary_claimed;
@@ -7690,7 +8978,7 @@ mod tests {
             let persist = &mut trace.effects.slot0.requested;
             persist.record_kind = WAL_RECORD_LOCK_AND_COMMIT;
             persist.proposal_height = trace.owner_tag_before.height;
-            persist.proposal_view = origin_view;
+            persist.proposal_view = proposal_view;
             persist.phase = 2;
             persist.auxiliary_present = true;
             persist.auxiliary_context_id = trace.boundary_claimed.auxiliary_context_id;
@@ -7739,6 +9027,11 @@ mod tests {
             acknowledge_persist_exact: false,
             application_transition_exact: true,
             acknowledgement_continuation: CONTINUATION_NONE,
+            install_view_unchanged: false,
+            timeout_vote_pool_unchanged: true,
+            formed_timeouts_unchanged: true,
+            timeout_control_unchanged: true,
+            timeout_control_after_absent: true,
             enter_view_exact: true,
             effects: EffectTrace::empty(),
         }
@@ -8154,27 +9447,109 @@ mod tests {
         bad_ack.acknowledge_persist_exact = true;
         bad_ack.acknowledgement_continuation = CONTINUATION_INSTALL_TIMEOUT;
         assert!(!accepts_facts(bad_ack));
+
+        let mut same_round_install = base_facts();
+        same_round_install.whole_state_unchanged = false;
+        same_round_install.action_kind = ACTION_ACKNOWLEDGE_WAL;
+        same_round_install.wal_record_kind = WAL_RECORD_INSTALL_TIMEOUT;
+        same_round_install.event_kind = EVENT_PERSISTED;
+        same_round_install.durable_unchanged = false;
+        same_round_install.pending_unchanged = false;
+        same_round_install.generation_unchanged = false;
+        same_round_install.acknowledge_persist_exact = true;
+        same_round_install.acknowledgement_continuation = CONTINUATION_INSTALL_TIMEOUT;
+        same_round_install.install_view_unchanged = true;
+        same_round_install.volatile_before.timeout_vote_pools = 1;
+        same_round_install.volatile_before.timeout_vote_entries = 2;
+        same_round_install.volatile_after.timeout_vote_pools = 1;
+        same_round_install.volatile_after.timeout_vote_entries = 2;
+        assert!(push_authorized(
+            &mut same_round_install.effects,
+            EFFECT_ENTER_VIEW
+        ));
+        assert!(
+            accepts_facts(same_round_install),
+            "a lock-only TC install preserves the exact current timeout pool"
+        );
+        let mut full_same_round_control = same_round_install;
+        full_same_round_control.volatile_after.outbound_control = 4;
+        assert!(
+            accepts_facts(full_same_round_control),
+            "install may retain CommitVote, PrepareQC, TimeoutVote, and TC"
+        );
+        let mut overflowing_same_round_control = full_same_round_control;
+        overflowing_same_round_control
+            .volatile_after
+            .outbound_control = 5;
+        assert!(!accepts_facts(overflowing_same_round_control));
+
+        let mut erased_same_round_pool = same_round_install;
+        erased_same_round_pool.volatile_after.timeout_vote_pools = 0;
+        erased_same_round_pool.volatile_after.timeout_vote_entries = 0;
+        assert!(!accepts_facts(erased_same_round_pool));
+
+        let mut substituted_same_size_pool = same_round_install;
+        substituted_same_size_pool.timeout_vote_pool_unchanged = false;
+        assert!(!accepts_facts(substituted_same_size_pool));
+
+        let mut substituted_formed_marker = same_round_install;
+        substituted_formed_marker.formed_timeouts_unchanged = false;
+        assert!(!accepts_facts(substituted_formed_marker));
+
+        let mut substituted_timeout_control = same_round_install;
+        substituted_timeout_control.timeout_control_unchanged = false;
+        assert!(!accepts_facts(substituted_timeout_control));
+
+        let mut advancing_install_keeps_old_pool = same_round_install;
+        advancing_install_keeps_old_pool.install_view_unchanged = false;
+        assert!(!accepts_facts(advancing_install_keeps_old_pool));
+
+        let mut advancing_install = advancing_install_keeps_old_pool;
+        advancing_install.volatile_after.timeout_vote_pools = 0;
+        advancing_install.volatile_after.timeout_vote_entries = 0;
+        assert!(
+            accepts_facts(advancing_install),
+            "an advancing TC install clears timeout pools, markers, and control"
+        );
+
+        let mut advancing_install_keeps_timeout_control = advancing_install;
+        advancing_install_keeps_timeout_control.timeout_control_after_absent = false;
+        assert!(!accepts_facts(advancing_install_keeps_timeout_control));
     }
 
     #[test]
-    fn decision_ack_may_retain_only_an_existing_body_pipeline() {
-        let mut retained = base_facts();
-        retained.action_kind = ACTION_ACKNOWLEDGE_WAL;
-        retained.wal_record_kind = WAL_RECORD_DECISION;
-        retained.event_kind = EVENT_PERSISTED;
-        retained.pending_unchanged = false;
-        retained.acknowledge_persist_exact = true;
-        retained.acknowledgement_continuation = CONTINUATION_DECIDE;
-        retained.volatile_before.body_work = 1;
-        retained.volatile_after.body_work = 1;
-        assert!(accepts_facts(retained));
+    fn decision_ack_retires_competing_owners_and_keeps_one_body_pipeline() {
+        let mut terminal = base_facts();
+        terminal.action_kind = ACTION_ACKNOWLEDGE_WAL;
+        terminal.wal_record_kind = WAL_RECORD_DECISION;
+        terminal.event_kind = EVENT_PERSISTED;
+        terminal.pending_unchanged = false;
+        terminal.acknowledge_persist_exact = true;
+        terminal.acknowledgement_continuation = CONTINUATION_DECIDE;
+        terminal.volatile_before.body_work = 2;
+        terminal.volatile_after.body_work = 1;
+        terminal.volatile_after.outbound_control = 1;
+        terminal.volatile_after.durable_signable_limit = 0;
+        assert!(accepts_facts(terminal));
 
-        let mut missing_pipeline = retained;
+        let mut stale_pipeline = terminal;
+        stale_pipeline.volatile_after.body_work = 2;
+        assert!(!accepts_facts(stale_pipeline));
+
+        let mut stale_candidate = terminal;
+        stale_candidate.volatile_after.candidate_present = true;
+        assert!(!accepts_facts(stale_candidate));
+
+        let mut stale_signature = terminal;
+        stale_signature.volatile_after.signature_queue = 1;
+        stale_signature.volatile_after.durable_signable_limit = 1;
+        assert!(!accepts_facts(stale_signature));
+
+        let mut missing_pipeline = terminal;
         missing_pipeline.volatile_before.body_work = 0;
-        missing_pipeline.volatile_after.body_work = 0;
         assert!(!accepts_facts(missing_pipeline));
 
-        let mut dropped_pipeline = retained;
+        let mut dropped_pipeline = terminal;
         dropped_pipeline.volatile_after.body_work = 0;
         assert!(!accepts_facts(dropped_pipeline));
     }

@@ -84,6 +84,31 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         .downcast_ref::<crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
         visitor.visit_compare_and_set_primary_account_alias(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::account_alias_lease::AcquireAccountAliasLease>()
+    {
+        visitor.visit_acquire_account_alias_lease(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::domain_link::SetAccountAliasBinding>()
+    {
+        visitor.visit_set_account_alias_binding(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::offline::IssueOfflineNote>()
+    {
+        visitor.visit_issue_offline_note(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::offline::RedeemOfflineNote>()
+    {
+        visitor.visit_redeem_offline_note(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::offline::AuditOfflineNote>()
+    {
+        visitor.visit_audit_offline_note(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<Log>() {
         visitor.visit_log(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<BurnBox>() {
@@ -533,6 +558,11 @@ macro_rules! instruction_visitors {
             visit_configure_alias_auto_renew(&$crate::isi::alias_setup::ConfigureAliasAutoRenew),
             visit_rebind_account_alias(&$crate::isi::alias_setup::RebindAccountAlias),
             visit_compare_and_set_primary_account_alias(&$crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias),
+            visit_acquire_account_alias_lease(&$crate::isi::account_alias_lease::AcquireAccountAliasLease),
+            visit_set_account_alias_binding(&$crate::isi::domain_link::SetAccountAliasBinding),
+            visit_issue_offline_note(&$crate::isi::offline::IssueOfflineNote),
+            visit_redeem_offline_note(&$crate::isi::offline::RedeemOfflineNote),
+            visit_audit_offline_note(&$crate::isi::offline::AuditOfflineNote),
             visit_log(&Log),
             visit_custom_instruction(&CustomInstruction),
             visit_publish_pedersen_params(&PublishPedersenParams),

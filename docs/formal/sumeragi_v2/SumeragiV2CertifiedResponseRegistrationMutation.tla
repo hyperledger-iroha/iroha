@@ -4,12 +4,21 @@ EXTENDS Naturals, Sequences
 (***************************************************************************
 Bounded mutation model for exact certified-response registration.
 
-One signed certified-body request is fanned out to every CommitQC signer, but
-all fan-out occurrences share one logical request registration.  The repaired
-authorization requires that logical registration to remain outstanding when a
+One exact signed certified-body request, including its full CommitQC, is
+fanned out to current archive servers.  Physical routes are not part of its
+hash, so all fan-out occurrences share one exact-hash registration class.  The
+repaired authorization requires that exact class to remain outstanding when a
 response drains.  The mutation omits that guard, allowing either a second
 fan-out response after the first response retired the request or a delayed
 response after restart replay reset removed volatile request ownership.
+
+Commit-certificate discovery has the same route-alias shape under its own
+request identity: every addressed archive server is one transport alias for
+the requester/height registration.  The CommitFanout scenario makes that
+shape explicit.  Its repair retires every matching alias when the first valid
+Commit-certificate response is accepted, so the second valid response is
+unmatched.  Its route-only mutant retires just the embedded request alias and
+therefore leaves the second route incorrectly live.
 
 The Historical scenario supplies a positive catch-up trace: exact CommitQC
 discovery installs a durable Decision, the target registers a certified-body
@@ -18,37 +27,97 @@ therefore checks that the repair rejects only unsolicited/replayed responses,
 not the intended historical recovery corridor.
 ***************************************************************************)
 
-CONSTANTS RequireMatchingCertifiedRequest, Scenario
+CONSTANTS RequireMatchingCertifiedRequest,
+          RetireAllCommitRouteAliases,
+          Scenario
 
 ASSUME RequireMatchingCertifiedRequest \in BOOLEAN
-ASSUME Scenario \in {"Duplicate", "Restart", "Historical"}
+ASSUME RetireAllCommitRouteAliases \in BOOLEAN
+ASSUME Scenario \in {"Duplicate", "Restart", "Historical", "CommitFanout"}
 
 Requester == "Requester"
-SignerA == "SignerA"
-SignerB == "SignerB"
-CertifiedSigners == {SignerA, SignerB}
+ArchiveA == "ArchiveA"
+ArchiveB == "ArchiveB"
+ArchiveServers == {ArchiveA, ArchiveB}
+FrozenSigner == "FrozenSigner"
+OtherFrozenSigner == "OtherFrozenSigner"
+Relay == "Relay"
+CommitCertificate == "CommitQC-7"
 
-CertifiedRequest(recipient) ==
+CertifiedQc ==
+  [height |-> 7,
+   view |-> 4,
+   phase |-> "Commit",
+   subject |-> "subject-7",
+   signers |-> {Requester, FrozenSigner, OtherFrozenSigner}]
+
+CertifiedRequestPreimage ==
+  [round |-> [height |-> 7, view |-> 4],
+   subject |-> "subject-7",
+   certificate |-> CertifiedQc,
+   requester |-> Requester]
+
+CertifiedRequestSignature ==
+  [signer |-> Requester, preimage |-> CertifiedRequestPreimage]
+
+CertifiedRequestHash ==
+  [exactSignedRequest |->
+    [preimage |-> CertifiedRequestPreimage,
+     signature |-> CertifiedRequestSignature]]
+
+CertifiedRequest(route) ==
   [kind |-> "CertifiedRequest",
    source |-> Requester,
-   recipient |-> recipient,
+   requester |-> Requester,
+   recipient |-> route,
    height |-> 7,
    view |-> 4,
-   subject |-> "subject-7"]
+   subject |-> "subject-7",
+   certificate |-> CertifiedQc,
+   requestHash |-> CertifiedRequestHash]
 
-CertifiedResponse(source) ==
+CertifiedResponse(archiveServer) ==
   [kind |-> "CertifiedResponse",
-   source |-> source,
+   source |-> Relay,
+   archiveServer |-> archiveServer,
+   signatureOwner |-> archiveServer,
+   citedResponder |-> FrozenSigner,
+   requestHash |-> CertifiedRequestHash,
    recipient |-> Requester,
    height |-> 7,
    view |-> 4,
    subject |-> "subject-7"]
 
 CertifiedRequestOutbox ==
-  {CertifiedRequest(signer): signer \in CertifiedSigners}
+  {CertifiedRequest(server): server \in ArchiveServers}
 
 CertifiedResponses ==
-  {CertifiedResponse(signer): signer \in CertifiedSigners}
+  {CertifiedResponse(server): server \in ArchiveServers}
+
+CommitCertificateRequest(server) ==
+  [kind |-> "CommitCertificateRequest",
+   source |-> Requester,
+   recipient |-> server,
+   height |-> 7]
+
+CommitCertificateResponse(server) ==
+  [kind |-> "CommitCertificateResponse",
+   source |-> server,
+   recipient |-> Requester,
+   request |-> CommitCertificateRequest(server),
+   certificate |-> CommitCertificate]
+
+CommitCertificateRequestOutbox ==
+  {CommitCertificateRequest(server): server \in ArchiveServers}
+
+CommitCertificateResponses ==
+  {CommitCertificateResponse(server): server \in ArchiveServers}
+
+RequestOutbox ==
+  CertifiedRequestOutbox \cup CommitCertificateRequestOutbox
+
+ResponseItems ==
+  CertifiedResponses \cup CommitCertificateResponses
 
 VARIABLES phase,
           generation,
@@ -81,6 +150,7 @@ vars ==
 
 Phases ==
   {"Start", "DuplicateRequest", "DuplicateResponses", "DuplicateSecond",
+   "CommitFanoutRequest", "CommitFanoutResponses", "CommitFanoutSecond",
    "RestartRunning", "RestartResponseInFlight", "RestartRequired",
    "ReplayRequired", "RecoveredFetchPending", "RestartReissuePending",
    "RestartRequest", "RestartFreshResponse", "RestartApply",
@@ -91,18 +161,35 @@ Phases ==
 MatchingCertifiedRequests(response) ==
   {request \in activeRequests:
      /\ request.kind = "CertifiedRequest"
-     /\ request.source = response.recipient
-     /\ request.height = response.height
-     /\ request.view = response.view
-     /\ request.subject = response.subject}
+     /\ request.requestHash = response.requestHash}
 
 CertifiedResponseAuthorized(response) ==
   /\ response.kind = "CertifiedResponse"
   /\ decisionInstalled
-  /\ response.source \in CertifiedSigners
+  /\ response.archiveServer \in ArchiveServers
+  /\ response.signatureOwner = response.archiveServer
+  /\ response.citedResponder \in CertifiedQc.signers
   /\ IF RequireMatchingCertifiedRequest
      THEN MatchingCertifiedRequests(response) # {}
      ELSE TRUE
+
+CommitCertificateRequestRegistrationIdentity(request) ==
+  [requester |-> request.source,
+   height |-> request.height]
+
+MatchingCommitCertificateRequests(response) ==
+  {request \in activeRequests:
+     /\ request.kind = "CommitCertificateRequest"
+     /\ CommitCertificateRequestRegistrationIdentity(request)
+          = CommitCertificateRequestRegistrationIdentity(response.request)}
+
+CommitCertificateResponseAuthorized(response) ==
+  /\ response.kind = "CommitCertificateResponse"
+  /\ response.source \in ArchiveServers
+  /\ response.recipient = Requester
+  /\ response.request \in activeRequests
+  /\ response.certificate = CommitCertificate
+  /\ MatchingCommitCertificateRequests(response) # {}
 
 TypeInvariant ==
   /\ phase \in Phases
@@ -110,8 +197,8 @@ TypeInvariant ==
   /\ decisionInstalled \in BOOLEAN
   /\ commitRequestOutstanding \in BOOLEAN
   /\ commitResponseAvailable \in BOOLEAN
-  /\ activeRequests \subseteq CertifiedRequestOutbox
-  /\ responseQueue \in Seq(CertifiedResponses)
+  /\ activeRequests \subseteq RequestOutbox
+  /\ responseQueue \in Seq(ResponseItems)
   /\ requestRegistrations \in Nat
   /\ acceptedResponses \in Nat
   /\ droppedResponses \in Nat
@@ -120,7 +207,9 @@ TypeInvariant ==
   /\ applied \in BOOLEAN
 
 ExactRequestFanout ==
-  activeRequests = {} \/ activeRequests = CertifiedRequestOutbox
+  \/ activeRequests = {}
+  \/ activeRequests = CertifiedRequestOutbox
+  \/ activeRequests = CommitCertificateRequestOutbox
 
 AcceptedOnlyWhileOutstanding ==
   ~acceptedWithoutOutstanding
@@ -136,10 +225,21 @@ ApplicationHasExactCompletion ==
              /\ completionOwned
              /\ activeRequests = {}
 
+CommitFanoutFirstAcceptedResponseRetiresAllRouteAliases ==
+  (Scenario = "CommitFanout" /\ phase = "CommitFanoutSecond")
+    => /\ acceptedResponses = 1
+       /\ decisionInstalled
+       /\ activeRequests = {}
+
+CommitFanoutSecondResponseIsUnmatched ==
+  (Scenario = "CommitFanout" /\ phase = "CommitFanoutSecond")
+    => /\ responseQueue = <<CommitCertificateResponse(ArchiveB)>>
+       /\ MatchingCommitCertificateRequests(Head(responseQueue)) = {}
+
 Init ==
   /\ phase = "Start"
   /\ generation = 0
-  /\ decisionInstalled = (Scenario # "Historical")
+  /\ decisionInstalled = (Scenario \in {"Duplicate", "Restart"})
   /\ commitRequestOutstanding = FALSE
   /\ commitResponseAvailable = FALSE
   /\ activeRequests = {}
@@ -200,6 +300,31 @@ DrainCertifiedResponse(nextPhase) ==
                      commitRequestOutstanding, commitResponseAvailable,
                      requestRegistrations, applied>>
 
+DrainCommitCertificateResponse(nextPhase) ==
+  LET response == Head(responseQueue)
+      matching == MatchingCommitCertificateRequests(response)
+      authorized == CommitCertificateResponseAuthorized(response)
+      retired ==
+        IF RetireAllCommitRouteAliases THEN matching ELSE {response.request}
+  IN /\ responseQueue # <<>>
+     /\ phase' = nextPhase
+     /\ responseQueue' = Tail(responseQueue)
+     /\ IF authorized
+        THEN /\ acceptedResponses' = acceptedResponses + 1
+             /\ droppedResponses' = droppedResponses
+             /\ decisionInstalled' = TRUE
+             /\ acceptedWithoutOutstanding' =
+                  (acceptedWithoutOutstanding \/ (matching = {}))
+             /\ activeRequests' = activeRequests \ retired
+        ELSE /\ acceptedResponses' = acceptedResponses
+             /\ droppedResponses' = droppedResponses + 1
+             /\ decisionInstalled' = decisionInstalled
+             /\ acceptedWithoutOutstanding' = acceptedWithoutOutstanding
+             /\ activeRequests' = activeRequests
+     /\ UNCHANGED <<generation, commitRequestOutstanding,
+                     commitResponseAvailable, requestRegistrations,
+                     completionOwned, applied>>
+
 (***************************************************************************
 Duplicate fan-out response scenario.
 ***************************************************************************)
@@ -213,7 +338,7 @@ ServeDuplicateResponses ==
   /\ Scenario = "Duplicate"
   /\ phase = "DuplicateRequest"
   /\ ServeCertifiedResponses(
-       <<CertifiedResponse(SignerA), CertifiedResponse(SignerB)>>,
+       <<CertifiedResponse(ArchiveA), CertifiedResponse(ArchiveB)>>,
        "DuplicateResponses")
 
 DrainDuplicateFirst ==
@@ -225,6 +350,52 @@ DrainDuplicateSecond ==
   /\ Scenario = "Duplicate"
   /\ phase = "DuplicateSecond"
   /\ DrainCertifiedResponse("Done")
+
+(***************************************************************************
+Commit-certificate route-alias fan-out scenario.  Both transport requests
+share one requester/height registration.  The first response is accepted and
+must retire both aliases; the second response is then valid but unmatched and
+is dropped.
+***************************************************************************)
+
+OpenCommitCertificateFanout ==
+  /\ Scenario = "CommitFanout"
+  /\ phase = "Start"
+  /\ ~decisionInstalled
+  /\ activeRequests = {}
+  /\ responseQueue = <<>>
+  /\ phase' = "CommitFanoutRequest"
+  /\ activeRequests' = CommitCertificateRequestOutbox
+  /\ requestRegistrations' = requestRegistrations + 1
+  /\ UNCHANGED <<generation, decisionInstalled,
+                  commitRequestOutstanding, commitResponseAvailable,
+                  responseQueue, acceptedResponses, droppedResponses,
+                  completionOwned, acceptedWithoutOutstanding, applied>>
+
+ServeCommitCertificateFanout ==
+  /\ Scenario = "CommitFanout"
+  /\ phase = "CommitFanoutRequest"
+  /\ activeRequests = CommitCertificateRequestOutbox
+  /\ responseQueue = <<>>
+  /\ phase' = "CommitFanoutResponses"
+  /\ responseQueue' =
+       <<CommitCertificateResponse(ArchiveA),
+         CommitCertificateResponse(ArchiveB)>>
+  /\ UNCHANGED <<generation, decisionInstalled,
+                  commitRequestOutstanding, commitResponseAvailable,
+                  activeRequests, requestRegistrations,
+                  acceptedResponses, droppedResponses, completionOwned,
+                  acceptedWithoutOutstanding, applied>>
+
+DrainCommitCertificateFanoutFirst ==
+  /\ Scenario = "CommitFanout"
+  /\ phase = "CommitFanoutResponses"
+  /\ DrainCommitCertificateResponse("CommitFanoutSecond")
+
+DrainCommitCertificateFanoutSecond ==
+  /\ Scenario = "CommitFanout"
+  /\ phase = "CommitFanoutSecond"
+  /\ DrainCommitCertificateResponse("Done")
 
 (***************************************************************************
 Crash/restart scenario.  Crash and authenticated restart preserve scheduler
@@ -242,7 +413,7 @@ EmitRestartDelayedResponse ==
   /\ Scenario = "Restart"
   /\ phase = "RestartRunning"
   /\ ServeCertifiedResponses(
-       <<CertifiedResponse(SignerA)>>, "RestartResponseInFlight")
+       <<CertifiedResponse(ArchiveA)>>, "RestartResponseInFlight")
 
 CrashRestartRequester ==
   /\ Scenario = "Restart"
@@ -290,7 +461,7 @@ ServeRestartFreshResponse ==
   /\ Scenario = "Restart"
   /\ phase = "RestartRequest"
   /\ ServeCertifiedResponses(
-       <<CertifiedResponse(SignerB)>>, "RestartFreshResponse")
+       <<CertifiedResponse(ArchiveB)>>, "RestartFreshResponse")
 
 DrainRestartFreshResponse ==
   /\ Scenario = "Restart"
@@ -357,7 +528,7 @@ ServeHistoricalCertifiedResponse ==
   /\ Scenario = "Historical"
   /\ phase = "HistoricalRequest"
   /\ ServeCertifiedResponses(
-       <<CertifiedResponse(SignerA)>>, "HistoricalResponse")
+       <<CertifiedResponse(ArchiveA)>>, "HistoricalResponse")
 
 DrainHistoricalCertifiedResponse ==
   /\ Scenario = "Historical"
@@ -382,6 +553,10 @@ Progress ==
   \/ ServeDuplicateResponses
   \/ DrainDuplicateFirst
   \/ DrainDuplicateSecond
+  \/ OpenCommitCertificateFanout
+  \/ ServeCommitCertificateFanout
+  \/ DrainCommitCertificateFanoutFirst
+  \/ DrainCommitCertificateFanoutSecond
   \/ OpenRestartRequest
   \/ EmitRestartDelayedResponse
   \/ CrashRestartRequester

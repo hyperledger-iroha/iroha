@@ -421,6 +421,7 @@ fn minimal_config_snapshot() {
                 require_sm_handshake_match: true,
                 require_sm_openssl_preview_match: true,
                 idle_timeout: 300s,
+                reply_writer_flush_timeout: 30s,
                 connect_startup_delay: 0ns,
                 dial_timeout: 5s,
                 deferred_send_ttl: 1.5s,
@@ -1316,6 +1317,313 @@ fn minimal_config_snapshot() {
                     auditor_signature_threshold: 1,
                 },
                 sorafs_appeal_finance_settlement: SorafsAppealFinanceSettlement {
+                    asset_definition_id: AssetDefinitionId {
+                        aid_bytes: [
+                            59,
+                            45,
+                            238,
+                            246,
+                            130,
+                            60,
+                            72,
+                            205,
+                            167,
+                            236,
+                            51,
+                            224,
+                            2,
+                            182,
+                            29,
+                            55,
+                        ],
+                        projection: None,
+                    },
+                    asset_scale: 9,
+                    pricing: SorafsAppealPricingPolicy {
+                        version: "baseline-v1",
+                        quote_ttl_secs: 900,
+                        default_panel_size: 7,
+                        urgency_multipliers: SorafsAppealUrgencyMultipliers {
+                            normal: Numeric {
+                                mantissa: 1,
+                                scale: 0,
+                            },
+                            high: Numeric {
+                                mantissa: 12,
+                                scale: 1,
+                            },
+                        },
+                        classes: SorafsAppealPricingClasses {
+                            content: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 150,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 50,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 100,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 2500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            access: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 200,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 30,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 50,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 2500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            fraud: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 20,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 50,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 5000,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            other: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 120,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 40,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 100,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 2500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                        },
+                    },
+                    settlement: SorafsAppealSettlementPolicy {
+                        version: "baseline-v1",
+                        default_panel_size: 7,
+                        panel_rewards: SorafsAppealPanelRewards {
+                            stipend_per_juror_xor: XorQuantity(
+                                Quantity(
+                                    Numeric {
+                                        mantissa: 25,
+                                        scale: 0,
+                                    },
+                                ),
+                            ),
+                            case_bonus_xor: XorQuantity(
+                                Quantity(
+                                    Numeric {
+                                        mantissa: 10,
+                                        scale: 0,
+                                    },
+                                ),
+                            ),
+                        },
+                        rules: SorafsAppealSettlementRules {
+                            decisions: SorafsAppealDecisionRules {
+                                uphold: SorafsAppealSettlementRule {
+                                    refund_rate: Numeric {
+                                        mantissa: 0,
+                                        scale: 0,
+                                    },
+                                    treasury_rate: Numeric {
+                                        mantissa: 1,
+                                        scale: 0,
+                                    },
+                                },
+                                overturn: SorafsAppealSettlementRule {
+                                    refund_rate: Numeric {
+                                        mantissa: 1,
+                                        scale: 0,
+                                    },
+                                    treasury_rate: Numeric {
+                                        mantissa: 0,
+                                        scale: 0,
+                                    },
+                                },
+                                modify: SorafsAppealSettlementRule {
+                                    refund_rate: Numeric {
+                                        mantissa: 1,
+                                        scale: 0,
+                                    },
+                                    treasury_rate: Numeric {
+                                        mantissa: 0,
+                                        scale: 0,
+                                    },
+                                },
+                            },
+                            withdrawn_before_panel: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 9,
+                                    scale: 1,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                            },
+                            withdrawn_after_panel: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            frivolous: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 5,
+                                    scale: 1,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 5,
+                                    scale: 1,
+                                },
+                            },
+                            escalated: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                            },
+                        },
+                    },
                     submitter_signers: [],
                     worker_scan_interval: 30s,
                     worker_max_retry_attempts: 3,
@@ -1564,7 +1872,6 @@ fn minimal_config_snapshot() {
                     merge_sidecar_outbound_sessions_per_source: 2,
                     merge_sidecar_outbound_bytes_per_source: 16777216,
                     merge_sidecar_server_request_gates_per_source: 4,
-                    merge_sidecar_server_request_gate_ttl: 10s,
                     pending_certified_merge_entry_capacity: 1024,
                     pending_queue_plan_admission_capacity: 1024,
                     pending_control_sidecar_bytes: 268435456,
@@ -1629,7 +1936,6 @@ fn minimal_config_snapshot() {
                 transaction_time_to_live: 86400s,
                 expired_cull_interval: 1s,
                 expired_cull_batch: 256,
-                plan_journal_enabled: true,
                 plan_journal_max_bytes: 67108864,
             },
             nexus: Nexus {
@@ -2741,7 +3047,7 @@ fn minimal_config_snapshot() {
                     collateral_substitution_matrix: {},
                 },
                 offline: Offline {
-                    escrow_required: false,
+                    escrow_required: true,
                     escrow_accounts: {},
                     kagemusha_release_policy_path: None,
                     kagemusha_artifact_dir: None,
@@ -3158,6 +3464,14 @@ fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
             || message.contains("recovery"),
         "diagnostic should identify a retired v1 table: {message}",
     );
+}
+
+#[test]
+fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage() {
+    let report = load_config_from_fixtures("bad.retired_plan_journal_toggle.toml")
+        .expect_err("the first release must not expose a journal-disabled runtime path");
+    let message = strip_ansi_codes(&format!("{report:?}"));
+    assert_contains!(message, "unknown parameter: `queue.plan_journal_enabled`");
 }
 
 #[test]
@@ -4171,7 +4485,7 @@ fn full_config_parses_fine() {
     println!("sorafs parsed {sorafs:?}");
     assert!(
         sorafs.discovery_enabled,
-        "torii.sorafs.discovery_enabled not parsed"
+        "sorafs.discovery.discovery_enabled not parsed"
     );
     assert_eq!(
         sorafs.known_capabilities,
@@ -4189,7 +4503,7 @@ fn full_config_parses_fine() {
     let admission = sorafs
         .admission
         .as_ref()
-        .expect("torii.sorafs.admission_envelopes_dir missing");
+        .expect("sorafs.discovery.admission.envelopes_dir missing");
     assert_eq!(
         admission.envelopes_dir,
         PathBuf::from("tests/fixtures/sorafs_admission")
@@ -4208,7 +4522,7 @@ fn full_config_parses_fine() {
     assert_eq!(site_bindings.max_bytes.get(), 4_096);
     assert_eq!(site_bindings.max_sites.get(), 7);
     let storage = &cfg.torii.sorafs_storage;
-    assert!(storage.enabled, "torii.sorafs.storage.enabled not parsed");
+    assert!(storage.enabled, "sorafs.storage.enabled not parsed");
     assert_eq!(storage.data_dir, PathBuf::from("./storage/sorafs"));
     assert_eq!(storage.max_capacity_bytes.0, 107_374_182_400);
     assert_eq!(storage.max_parallel_fetches, 64);

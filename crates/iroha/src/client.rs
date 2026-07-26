@@ -8453,6 +8453,8 @@ mod offline_client_tests {
 
     fn first_release_readiness(asset_definition_id: &AssetDefinitionId) -> OfflineReadiness {
         OfflineReadiness {
+            cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
@@ -10911,10 +10913,7 @@ mod evidence_http_tests {
         assert_eq!(alias.name, "docs");
         assert_eq!(alias.proof, alias_bytes);
         assert_eq!(
-            instruction
-                .successor_of
-                .expect("successor")
-                .as_bytes(),
+            instruction.successor_of.expect("successor").as_bytes(),
             &successor
         );
     }
@@ -11040,7 +11039,7 @@ mod evidence_http_tests {
         ];
 
         for alias in cases {
-            Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
+            let _ = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
                 manifest_payload: &manifest_payload,
                 submitted_epoch: 10,
                 alias: Some(alias),
@@ -16459,6 +16458,24 @@ impl Client {
             .send()
     }
 
+    /// Compatibility helper: POST `/v1/aliases/resolve` with an account-alias literal.
+    ///
+    /// New code should prefer [`Self::resolve_account_alias_unsigned`] or
+    /// [`Self::resolve_account_alias_authenticated`] for strict typed response
+    /// substitution checks.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, JSON serialization, or the HTTP call fails.
+    pub fn post_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
+        let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
     /// Convenience: POST `/v1/accounts/resolve` with an account literal.
     ///
     /// # Errors
@@ -17609,9 +17626,9 @@ impl Client {
         let alias = alias.map(Self::sorafs_pin_alias_binding).transpose()?;
         let successor_of = successor_of
             .map(|successor| {
-            if successor == [0; 32] {
-                return Err(eyre!("successor_of must not be the all-zero digest"));
-            }
+                if successor == [0; 32] {
+                    return Err(eyre!("successor_of must not be the all-zero digest"));
+                }
                 Ok(iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
                     successor,
                 ))
@@ -31753,7 +31770,7 @@ mod tests {
                 .as_any()
                 .downcast_ref::<SubmitSorafsModerationCommit>()
                 .expect("exact commit instruction");
-            assert_eq!(embedded.commit_payload(), commit_payload);
+            assert_eq!(embedded.commit_payload(), &commit_payload);
 
             for (route, _) in expected_routes {
                 client

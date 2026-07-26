@@ -16016,6 +16016,7 @@ mod tests {
             round_id: Some("round-1".to_string()),
             generated_at_unix_ms: 1_800_000_032_000,
             appeal_finance_config_version: "baseline-v1".to_string(),
+            appeal_finance_policy_digest: [0x44; 32],
             outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
             escrow_id_hex: "11".repeat(32),
             payer_account: "payer-account".to_string(),

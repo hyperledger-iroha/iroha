@@ -1082,20 +1082,6 @@ mod app {
             SorafsCommand::Reserve(
                 ReserveCommand::Quote(_) | ReserveCommand::Ledger(_) | ReserveCommand::Lifecycle(_),
             ) => true,
-            SorafsCommand::Reserve(
-                ReserveCommand::TopUp(_)
-                | ReserveCommand::Withdraw(_)
-                | ReserveCommand::Movements(_)
-                | ReserveCommand::Status(_)
-                | ReserveCommand::Custody(_)
-                | ReserveCommand::CreditLines(_)
-                | ReserveCommand::CreditStatus(_)
-                | ReserveCommand::AppealSubmit(_)
-                | ReserveCommand::Appeals(_)
-                | ReserveCommand::AppealDecide(_)
-                | ReserveCommand::PolicyUpdate(_)
-                | ReserveCommand::Policy(_),
-            ) => false,
             SorafsCommand::Incentives(
                 IncentivesCommand::Compute(_)
                 | IncentivesCommand::OpenDispute(_)
@@ -9198,6 +9184,51 @@ mod tests {
         ])
         .expect("parse offline rent quote");
         assert!(args.command.allows_fallback_config());
+
+        for command in [
+            vec![
+                "iroha",
+                "app",
+                "sorafs",
+                "reserve",
+                "quote",
+                "--storage-class",
+                "hot",
+                "--tier",
+                "tier-a",
+                "--gib",
+                "1",
+            ],
+            vec![
+                "iroha",
+                "app",
+                "sorafs",
+                "reserve",
+                "ledger",
+                "--quote",
+                "reserve-quote.json",
+                "--provider-account",
+                "provider",
+                "--treasury-account",
+                "treasury",
+                "--reserve-account",
+                "reserve",
+                "--asset-definition",
+                "xor",
+            ],
+            vec![
+                "iroha",
+                "app",
+                "sorafs",
+                "reserve",
+                "lifecycle",
+                "--quote",
+                "reserve-quote.json",
+            ],
+        ] {
+            let args = Args::try_parse_from(command).expect("parse offline SoraFS reserve command");
+            assert!(args.command.allows_fallback_config());
+        }
 
         let args = Args::try_parse_from([
             "iroha",

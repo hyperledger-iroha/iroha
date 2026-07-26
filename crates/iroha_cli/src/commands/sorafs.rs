@@ -244,26 +244,6 @@ impl ReserveDurationArg {
     }
 }
 
-#[derive(clap::ValueEnum, Clone, Copy, Debug)]
-enum ReserveCustodyStatusArg {
-    #[value(name = "submitted")]
-    Submitted,
-    #[value(name = "confirmed")]
-    Confirmed,
-    #[value(name = "rejected")]
-    Rejected,
-}
-
-impl ReserveCustodyStatusArg {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Submitted => "submitted",
-            Self::Confirmed => "confirmed",
-            Self::Rejected => "rejected",
-        }
-    }
-}
-
 #[cfg(test)]
 mod capture_path_tests {
     use super::{default_orchestrator_capture_dir, scoreboard_capture_paths};

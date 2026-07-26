@@ -1463,6 +1463,8 @@ mod tests {
             require_sm_openssl_preview_match:
                 iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
             idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay:
                 iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,

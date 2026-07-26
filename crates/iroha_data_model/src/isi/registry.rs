@@ -2,11 +2,11 @@
 use crate::isi::governance;
 use crate::{
     isi::{
-        InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
-        bridge, confidential, consensus_keys, content, contract_alias, defi, endorsement, escrow,
-        identifier, kaigi, ministry, musubi, nexus, offline, oracle, ram_lfe, repo,
-        runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns, sorafs,
-        space_directory,
+        InstructionRegistry, account_alias_lease, account_recovery, alias_setup, asset_alias,
+        asset_transfer_control, bridge, confidential, consensus_keys, content, contract_alias,
+        defi, domain_link, endorsement, escrow, identifier, kaigi, ministry, musubi, nexus,
+        offline, oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code,
+        social, soracloud, soradns, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -46,6 +46,15 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<RemoveAssetKeyValue>,
     InstructionRegistry::register_slice::<GrantBox>,
     InstructionRegistry::register_slice::<RevokeBox>,
+    InstructionRegistry::register_slice::<account_alias_lease::AcquireAccountAliasLease>,
+    |registry| {
+        registry.register_with_id_slice::<domain_link::SetAccountAliasBinding>(
+            "identity::SetAccountAliasBinding",
+        )
+    },
+    InstructionRegistry::register_slice::<offline::IssueOfflineNote>,
+    InstructionRegistry::register_slice::<offline::RedeemOfflineNote>,
+    InstructionRegistry::register_slice::<offline::AuditOfflineNote>,
     InstructionRegistry::register_slice::<offline::TopUpKagemushaRecursiveV4>,
     InstructionRegistry::register_slice::<offline::RedeemKagemushaRecursiveV4>,
     InstructionRegistry::register_slice::<offline::ActivateKagemushaRecursiveReleaseV4>,
@@ -940,13 +949,16 @@ mod tests {
     }
 
     #[test]
-    fn legacy_split_alias_instruction_ids_are_not_registered() {
+    fn required_boi_alias_compatibility_ids_are_registered_without_reopening_retired_mutations() {
         let registry = default();
+        assert!(registry.contains(core::any::type_name::<
+            account_alias_lease::AcquireAccountAliasLease,
+        >()));
+        assert!(registry.contains("identity::SetAccountAliasBinding"));
+
         let removed_ids = [
-            "iroha.account.alias.lease.acquire",
             "iroha.account.alias.lease.renew",
             "iroha.account.alias.binding.set",
-            "identity::SetAccountAliasBinding",
             "iroha.account.alias.primary.set",
             "identity::SetPrimaryAccountAlias",
         ];

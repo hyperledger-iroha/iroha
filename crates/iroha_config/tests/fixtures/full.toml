@@ -28,6 +28,7 @@ transaction_gossip_period_ms = 1_000
 transaction_gossip_resend_ticks = 3
 transaction_gossip_size = 500
 idle_timeout_ms = 10_000
+reply_writer_flush_timeout_ms = 10_000
 
 [torii]
 address = "addr:localhost:5000#A9D1"
@@ -35,60 +36,6 @@ max_content_len = 16_000
 query_idle_time_ms = 30_000
 query_store_capacity = 128
 query_store_capacity_per_user = 128
-
-[torii.sorafs.discovery]
-discovery_enabled = true
-known_capabilities = ["torii_gateway", "chunk_range_fetch", "vendor_reserved"]
-replay_checkpoint_path = "sorafs_discovery/test-provider-advert-replay.to"
-replay_checkpoint_max_entries = 4096
-
-[torii.sorafs.discovery.admission]
-envelopes_dir = "tests/fixtures/sorafs_admission"
-trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
-signature_threshold = 1
-
-[torii.sorafs.storage]
-enabled = true
-data_dir = "./storage/sorafs"
-max_capacity_bytes = 107374182400
-max_parallel_fetches = 64
-max_pins = 20000
-por_sample_interval_secs = 900
-alias = "tenant.alpha"
-
-[torii.sorafs.storage.provider_ingest_runtime]
-enabled = false
-scan_interval_ms = 1000
-max_page_rows = 64
-max_pages_per_tick = 4
-max_source_jobs_per_tick = 16
-max_source_providers = 1024
-source_operation_timeout_ms = 300000
-source_lease_renew_interval_ms = 15000
-signer_timeout_ms = 30000
-ingress_timeout_ms = 30000
-completion_transaction_ttl_ms = 300000
-max_snapshot_rows = 256
-max_snapshot_bytes = 134217728
-max_finalized_lag_blocks = 2
-
-[torii.sorafs.storage.provider_ingest_runtime.outbox]
-max_active_entries = 128
-max_terminal_entries = 4096
-max_attempts = 8
-checkpoint_max_bytes = 67108864
-source_lease_ttl_ms = 60000
-retry_base_delay_ms = 1000
-retry_max_delay_ms = 300000
-terminal_retention_blocks = 100000
-max_signed_transaction_bytes = 262144
-max_status_page_size = 256
-
-[torii.sorafs.storage.adverts]
-stake_pointer = "stake.pool.default"
-availability = "warm"
-max_latency_ms = 750
-topics = ["sorafs.sf1.primary:global", "sorafs.sf1.backup:eu"]
 
 [sorafs.discovery]
 discovery_enabled = true
@@ -110,6 +57,34 @@ max_pins = 20000
 por_sample_interval_secs = 900
 alias = "tenant.alpha"
 
+[sorafs.storage.provider_ingest_runtime]
+enabled = false
+scan_interval_ms = 1000
+max_page_rows = 64
+max_pages_per_tick = 4
+max_source_jobs_per_tick = 16
+max_source_providers = 1024
+source_operation_timeout_ms = 300000
+source_lease_renew_interval_ms = 15000
+signer_timeout_ms = 30000
+ingress_timeout_ms = 30000
+completion_transaction_ttl_ms = 300000
+max_snapshot_rows = 256
+max_snapshot_bytes = 134217728
+max_finalized_lag_blocks = 2
+
+[sorafs.storage.provider_ingest_runtime.outbox]
+max_active_entries = 128
+max_terminal_entries = 4096
+max_attempts = 8
+checkpoint_max_bytes = 67108864
+source_lease_ttl_ms = 60000
+retry_base_delay_ms = 1000
+retry_max_delay_ms = 300000
+terminal_retention_blocks = 100000
+max_signed_transaction_bytes = 262144
+max_status_page_size = 256
+
 [sorafs.storage.adverts]
 stake_pointer = "stake.pool.default"
 availability = "warm"
@@ -127,11 +102,101 @@ path = "site-bindings/test.json"
 max_bytes = 4096
 max_sites = 7
 
-[torii.sorafs.quota]
-capacity_declaration_window_secs = 3600
-capacity_telemetry_window_secs = 900
-capacity_dispute_window_secs = 1800
-por_submission_window_secs = 900
+[sorafs.appeal_finance_settlement]
+asset_definition_id = "xor#sora.universal"
+asset_scale = 9
+submitter_signers = []
+worker_scan_interval_ms = 30_000
+worker_max_retry_attempts = 3
+worker_max_pending = 4_096
+worker_max_completed = 16_384
+worker_max_dead_letters = 1_024
+worker_checkpoint_max_bytes = 67_108_864
+
+[sorafs.appeal_finance_settlement.pricing]
+version = "baseline-v1"
+quote_ttl_secs = 900
+default_panel_size = 7
+
+[sorafs.appeal_finance_settlement.pricing.urgency_multipliers]
+normal = "1"
+high = "1.2"
+
+[sorafs.appeal_finance_settlement.pricing.classes.content]
+base_rate_xor = "150"
+backlog_target = 50
+backlog_cap = "1"
+size_divisor_mb = "100"
+size_cap = "2"
+min_deposit_xor = "100"
+max_deposit_xor = "2500"
+surge_multiplier = "1"
+
+[sorafs.appeal_finance_settlement.pricing.classes.access]
+base_rate_xor = "200"
+backlog_target = 30
+backlog_cap = "1"
+size_divisor_mb = "50"
+size_cap = "2"
+min_deposit_xor = "100"
+max_deposit_xor = "2500"
+surge_multiplier = "1"
+
+[sorafs.appeal_finance_settlement.pricing.classes.fraud]
+base_rate_xor = "500"
+backlog_target = 20
+backlog_cap = "1"
+size_divisor_mb = "50"
+size_cap = "2"
+min_deposit_xor = "100"
+max_deposit_xor = "5000"
+surge_multiplier = "1"
+
+[sorafs.appeal_finance_settlement.pricing.classes.other]
+base_rate_xor = "120"
+backlog_target = 40
+backlog_cap = "1"
+size_divisor_mb = "100"
+size_cap = "2"
+min_deposit_xor = "100"
+max_deposit_xor = "2500"
+surge_multiplier = "1"
+
+[sorafs.appeal_finance_settlement.settlement]
+version = "baseline-v1"
+default_panel_size = 7
+
+[sorafs.appeal_finance_settlement.settlement.panel_rewards]
+stipend_per_juror_xor = "25"
+case_bonus_xor = "10"
+
+[sorafs.appeal_finance_settlement.settlement.rules.decisions.uphold]
+refund_rate = "0"
+treasury_rate = "1"
+
+[sorafs.appeal_finance_settlement.settlement.rules.decisions.overturn]
+refund_rate = "1"
+treasury_rate = "0"
+
+[sorafs.appeal_finance_settlement.settlement.rules.decisions.modify]
+refund_rate = "1"
+treasury_rate = "0"
+
+[sorafs.appeal_finance_settlement.settlement.rules.withdrawn_before_panel]
+refund_rate = "0.9"
+treasury_rate = "0"
+
+[sorafs.appeal_finance_settlement.settlement.rules.withdrawn_after_panel]
+refund_rate = "0"
+treasury_rate = "1"
+
+[sorafs.appeal_finance_settlement.settlement.rules.frivolous]
+refund_rate = "0.5"
+treasury_rate = "0.5"
+
+[sorafs.appeal_finance_settlement.settlement.rules.escalated]
+refund_rate = "0"
+treasury_rate = "0"
 
 [kura]
 init_mode = "strict"
@@ -153,7 +218,6 @@ capacity_per_user = 65_536
 transaction_time_to_live_ms = 100
 expired_cull_interval_ms = 1_000
 expired_cull_batch = 256
-plan_journal_enabled = true
 plan_journal_max_bytes = 67_108_864
 
 [snapshot]

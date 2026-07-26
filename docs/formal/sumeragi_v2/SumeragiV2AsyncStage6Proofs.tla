@@ -2673,16 +2673,6 @@ PROOF
     <2> QED BY <2>2, <2>3, PTL
   <1> QED BY <1>1
 
-ProtectedStage6RankProgressProperty(specification) ==
-  specification
-    => \A candidate \in AsyncCandidateSet, position \in Nat:
-         (gst
-           /\ ResponsiveProtectedCandidateOwned(candidate)
-           /\ CandidateServiceRank(candidate) = <<6, position>>)
-           ~> (~ResponsiveProtectedCandidateOwned(candidate)
-                \/ ServiceRankLess(CandidateServiceRank(candidate),
-                     <<6, position>>))
-
 THEOREM ProtectedStage6RankProgressFromFairCausalAdmissionObligation ==
   \A initialContext:
     ProtectedStage6RankProgressProperty(AsyncSpecAt(initialContext))
@@ -2760,5 +2750,10 @@ PROOF
          DEF ProtectedStage6RankProgressProperty,
              ProtectedRankProgressExit
   <1> QED BY <1>1
+
+THEOREM FairProtectedStage6RankProgress ==
+  \A initialContext:
+    ProtectedStage6RankProgressProperty(AsyncSpecAt(initialContext))
+BY ProtectedStage6RankProgressFromFairCausalAdmissionObligation
 
 =============================================================================

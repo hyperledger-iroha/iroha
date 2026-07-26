@@ -34,6 +34,15 @@ pub const MAX_MANTISSA_BYTES: usize = MAX_MANTISSA_BITS / 8;
 /// Maximum number of fractional decimal digits in a canonical decimal.
 pub const MAX_DECIMAL_SCALE: u32 = 28;
 
+/// Maximum number of factors accepted by aggregate decimal-product helpers.
+///
+/// Each factor is individually bounded to a 512-bit canonical mantissa, but
+/// the helpers deliberately retain an unbounded conceptual intermediate until
+/// their single final normalization or rounding step. Bounding the factor
+/// inventory prevents attacker-controlled iterators from growing that
+/// intermediate without limit.
+pub const MAX_DECIMAL_PRODUCT_FACTORS: usize = 64;
+
 /// Canonical exact decimal with a bounded signed mantissa and scale.
 ///
 /// The finite set of values of type [`Numeric`] are of the form $m / 10^e$,
@@ -203,6 +212,8 @@ pub enum NumericOperationError {
     NegativeQuantity,
     /// Quantity subtraction would produce a negative result
     QuantityUnderflow,
+    /// Aggregate decimal product contains more than 64 factors
+    TooManyFactors,
 }
 
 /// Errors raised while constructing or manipulating XOR quantities.
@@ -1554,8 +1565,9 @@ impl Quantity {
     /// not change the mathematical product.
     ///
     /// # Errors
-    /// Rejects a noncanonical factor or a canonical final result outside the
-    /// decimal scale, signed-mantissa, or non-negative quantity domain.
+    /// Rejects more than 64 factors, a noncanonical factor, or a canonical
+    /// final result outside the decimal scale, signed-mantissa, or non-negative
+    /// quantity domain.
     pub fn try_product_decimals<'a, I>(&self, factors: I) -> Result<Self, NumericOperationError>
     where
         I: IntoIterator<Item = &'a Numeric>,
@@ -1565,7 +1577,10 @@ impl Quantity {
         let mut product = self.mantissa().inner().clone();
         let mut scale = u128::from(self.scale());
 
-        for factor in factors {
+        for (index, factor) in factors.into_iter().enumerate() {
+            if index >= MAX_DECIMAL_PRODUCT_FACTORS {
+                return Err(NumericOperationError::TooManyFactors);
+            }
             factor.validate_decimal()?;
             product *= factor.mantissa().inner();
             if product.is_zero() {
@@ -1605,9 +1620,9 @@ impl Quantity {
     /// grouping.
     ///
     /// # Errors
-    /// Rejects a scale above 28, a noncanonical factor, an aggregate scale that
-    /// cannot be bounded safely, or a rounded result outside the canonical
-    /// non-negative quantity domain.
+    /// Rejects more than 64 factors, a scale above 28, a noncanonical factor,
+    /// an aggregate scale that cannot be bounded safely, or a rounded result
+    /// outside the canonical non-negative quantity domain.
     pub fn try_product_decimals_round<'a, I>(
         &self,
         factors: I,
@@ -1625,7 +1640,10 @@ impl Quantity {
         let mut product = self.mantissa().inner().clone();
         let mut scale = u128::from(self.scale());
 
-        for factor in factors {
+        for (index, factor) in factors.into_iter().enumerate() {
+            if index >= MAX_DECIMAL_PRODUCT_FACTORS {
+                return Err(NumericOperationError::TooManyFactors);
+            }
             factor.validate_decimal()?;
             product *= factor.mantissa().inner();
             if product.is_zero() {
@@ -2182,6 +2200,7 @@ impl From<NumericOperationError> for XorQuantityError {
             | NumericOperationError::RepeatingDecimal
             | NumericOperationError::ExactDivisionScaleOverflow
             | NumericOperationError::InvalidScale
+            | NumericOperationError::TooManyFactors
             | NumericOperationError::NonCanonical => Self::Overflow,
         }
     }
@@ -3459,6 +3478,22 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_decimal_product_rejects_more_than_sixty_four_factors() {
+        let one = Numeric::one();
+        assert_eq!(
+            Quantity::one()
+                .try_product_decimals(core::iter::repeat(&one).take(MAX_DECIMAL_PRODUCT_FACTORS)),
+            Ok(Quantity::one())
+        );
+        assert_eq!(
+            Quantity::one().try_product_decimals(
+                core::iter::repeat(&one).take(MAX_DECIMAL_PRODUCT_FACTORS + 1)
+            ),
+            Err(NumericOperationError::TooManyFactors)
+        );
+    }
+
+    #[test]
     fn aggregate_decimal_product_rounds_only_its_final_result() {
         let panel_multiplier = decimal("0.7142857142857142857142857143");
         let result = Quantity::from(150_u32)
@@ -3511,6 +3546,27 @@ mod tests {
                 RoundingMode::NearestEven,
             ),
             Err(NumericOperationError::InvalidScale)
+        );
+    }
+
+    #[test]
+    fn rounded_aggregate_decimal_product_rejects_more_than_sixty_four_factors() {
+        let one = Numeric::one();
+        assert_eq!(
+            Quantity::one().try_product_decimals_round(
+                core::iter::repeat(&one).take(MAX_DECIMAL_PRODUCT_FACTORS),
+                MAX_DECIMAL_SCALE,
+                RoundingMode::NearestEven,
+            ),
+            Ok(Quantity::one())
+        );
+        assert_eq!(
+            Quantity::one().try_product_decimals_round(
+                core::iter::repeat(&one).take(MAX_DECIMAL_PRODUCT_FACTORS + 1),
+                MAX_DECIMAL_SCALE,
+                RoundingMode::NearestEven,
+            ),
+            Err(NumericOperationError::TooManyFactors)
         );
     }
 

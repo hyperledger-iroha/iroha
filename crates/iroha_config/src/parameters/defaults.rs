@@ -288,8 +288,6 @@ pub mod queue {
     pub const EXPIRED_CULL_INTERVAL: Duration = Duration::from_secs(1);
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub const EXPIRED_CULL_BATCH: NonZeroUsize = nonzero!(256_usize);
-    /// Whether to persist pending transaction routing plans for local restart replay.
-    pub const PLAN_JOURNAL_ENABLED: bool = true;
     /// Maximum journal size before compaction is considered.
     pub const PLAN_JOURNAL_MAX_BYTES: u64 = 64 * 1024 * 1024;
 }
@@ -874,6 +872,8 @@ pub mod network {
     /// Keep this comfortably above the typical integration-test runtime so peers do not churn
     /// before they exchange their first gossip/status messages.
     pub const IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+    /// Base deadline for an exact reply to remain owned by one peer writer without a flush.
+    pub const REPLY_WRITER_FLUSH_TIMEOUT: Duration = Duration::from_secs(30);
     /// Delay outbound peer dials after startup.
     pub const CONNECT_STARTUP_DELAY: Duration = Duration::from_millis(0);
     /// Timeout applied to an individual outbound dial attempt (TCP/TLS/QUIC/WS).
@@ -2661,6 +2661,142 @@ pub mod torii {
     /// Default maximum canonical appeal-finance checkpoint size.
     pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
+    /// Canonical first-release appeal-finance asset and policy defaults.
+    pub mod sorafs_appeal_finance {
+        use std::str::FromStr;
+
+        use iroha_data_model::asset::prelude::AssetDefinitionId;
+        use iroha_primitives::numeric::{Numeric, XOR_QUANTITY_SCALE, XorQuantity};
+
+        /// Canonical first-release asset scale for XOR-denominated appeal finance.
+        pub const ASSET_SCALE: u32 = XOR_QUANTITY_SCALE;
+        /// Version shared by the baseline pricing and settlement policies.
+        pub const BASELINE_POLICY_VERSION: &str = "baseline-v1";
+        /// Quote validity window in seconds.
+        pub const PRICING_QUOTE_TTL_SECS: u64 = 15 * 60;
+        /// Default panel size shared by pricing and settlement.
+        pub const DEFAULT_PANEL_SIZE: u32 = 7;
+
+        /// Normal-urgency price multiplier.
+        pub const PRICING_URGENCY_NORMAL_MULTIPLIER: &str = "1";
+        /// High-urgency price multiplier.
+        pub const PRICING_URGENCY_HIGH_MULTIPLIER: &str = "1.2";
+
+        /// Content appeal base rate.
+        pub const PRICING_CONTENT_BASE_RATE_XOR: &str = "150";
+        /// Content appeal backlog target.
+        pub const PRICING_CONTENT_BACKLOG_TARGET: u32 = 50;
+        /// Content appeal backlog multiplier cap.
+        pub const PRICING_CONTENT_BACKLOG_CAP: &str = "1";
+        /// Content appeal evidence-size divisor in MiB.
+        pub const PRICING_CONTENT_SIZE_DIVISOR_MB: &str = "100";
+        /// Content appeal evidence-size multiplier cap.
+        pub const PRICING_CONTENT_SIZE_CAP: &str = "2";
+        /// Content appeal minimum deposit.
+        pub const PRICING_CONTENT_MIN_DEPOSIT_XOR: &str = "100";
+        /// Content appeal maximum deposit.
+        pub const PRICING_CONTENT_MAX_DEPOSIT_XOR: &str = "2500";
+
+        /// Access appeal base rate.
+        pub const PRICING_ACCESS_BASE_RATE_XOR: &str = "200";
+        /// Access appeal backlog target.
+        pub const PRICING_ACCESS_BACKLOG_TARGET: u32 = 30;
+        /// Access appeal backlog multiplier cap.
+        pub const PRICING_ACCESS_BACKLOG_CAP: &str = "1";
+        /// Access appeal evidence-size divisor in MiB.
+        pub const PRICING_ACCESS_SIZE_DIVISOR_MB: &str = "50";
+        /// Access appeal evidence-size multiplier cap.
+        pub const PRICING_ACCESS_SIZE_CAP: &str = "2";
+        /// Access appeal minimum deposit.
+        pub const PRICING_ACCESS_MIN_DEPOSIT_XOR: &str = "100";
+        /// Access appeal maximum deposit.
+        pub const PRICING_ACCESS_MAX_DEPOSIT_XOR: &str = "2500";
+
+        /// Fraud appeal base rate.
+        pub const PRICING_FRAUD_BASE_RATE_XOR: &str = "500";
+        /// Fraud appeal backlog target.
+        pub const PRICING_FRAUD_BACKLOG_TARGET: u32 = 20;
+        /// Fraud appeal backlog multiplier cap.
+        pub const PRICING_FRAUD_BACKLOG_CAP: &str = "1";
+        /// Fraud appeal evidence-size divisor in MiB.
+        pub const PRICING_FRAUD_SIZE_DIVISOR_MB: &str = "50";
+        /// Fraud appeal evidence-size multiplier cap.
+        pub const PRICING_FRAUD_SIZE_CAP: &str = "2";
+        /// Fraud appeal minimum deposit.
+        pub const PRICING_FRAUD_MIN_DEPOSIT_XOR: &str = "100";
+        /// Fraud appeal maximum deposit.
+        pub const PRICING_FRAUD_MAX_DEPOSIT_XOR: &str = "5000";
+
+        /// Other appeal base rate.
+        pub const PRICING_OTHER_BASE_RATE_XOR: &str = "120";
+        /// Other appeal backlog target.
+        pub const PRICING_OTHER_BACKLOG_TARGET: u32 = 40;
+        /// Other appeal backlog multiplier cap.
+        pub const PRICING_OTHER_BACKLOG_CAP: &str = "1";
+        /// Other appeal evidence-size divisor in MiB.
+        pub const PRICING_OTHER_SIZE_DIVISOR_MB: &str = "100";
+        /// Other appeal evidence-size multiplier cap.
+        pub const PRICING_OTHER_SIZE_CAP: &str = "2";
+        /// Other appeal minimum deposit.
+        pub const PRICING_OTHER_MIN_DEPOSIT_XOR: &str = "100";
+        /// Other appeal maximum deposit.
+        pub const PRICING_OTHER_MAX_DEPOSIT_XOR: &str = "2500";
+
+        /// Baseline class-level surge multiplier.
+        pub const PRICING_SURGE_MULTIPLIER: &str = "1";
+
+        /// Baseline stipend paid to each juror.
+        pub const SETTLEMENT_STIPEND_PER_JUROR_XOR: &str = "25";
+        /// Baseline per-case juror bonus pool.
+        pub const SETTLEMENT_CASE_BONUS_XOR: &str = "10";
+        /// Refund rate for an upheld decision.
+        pub const SETTLEMENT_UPHOLD_REFUND_RATE: &str = "0";
+        /// Treasury rate for an upheld decision.
+        pub const SETTLEMENT_UPHOLD_TREASURY_RATE: &str = "1";
+        /// Refund rate for an overturned decision.
+        pub const SETTLEMENT_OVERTURN_REFUND_RATE: &str = "1";
+        /// Treasury rate for an overturned decision.
+        pub const SETTLEMENT_OVERTURN_TREASURY_RATE: &str = "0";
+        /// Refund rate for a modified decision.
+        pub const SETTLEMENT_MODIFY_REFUND_RATE: &str = "1";
+        /// Treasury rate for a modified decision.
+        pub const SETTLEMENT_MODIFY_TREASURY_RATE: &str = "0";
+        /// Refund rate when an appeal is withdrawn before panel activation.
+        pub const SETTLEMENT_WITHDRAWN_BEFORE_PANEL_REFUND_RATE: &str = "0.9";
+        /// Treasury rate when an appeal is withdrawn before panel activation.
+        pub const SETTLEMENT_WITHDRAWN_BEFORE_PANEL_TREASURY_RATE: &str = "0";
+        /// Refund rate when an appeal is withdrawn after panel activation.
+        pub const SETTLEMENT_WITHDRAWN_AFTER_PANEL_REFUND_RATE: &str = "0";
+        /// Treasury rate when an appeal is withdrawn after panel activation.
+        pub const SETTLEMENT_WITHDRAWN_AFTER_PANEL_TREASURY_RATE: &str = "1";
+        /// Refund rate for a frivolous appeal.
+        pub const SETTLEMENT_FRIVOLOUS_REFUND_RATE: &str = "0.5";
+        /// Treasury rate for a frivolous appeal.
+        pub const SETTLEMENT_FRIVOLOUS_TREASURY_RATE: &str = "0.5";
+        /// Refund rate while an appeal remains escalated.
+        pub const SETTLEMENT_ESCALATED_REFUND_RATE: &str = "0";
+        /// Treasury rate while an appeal remains escalated.
+        pub const SETTLEMENT_ESCALATED_TREASURY_RATE: &str = "0";
+
+        /// Canonical governed asset definition used for appeal finance.
+        #[must_use]
+        pub fn asset_definition_id() -> AssetDefinitionId {
+            super::super::canonical_asset_definition_id("sora.universal", "xor")
+        }
+
+        /// Parse one hard-coded canonical decimal policy value.
+        #[must_use]
+        pub fn numeric(value: &str) -> Numeric {
+            Numeric::from_str(value).expect("canonical appeal-finance numeric default")
+        }
+
+        /// Parse one hard-coded canonical XOR-denominated policy value.
+        #[must_use]
+        pub fn xor_quantity(value: &str) -> XorQuantity {
+            XorQuantity::from_str(value).expect("canonical appeal-finance XOR quantity default")
+        }
+    }
+
     /// Alias cache positive TTL (seconds) applied by Torii gateways and SDK helpers.
     pub const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;
     /// Alias cache refresh window (seconds) before positive TTL elapses.
@@ -3653,10 +3789,6 @@ pub mod sumeragi {
     pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE: NonZeroUsize = nonzero!(4_usize);
     /// Hard ceiling for request gates retained per source.
     pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE_MAX: usize = 4_096;
-    /// Lifetime of a completed/rejected server request gate.
-    pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL: Duration = Duration::from_secs(10);
-    /// Longest admitted server request-gate lifetime.
-    pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL_MAX_MS: u64 = 300_000;
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     pub const V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY: NonZeroUsize = nonzero!(1_024_usize);
     /// Hard ceiling for pending certified merge entries retained by Kura.

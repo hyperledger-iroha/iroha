@@ -31,9 +31,17 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "IrohaSwift/Package.swift": "// package\n",
             "IrohaSwift/Package.resolved": '{"pins":[],"version":3}\n',
             "IrohaSwift/Sources/IrohaSwift/Core.swift": "public struct Core {}\n",
+            "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift": (
+                'let hashes = [\n'
+                '    "macos-arm64": "' + ("1" * 64) + '",\n'
+                '    "ios-arm64": "' + ("2" * 64) + '",\n'
+                '    "ios-arm64_x86_64-simulator": "' + ("3" * 64) + '"\n'
+                ']\n'
+            ),
             "IrohaSwift/Sources/IrohaSwiftMobileTransports/Nfc.swift":
                 "public struct Nfc {}\n",
             "scripts/build_norito_xcframework.sh": "#!/bin/sh\n",
+            "scripts/check_mobile_sdk_artifact_pin_commit.py": "#!/usr/bin/env python3\n",
             "scripts/check_mobile_sdk_artifacts.sh": "#!/bin/sh\n",
             "scripts/exec_with_file_lock.py": "#!/usr/bin/env python3\n",
             "scripts/norito_bridge_source_seal.py": "# fixture\n",
@@ -74,11 +82,27 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn("IrohaSwift/Sources/IrohaSwift", apple)
         self.assertIn("IrohaSwift/Sources/IrohaSwiftMobileTransports", apple)
         self.assertIn("scripts/exec_with_file_lock.py", apple)
+        self.assertIn("scripts/check_mobile_sdk_artifact_pin_commit.py", apple)
 
         android = self.inputs("android")
         self.assertNotIn("IrohaSwift/Package.resolved", android)
         self.assertNotIn("IrohaSwift/Sources/IrohaSwiftMobileTransports", android)
         self.assertNotIn("scripts/exec_with_file_lock.py", android)
+        self.assertIn("scripts/check_mobile_sdk_artifact_pin_commit.py", android)
+
+    def test_apple_fingerprint_normalizes_only_native_bridge_hash_pins(self) -> None:
+        inputs = self.inputs("apple")
+        original = seal.fingerprint(self.root, inputs)
+        loader = self.root / "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+        contents = loader.read_text(encoding="utf-8")
+        loader.write_text(contents.replace("1" * 64, "a" * 64), encoding="utf-8")
+        self.assertEqual(original, seal.fingerprint(self.root, inputs))
+
+        loader.write_text(
+            loader.read_text(encoding="utf-8") + "let changedLogic = true\n",
+            encoding="utf-8",
+        )
+        self.assertNotEqual(original, seal.fingerprint(self.root, inputs))
 
     def test_apple_fingerprint_and_dirty_state_bind_mobile_transport_bytes(self) -> None:
         inputs = self.inputs("apple")

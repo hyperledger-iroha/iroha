@@ -91,6 +91,13 @@ PendingVoteWritesAuthorized ==
        /\ PrepareCarriesHigherSafeQc(request.vote)
   /\ \A request \in pendingLockCommit:
        /\ request.node \in Honest
+       \* Local WAL payloads retain the complete constructor identity.  The
+       \* broad vote carrier also admits malformed wire records whose
+       \* redundant `height` can disagree with `context.height`; those must
+       \* never become durable LockCommit intents.
+       /\ request.vote =
+            Vote(context, request.qc.view, "Commit",
+                 request.qc.subject, request.node)
        /\ request.vote.phase = "Commit"
        /\ request.vote.signer = request.node
        /\ request.vote.context = context
@@ -99,8 +106,7 @@ PendingVoteWritesAuthorized ==
        /\ request.vote.subject = request.qc.subject
        /\ request.qc.phase = "Prepare"
        /\ request.qc \in prepareQCs
-       /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
-          \/ HistoricalLockedPrepareForCommit(request.node, request.qc)
+       /\ CurrentOpenPrepareForCommit(request.node, request.qc)
        /\ request.vote.subject \in ValidSubjects
        /\ BodyHeldBy(durableBodies, request.node,
                      request.vote.context, request.vote.view,
@@ -154,6 +160,11 @@ QcTransportBacked ==
        envelope.qc \in prepareQCs \cup commitQCs
   /\ \A received \in receivedQCs:
        received.qc \in prepareQCs \cup commitQCs
+
+ReceivedPrepareQcViewAdmissible ==
+  \A received \in receivedQCs:
+    received.qc.phase = "Prepare"
+      => received.qc.view <= nodeView[received.node]
 
 HonestTimeoutTransportBacked ==
   /\ \A envelope \in timeoutNetwork:
@@ -220,29 +231,29 @@ DurableTimeoutsProtectCommits ==
   TimeoutIntentProtectsCommits(timeoutIntents, commitIntents)
 
 (***************************************************************************
-If an honest durable Commit is not strictly protected by one of that node's
-older timeout reports, the Commit must have the exact PrepareQC selected by a
-durably installed TC.  This is the retained provenance needed when a node
-learned the lock through the TC and validated its body only afterward.
+Every pending LockAndCommit is for the durable current round, and every
+timeout/Commit pair is protected directly. Installed TC state cannot authorize
+new historical Commit creation.
 ***************************************************************************)
-HistoricalLockedCommitAuthorizationInvariant ==
+SameRoundLockAndCommitAuthorizationInvariant ==
   /\ \A request \in pendingLockCommit:
-       request.vote.view < nodeView[request.node]
-         => HistoricalLockedPrepareForCommit(request.node, request.qc)
+       /\ request.vote.view = nodeView[request.node]
+       /\ CurrentOpenPrepareForCommit(request.node, request.qc)
   /\ \A timeoutVote \in timeoutIntents, commitVote \in commitIntents:
        (/\ timeoutVote.signer \in Honest
         /\ commitVote.signer = timeoutVote.signer
         /\ commitVote.context = timeoutVote.context
         /\ commitVote.phase = "Commit"
-        /\ commitVote.view <= timeoutVote.view
-        /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote))
-         => InstalledTcAuthorizesCommitVote(commitVote)
+        /\ commitVote.view <= timeoutVote.view)
+         => TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
 
-\* Legacy release-ledger alias.  The canonical invariant name is source
-\* neutral because recovery itself also accepts an exact durable Commit
-\* intent carried through a later no-high TC.
+\* Compatibility aliases retain parser stability for the older proof module;
+\* both now denote the exact same-round invariant above.
+HistoricalLockedCommitAuthorizationInvariant ==
+  SameRoundLockAndCommitAuthorizationInvariant
+
 HistoricalTcLockedCommitAuthorizationInvariant ==
-  HistoricalLockedCommitAuthorizationInvariant
+  SameRoundLockAndCommitAuthorizationInvariant
 
 (***************************************************************************
 This authorization invariant is a derived consequence of
@@ -254,19 +265,22 @@ every action-preservation branch without strengthening the invariant.
 
 HighestAndLockAreCertified ==
   \A node \in ValidatorIds:
-    /\ (highestRank[node] = NoRank
-          => highestSubject[node] = NoSubject)
-    /\ (highestRank[node] # NoRank
-          => \E qc \in prepareQCs:
-               /\ qc.context = context
-               /\ qc.view = highestRank[node]
-               /\ qc.subject = highestSubject[node])
-    /\ (lockRank[node] = NoRank => lockSubject[node] = NoSubject)
-    /\ (lockRank[node] # NoRank
-          => \E qc \in prepareQCs:
-               /\ qc.context = context
-               /\ qc.view = lockRank[node]
-               /\ qc.subject = lockSubject[node])
+    /\ PrepareQcRank(highestPrepareQc[node]) = highestRank[node]
+    /\ PrepareQcSubject(highestPrepareQc[node]) = highestSubject[node]
+    /\ PrepareQcRank(lockPrepareQc[node]) = lockRank[node]
+    /\ PrepareQcSubject(lockPrepareQc[node]) = lockSubject[node]
+    /\ (highestPrepareQc[node] = NoPrepareQC
+          <=> highestRank[node] = NoRank)
+    /\ (highestPrepareQc[node] # NoPrepareQC
+          => /\ highestPrepareQc[node] \in prepareQCs
+             /\ highestPrepareQc[node].context = context
+             /\ highestPrepareQc[node].phase = "Prepare")
+    /\ (lockPrepareQc[node] = NoPrepareQC
+          <=> lockRank[node] = NoRank)
+    /\ (lockPrepareQc[node] # NoPrepareQC
+          => /\ lockPrepareQc[node] \in prepareQCs
+             /\ lockPrepareQc[node].context = context
+             /\ lockPrepareQc[node].phase = "Prepare")
 
 (***************************************************************************
 Every non-empty durable lock has one of the two reducer origins which can
@@ -286,8 +300,7 @@ DurableLockRecoveryProvenanceInvariant ==
     \/ \E installed \in installedTCs:
          /\ installed.node = node
          /\ installed.tc.context = context
-         /\ TcHighRank(installed.tc) = lockRank[node]
-         /\ TcHighSubject(installed.tc) = lockSubject[node]
+         /\ installed.tc.highestPrepareQc = lockPrepareQc[node]
 
 ReducerProvenanceInvariant ==
   /\ HonestVoteUnique(prepareIntents)
@@ -298,6 +311,7 @@ ReducerProvenanceInvariant ==
   /\ PendingCertificateWritesAuthorized
   /\ HonestVoteTransportBacked
   /\ QcTransportBacked
+  /\ ReceivedPrepareQcViewAdmissible
   /\ HonestTimeoutTransportBacked
   /\ TcTransportBacked
   /\ CertificatesBackedByIntents
@@ -315,6 +329,7 @@ ReducerProvenanceWithoutVoteTransport ==
   /\ PendingVoteWritesAuthorized
   /\ PendingCertificateWritesAuthorized
   /\ QcTransportBacked
+  /\ ReceivedPrepareQcViewAdmissible
   /\ HonestTimeoutTransportBacked
   /\ TcTransportBacked
   /\ CertificatesBackedByIntents
@@ -333,6 +348,7 @@ ReducerProvenanceWithoutTimeoutTransport ==
   /\ PendingCertificateWritesAuthorized
   /\ HonestVoteTransportBacked
   /\ QcTransportBacked
+  /\ ReceivedPrepareQcViewAdmissible
   /\ TcTransportBacked
   /\ CertificatesBackedByIntents
   /\ HonestDurableIntentsSound
@@ -363,6 +379,7 @@ ProofRelevantVars ==
     receivedVotes, receivedQCs, receivedTimeoutVotes,
     receivedTCs, proposalIntents, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
+    lastInstalledTc, lockPrepareQc, highestPrepareQc,
     lockRank, lockSubject, highestRank, highestSubject,
     pendingProposal, pendingPrepare, pendingObservePrepare,
     pendingLockCommit, pendingTimeout, pendingInstallTC, pendingDecision,

@@ -68,6 +68,18 @@ impl OfflineCommandRuntime {
         }
     }
 
+    pub(super) fn startup_config(&self) -> actual::ToriiKagemushaCommands {
+        let admission = self.admission.lock().unwrap();
+        actual::ToriiKagemushaCommands {
+            authority: self.authority.clone(),
+            key_pair: self.key_pair.clone(),
+            minimum_xor_balance: self.minimum_xor_balance.clone(),
+            max_tx_value: self.max_tx_value.clone(),
+            operation_registry_max_entries: admission.max_entries,
+            operation_registry_max_bytes: admission.max_accounted_bytes,
+        }
+    }
+
     fn quote_and_sign_transaction(
         &self,
         app: &AppState,
@@ -1885,7 +1897,7 @@ pub(crate) fn ensure_offline_command_authority_ready(
     )
 }
 
-fn ensure_offline_command_authority_ready_in_world(
+pub(super) fn ensure_offline_command_authority_ready_in_world(
     world: &impl WorldReadOnly,
     issuer: &OfflineCommandRuntime,
     fee_asset_selector: &str,

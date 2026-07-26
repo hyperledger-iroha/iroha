@@ -202,7 +202,7 @@ impl LocalProposalDirective {
         self.leader
     }
 
-    /// Subject whose exact proposal origin must be recovered while locked.
+    /// Subject whose exact immutable body must remain recoverable while locked.
     pub(crate) const fn locked_subject(self) -> Option<wire::BlockSubject> {
         self.locked_subject
     }
@@ -423,15 +423,37 @@ impl SignRequest {
 
 /// Return whether a proposal still satisfies the safe-value rule for one lock.
 ///
-/// The locked subject is admissible only at its exact authenticated proposal
-/// origin. A timeout certificate carrying a PrepareQC installs and commits that
-/// certificate's origin directly; it never authorizes a competing proposal.
+/// The exact locked subject remains safe in a later justified view. A different
+/// subject is safe only when the immediately preceding timeout certificate
+/// carries a strictly higher PrepareQC for that same subject.
 pub(crate) fn proposal_is_safe_for_lock(
     proposal: &wire::Proposal,
     locked_round: wire::ConsensusRound,
     locked_subject: wire::BlockSubject,
 ) -> bool {
-    proposal.round == locked_round && proposal.subject == locked_subject
+    if proposal.round.context_id != locked_round.context_id
+        || proposal.round.height != locked_round.height
+        || proposal.round.view < locked_round.view
+    {
+        return false;
+    }
+    if proposal.subject == locked_subject {
+        return true;
+    }
+    let wire::ProposalJustification::Timeout(timeout) = &proposal.justification else {
+        return false;
+    };
+    timeout.highest_prepare_qc.as_ref().is_some_and(|highest| {
+        highest.phase == wire::GlobalPhase::Prepare
+            && highest.round.context_id == locked_round.context_id
+            && highest.round.height == locked_round.height
+            && highest.round.view > locked_round.view
+            && highest.subject == proposal.subject
+            && timeout
+                .timeout_certificate
+                .highest_prepare_qc()
+                .is_some_and(|selected| selected == highest)
+    })
 }
 
 /// Effects delivered by the production adapter to asynchronous services.
@@ -650,11 +672,12 @@ pub(crate) enum DecisionLocalProposalDisposition {
 
 /// Classify one queued local-proposal completion against a durable Decision.
 ///
-/// `None` means the completion does not belong to the selected durable body
-/// origin. An exact Decision owner is retainable only when both non-forgeable
-/// receipts bind the full manifest and Decision execution commitment, and its
-/// tag is the current reducer tag for that proposal-origin round. The selected
-/// body origin may precede the CommitQC round that installed finality.
+/// `None` means the completion does not belong to the selected durable body.
+/// An exact Decision owner is retainable only when both non-forgeable receipts
+/// bind the full manifest and Decision execution commitment, and its tag is the
+/// current reducer tag for the certificate's strict same round. The immutable
+/// block header may have been constructed in an earlier view, but the manifest,
+/// Vote, and CommitQC for this reproposal all name one exact round.
 pub(crate) fn classify_decided_local_proposal(
     tag: reducer::EventTag,
     manifest: &wire::PayloadManifest,
@@ -2087,8 +2110,8 @@ pub(crate) enum AdapterError {
     /// No fsynced deterministic execution result exists for a signable vote or QC.
     #[error("missing validated Sumeragi v2 execution commitment")]
     MissingExecutionCommitment,
-    /// One round and subject were bound to different execution results.
-    #[error("conflicting Sumeragi v2 execution commitments for one round and subject")]
+    /// One immutable subject was bound to different execution results.
+    #[error("conflicting Sumeragi v2 execution commitments for one immutable subject")]
     ConflictingExecutionCommitment,
     /// A proposal justification was structurally inconsistent.
     #[error("inconsistent Sumeragi v2 proposal justification")]
@@ -2381,7 +2404,7 @@ impl SumeragiV2Adapter {
         // status snapshot. A durable decision owns the pipeline in preference
         // to the (possibly still retained) Prepare lock; otherwise the lock is
         // the active body which must remain recoverable while lifecycle views
-        // advance without changing its exact proposal origin.
+        // advance before the exact body is re-proposed in a later round.
         let active_subject = reducer
             .durable_state()
             .decision()
@@ -2545,14 +2568,13 @@ impl SumeragiV2Adapter {
         self.wire_ingress_may_use_progress(message.payload())
     }
 
-    /// Test whether an exact Commit/Prepare QC already has a Busy-deferred
-    /// authenticated-envelope owner and return its tag.
+    /// Return the tag of an exact Commit/Prepare QC already owned by the
+    /// adapter's Busy-deferred progress lane.
     ///
     /// This comparison is intentionally exact, including canonical signer
-    /// order and aggregate signature. Production uses the generic exact-byte
-    /// lookup directly; this wrapper keeps QC-specific regression assertions
-    /// readable.
-    #[cfg(test)]
+    /// order and aggregate signature. Runtime admission may use the result as
+    /// a capacity hint, but it must independently authenticate the arriving
+    /// envelope before coalescing it with this owner.
     pub(crate) fn deferred_quorum_certificate_owner_tag(
         &self,
         candidate: &wire::QuorumCertificate,
@@ -2561,21 +2583,26 @@ impl SumeragiV2Adapter {
             .map(|(tag, _)| tag)
     }
 
-    /// Test whether an exact Commit/Prepare QC already has a Busy-deferred
-    /// authenticated-envelope owner and return its tag and admission ordinal.
+    /// Return the tag and actor-global admission ordinal of an exact
+    /// Commit/Prepare QC already owned by the Busy-deferred progress lane.
     ///
     /// The ordinal is an opaque process-local association key. It lets the
     /// serialized runtime merge later authenticated-source routes into the
     /// exact deferred occurrence without exposing or reconstructing the
     /// adapter's reducer event.
-    #[cfg(test)]
     pub(crate) fn deferred_quorum_certificate_owner(
         &self,
         candidate: &wire::QuorumCertificate,
     ) -> Option<(reducer::EventTag, u128)> {
-        self.deferred_authenticated_message_owner(&wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(candidate.clone()),
-        ))
+        self.deferred_progress_inputs.iter().find_map(|input| {
+            let reducer::Event::QuorumCertificateReceived { tag, certificate } = &input.event
+            else {
+                return None;
+            };
+            self.registry
+                .reducer_qc_matches_wire(certificate, candidate)
+                .then_some((*tag, input.admission_ordinal))
+        })
     }
 
     /// Return the tag and actor-global admission ordinal of an exact canonical
@@ -2590,6 +2617,10 @@ impl SumeragiV2Adapter {
         &self,
         candidate: &wire::ConsensusMessageV2,
     ) -> Option<(reducer::EventTag, u128)> {
+        if let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) = &candidate.payload
+        {
+            return self.deferred_quorum_certificate_owner(certificate);
+        }
         let encoded = candidate.encode();
         self.deferred_completions
             .iter()
@@ -2783,7 +2814,6 @@ impl SumeragiV2Adapter {
         )>,
     ) -> Result<(), AdapterError> {
         commitment.validate()?;
-        let core_round = reducer::Round::new(round.height, round.view);
         let core_subject = reducer::Subject::new(Hash::new(subject.encode()).into());
         if self
             .registry
@@ -2793,19 +2823,13 @@ impl SumeragiV2Adapter {
         {
             return Err(AdapterError::SubjectCollision);
         }
-        if self
-            .registry
-            .execution_commitments
-            .get(&(core_round, core_subject))
-            .is_some_and(|registered| *registered != commitment)
-            || observed
-                .iter()
-                .any(|(registered_round, registered_subject, registered)| {
-                    *registered_round == round
-                        && *registered_subject == subject
-                        && *registered != commitment
-                })
-        {
+        if self.registry.execution_commitments.iter().any(
+            |((_, registered_subject), registered)| {
+                *registered_subject == core_subject && *registered != commitment
+            },
+        ) || observed.iter().any(|(_, registered_subject, registered)| {
+            *registered_subject == subject && *registered != commitment
+        }) {
             return Err(AdapterError::ConflictingExecutionCommitment);
         }
         observed.push((round, subject, commitment));
@@ -2829,8 +2853,7 @@ impl SumeragiV2Adapter {
         };
         vote.proposal_round.height == locked.round().height()
             && vote.proposal_round.view == locked.round().view()
-            && vote.round.height == locked.round().height()
-            && vote.round.view >= vote.proposal_round.view
+            && vote.round == vote.proposal_round
             && self
                 .registry
                 .subject(locked.subject())
@@ -3741,9 +3764,9 @@ impl SumeragiV2Adapter {
 
     /// Retire deferred proposals made unsafe by an installed durable lock.
     ///
-    /// Only an exact locked-origin proposal remains queued. Prepared value
-    /// authority is installed and committed directly rather than converted into
-    /// another proposal origin.
+    /// The locked subject may remain queued in a later justified view. A
+    /// different subject survives only when the proposal carries a strictly
+    /// higher matching PrepareQC.
     pub(crate) fn retire_deferred_unsafe_proposals_for_lock(
         &mut self,
         locked_round: wire::ConsensusRound,
@@ -3762,7 +3785,21 @@ impl SumeragiV2Adapter {
             {
                 return true;
             }
-            proposal.round() == locked_round && proposal.manifest().subject() == locked_subject
+            if proposal.round().view() < locked_round.view() {
+                return false;
+            }
+            if proposal.manifest().subject() == locked_subject {
+                return true;
+            }
+            let reducer::ProposalJustification::Timeout(certificate) = proposal.justification()
+            else {
+                return false;
+            };
+            certificate.highest_prepare().is_some_and(|highest| {
+                highest.phase() == reducer::Phase::Prepare
+                    && highest.subject() == proposal.manifest().subject()
+                    && highest.round().view() > locked_round.view()
+            })
         });
         let retired = before.saturating_sub(self.deferred_inputs.len());
         self.active_subject = Some((locked_round, locked_subject));
@@ -6065,10 +6102,16 @@ impl WireRegistry {
         commitment: wire::ExecutionCommitment,
     ) -> Result<(), AdapterError> {
         commitment.validate()?;
+        if self
+            .execution_commitments
+            .iter()
+            .any(|((_, registered_subject), registered)| {
+                *registered_subject == subject && *registered != commitment
+            })
+        {
+            return Err(AdapterError::ConflictingExecutionCommitment);
+        }
         match self.execution_commitments.get(&(round, subject)) {
-            Some(existing) if *existing != commitment => {
-                Err(AdapterError::ConflictingExecutionCommitment)
-            }
             Some(_) => Ok(()),
             None => {
                 self.execution_commitments
@@ -6129,6 +6172,11 @@ impl WireRegistry {
         vote: &wire::Vote,
         context: &wire::HeightContext,
     ) -> Result<reducer::SignedVote, AdapterError> {
+        if vote.round != vote.proposal_round {
+            return Err(AdapterError::WireValidation(
+                wire::ValidationError::InvalidProposalRound,
+            ));
+        }
         let round = self.round_to_core(vote.round, context)?;
         let proposal_round = self.round_to_core(vote.proposal_round, context)?;
         let subject = self.register_subject(vote.subject)?;
@@ -6189,6 +6237,11 @@ impl WireRegistry {
         {
             return Err(AdapterError::WireValidation(
                 wire::ValidationError::WrongHeightContext,
+            ));
+        }
+        if reference.proposal_round != reference.round {
+            return Err(AdapterError::WireValidation(
+                wire::ValidationError::InvalidProposalRound,
             ));
         }
         let round = reducer::Round::new(reference.round.height, reference.round.view);
@@ -6283,6 +6336,42 @@ impl WireRegistry {
         self.certificates
             .insert(certificate.reference(), wire.clone());
         Ok(wire)
+    }
+
+    /// Return whether a reducer QC retains this exact authenticated wire QC.
+    ///
+    /// Network QCs store the aggregate signature as the same opaque token on
+    /// every reducer signature share. Comparing that token as well as the
+    /// canonical signer order prevents a different certificate for the same
+    /// round, phase, and subject from borrowing an existing deferred owner.
+    fn reducer_qc_matches_wire(
+        &self,
+        queued: &reducer::QuorumCertificate,
+        candidate: &wire::QuorumCertificate,
+    ) -> bool {
+        if self.round_to_wire(queued.round()) != candidate.round
+            || self.round_to_wire(queued.proposal_round()) != candidate.proposal_round
+            || Self::phase_to_wire(queued.phase()) != candidate.phase
+            || !self
+                .subject(queued.subject())
+                .is_ok_and(|subject| subject == candidate.subject)
+            || !self
+                .execution_commitment(queued.proposal_round(), queued.subject())
+                .is_ok_and(|commitment| commitment == candidate.execution_commitment)
+            || queued.signatures().len() != candidate.signers.len()
+        {
+            return false;
+        }
+        let aggregate = aggregate_token(&candidate.aggregate_signature);
+        queued
+            .signatures()
+            .iter()
+            .zip(&candidate.signers)
+            .all(|(share, signer)| {
+                self.validator_index(share.signer())
+                    .is_ok_and(|index| index == *signer)
+                    && share.signature() == &aggregate
+            })
     }
 
     fn timeout_vote_to_core(
@@ -6503,17 +6592,11 @@ impl WireRegistry {
                 Ok(reducer::ProposalJustification::ParentCommit(reference))
             }
             wire::ProposalJustification::Timeout(timeout) => {
-                let certificate = self.tc_to_core(&timeout.timeout_certificate, context)?;
                 let selected = timeout.timeout_certificate.highest_prepare_qc();
-                if selected.map(wire::QuorumCertificate::as_ref)
-                    != timeout
-                        .highest_prepare_qc
-                        .as_ref()
-                        .map(wire::QuorumCertificate::as_ref)
-                    || selected.is_some()
-                {
+                if selected != timeout.highest_prepare_qc.as_ref() {
                     return Err(AdapterError::InvalidProposalJustification);
                 }
+                let certificate = self.tc_to_core(&timeout.timeout_certificate, context)?;
                 Ok(reducer::ProposalJustification::Timeout(certificate))
             }
         }
@@ -7414,13 +7497,9 @@ mod tests {
             height: parent_context.height,
             view: 3,
         };
-        let proposal_round = wire::ConsensusRound {
-            view: 1,
-            ..parent_round
-        };
         let parent_qc = wire::QuorumCertificate {
             round: parent_round,
-            proposal_round,
+            proposal_round: parent_round,
             phase: wire::GlobalPhase::Commit,
             subject: subject(0x6d),
             execution_commitment: execution_commitment(0x6d),
@@ -7444,7 +7523,7 @@ mod tests {
         assert_eq!(core_parent.context_id(), context_id(parent_context.id()));
         assert_ne!(core_parent.context_id(), context_id(successor_id));
         assert_eq!(core_parent.round().height(), parent_context.height);
-        assert_eq!(core_parent.proposal_round().view(), proposal_round.view);
+        assert_eq!(core_parent.proposal_round().view(), parent_round.view);
 
         let parent_reference = successor
             .parent_commit_qc
@@ -7718,7 +7797,7 @@ mod tests {
         };
         let alternate_preimage = wire::Vote {
             round: alternate_round,
-            proposal_round: round,
+            proposal_round: alternate_round,
             phase: wire::GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x21),
@@ -7740,7 +7819,7 @@ mod tests {
             .collect::<Vec<_>>();
         let alternate_parent_qc = wire::QuorumCertificate {
             round: alternate_round,
-            proposal_round: round,
+            proposal_round: alternate_round,
             phase: wire::GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x21),
@@ -7800,6 +7879,78 @@ mod tests {
                 wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
             ))
             .expect("alternate-view parent CommitQC is cryptographically verified");
+
+        let mut alternate_registry = adapter.registry.clone();
+        alternate_registry
+            .proposal_to_core(&proposal, &successor)
+            .expect("alternate-view parent CommitQC retains the durable parent decision");
+
+        let foreign_parent_subject = subject(0x73);
+        let foreign_parent_commitment = execution_commitment(0x73);
+        let foreign_preimage = wire::Vote {
+            round: alternate_round,
+            proposal_round: alternate_round,
+            phase: wire::GlobalPhase::Commit,
+            subject: foreign_parent_subject,
+            execution_commitment: foreign_parent_commitment,
+            signer: 0,
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let foreign_shares = keys[..3]
+            .iter()
+            .map(|key| {
+                Signature::new(key.private_key(), &foreign_preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let foreign_refs = foreign_shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let foreign_parent_qc = wire::QuorumCertificate {
+            round: alternate_round,
+            proposal_round: alternate_round,
+            phase: wire::GlobalPhase::Commit,
+            subject: foreign_parent_subject,
+            execution_commitment: foreign_parent_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&foreign_refs)
+                .expect("aggregate foreign parent CommitQC"),
+        };
+        let mut retargeted_proposal = proposal.clone();
+        let wire::ProposalJustification::ParentCommit(parent) =
+            &mut retargeted_proposal.justification
+        else {
+            unreachable!("fixture carries a parent certificate")
+        };
+        parent.certificate = Some(foreign_parent_qc);
+        retargeted_proposal.signature = Signature::new(
+            keys[usize::try_from(proposer).expect("small proposer index")].private_key(),
+            &retargeted_proposal.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let retargeted_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(retargeted_proposal),
+        );
+        assert!(matches!(
+            adapter.authenticate(retargeted_message.clone()),
+            Err(AdapterError::WireValidation(
+                wire::ValidationError::InvalidProposalJustification
+            ))
+        ));
+        let registry_before_retargeting = adapter.registry.clone();
+        // Exercise the staged conversion defense directly. Production ingress
+        // reaches this only after `authenticate`, whose structural check above
+        // already rejects the retargeting; the inner conversion must still be
+        // fail-closed if a caller violates that private precondition.
+        assert!(matches!(
+            adapter.receive_verified(retargeted_message),
+            Err(AdapterError::ParentContextMismatch)
+        ));
+        assert_registry_eq(&adapter.registry, &registry_before_retargeting);
+        assert!(adapter.ingress_equivocations.is_empty());
+        assert!(adapter.ingress_deliveries.is_empty());
+
         let admitted = adapter
             .receive_authenticated(authenticated)
             .expect("parent CommitQC remains bound to the predecessor during conversion");
@@ -7964,7 +8115,7 @@ mod tests {
     }
 
     #[test]
-    fn locked_subject_is_safe_only_at_its_exact_proposal_origin() {
+    fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
         let context = context();
         let locked_round = wire::ConsensusRound {
             context_id: context.id(),
@@ -8013,7 +8164,7 @@ mod tests {
             .expect("later same-subject manifest"),
             ..exact
         };
-        assert!(!proposal_is_safe_for_lock(
+        assert!(proposal_is_safe_for_lock(
             &later,
             locked_round,
             locked_subject
@@ -8062,15 +8213,112 @@ mod tests {
             }),
             signature: vec![0x35; 48],
         };
-        assert!(
-            !proposal_is_safe_for_lock(&prepared_proposal, locked_round, locked_subject),
-            "a higher PrepareQC is installed directly and cannot unlock a new proposal origin"
-        );
+        assert!(proposal_is_safe_for_lock(
+            &prepared_proposal,
+            locked_round,
+            locked_subject
+        ));
         let mut registry = WireRegistry::new(&context).expect("wire registry");
+        registry
+            .justification_to_core(&prepared_proposal.justification, &context)
+            .expect("matching strict-higher PrepareQC authorizes the proposal subject");
+
+        let mut missing_repeated_high = prepared_proposal.clone();
+        let wire::ProposalJustification::Timeout(timeout) =
+            &mut missing_repeated_high.justification
+        else {
+            unreachable!("prepared fixture carries a timeout")
+        };
+        timeout.highest_prepare_qc = None;
+        assert!(
+            !proposal_is_safe_for_lock(&missing_repeated_high, locked_round, locked_subject),
+            "safe-value admission must reject a TC-selected high omitted by the proposal"
+        );
+        let mut missing_registry = WireRegistry::new(&context).expect("wire registry");
         assert!(matches!(
-            registry.justification_to_core(&prepared_proposal.justification, &context),
+            missing_registry.justification_to_core(&missing_repeated_high.justification, &context),
             Err(AdapterError::InvalidProposalJustification)
         ));
+        assert!(
+            missing_registry.subjects.is_empty()
+                && missing_registry.execution_commitments.is_empty()
+                && missing_registry.certificates.is_empty(),
+            "the omitted repeated-QC gate must reject before registry mutation"
+        );
+
+        let mut invented_repeated_high = prepared_proposal.clone();
+        let wire::ProposalJustification::Timeout(timeout) =
+            &mut invented_repeated_high.justification
+        else {
+            unreachable!("prepared fixture carries a timeout")
+        };
+        timeout.timeout_certificate.groups[0].highest_prepare_qc = None;
+        assert!(
+            !proposal_is_safe_for_lock(&invented_repeated_high, locked_round, locked_subject),
+            "safe-value admission must reject a repeated high absent from the TC"
+        );
+        let mut invented_registry = WireRegistry::new(&context).expect("wire registry");
+        assert!(matches!(
+            invented_registry
+                .justification_to_core(&invented_repeated_high.justification, &context),
+            Err(AdapterError::InvalidProposalJustification)
+        ));
+        assert!(
+            invented_registry.subjects.is_empty()
+                && invented_registry.execution_commitments.is_empty()
+                && invented_registry.certificates.is_empty(),
+            "the invented repeated-QC gate must reject before registry mutation"
+        );
+
+        let mut alternate_evidence = prepared_proposal.clone();
+        let wire::ProposalJustification::Timeout(timeout) = &mut alternate_evidence.justification
+        else {
+            unreachable!("prepared fixture carries a timeout")
+        };
+        let tc_selected = timeout
+            .timeout_certificate
+            .highest_prepare_qc()
+            .expect("prepared fixture TC carries a high QC")
+            .clone();
+        let repeated = timeout
+            .highest_prepare_qc
+            .as_mut()
+            .expect("prepared fixture repeats the high QC");
+        repeated.signers = vec![0, 1, 3];
+        repeated.aggregate_signature = vec![0x36; 48];
+        assert_eq!(repeated.as_ref(), tc_selected.as_ref());
+        assert_ne!(repeated, &tc_selected);
+        assert!(
+            !proposal_is_safe_for_lock(&alternate_evidence, locked_round, locked_subject),
+            "safe-value admission must reject same-reference alternate evidence"
+        );
+        let mut alternate_registry = WireRegistry::new(&context).expect("wire registry");
+        assert!(matches!(
+            alternate_registry.justification_to_core(&alternate_evidence.justification, &context),
+            Err(AdapterError::InvalidProposalJustification)
+        ));
+        assert!(
+            alternate_registry.subjects.is_empty()
+                && alternate_registry.execution_commitments.is_empty()
+                && alternate_registry.certificates.is_empty(),
+            "the exact repeated-QC gate must reject before registry mutation"
+        );
+
+        let mut equal_rank = prepared_proposal.clone();
+        let wire::ProposalJustification::Timeout(timeout) = &mut equal_rank.justification else {
+            unreachable!("prepared fixture carries a timeout")
+        };
+        let selected = timeout
+            .highest_prepare_qc
+            .as_mut()
+            .expect("prepared fixture carries a high QC");
+        selected.round = locked_round;
+        selected.proposal_round = locked_round;
+        timeout.timeout_certificate.groups[0].highest_prepare_qc = Some(selected.clone());
+        assert!(
+            !proposal_is_safe_for_lock(&equal_rank, locked_round, locked_subject),
+            "an equal-rank PrepareQC cannot release a different lock subject"
+        );
     }
 
     fn proposal(
@@ -8638,7 +8886,7 @@ mod tests {
     }
 
     #[test]
-    fn tc_promoted_historical_commit_is_fsynced_before_sign_and_status() {
+    fn tc_promoted_lock_requires_same_subject_reproposal_before_commit() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
@@ -8761,62 +9009,45 @@ mod tests {
                 && *validated_round == round
                 && *validated_subject == subject
         ));
-        let sign = adapter
+        let validation = adapter
             .validation_succeeded(fetch_tag, round, subject, &validated)
-            .expect("validated TC lock crosses the historical Commit WAL boundary")
+            .expect("validate the TC-protected body without relabelling its origin")
             .into_effects();
-        let commit_round = wire::ConsensusRound {
+        let current_round = wire::ConsensusRound {
             view: fetch_tag.view(),
             ..round
         };
         assert_eq!(
-            commit_round.view,
+            current_round.view,
             round.view + 1,
-            "the TC installs the successor finality view"
+            "the TC installs the successor proposal view"
         );
-        let commit_vote = match sign.as_slice() {
-            [
-                AdapterEffect::Sign {
-                    tag,
-                    request: SignRequest::Vote(vote),
-                },
-            ] if *tag == fetch_tag
-                && vote.round == commit_round
-                && vote.proposal_round == round
-                && vote.phase == wire::GlobalPhase::Commit
-                && vote.subject == subject
-                && vote.execution_commitment == execution_commitment
-                && vote.signer == 0 =>
-            {
-                vote
-            }
-            effects => panic!("unexpected historical Commit effects: {effects:?}"),
-        };
-        assert!(commit_vote.signature.is_empty());
+        assert!(
+            validation.is_empty(),
+            "validating an old-round lock cannot mint a split-round Commit vote: {validation:?}"
+        );
         assert_eq!(
             adapter.wal.recovered_records().len(),
-            3,
-            "LockAndCommit must be fsynced before the adapter returns Sign"
+            2,
+            "validation must not append LockAndCommit until the immutable body is re-proposed"
         );
-        assert_eq!(adapter.reducer.durable_state().last_id().get(), 3);
-        let core_round = reducer::Round::new(commit_round.height, commit_round.view);
-        let core_commit_vote = adapter
-            .registry
-            .vote_to_core(commit_vote, &adapter.wire_context)
-            .expect("convert the exact emitted Commit vote");
+        assert_eq!(adapter.reducer.durable_state().last_id().get(), 2);
+        let core_current_round = reducer::Round::new(current_round.height, current_round.view);
         assert_eq!(
-            adapter.reducer.durable_state().commit_intent(core_round),
-            Some(core_commit_vote.vote()),
-            "the acknowledged WAL frame is the signing authority"
+            adapter
+                .reducer
+                .durable_state()
+                .commit_intent(core_current_round),
+            None,
+            "only a new same-round PrepareQC may authorize Commit in the successor view"
         );
-        let status = adapter.status().expect("historical Commit status");
-        assert!(status.liveness.outbound_intents.iter().any(|intent| {
-            intent.kind == wire::SumeragiV2OutboundIntentKind::CommitVote
-                && intent.round == commit_round
-                && intent.proposal_round == Some(round)
-                && intent.subject == Some(subject)
-                && intent.execution_commitment == Some(execution_commitment)
-                && intent.stage == wire::SumeragiV2OutboundIntentStage::PendingSignature
+        let status = adapter.status().expect("protected reproposal status");
+        assert!(status.liveness.outbound_intents.iter().all(|intent| {
+            !matches!(
+                intent.kind,
+                wire::SumeragiV2OutboundIntentKind::CommitVote
+                    | wire::SumeragiV2OutboundIntentKind::CommitQc
+            )
         }));
     }
 
@@ -10473,12 +10704,13 @@ mod tests {
             height: context.height,
             view: 0,
         };
+        let canonical_commitment = execution_commitment(0xEC);
         let mut vote = wire::Vote {
             round,
             proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
-            execution_commitment: execution_commitment(0xEC),
+            execution_commitment: canonical_commitment,
             signer: 0,
             signature: vec![1],
         };
@@ -10504,6 +10736,71 @@ mod tests {
         assert!(matches!(
             registry.qc_to_core(&certificate, &context),
             Err(AdapterError::ConflictingExecutionCommitment)
+        ));
+
+        let reproposal_round = wire::ConsensusRound { view: 1, ..round };
+        let mut reproposal_certificate = wire::QuorumCertificate {
+            round: reproposal_round,
+            proposal_round: reproposal_round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: execution_commitment(0xEF),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![3],
+        };
+        assert!(matches!(
+            registry.qc_to_core(&reproposal_certificate, &context),
+            Err(AdapterError::ConflictingExecutionCommitment)
+        ));
+        reproposal_certificate.execution_commitment = canonical_commitment;
+        registry
+            .qc_to_core(&reproposal_certificate, &context)
+            .expect("an unchanged re-proposal retains the deterministic execution result");
+    }
+
+    #[test]
+    fn registry_rejects_split_round_vote_and_qc_reference() {
+        let context = context();
+        let mut registry = WireRegistry::new(&context).expect("registry");
+        let proposal_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let certified_round = wire::ConsensusRound {
+            view: 1,
+            ..proposal_round
+        };
+        let subject = subject(0xEE);
+        let commitment = execution_commitment(0xEE);
+        let vote = wire::Vote {
+            round: certified_round,
+            proposal_round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: commitment,
+            signer: 0,
+            signature: vec![1],
+        };
+        assert!(matches!(
+            registry.vote_to_core(&vote, &context),
+            Err(AdapterError::WireValidation(
+                wire::ValidationError::InvalidProposalRound
+            ))
+        ));
+
+        let reference = wire::QuorumCertificateRef {
+            round: certified_round,
+            proposal_round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: commitment,
+        };
+        assert!(matches!(
+            registry.qc_reference_to_core(&reference),
+            Err(AdapterError::WireValidation(
+                wire::ValidationError::InvalidProposalRound
+            ))
         ));
     }
 
@@ -11520,6 +11817,296 @@ mod tests {
                 wire::SumeragiV2ProgressTransition::TimeoutCertificateInstalled
             )) if generation == adapter.current_tag().generation()
         ));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn strict_same_round_tc_preserves_and_retags_timeout_vote_owners() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+
+        let timed_out_round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: 0,
+        };
+        let initial_timeout = wire::TimeoutCertificate {
+            round: timed_out_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xC6; 96],
+            }],
+        };
+        let initial_install = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                    initial_timeout,
+                )),
+            ))
+            .expect("install the first timeout certificate");
+        assert_eq!(
+            initial_install.disposition(),
+            reducer::StepDisposition::Applied
+        );
+        assert_eq!(adapter.current_tag().view(), 1);
+
+        let current_round = wire::ConsensusRound {
+            view: 1,
+            ..timed_out_round
+        };
+        let core_current_round = reducer::Round::new(current_round.height, current_round.view);
+        let preserved_signer = adapter
+            .registry
+            .validator_id(1)
+            .expect("fixture signer belongs to the frozen roster");
+        let second_preserved_signer = adapter
+            .registry
+            .validator_id(3)
+            .expect("fixture signer belongs to the frozen roster");
+        let deferred_signer = adapter
+            .registry
+            .validator_id(2)
+            .expect("fixture signer belongs to the frozen roster");
+        let timeout_vote = |signer, marker| {
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(
+                wire::TimeoutVote {
+                    round: current_round,
+                    highest_prepare_qc: None,
+                    signer,
+                    signature: vec![marker],
+                },
+            ))
+        };
+
+        let preserved_vote = timeout_vote(1, 0xD1);
+        let first_consumed = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                preserved_vote.clone(),
+            ))
+            .expect("consume the current-view TimeoutVote before the lock-only bump");
+        assert_eq!(
+            first_consumed.disposition(),
+            reducer::StepDisposition::Applied
+        );
+        let second_preserved_vote = timeout_vote(3, 0xD5);
+        let second_consumed = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                second_preserved_vote,
+            ))
+            .expect("consume a second current-view TimeoutVote before the lock-only bump");
+        assert_eq!(
+            second_consumed.disposition(),
+            reducer::StepDisposition::Applied
+        );
+        assert!(adapter.deferred_progress_inputs.is_empty());
+        let preserved_pool = adapter
+            .reducer
+            .timeout_pool_snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.round == core_current_round)
+            .expect("the consumed TimeoutVotes own a reducer pool entry");
+        assert_eq!(
+            preserved_pool.signers,
+            vec![preserved_signer, second_preserved_signer]
+        );
+        assert!(!preserved_pool.certificate_formed);
+
+        let promoted_prepare = wire::QuorumCertificate {
+            round: timed_out_round,
+            proposal_round: timed_out_round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: subject(0xD2),
+            execution_commitment: execution_commitment(0xD2),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xD2; 96],
+        };
+        let alternate_timeout = wire::TimeoutCertificate {
+            round: timed_out_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: Some(promoted_prepare),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xD3; 96],
+            }],
+        };
+        let wire_context = adapter.wire_context.clone();
+        let alternate_timeout = adapter
+            .registry
+            .tc_to_core(&alternate_timeout, &wire_context)
+            .expect("register the strict same-round lock upgrade");
+        let pre_upgrade_tag = adapter.current_tag();
+        let pending_install = adapter
+            .reducer
+            .step(reducer::Event::TimeoutCertificateReceived {
+                tag: pre_upgrade_tag,
+                certificate: alternate_timeout,
+            })
+            .expect("stage the real InstallTimeout persistence fence");
+        assert_eq!(
+            pending_install.disposition(),
+            reducer::StepDisposition::Applied
+        );
+        let pending_install_effects = pending_install.into_effects();
+        assert!(matches!(
+            pending_install_effects.as_slice(),
+            [reducer::Effect::Persist { entry, .. }]
+                if matches!(entry.record(), reducer::WalRecord::InstallTimeout(_))
+        ));
+
+        let deferred_vote = timeout_vote(2, 0xD4);
+        let busy = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                deferred_vote.clone(),
+            ))
+            .expect("retain authenticated TimeoutVote ownership behind InstallTimeout");
+        assert_eq!(
+            busy.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+        assert!(busy.deferred_admission_ordinal().is_some());
+        assert_eq!(adapter.deferred_progress_inputs.len(), 1);
+        assert!(matches!(
+            adapter.deferred_progress_inputs.front(),
+            Some(DeferredInput {
+                event: reducer::Event::TimeoutVoteReceived { tag, vote },
+                retag_authenticated_ingress: true,
+                priority: DeferredPriority::Progress,
+                ..
+            }) if *tag == pre_upgrade_tag
+                && vote.vote().round() == core_current_round
+                && vote.vote().signer() == deferred_signer
+        ));
+        assert_eq!(
+            adapter
+                .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                    deferred_vote.clone(),
+                ))
+                .expect("coalesce the exact Busy-deferred occurrence")
+                .disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
+        );
+        assert_eq!(adapter.deferred_progress_inputs.len(), 1);
+
+        let install_effects = adapter
+            .drive_effects(pending_install_effects)
+            .expect("append and acknowledge the real strict same-round InstallTimeout");
+        let post_upgrade_tag = adapter.current_tag();
+        assert_eq!(post_upgrade_tag.view(), pre_upgrade_tag.view());
+        assert!(post_upgrade_tag.generation() > pre_upgrade_tag.generation());
+        assert!(install_effects.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::EnterView { tag, certificate, .. }
+                if *tag == post_upgrade_tag && certificate.round == timed_out_round
+        )));
+
+        let pool_after_upgrade = adapter
+            .reducer
+            .timeout_pool_snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.round == core_current_round)
+            .expect("lock-only generation bump preserves the current timeout pool");
+        assert_eq!(
+            pool_after_upgrade.signers,
+            vec![preserved_signer, second_preserved_signer]
+        );
+        assert!(!pool_after_upgrade.certificate_formed);
+        assert_eq!(
+            adapter
+                .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                    preserved_vote.clone(),
+                ))
+                .expect("suppress the already-consumed semantic duplicate after the bump")
+                .disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
+        );
+        assert_eq!(
+            adapter
+                .reducer
+                .timeout_pool_snapshots()
+                .into_iter()
+                .find(|snapshot| snapshot.round == core_current_round)
+                .expect("duplicate suppression cannot erase the preserved pool")
+                .signers,
+            vec![preserved_signer, second_preserved_signer]
+        );
+
+        let wal_records_before_service = adapter.wal.recovered_records().len();
+        let (service_effects, evidence) = adapter
+            .drain_deferred_with_evidence()
+            .expect("service the Busy-deferred TimeoutVote")
+            .expect("one deferred TimeoutVote owner is serviceable");
+        let successor_tag = adapter.current_tag();
+        assert_eq!(successor_tag.view(), current_round.view + 1);
+        assert!(successor_tag.generation() > post_upgrade_tag.generation());
+        assert_eq!(
+            adapter.wal.recovered_records().len(),
+            wal_records_before_service + 1,
+            "the quorum-completing deferred vote must synchronously persist its InstallTimeout"
+        );
+        assert_eq!(
+            adapter
+                .reducer
+                .durable_state()
+                .last_timeout()
+                .expect("the deferred third signer installs the next timeout certificate")
+                .round(),
+            core_current_round
+        );
+        let formed_timeout = service_effects
+            .iter()
+            .find_map(|effect| match effect {
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+                    ..
+                }) => Some(certificate),
+                _ => None,
+            })
+            .expect("the locally formed timeout certificate is broadcast");
+        assert_eq!(formed_timeout.round, current_round);
+        assert_eq!(formed_timeout.groups.len(), 1);
+        assert_eq!(formed_timeout.groups[0].signers, vec![1, 2, 3]);
+        assert!(service_effects.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::EnterView {
+                tag,
+                certificate,
+                ..
+            } if *tag == successor_tag && certificate == formed_timeout
+        )));
+        assert_eq!(evidence.event_kind, DeferredEventKind::TimeoutVoteReceived);
+        assert_eq!(
+            evidence.retag,
+            DeferredRetagRelation::AuthenticatedIngress {
+                from: pre_upgrade_tag,
+                to: post_upgrade_tag,
+            }
+        );
+        assert_eq!(evidence.total_len_before, 1);
+        assert_eq!(evidence.total_len_after, 0);
+        assert!(adapter.deferred_progress_inputs.is_empty());
+        assert!(
+            adapter
+                .drain_deferred_with_evidence()
+                .expect("a consumed capability cannot receive a second service turn")
+                .is_none()
+        );
+
+        assert!(
+            adapter.reducer.timeout_pool_snapshots().is_empty(),
+            "the view-advancing InstallTimeout retires the completed old-view pool"
+        );
+        assert_eq!(
+            adapter
+                .receive_authenticated(AuthenticatedConsensusMessage::for_test(deferred_vote))
+                .expect("reject the exact old-view occurrence after its one service turn")
+                .disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::IrrelevantView)
+        );
+        assert!(
+            adapter.reducer.timeout_pool_snapshots().is_empty(),
+            "an old-view replay cannot resurrect the retired quorum"
+        );
     }
 
     #[test]
@@ -14544,6 +15131,32 @@ mod tests {
             Err(AdapterError::ConflictingExecutionCommitment)
         ));
 
+        let later_round = wire::ConsensusRound { view: 1, ..round };
+        let mut cross_round_conflict = wire::QuorumCertificate {
+            round: later_round,
+            proposal_round: later_round,
+            ..conflicting_qc.clone()
+        };
+        authenticate_qc(&mut cross_round_conflict, &keys);
+        assert!(matches!(
+            adapter.authenticate(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(cross_round_conflict),
+            )),
+            Err(AdapterError::ConflictingExecutionCommitment)
+        ));
+        let mut cross_round_canonical = wire::QuorumCertificate {
+            round: later_round,
+            proposal_round: later_round,
+            execution_commitment: canonical_commitment,
+            ..conflicting_qc.clone()
+        };
+        authenticate_qc(&mut cross_round_canonical, &keys);
+        adapter
+            .authenticate(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(cross_round_canonical),
+            ))
+            .expect("an unchanged re-proposal authenticates the same deterministic execution");
+
         let timeout_round = wire::ConsensusRound { view: 1, ..round };
         let timeout_preimage = wire::TimeoutVote {
             round: timeout_round,
@@ -14599,13 +15212,14 @@ mod tests {
         ));
 
         let proposal_round = wire::ConsensusRound { view: 2, ..round };
-        let proposal_subject = subject(0x88);
+        let proposal_subject = bound_subject;
+        let proposal_body = vec![0x83, 2];
         let proposal_manifest = wire::PayloadManifest::derive(
             &context,
             proposal_round,
             proposal_subject,
-            5,
-            &[b"later".to_vec()],
+            u64::try_from(proposal_body.len()).expect("proposal body length"),
+            &[proposal_body],
         )
         .expect("derive later-view proposal manifest");
         let proposer = context.leader(proposal_round.view);
@@ -14629,10 +15243,10 @@ mod tests {
         let conflicting_proposal_message = wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal),
         );
-        // First-release proposal admission deliberately forbids carrying a
-        // high PrepareQC through a timeout justification. Exercise the
-        // read-only embedded-certificate compatibility walk directly, then
-        // confirm ordinary ingress preserves structural-error precedence.
+        // Exercise the read-only embedded-certificate compatibility walk
+        // directly, then confirm ordinary ingress rejects the same
+        // structurally valid proposal for its conflicting deterministic
+        // execution result.
         let authenticated_conflicting_proposal =
             AuthenticatedConsensusMessage::for_test(conflicting_proposal_message.clone());
         assert!(matches!(
@@ -14643,9 +15257,7 @@ mod tests {
         ));
         assert!(matches!(
             adapter.authenticate(conflicting_proposal_message),
-            Err(AdapterError::WireValidation(
-                wire::ValidationError::InvalidProposalJustification
-            ))
+            Err(AdapterError::ConflictingExecutionCommitment)
         ));
 
         let unbound_subject = subject(0x85);
