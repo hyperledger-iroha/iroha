@@ -219,6 +219,7 @@ _apalache-out*
 # Root-level scratch artifacts from ad-hoc experiments or local builds
 /output/
 /localnet-*/
+/.boi-sdk-scratch.*/
 /*.exit
 /*.out
 /*.bin
