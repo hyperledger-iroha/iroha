@@ -165,20 +165,6 @@
       "status": "tlaps_proved"
     },
     {
-      "id": "chain-durable-receipt-agreement",
-      "requirement": "Under IndexedChainSpec, any durable Decision or Application receipts whose exact slots context.height + 1 are equal carry the same frozen context and subject, including the terminal MaxHeight + 1 slot. Canonical prefix history decidedAt[1..h] may identify the unique joined source context, but current-slot subject agreement must come from joined-source ownership and each joined Core instance's DecisionAgreement invariant, never from decidedAt[h+1] or CanonicalCommitForSlot. IndexedFreshReceiptActionHasProductExtension must remain independently proved so the product cannot obtain agreement by filtering a conflicting fresh Core receipt step; the current proof script is SANY-clean but remains unproved until fresh strict TLAPS succeeds",
-      "module": "SumeragiV2ChainReceiptAgreementProofs",
-      "symbol": "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "terminal-ingress-process-lifetime-absorbency",
-      "requirement": "Within one terminal-runner process instance, the set {TerminalReadOnly, TerminalRetired} is forward-closed and TerminalRetired is individually absorbing; the history-service owner exists exactly in TerminalReadOnly, owner exit atomically enters TerminalRetired, clears detached and ingress owners, and preserves the successful-admission count, and no later successful admission occurs after owner loss. This is suffix safety only: restart creates a fresh instance, no eventual service-exit fairness is claimed, and the abstract theorem is not a Rust refinement. The existing ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal sentinel covers only terminal application/successor suppression and does not map terminal-ingress lifecycle actions; the current proof script is SANY-clean but remains unproved until fresh strict TLAPS succeeds",
-      "module": "SumeragiV2TerminalIngressLifecycleProofs",
-      "symbol": "TerminalIngressProcessLifetimeAbsorbencyObligation",
-      "status": "specified_unproved"
-    },
-    {
       "id": "effective-lock-body-acquisition-model",
       "requirement": "The executable height-scoped acquisition owner keeps physical ID and subject immutable across same-lock consumer rebinds, defers a higher different-subject replacement until the active local read terminates, rejects future/wrong/duplicate completions, waits for the exact certified durable store, retries once, and under weak fairness eventually makes every stable effective lock ready and repeatedly deliverable to the latest consumer",
       "module": "SumeragiV2EffectiveLockAcquisitionProofs",
@@ -256,20 +242,6 @@
       "status": "specified_unproved"
     },
     {
-      "id": "adequate-leader-exact-closure-residual",
-      "requirement": "The exact adequate-leader closure composes scheduler-origin readiness, target-aware physical transport and runner convergence, certified-response physical completion, timeout-quorum view rotation, immutable phase identity, and a well-founded semantic phase rank into the rotating-leader service kernel without importing the legacy proofless timeout, locked-body, or rotating-leader declarations.",
-      "module": "SumeragiV2AsyncTemporalClosureProofs",
-      "symbol": "AdequateLeaderExactClosureResidualObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "exact-decision-off-scheduler-residual-convergence",
-      "requirement": "Every exact durable Decision request and response owner outside the protected scheduler converges through the request clock/runtime prefix, ingress head and gate ownership, exact request admission or coalescing, and non-physical non-claim certified-response head and gate prefix into the proved Decision service pipeline.",
-      "module": "SumeragiV2AsyncTemporalClosureProofs",
-      "symbol": "ExactDecisionOffSchedulerResidualConvergenceObligation",
-      "status": "specified_unproved"
-    },
-    {
       "id": "protected-service-rank-stage4-ready-causal",
       "requirement": "In the executable asynchronous model, every protected protocol candidate already owned by a responsive current voter at an exact Stage-4 ready-completion position, under the exact weak-fairness target for PostGstRunNode, eventually leaves protected scheduler ownership or acquires a strictly smaller service rank; the proof covers ready-run auxiliary descent and non-Completion causal admission-capacity debt, while stages 2, 3, 5, and 6, candidate admission/provenance, and production transport/runtime refinement remain outside this abstract leaf",
       "module": "SumeragiV2AsyncLivenessProofs",
@@ -340,34 +312,6 @@
       "status": "specified_unproved"
     },
     {
-      "id": "historical-recovery-authority-acquisition",
-      "requirement": "From IndexedChainSpec, ordinary one-height consensus and source availability eventually move every outstanding responsive historical consumer to an exact application, Decision, Openable source, or exact historical target. This prefix cannot be discharged by historical-service fairness or by assuming indexed height liveness",
-      "module": "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-      "symbol": "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "historical-recovery-certificate-rank-progress",
-      "requirement": "From IndexedChainSpec, exact historical certificate ranks 4 through 1 eventually descend or exit through source discovery, CommitCertificate request transit and archive Serve ownership, authenticated response publication and import, and target-runner Decision ownership",
-      "module": "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-      "symbol": "IndexedHistoricalCertificateRankProgressResidualObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "historical-recovery-decision-stage-ownership",
-      "requirement": "From IndexedChainSpec, every durable historical Decision without a visible exact service stage eventually exposes exact application or one of the body-recovery ranks 6 through 1, without borrowing current-voter-only application liveness",
-      "module": "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-      "symbol": "IndexedHistoricalDecisionStageOwnershipResidualObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "historical-recovery-decision-rank-progress",
-      "requirement": "From IndexedChainSpec, the exact historical FetchBody, certified-request, FetchCertifiedBody, StoreBody, ValidateBody, and Apply ranks eventually descend to exact application under their target-aware runner, packet, archive, ordinary-I/O, and application service actions",
-      "module": "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-      "symbol": "IndexedHistoricalDecisionRankProgressResidualObligation",
-      "status": "specified_unproved"
-    },
-    {
       "id": "successor-activation-starvation-freedom",
       "requirement": "Every responsive validator's Queued or Running successor activation has an exact durable parent witness, an enabled progress action, and a rank in the finite 0..21 lifecycle carrier: Published predecessor ownership occupies the 12..21 tier and recovered/absent ownership occupies 1..10. A clean exact-complete-tip restart strictly descends from the Published tier into the absent-owner attempt, snapshot-bootstrap authority cannot authenticate that recovery, and failed resets occur only before the explicit eventual failure-free suffix. Within that suffix every fair progress action strictly decreases rank or publishes/supersedes the successor, no chain step orphans pending activation or raises its rank, and well-founded rank convergence plus suffix lifting yields starvation freedom. The candidate TLAPS proof remains specified_unproved until strict verification succeeds; no progress claim is made for validators outside Responsive",
       "module": "SumeragiV2SuccessorActivationRefinementProofs",
@@ -393,62 +337,6 @@
       "requirement": "Under IndexedLiveChainSpec, which keeps the per-context finite IndexedInstallGenerationBudgetPremise explicit, every joined post-GST context eventually applies at the terminal MaxHeight, or advances every responsive validator into a successor context when nonterminal",
       "module": "SumeragiV2ChainLivenessProofs",
       "symbol": "HeightLivenessObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "autoscale-lifecycle-production-refinement",
-      "requirement": "The deterministic production autoscaler refines the bounded creation, storage-before-activation, evidence-aware drain, archive-before-destruction, and fresh-incarnation recreation model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
-      "module": "SumeragiV2AutoscaleLifecycle",
-      "symbol": "AutoscaleLifecycleProductionRefinementObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "native-application-evidence-production-refinement",
-      "requirement": "Production Native AMX participant evidence refines the bounded finality-to-immutable-per-height-manifest-to-immutable-per-height-receipt-to-descriptor-bound-exact-latest-pointer-to-replicated-frontier order, QC-authenticated proof validation after body pruning, recoverable versioned route/incarnation/artifact-hash-bound pair-prune intents across every partial-unlink crash boundary, and same-route control-only model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
-      "module": "SumeragiV2NativeApplicationEvidence",
-      "symbol": "NativeApplicationEvidenceProductionRefinementObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "autonomous-reservation-carrier-production-refinement",
-      "requirement": "Production queue reservations and canonical global merge application refine the bounded single-owner, unchanged-identity, at-most-once application, loss-release, and commit-before-forget model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
-      "module": "SumeragiV2AutonomousReservationCarrier",
-      "symbol": "AutonomousReservationCarrierProductionRefinementObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "reply-writer-deadline-local-termination",
-      "requirement": "In the orthogonal executable model, every exact-reply actor occurrence acquires one absolute, adaptively scaled deadline at its first actor dispatch before peer-writer admission; full-queue retries preserve that deadline, only peer-writer publication establishes the immutable flush witness, timeout is distinct from flush, Closed and reconnect preserve the adaptive attempt, a ready witnessed receipt wins retirement and timeout races, stale timeout can retire only its accepting connection, topology output acquires no exact deadline, and local actor ownership terminates without fairness for peer-writer flush publication. Production source seals and focused tests constrain alignment with this abstraction but do not prove a Rust-to-TLA semantic refinement theorem",
-      "module": "SumeragiV2ReplyWriterDeadlineProofs",
-      "symbol": "ReplyWriterDeadlineModelObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "reply-writer-conditional-responsive-cursor-liveness",
-      "requirement": "In the orthogonal executable model, given the explicit responsive writer-receipt assumption that every outstanding exact reply eventually reaches a ready witnessed receipt, receipt polling advances that exact reply cursor. This conditional theorem intentionally isolates receipt publication; the separate responsive strong-fairness proof script supplies that bridge. Neither theorem is a Rust-to-TLA semantic refinement theorem",
-      "module": "SumeragiV2ReplyWriterDeadlineProofs",
-      "symbol": "ConditionalResponsiveWriterCursorLiveness",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "reply-writer-responsive-strong-fairness-to-receipt",
-      "requirement": "In the orthogonal executable model, the current SANY-clean proof script derives ResponsiveWriterReceiptAssumption from persistent exact ownership, weakly fair reconnect and first dispatch, and strongly fair admission and publication across fragmented WriterPending intervals. It remains specified_unproved until fresh strict TLAPS succeeds; finite responsive TLC is bounded evidence only",
-      "module": "SumeragiV2ReplyWriterDeadlineProofs",
-      "symbol": "ResponsiveStrongFairnessToReceiptResidual",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "typed-rollover-handoff-model-safety",
-      "requirement": "In the orthogonal authority-gated, root-anchored V3 typed rollover model, the proofless obligations require TypedRolloverSpec to preserve TypedRolloverSafetyInvariant: the generation-zero bootstrap root has no selected state; first adoption and later commits select the parity-addressed LifecycleSnapshotV3 whose generation and digest match the root; semantic validation precedes crash-artifact cleanup; ordinary changed-roster rollover requires authenticated terminality, while only a durable exact-output handoff or validated restart may fence active responder state; the inactive state slot is published before the root and memory, and modeled crash recovery restores the root-selected predecessor or successor; same-roster handoff preserves service generation and responder ownership; forced fencing cannot forge authenticated Close prefixes; requester epochs are durable-before-use and never reused; active or full-table state and service-generation, root-generation, or requester-epoch exhaustion return Capacity fail-atomically. Finite TLC and the mutation matrix are bounded evidence only; no Rust-to-TLA semantic refinement theorem is claimed",
-      "module": "SumeragiV2TypedRolloverHandoffProofs",
-      "symbol": "TypedRolloverSpecAlwaysSafeObligation / TypedRolloverNextPreservesSafetyObligation",
-      "status": "specified_unproved"
-    },
-    {
-      "id": "typed-rollover-handoff-conditional-local-liveness",
-      "requirement": "In the orthogonal authority-gated, root-anchored V3 typed rollover model, ResponsiveChangedRosterRolloverLiveness remains only a proofless temporal target over the explicit no-failure durable-exact-output corridor, with its stated weak fairness and service-generation and root-generation headroom. No derivation from fairness is claimed: recovery after failure, ordinary-terminalization progress, eventual finality validation, network delivery, writer flush, rotating-leader progress, repeated rollover, end-to-end liveness, and Rust-to-TLA semantic refinement remain outside this obligation. It remains specified_unproved until a fresh strict TLAPS proof establishes the target",
-      "module": "SumeragiV2TypedRolloverHandoffProofs",
-      "symbol": "ResponsiveChangedRosterRolloverLivenessObligation",
       "status": "specified_unproved"
     },
     {

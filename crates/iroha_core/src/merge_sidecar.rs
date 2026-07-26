@@ -1817,7 +1817,7 @@ type LifecycleArtifactIdentity = ();
 #[cfg(unix)]
 type LifecycleArtifactRevision = (u64, i64, i64, i64, i64, u64, u32, u32, u32);
 #[cfg(windows)]
-type LifecycleArtifactRevision = (u64, u64, u64, u32, Option<u64>);
+type LifecycleArtifactRevision = (u64, u64, u64, u32, Option<u32>);
 #[cfg(not(any(unix, windows)))]
 type LifecycleArtifactRevision = ();
 

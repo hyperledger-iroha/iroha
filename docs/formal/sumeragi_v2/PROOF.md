@@ -652,9 +652,10 @@ delivery, reply-writer flush, recovery after a fail-stop rejection, repeated
 rollover, or a Rust-to-TLA semantic refinement. Historical bounded and strict
 receipts predate the authority-gated force fence, V3 two-slot persistence,
 bootstrap adoption, validation-before-cleanup ordering, and the root trust
-boundary; both typed-handoff ledger entries remain `specified_unproved` until
-fresh strict TLAPS succeeds. No filesystem refinement claim follows from the
-abstract model.
+boundary. Both typed-handoff declarations remain source-bound support leaves
+consumed by the top-level successor-activation production-refinement debt; they
+are not independent ledger rows. No filesystem refinement claim follows from
+the abstract model.
 
 ## Mechanization ledger
 
@@ -667,11 +668,12 @@ source/log/tool-bound evidence under `target/formal/sumeragi_v2/`. Checked-in
 backend counts are intentionally prohibited because they become stale as
 proofs change.
 
-The reviewed source inventory contains exactly 70 obligations: 35
-`tlaps_proved`, 28 `specified_unproved`, 6 `trusted_contract`, and 1
-`out_of_scope`. Machine-checked completion projects exactly 60 targets and
-retains 10 reviewed exclusions in the source ledger. The completed projection
-must contain 50 `tlaps_proved`, 3 `cross_tool_proved`, 6
+The reviewed top-level inventory contains exactly 54 obligations: 35
+`tlaps_proved`, 12 `specified_unproved`, 6 `trusted_contract`, and 1
+`out_of_scope`. Sixteen source-bound proof/evidence decomposition leaves remain
+checked transitively through those top-level obligations and are not additional
+ledger rows. Machine-checked completion covers the same exact 54 obligations
+and must contain 44 `tlaps_proved`, 3 `cross_tool_proved`, 6
 `trusted_contract`, and 1 `out_of_scope`. Those are completion requirements,
 not current proof claims; `machine_checked_completion` remains false.
 
@@ -911,12 +913,12 @@ consume progress ownership, while all three rank leaves consume their exact
 proved fair-action prerequisites. The aggregate
 `protected-service-rank` obligation waits for every leaf, while production
 admission, runtime, ingress, and actor-to-flush ownership remain outside these
-abstract results. The 70-entry source ledger contains 35 `tlaps_proved`, 28
-`specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope`; its exact
-60-target completion projection expects 50 `tlaps_proved`, 3
-`cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope`. The 10
-reviewed exclusions remain source obligations but are not completion targets,
-so `machine_checked_completion` remains false.
+abstract results. The 54-entry top-level ledger contains 35 `tlaps_proved`, 12
+`specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope`; completion
+expects 44 `tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
+`out_of_scope`. Sixteen decomposition declarations remain source-bound and
+transitively checked through their reviewed top-level consumers rather than
+appearing as extra claims, so `machine_checked_completion` remains false.
 The aggregate temporal closure deliberately leaves
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` proofless. The
@@ -1210,7 +1212,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`b11a25ffc9608350a5350a1e2e0ffa92371f1d5dbd5b2b1c00154313fba8d005`.
+`53c85b2ca35797cf17b6939dbd1cc6d3a5e7653ccf0e7b37941c4bf79339ed96`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

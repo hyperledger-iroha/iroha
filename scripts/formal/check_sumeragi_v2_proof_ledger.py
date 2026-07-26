@@ -3776,14 +3776,6 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     "chain-prefix": ("SumeragiV2ChainEpochProofs", "ChainPrefixObligation"),
     "crash-restart": ("SumeragiV2Proofs", "CrashRecoveryObligation"),
     "epoch-boundary": ("SumeragiV2ChainEpochProofs", "EpochBoundaryObligation"),
-    "chain-durable-receipt-agreement": (
-        "SumeragiV2ChainReceiptAgreementProofs",
-        "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
-    ),
-    "terminal-ingress-process-lifetime-absorbency": (
-        "SumeragiV2TerminalIngressLifecycleProofs",
-        "TerminalIngressProcessLifetimeAbsorbencyObligation",
-    ),
     "effective-lock-body-acquisition-model": (
         "SumeragiV2EffectiveLockAcquisitionProofs",
         "EffectiveLockAcquisitionModelObligation",
@@ -3828,14 +3820,6 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2AsyncTemporalClosureProofs",
         "ProgressWitnessProductionRefinementObligation",
     ),
-    "adequate-leader-exact-closure-residual": (
-        "SumeragiV2AsyncTemporalClosureProofs",
-        "AdequateLeaderExactClosureResidualObligation",
-    ),
-    "exact-decision-off-scheduler-residual-convergence": (
-        "SumeragiV2AsyncTemporalClosureProofs",
-        "ExactDecisionOffSchedulerResidualConvergenceObligation",
-    ),
     "protected-service-rank-stage4-ready-causal": (
         "SumeragiV2AsyncLivenessProofs",
         "ProtectedStage4RankProgressFromFairScheduler",
@@ -3876,22 +3860,6 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2AsyncLivenessProofs",
         "ApplicationCompletionProgressObligation",
     ),
-    "historical-recovery-authority-acquisition": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
-    ),
-    "historical-recovery-certificate-rank-progress": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalCertificateRankProgressResidualObligation",
-    ),
-    "historical-recovery-decision-stage-ownership": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
-    ),
-    "historical-recovery-decision-rank-progress": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalDecisionRankProgressResidualObligation",
-    ),
     "successor-activation-starvation-freedom": (
         "SumeragiV2SuccessorActivationRefinementProofs",
         "SuccessorActivationStarvationFreedomObligation",
@@ -3907,6 +3875,58 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     "height-liveness": (
         "SumeragiV2ChainLivenessProofs",
         "HeightLivenessObligation",
+    ),
+    "cryptography": ("trusted-boundary", "cryptography"),
+    "durability-system-call": ("trusted-boundary", "os-fsync"),
+    "deterministic-execution": ("trusted-boundary", "deterministic-execution"),
+    "post-gst-responsive-quorum": (
+        "trusted-boundary",
+        "post-gst-responsive-quorum",
+    ),
+    "network-after-gst": ("trusted-boundary", "post-gst-delivery"),
+    "runtime-after-gst": ("trusted-boundary", "post-gst-runtime-service"),
+    "transaction-inclusion-fairness": (
+        "trusted-boundary",
+        "transaction-inclusion-fairness",
+    ),
+}
+
+# These sixteen declarations are proof/evidence decomposition leaves, not
+# independently reviewed release claims.  They remain source-bound below and
+# must be consumed by one of the exact 54 top-level obligations rather than
+# being promoted into additional ledger rows.
+SUPPORT_PROOF_OBLIGATION_INVENTORY = {
+    "chain-durable-receipt-agreement": (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
+    ),
+    "terminal-ingress-process-lifetime-absorbency": (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressProcessLifetimeAbsorbencyObligation",
+    ),
+    "adequate-leader-exact-closure-residual": (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderExactClosureResidualObligation",
+    ),
+    "exact-decision-off-scheduler-residual-convergence": (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "ExactDecisionOffSchedulerResidualConvergenceObligation",
+    ),
+    "historical-recovery-authority-acquisition": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
+    ),
+    "historical-recovery-certificate-rank-progress": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateRankProgressResidualObligation",
+    ),
+    "historical-recovery-decision-stage-ownership": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
+    ),
+    "historical-recovery-decision-rank-progress": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionRankProgressResidualObligation",
     ),
     "autoscale-lifecycle-production-refinement": (
         "SumeragiV2AutoscaleLifecycle",
@@ -3941,45 +3961,42 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2TypedRolloverHandoffProofs",
         "ResponsiveChangedRosterRolloverLivenessObligation",
     ),
-    "cryptography": ("trusted-boundary", "cryptography"),
-    "durability-system-call": ("trusted-boundary", "os-fsync"),
-    "deterministic-execution": ("trusted-boundary", "deterministic-execution"),
-    "post-gst-responsive-quorum": (
-        "trusted-boundary",
-        "post-gst-responsive-quorum",
+}
+SUPPORT_PROOF_CONSUMER_BY_ID = {
+    "chain-durable-receipt-agreement": "height-liveness",
+    "terminal-ingress-process-lifetime-absorbency": (
+        "successor-activation-exact-recovery-production-refinement"
     ),
-    "network-after-gst": ("trusted-boundary", "post-gst-delivery"),
-    "runtime-after-gst": ("trusted-boundary", "post-gst-runtime-service"),
-    "transaction-inclusion-fairness": (
-        "trusted-boundary",
-        "transaction-inclusion-fairness",
+    "adequate-leader-exact-closure-residual": "rotating-leader-liveness",
+    "exact-decision-off-scheduler-residual-convergence": "application-liveness",
+    "historical-recovery-authority-acquisition": "height-liveness",
+    "historical-recovery-certificate-rank-progress": "height-liveness",
+    "historical-recovery-decision-stage-ownership": "height-liveness",
+    "historical-recovery-decision-rank-progress": "height-liveness",
+    "autoscale-lifecycle-production-refinement": "progress-witness-production-refinement",
+    "native-application-evidence-production-refinement": (
+        "progress-witness-production-refinement"
+    ),
+    "autonomous-reservation-carrier-production-refinement": (
+        "progress-witness-production-refinement"
+    ),
+    "reply-writer-deadline-local-termination": "progress-witness-production-refinement",
+    "reply-writer-conditional-responsive-cursor-liveness": (
+        "progress-witness-production-refinement"
+    ),
+    "reply-writer-responsive-strong-fairness-to-receipt": (
+        "progress-witness-production-refinement"
+    ),
+    "typed-rollover-handoff-model-safety": (
+        "successor-activation-exact-recovery-production-refinement"
+    ),
+    "typed-rollover-handoff-conditional-local-liveness": (
+        "successor-activation-exact-recovery-production-refinement"
     ),
 }
 
-# The source ledger intentionally retains ten reviewed supporting or obsolete
-# obligations so their current proof debt cannot disappear through a JSON edit.
-# They are not members of the first-release completion theorem.  Completion is
-# therefore evaluated over the exact ordered 60-ID projection below while the
-# full 70-entry source inventory remains independently mandatory.
-MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS = (
-    "adequate-leader-exact-closure-residual",
-    "exact-decision-off-scheduler-residual-convergence",
-    "autoscale-lifecycle-production-refinement",
-    "native-application-evidence-production-refinement",
-    "autonomous-reservation-carrier-production-refinement",
-    "reply-writer-deadline-local-termination",
-    "reply-writer-conditional-responsive-cursor-liveness",
-    "reply-writer-responsive-strong-fairness-to-receipt",
-    "typed-rollover-handoff-model-safety",
-    "typed-rollover-handoff-conditional-local-liveness",
-)
-_MACHINE_CHECKED_COMPLETION_EXCLUDED_ID_SET = frozenset(
-    MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS
-)
 MACHINE_CHECKED_COMPLETION_TARGET_IDS = tuple(
-    obligation_id
-    for obligation_id in REQUIRED_PROOF_OBLIGATION_INVENTORY
-    if obligation_id not in _MACHINE_CHECKED_COMPLETION_EXCLUDED_ID_SET
+    REQUIRED_PROOF_OBLIGATION_INVENTORY
 )
 _MACHINE_CHECKED_COMPLETION_TARGET_ID_SET = frozenset(
     MACHINE_CHECKED_COMPLETION_TARGET_IDS
@@ -4011,7 +4028,7 @@ MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_BY_ID = {
     for obligation_id in MACHINE_CHECKED_COMPLETION_TARGET_IDS
 }
 MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_COUNTS = {
-    "tlaps_proved": 50,
+    "tlaps_proved": 44,
     "cross_tool_proved": 3,
     "specified_unproved": 0,
     "trusted_contract": 6,
@@ -4610,17 +4627,22 @@ _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS = (
     "TypedRolloverNextPreservesSafetyObligation",
     "TypedRolloverSpecAlwaysSafeObligation",
 )
-_TYPED_ROLLOVER_MODEL_SAFETY_LEDGER_SYMBOL = (
-    "TypedRolloverSpecAlwaysSafeObligation / "
-    "TypedRolloverNextPreservesSafetyObligation"
-)
-_PROOFLESS_RELEASE_AGGREGATE_DEBT_BY_THEOREM = {
-    ("SumeragiV2TypedRolloverHandoffProofs", symbol): (
-        "typed-rollover-handoff-model-safety",
-        _TYPED_ROLLOVER_MODEL_SAFETY_LEDGER_SYMBOL,
-    )
+_PROOFLESS_RELEASE_SUPPORT_BY_THEOREM = {
+    (
+        "SumeragiV2TypedRolloverHandoffProofs",
+        symbol,
+    ): "typed-rollover-handoff-model-safety"
     for symbol in _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS
 }
+_PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.update(
+    {
+        (module, symbol): support_id
+        for support_id, (module, symbols) in (
+            SUPPORT_PROOF_OBLIGATION_INVENTORY.items()
+        )
+        for symbol in symbols.split(" / ")
+    }
+)
 
 RETIRED_PATHS = (
     ROOT_DIR / "docs" / "formal" / "sumeragi",
@@ -4768,14 +4790,6 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
         "SumeragiV2Proofs",
         "SameRoundLockAndCommitAuthorizationObligation",
     ),
-    "chain-durable-receipt-agreement": (
-        "SumeragiV2ChainReceiptAgreementProofs",
-        "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
-    ),
-    "terminal-ingress-process-lifetime-absorbency": (
-        "SumeragiV2TerminalIngressLifecycleProofs",
-        "TerminalIngressProcessLifetimeAbsorbencyObligation",
-    ),
     "effective-lock-body-acquisition-model": (
         "SumeragiV2EffectiveLockAcquisitionProofs",
         "EffectiveLockAcquisitionModelObligation",
@@ -4816,22 +4830,6 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
         "SumeragiV2AsyncLivenessProofs",
         "ProtectedStage5RankProgressFromFairFifo",
     ),
-    "historical-recovery-authority-acquisition": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
-    ),
-    "historical-recovery-certificate-rank-progress": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalCertificateRankProgressResidualObligation",
-    ),
-    "historical-recovery-decision-stage-ownership": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
-    ),
-    "historical-recovery-decision-rank-progress": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalDecisionRankProgressResidualObligation",
-    ),
     "successor-activation-starvation-freedom": (
         "SumeragiV2SuccessorActivationRefinementProofs",
         "SuccessorActivationStarvationFreedomObligation",
@@ -4852,9 +4850,9 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
 
 # A fixed module/symbol binding is insufficient when a theorem can retain its
 # name while its statement is weakened.  These release seams therefore pin
-# the complete normalized theorem statement.  The four historical residuals
-# intentionally remain proofless until their exact fairness kernels are
-# discharged.
+# the complete normalized theorem statement. Historical residual declarations
+# are support leaves: whether a leaf has gained a proof does not by itself
+# promote its reviewed top-level consumer.
 EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
     "chain-durable-receipt-agreement": (
         "IndexedChainSpec "
@@ -4887,15 +4885,6 @@ EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
         "IndexedLiveChainSpec => IndexedHeightLivenessProperty"
     ),
 }
-
-PROOFLESS_FIXED_DEBT_OBLIGATION_IDS = frozenset(
-    {
-        "historical-recovery-authority-acquisition",
-        "historical-recovery-certificate-rank-progress",
-        "historical-recovery-decision-stage-ownership",
-        "historical-recovery-decision-rank-progress",
-    }
-)
 
 # Pin the direct property surfaces consumed by the six theorem statements.
 # Without these contracts, replacing a property with TRUE would preserve the
@@ -5340,12 +5329,24 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ): (
         "/\\ candidate \\in "
         "IndexedAsync(initialContext)!AsyncCandidateSet "
+        "/\\ IndexedHistoricalRecoveryTargetOwned(initialContext, node) "
         "/\\ candidate.node = node "
         "/\\ candidate.height = initialContext.height "
         "/\\ candidate.view = qc.view "
         "/\\ candidate.subject = qc.subject "
         '/\\ candidate.kind \\in {"DeliverQC", "BeginDecision", '
-        '"PersistDecision"}'
+        '"PersistDecision"} '
+        "/\\ candidate.consumerContext = initialContext "
+        "/\\ IndexedAsync(initialContext)!CandidateConsumerCurrent(candidate) "
+        '/\\ CASE candidate.kind \\in {"DeliverQC", "BeginDecision"} -> '
+        'candidate.class = "Progress" '
+        '[] candidate.kind = "PersistDecision" -> '
+        'candidate.class = "Completion" '
+        "[] OTHER -> FALSE "
+        "/\\ IndexedDecisionWitness(initialContext)! "
+        "ProtectedCandidateOwned(candidate) "
+        "/\\ IndexedHistoricalCertificateCommandLineage( "
+        "initialContext, node, qc, candidate)"
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
@@ -5848,10 +5849,6 @@ FIXED_PROOF_FORBIDDEN_MODULE_TOKENS = {
 # ledger order is intentional as well: reviewers should encounter each
 # prerequisite before the theorem which consumes it.
 PROOF_STATUS_DEPENDENCIES = {
-    "chain-durable-receipt-agreement": (
-        "agreement",
-        "no-conflicting-commit-qcs",
-    ),
     "effective-lock-body-acquisition-production-refinement": (
         "effective-lock-body-acquisition-model",
     ),
@@ -5934,35 +5931,10 @@ PROOF_STATUS_DEPENDENCIES = {
         "progress-witness-preservation",
         "post-gst-starvation-freedom",
     ),
-    "historical-recovery-authority-acquisition": (
-        "chain-durable-receipt-agreement",
-        "rotating-leader-liveness",
-        "application-liveness",
-    ),
-    "historical-recovery-certificate-rank-progress": (
-        "async-type-invariant",
-        "async-fair-action-refinement",
-        "progress-witness-preservation",
-        "post-gst-starvation-freedom",
-    ),
-    "historical-recovery-decision-stage-ownership": (
-        "async-type-invariant",
-        "decision-recovery-across-restart",
-        "progress-witness-preservation",
-        "post-gst-starvation-freedom",
-    ),
-    "historical-recovery-decision-rank-progress": (
-        "async-type-invariant",
-        "async-fair-action-refinement",
-        "decision-recovery-across-restart",
-        "progress-witness-preservation",
-        "post-gst-starvation-freedom",
-    ),
     "successor-activation-exact-recovery-production-refinement": (
         "epoch-boundary",
         "decision-recovery-across-restart",
         "successor-activation-starvation-freedom",
-        "terminal-ingress-process-lifetime-absorbency",
     ),
     "genesis-height-successor-handoff": (
         "rotating-leader-liveness",
@@ -5970,16 +5942,13 @@ PROOF_STATUS_DEPENDENCIES = {
         "successor-activation-starvation-freedom",
     ),
     "height-liveness": (
+        "agreement",
+        "no-conflicting-commit-qcs",
         "rotating-leader-liveness",
         "application-liveness",
-        "historical-recovery-authority-acquisition",
-        "historical-recovery-certificate-rank-progress",
-        "historical-recovery-decision-stage-ownership",
-        "historical-recovery-decision-rank-progress",
         "successor-activation-starvation-freedom",
-    ),
-    "typed-rollover-handoff-conditional-local-liveness": (
-        "typed-rollover-handoff-model-safety",
+        "successor-activation-exact-recovery-production-refinement",
+        "genesis-height-successor-handoff",
     ),
 }
 
@@ -7375,6 +7344,8 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::drain_closed_sidecar_prefixes": "2d0a07530ab64b95f687a48fa09cd029a40bad9c18ef29bf82e8b624274bf2e3",
     "V2LaneWorkAdapter::requeue_closed_sidecar_prefixes": "97bdd3f66d265ba00e0cc088af59f005e7cfdc97c138cad9faa64138f944df2d",
     "V2LaneWorkAdapter::confirm_closed_sidecar_prefix_handoff": "7aaca416f7ad687d7ee0c1b99da038d11dbdc710d81229c340a63bda10476c28",
+    "V2LaneWorkAdapter::stranded_retryable_sidecar_control_index": "09ed26efa19aefc39d448b1bee81d5b070c272557137e89a51c4f1dc6334419b",
+    "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "8e684a41c6ed9799d6fdf7598d7accf8f175f38ff1388058568a6f8bc077c9ea",
     "V2LaneWorkAdapter::persist_anchored_sessions": "40f2ca1c93171337adae168019d2f28ca65acf838da2e9011f6e751ad775876f",
     "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "b716b4d92ddd3c4e80e6999bd7aee543701e2727bef70841c2bf89f38ff5a3f1",
@@ -7392,7 +7363,8 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::push_merge_sidecar_post_or_restart": "85ca2f652d8409223ea2fd331d3c9010710301b5aafc0e2082e2b63557eed2e9",
     "V2LaneWorkAdapter::remove_acknowledged_sidecar_retry_effect": "14002f78eb6eee073c72b1c5fa547c69187392e1a2085d8bd5c1e385fbbf2efb",
     "V2LaneWorkAdapter::acknowledge_certified_merge_sidecar_chunk_admission": "60809702ee6e6fca12c654f9e93a453e9a4098be03608ccb11a6513cc5a6b5c5",
-    "V2LaneWorkAdapter::push_merge_sidecar_effect": "42e118f2ddf5141885207bbdcb30f2a2ecda370ee2987f39eec855da73296632",
+    "V2LaneWorkAdapter::push_merge_sidecar_effect": "08a2b77d14faf80060a2ca76a491df474dbbf548b3f0f4a5f95c13d14102c750",
+    "retryable_sidecar_server_control_has_writable_route": "4f7ac1895057d195e13c094178010703e09198a4b6824a96b75739072c1362eb",
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
@@ -7541,6 +7513,12 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
     "PendingExactFanout::can_coalesce_retry": (
         "b5f48359f0342b142f04b6fee8c6e74e7cbeaf5068f1dc628fffe7ad5a971de5"
     ),
+    "PendingExactFanout::has_writable_reply_target": (
+        "a717b59e74c10dda4248c99527c781463eabb0c8ac355f2e718f5b3f3e0f0b9a"
+    ),
+    "PendingExactFanout::is_stranded_retryable_certified_sidecar_responder_control": (
+        "ce27592a9a7e240a207c1b0ea26340edb7e7f25d11f15bdb7ef3d0698446ef49"
+    ),
     "PendingExactOutput::new": (
         "4d6f8872fd25a2d6041dfaab7d2182d3b43d13fcae408b478fab17f34afc738b"
     ),
@@ -7556,6 +7534,9 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
     "PendingExactOutput::ownership_state_after_additions": (
         "a22e2ff976a86ec6218c8a417b2f9b3fd066d16bb9b8edd561fcc00512008ad2"
     ),
+    "PendingExactOutput::ownership_state_after_replacement": (
+        "80d59ecc4e9300743cf22d82a07712f9c585cbda0cbaf49197ff89bfefc66932"
+    ),
     "PendingExactOutput::coalesced_target_geometry_available": (
         "16637dff951694ae9999357a0121a18e520dda07935fb88839625d080e47f403"
     ),
@@ -7570,6 +7551,21 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
     ),
     "PendingExactOutput::can_enqueue": (
         "21e501bc34a7c1b41ca787e5a8c4a48d9e853a8cf7b3960c685ef58e7d33cc0a"
+    ),
+    "PendingExactOutput::stranded_responder_control_replacement_index": (
+        "5a93e8d4bcf188928987ad45e193a7569f25c68f05ca9d7f25a93ba3e96974df"
+    ),
+    "PendingExactOutput::responder_control_replacement_ownership": (
+        "3b28dfe491d895c31600f4c6f871fb04015f7a9214dbb6768431c8484bf6dac6"
+    ),
+    "PendingExactOutput::responder_control_replacement_available": (
+        "1680843d65a96ef27f9c5d68c968dbbea10998b7641194647adede693c3fb4c7"
+    ),
+    "PendingExactOutput::responder_control_replacement_plan": (
+        "322b766ebaf692aec18c63262d3caec621511aa2c05139610b2e2ba5269aabd7"
+    ),
+    "PendingExactOutput::replace_stranded_responder_control": (
+        "a8a4eb616bf16cd28624cf27c3ebe872cc700aa53dd336063750ab09563781a8"
     ),
     "PendingExactOutput::enqueue": (
         "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6"
@@ -12552,20 +12548,38 @@ def _proofless_release_theorem_errors(
                 and obligation.get("module") == module
                 and obligation.get("symbol") == symbol
             ]
-            aggregate_debt = _PROOFLESS_RELEASE_AGGREGATE_DEBT_BY_THEOREM.get(
+            support_id = _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.get(
                 (module, symbol)
             )
-            if not exact_entries and aggregate_debt is not None:
-                aggregate_id, aggregate_symbol = aggregate_debt
-                exact_entries = [
+            support_consumer = None
+            if not exact_entries and support_id is not None:
+                consumer_id = SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+                support_consumer_entries = [
                     obligation
                     for obligation in obligations
                     if isinstance(obligation, dict)
-                    and obligation.get("id") == aggregate_id
-                    and obligation.get("module") == module
-                    and obligation.get("symbol") == aggregate_symbol
+                    and obligation.get("id") == consumer_id
                 ]
+                if len(support_consumer_entries) == 1:
+                    candidate = support_consumer_entries[0]
+                    reviewed_module, reviewed_symbol = (
+                        REQUIRED_PROOF_OBLIGATION_INVENTORY[consumer_id]
+                    )
+                    if (
+                        candidate.get("module") == reviewed_module
+                        and candidate.get("symbol") == reviewed_symbol
+                    ):
+                        support_consumer = candidate
+                        exact_entries = support_consumer_entries
             if len(exact_entries) != 1:
+                if support_id is not None:
+                    consumer_id = SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+                    errors.append(
+                        f"{module}.tla:{extracted[1]}: proofless support "
+                        f"theorem {module}!{symbol} must be transitively "
+                        f"accounted for by exact reviewed consumer {consumer_id}"
+                    )
+                    continue
                 errors.append(
                     f"{module}.tla:{extracted[1]}: proofless release theorem "
                     f"{module}!{symbol} must have exactly one ledger entry using "
@@ -12575,6 +12589,19 @@ def _proofless_release_theorem_errors(
             status = exact_entries[0].get("status")
             obligation_id = exact_entries[0].get("id")
             cross_tool_contract = CROSS_TOOL_REFINEMENT_BY_ID.get(obligation_id)
+            if support_consumer is not None:
+                if status == "specified_unproved":
+                    continue
+                if status == "tlaps_proved":
+                    continue
+                if status == "cross_tool_proved" and cross_tool_contract is not None:
+                    continue
+                errors.append(
+                    f"{module}.tla:{extracted[1]}: proofless support theorem "
+                    f"{module}!{symbol} must remain transitively visible through "
+                    f"consumer {obligation_id}; found consumer status {status!r}"
+                )
+                continue
             cross_tool_discharge = (
                 status == "cross_tool_proved"
                 and cross_tool_contract is not None
@@ -12591,56 +12618,53 @@ def _proofless_release_theorem_errors(
 
 
 def _machine_checked_completion_contract_errors() -> list[str]:
-    """Validate the code-owned 70-source/60-target completion projection."""
+    """Validate the exact code-owned 54-obligation completion contract."""
 
     errors: list[str] = []
     source_ids = tuple(REQUIRED_PROOF_OBLIGATION_INVENTORY)
-    excluded_ids = MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS
-    excluded_id_set = _MACHINE_CHECKED_COMPLETION_EXCLUDED_ID_SET
     target_ids = MACHINE_CHECKED_COMPLETION_TARGET_IDS
     target_id_set = _MACHINE_CHECKED_COMPLETION_TARGET_ID_SET
 
-    if len(source_ids) != 70:
+    if len(source_ids) != 54 or len(set(source_ids)) != 54:
         errors.append(
-            "reviewed proof source inventory must contain exactly 70 obligations; "
-            f"found {len(source_ids)}"
+            "reviewed proof inventory must contain exactly 54 distinct "
+            f"obligations; found {len(source_ids)} entries and "
+            f"{len(set(source_ids))} distinct IDs"
         )
-    if len(excluded_ids) != 10 or len(excluded_id_set) != 10:
+    support_ids = tuple(SUPPORT_PROOF_OBLIGATION_INVENTORY)
+    if len(support_ids) != 16 or len(set(support_ids)) != 16:
         errors.append(
-            "machine-checked completion exclusion must contain exactly ten "
-            f"distinct obligations; found {len(excluded_ids)} entries and "
-            f"{len(excluded_id_set)} distinct IDs"
+            "proof support inventory must contain exactly sixteen distinct "
+            f"decomposition leaves; found {len(support_ids)} entries and "
+            f"{len(set(support_ids))} distinct IDs"
         )
-    source_excluded_ids = tuple(
-        obligation_id
-        for obligation_id in source_ids
-        if obligation_id in excluded_id_set
+    if set(source_ids) & set(support_ids):
+        errors.append(
+            "top-level proof obligations and support decomposition leaves must "
+            f"be disjoint: {sorted(set(source_ids) & set(support_ids))!r}"
+        )
+    if tuple(SUPPORT_PROOF_CONSUMER_BY_ID) != support_ids:
+        errors.append(
+            "every support decomposition leaf must have one source-ordered "
+            "top-level consumer"
+        )
+    unknown_consumers = sorted(
+        set(SUPPORT_PROOF_CONSUMER_BY_ID.values()) - set(source_ids)
     )
-    if source_excluded_ids != excluded_ids:
+    if unknown_consumers:
         errors.append(
-            "machine-checked completion exclusions must be the exact reviewed "
-            f"source-ordered IDs {source_excluded_ids!r}; found {excluded_ids!r}"
+            "proof support leaves name unreviewed top-level consumers "
+            f"{unknown_consumers!r}"
         )
-    if len(target_ids) != 60 or len(target_id_set) != 60:
+    if target_ids != source_ids or len(target_id_set) != 54:
         errors.append(
-            "machine-checked completion target must contain exactly 60 distinct "
-            f"obligations; found {len(target_ids)} entries and "
-            f"{len(target_id_set)} distinct IDs"
-        )
-    if target_id_set & excluded_id_set:
-        errors.append(
-            "machine-checked completion target and supporting exclusion overlap: "
-            f"{sorted(target_id_set & excluded_id_set)!r}"
-        )
-    if target_id_set | excluded_id_set != set(source_ids):
-        errors.append(
-            "machine-checked completion target plus supporting exclusion must "
-            "equal the reviewed 70-entry source inventory"
+            "machine-checked completion target must equal the exact ordered "
+            "54-entry reviewed inventory"
         )
     if tuple(MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_BY_ID) != target_ids:
         errors.append(
             "machine-checked completion status contract must follow the exact "
-            "60-ID target order"
+            "54-ID target order"
         )
 
     observed_status_counts = {
@@ -12667,7 +12691,7 @@ def _machine_checked_completion_contract_errors() -> list[str]:
 def _machine_checked_completion_status_errors(
     obligations: list[Any],
 ) -> list[str]:
-    """Require exact final statuses for the code-owned 60-obligation target."""
+    """Require exact final statuses for the code-owned 54-obligation target."""
 
     by_id = {
         obligation.get("id"): obligation
@@ -12701,7 +12725,7 @@ def _machine_checked_completion_status_errors(
     if mismatches:
         errors.append(
             "machine_checked_completion=true requires exact statuses for the "
-            "60-obligation target: "
+            "54-obligation target: "
             + "; ".join(mismatches)
         )
     if (
@@ -12786,6 +12810,44 @@ def _proof_obligation_architecture_errors(
         if obligation.get("symbol") != symbol:
             errors.append(f"{where} must use the direct theorem {symbol}")
 
+    for support_id, (module, symbols) in (
+        SUPPORT_PROOF_OBLIGATION_INVENTORY.items()
+    ):
+        consumer_id = SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+        consumer = by_id.get(consumer_id)
+        if consumer is None:
+            errors.append(
+                f"proof support leaf {support_id} is missing reviewed consumer "
+                f"{consumer_id}"
+            )
+        else:
+            expected_module, expected_symbol = (
+                REQUIRED_PROOF_OBLIGATION_INVENTORY[consumer_id]
+            )
+            if (
+                consumer.get("module") != expected_module
+                or consumer.get("symbol") != expected_symbol
+            ):
+                errors.append(
+                    f"proof support leaf {support_id} must be transitively "
+                    f"consumed by exact reviewed obligation {consumer_id}"
+                )
+        source = module_sources.get(module)
+        if source is None:
+            continue
+        stripped = strip_tla_comments(source)
+        for symbol in symbols.split(" / "):
+            declaration = re.compile(
+                rf"(?m)^[ \t]*(?:(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)"
+                rf"[ \t]+)?{re.escape(symbol)}"
+                rf"\s*(?:\([^)=\n]*\))?\s*=="
+            )
+            if declaration.search(stripped) is None:
+                errors.append(
+                    f"{module}.tla: proof support leaf {support_id} is missing "
+                    f"reviewed declaration {symbol}"
+                )
+
     def check_direct_theorem(
         obligation_id: str,
         symbol: str,
@@ -12859,15 +12921,27 @@ def _proof_obligation_architecture_errors(
         exact_statement: str,
         forbidden: tuple[str, ...],
     ) -> None:
-        obligation = by_id.get(obligation_id)
-        if obligation is None:
-            errors.append(f"proof ledger is missing required obligation {obligation_id}")
-            return
-        where = f"proof obligation {obligation_id}"
-        if obligation.get("module") != module:
-            errors.append(f"{where} must use {module}")
-        if obligation.get("symbol") != symbol:
-            errors.append(f"{where} must use the direct theorem {symbol}")
+        if obligation_id in SUPPORT_PROOF_OBLIGATION_INVENTORY:
+            consumer_id = SUPPORT_PROOF_CONSUMER_BY_ID[obligation_id]
+            consumer = by_id.get(consumer_id)
+            where = f"proof support leaf {obligation_id}"
+            if consumer is None:
+                errors.append(
+                    f"{where} is missing reviewed consumer {consumer_id}"
+                )
+                return
+        else:
+            obligation = by_id.get(obligation_id)
+            if obligation is None:
+                errors.append(
+                    f"proof ledger is missing required obligation {obligation_id}"
+                )
+                return
+            where = f"proof obligation {obligation_id}"
+            if obligation.get("module") != module:
+                errors.append(f"{where} must use {module}")
+            if obligation.get("symbol") != symbol:
+                errors.append(f"{where} must use the direct theorem {symbol}")
         source = module_sources.get(module)
         if source is None:
             return
@@ -13082,7 +13156,17 @@ def _proof_obligation_architecture_errors(
     for obligation_id, exact_statement in (
         EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS.items()
     ):
-        module, symbol = FIXED_PROOF_OBLIGATION_TARGETS[obligation_id]
+        target = FIXED_PROOF_OBLIGATION_TARGETS.get(
+            obligation_id,
+            SUPPORT_PROOF_OBLIGATION_INVENTORY.get(obligation_id),
+        )
+        if target is None:
+            errors.append(
+                f"exact fixed proof contract has no reviewed target "
+                f"{obligation_id}"
+            )
+            continue
+        module, symbol = target
         check_closed_theorem(
             obligation_id,
             symbol,
@@ -13090,24 +13174,6 @@ def _proof_obligation_architecture_errors(
             exact_statement=exact_statement,
             forbidden=(),
         )
-        if (
-            obligation_id not in PROOFLESS_FIXED_DEBT_OBLIGATION_IDS
-            or by_id.get(obligation_id, {}).get("status")
-            != "specified_unproved"
-        ):
-            continue
-        source = module_sources.get(module)
-        if source is None:
-            continue
-        extracted = _top_level_theorem_body(source, symbol)
-        if extracted is None:
-            continue
-        body, line = extracted
-        if re.search(r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body):
-            errors.append(
-                f"{module}.tla:{line}: proof-debt theorem {symbol} must remain "
-                "proofless while ledgered specified_unproved"
-            )
     for (
         module,
         symbol,
@@ -39157,7 +39223,7 @@ type LifecycleArtifactIdentity = ();
 #[cfg(unix)]
 type LifecycleArtifactRevision = (u64, i64, i64, i64, i64, u64, u32, u32, u32);
 #[cfg(windows)]
-type LifecycleArtifactRevision = (u64, u64, u64, u32, Option<u64>);
+type LifecycleArtifactRevision = (u64, u64, u64, u32, Option<u32>);
 #[cfg(not(any(unix, windows)))]
 type LifecycleArtifactRevision = ();
 """,
@@ -39659,6 +39725,8 @@ if self.pending_server_closures.is_empty() {
         "drain_closed_sidecar_prefixes",
         "requeue_closed_sidecar_prefixes",
         "confirm_closed_sidecar_prefix_handoff",
+        "stranded_retryable_sidecar_control_index",
+        "replace_stranded_retryable_sidecar_control",
         "service_next_certified_merge_sidecar_materialization",
         "persist_anchored_sessions",
         "hydrate_canonical_lane_artifacts",
@@ -39704,6 +39772,22 @@ if self.pending_server_closures.is_empty() {
         (),
         "lane retryable sidecar responder-control classifier",
         errors,
+    )
+    retryable_sidecar_server_control_has_writable_route_item = _require_rust_item(
+        lane_path,
+        lane_source,
+        "retryable_sidecar_server_control_has_writable_route",
+        errors,
+    )
+    _require_rust_item_context(
+        lane_path,
+        retryable_sidecar_server_control_has_writable_route_item,
+        (),
+        "lane retryable sidecar responder-control writable-route classifier",
+        errors,
+    )
+    lane_ack_items["retryable_sidecar_server_control_has_writable_route"] = (
+        retryable_sidecar_server_control_has_writable_route_item
     )
 
     runner_ack_items: dict[str, RustItem | None] = {}
@@ -43017,6 +43101,26 @@ struct PendingExactTarget {
         "each exact source attempt must isolate payload cursor, actor ticket, writer-flush ownership, and parked state",
         errors,
     )
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        """
+struct ResponderControlReplacementPlan {
+    retained_index: usize,
+    replacement_fifo_id: ExactFanoutFifoId,
+    next_fanout_fifo_id: ExactFanoutFifoId,
+    next_fanout_index: usize,
+    source_fifo_owners: BTreeMap<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>,
+    reservation_owner_counts: BTreeMap<ExactTargetReservation, usize>,
+    ownership_units: usize,
+    shared_ownership_units: usize,
+}
+""",
+        "stranded responder-control replacement must precompute every scheduler, "
+        "FIFO, source, reservation, and ownership field before mutation",
+        errors,
+        count=1,
+    )
     _require_exact_rust_tokens(
         worker_path,
         worker_ack_items.get(
@@ -44874,17 +44978,35 @@ if !matches!(&effect, V2LaneWorkEffect::PostCertifiedMergeSidecar { .. })
 }
 let key = lane_work_effect_key(&effect);
 if self.sidecar_effect_keys.contains(&key) {
-    return self
+    let Some(index) = self
         .sidecar_effects
-        .iter_mut()
-        .find(|queued| lane_work_effect_key(queued) == key)
-        .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, &effect));
+        .iter()
+        .position(|queued| lane_work_effect_key(queued) == key)
+    else {
+        return false;
+    };
+    if self
+        .sidecar_effects
+        .get_mut(index)
+        .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, &effect))
+    {
+        return true;
+    }
+    if !lane_work_effect_reply_routes_are_valid(&effect)
+        || self.stranded_retryable_sidecar_control_index(&effect) != Some(index)
+    {
+        return false;
+    }
+    return self.replace_stranded_retryable_sidecar_control(index, key, effect);
 }
 if !lane_work_effect_reply_routes_are_valid(&effect) {
     return false;
 }
 let retryable_peer = retryable_sidecar_server_control_peer(&effect).cloned();
 if let Some(peer) = &retryable_peer {
+    if let Some(index) = self.stranded_retryable_sidecar_control_index(&effect) {
+        return self.replace_stranded_retryable_sidecar_control(index, key, effect);
+    }
     if self
         .sidecar_effects
         .iter()

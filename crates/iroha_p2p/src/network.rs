@@ -4240,6 +4240,8 @@ struct NetworkActorProgressState {
     waiters: HashMap<ActorProgressSource, VecDeque<NetworkActorProgressWaiter>>,
     waiter_count: usize,
     waiters_by_class: [usize; ActorProgressClass::COUNT],
+    #[cfg(any(test, feature = "test-fixtures"))]
+    ticket_drop_cancellations: usize,
 }
 
 /// Per-source service position owned by a caller retrying progress admission.
@@ -4390,6 +4392,82 @@ impl Drop for NetworkActorAdmissionTicket {
             self.budget.cancel(&self.source, self.id, self.shape);
             self.active = false;
         }
+    }
+}
+
+/// Test-only owner of a genuine actor-admission waiter and its cancellation witness.
+///
+/// This fixture is absent unless tests or the `test-fixtures` feature are
+/// enabled. It lets dependent-crate tests move a real admission ticket through
+/// an ownership container without exposing the production budget internals.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[derive(Clone, Debug)]
+pub struct NetworkActorAdmissionTicketTestFixture {
+    budget: Arc<NetworkActorProgressBudget>,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl NetworkActorAdmissionTicketTestFixture {
+    /// Create an isolated one-source actor admission budget.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            budget: NetworkActorProgressBudget::new(1, 1, 1)
+                .expect("test actor admission geometry must fit"),
+        }
+    }
+
+    /// Issue one active rank-one ticket whose drop cancels its exact waiter.
+    #[must_use]
+    pub fn issue(&self) -> NetworkActorAdmissionTicket {
+        let shape = ProgressTicketShape {
+            topic: message::Topic::Consensus,
+            stream_wire_bytes: 1,
+            broadcast: false,
+            reply_writer_timeout_attempt: None,
+            request_digest: Hash::new(b"network-actor-admission-ticket-test-fixture"),
+            authority: None,
+        };
+        let source = ActorProgressSource {
+            target: None,
+            class: ActorProgressClass::Lane,
+        };
+        let ProgressLeaseAttempt::Ready { lease, ticket } = self
+            .budget
+            .try_reserve_for_source(1, shape, source, None, None)
+        else {
+            panic!("fresh test actor admission ticket must own rank one");
+        };
+        drop(lease);
+        debug_assert_eq!(ticket.rank(), Some(1));
+        ticket
+    }
+
+    /// Return the number of live waiters in this isolated budget.
+    #[must_use]
+    pub fn waiter_count(&self) -> usize {
+        self.budget
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .waiter_count
+    }
+
+    /// Return the number of exact waiters removed by admission-ticket drop.
+    #[must_use]
+    pub fn ticket_drop_cancellations(&self) -> usize {
+        self.budget
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .ticket_drop_cancellations
+    }
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl Default for NetworkActorAdmissionTicketTestFixture {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -5517,6 +5595,13 @@ impl NetworkActorProgressBudget {
             state.waiters_by_class[class_index] = state.waiters_by_class[class_index]
                 .checked_sub(1)
                 .expect("progress ticket cancellation must match class ownership");
+            #[cfg(any(test, feature = "test-fixtures"))]
+            {
+                state.ticket_drop_cancellations = state
+                    .ticket_drop_cancellations
+                    .checked_add(1)
+                    .expect("bounded test ticket cancellation count cannot overflow");
+            }
         }
         if state.waiters.get(source).is_some_and(VecDeque::is_empty) {
             state.waiters.remove(source);

@@ -52,7 +52,10 @@ use iroha_data_model::{
     peer::PeerId,
 };
 #[cfg(test)]
-use iroha_p2p::network::{NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture};
+use iroha_p2p::network::{
+    NetworkActorAdmissionTicketTestFixture, NetworkReplyFlushAckTestFixture,
+    NetworkReplyRouteTestFixture,
+};
 use iroha_p2p::{
     Post, Priority,
     network::{
@@ -2195,11 +2198,14 @@ struct ExactTargetSource {
 ///
 /// FIFO and backpressure follow the authenticated transport source, but
 /// reservation geometry follows the frozen semantic target set. Every
-/// target/class occurrence is charged independently, preventing one relay from
-/// multiplying credits and one multi-target fanout from being undercounted.
-/// Topology-routed Request/Close progress and reproducible exact-reply responder
-/// controls use distinct kinds, so ordinary parked output cannot consume either
-/// bounded progress opportunity.
+/// ordinary target/class occurrence is charged independently, preventing one
+/// relay from multiplying credits and one multi-target fanout from being
+/// undercounted. A reproducible responder control instead owns one fanout-level
+/// unit per semantic target: its exact sources remain independently FIFO-indexed
+/// and route-bounded, but alternate authenticated return paths cannot make the
+/// dedicated control reservation depend on shared capacity. Topology-routed
+/// Request/Close progress and exact-reply responder controls use distinct kinds,
+/// so ordinary parked output cannot consume either bounded progress opportunity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ExactTargetReservationKind {
     Reliable,
@@ -3400,6 +3406,14 @@ impl PendingExactFanout {
                 })?;
             for class in exact_output_classes(*classes) {
                 let reservation = self.target_reservation(semantic_target, class);
+                if reservation.kind == ExactTargetReservationKind::SidecarReplyControl {
+                    // One bounded responder-control fanout may retain several
+                    // exact authenticated return paths. Route/source bounds
+                    // account for those paths; the dedicated progress credit
+                    // must remain one unit for the semantic target.
+                    reservations.entry(reservation).or_insert(1);
+                    continue;
+                }
                 let count = reservations.entry(reservation).or_default();
                 *count = count.checked_add(1).ok_or_else(|| {
                     "Sumeragi v2 outbound target/class ownership overflowed".to_owned()
@@ -3427,6 +3441,10 @@ impl PendingExactFanout {
                 })?;
             for class in exact_output_classes(*classes) {
                 let reservation = self.target_reservation(semantic_target, class);
+                if reservation.kind == ExactTargetReservationKind::SidecarReplyControl {
+                    reservations.entry(reservation).or_insert(1);
+                    continue;
+                }
                 let count = reservations.entry(reservation).or_default();
                 *count = count.checked_add(1).ok_or_else(|| {
                     "Sumeragi v2 outbound admission ownership overflowed".to_owned()
@@ -3712,6 +3730,7 @@ impl PendingExactFanout {
             .into_iter()
             .next()
             .ok_or_else(|| "Sumeragi v2 reply fanout lost its semantic target".to_owned())?;
+        let retained_reservations = self.outstanding_reservation_counts()?;
         let mut additions = BTreeMap::<ExactTargetReservation, usize>::new();
         for merge in plan {
             let added_mask = match *merge {
@@ -3732,9 +3751,14 @@ impl PendingExactFanout {
                 }
             };
             for class in exact_output_classes(added_mask) {
-                let count = additions
-                    .entry(candidate.target_reservation(&semantic_target, class))
-                    .or_default();
+                let reservation = candidate.target_reservation(&semantic_target, class);
+                if reservation.kind == ExactTargetReservationKind::SidecarReplyControl
+                    && (retained_reservations.contains_key(&reservation)
+                        || additions.contains_key(&reservation))
+                {
+                    continue;
+                }
+                let count = additions.entry(reservation).or_default();
                 *count = count
                     .checked_add(1)
                     .ok_or_else(|| "Sumeragi v2 alternate-route ownership overflowed".to_owned())?;
@@ -5326,12 +5350,9 @@ impl PendingExactOutput {
 
     fn responder_control_replacement_plan(
         &self,
+        retained_index: usize,
         candidate: &PendingExactFanout,
     ) -> Result<Option<ResponderControlReplacementPlan>, String> {
-        let Some(retained_index) = self.stranded_responder_control_replacement_index(candidate)
-        else {
-            return Ok(None);
-        };
         let Some((reservation_owner_counts, ownership_units, shared_ownership_units)) =
             self.responder_control_replacement_ownership(retained_index, candidate)?
         else {
@@ -5426,26 +5447,37 @@ impl PendingExactOutput {
         }))
     }
 
-    fn replace_stranded_responder_control(
+    fn commit_stranded_responder_control_replacement(
         &mut self,
         mut candidate: PendingExactFanout,
-    ) -> Result<bool, String> {
+    ) -> Result<Option<PendingExactFanout>, String> {
+        let Some(retained_index) = self.stranded_responder_control_replacement_index(&candidate)
+        else {
+            return Ok(None);
+        };
+        // Capacity failure must not rebase live FIFO identities. Establish
+        // that the replacement fits at the same liveness snapshot before the
+        // only preparatory mutation. Reply writability is monotonic within a
+        // tenure, so the plan below deliberately reuses this retained index
+        // instead of rereading external route state after a FIFO rebase.
         if self
-            .stranded_responder_control_replacement_index(&candidate)
+            .responder_control_replacement_ownership(retained_index, &candidate)?
             .is_none()
         {
-            return Ok(false);
+            return Ok(None);
         }
-        // Capacity failure must not rebase live FIFO identities. Establish
-        // that the replacement fits before the only preparatory mutation.
-        if !self.responder_control_replacement_available(&candidate)? {
-            return Ok(false);
+        if self.fanouts.is_empty() || self.next_fanout_index >= self.fanouts.len() {
+            return Err(
+                "Sumeragi v2 responder-control replacement found an invalid scheduler cursor"
+                    .to_owned(),
+            );
         }
         if self.next_fanout_fifo_id == ExactFanoutFifoId::MAX {
             self.rebase_source_fifo()?;
         }
-        let Some(plan) = self.responder_control_replacement_plan(&candidate)? else {
-            return Ok(false);
+        let Some(plan) = self.responder_control_replacement_plan(retained_index, &candidate)?
+        else {
+            return Ok(None);
         };
         candidate.fifo_id = Some(plan.replacement_fifo_id);
         let retired = self
@@ -5462,6 +5494,16 @@ impl PendingExactOutput {
         self.reservation_owner_counts = plan.reservation_owner_counts;
         self.ownership_units = plan.ownership_units;
         self.shared_ownership_units = plan.shared_ownership_units;
+        Ok(Some(retired))
+    }
+
+    fn replace_stranded_responder_control(
+        &mut self,
+        candidate: PendingExactFanout,
+    ) -> Result<bool, String> {
+        let Some(retired) = self.commit_stranded_responder_control_replacement(candidate)? else {
+            return Ok(false);
+        };
         // Actor-ticket destruction can emit cancellation. Keep that external
         // side effect strictly after every worker-owned index is committed.
         drop(retired);
@@ -6066,13 +6108,24 @@ impl PendingExactOutput {
                         "Sumeragi v2 exact-output target advanced beyond its class suffix"
                             .to_owned()
                     })?;
-                (remaining_mask & exact_output_class_bit(source.class) == 0).then(|| {
+                if remaining_mask & exact_output_class_bit(source.class) != 0 {
+                    None
+                } else {
                     let semantic_target = fanout
                         .peers
                         .get(target_index)
                         .expect("selected exact-output target must retain its peer");
-                    fanout.target_reservation(semantic_target, source.class)
-                })
+                    let reservation = fanout.target_reservation(semantic_target, source.class);
+                    if reservation.kind == ExactTargetReservationKind::SidecarReplyControl
+                        && fanout
+                            .outstanding_reservation_counts()?
+                            .contains_key(&reservation)
+                    {
+                        None
+                    } else {
+                        Some(reservation)
+                    }
+                }
             } else {
                 None
             };
@@ -7231,15 +7284,16 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 outbound fanout message bound overflowed".to_owned())?;
         let reply_route_source_capacity = network.reply_route_source_capacity().max(1);
         let max_peers_per_fanout = context.roster.len().max(reply_route_source_capacity).max(1);
-        // Capacity is charged per outstanding target/class ownership unit, not
-        // per container fanout. Async producers and one reducer macro-step bound
-        // the shared unit pool; frozen validator target/classes and one sidecar
-        // topology-progress unit per frozen target are checked-added separately
-        // so duplicate, observer, or parked reply traffic cannot consume their
-        // first units. The protocol fanout bound covers both the frozen roster
-        // and reply routes, but only the configured authenticated-source count
-        // can form an entirely non-frozen fanout. Require that source-sized
-        // fanout to fit the shared pool without charging the frozen roster twice.
+        // Capacity is charged per outstanding ordinary target/class occurrence.
+        // Async producers and one reducer macro-step bound the shared unit pool;
+        // frozen validator target/classes plus one topology-progress unit and one
+        // fanout-level responder-control unit per frozen target are checked-added
+        // separately. A responder control's exact authenticated routes remain
+        // independently source-FIFO-indexed and bounded by the protocol fanout,
+        // but cannot borrow shared capacity merely because one replay reached
+        // several return paths. Only the configured authenticated-source count
+        // can form an entirely non-frozen ordinary fanout, so require that
+        // source-sized fanout to fit without charging the frozen roster twice.
         let shared_pending_ownership_unit_capacity =
             sumeragi_v2_exact_output_shared_ownership_capacity(
                 consensus_io_capacity,
@@ -11669,6 +11723,68 @@ pub(super) mod tests {
             assert!(pending.fanouts[0].targets.iter().any(
                 |target| matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&second_route))
             ));
+            let control_reservation = ExactTargetReservation {
+                semantic_target: peer.clone(),
+                class: ExactOutputClass::Lane,
+                kind: ExactTargetReservationKind::SidecarReplyControl,
+            };
+            assert_eq!(
+                pending.reservation_owner_counts.get(&control_reservation),
+                Some(&1),
+                "alternate exact routes share one fanout-level control credit"
+            );
+            assert_eq!(pending.ownership_units, 1);
+            assert_eq!(pending.shared_ownership_units, 0);
+
+            let mut admitted_routes = Vec::new();
+            assert_eq!(
+                pending.drive_with_budget(1, |_post, ticket, route| {
+                    assert!(ticket.is_none());
+                    let ExactTargetRoute::Reply(route) = route else {
+                        panic!("responder control changed route kind")
+                    };
+                    admitted_routes.push(route.clone());
+                    Ok(())
+                }),
+                Ok(ExactOutputDriveOutcome::BudgetExhausted {
+                    closest_backpressure_rank: None,
+                })
+            );
+            assert_eq!(pending.ownership_units, 1);
+            assert_eq!(
+                pending.reservation_owner_counts.get(&control_reservation),
+                Some(&1),
+                "the fanout credit survives until its last exact route flushes"
+            );
+            assert_eq!(
+                pending.drive_with_budget(1, |_post, ticket, route| {
+                    assert!(ticket.is_none());
+                    let ExactTargetRoute::Reply(route) = route else {
+                        panic!("responder control changed route kind")
+                    };
+                    admitted_routes.push(route.clone());
+                    Ok(())
+                }),
+                Ok(ExactOutputDriveOutcome::Drained)
+            );
+            assert_eq!(admitted_routes.len(), 2);
+            assert!(
+                admitted_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&first_route))
+            );
+            assert!(
+                admitted_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&second_route))
+            );
+            assert_eq!(pending.ownership_units, 0);
+            assert_eq!(pending.shared_ownership_units, 0);
+            assert!(
+                !pending
+                    .reservation_owner_counts
+                    .contains_key(&control_reservation)
+            );
         }
     }
 
@@ -12316,6 +12432,12 @@ pub(super) mod tests {
         let older_fifo_id = pending.fanouts[1]
             .fifo_id
             .expect("the older same-source reply owns FIFO age");
+        let replacement_source =
+            ExactTargetRoute::Reply(writable_route.clone()).source(&target, ExactOutputClass::Lane);
+        assert_eq!(
+            pending.source_fifo_owners.get(&replacement_source),
+            Some(&BTreeSet::from([older_fifo_id]))
+        );
         assert!(
             routes.mark_reply_unwritable_while_delivery_active(&unwritable_route),
             "the old source enters its monotonic draining interval"
@@ -12335,6 +12457,7 @@ pub(super) mod tests {
             Ok(true),
             "writability is checked before the worker has a chance to park the old route"
         );
+        pending.next_fanout_fifo_id = ExactFanoutFifoId::MAX;
         assert_eq!(pending.enqueue(writable), Ok(ExactFanoutOwnership::Owned));
         assert_eq!(pending.fanouts.len(), 2);
         let replacement = pending
@@ -12344,8 +12467,6 @@ pub(super) mod tests {
         let replacement_fifo_id = replacement
             .fifo_id
             .expect("the replacement owns fresh FIFO age");
-        let replacement_source =
-            ExactTargetRoute::Reply(writable_route.clone()).source(&target, ExactOutputClass::Lane);
         assert_ne!(
             replacement_fifo_id, old_fifo_id,
             "a different authenticated source must not inherit old source age"
@@ -12369,7 +12490,25 @@ pub(super) mod tests {
         assert_eq!(
             pending.source_fifo_owners.get(&replacement_source),
             Some(&BTreeSet::from([older_fifo_id, replacement_fifo_id])),
-            "the replacement must remain behind older work for its exact source"
+            "forced rebase and replacement must keep older exact-source work first"
+        );
+        pending.next_fanout_fifo_id = ExactFanoutFifoId::MAX;
+        pending
+            .rebase_source_fifo()
+            .expect("a later FIFO exhaustion preserves replacement age");
+        let older_rebased_fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("the older reply keeps a rebased FIFO identity");
+        let replacement_rebased_fifo_id = pending.fanouts[1]
+            .fifo_id
+            .expect("the replacement keeps a rebased FIFO identity");
+        assert_eq!(
+            pending.source_fifo_owners.get(&replacement_source),
+            Some(&BTreeSet::from([
+                older_rebased_fifo_id,
+                replacement_rebased_fifo_id,
+            ])),
+            "later rebasing must preserve the tail-rejoined replacement's age"
         );
 
         let mut admitted_hashes = Vec::new();
@@ -12437,7 +12576,98 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn stranded_responder_control_replacement_preflight_is_fail_atomic() {
+    fn responder_control_replacement_cancels_ticket_after_index_commit() {
+        let (service, _) = fixture();
+        let target = service.context.roster[1].validator.clone();
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let old_route = routes.mint_via(target.clone(), hub_a);
+        let old = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_generation_hint(&service.local_peer, &target, 285),
+            NetworkReplyRoutes::try_from_route(old_route.clone())
+                .expect("one old responder-control route"),
+        );
+        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
+            .expect("one dedicated responder-control slot");
+        assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
+
+        let ticket_fixture = NetworkActorAdmissionTicketTestFixture::new();
+        let ticket = ticket_fixture.issue();
+        assert_eq!(ticket.rank(), Some(1));
+        assert_eq!(ticket_fixture.waiter_count(), 1);
+        assert_eq!(ticket_fixture.ticket_drop_cancellations(), 0);
+        let old_post = Post {
+            data: pending.fanouts[0].messages[0].clone(),
+            peer_id: target.clone(),
+            priority: Priority::High,
+        };
+        pending.fanouts[0].targets[0].current = Some(old_post);
+        pending.fanouts[0].targets[0].ticket = Some(ticket);
+        assert!(routes.mark_reply_unwritable_while_delivery_active(&old_route));
+
+        let replacement_route = routes.mint_via(target.clone(), hub_b);
+        let replacement = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_close_ack(&service.local_peer, &target, 286),
+            NetworkReplyRoutes::try_from_route(replacement_route.clone())
+                .expect("one replacement responder-control route"),
+        );
+        let replacement_hash = replacement.message_hashes[0];
+        let replacement_source = ExactTargetRoute::Reply(replacement_route.clone())
+            .source(&target, ExactOutputClass::Lane);
+        let retired = pending
+            .commit_stranded_responder_control_replacement(replacement)
+            .expect("replacement planning must remain valid")
+            .expect("the unwritable responder control must be replaced");
+
+        assert_eq!(pending.fanouts.len(), 1);
+        assert_eq!(pending.next_fanout_index, 0);
+        assert_eq!(pending.fanouts[0].message_hashes, vec![replacement_hash]);
+        let replacement_fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("replacement owns a committed FIFO identity");
+        assert_eq!(
+            pending.source_fifo_owners,
+            BTreeMap::from([(replacement_source, BTreeSet::from([replacement_fifo_id]))])
+        );
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 0);
+        assert_eq!(
+            retired.targets[0]
+                .ticket
+                .as_ref()
+                .and_then(NetworkActorAdmissionTicket::rank),
+            Some(1),
+            "the retired external owner remains live after every worker index commits"
+        );
+        assert_eq!(ticket_fixture.waiter_count(), 1);
+        assert_eq!(
+            ticket_fixture.ticket_drop_cancellations(),
+            0,
+            "the commit phase cannot trigger actor cancellation"
+        );
+
+        drop(retired);
+        assert_eq!(ticket_fixture.waiter_count(), 0);
+        assert_eq!(
+            ticket_fixture.ticket_drop_cancellations(),
+            1,
+            "terminal destruction cancels the exact actor waiter once"
+        );
+        drop(pending);
+        assert_eq!(
+            ticket_fixture.ticket_drop_cancellations(),
+            1,
+            "the replacement owns no alias of the retired actor ticket"
+        );
+    }
+
+    #[test]
+    fn multi_route_stranded_responder_control_uses_one_dedicated_reservation() {
         let (service, _) = fixture();
         let target = service.context.roster[1].validator.clone();
         let blocker = PeerId::new(KeyPair::random().public_key().clone());
@@ -12496,25 +12726,115 @@ pub(super) mod tests {
             candidate_routes,
         );
 
-        let fifo_before = pending.fanouts[0].fifo_id;
-        let next_fifo_before = pending.next_fanout_fifo_id;
+        assert_eq!(
+            pending.can_enqueue(&candidate),
+            Ok(true),
+            "alternate authenticated routes must not borrow shared capacity"
+        );
+        assert_eq!(pending.enqueue(candidate), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(pending.fanouts.len(), 2);
+        let replacement = pending
+            .fanouts
+            .back()
+            .expect("the multi-route replacement rejoins at the tail");
+        assert_eq!(replacement.targets.len(), 2);
+        assert_eq!(
+            pending
+                .reservation_owner_counts
+                .get(&ExactTargetReservation {
+                    semantic_target: target,
+                    class: ExactOutputClass::Lane,
+                    kind: ExactTargetReservationKind::SidecarReplyControl,
+                }),
+            Some(&1),
+            "all exact routes share the target's one responder-control credit"
+        );
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(
+            pending.shared_ownership_units, 1,
+            "only the unrelated non-frozen blocker consumes shared capacity"
+        );
+    }
+
+    #[test]
+    fn stranded_responder_control_fifo_collision_is_fail_atomic() {
+        let (service, _) = fixture();
+        let target = service.context.roster[1].validator.clone();
+        let blocker = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 1);
+        let old_route = routes.mint_via(target.clone(), hub_a);
+        let old = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_close_ack(&service.local_peer, &target, 287),
+            NetworkReplyRoutes::try_from_route(old_route.clone())
+                .expect("one old responder-control route"),
+        );
+        let mut pending = PendingExactOutput::new(2, 1, 1, std::slice::from_ref(&target))
+            .expect("one control plus one independent blocker");
+        assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(
+            pending.enqueue(
+                PendingExactFanout::new(
+                    vec![merge_share_message(
+                        b"live FIFO owner colliding with the replacement sequence",
+                    )],
+                    vec![blocker],
+                )
+                .expect("one independent FIFO owner"),
+            ),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        let old_post = Post {
+            data: pending.fanouts[0].messages[0].clone(),
+            peer_id: target.clone(),
+            priority: Priority::High,
+        };
+        pending.fanouts[0].targets[0].current = Some(old_post);
+        assert!(routes.mark_reply_unwritable_while_delivery_active(&old_route));
+
+        let replacement_route = routes.mint_via(target.clone(), hub_b);
+        let candidate = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_generation_hint(&service.local_peer, &target, 288),
+            NetworkReplyRoutes::try_from_route(replacement_route)
+                .expect("one live replacement route"),
+        );
+        let colliding_fifo_id = pending.fanouts[1]
+            .fifo_id
+            .expect("the independent blocker owns one FIFO identity");
+        pending.next_fanout_fifo_id = colliding_fifo_id;
+        let fanout_fifo_before = pending
+            .fanouts
+            .iter()
+            .map(|fanout| fanout.fifo_id)
+            .collect::<Vec<_>>();
+        let next_fanout_index_before = pending.next_fanout_index;
         let source_owners_before = pending.source_fifo_owners.clone();
         let reservations_before = pending.reservation_owner_counts.clone();
         let ownership_units_before = pending.ownership_units;
         let shared_units_before = pending.shared_ownership_units;
         let retained_hash_before = pending.fanouts[0].message_hashes.clone();
-        assert_eq!(
-            pending.can_enqueue(&candidate),
-            Ok(false),
-            "the replacement cannot borrow a second shared ownership unit"
-        );
+
+        assert_eq!(pending.can_enqueue(&candidate), Ok(true));
         assert_eq!(
             pending.enqueue(candidate),
-            Ok(ExactFanoutOwnership::SourceRetained)
+            Err("Sumeragi v2 responder-control replacement reused a live FIFO identity".to_owned())
         );
         assert_eq!(pending.fanouts.len(), 2);
-        assert_eq!(pending.fanouts[0].fifo_id, fifo_before);
-        assert_eq!(pending.next_fanout_fifo_id, next_fifo_before);
+        assert_eq!(
+            pending
+                .fanouts
+                .iter()
+                .map(|fanout| fanout.fifo_id)
+                .collect::<Vec<_>>(),
+            fanout_fifo_before
+        );
+        assert_eq!(pending.next_fanout_fifo_id, colliding_fifo_id);
+        assert_eq!(pending.next_fanout_index, next_fanout_index_before);
         assert_eq!(pending.source_fifo_owners, source_owners_before);
         assert_eq!(pending.reservation_owner_counts, reservations_before);
         assert_eq!(pending.ownership_units, ownership_units_before);
@@ -12522,7 +12842,7 @@ pub(super) mod tests {
         assert_eq!(pending.fanouts[0].message_hashes, retained_hash_before);
         assert!(
             pending.fanouts[0].targets[0].current.is_some(),
-            "failed preflight preserves the actor-returned old attempt"
+            "failed planning preserves the actor-returned old attempt"
         );
     }
 

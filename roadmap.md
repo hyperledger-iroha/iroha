@@ -25841,9 +25841,11 @@ transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
 (305/305), its strong caller and bracket (63/63), the exact type obligation
 (16/16), and the named always-strong wrapper (10/10).
 
-The 70-entry ledger contains 35 `tlaps_proved`, 28 `specified_unproved`, 6
-`trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
-remains false. In particular,
+The 54-entry top-level ledger contains 35 `tlaps_proved`, 12
+`specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope` entries;
+machine-checked completion remains false. Sixteen source-bound decomposition
+leaves are checked transitively through those reviewed consumers rather than
+being additional release claims. In particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` remain explicit
 proofless residuals; neither may be promoted through assumption, circular

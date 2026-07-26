@@ -1093,7 +1093,7 @@ cover state replacement before directory sync and root replacement before
 predecessor cleanup. The current source-bound inventory therefore contains 727 exact tests across
 38 modules and 81 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`b11a25ffc9608350a5350a1e2e0ffa92371f1d5dbd5b2b1c00154313fba8d005`.
+`53c85b2ca35797cf17b6939dbd1cc6d3a5e7653ccf0e7b37941c4bf79339ed96`.
 Nine of those legs execute the separate 277-test G-UNIT focus inventory; its
 canonical source-derived TSV SHA-256 is
 `dc6e4c3eece63441e9ba5ffdf6b603665e21cf6086a3a6a1307b45829a678510`.
@@ -1403,16 +1403,20 @@ ordering, and the root trust boundary, so they are not current evidence. The
 control partition and `NoRolloverFailure` remain specification structure only.
 The conditional rollover declaration is not promoted while its final
 persistence relation and downstream rotating-leader dependency remain
-unproved. Both typed-handoff entries remain `specified_unproved`; they do not
-establish filesystem or Rust refinement, recovery, eventual finality
-validation, network or writer progress, repeated rollover, or end-to-end
-liveness. Fresh strict safety-and-liveness validation remains pending.
+unproved. Both typed-handoff declarations remain source-bound support leaves
+consumed transitively by the top-level successor-activation production-
+refinement debt; they are not independent ledger rows and do not establish
+filesystem or Rust refinement, recovery, eventual finality validation, network
+or writer progress, repeated rollover, or end-to-end liveness. Fresh strict
+safety-and-liveness validation remains pending.
 
 The strict proof-run counts in the following paragraphs are retained
 historical submodule evidence, not current aggregate source-manifest-bound
-release evidence. The canonical 70-entry proof ledger currently reports 35
-`tlaps_proved`, 28 `specified_unproved`, 6 `trusted_contract`, and 1
-`out_of_scope` entry, with `machine_checked_completion: false`. The legacy-named
+release evidence. The canonical 54-entry top-level proof ledger currently
+reports 35 `tlaps_proved`, 12 `specified_unproved`, 6 `trusted_contract`, and 1
+`out_of_scope` entry, with `machine_checked_completion: false`. Sixteen
+source-bound decomposition leaves remain checked transitively through their
+reviewed consumers and are not independent ledger rows. The legacy-named
 locked-body-reproposal entry denotes the exact three-arm progress obligation:
 old-round Commit, unchanged later-view same-round re-proposal, or legitimate
 Decision/higher-Prepare supersession. It and the production cross-tool refinements remain explicitly

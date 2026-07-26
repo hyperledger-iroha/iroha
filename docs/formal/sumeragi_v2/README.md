@@ -432,9 +432,9 @@ certificate round.
   ledger, and bound production source before and after checking, then records
   each model/config/log hash, bound length, and exact `NoError` result. A
   failed or source-drifting run removes or withholds the completion evidence.
-  These finite checks constrain the four `specified_unproved`
-  production-refinement obligations in `proof_coverage.json`; they are not TLAPS
-  or cross-tool proof evidence and do not change proof-ledger status.
+  These finite checks constrain four source-bound production-refinement
+  declarations consumed transitively by the top-level refinement debts; they
+  are not independent ledger rows, TLAPS evidence, or cross-tool proof evidence.
 
 ## Exact protocol abstractions
 
@@ -683,14 +683,14 @@ progress ownership, and the three rank leaves use their exact fair-action
 prerequisites. The
 aggregate `protected-service-rank` obligation depends on every one of these
 leaves, without conflating the abstract model with production admission,
-runtime, ingress, or actor-to-flush ownership. The source ledger now contains
-70 obligations: 35 `tlaps_proved`, 28 `specified_unproved`, 6
-`trusted_contract`, and 1 `out_of_scope`. Machine-checked completion is
-evaluated over exactly 60 targets, with 10 reviewed source obligations
-excluded from that completion projection. A completed projection must contain
-50 `tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
-`out_of_scope`; the current ledger keeps
-`machine_checked_completion: false`.
+runtime, ingress, or actor-to-flush ownership. The top-level source ledger now
+contains exactly 54 obligations: 35 `tlaps_proved`, 12 `specified_unproved`, 6
+`trusted_contract`, and 1 `out_of_scope`. Sixteen proof/evidence decomposition
+leaves remain source-bound and transitively checked through reviewed top-level
+consumers rather than being promoted into extra ledger rows. Machine-checked
+completion is evaluated over the same 54 obligations and must contain 44
+`tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
+`out_of_scope`; the current ledger keeps `machine_checked_completion: false`.
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` are the two explicit
 proofless residual theorems in the aggregate temporal closure. Their downstream
@@ -821,15 +821,16 @@ is well founded for that owner, and proves the weak-fair historical discovery
 rule conditional on exact next-step preservation. Clock/readiness, discovery
 preservation, authenticated request-to-Decision delivery, and the historical
 Decision/body/application corridor remain named operator premises; the child
-does not promote either endpoint from those premises. The release ledger
-exposes the remaining historical corridor as four exact proofless wrappers:
+does not promote either endpoint from those premises. The checker exposes the
+remaining historical corridor as four exact proofless support wrappers:
 `IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation`,
 `IndexedHistoricalCertificateRankProgressResidualObligation`,
 `IndexedHistoricalDecisionStageOwnershipResidualObligation`, and
 `IndexedHistoricalDecisionRankProgressResidualObligation`. The downstream
 exact-recovery composition assumes their residual properties and therefore
-cannot serve as proof of them. All four remain `specified_unproved`, with no
-promotion. The release-facing theorem itself remains proofless, explicit
+cannot serve as proof of them. They are source-bound transitively through the
+top-level `height-liveness` row rather than promoted into four extra claims.
+The release-facing theorem itself remains proofless, explicit
 `specified_unproved` debt until its prerequisites are discharged and a fresh
 pinned strict proof succeeds
 after rotating-leader, application liveness, successor-activation starvation,
@@ -1151,7 +1152,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`b11a25ffc9608350a5350a1e2e0ffa92371f1d5dbd5b2b1c00154313fba8d005`.
+`53c85b2ca35797cf17b6939dbd1cc6d3a5e7653ccf0e7b37941c4bf79339ed96`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
