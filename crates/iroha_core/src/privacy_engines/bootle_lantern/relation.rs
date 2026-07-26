@@ -14,6 +14,7 @@ use iroha_data_model::privacy::{
     IrohaBootleLanternAnoncredStatementV1,
 };
 use thiserror::Error;
+use zeroize::Zeroize;
 
 use super::{
     params::{
@@ -39,7 +40,7 @@ const ATTRIBUTE_START_V1: usize = SIGNATURE_TWO_START_V1 + SIGNATURE_HALF_POLYNO
 ///
 /// Attributes retain their direct 64-bit form; conversion to binary ring
 /// polynomials occurs only inside the canonical relation compiler.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BootleLanternPresentationWitnessV1 {
     /// Credential commitment randomness `r`.
     pub randomness: [ApplicationPolynomialV1; RANDOMNESS_POLYNOMIALS_V1],
@@ -51,6 +52,31 @@ pub struct BootleLanternPresentationWitnessV1 {
     pub signature_two: [ApplicationPolynomialV1; SIGNATURE_HALF_POLYNOMIALS_V1],
     /// All eight direct credential attributes.
     pub attributes: [[u8; 8]; ATTRIBUTE_POLYNOMIALS_V1],
+}
+
+impl core::fmt::Debug for BootleLanternPresentationWitnessV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("BootleLanternPresentationWitnessV1")
+            .field("secret", &"<redacted>")
+            .finish()
+    }
+}
+
+impl Zeroize for BootleLanternPresentationWitnessV1 {
+    fn zeroize(&mut self) {
+        self.randomness.zeroize();
+        self.tag.zeroize();
+        self.signature_one.zeroize();
+        self.signature_two.zeroize();
+        self.attributes.zeroize();
+    }
+}
+
+impl Drop for BootleLanternPresentationWitnessV1 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 /// Canonical public 8-by-48 application relation for one presentation.
@@ -319,6 +345,19 @@ fn witness_vector(
         }
     }
     vector
+}
+
+/// Lift the canonical presentation witness into its fixed 48-polynomial
+/// application-relation order.
+///
+/// Publicly disclosed attribute columns are represented by zero because their
+/// values are already accumulated into the relation's public offset.
+#[must_use]
+pub fn canonical_witness_vector_v1(
+    witness: &BootleLanternPresentationWitnessV1,
+    disclosure_bitmap: u8,
+) -> [ApplicationPolynomialV1; APPLICATION_WITNESS_POLYNOMIALS_V1] {
+    witness_vector(witness, disclosure_bitmap)
 }
 
 fn decode_issuer_matrix(

@@ -119,6 +119,7 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         PrivacyVerificationErrorV1::Envelope(_)
         | PrivacyVerificationErrorV1::EngineUnavailable(_)
         | PrivacyVerificationErrorV1::NativeVeRange(_)
+        | PrivacyVerificationErrorV1::NativeJindo(_)
         | PrivacyVerificationErrorV1::NativeAnonymousPgc(_) => false,
     };
     if invariant {
@@ -2163,10 +2164,11 @@ mod tests {
         let error = payment
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("one-bit proof mutation");
-        let message = smart_contract_parameter_message(&error);
-        assert!(
-            message.contains("Anonymous PGC") || message.contains("native proof"),
-            "{error:?}"
+        assert_eq!(
+            smart_contract_parameter_message(&error),
+            "privacy proof admission rejected: native Anonymous-PGC verification failed: \
+             Anonymous-PGC payment proof equation failed",
+            "unexpected typed proof rejection: {error:?}"
         );
         assert_eq!(
             transaction

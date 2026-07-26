@@ -427,9 +427,37 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
                         .unwrap_or_else(|error| {
                             panic!("materialize typed {:?} page: {error:?}", family.tag)
                         });
+                    assert_eq!(
+                        items.len(),
+                        QUERY_PAGE_CAPACITY_V1,
+                        "one full typed {:?} page",
+                        family.tag
+                    );
                     let metrics = host
                         .core_query_page_metrics()
                         .expect("typed page-query counters enabled");
+                    assert_eq!(
+                        metrics.host_queries, 1,
+                        "one host query per typed {:?} page",
+                        family.tag
+                    );
+                    assert_eq!(
+                        metrics.projection_decodes, 1,
+                        "one projection decode per typed {:?} page",
+                        family.tag
+                    );
+                    assert!(
+                        metrics.leaf_tlv_bytes > 0,
+                        "typed {:?} leaves must be encoded exactly once before materialization",
+                        family.tag
+                    );
+                    assert!(
+                        metrics.projection_payload_bytes < raw_query_response_bytes,
+                        "typed {:?} projection payload ({} bytes) must be smaller than the raw QueryResponse envelope ({} bytes)",
+                        family.tag,
+                        metrics.projection_payload_bytes,
+                        raw_query_response_bytes,
+                    );
                     std::hint::black_box((gas, items, vm.register(11), metrics));
                 },
                 BatchSize::SmallInput,

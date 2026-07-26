@@ -274,6 +274,7 @@ impl Neg for JindoFieldElementV1 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1};
     use super::*;
 
     fn canonical_from_limbs(limbs: [u64; 4]) -> [u8; 32] {
@@ -292,8 +293,8 @@ mod tests {
     #[test]
     fn modulus_matches_the_jindo_friendly_base_relation() {
         let mut value = JindoFieldElementV1::ONE;
-        let base = JindoFieldElementV1::from_u64(60_272);
-        for _ in 0..16 {
+        let base = JindoFieldElementV1::from_u64(JINDO_ENCODING_BASE_V1);
+        for _ in 0..JINDO_ENCODING_EXPONENT_V1 {
             value = value * base;
         }
         assert_eq!(value + JindoFieldElementV1::ONE, JindoFieldElementV1::ZERO);

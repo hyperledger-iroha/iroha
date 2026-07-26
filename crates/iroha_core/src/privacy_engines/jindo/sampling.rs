@@ -8,12 +8,14 @@
 
 use rand_core_06::{CryptoRng, RngCore};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use super::{
     JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1,
-    JINDO_RING_DEGREE_V1, JindoFieldElementV1, JindoRnsPolynomialV1,
+    JINDO_RING_DEGREE_V1,
     encoding::encode_coefficient_slots_v1,
-    ring::{JINDO_INNER_MODULI_V1, JindoPrimeModulusV1},
+    field::JindoFieldElementV1,
+    ring::{JINDO_INNER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1},
 };
 
 /// Standard deviation for ordinary randomized coefficient encodings.
@@ -79,9 +81,9 @@ where
     R: CryptoRng + RngCore,
 {
     for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
-        let mut bytes = [0_u8; 32];
-        rng.fill_bytes(&mut bytes);
-        if let Some(value) = JindoFieldElementV1::from_canonical_bytes(bytes) {
+        let mut bytes = Zeroizing::new([0_u8; 32]);
+        rng.fill_bytes(bytes.as_mut());
+        if let Some(value) = JindoFieldElementV1::from_canonical_bytes(*bytes) {
             return Ok(value);
         }
     }
@@ -146,14 +148,16 @@ pub(crate) fn randomized_encode_coefficient_slots_v1<R>(
 where
     R: CryptoRng + RngCore,
 {
-    let deterministic = encode_coefficient_slots_v1(values)
-        .ok_or(JindoSamplingErrorV1::InvalidGaussianParameters)?;
-    let mut encoded_coefficients = [0_i128; JINDO_RING_DEGREE_V1];
+    let deterministic = Zeroizing::new(
+        encode_coefficient_slots_v1(values)
+            .ok_or(JindoSamplingErrorV1::InvalidGaussianParameters)?,
+    );
+    let mut encoded_coefficients = Zeroizing::new([0_i128; JINDO_RING_DEGREE_V1]);
     for (index, coefficient) in encoded_coefficients.iter_mut().enumerate() {
         *coefficient = deterministic.balanced_coefficient(index, JINDO_INNER_MODULI_V1);
     }
 
-    let mut centers = [0_f64; JINDO_RING_DEGREE_V1];
+    let mut centers = Zeroizing::new([0_f64; JINDO_RING_DEGREE_V1]);
     for (digit, delta_inverse) in DELTA_INVERSE_V1.into_iter().enumerate() {
         if delta_inverse == 0.0 {
             continue;
@@ -168,8 +172,8 @@ where
         }
     }
 
-    let mut lattice = [0_i128; JINDO_RING_DEGREE_V1];
-    for (sample, center) in lattice.iter_mut().zip(centers) {
+    let mut lattice = Zeroizing::new([0_i128; JINDO_RING_DEGREE_V1]);
+    for (sample, center) in lattice.iter_mut().zip(centers.iter().copied()) {
         *sample = i128::from(sample_discrete_gaussian_v1(
             -center,
             standard_deviation,
@@ -177,7 +181,7 @@ where
         )?);
     }
 
-    let mut randomized = encoded_coefficients;
+    let mut randomized = Zeroizing::new(*encoded_coefficients);
     for index in 0..JINDO_RING_DEGREE_V1 {
         randomized[index] -= i128::from(JINDO_ENCODING_BASE_V1) * lattice[index];
         if index >= JINDO_ENCODING_SLOTS_V1 {
@@ -187,7 +191,7 @@ where
         }
     }
     Ok(JindoRnsPolynomialV1::from_balanced_coefficients(
-        randomized,
+        *randomized,
         JINDO_INNER_MODULI_V1,
     ))
 }
@@ -201,12 +205,12 @@ pub(crate) fn sample_gaussian_polynomial_v1<R>(
 where
     R: CryptoRng + RngCore,
 {
-    let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
-    for coefficient in &mut coefficients {
+    let mut coefficients = Zeroizing::new([0_i128; JINDO_RING_DEGREE_V1]);
+    for coefficient in coefficients.iter_mut() {
         *coefficient = i128::from(sample_discrete_gaussian_v1(0.0, standard_deviation, rng)?);
     }
     Ok(JindoRnsPolynomialV1::from_balanced_coefficients(
-        coefficients,
+        *coefficients,
         moduli,
     ))
 }

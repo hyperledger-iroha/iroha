@@ -42,9 +42,6 @@ pub use protocol::{
 pub use sampling::JindoSamplingErrorV1;
 pub use transcript::JindoTranscriptErrorV1;
 
-pub(crate) use field::JindoFieldElementV1;
-pub(crate) use ring::JindoRnsPolynomialV1;
-
 /// Exact coefficient-field byte width in the first native Jindo profile.
 pub const JINDO_FIELD_ELEMENT_BYTES_V1: usize = 32;
 
@@ -63,6 +60,9 @@ pub const JINDO_ENCODING_SLOTS_V1: usize = JINDO_RING_DEGREE_V1 / JINDO_ENCODING
 /// Maximum polynomial coefficient count in the fixed testnet profile.
 pub const JINDO_MAX_COEFFICIENTS_V1: usize = 256;
 
+/// Maximum polynomial count in one first-release batched opening.
+pub const JINDO_MAX_BATCH_SIZE_V1: usize = 4;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,5 +73,6 @@ mod tests {
         assert_eq!(JINDO_RING_DEGREE_V1 % JINDO_ENCODING_EXPONENT_V1, 0);
         assert_eq!(JINDO_FIELD_ELEMENT_BYTES_V1, 32);
         assert!(JINDO_MAX_COEFFICIENTS_V1.is_power_of_two());
+        assert_eq!(JINDO_MAX_BATCH_SIZE_V1, 4);
     }
 }

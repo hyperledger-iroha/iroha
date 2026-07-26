@@ -47,8 +47,8 @@ use crate::privacy_engines::{
         },
     },
     jindo::{
-        JINDO_NATIVE_PROOF_BYTES_V1, JINDO_PARAMETER_MANIFEST_V1, JINDO_SOURCE_PROFILE_V1,
-        JINDO_SUITE_V1, jindo_crs_digest_v1,
+        JINDO_MAX_BATCH_SIZE_V1, JINDO_NATIVE_PROOF_BYTES_V1, JINDO_PARAMETER_MANIFEST_V1,
+        JINDO_SOURCE_PROFILE_V1, JINDO_SUITE_V1, jindo_crs_digest_v1,
     },
     verange::{
         VERANGE_TYPE1_PROOF_VERSION_V1, VERANGE_TYPE1_SOURCE_PROFILE_V1, VERANGE_TYPE1_SUITE_V1,
@@ -437,7 +437,8 @@ fn compiled_anonymous_pgc_profile_v1()
 
 fn compiled_jindo_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0;
-    let max_polynomial_count = 4_u32;
+    let max_polynomial_count =
+        u32::try_from(JINDO_MAX_BATCH_SIZE_V1).expect("fixed Jindo batch size fits u32");
     let max_polynomial_count_bytes = max_polynomial_count.to_be_bytes();
     let proof_bytes = u64::try_from(JINDO_NATIVE_PROOF_BYTES_V1)
         .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
@@ -1311,7 +1312,8 @@ mod tests {
             first.protocol_limits,
             PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
                 JindoActivationLimitsV1 {
-                    max_polynomial_count: 4,
+                    max_polynomial_count: u32::try_from(JINDO_MAX_BATCH_SIZE_V1)
+                        .expect("fixed Jindo batch size fits u32"),
                 }
             )
         );
@@ -1325,12 +1327,12 @@ mod tests {
                 hex::encode(jindo_crs_digest_v1()),
             ),
             (
-                "REPLACE_JINDO_PARAMETER_ID".to_owned(),
-                "REPLACE_JINDO_PARAMETER_DIGEST".to_owned(),
-                "REPLACE_JINDO_VERIFIER_DIGEST".to_owned(),
-                "REPLACE_JINDO_STATEMENT_SCHEMA_DIGEST".to_owned(),
-                "REPLACE_JINDO_ENGINE_MANIFEST_DIGEST".to_owned(),
-                "REPLACE_JINDO_CRS_DIGEST".to_owned(),
+                "f31a2e933a87837aa21ea847e41c19742db3264a67388d12e7569824249895b5".to_owned(),
+                "e242ffba43bef1752f53ff40161deabaee972324a1c90cf8658181fc597afae9".to_owned(),
+                "c797afdf5fa8141f3cfc85e16e495a0729c97a041d0e8e3f6fbf96b7dcfcf9ae".to_owned(),
+                "7b87a8f64c9345e3ce13c2f4ce02a183e3806a8d2cea0faf7b6b0a00491aed28".to_owned(),
+                "bbcb401ed660711f5b959e1a4bbd41f6eeb5ffb124c40af495ba915c18e688d1".to_owned(),
+                "0ed26c12d05daa25307810cb6bf26b388baab3aa3f7641248db8ea3e4424f6b9".to_owned(),
             )
         );
     }

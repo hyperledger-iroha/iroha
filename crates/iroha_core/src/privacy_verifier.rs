@@ -9,11 +9,11 @@
 use iroha_data_model::{
     ChainId,
     privacy::{
-        AnonymousPgcKOutOfNStatementV1, PrivacyConsensusLimitsV1, PrivacyNamespaceV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
-        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofEnvelopeValidationError, PrivacyProofV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootV1,
+        AnonymousPgcKOutOfNStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
+        PrivacyConsensusLimitsV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
+        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofEnvelopeValidationError,
+        PrivacyProofV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootV1,
         PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyVeRangeBitLengthV1,
     },
 };
@@ -26,6 +26,7 @@ use crate::{
             TwistedElGamalCiphertextV1, TwistedElGamalPublicKeyV1,
             payment::{AnonymousPgcPaymentStatementV1, verify_payment_encoded},
         },
+        jindo::{JindoErrorV1, jindo_crs_digest_v1, verify_batched_evaluation_v1},
         p256::{CompressedPointV1, TranscriptBindingV1},
         verange::{
             VeRangeBitLengthV1, VeRangeError, VeRangeParametersV1, VeRangeType1BatchStatementV1,
@@ -326,6 +327,10 @@ pub(crate) fn verify_privacy_envelope_v1(
             })?;
             VerifiedPrivacyLedgerEffectsV1::None
         }
+        (
+            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement),
+            PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(proof),
+        ) => verify_jindo_batched_evaluation_v1(statement, proof, envelope, &context)?,
         _ => {
             return Err(PrivacyVerificationErrorV1::EngineUnavailable(Box::new(
                 PrivacyEngineUnavailableFailureV1 {
@@ -343,6 +348,38 @@ pub(crate) fn verify_privacy_envelope_v1(
         encoded_action_bytes,
         ledger,
     })
+}
+
+fn verify_jindo_batched_evaluation_v1(
+    statement: &IrohaJindoPolynomialCommitmentStatementV1,
+    proof: &PrivacyProofBytesV1,
+    envelope: &PrivacyProofEnvelopeV1,
+    context: &PrivacyVerificationContextV1<'_>,
+) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
+    let transcript = TranscriptBindingV1 {
+        chain_id: context.chain_id.as_str().as_bytes(),
+        genesis_hash: context.genesis_hash,
+        action_index: context.expected_action_index,
+        statement_digest: *envelope.statement_digest.as_bytes(),
+        parameter_id: *envelope.parameter_id.as_bytes(),
+        parameter_digest: *envelope.parameter_digest.as_bytes(),
+        verifier_digest: *envelope.verifier_digest.as_bytes(),
+        statement_schema_digest: *envelope.statement_schema_digest.as_bytes(),
+        engine_manifest_digest: *envelope.engine_manifest_digest.as_bytes(),
+        generator_digest: jindo_crs_digest_v1(),
+    };
+    verify_batched_evaluation_v1(
+        statement,
+        proof.as_bytes(),
+        &transcript,
+        context.consensus_limits.max_proof_bytes_per_action,
+    )
+    .map_err(|source| {
+        PrivacyVerificationErrorV1::NativeJindo(Box::new(PrivacyJindoVerificationFailureV1 {
+            source,
+        }))
+    })?;
+    Ok(VerifiedPrivacyLedgerEffectsV1::None)
 }
 
 fn verify_anonymous_pgc_payment_v1(
@@ -540,6 +577,9 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     /// Native VeRange decoding or verification failed.
     #[error(transparent)]
     NativeVeRange(Box<PrivacyVeRangeVerificationFailureV1>),
+    /// Native Jindo decoding or verification failed.
+    #[error(transparent)]
+    NativeJindo(Box<PrivacyJindoVerificationFailureV1>),
     /// Trusted persisted Anonymous-PGC state was absent or inconsistent.
     #[error(transparent)]
     AnonymousPgcState(Box<PrivacyAnonymousPgcStateFailureV1>),
@@ -608,6 +648,12 @@ pub(crate) struct PrivacyVeRangeVerificationFailureV1 {
     source: VeRangeError,
 }
 
+#[derive(Debug, Error)]
+#[error("native Jindo verification failed: {source}")]
+pub(crate) struct PrivacyJindoVerificationFailureV1 {
+    source: JindoErrorV1,
+}
+
 /// Stable trusted-state failure detected before or after native PGC proof
 /// verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -655,14 +701,15 @@ pub(crate) struct PrivacyCanonicalEncodingFailureV1;
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
+    use std::{str::FromStr as _, sync::OnceLock};
 
     use iroha_data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,
         name::Name,
         privacy::{
-            PrivacyActiveLifecycleV1, PrivacyEngineIdV1, PrivacyNamespaceScopeV1,
+            IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1, PrivacyActiveLifecycleV1,
+            PrivacyEngineIdV1, PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1,
             PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
             PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
             PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofSystemIdV1,
@@ -681,6 +728,10 @@ mod tests {
                 payment::{
                     AnonymousPgcPaymentWitnessV1, encrypt_signed_with_randomness, prove_payment,
                 },
+            },
+            jindo::{
+                JINDO_NATIVE_PROOF_BYTES_V1, commit_polynomial_v1, evaluate_polynomial_v1,
+                prove_batched_evaluation_v1,
             },
             p256::SecretScalarV1,
             verange::{commit, prove_batch},
@@ -840,6 +891,120 @@ mod tests {
             activation,
             chain_id,
         )
+    }
+
+    fn jindo_field(value: u64) -> PrivacyJindoFieldElementV1 {
+        let mut encoding = [0_u8; 32];
+        encoding[..8].copy_from_slice(&value.to_le_bytes());
+        PrivacyJindoFieldElementV1::new(encoding)
+    }
+
+    struct JindoFixture {
+        envelope: PrivacyProofEnvelopeV1,
+        activation: PrivacyProtocolActivationRecordV1,
+        chain_id: ChainId,
+    }
+
+    impl JindoFixture {
+        fn new() -> Self {
+            let compiled =
+                compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
+                    .expect("compiled Jindo");
+            let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
+                PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 1,
+                    activated_at_height: 2,
+                    state_since_height: 2,
+                },
+            ));
+            let chain_id = ChainId::from("taira-privacy-jindo-test");
+            let polynomial = vec![
+                jindo_field(3),
+                jindo_field(5),
+                jindo_field(7),
+                jindo_field(11),
+            ];
+            let evaluation_point = jindo_field(13);
+            let claim = evaluate_polynomial_v1(&polynomial, evaluation_point)
+                .expect("canonical Jindo evaluation");
+            let (commitment, opening) =
+                commit_polynomial_v1(&polynomial, &mut KatRng::new([0x6a; 32]))
+                    .expect("Jindo commitment");
+            let statement = IrohaJindoPolynomialCommitmentStatementV1 {
+                context: PrivacyStatementContextV1 {
+                    chain_id: chain_id.clone(),
+                    action_index: 0,
+                    transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xd2; 32]),
+                    parameter_id: compiled.parameter_id,
+                    parameter_digest: compiled.parameter_digest,
+                    verifier_digest: compiled.verifier_digest,
+                    statement_schema_digest: compiled.statement_schema_digest,
+                    engine_manifest_digest: compiled.engine_manifest_digest,
+                },
+                polynomial_commitments: vec![commitment],
+                evaluation_point,
+                claimed_evaluations: vec![claim],
+            };
+            let typed_statement =
+                PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement.clone());
+            let statement_digest = typed_statement.digest().expect("Jindo statement digest");
+            let transcript = TranscriptBindingV1 {
+                chain_id: chain_id.as_str().as_bytes(),
+                genesis_hash: [0xa7; 32],
+                action_index: 0,
+                statement_digest: *statement_digest.as_bytes(),
+                parameter_id: *compiled.parameter_id.as_bytes(),
+                parameter_digest: *compiled.parameter_digest.as_bytes(),
+                verifier_digest: *compiled.verifier_digest.as_bytes(),
+                statement_schema_digest: *compiled.statement_schema_digest.as_bytes(),
+                engine_manifest_digest: *compiled.engine_manifest_digest.as_bytes(),
+                generator_digest: jindo_crs_digest_v1(),
+            };
+            let proof =
+                prove_batched_evaluation_v1(&statement, &[polynomial], &[opening], &transcript)
+                    .expect("Jindo proof");
+            assert_eq!(proof.len(), JINDO_NATIVE_PROOF_BYTES_V1);
+            Self {
+                envelope: PrivacyProofEnvelopeV1 {
+                    protocol_id: compiled.protocol_id,
+                    proof_system_id: compiled.proof_system_id,
+                    engine_id: compiled.engine_id,
+                    parameter_id: compiled.parameter_id,
+                    parameter_digest: compiled.parameter_digest,
+                    verifier_digest: compiled.verifier_digest,
+                    statement_schema_digest: compiled.statement_schema_digest,
+                    engine_manifest_digest: compiled.engine_manifest_digest,
+                    statement_digest,
+                    statement: typed_statement,
+                    proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(
+                        PrivacyProofBytesV1::new(proof),
+                    ),
+                },
+                activation,
+                chain_id,
+            }
+        }
+
+        fn verification_context<'a>(
+            &'a self,
+            consensus_limits: &'a PrivacyConsensusLimitsV1,
+        ) -> PrivacyVerificationContextV1<'a> {
+            PrivacyVerificationContextV1 {
+                activation: &self.activation,
+                consensus_limits,
+                chain_id: &self.chain_id,
+                genesis_hash: [0xa7; 32],
+                current_height: 10,
+                expected_action_index: 0,
+                block_timestamp_ms: 1_800_000_000_000,
+                pgc_state: None,
+            }
+        }
+    }
+
+    fn jindo_fixture() -> &'static JindoFixture {
+        static FIXTURE: OnceLock<JindoFixture> = OnceLock::new();
+        FIXTURE.get_or_init(JindoFixture::new)
     }
 
     struct PgcFixture {
@@ -1137,6 +1302,17 @@ mod tests {
             .expect("mutated statement remains canonically encodable");
     }
 
+    fn jindo_statement_mut(
+        envelope: &mut PrivacyProofEnvelopeV1,
+    ) -> &mut IrohaJindoPolynomialCommitmentStatementV1 {
+        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) =
+            &mut envelope.statement
+        else {
+            unreachable!("Jindo fixture")
+        };
+        statement
+    }
+
     fn assert_rejected(
         envelope: &PrivacyProofEnvelopeV1,
         activation: &PrivacyProtocolActivationRecordV1,
@@ -1147,6 +1323,20 @@ mod tests {
             verify_privacy_envelope_v1(envelope, verification_context(activation, chain_id))
                 .is_err(),
             "adversarial envelope `{label}` was accepted"
+        );
+    }
+
+    fn assert_native_jindo_rejected(
+        envelope: &PrivacyProofEnvelopeV1,
+        context: PrivacyVerificationContextV1<'_>,
+        label: &str,
+    ) {
+        assert!(
+            matches!(
+                verify_privacy_envelope_v1(envelope, context),
+                Err(PrivacyVerificationErrorV1::NativeJindo(_))
+            ),
+            "Jindo adversarial envelope `{label}` did not reach and fail the native verifier"
         );
     }
 
@@ -1682,6 +1872,261 @@ mod tests {
             verify_privacy_envelope_v1(&replayed, context),
             Err(PrivacyVerificationErrorV1::Envelope(_))
                 | Err(PrivacyVerificationErrorV1::NativeVeRange(_))
+        ));
+    }
+
+    #[test]
+    fn jindo_runtime_verification_is_non_mutating_and_honors_the_authoritative_proof_cap() {
+        let fixture = jindo_fixture();
+        let PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(proof) = &fixture.envelope.proof
+        else {
+            unreachable!("Jindo fixture")
+        };
+        assert_eq!(proof.as_bytes().len(), JINDO_NATIVE_PROOF_BYTES_V1);
+
+        let effects = verify_privacy_envelope_v1(
+            &fixture.envelope,
+            fixture.verification_context(&TEST_CONSENSUS_LIMITS),
+        )
+        .expect("valid native Jindo proof");
+        assert_eq!(
+            effects.protocol_id(),
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+        );
+        assert_eq!(
+            effects.statement_digest(),
+            fixture.envelope.statement_digest
+        );
+        assert_eq!(effects.action_index(), 0);
+        assert_eq!(effects.ledger(), &VerifiedPrivacyLedgerEffectsV1::None);
+
+        let proof_len = u32::try_from(proof.as_bytes().len()).expect("Jindo proof length fits u32");
+        let mut exact_limit = TEST_CONSENSUS_LIMITS;
+        exact_limit.max_proof_bytes_per_action = proof_len;
+        verify_privacy_envelope_v1(
+            &fixture.envelope,
+            fixture.verification_context(&exact_limit),
+        )
+        .expect("exact proof-byte boundary is admitted");
+
+        let mut one_byte_below = exact_limit;
+        one_byte_below.max_proof_bytes_per_action = proof_len - 1;
+        assert!(matches!(
+            verify_privacy_envelope_v1(
+                &fixture.envelope,
+                fixture.verification_context(&one_byte_below)
+            ),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+    }
+
+    #[test]
+    fn jindo_wire_rejects_truncation_extension_cross_suite_and_relation_malleation() {
+        let fixture = jindo_fixture();
+        let PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(valid_proof) = &fixture.envelope.proof
+        else {
+            unreachable!("Jindo fixture")
+        };
+        let proof_len = valid_proof.as_bytes().len();
+
+        for length in [1, proof_len / 2, proof_len - 1] {
+            let mut candidate = fixture.envelope.clone();
+            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(bytes) = &mut candidate.proof
+            else {
+                unreachable!("Jindo fixture")
+            };
+            bytes.bytes.truncate(length);
+            assert_native_jindo_rejected(
+                &candidate,
+                fixture.verification_context(&TEST_CONSENSUS_LIMITS),
+                &format!("truncated-{length}"),
+            );
+        }
+
+        for suffix in [&[0_u8][..], &[0xff][..], &[0, 0xff][..]] {
+            let mut candidate = fixture.envelope.clone();
+            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(bytes) = &mut candidate.proof
+            else {
+                unreachable!("Jindo fixture")
+            };
+            bytes.bytes.extend_from_slice(suffix);
+            assert_native_jindo_rejected(
+                &candidate,
+                fixture.verification_context(&TEST_CONSENSUS_LIMITS),
+                &format!("trailing-{}", suffix.len()),
+            );
+        }
+
+        for offset in [0, proof_len / 3, proof_len / 2, proof_len - 1] {
+            let mut candidate = fixture.envelope.clone();
+            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(bytes) = &mut candidate.proof
+            else {
+                unreachable!("Jindo fixture")
+            };
+            bytes.bytes[offset] ^= 0x80;
+            assert_native_jindo_rejected(
+                &candidate,
+                fixture.verification_context(&TEST_CONSENSUS_LIMITS),
+                &format!("bit-flip-{offset}"),
+            );
+        }
+
+        let mut empty = fixture.envelope.clone();
+        empty.proof =
+            PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1::new(Vec::new()));
+        assert!(matches!(
+            verify_privacy_envelope_v1(
+                &empty,
+                fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+            ),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+
+        let mut all_zero = fixture.envelope.clone();
+        all_zero.proof = PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(
+            PrivacyProofBytesV1::new(vec![0; proof_len]),
+        );
+        assert!(matches!(
+            verify_privacy_envelope_v1(
+                &all_zero,
+                fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+            ),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+
+        let mut cross_suite = fixture.envelope.clone();
+        cross_suite.proof = PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(
+            valid_proof.as_bytes().to_vec(),
+        ));
+        assert!(matches!(
+            verify_privacy_envelope_v1(
+                &cross_suite,
+                fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+            ),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+    }
+
+    #[test]
+    fn jindo_transcript_rejects_intent_statement_chain_genesis_action_and_governance_replay() {
+        let fixture = jindo_fixture();
+
+        let mut stale_digest = fixture.envelope.clone();
+        jindo_statement_mut(&mut stale_digest).claimed_evaluations[0] = jindo_field(17);
+        assert!(matches!(
+            verify_privacy_envelope_v1(
+                &stale_digest,
+                fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+            ),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+
+        let mut changed_intent = fixture.envelope.clone();
+        jindo_statement_mut(&mut changed_intent)
+            .context
+            .transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0xd3; 32]);
+        refresh_statement_digest(&mut changed_intent);
+        assert_native_jindo_rejected(
+            &changed_intent,
+            fixture.verification_context(&TEST_CONSENSUS_LIMITS),
+            "transaction-intent replay",
+        );
+
+        let mut changed_point = fixture.envelope.clone();
+        jindo_statement_mut(&mut changed_point).evaluation_point = jindo_field(19);
+        refresh_statement_digest(&mut changed_point);
+        assert_native_jindo_rejected(
+            &changed_point,
+            fixture.verification_context(&TEST_CONSENSUS_LIMITS),
+            "evaluation-point mutation",
+        );
+
+        let mut changed_claim = fixture.envelope.clone();
+        jindo_statement_mut(&mut changed_claim).claimed_evaluations[0] = jindo_field(23);
+        refresh_statement_digest(&mut changed_claim);
+        assert_native_jindo_rejected(
+            &changed_claim,
+            fixture.verification_context(&TEST_CONSENSUS_LIMITS),
+            "claimed-evaluation mutation",
+        );
+
+        let mut changed_commitment = fixture.envelope.clone();
+        let coefficient_bytes = &mut jindo_statement_mut(&mut changed_commitment)
+            .polynomial_commitments[0]
+            .encoding[..4];
+        let coefficient = i32::from_le_bytes(
+            coefficient_bytes
+                .try_into()
+                .expect("fixed coefficient width"),
+        );
+        let replacement = if coefficient == IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1 {
+            coefficient - 1
+        } else {
+            coefficient + 1
+        };
+        coefficient_bytes.copy_from_slice(&replacement.to_le_bytes());
+        refresh_statement_digest(&mut changed_commitment);
+        assert_native_jindo_rejected(
+            &changed_commitment,
+            fixture.verification_context(&TEST_CONSENSUS_LIMITS),
+            "commitment mutation",
+        );
+
+        let replay_chain = ChainId::from("taira-privacy-jindo-replay");
+        let mut changed_chain = fixture.envelope.clone();
+        jindo_statement_mut(&mut changed_chain).context.chain_id = replay_chain.clone();
+        refresh_statement_digest(&mut changed_chain);
+        let mut replay_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        replay_context.chain_id = &replay_chain;
+        assert_native_jindo_rejected(&changed_chain, replay_context, "cross-chain replay");
+
+        let mut changed_genesis_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        changed_genesis_context.genesis_hash[0] ^= 1;
+        assert_native_jindo_rejected(
+            &fixture.envelope,
+            changed_genesis_context,
+            "cross-genesis replay",
+        );
+
+        let mut changed_action = fixture.envelope.clone();
+        jindo_statement_mut(&mut changed_action)
+            .context
+            .action_index = 1;
+        refresh_statement_digest(&mut changed_action);
+        let mut action_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        action_context.expected_action_index = 1;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&changed_action, action_context),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+                | Err(PrivacyVerificationErrorV1::NativeJindo(_))
+        ));
+
+        let governed_mutations: [fn(&mut PrivacyProofEnvelopeV1); 5] = [
+            |value| value.parameter_id.0[0] ^= 1,
+            |value| value.parameter_digest.0[0] ^= 1,
+            |value| value.verifier_digest.0[0] ^= 1,
+            |value| value.statement_schema_digest.0[0] ^= 1,
+            |value| value.engine_manifest_digest.0[0] ^= 1,
+        ];
+        for mutate in governed_mutations {
+            let mut candidate = fixture.envelope.clone();
+            mutate(&mut candidate);
+            assert!(matches!(
+                verify_privacy_envelope_v1(
+                    &candidate,
+                    fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+                ),
+                Err(PrivacyVerificationErrorV1::Envelope(_))
+            ));
+        }
+
+        let mut altered_activation = fixture.activation;
+        altered_activation.verifier_digest.0[0] ^= 1;
+        let mut context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        context.activation = &altered_activation;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, context),
+            Err(PrivacyVerificationErrorV1::CompiledActivation(_))
         ));
     }
 

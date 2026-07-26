@@ -11,7 +11,7 @@ use iroha_data_model::privacy::{
 };
 use rand_core_06::{CryptoRng, RngCore};
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::privacy_engines::p256::TranscriptBindingV1;
 
@@ -48,10 +48,10 @@ pub const JINDO_SUITE_V1: &[u8] = b"iroha-jindo-batched-univariate-opening-v1";
 /// Opaque opening produced together with one public commitment.
 #[derive(Clone)]
 pub struct JindoOpeningV1 {
-    polynomial: Vec<JindoFieldElementV1>,
-    encoded_columns: Vec<Vec<JindoRnsPolynomialV1>>,
-    mlwe_columns: Vec<Vec<JindoRnsPolynomialV1>>,
-    rounded_inner_commitments: Vec<JindoRnsPolynomialV1>,
+    polynomial: Zeroizing<Vec<JindoFieldElementV1>>,
+    encoded_columns: Zeroizing<Vec<Vec<JindoRnsPolynomialV1>>>,
+    mlwe_columns: Zeroizing<Vec<Vec<JindoRnsPolynomialV1>>>,
+    rounded_inner_commitments: Zeroizing<Vec<JindoRnsPolynomialV1>>,
     commitment_encoding: Vec<u8>,
 }
 
@@ -63,16 +63,6 @@ impl core::fmt::Debug for JindoOpeningV1 {
 
 impl Drop for JindoOpeningV1 {
     fn drop(&mut self) {
-        self.polynomial.zeroize();
-        for polynomial in self
-            .encoded_columns
-            .iter_mut()
-            .flatten()
-            .chain(self.mlwe_columns.iter_mut().flatten())
-            .chain(self.rounded_inner_commitments.iter_mut())
-        {
-            polynomial.clear();
-        }
         self.commitment_encoding.zeroize();
     }
 }
@@ -274,12 +264,12 @@ where
     let polynomial = parse_polynomial(coefficients, 0)?;
     let (first_row, last_row) = split_boundary_rows(&polynomial, rng)?;
 
-    let mut encoded_columns = vec![
+    let mut encoded_columns = Zeroizing::new(vec![
         Vec::with_capacity(JINDO_PARAMETERS_V1.rows),
         Vec::with_capacity(JINDO_PARAMETERS_V1.rows),
-    ];
+    ]);
     encoded_columns[0].push(randomized_encode_coefficient_slots_v1(
-        &first_row,
+        first_row.as_ref(),
         JINDO_ECD_BLIND_STD_DEV_V1,
         rng,
     )?);
@@ -293,14 +283,14 @@ where
         )?);
     }
     encoded_columns[0].push(randomized_encode_coefficient_slots_v1(
-        &last_row,
+        last_row.as_ref(),
         JINDO_ECD_STD_DEV_V1,
         rng,
     )?);
 
     for row in 0..JINDO_PARAMETERS_V1.rows {
-        let mut mask = [JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1];
-        for value in &mut mask {
+        let mut mask = Zeroizing::new([JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1]);
+        for value in mask.iter_mut() {
             *value = sample_uniform_field_element_v1(rng)?;
         }
         let standard_deviation = if row == 0 {
@@ -309,34 +299,34 @@ where
             JINDO_MASK_STD_DEV_V1
         };
         encoded_columns[1].push(randomized_encode_coefficient_slots_v1(
-            &mask,
+            mask.as_ref(),
             standard_deviation,
             rng,
         )?);
     }
 
-    let mut mlwe_columns = Vec::with_capacity(JINDO_PARAMETERS_V1.columns + 1);
+    let mut mlwe_columns = Zeroizing::new(Vec::with_capacity(JINDO_PARAMETERS_V1.columns + 1));
     for column in 0..=JINDO_PARAMETERS_V1.columns {
         let standard_deviation = if column == JINDO_PARAMETERS_V1.columns {
             JINDO_MASK_MLWE_STD_DEV_V1
         } else {
             JINDO_MLWE_STD_DEV_V1
         };
-        let value_count =
-            JINDO_PARAMETERS_V1.mlwe_rank + JINDO_PARAMETERS_V1.inner_msis_rank;
-        let mut values = Vec::with_capacity(value_count);
+        let value_count = JINDO_PARAMETERS_V1.mlwe_rank + JINDO_PARAMETERS_V1.inner_msis_rank;
+        mlwe_columns.push(Vec::with_capacity(value_count));
         for _ in 0..value_count {
-            values.push(sample_gaussian_polynomial_v1(
+            mlwe_columns[column].push(sample_gaussian_polynomial_v1(
                 standard_deviation,
                 JINDO_INNER_MODULI_V1,
                 rng,
             )?);
         }
-        mlwe_columns.push(values);
     }
 
-    let rounded_inner_commitments =
-        compute_rounded_inner_commitments(&encoded_columns, &mlwe_columns);
+    let rounded_inner_commitments = Zeroizing::new(compute_rounded_inner_commitments(
+        &encoded_columns,
+        &mlwe_columns,
+    ));
     let public_coefficients = compute_public_commitment(&rounded_inner_commitments)?;
     let commitment_encoding = encode_public_commitment(&public_coefficients);
     if commitment_encoding.iter().all(|byte| *byte == 0) {
@@ -379,7 +369,7 @@ pub fn prove_batched_evaluation_v1(
             return Err(JindoErrorV1::ClaimMismatch { index });
         }
         let opening = &openings[index];
-        if opening.polynomial != polynomial
+        if opening.polynomial.as_slice() != polynomial.as_slice()
             || opening.commitment_encoding != statement.polynomial_commitments[index].encoding
             || !opening_has_fixed_shape(opening)
         {
@@ -390,8 +380,9 @@ pub fn prove_batched_evaluation_v1(
     let mut transcript = statement_transcript(statement, binding)?;
     let batch_challenges = batch_challenges(&mut transcript, public.batch_count)?;
     let rounded_inner_commitments = combine_rounded_inner(openings, &batch_challenges.outer);
-    let encoded_columns = combine_encoded_columns(openings, &batch_challenges.inner);
-    let mlwe_columns = combine_mlwe_columns(openings, &batch_challenges.inner);
+    let encoded_columns =
+        Zeroizing::new(combine_encoded_columns(openings, &batch_challenges.inner));
+    let mlwe_columns = Zeroizing::new(combine_mlwe_columns(openings, &batch_challenges.inner));
 
     let left = evaluation_left_vector(public.evaluation_point);
     let mut partials = Vec::with_capacity(JINDO_PARAMETERS_V1.columns);
@@ -696,7 +687,7 @@ fn indexed_label(prefix: &[u8], index: usize) -> Vec<u8> {
 fn parse_polynomial(
     coefficients: &[PrivacyJindoFieldElementV1],
     polynomial_index: usize,
-) -> Result<Vec<JindoFieldElementV1>, JindoErrorV1> {
+) -> Result<Zeroizing<Vec<JindoFieldElementV1>>, JindoErrorV1> {
     if coefficients.len() > JINDO_MAX_COEFFICIENTS_V1 {
         return Err(JindoErrorV1::PolynomialTooLarge {
             index: polynomial_index,
@@ -704,7 +695,7 @@ fn parse_polynomial(
             max: JINDO_MAX_COEFFICIENTS_V1,
         });
     }
-    let mut polynomial = vec![JindoFieldElementV1::ZERO; JINDO_MAX_COEFFICIENTS_V1];
+    let mut polynomial = Zeroizing::new(vec![JindoFieldElementV1::ZERO; JINDO_MAX_COEFFICIENTS_V1]);
     for (coefficient_index, coefficient) in coefficients.iter().enumerate() {
         polynomial[coefficient_index] = JindoFieldElementV1::from_canonical_bytes(
             coefficient.encoding,
@@ -722,19 +713,19 @@ fn split_boundary_rows<R>(
     rng: &mut R,
 ) -> Result<
     (
-        [JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1],
-        [JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1],
+        Zeroizing<[JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1]>,
+        Zeroizing<[JindoFieldElementV1; JINDO_ENCODING_SLOTS_V1]>,
     ),
     JindoErrorV1,
 >
 where
     R: CryptoRng + RngCore,
 {
-    let mut last = [JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1];
+    let mut last = Zeroizing::new([JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1]);
     for value in &mut last[..JINDO_ENCODING_SLOTS_V1 - 1] {
         *value = sample_uniform_field_element_v1(rng)?;
     }
-    let mut first = [JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1];
+    let mut first = Zeroizing::new([JindoFieldElementV1::ZERO; JINDO_ENCODING_SLOTS_V1]);
     first[0] = polynomial[0];
     for index in 1..JINDO_ENCODING_SLOTS_V1 {
         first[index] = polynomial[index] - last[index - 1];
@@ -900,7 +891,10 @@ fn combine_rounded_inner(
         JINDO_PARAMETERS_V1.inner_msis_rank * (JINDO_PARAMETERS_V1.columns + 1)
     ];
     for (opening, challenge) in openings.iter().zip(challenges) {
-        for (output, value) in combined.iter_mut().zip(&opening.rounded_inner_commitments) {
+        for (output, value) in combined
+            .iter_mut()
+            .zip(opening.rounded_inner_commitments.iter())
+        {
             output.add_assign(
                 &value.mul(challenge, JINDO_OUTER_MODULI_V1),
                 JINDO_OUTER_MODULI_V1,
@@ -919,7 +913,8 @@ fn combine_encoded_columns(
         JINDO_PARAMETERS_V1.columns + 1
     ];
     for (opening, challenge) in openings.iter().zip(challenges) {
-        for (output_column, input_column) in combined.iter_mut().zip(&opening.encoded_columns) {
+        for (output_column, input_column) in combined.iter_mut().zip(opening.encoded_columns.iter())
+        {
             for (output, value) in output_column.iter_mut().zip(input_column) {
                 output.add_assign(
                     &value.mul(challenge, JINDO_INNER_MODULI_V1),
@@ -943,7 +938,7 @@ fn combine_mlwe_columns(
         JINDO_PARAMETERS_V1.columns + 1
     ];
     for (opening, challenge) in openings.iter().zip(challenges) {
-        for (output_column, input_column) in combined.iter_mut().zip(&opening.mlwe_columns) {
+        for (output_column, input_column) in combined.iter_mut().zip(opening.mlwe_columns.iter()) {
             for (output, value) in output_column.iter_mut().zip(input_column) {
                 output.add_assign(
                     &value.mul(challenge, JINDO_INNER_MODULI_V1),
@@ -1174,6 +1169,14 @@ mod tests {
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 
     use super::*;
+    use crate::privacy_engines::jindo::{
+        JINDO_MAX_BATCH_SIZE_V1,
+        codec::{
+            JINDO_PROOF_HEADER_BYTES_V1, JINDO_PROOF_INNER_POLYNOMIALS_V1,
+            JINDO_PROOF_OUTER_POLYNOMIALS_V1, JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1,
+        },
+        ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1},
+    };
 
     #[derive(Clone)]
     struct TestRng(u64);
@@ -1213,10 +1216,44 @@ mod tests {
 
     impl CryptoRng for TestRng {}
 
+    struct NonCanonicalFieldRng;
+
+    impl RngCore for NonCanonicalFieldRng {
+        fn next_u32(&mut self) -> u32 {
+            u32::MAX
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            u64::MAX
+        }
+
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            destination.fill(u8::MAX);
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            self.fill_bytes(destination);
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for NonCanonicalFieldRng {}
+
     fn field(value: u64) -> PrivacyJindoFieldElementV1 {
         let mut encoding = [0_u8; 32];
         encoding[..8].copy_from_slice(&value.to_le_bytes());
         PrivacyJindoFieldElementV1::new(encoding)
+    }
+
+    fn field_modulus_encoding() -> [u8; 32] {
+        let mut encoding = [0_u8; 32];
+        for (chunk, limb) in encoding
+            .chunks_exact_mut(core::mem::size_of::<u64>())
+            .zip(JindoFieldElementV1::MODULUS)
+        {
+            chunk.copy_from_slice(&limb.to_le_bytes());
+        }
+        encoding
     }
 
     fn context() -> PrivacyStatementContextV1 {
@@ -1250,6 +1287,78 @@ mod tests {
         }
     }
 
+    fn commit_statement(
+        polynomials: &[Vec<PrivacyJindoFieldElementV1>],
+        evaluation_point: PrivacyJindoFieldElementV1,
+        seed: u64,
+    ) -> (
+        IrohaJindoPolynomialCommitmentStatementV1,
+        Vec<JindoOpeningV1>,
+    ) {
+        let mut rng = TestRng::new(seed);
+        let mut commitments = Vec::with_capacity(polynomials.len());
+        let mut claims = Vec::with_capacity(polynomials.len());
+        let mut openings = Vec::with_capacity(polynomials.len());
+        for polynomial in polynomials {
+            let (commitment, opening) =
+                commit_polynomial_v1(polynomial, &mut rng).expect("commitment");
+            commitments.push(commitment);
+            openings.push(opening);
+            claims.push(
+                evaluate_polynomial_v1(polynomial, evaluation_point).expect("canonical evaluation"),
+            );
+        }
+        (
+            IrohaJindoPolynomialCommitmentStatementV1 {
+                context: context(),
+                polynomial_commitments: commitments,
+                evaluation_point,
+                claimed_evaluations: claims,
+            },
+            openings,
+        )
+    }
+
+    fn prove_fixture(
+        polynomials: &[Vec<PrivacyJindoFieldElementV1>],
+        evaluation_point: PrivacyJindoFieldElementV1,
+        seed: u64,
+    ) -> (IrohaJindoPolynomialCommitmentStatementV1, Vec<u8>) {
+        let (statement, openings) = commit_statement(polynomials, evaluation_point, seed);
+        let proof =
+            prove_batched_evaluation_v1(&statement, polynomials, &openings, &binding(&statement))
+                .expect("proof");
+        (statement, proof)
+    }
+
+    fn assert_verification_rejected(
+        label: &str,
+        statement: &IrohaJindoPolynomialCommitmentStatementV1,
+        proof: &[u8],
+        binding: &TranscriptBindingV1<'_>,
+    ) {
+        let result = verify_batched_evaluation_v1(
+            statement,
+            proof,
+            binding,
+            u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+        );
+        assert!(result.is_err(), "{label} unexpectedly verified");
+    }
+
+    fn perturb_polynomial(
+        polynomial: &mut JindoRnsPolynomialV1,
+        moduli: [JindoPrimeModulusV1; 2],
+        magnitude: i128,
+    ) {
+        let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
+        coefficients[0] = magnitude;
+        polynomial.add_assign(
+            &JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, moduli),
+            moduli,
+        );
+    }
+
     #[test]
     fn single_polynomial_commit_open_verify_roundtrip() {
         let polynomial = vec![field(3), field(5), field(7), field(11)];
@@ -1278,5 +1387,465 @@ mod tests {
             u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
         )
         .expect("valid proof");
+    }
+
+    #[test]
+    fn two_polynomial_batch_and_zero_evaluation_point_roundtrip() {
+        let polynomials = vec![
+            Vec::new(),
+            vec![field(5), field(7), field(11), field(13), field(17)],
+        ];
+        let (statement, proof) = prove_fixture(&polynomials, field(0), 0x2234_5678_9abc_def0);
+        assert_eq!(statement.claimed_evaluations, vec![field(0), field(5)]);
+        verify_batched_evaluation_v1(
+            &statement,
+            &proof,
+            &binding(&statement),
+            u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+        )
+        .expect("valid two-polynomial proof at zero");
+
+        let mut duplicate = statement.clone();
+        duplicate.polynomial_commitments[1] = duplicate.polynomial_commitments[0].clone();
+        assert_eq!(
+            verify_batched_evaluation_v1(
+                &duplicate,
+                &proof,
+                &binding(&duplicate),
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            ),
+            Err(JindoErrorV1::DuplicateCommitment { index: 1 })
+        );
+    }
+
+    #[test]
+    fn canonical_adversarial_mutations_reach_and_fail_every_proof_relation() {
+        let polynomials = vec![vec![field(3), field(5), field(7), field(11)]];
+        let (statement, proof_bytes) =
+            prove_fixture(&polynomials, field(13), 0x3234_5678_9abc_def0);
+        let decoded = JindoEvaluationProofV1::decode_exact(
+            &proof_bytes,
+            1,
+            u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+        )
+        .expect("canonical proof");
+
+        let mut mutations = Vec::new();
+        for index in [0, JINDO_PROOF_OUTER_POLYNOMIALS_V1 - 1] {
+            let mut proof = decoded.clone();
+            perturb_polynomial(
+                &mut proof.rounded_inner_commitments[index],
+                JINDO_OUTER_MODULI_V1,
+                1,
+            );
+            mutations.push(("rounded-inner-commitment", proof.encode()));
+        }
+        {
+            let mut proof = decoded.clone();
+            perturb_polynomial(&mut proof.partials[0], JINDO_INNER_MODULI_V1, 1);
+            mutations.push(("evaluation-partial", proof.encode()));
+        }
+        {
+            let mut proof = decoded.clone();
+            perturb_polynomial(&mut proof.partial_mask, JINDO_INNER_MODULI_V1, 1);
+            mutations.push(("evaluation-partial-mask", proof.encode()));
+        }
+        for index in [0, decoded.encode_responses.len() - 1] {
+            let mut proof = decoded.clone();
+            perturb_polynomial(&mut proof.encode_responses[index], JINDO_INNER_MODULI_V1, 1);
+            mutations.push(("encoded-column-response", proof.encode()));
+        }
+        for index in [0, 31] {
+            let mut proof = decoded.clone();
+            perturb_polynomial(&mut proof.mlwe_responses[index], JINDO_INNER_MODULI_V1, 1);
+            mutations.push(("mlwe-response", proof.encode()));
+        }
+        // The final inner-MSIS-rank responses are explicit short-error
+        // witnesses in an approximate lattice relation. A unit perturbation
+        // can legitimately remain within the norm ball, so cross the strict
+        // norm ceiling while retaining a canonical RNS encoding.
+        for index in [32, decoded.mlwe_responses.len() - 1] {
+            let mut proof = decoded.clone();
+            perturb_polynomial(
+                &mut proof.mlwe_responses[index],
+                JINDO_INNER_MODULI_V1,
+                1_i128 << 80,
+            );
+            mutations.push(("mlwe-short-error-norm", proof.encode()));
+        }
+
+        assert_eq!(mutations.len(), 10);
+        for (label, mutation) in mutations {
+            assert_eq!(mutation.len(), JINDO_PROOF_BYTES_V1);
+            JindoEvaluationProofV1::decode_exact(
+                &mutation,
+                1,
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            )
+            .expect("mutation remains canonically encoded");
+            assert_verification_rejected(label, &statement, &mutation, &binding(&statement));
+        }
+    }
+
+    #[test]
+    fn proof_caps_lengths_headers_and_noncanonical_residues_fail_closed() {
+        let polynomials = vec![vec![field(19), field(23), field(29)]];
+        let (statement, proof) = prove_fixture(&polynomials, field(31), 0x4234_5678_9abc_def0);
+        let exact_cap = u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length");
+        verify_batched_evaluation_v1(&statement, &proof, &binding(&statement), exact_cap)
+            .expect("exact cap");
+        assert!(matches!(
+            verify_batched_evaluation_v1(&statement, &proof, &binding(&statement), exact_cap - 1),
+            Err(JindoErrorV1::ProofCodec(
+                JindoProofCodecErrorV1::TooLarge { .. }
+            ))
+        ));
+
+        for (label, malformed) in [
+            ("truncated", proof[..proof.len() - 1].to_vec()),
+            ("trailing", {
+                let mut bytes = proof.clone();
+                bytes.push(0);
+                bytes
+            }),
+            ("magic", {
+                let mut bytes = proof.clone();
+                bytes[0] ^= 1;
+                bytes
+            }),
+            ("version", {
+                let mut bytes = proof.clone();
+                bytes[4] = 2;
+                bytes
+            }),
+            ("batch-count", {
+                let mut bytes = proof.clone();
+                bytes[5] = 2;
+                bytes
+            }),
+            ("flags", {
+                let mut bytes = proof.clone();
+                bytes[6] = 1;
+                bytes
+            }),
+            ("reserved", {
+                let mut bytes = proof.clone();
+                bytes[7] = 1;
+                bytes
+            }),
+        ] {
+            assert_verification_rejected(label, &statement, &malformed, &binding(&statement));
+        }
+
+        let mut noncanonical_outer = proof.clone();
+        noncanonical_outer[JINDO_PROOF_HEADER_BYTES_V1..JINDO_PROOF_HEADER_BYTES_V1 + 8]
+            .copy_from_slice(&JINDO_OUTER_MODULI_V1[0].modulus().to_le_bytes());
+        assert_verification_rejected(
+            "noncanonical outer residue",
+            &statement,
+            &noncanonical_outer,
+            &binding(&statement),
+        );
+
+        let inner_start = JINDO_PROOF_HEADER_BYTES_V1
+            + JINDO_PROOF_OUTER_POLYNOMIALS_V1 * JINDO_PROOF_RNS_POLYNOMIAL_BYTES_V1;
+        let mut noncanonical_inner = proof.clone();
+        noncanonical_inner[inner_start..inner_start + 8]
+            .copy_from_slice(&JINDO_INNER_MODULI_V1[0].modulus().to_le_bytes());
+        assert_verification_rejected(
+            "noncanonical inner residue",
+            &statement,
+            &noncanonical_inner,
+            &binding(&statement),
+        );
+        assert_eq!(
+            JINDO_PROOF_OUTER_POLYNOMIALS_V1 + JINDO_PROOF_INNER_POLYNOMIALS_V1,
+            96
+        );
+    }
+
+    #[test]
+    fn every_consensus_binding_and_public_statement_axis_rejects_replay() {
+        let polynomials = vec![vec![field(37), field(41), field(43), field(47)]];
+        let (statement, proof) = prove_fixture(&polynomials, field(53), 0x5234_5678_9abc_def0);
+        let valid = binding(&statement);
+
+        macro_rules! reject_binding_mutation {
+            ($label:literal, $field:ident, $value:expr) => {{
+                let mut mutated = valid;
+                mutated.$field = $value;
+                assert_verification_rejected($label, &statement, &proof, &mutated);
+            }};
+        }
+        reject_binding_mutation!("genesis", genesis_hash, [8; 32]);
+        reject_binding_mutation!("action", action_index, 1);
+        reject_binding_mutation!("statement digest", statement_digest, [8; 32]);
+        reject_binding_mutation!("parameter id", parameter_id, [8; 32]);
+        reject_binding_mutation!("parameter digest", parameter_digest, [8; 32]);
+        reject_binding_mutation!("verifier digest", verifier_digest, [8; 32]);
+        reject_binding_mutation!("schema digest", statement_schema_digest, [8; 32]);
+        reject_binding_mutation!("manifest digest", engine_manifest_digest, [8; 32]);
+        reject_binding_mutation!("CRS digest", generator_digest, [8; 32]);
+        let mut wrong_chain = valid;
+        wrong_chain.chain_id = b"jindo-replay-chain";
+        assert_verification_rejected("chain", &statement, &proof, &wrong_chain);
+
+        macro_rules! reject_statement_mutation {
+            ($label:literal, $mutation:expr) => {{
+                let mut mutated = statement.clone();
+                $mutation(&mut mutated);
+                assert_verification_rejected($label, &mutated, &proof, &binding(&mutated));
+            }};
+        }
+        reject_statement_mutation!(
+            "claim",
+            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
+                value.claimed_evaluations[0] = field(59);
+            }
+        );
+        reject_statement_mutation!(
+            "evaluation point",
+            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
+                value.evaluation_point = field(61);
+            }
+        );
+        reject_statement_mutation!(
+            "transaction intent",
+            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
+                value.context.transaction_intent_digest =
+                    PrivacyTransactionIntentDigestV1::new([9; 32]);
+            }
+        );
+        reject_statement_mutation!(
+            "chain context",
+            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
+                value.context.chain_id = "jindo-other-chain".parse().expect("chain id");
+            }
+        );
+        reject_statement_mutation!(
+            "parameter id context",
+            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
+                value.context.parameter_id = PrivacyParameterIdV1::new([9; 32]);
+            }
+        );
+        reject_statement_mutation!(
+            "parameter digest context",
+            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
+                value.context.parameter_digest = PrivacyParameterDigestV1::new([9; 32]);
+            }
+        );
+        reject_statement_mutation!(
+            "verifier digest context",
+            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
+                value.context.verifier_digest = PrivacyVerifierDigestV1::new([9; 32]);
+            }
+        );
+        reject_statement_mutation!(
+            "schema digest context",
+            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
+                value.context.statement_schema_digest =
+                    PrivacyStatementSchemaDigestV1::new([9; 32]);
+            }
+        );
+        reject_statement_mutation!(
+            "manifest digest context",
+            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
+                value.context.engine_manifest_digest = PrivacyEngineManifestDigestV1::new([9; 32]);
+            }
+        );
+        reject_statement_mutation!(
+            "commitment",
+            |value: &mut IrohaJindoPolynomialCommitmentStatementV1| {
+                let first: [u8; 4] = value.polynomial_commitments[0].encoding[..4]
+                    .try_into()
+                    .expect("coefficient");
+                let replacement = if i32::from_le_bytes(first) == 0 {
+                    1_i32
+                } else {
+                    0_i32
+                };
+                value.polynomial_commitments[0].encoding[..4]
+                    .copy_from_slice(&replacement.to_le_bytes());
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_statements_witnesses_openings_and_rng_are_rejected() {
+        let polynomial = vec![field(67), field(71), field(73)];
+        let (statement, openings) = commit_statement(
+            core::slice::from_ref(&polynomial),
+            field(79),
+            0x6234_5678_9abc_def0,
+        );
+
+        let mut no_commitments = statement.clone();
+        no_commitments.polynomial_commitments.clear();
+        no_commitments.claimed_evaluations.clear();
+        assert_eq!(
+            verify_batched_evaluation_v1(
+                &no_commitments,
+                &[],
+                &binding(&no_commitments),
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            ),
+            Err(JindoErrorV1::InvalidPolynomialCount {
+                count: 0,
+                max: JINDO_MAX_BATCH_SIZE_V1,
+            })
+        );
+
+        let mut wrong_claim_count = statement.clone();
+        wrong_claim_count.claimed_evaluations.clear();
+        assert_eq!(
+            verify_batched_evaluation_v1(
+                &wrong_claim_count,
+                &[],
+                &binding(&wrong_claim_count),
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            ),
+            Err(JindoErrorV1::ClaimCountMismatch)
+        );
+
+        let mut short_commitment = statement.clone();
+        short_commitment.polynomial_commitments[0].encoding.pop();
+        assert_eq!(
+            verify_batched_evaluation_v1(
+                &short_commitment,
+                &[],
+                &binding(&short_commitment),
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            ),
+            Err(JindoErrorV1::InvalidCommitmentEncoding { index: 0 })
+        );
+
+        let mut zero_commitment = statement.clone();
+        zero_commitment.polynomial_commitments[0].encoding.fill(0);
+        assert_eq!(
+            verify_batched_evaluation_v1(
+                &zero_commitment,
+                &[],
+                &binding(&zero_commitment),
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            ),
+            Err(JindoErrorV1::ZeroCommitment { index: 0 })
+        );
+
+        let mut out_of_range_commitment = statement.clone();
+        out_of_range_commitment.polynomial_commitments[0].encoding[..4]
+            .copy_from_slice(&i32::MAX.to_le_bytes());
+        assert_eq!(
+            verify_batched_evaluation_v1(
+                &out_of_range_commitment,
+                &[],
+                &binding(&out_of_range_commitment),
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            ),
+            Err(JindoErrorV1::InvalidCommitmentEncoding { index: 0 })
+        );
+
+        let mut noncanonical_point = statement.clone();
+        noncanonical_point.evaluation_point =
+            PrivacyJindoFieldElementV1::new(field_modulus_encoding());
+        assert_eq!(
+            verify_batched_evaluation_v1(
+                &noncanonical_point,
+                &[],
+                &binding(&noncanonical_point),
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            ),
+            Err(JindoErrorV1::NonCanonicalEvaluationPoint)
+        );
+
+        let mut noncanonical_claim = statement.clone();
+        noncanonical_claim.claimed_evaluations[0] =
+            PrivacyJindoFieldElementV1::new(field_modulus_encoding());
+        assert_eq!(
+            verify_batched_evaluation_v1(
+                &noncanonical_claim,
+                &[],
+                &binding(&noncanonical_claim),
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            ),
+            Err(JindoErrorV1::NonCanonicalClaim { index: 0 })
+        );
+
+        let mut zero_intent = statement.clone();
+        zero_intent.context.transaction_intent_digest =
+            PrivacyTransactionIntentDigestV1::new([0; 32]);
+        assert_eq!(
+            verify_batched_evaluation_v1(
+                &zero_intent,
+                &[],
+                &binding(&zero_intent),
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            ),
+            Err(JindoErrorV1::ZeroTransactionIntentDigest)
+        );
+
+        let mut wrong_action = statement.clone();
+        wrong_action.context.action_index = 1;
+        assert_eq!(
+            verify_batched_evaluation_v1(
+                &wrong_action,
+                &[],
+                &binding(&wrong_action),
+                u32::try_from(JINDO_PROOF_BYTES_V1).expect("proof length"),
+            ),
+            Err(JindoErrorV1::InvalidActionIndex { index: 1 })
+        );
+
+        let oversized = vec![field(1); JINDO_MAX_COEFFICIENTS_V1 + 1];
+        assert!(matches!(
+            evaluate_polynomial_v1(&oversized, field(1)),
+            Err(JindoErrorV1::PolynomialTooLarge { .. })
+        ));
+        let mut noncanonical_witness = polynomial.clone();
+        noncanonical_witness[1] = PrivacyJindoFieldElementV1::new(field_modulus_encoding());
+        assert_eq!(
+            prove_batched_evaluation_v1(
+                &statement,
+                &[noncanonical_witness],
+                &openings,
+                &binding(&statement),
+            ),
+            Err(JindoErrorV1::NonCanonicalCoefficient {
+                polynomial_index: 0,
+                coefficient_index: 1,
+            })
+        );
+        let mut wrong_witness = polynomial.clone();
+        wrong_witness[0] = field(83);
+        assert_eq!(
+            prove_batched_evaluation_v1(
+                &statement,
+                &[wrong_witness],
+                &openings,
+                &binding(&statement),
+            ),
+            Err(JindoErrorV1::ClaimMismatch { index: 0 })
+        );
+
+        let (_, wrong_openings) = commit_statement(
+            &[vec![field(89), field(97)]],
+            field(79),
+            0x7234_5678_9abc_def0,
+        );
+        assert_eq!(
+            prove_batched_evaluation_v1(
+                &statement,
+                &[polynomial],
+                &wrong_openings,
+                &binding(&statement),
+            ),
+            Err(JindoErrorV1::OpeningMismatch { index: 0 })
+        );
+
+        assert!(matches!(
+            commit_polynomial_v1(&[field(1)], &mut NonCanonicalFieldRng),
+            Err(JindoErrorV1::Sampling(
+                JindoSamplingErrorV1::FieldRejectionBudgetExhausted
+            ))
+        ));
     }
 }

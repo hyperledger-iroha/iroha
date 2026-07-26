@@ -673,7 +673,7 @@ pub(super) fn deploy_contract_locally_signed(
     iroha_data_model::smart_contract::ContractAddress,
     String,
     String,
-    HashOf<SignedTransaction>,
+    HashOf<iroha_data_model::transaction::SignedTransaction>,
 )> {
     use iroha_data_model::isi::smart_contract_code::{
         CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
@@ -772,11 +772,7 @@ async fn deploy_contract_artifact(
     artifact: &[u8],
     alias_name: &str,
     stage: &str,
-) -> Result<(
-    iroha_data_model::smart_contract::ContractAddress,
-    Hash,
-    u64,
-)> {
+) -> Result<(iroha_data_model::smart_contract::ContractAddress, Hash, u64)> {
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         alias_name,
         None,
@@ -1237,7 +1233,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
 
     network.ensure_blocks(1).await?;
     let rbc_baseline =
-        wait_for_cross_peer_rbc_diagnostics(&network, Duration::from_secs(120), None).await?;
+        wait_for_cross_peer_rbc_diagnostics(&network, Duration::from_secs(120), None, None).await?;
     let deploy_client = network.peers()[0].client();
     let http = integration_tests::http::client();
     let (contract_address, deployment_tx_hash, deploy_height) = deploy_contract_artifact(
@@ -1252,7 +1248,8 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     wait_for_cross_peer_rbc_diagnostics(
         &network,
         Duration::from_secs(120),
-        Some((rbc_baseline.lane_block_height, rbc_baseline.lane_block_view)),
+        Some(&rbc_baseline),
+        Some((deploy_height, &deployment_tx_hash)),
     )
     .await?;
 

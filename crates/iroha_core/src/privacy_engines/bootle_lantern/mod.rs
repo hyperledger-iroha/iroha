@@ -12,6 +12,7 @@ pub mod compression;
 pub mod params;
 pub mod relation;
 pub mod ring;
+pub mod sampling;
 pub mod transcript;
 
 /// This engine remains fail-closed until its trusted runtime inputs and the

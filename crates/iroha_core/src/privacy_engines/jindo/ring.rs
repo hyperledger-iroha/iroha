@@ -166,11 +166,6 @@ impl JindoRnsPolynomialV1 {
         self.residues.iter().flatten().all(|residue| *residue == 0)
     }
 
-    /// Erase every residue in place.
-    pub(crate) fn clear(&mut self) {
-        self.zeroize();
-    }
-
     /// Reconstruct one coefficient in `[0, q_0 q_1)`.
     pub(crate) fn reconstruct_coefficient(
         &self,

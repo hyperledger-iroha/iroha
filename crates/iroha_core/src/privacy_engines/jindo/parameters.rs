@@ -6,6 +6,8 @@
 //! consensus code: its selected output is pinned here and covered by the engine
 //! manifest and known-answer tests.
 
+use super::JINDO_MAX_BATCH_SIZE_V1;
+
 /// Exact compiled Jindo parameter tuple.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct JindoParametersV1 {
@@ -36,7 +38,7 @@ pub(crate) struct JindoParametersV1 {
 
 /// The only native Jindo parameter profile compiled for the first release.
 pub(crate) const JINDO_PARAMETERS_V1: JindoParametersV1 = JindoParametersV1 {
-    max_batch_size: 4,
+    max_batch_size: JINDO_MAX_BATCH_SIZE_V1,
     rows: 17,
     columns: 1,
     inner_msis_rank: 15,
@@ -58,12 +60,12 @@ pub const JINDO_PARAMETER_MANIFEST_V1: &[u8] = b"iroha-jindo-v0|paper=eprint-202
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::privacy_engines::jindo::{
+    use super::super::{
         JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1, JINDO_MAX_COEFFICIENTS_V1,
         JINDO_RING_DEGREE_V1,
         ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1},
     };
+    use super::*;
 
     #[test]
     fn fixed_matrix_shape_covers_exactly_256_coefficients() {
@@ -91,7 +93,7 @@ mod tests {
     #[test]
     fn all_profile_counts_and_bounds_are_nonzero_and_bounded() {
         let profile = JINDO_PARAMETERS_V1;
-        assert!((1..=4).contains(&profile.max_batch_size));
+        assert_eq!(profile.max_batch_size, JINDO_MAX_BATCH_SIZE_V1);
         assert_eq!(profile.inner_msis_rank * (profile.columns + 1), 30);
         assert!(profile.outer_msis_rank > 0);
         assert!(profile.mlwe_rank > profile.inner_msis_rank);

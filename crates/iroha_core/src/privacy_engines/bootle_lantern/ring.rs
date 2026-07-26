@@ -7,6 +7,7 @@
 //! have identical overflow behavior.
 
 use thiserror::Error;
+use zeroize::Zeroize;
 
 use super::params::{APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1, PROOF_MODULUS_V1};
 
@@ -59,6 +60,20 @@ impl ApplicationPolynomialV1 {
         Ok(Self { coefficients })
     }
 
+    /// Construct from the unique centered integer lift of each coefficient.
+    #[must_use]
+    pub fn from_centered_coefficients(coefficients: [i64; APPLICATION_RING_DEGREE_V1]) -> Self {
+        let modulus = i64::from(APPLICATION_MODULUS_V1);
+        let mut output = [0_u16; APPLICATION_RING_DEGREE_V1];
+        for (output, coefficient) in output.iter_mut().zip(coefficients) {
+            let residue = coefficient.rem_euclid(modulus);
+            *output = u16::try_from(residue).expect("reduced application residue fits u16");
+        }
+        Self {
+            coefficients: output,
+        }
+    }
+
     /// Encode one direct 64-bit attribute as little-endian binary
     /// coefficients.
     #[must_use]
@@ -94,6 +109,14 @@ impl ApplicationPolynomialV1 {
     #[must_use]
     pub const fn coefficients(&self) -> &[u16; APPLICATION_RING_DEGREE_V1] {
         &self.coefficients
+    }
+
+    /// Return whether this polynomial is the additive identity.
+    #[must_use]
+    pub fn is_zero(&self) -> bool {
+        self.coefficients
+            .iter()
+            .all(|coefficient| *coefficient == 0)
     }
 
     /// Add in the application ring.
@@ -161,6 +184,41 @@ impl ApplicationPolynomialV1 {
         }
     }
 
+    /// Multiply by a signed integer in the application ring.
+    #[must_use]
+    pub fn scale_centered(self, scalar: i64) -> Self {
+        let scalar = scalar.rem_euclid(i64::from(APPLICATION_MODULUS_V1));
+        let scalar = u16::try_from(scalar).expect("reduced application scalar fits u16");
+        let mut output = [0_u16; APPLICATION_RING_DEGREE_V1];
+        for (output, coefficient) in output.iter_mut().zip(self.coefficients) {
+            *output = u16::try_from(
+                u32::from(coefficient) * u32::from(scalar) % u32::from(APPLICATION_MODULUS_V1),
+            )
+            .expect("reduced application residue fits u16");
+        }
+        Self {
+            coefficients: output,
+        }
+    }
+
+    /// Apply the involution `X -> X^-1` in the negacyclic ring.
+    #[must_use]
+    pub fn automorphism(self) -> Self {
+        let mut output = [0_u16; APPLICATION_RING_DEGREE_V1];
+        output[0] = self.coefficients[0];
+        for index in 1..APPLICATION_RING_DEGREE_V1 {
+            let coefficient = self.coefficients[APPLICATION_RING_DEGREE_V1 - index];
+            output[index] = if coefficient == 0 {
+                0
+            } else {
+                APPLICATION_MODULUS_V1 - coefficient
+            };
+        }
+        Self {
+            coefficients: output,
+        }
+    }
+
     /// Return a centered coefficient in `[-6144, 6144]`.
     #[must_use]
     pub fn centered_coefficient(&self, index: usize) -> i16 {
@@ -184,6 +242,12 @@ impl ApplicationPolynomialV1 {
                 u64::try_from(coefficient * coefficient).expect("square is non-negative")
             })
             .sum()
+    }
+}
+
+impl Zeroize for ApplicationPolynomialV1 {
+    fn zeroize(&mut self) {
+        self.coefficients.zeroize();
     }
 }
 
@@ -237,10 +301,48 @@ impl ProofPolynomialV1 {
         Ok(Self { coefficients })
     }
 
+    /// Construct a constant polynomial from any centered integer.
+    #[must_use]
+    pub fn constant_centered(constant: i64) -> Self {
+        let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
+        coefficients[0] = canonicalize_i128(i128::from(constant), PROOF_MODULUS_V1);
+        Self { coefficients }
+    }
+
+    /// Construct from arbitrary centered integer coefficients.
+    #[must_use]
+    pub fn from_centered_coefficients(coefficients: [i64; APPLICATION_RING_DEGREE_V1]) -> Self {
+        let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
+        for (output, coefficient) in output.iter_mut().zip(coefficients) {
+            *output = canonicalize_i128(i128::from(coefficient), PROOF_MODULUS_V1);
+        }
+        Self {
+            coefficients: output,
+        }
+    }
+
+    /// Embed one application-ring polynomial through its centered lift.
+    #[must_use]
+    pub fn from_application_centered(polynomial: ApplicationPolynomialV1) -> Self {
+        let mut coefficients = [0_i64; APPLICATION_RING_DEGREE_V1];
+        for (index, coefficient) in coefficients.iter_mut().enumerate() {
+            *coefficient = i64::from(polynomial.centered_coefficient(index));
+        }
+        Self::from_centered_coefficients(coefficients)
+    }
+
     /// Borrow canonical residues.
     #[must_use]
     pub const fn coefficients(&self) -> &[u64; APPLICATION_RING_DEGREE_V1] {
         &self.coefficients
+    }
+
+    /// Return whether this polynomial is the additive identity.
+    #[must_use]
+    pub fn is_zero(&self) -> bool {
+        self.coefficients
+            .iter()
+            .all(|coefficient| *coefficient == 0)
     }
 
     /// Add in the internal proof ring.
@@ -307,6 +409,63 @@ impl ProofPolynomialV1 {
         }
     }
 
+    /// Multiply by a signed integer in the proof ring.
+    #[must_use]
+    pub fn scale_centered(self, scalar: i64) -> Self {
+        let scalar = canonicalize_i128(i128::from(scalar), PROOF_MODULUS_V1);
+        let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
+        for (output, coefficient) in output.iter_mut().zip(self.coefficients) {
+            *output = u64::try_from(
+                u128::from(coefficient) * u128::from(scalar) % u128::from(PROOF_MODULUS_V1),
+            )
+            .expect("reduced proof residue fits u64");
+        }
+        Self {
+            coefficients: output,
+        }
+    }
+
+    /// Apply the involution `X -> X^-1` in the negacyclic ring.
+    #[must_use]
+    pub fn automorphism(self) -> Self {
+        let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
+        output[0] = self.coefficients[0];
+        for index in 1..APPLICATION_RING_DEGREE_V1 {
+            let coefficient = self.coefficients[APPLICATION_RING_DEGREE_V1 - index];
+            output[index] = if coefficient == 0 {
+                0
+            } else {
+                PROOF_MODULUS_V1 - coefficient
+            };
+        }
+        Self {
+            coefficients: output,
+        }
+    }
+
+    /// Multiply by `X^power` modulo `X^64 + 1`.
+    #[must_use]
+    pub fn multiply_by_monomial(self, power: usize) -> Self {
+        let reduced_power = power % (2 * APPLICATION_RING_DEGREE_V1);
+        if reduced_power == 0 {
+            return self;
+        }
+        let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
+        for (index, coefficient) in self.coefficients.iter().copied().enumerate() {
+            let degree = index + reduced_power;
+            let wraps = degree / APPLICATION_RING_DEGREE_V1;
+            let destination = degree % APPLICATION_RING_DEGREE_V1;
+            output[destination] = if wraps % 2 == 0 || coefficient == 0 {
+                coefficient
+            } else {
+                PROOF_MODULUS_V1 - coefficient
+            };
+        }
+        Self {
+            coefficients: output,
+        }
+    }
+
     /// Return a centered coefficient in `[-floor(q/2), floor(q/2)]`.
     #[must_use]
     pub fn centered_coefficient(&self, index: usize) -> i64 {
@@ -331,6 +490,21 @@ impl ProofPolynomialV1 {
             })
             .sum()
     }
+}
+
+impl Zeroize for ProofPolynomialV1 {
+    fn zeroize(&mut self) {
+        self.coefficients.zeroize();
+    }
+}
+
+fn canonicalize_i128(value: i128, modulus: u64) -> u64 {
+    let modulus = i128::from(modulus);
+    let mut residue = value % modulus;
+    if residue < 0 {
+        residue += modulus;
+    }
+    u64::try_from(residue).expect("canonical residue fits u64")
 }
 
 fn add_mod_u16(lhs: u16, rhs: u16, modulus: u16) -> u16 {
