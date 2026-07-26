@@ -2663,7 +2663,7 @@ fn parse_commitment_hex(value: &str) -> Result<[u8; 32]> {
 
 fn vk_backend_tag_from_label(label: &str) -> Result<iroha::data_model::zk::BackendTag> {
     iroha_core::zk::verifier_backend_registry_tag_v1(label)
-        .ok_or_else(|| eyre!("unsupported generic OpenVerify backend `{label}`"))
+        .ok_or_else(|| eyre::eyre!("unsupported generic OpenVerify backend `{label}`"))
 }
 
 const DEFAULT_VK_NAMESPACE: &str = "core";
