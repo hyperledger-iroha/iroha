@@ -63633,6 +63633,7 @@ pub(crate) mod deserialize {
                 })?;
             world
                 .privacy_consensus_policy
+                .view()
                 .get()
                 .validate_at_committed_height(committed_height)
                 .map_err(|error| json::Error::InvalidField {
@@ -64694,7 +64695,7 @@ pub(crate) mod deserialize {
             crate::privacy_state::PrivacyRootHeadRecordV1,
         > = take_required(&mut map, "privacy_root_heads")?;
         crate::privacy_state::validate_privacy_persisted_state_v1(
-            privacy_consensus_policy.get(),
+            privacy_consensus_policy.view().get(),
             &privacy_activations.view(),
             &privacy_pgc_accounts.view(),
             &privacy_pgc_pool_invariants.view(),

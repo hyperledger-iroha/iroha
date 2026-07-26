@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
     AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
-    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
-    PrivacyAssuranceV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
+    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PrivacyAssuranceV1, PrivacyEngineIdV1,
+    PrivacyEngineManifestDigestV1,
     PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
     PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
     PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1,
@@ -737,7 +737,10 @@ pub enum CompiledPrivacyProfileValidationErrorV1 {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::privacy::{AnonymousPgcActivationLimitsV1, PrivacyProposedLifecycleV1};
+    use iroha_data_model::privacy::{
+        AnonymousPgcActivationLimitsV1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+        PrivacyProposedLifecycleV1,
+    };
     use iroha_schema::{Declaration, MetaMap, NamedFieldsMeta, TypeId};
 
     use super::*;

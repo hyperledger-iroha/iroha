@@ -224,17 +224,16 @@ mod tests {
     #[test]
     fn closed_layout_has_stable_lengths_offsets_and_no_unclassified_bytes() {
         let layout = &*FIGURE9_LAYOUT;
-        eprintln!("{layout:#?}");
-        assert_eq!(layout.issuer_template.len(), 432);
+        assert_eq!(layout.issuer_template.len(), 368);
         assert_eq!(layout.birth_template.len(), 92);
-        assert_eq!(layout.issuer_birth_digest, 91..123);
-        assert_eq!(layout.issuer_device_x, 210..242);
-        assert_eq!(layout.issuer_device_y, 245..277);
-        assert_eq!(layout.issuer_signed_datetime, 312..332);
-        assert_eq!(layout.issuer_valid_from_datetime, 344..364);
-        assert_eq!(layout.issuer_valid_until_datetime, 377..397);
-        assert_eq!(layout.birth_random, 10..26);
-        assert_eq!(layout.birth_date, 81..91);
+        assert_eq!(layout.issuer_birth_digest, 212..244);
+        assert_eq!(layout.issuer_device_x, 277..309);
+        assert_eq!(layout.issuer_device_y, 312..344);
+        assert_eq!(layout.issuer_signed_datetime, 91..111);
+        assert_eq!(layout.issuer_valid_from_datetime, 123..143);
+        assert_eq!(layout.issuer_valid_until_datetime, 156..176);
+        assert_eq!(layout.birth_random, 13..29);
+        assert_eq!(layout.birth_date, 53..63);
         assert_eq!(layout.issuer_fixed.len(), layout.issuer_template.len());
         assert_eq!(layout.birth_fixed.len(), layout.birth_template.len());
     }

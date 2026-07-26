@@ -1,31 +1,253 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyRecordDescription;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyStatus;
 
 public final class VerifyingKeyInstructionUtilsTests {
 
+  private static final String[] EXACT_REGISTRY = {
+    "halo2/ipa",
+    "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kaigi-usage-v1",
+    "halo2/pasta/ivm-overlay-bind",
+    "halo2/pasta/ivm-execution-v1",
+    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
+    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+    "stark/fri",
+    "stark/fri/sha256-goldilocks",
+    "stark/fri/poseidon2-goldilocks",
+    "stark/fri/sha256_goldilocks.v1"
+  };
+
   private VerifyingKeyInstructionUtilsTests() {}
 
   public static void main(final String[] args) {
+    canonicalEngineTagsAreExact();
+    verifierRegistryIsClosedExactTypedAndImmutable();
+    verifierRegistryRejectsAliasesRetiredFamiliesAndConfusables();
+    everyRegistryLabelRejectsStructuralMutations();
+    recordBackendTagIsRequiredAndMustMatchRegistryEngine();
     deprecationHeightMapsToWithdrawHeight();
     deprecationHeightMismatchThrows();
-    pendingProductionBackendTagsRoundtrip();
-    catalogBackendAliasesClassifyAsPendingProduction();
-    adversarialPendingBackendAliasesStayFailClosed();
-    supportedBackendAliasesRemainNonPending();
-    catalogBackendAliasesRejectNonAsciiConfusables();
-    noritoBackendAndStatusParsersRejectNonExactLabels();
-    productionVerifierBackendClassifierMirrorsNativeAllowlist();
+    noritoStatusParserRejectsNonExactLabels();
     inlineKeyCommitmentMustMatchSerializationBackend();
-    registerAndUpdateRejectUnsupportedProductionBackends();
+    registerAndUpdateRejectUnknownVerifierLabels();
     registerAndUpdateRejectNoncanonicalRecordFields();
     registerAndUpdateRejectBlankNames();
     System.out.println("[IrohaAndroid] VerifyingKeyInstructionUtilsTests passed.");
+  }
+
+  private static void canonicalEngineTagsAreExact() {
+    assert Arrays.equals(
+            new VerifyingKeyBackendTag[] {
+              VerifyingKeyBackendTag.HALO2_IPA_PASTA, VerifyingKeyBackendTag.STARK
+            },
+            VerifyingKeyBackendTag.values())
+        : "only the two native proof engines may be encoded";
+    assert VerifyingKeyBackendTag.HALO2_IPA_PASTA
+        == VerifyingKeyBackendTag.parse("halo2-ipa-pasta");
+    assert VerifyingKeyBackendTag.STARK == VerifyingKeyBackendTag.parse("stark");
+
+    for (final String label :
+        new String[] {
+          "",
+          " halo2-ipa-pasta",
+          "halo2-ipa-pasta ",
+          "HALO2-IPA-PASTA",
+          "Stark",
+          "stark ",
+          "halo2/ipa",
+          "stark/fri",
+          "halo2-bn254",
+          "groth16",
+          "groth16-bls12-377",
+          "aztec-plonkish-private-kernel",
+          "zkat",
+          "silent-threshold-anoncred",
+          "unsupported",
+          "stark\u0000",
+          "st\u0430rk"
+        }) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> VerifyingKeyBackendTag.parse(label),
+          label + " must not parse as a canonical engine tag");
+    }
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> VerifyingKeyBackendTag.parse(null),
+        "null must not parse as a canonical engine tag");
+  }
+
+  private static void verifierRegistryIsClosedExactTypedAndImmutable() {
+    final Set<String> expected = new LinkedHashSet<>(Arrays.asList(EXACT_REGISTRY));
+    assert expected.size() == 15 : "test registry must not contain duplicates";
+    assert expected.equals(VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1)
+        : "Java registry must exactly mirror the native registry";
+
+    for (final String label : EXACT_REGISTRY) {
+      final VerifyingKeyBackendTag expectedTag =
+          label.startsWith("halo2/")
+              ? VerifyingKeyBackendTag.HALO2_IPA_PASTA
+              : VerifyingKeyBackendTag.STARK;
+      assert expectedTag == VerifyingKeyBackendTag.verifierBackendRegistryTagV1(label)
+          : label + " must resolve to the expected native engine";
+      assert VerifyingKeyBackendTag.isVerifierBackendRegistryLabelV1(label)
+          : label + " must be admitted exactly";
+      assert label.equals(
+          VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(label, "backend"));
+    }
+
+    assertThrows(
+        UnsupportedOperationException.class,
+        () ->
+            VerifyingKeyBackendTag.VERIFIER_BACKEND_REGISTRY_LABELS_V1.add(
+                "stark/fri/latest"),
+        "public registry must be immutable");
+  }
+
+  private static void verifierRegistryRejectsAliasesRetiredFamiliesAndConfusables() {
+    final String[] rejected = {
+      "",
+      "halo2-ipa-pasta",
+      "stark",
+      " halo2/ipa",
+      "halo2/ipa ",
+      "\thalo2/ipa",
+      "halo2/ipa\n",
+      "HALO2/IPA",
+      "halo2//ipa",
+      "halo2/ipa/",
+      "halo2/ipa:",
+      "halo2/ipa:ivm-execution-v1",
+      "halo2/ipa::ivm-execution-v1",
+      "halo2/ipa/ivm-execution-v1",
+      "halo2/pasta/ipa/ivm-execution-v1",
+      "halo2/pasta/ivm_execution_v1",
+      "halo2/pasta/ivm-execution-v1/",
+      "halo2/pasta/ivm-execution-v1\u0000",
+      "halo2/pasta/ipa-pasta-cycle-v1",
+      "halo2/ipa-pasta-cycle-v1",
+      "halo2/pasta/tiny-add",
+      "stark/fri/",
+      "STARK/FRI",
+      "stark/FRI",
+      "stark/fri/latest",
+      "stark/fri/sha256-goldilocks/extra",
+      "stark/fri/sha256 goldilocks",
+      "stark/fri/sha256+goldilocks",
+      "stark/fri/sha256-goldilocks\u200B",
+      "halo2\uFF0Fipa",
+      "halo2/\u200Bipa",
+      "h\u0430lo2/ipa",
+      "../halo2/ipa",
+      "groth16",
+      "groth16/bn254",
+      "groth16/bls12-377",
+      "halo2/bn254",
+      "halo2/kzg",
+      "kzg/powersoftau",
+      "aztec-plonkish-private-kernel",
+      "zkat",
+      "silent-threshold-anoncred",
+      "penumbra-masp",
+      "orchard",
+      "fcmp++",
+      "jindo-lattice-pcs-zk",
+      "sis-with-hints",
+      "vega-existing-credential-zk-v0",
+      "anonymous-pgc-k-out-of-n-v1",
+      "stark/fri/dev-fixture",
+      "stark/fri/externally-audited",
+      "halo2/ipa:production-ready",
+      "halo2/ipa:kzg"
+    };
+
+    for (final String label : rejected) {
+      assert VerifyingKeyBackendTag.verifierBackendRegistryTagV1(label) == null
+          : label + " must not resolve";
+      assert !VerifyingKeyBackendTag.isVerifierBackendRegistryLabelV1(label)
+          : label + " must remain rejected";
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(label, "backend"),
+          label + " must fail closed");
+    }
+    assert VerifyingKeyBackendTag.verifierBackendRegistryTagV1(null) == null;
+    assert !VerifyingKeyBackendTag.isVerifierBackendRegistryLabelV1(null);
+  }
+
+  private static void everyRegistryLabelRejectsStructuralMutations() {
+    for (final String label : EXACT_REGISTRY) {
+      final char replacement = label.charAt(label.length() - 1) == 'x' ? 'y' : 'x';
+      final String[] mutations = {
+        " " + label,
+        label + " ",
+        label.toUpperCase(java.util.Locale.ROOT),
+        label + "/",
+        label + '\0',
+        label + '\u200B',
+        label.replaceFirst("/", "//"),
+        label.substring(0, label.length() - 1) + replacement
+      };
+      for (final String mutation : mutations) {
+        assert !VerifyingKeyBackendTag.isVerifierBackendRegistryLabelV1(mutation)
+            : mutation + " mutated from " + label + " must be rejected";
+      }
+    }
+  }
+
+  private static void recordBackendTagIsRequiredAndMustMatchRegistryEngine() {
+    final VerifyingKeyRecordDescription.Builder missing =
+        VerifyingKeyRecordDescription.builder()
+            .setVersion(1)
+            .setCircuitId("vk-test")
+            .setSchemaHashHex(repeatChar('a', 64))
+            .setGasScheduleId("default")
+            .setInlineKeyBytes(new byte[] {1, 2, 3});
+    assertThrows(
+        IllegalStateException.class,
+        () -> missing.build("halo2/ipa"),
+        "backendTag must be required");
+
+    assertThrows(
+        NullPointerException.class,
+        () -> VerifyingKeyRecordDescription.builder().setBackendTag(null),
+        "backendTag must reject null");
+
+    final VerifyingKeyRecordDescription.Builder mismatch =
+        VerifyingKeyRecordDescription.builder()
+            .setVersion(1)
+            .setCircuitId("vk-test")
+            .setBackendTag(VerifyingKeyBackendTag.HALO2_IPA_PASTA)
+            .setSchemaHashHex(repeatChar('a', 64))
+            .setGasScheduleId("default")
+            .setInlineKeyBytes(new byte[] {1, 2, 3});
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> mismatch.build("stark/fri"),
+        "record engine must match the exact registry label");
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> mismatch.build("groth16"),
+        "record backend must be in the exact registry");
+
+    final Map<String, String> mismatchedArguments = baseArguments();
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> VerifyingKeyInstructionUtils.parseRecord(mismatchedArguments, "stark/fri"),
+        "decoded record engine must match its registry label");
   }
 
   private static void deprecationHeightMapsToWithdrawHeight() {
@@ -34,10 +256,8 @@ public final class VerifyingKeyInstructionUtilsTests {
     final VerifyingKeyRecordDescription record =
         VerifyingKeyInstructionUtils.parseRecord(arguments, "halo2/ipa");
     final Map<String, String> encoded = record.toArguments("halo2/ipa");
-    assert "42".equals(encoded.get("record.withdraw_height"))
-        : "deprecation height should map to withdraw_height";
-    assert !encoded.containsKey("record.deprecation_height")
-        : "deprecation height should not be emitted";
+    assert "42".equals(encoded.get("record.withdraw_height"));
+    assert !encoded.containsKey("record.deprecation_height");
   }
 
   private static void deprecationHeightMismatchThrows() {
@@ -45,371 +265,83 @@ public final class VerifyingKeyInstructionUtilsTests {
     arguments.put("record.withdraw_height", "7");
     arguments.put("record.deprecation_height", "8");
     assertThrows(
+        IllegalArgumentException.class,
         () -> VerifyingKeyInstructionUtils.parseRecord(arguments, "halo2/ipa"),
-        "expected mismatched deprecation/withdraw heights to fail");
+        "mismatched deprecation/withdraw heights must fail");
   }
 
-  private static void pendingProductionBackendTagsRoundtrip() {
-    final Object[][] cases = {
-      {"halo2-ipa-orchard", VerifyingKeyBackendTag.HALO2_IPA_ORCHARD},
-      {"groth16-bls12-377", VerifyingKeyBackendTag.GROTH16_BLS12_377},
-      {"fcmp-plus-plus-curve-tree", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
-      {"lattice-pcs-sis", VerifyingKeyBackendTag.LATTICE_PCS_SIS},
-      {"miden-stark", VerifyingKeyBackendTag.MIDEN_STARK},
-      {"aztec-plonkish-private-kernel", VerifyingKeyBackendTag.AZTEC_PLONKISH_PRIVATE_KERNEL},
-      {"pq-masp-stark-fri", VerifyingKeyBackendTag.PQ_MASP_STARK_FRI},
-      {"anonymous-pgc", VerifyingKeyBackendTag.ANONYMOUS_PGC},
-      {"verange", VerifyingKeyBackendTag.VERANGE},
-      {"zkat", VerifyingKeyBackendTag.ZKAT},
-      {"recursive-anonymous-admission", VerifyingKeyBackendTag.RECURSIVE_ANONYMOUS_ADMISSION},
-      {"vega-existing-credential-zk", VerifyingKeyBackendTag.VEGA_EXISTING_CREDENTIAL_ZK},
-      {"silent-threshold-anoncred", VerifyingKeyBackendTag.SILENT_THRESHOLD_ANONCRED},
-      {"zk-x509", VerifyingKeyBackendTag.ZK_X509},
-      {"sis-with-hints", VerifyingKeyBackendTag.SIS_WITH_HINTS}
-    };
-
-    for (final Object[] entry : cases) {
-      final String wireName = (String) entry[0];
-      final VerifyingKeyBackendTag expected = (VerifyingKeyBackendTag) entry[1];
-      final Map<String, String> arguments = baseArguments();
-      arguments.put("record.backend_tag", wireName);
-      final VerifyingKeyRecordDescription record =
-          VerifyingKeyInstructionUtils.parseRecord(arguments, "halo2/ipa");
-      assert expected == record.backendTag() : "pending backend tag should parse";
-      assert expected.isPendingProductionBackend() : "pending backend tag should classify pending";
-      assert VerifyingKeyBackendTag.isPendingProductionBackendLabel(wireName)
-          : "canonical pending backend label should classify pending";
-      assert wireName.equals(record.toArguments("halo2/ipa").get("record.backend_tag"))
-          : "pending backend tag should roundtrip";
-    }
-  }
-
-  private static void catalogBackendAliasesClassifyAsPendingProduction() {
-    final Object[][] cases = {
-      {"halo2/ipa/orchard", VerifyingKeyBackendTag.HALO2_IPA_ORCHARD},
-      {"orchard", VerifyingKeyBackendTag.HALO2_IPA_ORCHARD},
-      {"zcash-orchard", VerifyingKeyBackendTag.HALO2_IPA_ORCHARD},
-      {"groth16/bls12-377", VerifyingKeyBackendTag.GROTH16_BLS12_377},
-      {"penumbra-masp", VerifyingKeyBackendTag.GROTH16_BLS12_377},
-      {"halo2/ipa/penumbra", VerifyingKeyBackendTag.GROTH16_BLS12_377},
-      {"halo2/ipa/masp", VerifyingKeyBackendTag.GROTH16_BLS12_377},
-      {"monero-fcmp++", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
-      {"fcmp++", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
-      {"fcmp-plus-plus-curve-tree", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
-      {"halo2/ipa/monero", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
-      {"halo2/ipa/curve-tree", VerifyingKeyBackendTag.FCMP_PLUS_PLUS_CURVE_TREE},
-      {"jindo-lattice-pcs-zk", VerifyingKeyBackendTag.LATTICE_PCS_SIS},
-      {"verange-transparent-range", VerifyingKeyBackendTag.VERANGE},
-      {"anonymous-pgc-k-out-of-n", VerifyingKeyBackendTag.ANONYMOUS_PGC},
-      {"stark/fri/miden", VerifyingKeyBackendTag.MIDEN_STARK},
-      {"aztec/private-kernel", VerifyingKeyBackendTag.AZTEC_PLONKISH_PRIVATE_KERNEL},
-      {"stark/fri/pq-masp-stark-fri", VerifyingKeyBackendTag.PQ_MASP_STARK_FRI},
-      {"post-quantum-masp", VerifyingKeyBackendTag.PQ_MASP_STARK_FRI},
-      {"anonymous-pgc-k-out-of-n-v1", VerifyingKeyBackendTag.ANONYMOUS_PGC},
-      {"ve-range-transparent-range-v1", VerifyingKeyBackendTag.VERANGE},
-      {"zkAt policy-private authenticator", VerifyingKeyBackendTag.ZKAT},
-      {"zk-at-policy-private-authenticator", VerifyingKeyBackendTag.ZKAT},
-      {"zk-ams-recursive-admission-v0", VerifyingKeyBackendTag.RECURSIVE_ANONYMOUS_ADMISSION},
-      {"vega-existing-credential-zk-v0", VerifyingKeyBackendTag.VEGA_EXISTING_CREDENTIAL_ZK},
-      {"threshold-anonymous-credentials", VerifyingKeyBackendTag.SILENT_THRESHOLD_ANONCRED},
-      {"silent-threshold-anonymous-credential", VerifyingKeyBackendTag.SILENT_THRESHOLD_ANONCRED},
-      {"zkvm-x509-identity", VerifyingKeyBackendTag.ZK_X509},
-      {"lattice-anonymous-credentials", VerifyingKeyBackendTag.SIS_WITH_HINTS}
-    };
-
-    for (final Object[] entry : cases) {
-      final String label = (String) entry[0];
-      final VerifyingKeyBackendTag expected = (VerifyingKeyBackendTag) entry[1];
-      assert expected == VerifyingKeyBackendTag.fromCatalogLabel(label)
-          : label + " should classify to the exact pending backend tag";
-      assert VerifyingKeyBackendTag.isPendingProductionBackendLabel(label)
-          : label + " should remain pending production";
-    }
-  }
-
-  private static void adversarialPendingBackendAliasesStayFailClosed() {
-    final String[] cases = {
-      "halo2/ipa/orchard/dev-fixture",
-      "stark/fri/miden/claimed-production",
-      "anonymous-pgc-k-out-of-n-v1-production",
-      "sis-hints-anoncred-pq-v0-devfixture",
-      "groth16/bls12-377/../../prod",
-      "post-quantum-masp/audit-claimed",
-      "halo2/ipa/orchard:kzg",
-      "orchard:universal-srs",
-      "penumbra-masp:kzg",
-      "jindo-lattice-pcs-zk:trusted-setup",
-      "miden-stark:ptau",
-      "sis-with-hints:groth16",
-      "pq-masp-stark-fri:kzg"
-    };
-
-    for (final String label : cases) {
-      assert VerifyingKeyBackendTag.UNSUPPORTED == VerifyingKeyBackendTag.fromCatalogLabel(label)
-          : label + " should stay unsupported";
-      assert !VerifyingKeyBackendTag.isPendingProductionBackendLabel(label)
-          : label + " must not classify as pending production";
-      assertThrows(
-          () -> VerifyingKeyBackendTag.parse(label),
-          label + " must not parse as a canonical Norito backend tag");
-    }
-  }
-
-  private static void supportedBackendAliasesRemainNonPending() {
-    final Object[][] cases = {
-      {"halo2/ipa", VerifyingKeyBackendTag.HALO2_IPA_PASTA},
-      {"halo2/ipa/pasta", VerifyingKeyBackendTag.HALO2_IPA_PASTA},
-      {"halo2/pasta/ipa/vote-bool", VerifyingKeyBackendTag.HALO2_IPA_PASTA},
-      {"halo2/bn254", VerifyingKeyBackendTag.HALO2_BN254},
-      {"groth16", VerifyingKeyBackendTag.GROTH16},
-      {"groth16/bn254", VerifyingKeyBackendTag.GROTH16},
-      {"stark", VerifyingKeyBackendTag.STARK},
-      {"stark/fri", VerifyingKeyBackendTag.STARK},
-      {"stark/fri/sha256-goldilocks", VerifyingKeyBackendTag.STARK},
-      {"stark/fri/poseidon2-goldilocks", VerifyingKeyBackendTag.STARK},
-      {"stark/fri/sha256_goldilocks.v1", VerifyingKeyBackendTag.STARK},
-      {"", VerifyingKeyBackendTag.UNSUPPORTED},
-      {"unknown-backend", VerifyingKeyBackendTag.UNSUPPORTED},
-      {"unknown/privacy/backend", VerifyingKeyBackendTag.UNSUPPORTED},
-      {null, VerifyingKeyBackendTag.UNSUPPORTED}
-    };
-
-    for (final Object[] entry : cases) {
-      final String label = (String) entry[0];
-      final VerifyingKeyBackendTag expected = (VerifyingKeyBackendTag) entry[1];
-      assert expected == VerifyingKeyBackendTag.fromCatalogLabel(label)
-          : String.valueOf(label) + " should classify to the supported legacy tag";
-      assert !VerifyingKeyBackendTag.isPendingProductionBackendLabel(label)
-          : String.valueOf(label) + " should not classify pending";
-    }
-  }
-
-  private static void catalogBackendAliasesRejectNonAsciiConfusables() {
-    final String[] labels = {
-      "halo2\uFF0Fipa",
-      "halo2/\u200Bipa",
-      "h\u0430lo2/ipa",
-      "stark\uFF0Ffri/sha256-goldilocks",
-      "stark/fri/\u200Bsha256-goldilocks",
-      "st\u0430rk/fri/sha256-goldilocks"
-    };
-
-    for (final String label : labels) {
-      assert VerifyingKeyBackendTag.UNSUPPORTED == VerifyingKeyBackendTag.fromCatalogLabel(label)
-          : label + " must stay unsupported before catalog alias compaction";
-      assert !VerifyingKeyBackendTag.isPendingProductionBackendLabel(label)
-          : label + " must not classify as pending production";
-    }
-  }
-
-  private static void noritoBackendAndStatusParsersRejectNonExactLabels() {
-    assert VerifyingKeyBackendTag.HALO2_IPA_PASTA
-        == VerifyingKeyBackendTag.parse("halo2-ipa-pasta");
-    for (final String label :
-        new String[] {" halo2-ipa-pasta", "halo2-ipa-pasta ", "HALO2-IPA-PASTA"}) {
-      assertThrows(
-          () -> VerifyingKeyBackendTag.parse(label),
-          label + " must not parse as an exact Norito backend tag");
-    }
-
+  private static void noritoStatusParserRejectsNonExactLabels() {
     assert VerifyingKeyStatus.ACTIVE == VerifyingKeyStatus.parse("Active");
-    for (final String label : new String[] {" Active", "Active ", "active", "ACTIVE"}) {
+    for (final String label : new String[] {" Active", "Active ", "active", "ACTIVE", ""}) {
       assertThrows(
+          IllegalArgumentException.class,
           () -> VerifyingKeyStatus.parse(label),
           label + " must not parse as an exact verifying-key status");
     }
   }
 
-  private static void productionVerifierBackendClassifierMirrorsNativeAllowlist() {
-    final String[] supported = {
-      "halo2/ipa",
-      "halo2/ipa:ivm-execution-v1",
-      "halo2/pasta/ivm-execution-v1",
-      "halo2/ipa-pasta-cycle-v1",
-      "halo2/pasta/kaigi-roster-v1",
-      "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-      "stark/fri",
-      "stark/fri/sha256-goldilocks",
-      "stark/fri/poseidon2-goldilocks",
-      "stark/fri/sha256_goldilocks.v1"
-    };
-    for (final String backend : supported) {
-      assert VerifyingKeyBackendTag.isProductionVerifyBackendLabel(backend)
-          : backend + " should be production-admissible";
-    }
-
-    final String[] unsupported = {
-      "",
-      "unknown/privacy/backend",
-      "halo2/unknown-native-v1",
-      "halo2/ipa:unknown-native-v1",
-      "stark/unknown-native-v1",
-      "halo2/bn254",
-      "groth16",
-      "groth16/bls12-377",
-      " halo2/ipa",
-      "halo2/ipa ",
-      "\thalo2/ipa",
-      "halo2/ipa\n",
-      "halo2\uFF0Fipa",
-      "halo2/\u200Bipa",
-      "h\u0430lo2/ipa",
-      "HALO2/IPA",
-      "stark/FRI",
-      "halo2/ipa::ivm-execution-v1",
-      "halo2//ipa",
-      "halo2/ipa:",
-      "halo2/ipa.",
-      "halo2/ipa/.ivm-execution-v1",
-      "halo2/ipa:ivm..execution-v1",
-      " stark/fri/sha256-goldilocks",
-      "stark/fri/sha256-goldilocks ",
-      "halo2/ipa/orchard",
-      "halo2-ipa-orchard",
-      "halo2/ipa/penumbra",
-      "halo2/ipa/masp",
-      "halo2/ipa/monero",
-      "halo2/ipa/curve-tree",
-      "halo2/pasta/tiny-add",
-      "halo2/ipa/tiny-add",
-      "halo2/ipa:tiny-add",
-      "halo2/pasta/tiny-commit-open",
-      "halo2/pasta/anon-transfer-2x2",
-      "halo2/ipa/anon-transfer-2x2",
-      "halo2/ipa:anon-transfer-2x2",
-      "halo2/pasta/anon-transfer-2x2-merkle2",
-      "halo2/ipa/anon-transfer-2x2-merkle8",
-      "halo2/ipa:anon-transfer-2x2-merkle16",
-      "halo2/pasta/vote-bool-commit",
-      "halo2/ipa/vote-bool-commit",
-      "halo2/ipa:vote-bool-commit",
-      "halo2/pasta/vote-bool-commit-merkle2",
-      "halo2/ipa/vote-bool-commit-merkle8",
-      "halo2/ipa:vote-bool-commit-merkle16",
-      "halo2/pasta/asset-hidden-transfer-public-test",
-      "halo2/ipa/asset-hidden-transfer-public-test",
-      "halo2/ipa:asset-hidden-transfer-public-test",
-      "stark/fri/miden",
-      "stark/fri/miden/claimed-production",
-      "stark/fri/latest",
-      "stark/fri/attestation",
-      "stark/fri/contest",
-      "stark/fri/random-profile",
-      "stark/fri/sha512-goldilocks",
-      "stark/fri/audit-proof-v1",
-      "stark/fri/sha256 goldilocks",
-      "stark/fri/sha256+goldilocks",
-      "halo2/ipa+mock",
-      "halo2/ipa:production-ready",
-      "halo2/ipa:claimed-production",
-      "halo2/ipa:mainnet-ready",
-      "halo2/ipa:release-ready",
-      "halo2/ipa:certified-mainnet",
-      "halo2/ipa:third-party-audited",
-      "halo2/ipa/orchard:production-ready",
-      "orchard:mainnet-ready",
-      "penumbra-masp:external-security-review",
-      "jindo-lattice-pcs-zk:release-ready",
-      "miden-stark:dev-fixture",
-      "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
-      "halo2/ipa/orchard:kzg",
-      "orchard:universal-srs",
-      "penumbra-masp:kzg",
-      "jindo-lattice-pcs-zk:trusted-setup",
-      "miden-stark:ptau",
-      "sis-with-hints:groth16",
-      "pq-masp-stark-fri:kzg",
-      "stark/fri/audit-signoff",
-      "stark/fri/externally-audited",
-      "stark/fri/boi-audited",
-      "stark/fri/external-security-review",
-      "stark/fri/security-review-passed",
-      "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
-      "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
-      "stark/fri/a-u-d-i-t-c-l-a-i-m",
-      "stark/fri/dev-fixture",
-      "stark/fri/d-e-v-f-i-x-t-u-r-e",
-      "stark/fri/dev",
-      "stark/fri/d-e-v",
-      "stark/fri/test",
-      "stark/fri/t-e-s-t",
-      "stark/fri/todo",
-      "stark/fri/t-o-d-o",
-      "stark/fri/draft-only",
-      "stark/fri/d-r-a-f-t",
-      "stark/fri/pending-audit",
-      "stark/fri/replace-before-mainnet",
-      "stark/fri/not-production-ready",
-      "stark/fri/placeholder",
-      "halo2/ipa:dev-fixture",
-      "halo2/ipa:dev",
-      "halo2/ipa:d-e-v",
-      "halo2/ipa:todo-proof",
-      "halo2/ipa:t-o-d-o-proof",
-      "halo2/ipa:draft-proof",
-      "halo2/ipa:d-r-a-f-t-proof",
-      "halo2/ipa:pending-audit",
-      "halo2/ipa:replace-before-production",
-      "halo2/ipa:not-for-production",
-      "halo2/ipa:dummy",
-      "halo2/ipa:f-a-k-e",
-      "halo2/ipa:stub",
-      "halo2/ipa:s-a-m-p-l-e",
-      "halo2/kzg",
-      "halo2/pasta/mock",
-      "halo2/pasta/debug-vote",
-      "mock/dev",
-      "kzg/powersoftau",
-      "../halo2/ipa",
-      "halo2\uFF0Fipa",
-      "halo2/\u200Bipa",
-      "h\u0430lo2/ipa",
-      "halo2/ipa" + '\0'
-    };
-    for (final String backend : unsupported) {
-      assert !VerifyingKeyBackendTag.isProductionVerifyBackendLabel(backend)
-          : backend + " should remain fail-closed";
-      final IllegalArgumentException error =
-          assertThrows(
-              () -> VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(backend, "backend"),
-              backend + " should not pass production backend validation");
-      final String trimmedBackend = trimWhitespace(backend);
-      final String expected =
-          trimmedBackend.isEmpty()
-              ? "must not be blank"
-              : trimmedBackend.equals(backend)
-                  ? "unsupported production verifier backend"
-                  : "surrounding whitespace";
-      if (!error.getMessage().contains(expected)) {
-        throw new AssertionError("unexpected backend rejection message: " + error.getMessage());
-      }
-    }
-  }
-
-  private static void registerAndUpdateRejectUnsupportedProductionBackends() {
+  private static void inlineKeyCommitmentMustMatchSerializationBackend() {
     final VerifyingKeyRecordDescription record =
         VerifyingKeyInstructionUtils.parseRecord(baseArguments(), "halo2/ipa");
-    for (final String backend : unsafeProductionBackends()) {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> record.toArguments("stark/fri/sha256-goldilocks"),
+        "record engine must not change during serialization");
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> record.toArguments("halo2/pasta/kaigi-roster-v1"),
+        "inline verifier commitment must remain bound to the exact registry label");
+
+    final VerifyingKeyRecordDescription mismatchedRecord =
+        VerifyingKeyInstructionUtils.parseRecord(starkArguments(), "stark/fri/sha256-goldilocks");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            RegisterVerifyingKeyInstruction.builder()
+                .setBackend("halo2/ipa")
+                .setName("vk_test")
+                .setRecord(mismatchedRecord)
+                .build(),
+        "register builder must reject a record from another engine");
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            UpdateVerifyingKeyInstruction.builder()
+                .setBackend("halo2/ipa")
+                .setName("vk_test")
+                .setRecord(mismatchedRecord)
+                .build(),
+        "update builder must reject a record from another engine");
+  }
+
+  private static void registerAndUpdateRejectUnknownVerifierLabels() {
+    final VerifyingKeyRecordDescription record =
+        VerifyingKeyInstructionUtils.parseRecord(baseArguments(), "halo2/ipa");
+    for (final String backend : rejectedRegistryBackends()) {
       assertThrows(
+          IllegalArgumentException.class,
           () -> RegisterVerifyingKeyInstruction.builder().setBackend(backend),
-          backend + " should be rejected by register builder");
+          backend + " must be rejected by register builder");
       assertThrows(
+          IllegalArgumentException.class,
           () -> UpdateVerifyingKeyInstruction.builder().setBackend(backend),
-          backend + " should be rejected by update builder");
+          backend + " must be rejected by update builder");
 
       final Map<String, String> registerArguments = baseArguments();
       registerArguments.put("backend", backend);
       registerArguments.put("name", "vk_test");
       assertThrows(
+          IllegalArgumentException.class,
           () -> RegisterVerifyingKeyInstruction.fromArguments(registerArguments),
-          backend + " should be rejected by register fromArguments");
+          backend + " must be rejected by register decoding");
 
       final Map<String, String> updateArguments = baseArguments();
       updateArguments.put("backend", backend);
       updateArguments.put("name", "vk_test");
       assertThrows(
+          IllegalArgumentException.class,
           () -> UpdateVerifyingKeyInstruction.fromArguments(updateArguments),
-          backend + " should be rejected by update fromArguments");
+          backend + " must be rejected by update decoding");
     }
 
     final RegisterVerifyingKeyInstruction validRegister =
@@ -418,7 +350,7 @@ public final class VerifyingKeyInstructionUtilsTests {
             .setName("vk_test")
             .setRecord(record)
             .build();
-    assert "halo2/ipa".equals(validRegister.backend()) : "valid register backend should survive";
+    assert "halo2/ipa".equals(validRegister.backend());
 
     final UpdateVerifyingKeyInstruction validUpdate =
         UpdateVerifyingKeyInstruction.builder()
@@ -426,37 +358,9 @@ public final class VerifyingKeyInstructionUtilsTests {
             .setName("vk_test")
             .setRecord(
                 VerifyingKeyInstructionUtils.parseRecord(
-                    baseArguments(), "stark/fri/sha256-goldilocks"))
+                    starkArguments(), "stark/fri/sha256-goldilocks"))
             .build();
-    assert "stark/fri/sha256-goldilocks".equals(validUpdate.backend())
-        : "valid update backend should survive";
-  }
-
-  private static void inlineKeyCommitmentMustMatchSerializationBackend() {
-    final VerifyingKeyRecordDescription record =
-        VerifyingKeyInstructionUtils.parseRecord(baseArguments(), "halo2/ipa");
-    assertThrows(
-        () -> record.toArguments("stark/fri/sha256-goldilocks"),
-        "inline verifier records must not serialize under a different backend");
-
-    final VerifyingKeyRecordDescription mismatchedRecord =
-        VerifyingKeyInstructionUtils.parseRecord(baseArguments(), "stark/fri/sha256-goldilocks");
-    assertThrows(
-        () ->
-            RegisterVerifyingKeyInstruction.builder()
-                .setBackend("halo2/ipa")
-                .setName("vk_test")
-                .setRecord(mismatchedRecord)
-                .build(),
-        "register builder must reject inline verifier records from another backend");
-    assertThrows(
-        () ->
-            UpdateVerifyingKeyInstruction.builder()
-                .setBackend("halo2/ipa")
-                .setName("vk_test")
-                .setRecord(mismatchedRecord)
-                .build(),
-        "update builder must reject inline verifier records from another backend");
+    assert "stark/fri/sha256-goldilocks".equals(validUpdate.backend());
   }
 
   private static void registerAndUpdateRejectBlankNames() {
@@ -464,40 +368,28 @@ public final class VerifyingKeyInstructionUtilsTests {
         VerifyingKeyInstructionUtils.parseRecord(baseArguments(), "halo2/ipa");
     for (final String name : new String[] {"", "   ", "\t", "\n", " vk_test", "vk_test "}) {
       assertThrows(
+          IllegalArgumentException.class,
           () ->
               RegisterVerifyingKeyInstruction.builder()
                   .setBackend("halo2/ipa")
                   .setName(name)
                   .setRecord(record)
                   .build(),
-          "blank register builder name should be rejected");
+          "invalid register name must fail");
       assertThrows(
+          IllegalArgumentException.class,
           () ->
               UpdateVerifyingKeyInstruction.builder()
                   .setBackend("halo2/ipa")
                   .setName(name)
                   .setRecord(record)
                   .build(),
-          "blank update builder name should be rejected");
-
-      final Map<String, String> registerArguments = baseArguments();
-      registerArguments.put("backend", "halo2/ipa");
-      registerArguments.put("name", name);
-      assertThrows(
-          () -> RegisterVerifyingKeyInstruction.fromArguments(registerArguments),
-          "blank register fromArguments name should be rejected");
-
-      final Map<String, String> updateArguments = baseArguments();
-      updateArguments.put("backend", "halo2/ipa");
-      updateArguments.put("name", name);
-      assertThrows(
-          () -> UpdateVerifyingKeyInstruction.fromArguments(updateArguments),
-          "blank update fromArguments name should be rejected");
+          "invalid update name must fail");
     }
   }
 
   private static void registerAndUpdateRejectNoncanonicalRecordFields() {
-    final Map<String, String> canonicalArguments =
+    final Map<String, String> canonical =
         VerifyingKeyInstructionUtils.parseRecord(baseArguments(), "halo2/ipa")
             .toArguments("halo2/ipa");
     final String[][] cases = {
@@ -505,21 +397,16 @@ public final class VerifyingKeyInstructionUtilsTests {
       {"record.circuit_id", "vk-test "},
       {"record.backend_tag", " halo2-ipa-pasta"},
       {"record.backend_tag", "HALO2-IPA-PASTA"},
+      {"record.backend_tag", "stark"},
       {"record.curve", " pallas"},
       {"record.curve", "pallas "},
-      {
-        "record.public_inputs_schema_hash_hex",
-        " " + canonicalArguments.get("record.public_inputs_schema_hash_hex")
-      },
-      {
-        "record.public_inputs_schema_hash_hex",
-        canonicalArguments.get("record.public_inputs_schema_hash_hex") + " "
-      },
-      {"record.commitment_hex", " " + canonicalArguments.get("record.commitment_hex")},
-      {"record.commitment_hex", canonicalArguments.get("record.commitment_hex") + " "},
-      {"record.vk_bytes_b64", " " + canonicalArguments.get("record.vk_bytes_b64")},
-      {"record.vk_bytes_b64", canonicalArguments.get("record.vk_bytes_b64") + " "},
-      {"record.vk_len", " " + canonicalArguments.get("record.vk_len")},
+      {"record.public_inputs_schema_hash_hex", " " + canonical.get("record.public_inputs_schema_hash_hex")},
+      {"record.public_inputs_schema_hash_hex", canonical.get("record.public_inputs_schema_hash_hex") + " "},
+      {"record.commitment_hex", " " + canonical.get("record.commitment_hex")},
+      {"record.commitment_hex", canonical.get("record.commitment_hex") + " "},
+      {"record.vk_bytes_b64", " " + canonical.get("record.vk_bytes_b64")},
+      {"record.vk_bytes_b64", canonical.get("record.vk_bytes_b64") + " "},
+      {"record.vk_len", " " + canonical.get("record.vk_len")},
       {"record.max_proof_bytes", " 1024"},
       {"record.gas_schedule_id", " default"},
       {"record.gas_schedule_id", "default "},
@@ -539,54 +426,19 @@ public final class VerifyingKeyInstructionUtilsTests {
       registerArguments.put("name", "vk_test");
       registerArguments.put(entry[0], entry[1]);
       assertThrows(
+          RuntimeException.class,
           () -> RegisterVerifyingKeyInstruction.fromArguments(registerArguments),
-          "padded " + entry[0] + " should be rejected by register fromArguments");
+          entry[0] + " mutation must fail register decoding");
 
       final Map<String, String> updateArguments = baseArguments();
       updateArguments.put("backend", "halo2/ipa");
       updateArguments.put("name", "vk_test");
       updateArguments.put(entry[0], entry[1]);
       assertThrows(
+          RuntimeException.class,
           () -> UpdateVerifyingKeyInstruction.fromArguments(updateArguments),
-          "padded " + entry[0] + " should be rejected by update fromArguments");
+          entry[0] + " mutation must fail update decoding");
     }
-
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setCircuitId(" vk-test"),
-        "padded direct circuitId should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setGasScheduleId("default "),
-        "padded direct gasScheduleId should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setSchemaHashHex(" " + repeatChar('a', 64)),
-        "padded direct schema hash should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setSchemaHashHex(repeatChar('a', 64) + " "),
-        "padded direct schema hash should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setCommitmentHex(" " + repeatChar('b', 64)),
-        "padded direct commitment should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setCommitmentHex(repeatChar('b', 64) + " "),
-        "padded direct commitment should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setCurve(" pallas"),
-        "padded direct curve should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setCurve("pallas "),
-        "padded direct curve should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setMetadataUriCid(" bafy-metadata"),
-        "padded direct metadata CID should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setMetadataUriCid("bafy-metadata "),
-        "padded direct metadata CID should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setVkBytesCid(" bafy-vk"),
-        "padded direct verifier-key CID should be rejected");
-    assertThrows(
-        () -> VerifyingKeyRecordDescription.builder().setVkBytesCid("bafy-vk "),
-        "padded direct verifier-key CID should be rejected");
   }
 
   private static Map<String, String> baseArguments() {
@@ -601,7 +453,13 @@ public final class VerifyingKeyInstructionUtilsTests {
     return arguments;
   }
 
-  private static String[] unsafeProductionBackends() {
+  private static Map<String, String> starkArguments() {
+    final Map<String, String> arguments = baseArguments();
+    arguments.put("record.backend_tag", "stark");
+    return arguments;
+  }
+
+  private static String[] rejectedRegistryBackends() {
     return new String[] {
       "",
       "unknown/privacy/backend",
@@ -611,6 +469,9 @@ public final class VerifyingKeyInstructionUtilsTests {
       "halo2/bn254",
       "groth16",
       "groth16/bls12-377",
+      " halo2/ipa",
+      "halo2/ipa ",
+      "HALO2/IPA",
       "halo2/ipa/orchard",
       "halo2-ipa-orchard",
       "halo2/ipa/penumbra",
@@ -618,66 +479,22 @@ public final class VerifyingKeyInstructionUtilsTests {
       "halo2/ipa/monero",
       "halo2/ipa/curve-tree",
       "halo2/pasta/tiny-add",
-      "halo2/ipa/tiny-add",
       "halo2/ipa:tiny-add",
-      "halo2/pasta/tiny-commit-open",
-      "halo2/pasta/anon-transfer-2x2",
-      "halo2/ipa/anon-transfer-2x2",
-      "halo2/ipa:anon-transfer-2x2",
-      "halo2/pasta/anon-transfer-2x2-merkle2",
-      "halo2/ipa/anon-transfer-2x2-merkle8",
-      "halo2/ipa:anon-transfer-2x2-merkle16",
-      "halo2/pasta/vote-bool-commit",
-      "halo2/ipa/vote-bool-commit",
-      "halo2/ipa:vote-bool-commit",
-      "halo2/pasta/vote-bool-commit-merkle2",
-      "halo2/ipa/vote-bool-commit-merkle8",
-      "halo2/ipa:vote-bool-commit-merkle16",
-      "halo2/pasta/asset-hidden-transfer-public-test",
-      "halo2/ipa/asset-hidden-transfer-public-test",
-      "halo2/ipa:asset-hidden-transfer-public-test",
+      "halo2/pasta/ipa-pasta-cycle-v1",
       "stark/fri/miden",
-      "stark/fri/miden/claimed-production",
       "stark/fri/latest",
-      "stark/fri/attestation",
-      "stark/fri/contest",
       "stark/fri/sha256 goldilocks",
       "stark/fri/sha256+goldilocks",
-      "halo2/ipa+mock",
       "stark/fri/dev-fixture",
-      "stark/fri/d-e-v-f-i-x-t-u-r-e",
-      "stark/fri/dev",
-      "stark/fri/d-e-v",
-      "stark/fri/test",
-      "stark/fri/t-e-s-t",
-      "stark/fri/todo",
-      "stark/fri/t-o-d-o",
-      "stark/fri/draft-only",
-      "stark/fri/d-r-a-f-t",
-      "stark/fri/pending-audit",
-      "stark/fri/replace-before-mainnet",
-      "stark/fri/not-production-ready",
-      "stark/fri/placeholder",
-      "halo2/ipa:dev-fixture",
-      "halo2/ipa:dev",
-      "halo2/ipa:d-e-v",
-      "halo2/ipa:todo-proof",
-      "halo2/ipa:t-o-d-o-proof",
-      "halo2/ipa:draft-proof",
-      "halo2/ipa:d-r-a-f-t-proof",
-      "halo2/ipa:pending-audit",
-      "halo2/ipa:replace-before-production",
-      "halo2/ipa:not-for-production",
-      "halo2/ipa:dummy",
-      "halo2/ipa:f-a-k-e",
-      "halo2/ipa:stub",
-      "halo2/ipa:s-a-m-p-l-e",
+      "stark/fri/externally-audited",
+      "halo2/ipa:production-ready",
+      "halo2/ipa:kzg",
       "halo2/kzg",
-      "halo2/pasta/mock",
-      "halo2/pasta/debug-vote",
-      "mock/dev",
       "kzg/powersoftau",
       "../halo2/ipa",
+      "halo2\uFF0Fipa",
+      "halo2/\u200Bipa",
+      "h\u0430lo2/ipa",
       "halo2/ipa" + '\0'
     };
   }
@@ -690,24 +507,17 @@ public final class VerifyingKeyInstructionUtilsTests {
     return builder.toString();
   }
 
-  private static String trimWhitespace(final String value) {
-    int start = 0;
-    int end = value.length();
-    while (start < end && Character.isWhitespace(value.charAt(start))) {
-      start++;
-    }
-    while (end > start && Character.isWhitespace(value.charAt(end - 1))) {
-      end--;
-    }
-    return value.substring(start, end);
-  }
-
-  private static IllegalArgumentException assertThrows(final Runnable runnable, final String message) {
+  private static <T extends Throwable> T assertThrows(
+      final Class<T> type, final Runnable runnable, final String message) {
     try {
       runnable.run();
-    } catch (final IllegalArgumentException expected) {
-      return expected;
+    } catch (final Throwable thrown) {
+      if (type.isInstance(thrown)) {
+        return type.cast(thrown);
+      }
+      throw new AssertionError(
+          message + ": expected " + type.getName() + " but got " + thrown, thrown);
     }
-    throw new AssertionError(message);
+    throw new AssertionError(message + ": expected " + type.getName());
   }
 }

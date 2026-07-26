@@ -1464,7 +1464,7 @@ class HttpClientTransport(
         }
 
         @JvmStatic internal fun buildVerifyingKeyRegisterPayload(request: VerifyingKeyRegisterRequest): Map<String, Any> {
-            val backend = VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(request.backend, "backend")
+            val backend = VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(request.backend, "backend")
             val vkPayload = normalizeVerifierBytes(request.verifyingKeyBytes, request.verifyingKeyLength)
             val commitmentHex = normalizeOptionalHex32(request.commitmentHex, "commitmentHex")
             validateVerifyingKeyMaterial(vkPayload, commitmentHex)
@@ -1496,7 +1496,7 @@ class HttpClientTransport(
         }
 
         @JvmStatic internal fun buildVerifyingKeyUpdatePayload(request: VerifyingKeyUpdateRequest): Map<String, Any> {
-            val backend = VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(request.backend, "backend")
+            val backend = VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(request.backend, "backend")
             val vkPayload = normalizeVerifierBytes(request.verifyingKeyBytes, request.verifyingKeyLength)
             val commitmentHex = normalizeOptionalHex32(request.commitmentHex, "commitmentHex")
             validateVerifyingKeyMaterial(vkPayload, commitmentHex)

@@ -1898,13 +1898,21 @@ impl PrivacyConsensusPolicyV1 {
         committed_height: u64,
     ) -> Result<(), PrivacyPolicyValidationErrorV1> {
         self.validate()?;
-        if let Some(pending) = self.pending_tightening
-            && pending.effective_at_height <= committed_height
-        {
-            return Err(PrivacyPolicyValidationErrorV1::PendingNotFuture {
-                effective_at_height: pending.effective_at_height,
-                committed_height,
-            });
+        if let Some(pending) = self.pending_tightening {
+            if pending.scheduled_at_height > committed_height {
+                return Err(
+                    PrivacyPolicyValidationErrorV1::PendingScheduledAfterCommitted {
+                        scheduled_at_height: pending.scheduled_at_height,
+                        committed_height,
+                    },
+                );
+            }
+            if pending.effective_at_height <= committed_height {
+                return Err(PrivacyPolicyValidationErrorV1::PendingNotFuture {
+                    effective_at_height: pending.effective_at_height,
+                    committed_height,
+                });
+            }
         }
         Ok(())
     }
@@ -1968,6 +1976,16 @@ pub enum PrivacyPolicyValidationErrorV1 {
     /// Adding the minimum notice overflows the height domain.
     #[error("privacy policy schedule height overflow")]
     HeightOverflow,
+    /// A restored schedule claims admission after the snapshot it inhabits.
+    #[error(
+        "privacy policy scheduled-at height {scheduled_at_height} is after committed height {committed_height}"
+    )]
+    PendingScheduledAfterCommitted {
+        /// Persisted admission height.
+        scheduled_at_height: u64,
+        /// Latest committed height.
+        committed_height: u64,
+    },
     /// A restored state retained a schedule which is already due or missed.
     #[error(
         "privacy policy effective height {effective_at_height} is not after committed height {committed_height}"
@@ -7521,6 +7539,254 @@ mod tests {
                 "mutated limits must fail: {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn consensus_limit_tightening_is_strict_and_rejects_every_component_increase() {
+        let current = PrivacyConsensusLimitsV1 {
+            max_actions_per_transaction: 1,
+            max_actions_per_block: 1,
+            max_proof_bytes_per_action: 1_024,
+            max_action_bytes: 2_048,
+            max_privacy_bytes_per_transaction: 4_096,
+            max_privacy_bytes_per_block: 8_192,
+            max_statement_and_encrypted_output_bytes_per_transaction: 1_024,
+            max_nullifiers_per_action: 4,
+            max_commitments_per_action: 4,
+            retained_root_count: 100,
+        };
+        current.validate().expect("lower valid current profile");
+
+        assert!(matches!(
+            current.validate_tightening_to(&current),
+            Err(PrivacyConsensusLimitsTighteningErrorV1::NoChange)
+        ));
+        let mut strict = current;
+        strict.retained_root_count -= 1;
+        current
+            .validate_tightening_to(&strict)
+            .expect("one component may be lowered");
+
+        let mutations: [(
+            PrivacyLimitFieldV1,
+            fn(&mut PrivacyConsensusLimitsV1),
+        ); 10] = [
+            (
+                PrivacyLimitFieldV1::ActionsPerTransaction,
+                |value| value.max_actions_per_transaction += 1,
+            ),
+            (PrivacyLimitFieldV1::ActionsPerBlock, |value| {
+                value.max_actions_per_block += 1;
+            }),
+            (PrivacyLimitFieldV1::ProofBytesPerAction, |value| {
+                value.max_proof_bytes_per_action += 1;
+            }),
+            (PrivacyLimitFieldV1::ActionBytes, |value| {
+                value.max_action_bytes += 1;
+            }),
+            (
+                PrivacyLimitFieldV1::PrivacyBytesPerTransaction,
+                |value| value.max_privacy_bytes_per_transaction += 1,
+            ),
+            (PrivacyLimitFieldV1::PrivacyBytesPerBlock, |value| {
+                value.max_privacy_bytes_per_block += 1;
+            }),
+            (
+                PrivacyLimitFieldV1::StatementAndEncryptedOutputBytesPerTransaction,
+                |value| value.max_statement_and_encrypted_output_bytes_per_transaction += 1,
+            ),
+            (PrivacyLimitFieldV1::NullifiersPerAction, |value| {
+                value.max_nullifiers_per_action += 1;
+            }),
+            (PrivacyLimitFieldV1::CommitmentsPerAction, |value| {
+                value.max_commitments_per_action += 1;
+            }),
+            (PrivacyLimitFieldV1::RetainedRootCount, |value| {
+                value.retained_root_count += 1;
+            }),
+        ];
+        for (field, mutate) in mutations {
+            let mut candidate = current;
+            mutate(&mut candidate);
+            let error = current
+                .validate_tightening_to(&candidate)
+                .expect_err("an increased component must fail closed");
+            if field == PrivacyLimitFieldV1::ActionsPerTransaction {
+                assert!(matches!(
+                    error,
+                    PrivacyConsensusLimitsTighteningErrorV1::InvalidNext(
+                        PrivacyConsensusLimitsValidationError::ExceedsHardMaximum {
+                            field: PrivacyLimitFieldV1::ActionsPerTransaction,
+                            ..
+                        }
+                    )
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    PrivacyConsensusLimitsTighteningErrorV1::Increase {
+                        field: actual,
+                        ..
+                    } if actual == field
+                ));
+            }
+        }
+
+        let mut mixed = strict;
+        mixed.max_actions_per_block += 1;
+        assert!(matches!(
+            current.validate_tightening_to(&mixed),
+            Err(PrivacyConsensusLimitsTighteningErrorV1::Increase {
+                field: PrivacyLimitFieldV1::ActionsPerBlock,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn consensus_policy_schedule_enforces_exact_notice_and_snapshot_boundaries() {
+        let current_limits = PrivacyConsensusLimitsV1::taira_default();
+        let mut next_limits = current_limits;
+        next_limits.max_actions_per_block -= 1;
+        next_limits.retained_root_count -= 1;
+        let valid = PrivacyConsensusPolicyTighteningV1 {
+            scheduled_at_height: 100,
+            effective_at_height: 100 + MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1,
+            next_limits,
+        };
+        valid
+            .validate_against(&current_limits)
+            .expect("exact +300 schedule");
+
+        for invalid in [
+            PrivacyConsensusPolicyTighteningV1 {
+                scheduled_at_height: 0,
+                ..valid
+            },
+            PrivacyConsensusPolicyTighteningV1 {
+                effective_at_height: 99,
+                ..valid
+            },
+            PrivacyConsensusPolicyTighteningV1 {
+                effective_at_height: 100,
+                ..valid
+            },
+            PrivacyConsensusPolicyTighteningV1 {
+                effective_at_height: valid.effective_at_height - 1,
+                ..valid
+            },
+            PrivacyConsensusPolicyTighteningV1 {
+                scheduled_at_height: u64::MAX - 100,
+                effective_at_height: u64::MAX,
+                ..valid
+            },
+        ] {
+            assert!(
+                invalid.validate_against(&current_limits).is_err(),
+                "invalid schedule must reject: {invalid:?}"
+            );
+        }
+
+        let policy = PrivacyConsensusPolicyV1 {
+            current_limits,
+            pending_tightening: Some(valid),
+        };
+        assert!(matches!(
+            policy.validate_at_committed_height(99),
+            Err(PrivacyPolicyValidationErrorV1::PendingScheduledAfterCommitted {
+                scheduled_at_height: 100,
+                committed_height: 99
+            })
+        ));
+        policy
+            .validate_at_committed_height(100)
+            .expect("schedule exists in its admitting committed block");
+        policy
+            .validate_at_committed_height(valid.effective_at_height - 1)
+            .expect("effective E remains pending in committed E-1");
+        assert!(matches!(
+            policy.validate_at_committed_height(valid.effective_at_height),
+            Err(PrivacyPolicyValidationErrorV1::PendingNotFuture {
+                effective_at_height,
+                committed_height
+            }) if effective_at_height == valid.effective_at_height
+                && committed_height == valid.effective_at_height
+        ));
+        assert_eq!(
+            policy.admission_retained_root_count(),
+            next_limits.retained_root_count
+        );
+    }
+
+    #[test]
+    fn protocol_limit_schedule_rejects_bad_timing_mismatch_increase_and_noop() {
+        let current = PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            VeRangeActivationLimitsV1 {
+                max_aggregation_count: 8,
+            },
+        );
+        let next = PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            VeRangeActivationLimitsV1 {
+                max_aggregation_count: 7,
+            },
+        );
+        let valid = PrivacyProtocolLimitsTighteningV1 {
+            scheduled_at_height: 25,
+            effective_at_height: 25 + MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1,
+            next_limits: next,
+        };
+        valid
+            .validate_against(&current)
+            .expect("exact delayed protocol tightening");
+
+        assert!(matches!(
+            PrivacyProtocolLimitsTighteningV1 {
+                next_limits: current,
+                ..valid
+            }
+            .validate_against(&current),
+            Err(PrivacyProtocolLimitsTighteningValidationErrorV1::NoChange)
+        ));
+        assert!(matches!(
+            PrivacyProtocolLimitsTighteningV1 {
+                effective_at_height: valid.effective_at_height - 1,
+                ..valid
+            }
+            .validate_against(&current),
+            Err(PrivacyProtocolLimitsTighteningValidationErrorV1::Schedule(
+                PrivacyPolicyValidationErrorV1::LeadTimeTooShort { .. }
+            ))
+        ));
+        assert!(matches!(
+            PrivacyProtocolLimitsTighteningV1 {
+                next_limits: PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(
+                    OrchardActivationLimitsV1 {
+                        max_action_count: 1,
+                    }
+                ),
+                ..valid
+            }
+            .validate_against(&current),
+            Err(PrivacyProtocolLimitsTighteningValidationErrorV1::Limits(
+                PrivacyProtocolActivationLimitsValidationError::ProtocolMismatch { .. }
+            ))
+        ));
+
+        let lower_current = next;
+        assert!(matches!(
+            PrivacyProtocolLimitsTighteningV1 {
+                next_limits: current,
+                ..valid
+            }
+            .validate_against(&lower_current),
+            Err(PrivacyProtocolLimitsTighteningValidationErrorV1::Limits(
+                PrivacyProtocolActivationLimitsValidationError::ExceedsConfiguredCeiling {
+                    field: PrivacyActivationLimitFieldV1::VeRangeAggregationCount,
+                    value: 8,
+                    ceiling: 7
+                }
+            ))
+        ));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use iroha_data_model::privacy::{
     VEGA_MDL_MAX_ISSUER_AUTH_BYTES_V1, VEGA_MDL_MAX_MSO_PAYLOAD_BYTES_V1,
     VegaExistingCredentialStatementV1,
 };
+use iroha_zkp_halo2::vega::{VegaMdlFigure9WitnessV1, validate_vega_mdl_figure9_encoding_v1};
 use p256::{
     EncodedPoint, PublicKey, Scalar,
     ecdsa::{Signature, VerifyingKey, signature::hazmat::PrehashVerifier},
@@ -277,6 +278,25 @@ impl VegaMdlValidatedWitnessV1 {
     pub const fn device_ecdsa(&self) -> &VegaEcdsaWitnessV1 {
         &self.device_ecdsa
     }
+
+    /// Borrow the exact private assignment accepted by the native Figure 9
+    /// proof circuit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VegaMdlError`] only if this value's closed-profile invariant
+    /// was violated internally.
+    pub fn circuit_witness(&self) -> Result<VegaMdlFigure9WitnessV1<'_>, VegaMdlError> {
+        VegaMdlFigure9WitnessV1::new(
+            self.issuer_authentication_sig_structure(),
+            self.birth_date_issuer_signed_item(),
+            self.issuer_ecdsa().r(),
+            self.issuer_ecdsa().s_inverse(),
+            self.device_ecdsa().r(),
+            self.device_ecdsa().s_inverse(),
+        )
+        .map_err(VegaMdlError::from)
+    }
 }
 
 impl fmt::Debug for VegaMdlValidatedWitnessV1 {
@@ -314,6 +334,10 @@ pub fn validate_mdl_witness(
     }
     let public_inputs = VegaMdlPublicInputsV1::from_statement(statement)?;
 
+    validate_vega_mdl_figure9_encoding_v1(
+        &witness.issuer_authentication_sig_structure,
+        &witness.birth_date_issuer_signed_item,
+    )?;
     validate_issuer_signature_structure(
         &witness.issuer_authentication_sig_structure,
         &witness.mobile_security_object_payload,

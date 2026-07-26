@@ -3046,7 +3046,7 @@ public final class HttpClientTransportTests {
     expectVerifierReject(
         () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().backend("mock/dev").build()),
         executor,
-        "VK register must reject non-production backend");
+        "VK register must reject a backend outside the verifier registry");
     expectVerifierReject(
         () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().authority(" ").build()),
         executor,

@@ -154,6 +154,19 @@ pub(super) fn enforce_byte_constant(
     )
 }
 
+/// Bit-decompose one public input as an exact unsigned 32-bit word.
+pub(super) fn public_word(
+    builder: &mut CircuitBuilder,
+    public_input_index: usize,
+) -> Result<WordVar, CircuitError> {
+    let public = builder.public(public_input_index)?;
+    let value = u32::try_from(scalar_to_u64(builder.evaluate(&public.into()))?)
+        .map_err(|_| CircuitError::InvalidAssignment)?;
+    let word = allocate_word(builder, value)?;
+    builder.enforce_equal(word.lc(), public.into())?;
+    Ok(word)
+}
+
 pub(super) fn sha256(
     builder: &mut CircuitBuilder,
     message: &[ByteVar],

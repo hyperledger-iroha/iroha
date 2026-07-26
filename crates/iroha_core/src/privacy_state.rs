@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
     PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PrivacyActivationValidationError, PrivacyCommitmentV1,
-    PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1, PrivacyNamespaceV1, PrivacyNullifierV1,
+    PrivacyConsensusPolicyV1, PrivacyNamespaceV1, PrivacyNullifierV1,
     PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
     PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
     PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootManagementV1,
@@ -211,13 +211,19 @@ pub(crate) fn validate_privacy_activation_schedules_at_committed_height_v1(
                 record.protocol_id
             )
         })?;
-        if let Some(pending) = record.pending_protocol_limits_tightening
-            && pending.effective_at_height <= committed_height
-        {
-            return Err(format!(
-                "privacy activation {:?} protocol-limit effective height {} is not after committed height {committed_height}",
-                record.protocol_id, pending.effective_at_height
-            ));
+        if let Some(pending) = record.pending_protocol_limits_tightening {
+            if pending.scheduled_at_height > committed_height {
+                return Err(format!(
+                    "privacy activation {:?} protocol-limit scheduled-at height {} is after committed height {committed_height}",
+                    record.protocol_id, pending.scheduled_at_height
+                ));
+            }
+            if pending.effective_at_height <= committed_height {
+                return Err(format!(
+                    "privacy activation {:?} protocol-limit effective height {} is not after committed height {committed_height}",
+                    record.protocol_id, pending.effective_at_height
+                ));
+            }
         }
     }
     Ok(())
@@ -1806,19 +1812,6 @@ impl PrivacyRootProvenanceV1 {
         }
     }
 
-    #[must_use]
-    const fn pgc_invariant_digest(self) -> Option<PrivacyPgcPoolInvariantDigestV1> {
-        match self {
-            Self::VerifiedPgcSuccessor {
-                pool_invariant_digest,
-                ..
-            } => Some(pool_invariant_digest),
-            Self::Governance { .. }
-            | Self::VerifiedBootstrap { .. }
-            | Self::VerifiedProof { .. } => None,
-        }
-    }
-
     /// Validate restored provenance.
     ///
     /// # Errors
@@ -2889,6 +2882,72 @@ mod tests {
                     && error.effective_at_height == 1_300
                     && error.incoming_height == 1_301
         ));
+    }
+
+    #[test]
+    fn protocol_limit_schedule_applies_with_lifecycle_only_at_exact_height() {
+        let mut proposal = activation_proposal();
+        let mut next_limits = proposal.protocol_limits;
+        let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            ref mut limits,
+        ) = next_limits
+        else {
+            unreachable!("VeRange fixture")
+        };
+        limits.max_aggregation_count -= 1;
+        proposal.pending_protocol_limits_tightening =
+            Some(iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
+                scheduled_at_height: 1_000,
+                effective_at_height: 1_300,
+                next_limits,
+            });
+        let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
+        let mut activations = Storage::new();
+        activations.insert(key, proposal);
+
+        assert!(
+            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_299)
+                .expect("valid pre-effective registry")
+                .is_empty()
+        );
+        let promotions = plan_due_privacy_activation_promotions_v1(&activations.view(), 1_300)
+            .expect("lifecycle and protocol limits apply atomically");
+        assert_eq!(promotions.len(), 1);
+        let promoted = promotions[0].1;
+        assert_eq!(promoted.protocol_limits, next_limits);
+        assert_eq!(promoted.pending_protocol_limits_tightening, None);
+        assert_eq!(
+            promoted.lifecycle,
+            PrivacyProtocolLifecycleV1::Active(
+                iroha_data_model::privacy::PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 1_000,
+                    activated_at_height: 1_300,
+                    state_since_height: 1_300,
+                }
+            )
+        );
+
+        assert!(
+            validate_privacy_activation_schedules_at_committed_height_v1(
+                &activations.view(),
+                999
+            )
+            .expect_err("a snapshot cannot contain a future-admitted schedule")
+            .contains("scheduled-at")
+        );
+        validate_privacy_activation_schedules_at_committed_height_v1(
+            &activations.view(),
+            1_299,
+        )
+        .expect("effective E is valid in committed E-1");
+        assert!(
+            validate_privacy_activation_schedules_at_committed_height_v1(
+                &activations.view(),
+                1_300
+            )
+            .expect_err("effective E cannot remain pending in committed E")
+            .contains("not after committed height")
+        );
     }
 
     #[test]

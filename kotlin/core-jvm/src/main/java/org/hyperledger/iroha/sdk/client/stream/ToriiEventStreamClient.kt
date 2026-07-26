@@ -407,7 +407,7 @@ class ToriiEventStreamClient(
                 val backend = matcher["backend"] as? String
                     ?: throw IllegalArgumentException("$backendContext must be a string")
                 val normalizedBackend =
-                    VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(backend, backendContext)
+                    VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(backend, backendContext)
                 if (normalizedBackend != backend) {
                     matcher["backend"] = normalizedBackend
                     changed = true

@@ -688,6 +688,9 @@ mod tests {
         privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
     };
 
+    const TEST_CONSENSUS_LIMITS: PrivacyConsensusLimitsV1 =
+        PrivacyConsensusLimitsV1::taira_default();
+
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -1065,7 +1068,7 @@ mod tests {
         fn verification_context(&self) -> PrivacyVerificationContextV1<'_> {
             PrivacyVerificationContextV1 {
                 activation: &self.activation,
-                consensus_limits: &PrivacyConsensusLimitsV1::taira_default(),
+                consensus_limits: &TEST_CONSENSUS_LIMITS,
                 chain_id: &self.chain_id,
                 genesis_hash: [0xa7; 32],
                 current_height: 10,
@@ -1105,7 +1108,7 @@ mod tests {
     ) -> PrivacyVerificationContextV1<'a> {
         PrivacyVerificationContextV1 {
             activation,
-            consensus_limits: &PrivacyConsensusLimitsV1::taira_default(),
+            consensus_limits: &TEST_CONSENSUS_LIMITS,
             chain_id,
             genesis_hash: [0xA7; 32],
             current_height: 10,

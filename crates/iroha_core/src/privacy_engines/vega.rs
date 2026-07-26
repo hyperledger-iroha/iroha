@@ -14,7 +14,7 @@ use iroha_data_model::privacy::{
     VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
     VegaExistingCredentialStatementV1,
 };
-use iroha_zkp_halo2::vega::{VegaFieldError, VegaT256ScalarV1};
+use iroha_zkp_halo2::vega::{VegaFieldError, VegaMdlFigure9ErrorV1, VegaT256ScalarV1};
 use p256::{EncodedPoint, PublicKey, elliptic_curve::sec1::ToEncodedPoint};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -217,6 +217,9 @@ pub enum VegaMdlError {
     /// A Figure 9 public input is not canonical in the T256 scalar field.
     #[error("Vega Figure 9 public input is not a canonical T256 scalar")]
     InvalidPublicInputScalar,
+    /// The witness is not the one released exact deterministic-CBOR profile.
+    #[error("Vega witness is not the released exact Figure 9 encoding")]
+    InvalidClosedProfileEncoding,
 }
 
 impl From<cbor::CborError> for VegaMdlError {
@@ -228,6 +231,12 @@ impl From<cbor::CborError> for VegaMdlError {
 impl From<VegaFieldError> for VegaMdlError {
     fn from(_: VegaFieldError) -> Self {
         Self::InvalidPublicInputScalar
+    }
+}
+
+impl From<VegaMdlFigure9ErrorV1> for VegaMdlError {
+    fn from(_: VegaMdlFigure9ErrorV1) -> Self {
+        Self::InvalidClosedProfileEncoding
     }
 }
 

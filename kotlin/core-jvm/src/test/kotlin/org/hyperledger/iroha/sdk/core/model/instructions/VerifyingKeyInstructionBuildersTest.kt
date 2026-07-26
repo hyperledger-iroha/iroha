@@ -9,7 +9,7 @@ import kotlin.test.assertFailsWith
 class VerifyingKeyInstructionBuildersTest {
 
     @Test
-    fun `register verifying key builder accepts only production verifier backends`() {
+    fun `register verifying key builder accepts only exact registry backends`() {
         val instruction = RegisterVerifyingKeyInstruction.builder()
             .setBackend("halo2/ipa")
             .setName("treasury-spend")
@@ -25,7 +25,7 @@ class VerifyingKeyInstructionBuildersTest {
     }
 
     @Test
-    fun `update verifying key instruction accepts only production verifier backends`() {
+    fun `update verifying key instruction accepts only exact registry backends`() {
         val instruction = UpdateVerifyingKeyInstruction(
             backend = "stark/fri/sha256-goldilocks",
             name = "stark-proof",
@@ -38,7 +38,7 @@ class VerifyingKeyInstructionBuildersTest {
     }
 
     @Test
-    fun `register and update reject unsupported production verifier backends`() {
+    fun `register and update reject labels outside the verifier registry`() {
         val record = sampleRecord("halo2/ipa")
 
         for (backend in unsafeBackends.filter { it.isNotEmpty() }) {
@@ -163,7 +163,9 @@ class VerifyingKeyInstructionBuildersTest {
             circuitId = "vk-test",
             schemaHashHex = "a".repeat(64),
             gasScheduleId = "default",
-            backendTag = VerifyingKeyBackendTag.HALO2_IPA_PASTA,
+            backendTag = requireNotNull(
+                VerifyingKeyBackendTag.verifierBackendRegistryTagV1(backend),
+            ),
             inlineKeyBytes = byteArrayOf(1, 2, 3),
         )
 

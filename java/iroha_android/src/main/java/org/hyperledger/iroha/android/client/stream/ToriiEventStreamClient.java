@@ -292,7 +292,7 @@ public final class ToriiEventStreamClient {
         throw new IllegalArgumentException(backendContext + " must be a string");
       }
       final String normalizedBackend =
-          VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(backend, backendContext);
+          VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(backend, backendContext);
       if (!normalizedBackend.equals(backend)) {
         matcher.put("backend", normalizedBackend);
         changed = true;

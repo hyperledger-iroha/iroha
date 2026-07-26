@@ -2515,7 +2515,7 @@ public final class HttpClientTransport implements IrohaClient {
       final VerifyingKeyRegisterRequest request) {
     Objects.requireNonNull(request, "request");
     final String backend =
-        VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(request.backend(), "backend");
+        VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(request.backend(), "backend");
     final VerifyingKeyPayload vkPayload =
         normalizeVerifierBytes(request.verifyingKeyBytes(), request.verifyingKeyLength());
     final String commitmentHex = normalizeOptionalHex32(request.commitmentHex(), "commitmentHex");
@@ -2553,7 +2553,7 @@ public final class HttpClientTransport implements IrohaClient {
       final VerifyingKeyUpdateRequest request) {
     Objects.requireNonNull(request, "request");
     final String backend =
-        VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(request.backend(), "backend");
+        VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(request.backend(), "backend");
     final VerifyingKeyPayload vkPayload =
         normalizeVerifierBytes(request.verifyingKeyBytes(), request.verifyingKeyLength());
     final String commitmentHex = normalizeOptionalHex32(request.commitmentHex(), "commitmentHex");

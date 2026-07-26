@@ -17,7 +17,8 @@ import java.util.Objects;
  * <p>The builder enforces the same invariants as the server-side DTO handling:
  * either embedded verifying key bytes must be provided or the commitment + length
  * pair must be supplied. Gas schedule identifiers are required, and the builder
- * defaults optional fields to sensible values when omitted.
+ * defaults optional fields to sensible values when omitted. The low-level
+ * proof engine tag is required.
  */
 public final class VerifyingKeyRecordDescription {
 
@@ -148,6 +149,7 @@ public final class VerifyingKeyRecordDescription {
     */
   public Map<String, String> toArguments(final String backend) {
     Objects.requireNonNull(backend, "backend");
+    Builder.requireBackendTagMatchesRegistryLabel(backend, backendTag);
     if (inlineKeyBytes != null) {
       final String expectedCommitmentHex = Builder.computeCommitmentHex(backend, inlineKeyBytes);
       if (!commitmentHex.equalsIgnoreCase(expectedCommitmentHex)) {
@@ -196,7 +198,7 @@ public final class VerifyingKeyRecordDescription {
   public static final class Builder {
     private Integer version;
     private String circuitId;
-    private VerifyingKeyBackendTag backendTag = VerifyingKeyBackendTag.UNSUPPORTED;
+    private VerifyingKeyBackendTag backendTag;
     private String curve = "unknown";
     private String schemaHashHex;
     private String commitmentHex;
@@ -317,6 +319,10 @@ public final class VerifyingKeyRecordDescription {
       if (circuitId == null) {
         throw new IllegalStateException("circuitId must be provided");
       }
+      if (backendTag == null) {
+        throw new IllegalStateException("backendTag must be provided");
+      }
+      requireBackendTagMatchesRegistryLabel(backend, backendTag);
       if (schemaHashHex == null) {
         throw new IllegalStateException("public_inputs_schema_hash_hex must be provided");
       }
@@ -417,6 +423,23 @@ public final class VerifyingKeyRecordDescription {
         return builder.toString();
       } catch (final NoSuchAlgorithmException ex) {
         throw new IllegalStateException("SHA-256 algorithm unavailable", ex);
+      }
+    }
+
+    private static void requireBackendTagMatchesRegistryLabel(
+        final String backend, final VerifyingKeyBackendTag backendTag) {
+      final VerifyingKeyBackendTag expected =
+          VerifyingKeyBackendTag.verifierBackendRegistryTagV1(backend);
+      if (expected == null) {
+        throw new IllegalArgumentException(
+            "backend uses unsupported verifier-registry label " + backend);
+      }
+      if (backendTag != expected) {
+        throw new IllegalArgumentException(
+            "backendTag "
+                + backendTag.noritoValue()
+                + " does not match verifier-registry label "
+                + backend);
       }
     }
   }
