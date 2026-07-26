@@ -9031,6 +9031,14 @@ pub struct SorafsPopCredentialService {
     pub issuer_public_key: [u8; 32],
     /// Non-secret runtime hybrid recipient-key handle.
     pub enrollment_recipient_key_id: String,
+    /// Non-secret runtime wallet wrapping-key handle.
+    pub wallet_wrapping_key_id: String,
+    /// Non-secret deployment runtime-provider registry handle.
+    pub runtime_provider_registry_handle: String,
+    /// Exact non-zero deployment registry policy revision.
+    pub runtime_provider_registry_revision: u64,
+    /// Exact deployment registry policy digest.
+    pub runtime_provider_registry_policy_digest: [u8; 32],
     /// Required distinct active approval count.
     pub approval_quorum: u8,
     /// Canonically signer-id-ordered approval authority.
@@ -9109,12 +9117,28 @@ pub struct SorafsEvidenceViewer {
     pub webauthn_allowed_origins: Vec<String>,
     /// Identity-pinned WebAuthn runtime handle.
     pub webauthn_handle: String,
+    /// Exact non-zero WebAuthn adapter and public-policy revision.
+    pub webauthn_revision: u64,
+    /// Exact WebAuthn adapter public-policy digest.
+    pub webauthn_policy_digest: [u8; 32],
     /// Identity-pinned rotating-grant runtime handle.
     pub grant_handle: String,
+    /// Exact non-zero rotating-grant adapter and public-policy revision.
+    pub grant_revision: u64,
+    /// Exact rotating-grant adapter public-policy digest.
+    pub grant_policy_digest: [u8; 32],
     /// Identity-pinned irreversible-erasure runtime handle.
     pub erasure_handle: String,
+    /// Exact non-zero irreversible-erasure adapter and public-policy revision.
+    pub erasure_revision: u64,
+    /// Exact irreversible-erasure adapter public-policy digest.
+    pub erasure_policy_digest: [u8; 32],
     /// Identity-pinned Ed25519 receipt signer handle.
     pub receipt_signer_handle: String,
+    /// Exact non-zero receipt-signer adapter and public-policy revision.
+    pub receipt_signer_revision: u64,
+    /// Exact receipt-signer adapter public-policy digest.
+    pub receipt_signer_policy_digest: [u8; 32],
     /// Exact receipt-verification key.
     pub receipt_signer_public_key: [u8; 32],
 }

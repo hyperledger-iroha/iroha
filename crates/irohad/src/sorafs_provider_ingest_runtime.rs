@@ -365,6 +365,7 @@ impl NativeFinalizedAssignmentLedgerV1 {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn build_snapshot(
         &self,
     ) -> std::result::Result<OwnedFinalizedAssignmentSnapshotV1, ProviderIngestFinalizedLedgerErrorV1>

@@ -30752,10 +30752,10 @@ mod advert_tests {
         proof_stream::ProofStreamTier,
     };
     use sorafs_node::{
-        GovernanceDagRuntimeSigner, ModerationQuarantineKeyWrapper, NodeRuntimeDeps,
-        PrivacyCyclePrfOutputV1, PrivacyCyclePrfProviderErrorV1, PrivacyCyclePrfProviderV1,
-        PrivacyCyclePrfRequestV1, PrivacyReleaseAnchorErrorV1, PrivacyReleaseAnchorHeadV1,
-        PrivacyReleaseAnchorV1,
+        GovernanceDagRuntimeProviderQualificationV1, GovernanceDagRuntimeSigner,
+        ModerationQuarantineKeyWrapper, NodeRuntimeDeps, PrivacyCyclePrfOutputV1,
+        PrivacyCyclePrfProviderErrorV1, PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestV1,
+        PrivacyReleaseAnchorErrorV1, PrivacyReleaseAnchorHeadV1, PrivacyReleaseAnchorV1,
         config::{StorageConfig, StorageConfigBuilder},
         reputation::runtime::{
             REPUTATION_COMMITTED_READ_PROJECTION_VERSION_V1,
@@ -30850,7 +30850,7 @@ mod advert_tests {
     }
 
     impl ApiTestGovernanceDagSigner {
-        const HANDLE: &'static str = "pkcs11:governance-dag:torii-api-test";
+        const HANDLE: &'static str = "pkcs11:governance-dag:torii-api-primary";
         const PEER_ID: &'static [u8] = b"12D3KooWToriiApiTestGovernancePublisher";
 
         fn new() -> Self {
@@ -30874,6 +30874,12 @@ mod advert_tests {
     impl GovernanceDagRuntimeSigner for ApiTestGovernanceDagSigner {
         fn handle(&self) -> &str {
             Self::HANDLE
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
+                1, [0x85; 32],
+            ))
         }
 
         fn publisher_peer_id(&self) -> &[u8] {
@@ -35074,7 +35080,7 @@ mod advert_tests {
             AppealFinanceTransactionForwarderPolicyV1,
         };
 
-        let handle = "test-hsm:appeal-finance".to_owned();
+        let handle = "pkcs11:appeal-finance-a".to_owned();
         let runtime_signer: Arc<dyn crate::SoraFsAppealFinanceTransactionSigner> =
             Arc::new(TestAppealFinanceRuntimeSigner {
                 handle: handle.clone(),

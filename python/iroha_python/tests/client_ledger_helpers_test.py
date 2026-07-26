@@ -2504,11 +2504,24 @@ def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> N
     )
 
     draft = captured["draft"]
-    instruction_json = draft.instructions[0].to_json().replace(" ", "")
+    instruction_json_bytes = draft.instructions[0].to_json().encode("utf-8")
+    expected_instruction = {
+        "CancelAssetLock": {
+            "escrow_id": (
+                "hash:8A0C92D078C19A229AC2293412F8CAA15E830554A8C5A271AA2F34F94B392649#91BC"
+            ),
+            "expected_remaining_amount": "10",
+        }
+    }
     assert result == {"hash": "cancel-lock"}
     assert len(draft) == 1
     assert draft.config.metadata == {"purpose": "stale-cancel-guard"}
-    assert '"expected_remaining_amount":"10"' in instruction_json
+    assert json.loads(instruction_json_bytes) == expected_instruction
+    assert instruction_json_bytes == (
+        b'{"CancelAssetLock":{"escrow_id":'
+        b'"hash:8A0C92D078C19A229AC2293412F8CAA15E830554A8C5A271AA2F34F94B392649#91BC",'
+        b'"expected_remaining_amount":"10"}}'
+    )
     assert captured["kwargs"]["wait"] is False
 
 

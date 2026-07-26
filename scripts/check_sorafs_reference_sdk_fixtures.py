@@ -148,11 +148,11 @@ EXPECTED_PAYLOADS[
     "invalid_noncanonical_quantity",
 )
 EXPECTED_PAYLOADS[
-    "appeal_finance/negative/cancel_asset_lock_trailing_bytes_v1.to"
+    "appeal_finance/negative/cancel_asset_lock_nested_escrow_id_v1.to"
 ] = _payload(
     "appeal_finance",
     "cancel_asset_lock",
-    "noncanonical_trailing_bytes",
+    "invalid_nested_escrow_id",
 )
 _pair(
     EXPECTED_PAYLOADS,
@@ -673,6 +673,21 @@ EXPECTED_CANCEL_ASSET_LOCK_JSON: dict[str, tuple[set[str], str | None]] = {
         "0",
     ),
 }
+EXPECTED_CANCEL_ASSET_LOCK_ESCROW_ID = (
+    "hash:73CCD4E0DD69AD434DB75056B600AA4F74C8FC5556B11BDC799DFDB7EA29851F#434B"
+)
+EXPECTED_CANCEL_ASSET_LOCK_NORITO: dict[str, bytes] = {
+    "appeal_finance/cancel_asset_lock_v1.to": bytes.fromhex(
+        "4e5254300000b5c8a665a7de80e2eef75ccb287078fa002d00000000000000"
+        "d5f0a9bf0af707a1022073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11bdc"
+        "799dfdb7ea29851f0b0501000000140400000000"
+    ),
+    "appeal_finance/negative/cancel_asset_lock_nested_escrow_id_v1.to": bytes.fromhex(
+        "4e5254300000b5c8a665a7de80e2eef75ccb287078fa002e00000000000000"
+        "0e55fb7ed463b87302212073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11b"
+        "dc799dfdb7ea29851f0b0501000000140400000000"
+    ),
+}
 REQUIRED_OUTCOME_DOMAINS = {
     "governance_dag",
     "moderation",
@@ -1068,6 +1083,12 @@ def _validate_payloads(
             domains.add(row["domain"])
         data = _validate_file_binding(row, root_fd, label, errors)
         if data is not None:
+            expected_norito = EXPECTED_CANCEL_ASSET_LOCK_NORITO.get(path)
+            if expected_norito is not None and data != expected_norito:
+                errors.append(
+                    f"{label} CancelAssetLock Norito bytes do not match "
+                    "the closed V1 vector"
+                )
             if row["encoding"] == "norito" and not data.startswith(b"NRT0"):
                 errors.append(f"{label} Norito payload must use the canonical NRT0 envelope")
             if row["encoding"] == "json":
@@ -1093,12 +1114,12 @@ def _validate_payloads(
                                 "does not match its closed V1 vector"
                             )
                         if (
-                            type(decoded.get("escrow_id")) is not str
-                            or not decoded["escrow_id"]
+                            decoded.get("escrow_id")
+                            != EXPECTED_CANCEL_ASSET_LOCK_ESCROW_ID
                         ):
                             errors.append(
-                                f"{label} CancelAssetLock escrow_id must be a "
-                                "non-empty string"
+                                f"{label} CancelAssetLock escrow_id does not "
+                                "match its closed V1 vector"
                             )
                 except ValueError as error:
                     errors.append(str(error))

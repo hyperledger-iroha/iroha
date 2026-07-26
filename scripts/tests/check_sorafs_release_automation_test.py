@@ -142,8 +142,18 @@ def test_java_governance_validator_uses_external_writable_gradle_state(
         ),
         (
             automation.JAVA_GOVERNANCE_VALIDATOR_TEST,
-            "      requireGovernanceDagNativeBridge();\n",
-            "",
+            (
+                "  private static void "
+                "validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable()\n"
+                "      throws IOException {\n"
+                "    if (!requireNativeBridge()) {\n"
+            ),
+            (
+                "  private static void "
+                "validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable()\n"
+                "      throws IOException {\n"
+                "    if (!SorafsReferenceValidators.isNativeAvailable()) {\n"
+            ),
         ),
     ],
 )

@@ -291,12 +291,15 @@ class SorafsReferenceValidatorsTest {
         assertEquals(21, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
         assertTrue(!SorafsReferenceValidators.isBridgeAbiSupported(20))
         assertTrue(SorafsReferenceValidators.isBridgeAbiSupported(21))
+        assertTrue(!SorafsReferenceValidators.isBridgeAbiSupported(22))
         assertTrue(!SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, false))
         assertTrue(SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, true))
         assertTrue(!SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, false))
         assertTrue(SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, true))
         assertTrue(!SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, false))
         assertTrue(SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, true))
+        assertTrue(!SorafsReferenceValidators.isAppealFinanceBridgeSupported(21, false))
+        assertTrue(SorafsReferenceValidators.isAppealFinanceBridgeSupported(21, true))
         assertEquals(64, SorafsReferenceValidators.GOVERNANCE_DAG_MAX_BLOCKS_V1)
         assertEquals(32, SorafsReferenceValidators.GOVERNANCE_DAG_CID_BYTES_V1)
         assertEquals(67_108_864, SorafsReferenceValidators.REFERENCE_MAX_INPUT_BYTES_V1)
@@ -602,7 +605,7 @@ class SorafsReferenceValidatorsTest {
 
     @Test
     fun validatesOrderbookFixtureWhenNativeBridgeIsAvailable() {
-        assumeTrue(SorafsReferenceValidators.isNativeAvailable(), "connect_norito_bridge not available")
+        requireNativeBridge()
         val payload = fixture("sorafs_manifest", "orderbook", "order_request_v1.to")
         val json = SorafsReferenceValidators.validateOrderbookPayloadJson(
             SorafsOrderbookPayloadKind.ORDER_REQUEST,
@@ -640,8 +643,53 @@ class SorafsReferenceValidatorsTest {
     }
 
     @Test
+    fun validatesAppealFinanceCancelAssetLockProfiles() {
+        assertTrue(
+            SorafsReferenceValidators.isNativeAvailable(),
+            "ABI-21 appeal-finance reference bridge is required",
+        )
+        val profiles =
+            listOf(
+                arrayOf(
+                    "cancel_asset_lock_v1.to",
+                    "Ok",
+                    "SFS-OK-000",
+                    "validation",
+                ),
+                arrayOf(
+                    "negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+                    "Error",
+                    "SFS-NORITO-001",
+                    "norito",
+                ),
+                arrayOf(
+                    "negative/cancel_asset_lock_zero_expected_v1.to",
+                    "Error",
+                    "SFS-VAL-001",
+                    "validation",
+                ),
+            )
+        for (profile in profiles) {
+            val path = profile[0]
+            val label = path.substringAfterLast('/')
+            val outcome =
+                SorafsReferenceValidators.validateAppealFinanceCancelAssetLockJson(
+                    fixture("sorafs_manifest", "appeal_finance", *path.split('/').toTypedArray()),
+                    label = label,
+                    generatedAtUnix = 123,
+                )
+            assertTrue(outcome.contains("\"status\": \"${profile[1]}\""), path)
+            assertTrue(outcome.contains("\"code\": \"${profile[2]}\""), path)
+            assertTrue(outcome.contains("\"category\": \"${profile[3]}\""), path)
+            assertTrue(outcome.contains("\"version\": 1"), path)
+            assertTrue(outcome.contains("\"generated_at\": 123"), path)
+            assertTrue(outcome.contains("\"sorafs.reference.appeal_finance\""), path)
+        }
+    }
+
+    @Test
     fun validatesEveryPdpOutcomeFixtureWhenNativeBridgeIsAvailable() {
-        assumeTrue(SorafsReferenceValidators.isNativeAvailable(), "connect_norito_bridge not available")
+        requireNativeBridge()
         val commitment = fixture("sorafs_manifest", "pdp", "commitment_v1.to")
         val challenge = fixture("sorafs_manifest", "pdp", "challenge_v1.to")
         val proof = fixture("sorafs_manifest", "pdp", "proof_v1.to")
@@ -707,7 +755,7 @@ class SorafsReferenceValidatorsTest {
 
     @Test
     fun validatesLinkedFixtureBundleWhenNativeBridgeIsAvailable() {
-        assumeTrue(SorafsReferenceValidators.isNativeAvailable())
+        requireNativeBridge()
         val outcome =
             SorafsReferenceValidators.validateFixtureBundleJson(
                 listOf(
@@ -732,7 +780,7 @@ class SorafsReferenceValidatorsTest {
 
     @Test
     fun validatesEveryReferenceSdkBundleOutcomeByteForByte() {
-        assumeTrue(SorafsReferenceValidators.isNativeAvailable())
+        requireNativeBridge()
         val outcomePaths = referenceBundleProfiles.map { it.outcomePath }
         assertEquals(9, outcomePaths.size)
         assertEquals(outcomePaths.sorted(), outcomePaths)
@@ -762,7 +810,7 @@ class SorafsReferenceValidatorsTest {
 
     @Test
     fun validatesModerationGovernanceLogNodeOutcomeByteForByte() {
-        assumeTrue(SorafsReferenceValidators.isNativeAvailable())
+        requireNativeBridge()
         val actual =
             SorafsReferenceValidators.validateGovernanceLogNodeJson(
                 noritoBytes =
@@ -940,20 +988,26 @@ class SorafsReferenceValidatorsTest {
     }
 
     private fun requireGovernanceDagNativeBridge() {
+        requireNativeBridge(
+            "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
+        )
+    }
+
+    private fun requireNativeBridge(
+        requiredMessage: String = "ABI-21 connect_norito_bridge is required.",
+    ) {
         if (SorafsReferenceValidators.isNativeAvailable()) {
             return
         }
         if (System.getenv("IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION") == "1") {
-            throw AssertionError(
-                "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
-            )
+            throw AssertionError(requiredMessage)
         }
         assumeTrue(false, "connect_norito_bridge not available")
     }
 
     @Test
     fun signsOrderbookFixtureWhenNativeBridgeIsAvailable() {
-        assumeTrue(SorafsReferenceValidators.isNativeAvailable(), "connect_norito_bridge not available")
+        requireNativeBridge()
         val payload = fixture("sorafs_manifest", "orderbook", "order_request_v1.to")
         val signed = SorafsReferenceValidators.signOrderbookPayload(
             SorafsOrderbookPayloadKind.ORDER_REQUEST,
@@ -966,7 +1020,7 @@ class SorafsReferenceValidatorsTest {
 
     @Test
     fun derivesCanonicalOrderIdAndRejectsExplicitMismatchWhenNativeBridgeIsAvailable() {
-        assumeTrue(SorafsReferenceValidators.isNativeAvailable(), "connect_norito_bridge not available")
+        requireNativeBridge()
         val owner = "buyer@sora".toByteArray(Charsets.UTF_8)
         val orderId = SorafsReferenceValidators.deriveOrderbookOrderId(owner, 7)
         assertEquals(

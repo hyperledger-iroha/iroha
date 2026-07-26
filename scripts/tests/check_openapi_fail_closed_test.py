@@ -6,6 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 XTASK = REPO_ROOT / "xtask" / "src" / "main.rs"
 TORII_OPENAPI = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
+OPENAPI_GATE = REPO_ROOT / "ci" / "check_openapi_spec.sh"
 PORTAL_SCRIPTS = (
     REPO_ROOT / "docs" / "portal" / "scripts" / "sync-openapi.mjs",
     REPO_ROOT / "docs" / "portal" / "scripts" / "verify-openapi-versions.mjs",
@@ -48,3 +49,20 @@ def test_portal_version_and_signature_paths_reject_empty_specs() -> None:
     for path in PORTAL_SCRIPTS:
         source = path.read_text(encoding="utf-8")
         assert "validateReleaseOpenApiDocumentBytes" in source, path
+
+
+def test_release_gate_is_clean_pinned_and_two_pass() -> None:
+    gate = OPENAPI_GATE.read_text(encoding="utf-8")
+
+    assert "require_clean_checkout" in gate
+    assert "git -C \"${REPO_ROOT}\" rev-parse --verify 'HEAD^{commit}'" in gate
+    assert (
+        '--expected-generator-commit="${EXPECTED_GENERATOR_COMMIT}"' in gate
+    )
+    assert gate.count("run_xtask openapi --output") == 2
+    assert (
+        'diff -u "${GENERATED_SPEC_FIRST}" "${GENERATED_SPEC_SECOND}"'
+        in gate
+    )
+    assert 'diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}"' in gate
+    assert "VERSION_VERIFY_POLICY_ARGS" not in gate

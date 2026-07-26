@@ -84,14 +84,22 @@ Use one canonical deployment ID across every required lane. Each lane checker
 must receive evidence from the same reviewed environment and emit a
 schema-closed, payload-free summary. Required evidence includes, at minimum:
 
+Before provisioning, validate the non-secret plan with
+`scripts/check_sorafs_l1_deployment_qualification.py` as documented in
+`docs/source/sorafs/l1_deployment_qualification.md`. A passing result confirms
+only that the proposed four-validator, multi-provider, dual-gateway,
+dual-Governance-DAG topology and its 17 deployment-bound lane slots are
+well-shaped. It explicitly recognizes no live evidence and is never promotion
+eligible.
+
 - deterministic pin registration, alias proof, provider-advert replay, and
   multi-provider retrieval;
 - gateway compliance, denylist, load, TLS/DNS, and cache-revocation behavior;
 - PDP, PoR, PoTR, PoP, repair, reputation, reserve/rent, orderbook, settlement,
   billing/hedging, moderation, governance-DAG, transparency, AI prescreen, and
   appeal-finance lanes selected by the aggregate checker;
-- four-or-more-validator consensus/finality evidence where a network exercise
-  is required;
+- exactly-four-validator DA/RBC consensus/finality evidence where a network
+  exercise is required;
 - signed approvals, key/HSM provenance, dashboards, alert tests, load/chaos
   results, and public package canaries where required by the lane contract.
 

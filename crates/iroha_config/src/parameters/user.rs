@@ -18275,13 +18275,13 @@ impl SorafsAppealFinanceSettlement {
         let mut handles = BTreeSet::new();
         let mut active_windows: BTreeMap<AccountId, Vec<(u64, Option<u64>)>> = BTreeMap::new();
         for (index, signer) in self.submitter_signers.into_iter().enumerate() {
-            if !is_canonical_runtime_handle(&signer.handle)
+            if !is_production_runtime_handle(&signer.handle)
                 || !handles.insert(signer.handle.clone())
             {
                 emit(
                     emitter,
                     format!(
-                        "sorafs.appeal_finance_settlement.submitter_signers[{index}].handle must be unique canonical visible ASCII"
+                        "sorafs.appeal_finance_settlement.submitter_signers[{index}].handle must be a unique production runtime handle"
                     ),
                 );
             }
@@ -18454,6 +18454,14 @@ pub struct SorafsPopCredentialService {
     pub issuer_public_key_hex: Option<String>,
     /// Non-secret runtime hybrid recipient-key handle.
     pub enrollment_recipient_key_id: Option<String>,
+    /// Non-secret runtime wallet wrapping-key handle.
+    pub wallet_wrapping_key_id: Option<String>,
+    /// Non-secret deployment runtime-provider registry handle.
+    pub runtime_provider_registry_handle: Option<String>,
+    /// Exact non-zero deployment registry policy revision.
+    pub runtime_provider_registry_revision: Option<u64>,
+    /// Exact deployment registry policy digest as lowercase hexadecimal.
+    pub runtime_provider_registry_policy_digest_hex: Option<String>,
     /// Required distinct active approval count.
     #[config(default = "defaults::sorafs::storage::pop_credentials::APPROVAL_QUORUM")]
     pub approval_quorum: u8,
@@ -18494,6 +18502,10 @@ impl Default for SorafsPopCredentialService {
             issuer_hsm_key_id: None,
             issuer_public_key_hex: None,
             enrollment_recipient_key_id: None,
+            wallet_wrapping_key_id: None,
+            runtime_provider_registry_handle: None,
+            runtime_provider_registry_revision: None,
+            runtime_provider_registry_policy_digest_hex: None,
             approval_quorum: defaults::sorafs::storage::pop_credentials::APPROVAL_QUORUM,
             approval_signers: Vec::new(),
             max_pending_enrollments:
@@ -18566,6 +18578,10 @@ impl SorafsPopCredentialService {
             || self.issuer_hsm_key_id.is_some()
             || self.issuer_public_key_hex.is_some()
             || self.enrollment_recipient_key_id.is_some()
+            || self.wallet_wrapping_key_id.is_some()
+            || self.runtime_provider_registry_handle.is_some()
+            || self.runtime_provider_registry_revision.is_some()
+            || self.runtime_provider_registry_policy_digest_hex.is_some()
             || !self.approval_signers.is_empty();
         if !self.enabled {
             if authority_fields_present {
@@ -18604,11 +18620,12 @@ impl SorafsPopCredentialService {
             "sorafs.storage.pop_credentials.issuer_public_key_hex",
             self.issuer_public_key_hex.as_deref(),
         );
+        let runtime_provider_registry_policy_digest = parse_digest(
+            emitter,
+            "sorafs.storage.pop_credentials.runtime_provider_registry_policy_digest_hex",
+            self.runtime_provider_registry_policy_digest_hex.as_deref(),
+        );
         for (path, value) in [
-            (
-                "sorafs.storage.pop_credentials.issuer_id",
-                self.issuer_id.as_deref(),
-            ),
             (
                 "sorafs.storage.pop_credentials.issuer_hsm_key_id",
                 self.issuer_hsm_key_id.as_deref(),
@@ -18617,14 +18634,37 @@ impl SorafsPopCredentialService {
                 "sorafs.storage.pop_credentials.enrollment_recipient_key_id",
                 self.enrollment_recipient_key_id.as_deref(),
             ),
+            (
+                "sorafs.storage.pop_credentials.wallet_wrapping_key_id",
+                self.wallet_wrapping_key_id.as_deref(),
+            ),
+            (
+                "sorafs.storage.pop_credentials.runtime_provider_registry_handle",
+                self.runtime_provider_registry_handle.as_deref(),
+            ),
         ] {
             match value {
-                Some(value) if clean_text(value) => {}
+                Some(value) if is_production_runtime_handle(value) => {}
                 _ => emit(
                     emitter,
-                    format!("{path} is required and must be canonical bounded text"),
+                    format!("{path} is required and must be a production runtime handle"),
                 ),
             }
+        }
+        match self.issuer_id.as_deref() {
+            Some(value) if clean_text(value) => {}
+            _ => emit(
+                emitter,
+                "sorafs.storage.pop_credentials.issuer_id is required and must be canonical bounded text",
+            ),
+        }
+        if self.runtime_provider_registry_revision == Some(0)
+            || self.runtime_provider_registry_revision.is_none()
+        {
+            emit(
+                emitter,
+                "sorafs.storage.pop_credentials.runtime_provider_registry_revision must be nonzero",
+            );
         }
         if let Some(public_key) = issuer_public_key
             && PublicKey::from_bytes(Algorithm::Ed25519, &public_key).is_err()
@@ -18737,6 +18777,10 @@ impl SorafsPopCredentialService {
             issuer_hsm_key_id: self.issuer_hsm_key_id?,
             issuer_public_key: issuer_public_key?,
             enrollment_recipient_key_id: self.enrollment_recipient_key_id?,
+            wallet_wrapping_key_id: self.wallet_wrapping_key_id?,
+            runtime_provider_registry_handle: self.runtime_provider_registry_handle?,
+            runtime_provider_registry_revision: self.runtime_provider_registry_revision?,
+            runtime_provider_registry_policy_digest: runtime_provider_registry_policy_digest?,
             approval_quorum: self.approval_quorum,
             approval_signers,
             max_pending_enrollments: self.max_pending_enrollments,
@@ -18993,12 +19037,28 @@ pub struct SorafsEvidenceViewerConfig {
     pub webauthn_allowed_origins: Vec<String>,
     /// Identity-pinned WebAuthn runtime handle.
     pub webauthn_handle: Option<String>,
+    /// Exact non-zero WebAuthn adapter and public-policy revision.
+    pub webauthn_revision: Option<u64>,
+    /// Exact WebAuthn adapter public-policy digest as lowercase hexadecimal.
+    pub webauthn_policy_digest_hex: Option<String>,
     /// Identity-pinned rotating-grant runtime handle.
     pub grant_handle: Option<String>,
+    /// Exact non-zero rotating-grant adapter and public-policy revision.
+    pub grant_revision: Option<u64>,
+    /// Exact rotating-grant adapter public-policy digest as lowercase hexadecimal.
+    pub grant_policy_digest_hex: Option<String>,
     /// Identity-pinned irreversible-erasure runtime handle.
     pub erasure_handle: Option<String>,
+    /// Exact non-zero irreversible-erasure adapter and public-policy revision.
+    pub erasure_revision: Option<u64>,
+    /// Exact irreversible-erasure adapter public-policy digest as lowercase hexadecimal.
+    pub erasure_policy_digest_hex: Option<String>,
     /// Identity-pinned Ed25519 receipt signer handle.
     pub receipt_signer_handle: Option<String>,
+    /// Exact non-zero receipt-signer adapter and public-policy revision.
+    pub receipt_signer_revision: Option<u64>,
+    /// Exact receipt-signer adapter public-policy digest as lowercase hexadecimal.
+    pub receipt_signer_policy_digest_hex: Option<String>,
     /// Exact Ed25519 receipt-verification key as canonical lowercase hex.
     pub receipt_signer_public_key_hex: Option<String>,
 }
@@ -19023,9 +19083,17 @@ impl Default for SorafsEvidenceViewerConfig {
             webauthn_rp_id: None,
             webauthn_allowed_origins: Vec::new(),
             webauthn_handle: None,
+            webauthn_revision: None,
+            webauthn_policy_digest_hex: None,
             grant_handle: None,
+            grant_revision: None,
+            grant_policy_digest_hex: None,
             erasure_handle: None,
+            erasure_revision: None,
+            erasure_policy_digest_hex: None,
             receipt_signer_handle: None,
+            receipt_signer_revision: None,
+            receipt_signer_policy_digest_hex: None,
             receipt_signer_public_key_hex: None,
         }
     }
@@ -19046,12 +19114,80 @@ impl SorafsEvidenceViewerConfig {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
 
+        fn runtime_qualification(
+            prefix: &str,
+            revision: Option<u64>,
+            policy_digest_hex: Option<String>,
+            emitter: &mut Emitter<ParseError>,
+        ) -> Option<(u64, [u8; 32])> {
+            let revision = match revision {
+                Some(revision) if revision != 0 => Some(revision),
+                _ => {
+                    emit(
+                        emitter,
+                        format!("sorafs.storage.evidence_viewer.{prefix}_revision must be nonzero"),
+                    );
+                    None
+                }
+            };
+            let policy_digest = match policy_digest_hex {
+                None => {
+                    emit(
+                        emitter,
+                        format!(
+                            "sorafs.storage.evidence_viewer.{prefix}_policy_digest_hex is required when enabled"
+                        ),
+                    );
+                    None
+                }
+                Some(value)
+                    if value.len() != 64
+                        || !value
+                            .bytes()
+                            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) =>
+                {
+                    emit(
+                        emitter,
+                        format!(
+                            "sorafs.storage.evidence_viewer.{prefix}_policy_digest_hex must be exactly 64 lowercase hexadecimal characters"
+                        ),
+                    );
+                    None
+                }
+                Some(value) => {
+                    let mut digest = [0_u8; 32];
+                    hex::decode_to_slice(value, &mut digest)
+                        .expect("validated lowercase 32-byte hexadecimal");
+                    if digest == [0; 32] {
+                        emit(
+                            emitter,
+                            format!(
+                                "sorafs.storage.evidence_viewer.{prefix}_policy_digest_hex must be nonzero"
+                            ),
+                        );
+                        None
+                    } else {
+                        Some(digest)
+                    }
+                }
+            };
+            Some((revision?, policy_digest?))
+        }
+
         let runtime_fields_present = [
             self.webauthn_rp_id.is_some(),
             self.webauthn_handle.is_some(),
+            self.webauthn_revision.is_some(),
+            self.webauthn_policy_digest_hex.is_some(),
             self.grant_handle.is_some(),
+            self.grant_revision.is_some(),
+            self.grant_policy_digest_hex.is_some(),
             self.erasure_handle.is_some(),
+            self.erasure_revision.is_some(),
+            self.erasure_policy_digest_hex.is_some(),
             self.receipt_signer_handle.is_some(),
+            self.receipt_signer_revision.is_some(),
+            self.receipt_signer_policy_digest_hex.is_some(),
             self.receipt_signer_public_key_hex.is_some(),
             !self.webauthn_allowed_origins.is_empty(),
         ];
@@ -19193,6 +19329,30 @@ impl SorafsEvidenceViewerConfig {
         let erasure_handle = runtime_handle("erasure_handle", self.erasure_handle);
         let receipt_signer_handle =
             runtime_handle("receipt_signer_handle", self.receipt_signer_handle);
+        let webauthn_qualification = runtime_qualification(
+            "webauthn",
+            self.webauthn_revision,
+            self.webauthn_policy_digest_hex,
+            emitter,
+        );
+        let grant_qualification = runtime_qualification(
+            "grant",
+            self.grant_revision,
+            self.grant_policy_digest_hex,
+            emitter,
+        );
+        let erasure_qualification = runtime_qualification(
+            "erasure",
+            self.erasure_revision,
+            self.erasure_policy_digest_hex,
+            emitter,
+        );
+        let receipt_signer_qualification = runtime_qualification(
+            "receipt_signer",
+            self.receipt_signer_revision,
+            self.receipt_signer_policy_digest_hex,
+            emitter,
+        );
         let receipt_signer_public_key =
             self.receipt_signer_public_key_hex.and_then(|value| {
                 if !is_canonical_nonzero_ed25519_public_key_hex(&value) {
@@ -19220,6 +19380,10 @@ impl SorafsEvidenceViewerConfig {
                 "sorafs.storage.evidence_viewer.receipt_signer_public_key_hex is required when enabled",
             );
         }
+        let (webauthn_revision, webauthn_policy_digest) = webauthn_qualification?;
+        let (grant_revision, grant_policy_digest) = grant_qualification?;
+        let (erasure_revision, erasure_policy_digest) = erasure_qualification?;
+        let (receipt_signer_revision, receipt_signer_policy_digest) = receipt_signer_qualification?;
 
         Some(actual::SorafsEvidenceViewer {
             checkpoint_path: self.checkpoint_path,
@@ -19237,9 +19401,17 @@ impl SorafsEvidenceViewerConfig {
             webauthn_rp_id: webauthn_rp_id?,
             webauthn_allowed_origins: origins,
             webauthn_handle: webauthn_handle?,
+            webauthn_revision,
+            webauthn_policy_digest,
             grant_handle: grant_handle?,
+            grant_revision,
+            grant_policy_digest,
             erasure_handle: erasure_handle?,
+            erasure_revision,
+            erasure_policy_digest,
             receipt_signer_handle: receipt_signer_handle?,
+            receipt_signer_revision,
+            receipt_signer_policy_digest,
             receipt_signer_public_key: receipt_signer_public_key?,
         })
     }
@@ -20764,6 +20936,80 @@ mod sorafs_provider_ingest_runtime_config_tests {
 }
 
 #[cfg(test)]
+mod sorafs_evidence_viewer_config_tests {
+    use super::*;
+
+    fn checkpoint_path() -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            PathBuf::from(r"C:\iroha\sorafs\evidence-viewer.to")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("/var/lib/iroha/sorafs/evidence-viewer.to")
+        }
+    }
+
+    fn receipt_public_key_hex() -> String {
+        let key = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("test keypair");
+        hex::encode(key.public_key().to_bytes().1)
+    }
+
+    fn valid_config() -> SorafsEvidenceViewerConfig {
+        SorafsEvidenceViewerConfig {
+            enabled: true,
+            checkpoint_path: checkpoint_path(),
+            webauthn_rp_id: Some("review.example".to_owned()),
+            webauthn_allowed_origins: vec!["https://review.example".to_owned()],
+            webauthn_handle: Some("webauthn.evidence.primary".to_owned()),
+            webauthn_revision: Some(11),
+            webauthn_policy_digest_hex: Some("a1".repeat(32)),
+            grant_handle: Some("kms.evidence.grants.primary".to_owned()),
+            grant_revision: Some(12),
+            grant_policy_digest_hex: Some("a2".repeat(32)),
+            erasure_handle: Some("kms.evidence.erasure.primary".to_owned()),
+            erasure_revision: Some(13),
+            erasure_policy_digest_hex: Some("a3".repeat(32)),
+            receipt_signer_handle: Some("hsm.evidence.receipts.primary".to_owned()),
+            receipt_signer_revision: Some(14),
+            receipt_signer_policy_digest_hex: Some("a4".repeat(32)),
+            receipt_signer_public_key_hex: Some(receipt_public_key_hex()),
+            ..SorafsEvidenceViewerConfig::default()
+        }
+    }
+
+    #[test]
+    fn enabled_policy_binds_exact_runtime_qualifications() {
+        let mut emitter = Emitter::new();
+        let parsed = valid_config()
+            .parse(true, &mut emitter)
+            .expect("enabled evidence-viewer policy");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(parsed.webauthn_revision, 11);
+        assert_eq!(parsed.webauthn_policy_digest, [0xA1; 32]);
+        assert_eq!(parsed.grant_revision, 12);
+        assert_eq!(parsed.grant_policy_digest, [0xA2; 32]);
+        assert_eq!(parsed.erasure_revision, 13);
+        assert_eq!(parsed.erasure_policy_digest, [0xA3; 32]);
+        assert_eq!(parsed.receipt_signer_revision, 14);
+        assert_eq!(parsed.receipt_signer_policy_digest, [0xA4; 32]);
+    }
+
+    #[test]
+    fn enabled_policy_rejects_missing_stale_or_noncanonical_qualifications() {
+        let mut config = valid_config();
+        config.webauthn_revision = Some(0);
+        config.grant_policy_digest_hex = Some("A2".repeat(32));
+        config.erasure_policy_digest_hex = Some("00".repeat(32));
+        config.receipt_signer_revision = None;
+
+        let mut emitter = Emitter::new();
+        assert!(config.parse(true, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[cfg(test)]
 mod sorafs_hedging_billing_runtime_config_tests {
     use super::*;
 
@@ -20995,6 +21241,10 @@ mod sorafs_pop_credential_service_tests {
             issuer_hsm_key_id: Some("pkcs11:object=pop-issuer-v1".to_owned()),
             issuer_public_key_hex: Some(ed25519_public_hex(0x11)),
             enrollment_recipient_key_id: Some("kms://pop/enrollment/primary".to_owned()),
+            wallet_wrapping_key_id: Some("kms://pop/wallet/primary".to_owned()),
+            runtime_provider_registry_handle: Some("runtime://pop/providers/primary".to_owned()),
+            runtime_provider_registry_revision: Some(7),
+            runtime_provider_registry_policy_digest_hex: Some("51".repeat(32)),
             approval_quorum: 2,
             approval_signers: vec![
                 SorafsPopApprovalSigner {
@@ -21012,6 +21262,12 @@ mod sorafs_pop_credential_service_tests {
         }
     }
 
+    fn assert_rejected(config: SorafsPopCredentialService) {
+        let mut emitter = Emitter::new();
+        assert!(config.parse(true, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
     #[test]
     fn governed_pop_policy_parses_without_runtime_secrets() {
         let mut emitter = Emitter::new();
@@ -21024,6 +21280,13 @@ mod sorafs_pop_credential_service_tests {
         assert_eq!(parsed.approval_signers.len(), 2);
         assert_eq!(parsed.worker_interval, Duration::from_secs(1));
         assert_eq!(parsed.max_finalized_time_skew, Duration::from_secs(30));
+        assert_eq!(parsed.wallet_wrapping_key_id, "kms://pop/wallet/primary");
+        assert_eq!(
+            parsed.runtime_provider_registry_handle,
+            "runtime://pop/providers/primary"
+        );
+        assert_eq!(parsed.runtime_provider_registry_revision, 7);
+        assert_eq!(parsed.runtime_provider_registry_policy_digest, [0x51; 32]);
     }
 
     #[test]
@@ -21061,6 +21324,79 @@ mod sorafs_pop_credential_service_tests {
         let mut emitter = Emitter::new();
         let _ = config.parse(false, &mut emitter);
         assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn enabled_pop_policy_rejects_missing_or_stale_provider_qualification() {
+        let missing_handle = {
+            let mut config = valid_config();
+            config.runtime_provider_registry_handle = None;
+            config
+        };
+        let missing_revision = {
+            let mut config = valid_config();
+            config.runtime_provider_registry_revision = None;
+            config
+        };
+        let zero_revision = {
+            let mut config = valid_config();
+            config.runtime_provider_registry_revision = Some(0);
+            config
+        };
+        let missing_digest = {
+            let mut config = valid_config();
+            config.runtime_provider_registry_policy_digest_hex = None;
+            config
+        };
+        let zero_digest = {
+            let mut config = valid_config();
+            config.runtime_provider_registry_policy_digest_hex = Some("00".repeat(32));
+            config
+        };
+
+        for config in [
+            missing_handle,
+            missing_revision,
+            zero_revision,
+            missing_digest,
+            zero_digest,
+        ] {
+            assert_rejected(config);
+        }
+    }
+
+    #[test]
+    fn enabled_pop_policy_rejects_test_marked_provider_handles() {
+        let test_hsm = {
+            let mut config = valid_config();
+            config.issuer_hsm_key_id = Some("pkcs11:pop:test".to_owned());
+            config
+        };
+        let test_enrollment_recipient = {
+            let mut config = valid_config();
+            config.enrollment_recipient_key_id = Some("kms://pop/mock/enrollment".to_owned());
+            config
+        };
+        let test_wallet_wrapper = {
+            let mut config = valid_config();
+            config.wallet_wrapping_key_id = Some("kms://pop/fake/wallet".to_owned());
+            config
+        };
+        let test_registry = {
+            let mut config = valid_config();
+            config.runtime_provider_registry_handle =
+                Some("runtime://pop/providers/placeholder".to_owned());
+            config
+        };
+
+        for config in [
+            test_hsm,
+            test_enrollment_recipient,
+            test_wallet_wrapper,
+            test_registry,
+        ] {
+            assert_rejected(config);
+        }
     }
 }
 
@@ -21382,10 +21718,10 @@ impl SorafsStorage {
             }
         }
         if let Some(handle) = self.governance_dag_signer_handle.as_deref()
-            && !is_canonical_runtime_handle(handle)
+            && !is_production_runtime_handle(handle)
         {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                "sorafs.storage.governance_dag_signer_handle must be 1..=256 visible ASCII bytes without whitespace",
+                "sorafs.storage.governance_dag_signer_handle must be a production runtime handle",
             ));
         }
         if let Some(public_key) = self.governance_dag_publisher_public_key_hex.as_deref()
@@ -21676,11 +22012,11 @@ impl SorafsGovernanceDagService {
                 self.checkpoint_store_handle.as_deref(),
             ),
         ] {
-            if value.is_some_and(|value| !is_canonical_runtime_handle(value)) {
+            if value.is_some_and(|value| !is_production_runtime_handle(value)) {
                 emit(
                     emitter,
                     format!(
-                        "sorafs.storage.governance_dag_service.{field} must be 1..=256 visible ASCII bytes without whitespace"
+                        "sorafs.storage.governance_dag_service.{field} must be a production runtime handle"
                     ),
                 );
             }
@@ -21866,6 +22202,30 @@ mod sorafs_governance_dag_service_tests {
         let _ = service.parse(&mut emitter);
 
         assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn governance_runtime_bindings_reject_test_marked_handles() {
+        for marker in ["null", "mock", "test", "dev", "fake", "placeholder"] {
+            let mut service = SorafsGovernanceDagService::default();
+            service.ipfs_authenticator_handle = Some(format!("vault:governance:{marker}:ipfs"));
+            let mut emitter = Emitter::new();
+            let _ = service.parse(&mut emitter);
+            assert!(
+                emitter.into_result().is_err(),
+                "service handle marker `{marker}` must fail closed"
+            );
+
+            let mut storage = SorafsStorage::default();
+            storage.governance_dag_signer_handle =
+                Some(format!("pkcs11:governance:{marker}:signer"));
+            let mut emitter = Emitter::new();
+            let _ = storage.parse(&mut emitter);
+            assert!(
+                emitter.into_result().is_err(),
+                "embedded signer handle marker `{marker}` must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -23027,6 +23387,34 @@ mod sorafs_repair_gc_tests {
             std::time::Duration::from_millis(30_000)
         );
         assert_eq!(actual.worker_max_retry_attempts, 3);
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_settlement_rejects_test_marked_runtime_handles() {
+        let key_pair = KeyPair::try_from_seed(vec![0xA8; 32], Algorithm::Ed25519)
+            .expect("derive settlement submitter keypair");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
+
+        for marker in ["null", "mock", "test", "dev", "fake", "placeholder"] {
+            let config = SorafsAppealFinanceSettlement {
+                submitter_signers: vec![SorafsAppealFinanceSignerBinding {
+                    handle: format!("pkcs11:{marker}:appeal-finance"),
+                    authority: authority.clone(),
+                    public_key_hex: public_key_hex.clone(),
+                    valid_from_block_height: 1,
+                    revoked_at_block_height: None,
+                }],
+                ..SorafsAppealFinanceSettlement::default()
+            };
+
+            let mut emitter = Emitter::new();
+            let _ = config.parse(&mut emitter);
+            assert!(
+                emitter.into_result().is_err(),
+                "test-marked runtime handle component `{marker}` must fail closed"
+            );
+        }
     }
 
     #[test]

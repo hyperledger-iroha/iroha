@@ -694,7 +694,7 @@ pub struct ProviderIngestCompletionSignerPolicyV1 {
 impl ProviderIngestCompletionSignerPolicyV1 {
     /// Return whether every canonical identity component is non-zero.
     #[must_use]
-    pub const fn is_valid(&self) -> bool {
+    pub fn is_valid(&self) -> bool {
         self.policy_id != [0; 32] && self.revision != 0 && self.policy_digest != [0; 32]
     }
 
@@ -1397,7 +1397,10 @@ impl ProviderIngestOutbox {
         &self,
     ) -> Result<Option<ProviderIngestFinalizedCursorV1>, ProviderIngestOutboxError> {
         let state = self.lock_state()?;
-        Ok(state.checkpoint.finalized_cursor_high_water)
+        Ok(
+            validate_retained_finalized_snapshot(&state.checkpoint, None)?
+                .map(|(cursor, _)| cursor),
+        )
     }
 
     /// Return the finalized cursor and block time durably bound as one snapshot.
@@ -1405,16 +1408,7 @@ impl ProviderIngestOutbox {
         &self,
     ) -> Result<Option<(ProviderIngestFinalizedCursorV1, u64)>, ProviderIngestOutboxError> {
         let state = self.lock_state()?;
-        match (
-            state.checkpoint.finalized_cursor_high_water,
-            state.checkpoint.finalized_block_time_ms_high_water,
-        ) {
-            (None, None) => Ok(None),
-            (Some(cursor), Some(finalized_block_time_ms)) => {
-                Ok(Some((cursor, finalized_block_time_ms)))
-            }
-            (None, Some(_)) | (Some(_), None) => Err(ProviderIngestOutboxError::InvalidCheckpoint),
-        }
+        validate_retained_finalized_snapshot(&state.checkpoint, None)
     }
 
     /// Durably advance one finalized cursor/time snapshot, rejecting regression,
@@ -1429,26 +1423,19 @@ impl ProviderIngestOutbox {
             return Err(ProviderIngestOutboxError::InvalidFinalizedBlockTime);
         }
         let mut state = self.lock_state()?;
-        match (
-            state.checkpoint.finalized_cursor_high_water,
-            state.checkpoint.finalized_block_time_ms_high_water,
-        ) {
-            (None, None) => {}
-            (Some(retained_cursor), Some(retained_block_time_ms)) => {
-                validate_cursor_not_before(retained_cursor, cursor)?;
-                if retained_cursor == cursor {
-                    return if retained_block_time_ms == finalized_block_time_ms {
-                        Ok(())
-                    } else {
-                        Err(ProviderIngestOutboxError::FinalizedSnapshotConflict)
-                    };
-                }
-                if finalized_block_time_ms <= retained_block_time_ms {
-                    return Err(ProviderIngestOutboxError::FinalizedSnapshotConflict);
-                }
+        if let Some((retained_cursor, retained_block_time_ms)) =
+            validate_retained_finalized_snapshot(&state.checkpoint, None)?
+        {
+            validate_cursor_not_before(retained_cursor, cursor)?;
+            if retained_cursor == cursor {
+                return if retained_block_time_ms == finalized_block_time_ms {
+                    Ok(())
+                } else {
+                    Err(ProviderIngestOutboxError::FinalizedSnapshotConflict)
+                };
             }
-            (None, Some(_)) | (Some(_), None) => {
-                return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+            if finalized_block_time_ms <= retained_block_time_ms {
+                return Err(ProviderIngestOutboxError::FinalizedSnapshotConflict);
             }
         }
         let mut candidate = state.checkpoint.clone();
@@ -2684,6 +2671,9 @@ impl ProviderIngestOutbox {
         now_ms: u64,
         observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     ) -> Result<ProviderIngestRetryOutcomeV1, ProviderIngestOutboxError> {
+        if now_ms == 0 {
+            return Err(ProviderIngestOutboxError::InvalidRuntimeTimestamp);
+        }
         observed_finalized_cursor.validate()?;
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
@@ -2989,6 +2979,9 @@ impl ProviderIngestOutbox {
         now_ms: u64,
         observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     ) -> Result<ProviderIngestRetryOutcomeV1, ProviderIngestOutboxError> {
+        if now_ms == 0 {
+            return Err(ProviderIngestOutboxError::InvalidRuntimeTimestamp);
+        }
         observed_finalized_cursor.validate()?;
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
@@ -3090,6 +3083,9 @@ impl ProviderIngestOutbox {
     }
 
     /// Re-sign after a terminal pipeline rejection, or dead-letter at the bound.
+    ///
+    /// The rejection cursor must exactly match a prior durable
+    /// [`Self::observe_finalized_snapshot`] observation.
     pub(crate) fn mark_completion_transaction_rejected(
         &self,
         job_id: [u8; 32],
@@ -3099,6 +3095,7 @@ impl ProviderIngestOutbox {
     ) -> Result<ProviderIngestRetryOutcomeV1, ProviderIngestOutboxError> {
         observed_finalized_cursor.validate()?;
         let mut state = self.lock_state()?;
+        validate_retained_finalized_snapshot(&state.checkpoint, Some(observed_finalized_cursor))?;
         let mut candidate = state.checkpoint.clone();
         let position = active_position(&candidate, job_id)?;
         validate_cursor_after_admission(
@@ -3152,6 +3149,9 @@ impl ProviderIngestOutbox {
     }
 
     /// Mark this provider complete only after exact committed-state confirmation.
+    ///
+    /// The evidence cursor must exactly match a prior durable
+    /// [`Self::observe_finalized_snapshot`] observation.
     #[allow(clippy::too_many_lines)]
     pub fn mark_finalized_complete(
         &self,
@@ -3160,6 +3160,7 @@ impl ProviderIngestOutbox {
     ) -> Result<(), ProviderIngestOutboxError> {
         validate_finalized_completion_evidence(&evidence)?;
         let mut state = self.lock_state()?;
+        validate_retained_finalized_snapshot(&state.checkpoint, Some(evidence.finalized_cursor))?;
         if let Some(position) = state
             .checkpoint
             .terminal
@@ -3281,6 +3282,10 @@ impl ProviderIngestOutbox {
     /// An absent completion is written directly as a terminal tombstone. It
     /// therefore never consumes active capacity or exposes already-completed
     /// source work between admission and finalization.
+    ///
+    /// The evidence cursor must exactly match a prior durable
+    /// [`Self::observe_finalized_snapshot`] observation, including when no
+    /// local job is retained.
     pub fn reconcile_finalized_completion(
         &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
@@ -3292,6 +3297,7 @@ impl ProviderIngestOutbox {
         validate_completion_binding(&authorization, &evidence)?;
         let job_id = authorization.job_id;
         let mut state = self.lock_state()?;
+        validate_retained_finalized_snapshot(&state.checkpoint, Some(evidence.finalized_cursor))?;
         if let Some(existing) = state
             .checkpoint
             .active
@@ -3361,6 +3367,10 @@ impl ProviderIngestOutbox {
     ///
     /// An absent job is written directly as a terminal tombstone so a crash
     /// cannot expose cancelled source work between admission and cancellation.
+    ///
+    /// The evidence cursor must exactly match a prior durable
+    /// [`Self::observe_finalized_snapshot`] observation, including when no
+    /// local job is retained.
     pub fn reconcile_finalized_cancellation(
         &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
@@ -3372,6 +3382,7 @@ impl ProviderIngestOutbox {
         validate_cancellation_binding(&authorization, &evidence)?;
         let job_id = authorization.job_id;
         let mut state = self.lock_state()?;
+        validate_retained_finalized_snapshot(&state.checkpoint, Some(evidence.finalized_cursor))?;
         if let Some(existing) = state
             .checkpoint
             .active
@@ -3435,6 +3446,9 @@ impl ProviderIngestOutbox {
     }
 
     /// Cancel active work after finalized chain state proves it inapplicable.
+    ///
+    /// The evidence cursor must exactly match a prior durable
+    /// [`Self::observe_finalized_snapshot`] observation.
     pub fn cancel(
         &self,
         job_id: [u8; 32],
@@ -3442,6 +3456,7 @@ impl ProviderIngestOutbox {
     ) -> Result<(), ProviderIngestOutboxError> {
         validate_finalized_cancellation_evidence(&evidence)?;
         let mut state = self.lock_state()?;
+        validate_retained_finalized_snapshot(&state.checkpoint, Some(evidence.finalized_cursor))?;
         if let Some(position) = state
             .checkpoint
             .terminal
@@ -4203,7 +4218,24 @@ fn observe_finalized_completion_authority(
         return Err(ProviderIngestOutboxError::FinalizedAuthorityConflict);
     }
     match (retained.signer_policy, incoming.signer_policy) {
-        (left, right) if left == right => Ok(false),
+        (
+            ProviderIngestSignerPolicyObservationV1::NotChecked,
+            ProviderIngestSignerPolicyObservationV1::NotChecked,
+        )
+        | (
+            ProviderIngestSignerPolicyObservationV1::Missing,
+            ProviderIngestSignerPolicyObservationV1::Missing,
+        ) => Ok(false),
+        (
+            ProviderIngestSignerPolicyObservationV1::Active(left),
+            ProviderIngestSignerPolicyObservationV1::Active(right),
+        ) => {
+            if left == right {
+                Ok(false)
+            } else {
+                Err(ProviderIngestOutboxError::FinalizedAuthorityConflict)
+            }
+        }
         (
             ProviderIngestSignerPolicyObservationV1::NotChecked,
             ProviderIngestSignerPolicyObservationV1::Missing
@@ -4218,10 +4250,12 @@ fn observe_finalized_completion_authority(
             ProviderIngestSignerPolicyObservationV1::NotChecked,
         ) => Ok(false),
         (
-            ProviderIngestSignerPolicyObservationV1::Missing
-            | ProviderIngestSignerPolicyObservationV1::Active(_),
-            ProviderIngestSignerPolicyObservationV1::Missing
-            | ProviderIngestSignerPolicyObservationV1::Active(_),
+            ProviderIngestSignerPolicyObservationV1::Missing,
+            ProviderIngestSignerPolicyObservationV1::Active(_),
+        )
+        | (
+            ProviderIngestSignerPolicyObservationV1::Active(_),
+            ProviderIngestSignerPolicyObservationV1::Missing,
         ) => Err(ProviderIngestOutboxError::FinalizedAuthorityConflict),
     }
 }
@@ -4364,6 +4398,36 @@ fn validate_finalized_cancellation_evidence(
         return Err(ProviderIngestOutboxError::InvalidCancellationEvidence);
     }
     Ok(())
+}
+
+fn validate_retained_finalized_snapshot(
+    checkpoint: &ProviderIngestOutboxCheckpointV1,
+    required_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
+) -> Result<Option<(ProviderIngestFinalizedCursorV1, u64)>, ProviderIngestOutboxError> {
+    let retained_snapshot = match (
+        checkpoint.finalized_cursor_high_water,
+        checkpoint.finalized_block_time_ms_high_water,
+    ) {
+        (Some(cursor), Some(finalized_block_time_ms)) => {
+            cursor
+                .validate()
+                .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
+            if finalized_block_time_ms == 0 {
+                return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+            }
+            Some((cursor, finalized_block_time_ms))
+        }
+        (None, None) => None,
+        (None, Some(_)) | (Some(_), None) => {
+            return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+        }
+    };
+    if let Some(required_finalized_cursor) = required_finalized_cursor
+        && retained_snapshot.map(|(cursor, _)| cursor) != Some(required_finalized_cursor)
+    {
+        return Err(ProviderIngestOutboxError::StaleFinalizedCursor);
+    }
+    Ok(retained_snapshot)
 }
 
 fn validate_cancellation_binding(
@@ -4575,23 +4639,7 @@ fn validate_checkpoint_count_snapshot(
     {
         return Err(ProviderIngestOutboxError::InvalidCheckpoint);
     }
-    match (
-        checkpoint.finalized_cursor_high_water,
-        checkpoint.finalized_block_time_ms_high_water,
-    ) {
-        (None, None) => {}
-        (Some(high_water), Some(finalized_block_time_ms)) => {
-            high_water
-                .validate()
-                .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
-            if finalized_block_time_ms == 0 {
-                return Err(ProviderIngestOutboxError::InvalidCheckpoint);
-            }
-        }
-        (None, Some(_)) | (Some(_), None) => {
-            return Err(ProviderIngestOutboxError::InvalidCheckpoint);
-        }
-    }
+    validate_retained_finalized_snapshot(checkpoint, None)?;
     Ok(())
 }
 
@@ -4647,19 +4695,9 @@ fn validate_checkpoint(
 fn validate_checkpoint_finalized_high_water(
     checkpoint: &ProviderIngestOutboxCheckpointV1,
 ) -> Result<(), ProviderIngestOutboxError> {
-    let high_water = match (
-        checkpoint.finalized_cursor_high_water,
-        checkpoint.finalized_block_time_ms_high_water,
-    ) {
-        (None, None) => return Ok(()),
-        (Some(cursor), Some(finalized_block_time_ms)) if finalized_block_time_ms != 0 => cursor,
-        (None, Some(_)) | (Some(_), None) | (Some(_), Some(0)) => {
-            return Err(ProviderIngestOutboxError::InvalidCheckpoint);
-        }
+    let Some((high_water, _)) = validate_retained_finalized_snapshot(checkpoint, None)? else {
+        return Ok(());
     };
-    high_water
-        .validate()
-        .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
     for entry in &checkpoint.active {
         validate_cursor_not_before(entry.authorization.admission_finalized_cursor, high_water)
             .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
@@ -5660,7 +5698,7 @@ mod tests {
             Err(ProviderIngestOutboxError::InvalidSigningClaim)
         );
 
-        let transaction = signed_completion(&initial_authorization, 9, 9);
+        let transaction = signed_completion(&initial_authorization, 9, 8);
         let signing_claim = claim_for_transaction(&outbox, job_id, &transaction, 9, 143, cursor(9));
         let transaction_hash = outbox
             .store_completion_transaction(&signing_claim, transaction)
@@ -5702,6 +5740,7 @@ mod tests {
             }
         ));
 
+        observe_finalized(&outbox, cursor(10));
         let evidence = finalized_evidence(&initial_authorization, 9, Some(transaction_hash), 10);
         outbox.mark_finalized_complete(job_id, evidence).unwrap();
         drop(outbox);
@@ -5823,6 +5862,120 @@ mod tests {
     }
 
     #[test]
+    fn retained_finalized_snapshot_validation_fails_closed() {
+        let mut checkpoint = ProviderIngestOutboxCheckpointV1::default();
+        assert_eq!(
+            validate_retained_finalized_snapshot(&checkpoint, Some(cursor(8))),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(
+            validate_retained_finalized_snapshot(&checkpoint, None),
+            Ok(None)
+        );
+
+        checkpoint.finalized_cursor_high_water = Some(cursor(8));
+        assert_eq!(
+            validate_retained_finalized_snapshot(&checkpoint, Some(cursor(8))),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+
+        checkpoint.finalized_cursor_high_water = None;
+        checkpoint.finalized_block_time_ms_high_water = Some(8_000);
+        assert_eq!(
+            validate_retained_finalized_snapshot(&checkpoint, Some(cursor(8))),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+
+        checkpoint.finalized_cursor_high_water = Some(cursor(8));
+        checkpoint.finalized_block_time_ms_high_water = Some(0);
+        assert_eq!(
+            validate_retained_finalized_snapshot(&checkpoint, Some(cursor(8))),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+
+        checkpoint.finalized_cursor_high_water = Some(cursor(0));
+        checkpoint.finalized_block_time_ms_high_water = Some(8_000);
+        assert_eq!(
+            validate_retained_finalized_snapshot(&checkpoint, Some(cursor(8))),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+
+        checkpoint.finalized_cursor_high_water = Some(cursor(8));
+        assert_eq!(
+            validate_retained_finalized_snapshot(&checkpoint, Some(cursor(9))),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(
+            validate_retained_finalized_snapshot(&checkpoint, Some(cursor(8))),
+            Ok(Some((cursor(8), 8_000)))
+        );
+    }
+
+    #[test]
+    fn finalized_transition_rejects_malformed_snapshot_before_absent_job_lookup() {
+        let authorization = authorization(0x7A, 7);
+        let evidence = finalized_evidence(&authorization, 8, None, 8);
+        for (retained_cursor, retained_block_time_ms) in [
+            (Some(cursor(8)), None),
+            (None, Some(8_000)),
+            (Some(cursor(8)), Some(0)),
+        ] {
+            let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
+            {
+                let mut state = outbox.state.lock().unwrap();
+                state.checkpoint.finalized_cursor_high_water = retained_cursor;
+                state.checkpoint.finalized_block_time_ms_high_water = retained_block_time_ms;
+            }
+            let malformed = outbox.state.lock().unwrap().checkpoint.clone();
+            assert_eq!(
+                outbox.finalized_snapshot_high_water(),
+                Err(ProviderIngestOutboxError::InvalidCheckpoint)
+            );
+            assert_eq!(
+                outbox.observe_finalized_snapshot(cursor(9), 9_000),
+                Err(ProviderIngestOutboxError::InvalidCheckpoint)
+            );
+            assert_eq!(
+                outbox.mark_finalized_complete(authorization.job_id(), evidence.clone()),
+                Err(ProviderIngestOutboxError::InvalidCheckpoint)
+            );
+            assert_eq!(outbox.state.lock().unwrap().checkpoint, malformed);
+        }
+    }
+
+    #[test]
+    fn finalized_transitions_require_snapshot_before_absent_job_lookup() {
+        let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
+        let authorization = authorization(0x7B, 7);
+        let finalized_completion = finalized_evidence(&authorization, 8, None, 8);
+        let finalized_cancellation = cancellation_evidence(
+            &authorization,
+            ProviderIngestCancellationReasonV1::OrderExpired,
+            8,
+        );
+        let empty = outbox.state.lock().unwrap().checkpoint.clone();
+
+        assert_eq!(
+            outbox.mark_completion_transaction_rejected(
+                authorization.job_id(),
+                [0xA5; 32],
+                100,
+                cursor(8),
+            ),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(
+            outbox.mark_finalized_complete(authorization.job_id(), finalized_completion),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(
+            outbox.cancel(authorization.job_id(), finalized_cancellation),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(outbox.state.lock().unwrap().checkpoint, empty);
+    }
+
+    #[test]
     fn persistent_outbox_holds_one_hardened_writer_lock_for_its_lifetime() {
         let directory = tempdir().expect("tempdir");
         let path = checkpoint_path(&directory);
@@ -5884,6 +6037,12 @@ mod tests {
             .store_completion_transaction(&first_claim, first_transaction)
             .unwrap();
         begin_submission(&outbox, job_id, first_hash, 103).unwrap();
+        let ambiguous = stored_completion(&outbox, job_id);
+        assert_eq!(
+            outbox.mark_completion_not_submitted(job_id, first_hash, 0, cursor(8)),
+            Err(ProviderIngestOutboxError::InvalidRuntimeTimestamp)
+        );
+        assert_eq!(stored_completion(&outbox, job_id), ambiguous);
         outbox
             .mark_completion_submitted(job_id, first_hash)
             .unwrap();
@@ -5917,7 +6076,7 @@ mod tests {
         );
         assert_eq!(
             begin_submission(&outbox, job_id, first_hash, 219),
-            Err(ProviderIngestOutboxError::RetryNotDue)
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
         );
         outbox
             .invalidate_stale_completion_authority(
@@ -5928,6 +6087,10 @@ mod tests {
                 cursor(9),
             )
             .expect("refresh finalized completion authority");
+        assert_eq!(
+            begin_submission(&outbox, job_id, first_hash, 219),
+            Err(ProviderIngestOutboxError::RetryNotDue)
+        );
         begin_submission(&outbox, job_id, first_hash, 220).unwrap();
         observe_finalized(&outbox, cursor(10));
         assert_eq!(
@@ -5939,7 +6102,7 @@ mod tests {
                 next_attempt_at_ms: 241,
             }
         );
-        let second_transaction = signed_completion(&authorization, 10, 10);
+        let second_transaction = signed_completion(&authorization, 10, 8);
         let second_context = completion_context(&second_transaction, 10, cursor(10));
         assert_eq!(
             outbox.claim_completion_signing(job_id, second_context.clone(), 240),
@@ -5957,13 +6120,21 @@ mod tests {
         outbox
             .mark_completion_submitted(job_id, second_hash)
             .unwrap();
+        observe_finalized(&outbox, cursor(11));
         let evidence = finalized_evidence(&authorization, 10, Some(second_hash), 11);
         outbox
             .mark_finalized_complete(job_id, evidence.clone())
             .unwrap();
         outbox
-            .mark_finalized_complete(job_id, evidence)
+            .mark_finalized_complete(job_id, evidence.clone())
             .expect("duplicate finalized reconciliation is idempotent");
+        observe_finalized(&outbox, cursor(12));
+        let finalized = outbox.state.lock().unwrap().checkpoint.clone();
+        assert_eq!(
+            outbox.mark_finalized_complete(job_id, evidence),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(outbox.state.lock().unwrap().checkpoint, finalized);
     }
 
     #[test]
@@ -6008,6 +6179,13 @@ mod tests {
             .store_completion_transaction(&signing_claim, transaction)
             .unwrap();
         begin_submission(&outbox, job_id, transaction_hash, 103).unwrap();
+        let ambiguous = outbox.state.lock().unwrap().checkpoint.clone();
+        assert_eq!(
+            outbox.mark_completion_transaction_rejected(job_id, transaction_hash, 104, cursor(9),),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(outbox.state.lock().unwrap().checkpoint, ambiguous);
+        observe_finalized(&outbox, cursor(9));
         assert_eq!(
             outbox
                 .mark_completion_transaction_rejected(job_id, transaction_hash, 104, cursor(9),)
@@ -6052,6 +6230,7 @@ mod tests {
         for (order, observed_height) in [(1, 10), (2, 11)] {
             let authorization = authorization(order, 7);
             outbox.enqueue(authorization.clone()).unwrap();
+            observe_finalized(&outbox, cursor(observed_height));
             outbox
                 .cancel(
                     authorization.job_id(),
@@ -6065,6 +6244,7 @@ mod tests {
         }
         let protected = authorization(3, 7);
         outbox.enqueue(protected.clone()).unwrap();
+        observe_finalized(&outbox, cursor(12));
         assert_eq!(
             outbox.cancel(
                 protected.job_id(),
@@ -6102,6 +6282,7 @@ mod tests {
 
         let active = authorization(4, 7);
         outbox.enqueue(active.clone()).unwrap();
+        observe_finalized(&outbox, cursor(20));
         assert_eq!(outbox.prune_terminal(cursor(20)).unwrap(), 2);
         outbox
             .cancel(
@@ -6159,6 +6340,7 @@ mod tests {
         for authorization in [&active, &cancelled, &dead_letter] {
             outbox.enqueue(authorization.clone()).unwrap();
         }
+        observe_finalized(&outbox, cursor(8));
         outbox
             .cancel(
                 cancelled.job_id(),
@@ -6327,6 +6509,7 @@ mod tests {
             begin_submission(&outbox, job_id, transaction_hash, 103),
             Err(ProviderIngestOutboxError::InvalidTransition)
         );
+        observe_finalized(&outbox, cursor(9));
         outbox
             .cancel(
                 job_id,
@@ -6409,6 +6592,7 @@ mod tests {
             .mark_completion_submitted(job_id, transaction_hash)
             .unwrap();
 
+        observe_finalized(&outbox, cursor(9));
         let mut other_provider = finalized_evidence(&authorization, 8, Some(transaction_hash), 9);
         other_provider.provider_id = [0x99; 32];
         assert_eq!(
@@ -7428,6 +7612,17 @@ mod tests {
         let transaction_hash = outbox
             .store_completion_transaction(&claim, transaction)
             .unwrap();
+        let signed = stored_completion(&outbox, preflight.job_id());
+        assert_eq!(
+            outbox.mark_completion_preflight_rejected(
+                preflight.job_id(),
+                transaction_hash,
+                0,
+                cursor(8),
+            ),
+            Err(ProviderIngestOutboxError::InvalidRuntimeTimestamp)
+        );
+        assert_eq!(stored_completion(&outbox, preflight.job_id()), signed);
         assert_eq!(
             outbox
                 .mark_completion_preflight_unavailable(
@@ -7511,6 +7706,23 @@ mod tests {
         outbox.enqueue(active).expect("fill active capacity");
 
         let completed = authorization(0x74, 7);
+        let before_reconciliation = outbox.state.lock().unwrap().checkpoint.clone();
+        assert_eq!(
+            outbox.reconcile_finalized_completion(
+                completed.clone(),
+                finalized_evidence(&completed, 8, None, 8),
+            ),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(
+            outbox.state.lock().unwrap().checkpoint,
+            before_reconciliation
+        );
+        assert_eq!(
+            outbox.status(completed.job_id()),
+            Err(ProviderIngestOutboxError::UnknownJob)
+        );
+        observe_finalized(&outbox, cursor(8));
         outbox
             .reconcile_finalized_completion(
                 completed.clone(),
@@ -7526,12 +7738,44 @@ mod tests {
             }
         ));
         assert_eq!(outbox.state.lock().unwrap().checkpoint.active.len(), 1);
+
+        observe_finalized(&outbox, cursor(9));
+        let finalized = outbox.state.lock().unwrap().checkpoint.clone();
+        assert_eq!(
+            outbox.reconcile_finalized_completion(
+                completed.clone(),
+                finalized_evidence(&completed, 8, None, 8),
+            ),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(outbox.state.lock().unwrap().checkpoint, finalized);
     }
 
     #[test]
     fn finalized_cancellation_inserts_absent_and_supersedes_dead_letter() {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
         let absent = authorization(0x75, 7);
+        let before_reconciliation = outbox.state.lock().unwrap().checkpoint.clone();
+        assert_eq!(
+            outbox.reconcile_finalized_cancellation(
+                absent.clone(),
+                cancellation_evidence(
+                    &absent,
+                    ProviderIngestCancellationReasonV1::OrderExpired,
+                    8,
+                ),
+            ),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(
+            outbox.state.lock().unwrap().checkpoint,
+            before_reconciliation
+        );
+        assert_eq!(
+            outbox.status(absent.job_id()),
+            Err(ProviderIngestOutboxError::UnknownJob)
+        );
+        observe_finalized(&outbox, cursor(8));
         outbox
             .reconcile_finalized_cancellation(
                 absent.clone(),
@@ -7560,6 +7804,7 @@ mod tests {
                 ProviderIngestFailureClassV1::BindingMismatch,
             )
             .unwrap();
+        observe_finalized(&outbox, cursor(9));
         outbox
             .reconcile_finalized_cancellation(
                 dead.clone(),
@@ -7587,6 +7832,7 @@ mod tests {
 
         let pending = authorization(0x67, 7);
         outbox.enqueue(pending.clone()).unwrap();
+        observe_finalized(&outbox, cursor(8));
         outbox
             .mark_finalized_complete(pending.job_id(), finalized_evidence(&pending, 8, None, 8))
             .expect("semantic completion needs no local bytes");
@@ -7609,6 +7855,7 @@ mod tests {
             .unwrap();
         let other_hash = [0xAB; 32];
         assert_ne!(local_hash, other_hash);
+        observe_finalized(&outbox, cursor(9));
         outbox
             .mark_finalized_complete(
                 signed.job_id(),
@@ -7629,9 +7876,10 @@ mod tests {
         enqueue_and_store_local(&outbox, &signing, 120);
         let transaction = signed_completion(&signing, 8, 8);
         let signing_claim =
-            claim_for_transaction(&outbox, signing.job_id(), &transaction, 8, 122, cursor(8));
+            claim_for_transaction(&outbox, signing.job_id(), &transaction, 8, 122, cursor(9));
+        observe_finalized(&outbox, cursor(10));
         outbox
-            .mark_finalized_complete(signing.job_id(), finalized_evidence(&signing, 9, None, 9))
+            .mark_finalized_complete(signing.job_id(), finalized_evidence(&signing, 9, None, 10))
             .expect("semantic completion safely supersedes signer-only state");
         assert_eq!(
             outbox.store_completion_transaction(&signing_claim, transaction),
@@ -7646,32 +7894,34 @@ mod tests {
                 cancellation_evidence(
                     &cancelled,
                     ProviderIngestCancellationReasonV1::OrderExpired,
-                    8,
+                    10,
                 ),
             )
             .unwrap();
+        observe_finalized(&outbox, cursor(11));
         outbox
             .mark_finalized_complete(
                 cancelled.job_id(),
-                finalized_evidence(&cancelled, 9, None, 9),
+                finalized_evidence(&cancelled, 9, None, 11),
             )
             .expect("later semantic success supersedes cancellation");
 
         let dead = authorization(0x6A, 7);
         outbox.enqueue(dead.clone()).unwrap();
         let claim = outbox
-            .claim_source(dead.job_id(), owner(3), 200, cursor(8))
+            .claim_source(dead.job_id(), owner(3), 200, cursor(11))
             .unwrap();
         outbox
             .dead_letter_source(
                 &claim,
                 201,
-                cursor(8),
+                cursor(11),
                 ProviderIngestDeadLetterReasonV1::BindingMismatch,
                 ProviderIngestFailureClassV1::BindingMismatch,
             )
             .unwrap();
-        let evidence = finalized_evidence(&dead, 9, None, 9);
+        observe_finalized(&outbox, cursor(12));
+        let evidence = finalized_evidence(&dead, 9, None, 12);
         outbox
             .mark_finalized_complete(dead.job_id(), evidence.clone())
             .expect("later semantic success supersedes dead letter");
@@ -7685,6 +7935,20 @@ mod tests {
         let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
         let authorization = authorization(0x6B, 7);
         outbox.enqueue(authorization.clone()).unwrap();
+        let before_cancellation = outbox.state.lock().unwrap().checkpoint.clone();
+        assert_eq!(
+            outbox.cancel(
+                authorization.job_id(),
+                cancellation_evidence(
+                    &authorization,
+                    ProviderIngestCancellationReasonV1::ManifestRetired,
+                    8,
+                ),
+            ),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(outbox.state.lock().unwrap().checkpoint, before_cancellation);
+        observe_finalized(&outbox, cursor(8));
         let mut wrong_provider = cancellation_evidence(
             &authorization,
             ProviderIngestCancellationReasonV1::ManifestRetired,
@@ -7704,16 +7968,24 @@ mod tests {
             outbox.cancel(authorization.job_id(), stale),
             Err(ProviderIngestOutboxError::StaleFinalizedCursor)
         );
+        let evidence = cancellation_evidence(
+            &authorization,
+            ProviderIngestCancellationReasonV1::ManifestRetired,
+            8,
+        );
         outbox
-            .cancel(
-                authorization.job_id(),
-                cancellation_evidence(
-                    &authorization,
-                    ProviderIngestCancellationReasonV1::ManifestRetired,
-                    8,
-                ),
-            )
+            .cancel(authorization.job_id(), evidence.clone())
             .unwrap();
+        outbox
+            .cancel(authorization.job_id(), evidence.clone())
+            .expect("matching cancellation replay is idempotent");
+        observe_finalized(&outbox, cursor(9));
+        let cancelled = outbox.state.lock().unwrap().checkpoint.clone();
+        assert_eq!(
+            outbox.cancel(authorization.job_id(), evidence),
+            Err(ProviderIngestOutboxError::StaleFinalizedCursor)
+        );
+        assert_eq!(outbox.state.lock().unwrap().checkpoint, cancelled);
     }
 
     #[test]

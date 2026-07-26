@@ -48,9 +48,19 @@ resolve compare-and-swap. An authenticated checkpoint and write-ahead publish
 intent live in a deployment-injected sealed monotonic store, making restart
 recovery fail closed across partial block, head, and mirror publication. Every
 outbound control-plane request is authenticated through a rotation-aware
-runtime provider selected by an opaque configuration handle. The same process
-serves a bounded public mirror, head, block,
-node, checkpoint, health, and Prometheus surface. What remains for SF-12 is
+runtime provider selected by an opaque configuration handle. Signer,
+authenticator, and checkpoint providers must also return a non-zero public
+policy revision and digest; startup pins those qualifications before opening
+publisher/checkpoint state or resolving publication endpoints, and every
+operation rejects handle or qualification drift. Canonical configuration and
+runtime validation reject null/mock/test/dev/fake/placeholder handle
+components. The public
+`run_governance_dag_service_with_runtime_registry` launcher resolves one exact
+set of those stable handles through a deployment-owned registry and then uses
+the same pre-state qualification path. Missing, stale, rejected, incomplete,
+substituted, or test-marked registry results fail with typed redacted errors
+before service state is opened. The same process serves a bounded public mirror,
+head, block, node, checkpoint, health, and Prometheus surface. What remains for SF-12 is
 deployment-owned HSM/authenticator/sealed-store adapters, supervised
 deployment/package integration, optional RocksDB/IPLD storage if the JSON mirror cannot meet
 deployment scale, and captured multi-instance public rollout evidence—not an
@@ -91,11 +101,14 @@ Implemented foundations include:
   appeal finance reports, weekly rollups, appeal finance settlement receipts,
   and orderbook settlement receipts also append to the local signed runtime DAG;
   duplicate publishes are idempotent and malformed runtime DAG index state
-  fails closed. Provider construction rejects missing or mismatched handles,
-  peer identities, public keys, malformed/weak Ed25519 points, provider
-  identity drift, invalid signatures, and signer outages without exposing
-  provider diagnostics. No signing-key file setting or compatibility loader
-  remains. A filesystem publisher now holds an exclusive lock on its root
+  fails closed. Provider construction rejects missing, stale, unqualified, or
+  test-marked adapters; mismatched handles, peer identities, public keys,
+  malformed/weak Ed25519 points; provider identity/policy-revision/digest
+  drift; invalid signatures; and signer outages without exposing provider
+  diagnostics. Embedded-node startup completes that signer qualification
+  before opening any durable worker or publisher state. No signing-key file
+  setting or compatibility loader remains. A filesystem publisher now holds an
+  exclusive lock on its root
   for its full lifetime and serializes the artifact files, publish index, CAR
   queue, and signed block/head update as one in-process publication transaction,
   so two publishers cannot race the same mutable indexes. Atomic artifact
@@ -248,10 +261,14 @@ Still outstanding:
 - Package and supervise `sorafs_governance_dag` in the supported deployment
   bundles, implement and provision the deployment-owned HSM signer,
   rotation-aware IPFS/head authenticators, and sealed monotonic checkpoint-store
-  adapters, and capture multi-instance rollout/rollback evidence. The generic
-  packaged binary deliberately injects no secret provider and therefore fails
-  closed when the service is enabled; production supervisors call the public
-  `run_governance_dag_service` library entry point with the three providers.
+  adapters that derive their qualification revision/digest from the external
+  control plane and reject revoked/stale policy internally, and capture
+  multi-instance rollout/rollback evidence. The generic packaged binary calls
+  the registry-aware launcher without inventing a registry and therefore emits
+  the typed `MissingRuntimeProviderRegistry` error before state access.
+  Supported deployment packages link the library, inject their audited runtime
+  registry programmatically, and provide the concrete adapters; no credential,
+  private-key, environment, or provider-file fallback exists.
 - Decide from measured production scale whether the bounded authenticated JSON
   mirror is sufficient; add a RocksDB/IPLD backend only if the governed
   deployment profile requires it.
@@ -389,11 +406,16 @@ has to prove this workflow against the governed public deployment.
 - Head and block signatures must be deterministic and replayable.
 - The embedded publisher accepts only an injected signer whose opaque handle,
   peer identity, and canonical non-weak Ed25519 public key exactly match
-  `iroha_config`; private signing material has no configuration or file path.
+  `iroha_config`; it pins the provider's non-zero public policy
+  revision/digest before durable startup and rechecks them for every signature.
+  Private signing material has no configuration or file path.
 - The always-on service accepts only injected rotation-aware authenticators and
   a sealed monotonic CAS checkpoint store whose opaque handles exactly match
-  `iroha_config`; removed key/token path fields are rejected as unknown V1
-  configuration.
+  `iroha_config`. Their non-zero qualification revisions/digests are pinned
+  before mutable state or endpoint access and rechecked for every authenticated
+  request and sealed-state operation; exact record revisions and canonical
+  payload digests remain enforced by the CAS layer. Removed key/token path
+  fields are rejected as unknown V1 configuration.
 - Consumers must verify payload validation status, publisher signature, parent linkage, and head signature before trusting a block.
 - Public rollout must not persist runtime secrets such as publisher private keys or bearer tokens in repo files.
 

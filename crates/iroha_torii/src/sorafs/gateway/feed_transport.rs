@@ -4,6 +4,8 @@
 //! configured trust pins. This transport enforces the runtime side of that
 //! contract: a bounded system resolver, exact address pinning, authenticated
 //! HTTPS, explicit content encodings, and bounded response buffering.
+//! Construction also seals the canonical trust inventory into the runtime
+//! identity that the controller verifies at startup and around feed use.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -28,9 +30,11 @@ use url::Host;
 use x509_parser::parse_x509_certificate;
 
 use super::compliance::{
+    GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1, GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
     GatewayComplianceContentEncoding, GatewayComplianceError, GatewayComplianceFeedTransport,
+    GatewayComplianceFeedTransportIdentityV1, GatewayComplianceFeedTransportProbeError,
     GatewayComplianceFetchRequest, GatewayComplianceFetchResponse,
-    MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+    MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1, gateway_compliance_feed_transport_policy_digest,
 };
 
 const RESOLVER_WORKERS: usize = 4;
@@ -229,6 +233,7 @@ fn resolve_system_hostname(hostname: &str) -> Result<Vec<IpAddr>, ResolveFailure
 pub struct ProductionGatewayComplianceFeedTransport {
     resolver: ResolverPool,
     accepted_spki_sha256_by_hostname: BTreeMap<String, BTreeSet<[u8; 32]>>,
+    identity: GatewayComplianceFeedTransportIdentityV1,
 }
 
 impl fmt::Debug for ProductionGatewayComplianceFeedTransport {
@@ -240,6 +245,8 @@ impl fmt::Debug for ProductionGatewayComplianceFeedTransport {
                 "trusted_hostname_count",
                 &self.accepted_spki_sha256_by_hostname.len(),
             )
+            .field("provider_handle", &self.identity.provider_handle)
+            .field("revision", &self.identity.revision)
             .finish()
     }
 }
@@ -263,9 +270,18 @@ impl ProductionGatewayComplianceFeedTransport {
                 ));
             }
         }
+        let identity = GatewayComplianceFeedTransportIdentityV1 {
+            provider_handle: GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.to_owned(),
+            revision: GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+            policy_digest: gateway_compliance_feed_transport_policy_digest(
+                &accepted_spki_sha256_by_hostname,
+            )?,
+            test_marked: false,
+        };
         Ok(Self {
             resolver: ResolverPool::new()?,
             accepted_spki_sha256_by_hostname,
+            identity,
         })
     }
 
@@ -287,6 +303,13 @@ impl ProductionGatewayComplianceFeedTransport {
 }
 
 impl GatewayComplianceFeedTransport for ProductionGatewayComplianceFeedTransport {
+    fn qualification(
+        &self,
+    ) -> Result<GatewayComplianceFeedTransportIdentityV1, GatewayComplianceFeedTransportProbeError>
+    {
+        Ok(self.identity.clone())
+    }
+
     fn resolve(
         &self,
         hostname: &str,
@@ -948,6 +971,24 @@ mod tests {
             BTreeSet::from([digest]),
         )]))
         .expect("production transport");
+        let identity = transport.qualification().expect("transport identity");
+        assert_eq!(
+            identity.provider_handle,
+            GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1
+        );
+        assert_eq!(
+            identity.revision,
+            GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1
+        );
+        assert!(!identity.test_marked);
+        assert_eq!(
+            identity.policy_digest,
+            gateway_compliance_feed_transport_policy_digest(&BTreeMap::from([(
+                "feed.example".to_owned(),
+                BTreeSet::from([digest]),
+            )]))
+            .expect("transport policy digest")
+        );
         transport
             .verify_spki("feed.example", digest)
             .expect("configured SPKI");

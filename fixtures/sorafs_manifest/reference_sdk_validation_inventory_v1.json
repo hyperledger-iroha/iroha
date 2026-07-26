@@ -4,6 +4,78 @@
   "signing_domain": "sorafs.reference_sdk.validation_fixture_inventory.v1",
   "payloads": [
     {
+      "path": "appeal_finance/cancel_asset_lock_v1.json",
+      "domain": "appeal_finance",
+      "kind": "cancel_asset_lock",
+      "encoding": "json",
+      "expectation": "valid",
+      "byte_length": 133,
+      "sha256": "e7836804bcb81a36638fd44deccff680b6084fec063ebbb55b94f7fb1c71a680"
+    },
+    {
+      "path": "appeal_finance/cancel_asset_lock_v1.to",
+      "domain": "appeal_finance",
+      "kind": "cancel_asset_lock",
+      "encoding": "norito",
+      "expectation": "valid",
+      "byte_length": 85,
+      "sha256": "a6c89210193c31e03df934be73911dc267a6a93f08664245ef76ed5dac7fd972"
+    },
+    {
+      "path": "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.json",
+      "domain": "appeal_finance",
+      "kind": "cancel_asset_lock",
+      "encoding": "json",
+      "expectation": "invalid_missing_expected_remaining_amount",
+      "byte_length": 96,
+      "sha256": "3478e3e525bc0145de85eb829005798cab6de4ee0b7a8b8a8f0b1168866933dd"
+    },
+    {
+      "path": "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+      "domain": "appeal_finance",
+      "kind": "cancel_asset_lock",
+      "encoding": "norito",
+      "expectation": "invalid_missing_expected_remaining_amount",
+      "byte_length": 73,
+      "sha256": "7a79bebdbd059fa218794ead25f44e8fb9b91b5fa184518716dcfde3f4c14b6a"
+    },
+    {
+      "path": "appeal_finance/negative/cancel_asset_lock_nested_escrow_id_v1.to",
+      "domain": "appeal_finance",
+      "kind": "cancel_asset_lock",
+      "encoding": "norito",
+      "expectation": "invalid_nested_escrow_id",
+      "byte_length": 86,
+      "sha256": "163b50ba963c0fc1787d96d3f52068b1acb7ac2a94446492dd94a1f70dc75512"
+    },
+    {
+      "path": "appeal_finance/negative/cancel_asset_lock_noncanonical_quantity_v1.json",
+      "domain": "appeal_finance",
+      "kind": "cancel_asset_lock",
+      "encoding": "json",
+      "expectation": "invalid_noncanonical_quantity",
+      "byte_length": 135,
+      "sha256": "8f9f8186ee1ae510d17426f78e43c5efbf6543d596edc2180058f0da49f6e612"
+    },
+    {
+      "path": "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.json",
+      "domain": "appeal_finance",
+      "kind": "cancel_asset_lock",
+      "encoding": "json",
+      "expectation": "invalid_zero_expected_remaining_amount",
+      "byte_length": 132,
+      "sha256": "95a45bc0b4dc519276f53da995e4c750bab6b6e5ca7a12de9d30d05a7ad8df26"
+    },
+    {
+      "path": "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
+      "domain": "appeal_finance",
+      "kind": "cancel_asset_lock",
+      "encoding": "norito",
+      "expectation": "invalid_zero_expected_remaining_amount",
+      "byte_length": 84,
+      "sha256": "2e5ea5085af48a25dce82962be42e0a5b5143b33a97b699e97fa47a58e1a7579"
+    },
+    {
       "path": "governance/dag_block_0_v1.json",
       "domain": "governance_dag",
       "kind": "governance_dag_block",
@@ -947,6 +1019,6 @@
     "key_usage": "test_only_reference_sdk_fixture",
     "public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
     "public_key_fingerprint_sha256": "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff",
-    "signature_hex": "6ae977cf27904b4c386158f58f16ae39650b9ab32c28a075dcc6f8b86f916a3e9168e94c9cce2782bdd9c5eb2021730667eb2b66d9a3e84533ca228ce3a8e906"
+    "signature_hex": "40a3700e7d938f4df1b29e725de9d9ff3dbd0696fa0d6673c7d6c85e31025f828a657849d793d4ffda03a422e3f04355527ddf135cfc61272db6e797c1ffaf0e"
   }
 }

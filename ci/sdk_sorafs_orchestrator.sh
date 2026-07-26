@@ -123,10 +123,9 @@ def sync_output_parent(path: pathlib.Path) -> None:
     finally:
         os.close(fd)
 
-def require_source(path: pathlib.Path, label: str) -> pathlib.Path | None:
+def require_source(path: pathlib.Path, label: str) -> pathlib.Path:
     if not path.exists():
-        print(f"[sorafs-sdk] warning: fixture file missing ({path})", file=sys.stderr)
-        return None
+        sys.exit(f"[sorafs-sdk] {label} missing: {path}")
     validate_sdk_path(path, label)
     path_stat = path.lstat()
     if not stat.S_ISREG(path_stat.st_mode):
@@ -136,8 +135,6 @@ def require_source(path: pathlib.Path, label: str) -> pathlib.Path | None:
     return path
 
 source = require_source(source, "fixture source")
-if source is None:
-    raise SystemExit(0)
 validate_sdk_path(target, "fixture snapshot")
 target.parent.mkdir(parents=True, exist_ok=True)
 validate_sdk_path(target, "fixture snapshot")

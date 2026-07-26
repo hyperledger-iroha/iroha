@@ -41,4 +41,3 @@ This crate hosts cross-component tests for Iroha.
   exercises top-up, offline multihop split/change, restart recovery, and exact
   redemption under Halo2 verification.
 - SoraNet web deploy + public DNS ALIAS/CNAME + NS/DS delegation placeholders coverage lives at `tests/soranet_web_deploy.rs`.
-- SoraFS reconciliation divergence reports are exercised in `tests/sorafs_reconciliation.rs`.

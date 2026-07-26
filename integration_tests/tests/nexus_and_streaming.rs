@@ -39,8 +39,6 @@ mod sorafs_gateway_capability_refusal;
 mod sorafs_gateway_conformance;
 #[path = "sorafs_orchestrator_parity.rs"]
 mod sorafs_orchestrator_parity;
-#[path = "sorafs_reconciliation.rs"]
-mod sorafs_reconciliation;
 #[path = "soranet_web_deploy.rs"]
 mod soranet_web_deploy;
 #[path = "streaming/mod.rs"]

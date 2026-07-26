@@ -1,0 +1,111 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+import { validateAppealFinanceCancelAssetLock } from "../src/sorafs.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const fixtureRoot = path.resolve(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "fixtures",
+  "sorafs_manifest",
+  "appeal_finance",
+);
+
+function fixture(relativePath) {
+  return fs.readFileSync(path.join(fixtureRoot, relativePath));
+}
+
+function assertOutcomeShape(outcome, expected) {
+  assert.equal(outcome.status, expected.status);
+  assert.equal(outcome.code, expected.code);
+  assert.equal(outcome.category, expected.category);
+  assert.equal(outcome.version, 1);
+  assert.equal(outcome.generated_at, expected.generatedAt);
+  assert.deepEqual(outcome.inputs, [
+    { kind: "cancel_asset_lock", path: expected.label },
+  ]);
+  assert.equal(
+    outcome.telemetry_tags.includes(
+      `sorafs.reference.code.${expected.code}`,
+    ),
+    true,
+  );
+}
+
+test("appeal-finance validation reports the stable canonical profile", () => {
+  const label = "cancel_asset_lock_v1.to";
+  const outcome = validateAppealFinanceCancelAssetLock(
+    fixture(label),
+    { label, generatedAtUnix: 41 },
+  );
+  assertOutcomeShape(outcome, {
+    status: "Ok",
+    code: "SFS-OK-000",
+    category: "validation",
+    generatedAt: 41,
+    label,
+  });
+  assert.equal(outcome.action, null);
+  assert.deepEqual(
+    outcome.context.find((field) => field.key === "canonical_bytes"),
+    { key: "canonical_bytes", value: "85" },
+  );
+});
+
+test("appeal-finance validation reports the stable missing-field profile", () => {
+  const label = "cancel_asset_lock_legacy_missing_expected_v1.to";
+  const outcome = validateAppealFinanceCancelAssetLock(
+    fixture(`negative/${label}`),
+    { label, generatedAtUnix: 42 },
+  );
+  assertOutcomeShape(outcome, {
+    status: "Error",
+    code: "SFS-NORITO-001",
+    category: "norito",
+    generatedAt: 42,
+    label,
+  });
+  assert.equal(typeof outcome.action, "string");
+  assert.match(outcome.message, /failed to decode CancelAssetLock/u);
+});
+
+test("appeal-finance validation reports the stable zero-quantity profile", () => {
+  const label = "cancel_asset_lock_zero_expected_v1.to";
+  const outcome = validateAppealFinanceCancelAssetLock(
+    fixture(`negative/${label}`),
+    { label, generatedAtUnix: 43 },
+  );
+  assertOutcomeShape(outcome, {
+    status: "Error",
+    code: "SFS-VAL-001",
+    category: "validation",
+    generatedAt: 43,
+    label,
+  });
+  assert.equal(typeof outcome.action, "string");
+  assert.match(outcome.message, /greater than zero/u);
+});
+
+test("appeal-finance validation wrapper rejects unsafe boundary inputs", () => {
+  const canonical = fixture("cancel_asset_lock_v1.to");
+  for (const bytes of [
+    canonical.toString("hex"),
+    canonical.toString("base64"),
+    [...canonical],
+  ]) {
+    assert.throws(() => validateAppealFinanceCancelAssetLock(bytes));
+  }
+  assert.throws(
+    () =>
+      validateAppealFinanceCancelAssetLock(canonical, {
+        generatedAtUnix: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    /safe integer/u,
+  );
+});

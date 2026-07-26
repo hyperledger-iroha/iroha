@@ -176,11 +176,86 @@ test('verifyOpenApiVersions requires explicit unsigned opt-in for dirty provenan
     /dirty provenance cannot be release-verified/i,
   );
   await verifyOpenApiVersions({...context, allowUnsigned: true});
+  await assert.rejects(
+    () =>
+      verifyOpenApiVersions({
+        ...context,
+        allowUnsigned: true,
+        expectedGeneratorCommit: 'ab'.repeat(20),
+      }),
+    /dirty provenance cannot be release-verified/i,
+  );
 });
 
 test('verifyOpenApiVersions validates recorded metadata', async () => {
   const context = await setupFixture();
   await verifyOpenApiVersions(context);
+});
+
+test('verifyOpenApiVersions binds mutable manifests to the expected commit', async () => {
+  const context = await setupFixture();
+  await verifyOpenApiVersions({
+    ...context,
+    expectedGeneratorCommit: 'ab'.repeat(20),
+  });
+  await assert.rejects(
+    () =>
+      verifyOpenApiVersions({
+        ...context,
+        expectedGeneratorCommit: 'cd'.repeat(20),
+      }),
+    /generator_commit .* does not match checked-out commit/i,
+  );
+  await assert.rejects(
+    () =>
+      verifyOpenApiVersions({
+        ...context,
+        expectedGeneratorCommit: 'AB'.repeat(20),
+      }),
+    /exactly 40 lowercase hexadecimal/i,
+  );
+});
+
+test('verifyOpenApiVersions requires byte-identical mutable manifests', async () => {
+  const context = await setupFixture();
+  const currentManifestPath = join(
+    context.outputDir,
+    'versions',
+    'current',
+    'manifest.json',
+  );
+  const currentManifest = await readFile(currentManifestPath, 'utf8');
+  await writeFile(currentManifestPath, `${currentManifest}\n`, 'utf8');
+
+  await assert.rejects(
+    () => verifyOpenApiVersions(context),
+    /latest and current OpenAPI manifests must be byte-identical/i,
+  );
+});
+
+test('verifyOpenApiVersions requires canonical mutable alias paths', async () => {
+  const context = await setupFixture((manifest) => {
+    const latest = manifest.entries.find((entry) => entry.label === 'latest');
+    latest.path = 'versions/current/torii.json';
+    latest.manifestPath = 'versions/current/manifest.json';
+  });
+
+  await assert.rejects(
+    () => verifyOpenApiVersions(context),
+    /latest path must be exactly torii\.json/i,
+  );
+});
+
+test('verifyOpenApiVersions aligns mutable version-map timestamps', async () => {
+  const context = await setupFixture((manifest) => {
+    const current = manifest.entries.find((entry) => entry.label === 'current');
+    current.updatedAt = '2025-11-10T04:39:41.260Z';
+  });
+
+  await assert.rejects(
+    () => verifyOpenApiVersions(context),
+    /latest updatedAt must match current updatedAt/i,
+  );
 });
 
 test('verifyOpenApiVersions rejects unknown root and entry fields', async () => {

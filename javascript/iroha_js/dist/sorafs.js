@@ -398,6 +398,51 @@ export function validateOrderbookPayload(kind, bytes, options = {}) {
 }
 
 /**
+ * Validate a bare appeal-finance `CancelAssetLock` V1 archive with the Rust
+ * reference validator.
+ *
+ * A successful diagnostic outcome does not itself authorize settlement.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @param {{ label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @returns {Record<string, any>}
+ */
+export function validateAppealFinanceCancelAssetLock(bytes, options = {}) {
+  if (!isPlainObject(options)) {
+    throw new TypeError("options must be an object");
+  }
+  const buffer = toBuffer(bytes);
+  const label =
+    typeof options.label === "string" && options.label.trim() !== ""
+      ? options.label.trim()
+      : "sdk:sorafs.appeal_finance.cancel_asset_lock";
+  const generatedAtUnix = normalizeGeneratedAtUnix(
+    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  );
+  const binding = requireSorafsNativeFunction(
+    "sorafsValidateAppealFinanceCancelAssetLockJson",
+    "appeal-finance CancelAssetLock validation",
+  );
+  const payload = binding.sorafsValidateAppealFinanceCancelAssetLockJson(
+    buffer,
+    label,
+    generatedAtUnix,
+  );
+  if (typeof payload !== "string") {
+    throw new Error(
+      "Native binding returned a non-string appeal-finance validation payload",
+    );
+  }
+  const outcome = JSON.parse(payload);
+  if (!isPlainObject(outcome)) {
+    throw new Error(
+      "Native binding returned an invalid appeal-finance validation outcome",
+    );
+  }
+  return outcome;
+}
+
+/**
  * Sign a Norito-encoded mutable orderbook payload with an Ed25519 private key.
  * @param {string} kind
  * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes

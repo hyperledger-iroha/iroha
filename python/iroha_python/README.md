@@ -1020,6 +1020,28 @@ drawdown;
 Zero, negative, NaN, and infinite amounts and expected-remaining preconditions
 are rejected by the SDK before transaction construction.
 
+The appeal-finance fixture boundary also exposes a strict bare archive codec:
+
+```python
+from iroha_python import (
+    decode_cancel_asset_lock_v1,
+    encode_cancel_asset_lock_v1,
+    validate_appeal_finance_cancel_asset_lock,
+)
+
+archive = encode_cancel_asset_lock_v1(
+    "hash:73CCD4E0DD69AD434DB75056B600AA4F74C8FC5556B11BDC799DFDB7EA29851F#434B",
+    "20",
+)
+fields = decode_cancel_asset_lock_v1(archive)
+diagnostic = validate_appeal_finance_cancel_asset_lock(archive)
+```
+
+Only the canonical checksummed hash string, positive canonical quantity string,
+and exact archive bytes are accepted. Hex/base64 aliases, nested identifiers,
+padding, substituted schemas or flags, and trailing bytes fail closed. The
+validation result is diagnostic and does not authorize settlement.
+
 ### Repo settlement helpers
 
 Create repo instructions without hand-crafting Norito payloads:

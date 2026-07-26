@@ -109,6 +109,8 @@ pub const REPUTATION_PUBLICATION_LOCK_FILE_NAME_V1: &str =
 
 /// Maximum bytes in a pinned external runtime handle.
 pub const REPUTATION_RUNTIME_MAX_HANDLE_BYTES_V1: usize = 256;
+/// Exact public provider-contract revision accepted by the V1 runtime.
+pub const REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1: u64 = 1;
 /// Maximum bytes in a pinned Governance DAG peer identity.
 pub const REPUTATION_RUNTIME_MAX_GOVERNANCE_PEER_ID_BYTES_V1: usize = 128;
 /// Default hard pending-operation ceiling for the journal producer.
@@ -165,6 +167,60 @@ impl ReputationExternalFailureV1 {
     pub const fn receipt(self) -> [u8; 32] {
         self.receipt
     }
+}
+
+/// Public, non-secret qualification for one reputation runtime provider.
+///
+/// The revision identifies the V1 provider contract. The digest is supplied
+/// by an independently constructed runtime policy rather than learned from the
+/// provider at first use. Runtime components require both values to match
+/// before and after every external operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReputationRuntimeProviderQualificationV1 {
+    revision: u64,
+    policy_digest: [u8; 32],
+}
+
+impl ReputationRuntimeProviderQualificationV1 {
+    /// Construct one provider qualification observation.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Return the exact public provider-contract revision.
+    #[must_use]
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    /// Return the digest of the independently governed public policy.
+    #[must_use]
+    pub const fn policy_digest(self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    const fn is_valid(self) -> bool {
+        self.revision != 0 && self.policy_digest != [0; 32]
+    }
+}
+
+/// Stable identity and qualification shared by every reputation provider.
+///
+/// Implementations retain credentials, key identifiers, and vendor
+/// diagnostics inside their protected boundary. Qualification must fail for
+/// unavailable, revoked, stale, or otherwise ineligible providers.
+pub trait ReputationRuntimeProviderV1: Send + Sync + fmt::Debug {
+    /// Opaque deployment handle, stable for the provider lifetime.
+    fn handle(&self) -> &str;
+
+    /// Observe the active public provider revision and policy digest.
+    fn qualification(
+        &self,
+    ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1>;
 }
 
 /// One immutable finalized chain view selected for a runtime poll.
@@ -253,16 +309,7 @@ impl ReputationJournalDeliveryFinalizedViewV1 {
 /// Implementations must execute every page method against the exact `anchor`
 /// supplied by the caller. A node that cannot serve the requested immutable
 /// view must return a failure rather than silently selecting a newer view.
-pub trait ReputationFinalizedQueryV1: Send + Sync + fmt::Debug {
-    /// Opaque deployment handle, stable for the lifetime of the provider.
-    fn handle(&self) -> &str;
-
-    /// Verify that the exact-anchor query service is authenticated and ready.
-    ///
-    /// Implementations must not return success for a null, disconnected, or
-    /// identity-unverified backend.
-    fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1>;
-
+pub trait ReputationFinalizedQueryV1: ReputationRuntimeProviderV1 {
     /// Return the highest finalized anchor at or below `maximum_height`.
     ///
     /// Once the chain has finalized `maximum_height`, the implementation must
@@ -344,6 +391,7 @@ pub struct ReputationFinalizedQueryPolicyV1 {
     window_end_height: u64,
     ingest_policy_digest: [u8; 32],
     query_handle: String,
+    query_qualification: ReputationRuntimeProviderQualificationV1,
     page_items: u32,
     max_pages_per_batch: u32,
 }
@@ -390,12 +438,17 @@ impl ReputationFinalizedQueryPolicyV1 {
         {
             return Err(ReputationRuntimeError::InvalidRuntimePolicy);
         }
+        let ingest_policy_digest = ingest_policy.canonical_digest()?;
         Ok(Self {
             version: REPUTATION_FINALIZED_QUERY_POLICY_VERSION_V1,
             chain_id: ingest_policy.chain_id.clone(),
             window_end_height: ingest_policy.window_end_height,
-            ingest_policy_digest: ingest_policy.canonical_digest()?,
+            ingest_policy_digest,
             query_handle,
+            query_qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                ingest_policy_digest,
+            ),
             page_items,
             max_pages_per_batch,
         })
@@ -411,6 +464,25 @@ impl ReputationFinalizedQueryPolicyV1 {
     #[must_use]
     pub const fn window_end_height(&self) -> u64 {
         self.window_end_height
+    }
+
+    /// Return the independently derived finalized-query qualification.
+    #[must_use]
+    pub const fn query_qualification(&self) -> ReputationRuntimeProviderQualificationV1 {
+        self.query_qualification
+    }
+
+    /// Qualify or revalidate the exact finalized-query provider.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, test-marked, substituted, stale, or policy-mismatched
+    /// providers without exposing provider diagnostics.
+    pub fn revalidate_provider(
+        &self,
+        query: &dyn ReputationFinalizedQueryV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        assert_runtime_provider_qualification(&self.query_handle, self.query_qualification, query)
     }
 }
 
@@ -481,10 +553,14 @@ impl ReputationCommittedProjectorRuntimeV1 {
             || policy.window_end_height != ingest_policy.window_end_height
             || policy.ingest_policy_digest != ingest_policy.canonical_digest()?
             || projector.status()?.policy_digest != policy.ingest_policy_digest
-            || query.handle() != policy.query_handle
         {
             return Err(ReputationRuntimeError::RuntimeBindingMismatch);
         }
+        qualify_runtime_provider(
+            &policy.query_handle,
+            policy.query_qualification,
+            query.as_ref(),
+        )?;
         Ok(Self {
             projector,
             policy,
@@ -556,16 +632,15 @@ impl ReputationCommittedProjectorRuntimeV1 {
         &self,
     ) -> Result<ReputationFinalizedPollOutcomeV1, ReputationRuntimeError> {
         self.ensure_query_binding()?;
-        self.query.check_readiness()?;
-        self.ensure_query_binding()?;
         if projector_ready_at(&self.projector, self.policy.window_end_height)? {
             return Ok(ReputationFinalizedPollOutcomeV1::Complete);
         }
 
-        let anchor = self
+        let anchor_result = self
             .query
-            .finalized_at_or_before(&self.policy.chain_id, self.policy.window_end_height)?;
+            .finalized_at_or_before(&self.policy.chain_id, self.policy.window_end_height);
         self.ensure_query_binding()?;
+        let anchor = anchor_result?;
         anchor.validate()?;
         if anchor.chain_id != self.policy.chain_id {
             return Err(ReputationRuntimeError::ChainIdMismatch);
@@ -635,10 +710,7 @@ impl ReputationCommittedProjectorRuntimeV1 {
     }
 
     fn ensure_query_binding(&self) -> Result<(), ReputationRuntimeError> {
-        if self.query.handle() != self.policy.query_handle {
-            return Err(ReputationRuntimeError::RuntimeBindingChanged);
-        }
-        Ok(())
+        self.policy.revalidate_provider(self.query.as_ref())
     }
 
     fn validate_anchor_progress(
@@ -674,10 +746,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let after = after.map(proof_cursor);
         budget.take()?;
         self.ensure_query_binding()?;
-        let page = self
+        let page_result = self
             .query
-            .proof_outcome_page(anchor, after, self.policy.page_items)?;
+            .proof_outcome_page(anchor, after, self.policy.page_items);
         self.ensure_query_binding()?;
+        let page = page_result?;
         validate_event_page(
             anchor.identity,
             after.map(committed_from_proof_cursor),
@@ -703,10 +776,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let after = after.map(journal_cursor);
         budget.take()?;
         self.ensure_query_binding()?;
-        let page = self
+        let page_result = self
             .query
-            .reputation_journal_page(anchor, after, self.policy.page_items)?;
+            .reputation_journal_page(anchor, after, self.policy.page_items);
         self.ensure_query_binding()?;
+        let page = page_result?;
         page.validate_after(after)
             .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
         if page.finalized_cursor
@@ -733,10 +807,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let after = after.map(repair_cursor);
         budget.take()?;
         self.ensure_query_binding()?;
-        let page = self
+        let page_result = self
             .query
-            .repair_page(anchor, after, self.policy.page_items)?;
+            .repair_page(anchor, after, self.policy.page_items);
         self.ensure_query_binding()?;
+        let page = page_result?;
         validate_event_page(
             anchor.identity,
             after.map(committed_from_repair_cursor),
@@ -762,10 +837,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let after = after.map(orderbook_cursor);
         budget.take()?;
         self.ensure_query_binding()?;
-        let page = self
+        let page_result = self
             .query
-            .orderbook_page(anchor, after, self.policy.page_items)?;
+            .orderbook_page(anchor, after, self.policy.page_items);
         self.ensure_query_binding()?;
+        let page = page_result?;
         validate_event_page(
             anchor.identity,
             after.map(committed_from_orderbook_cursor),
@@ -791,10 +867,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let after = after.map(reserve_cursor);
         budget.take()?;
         self.ensure_query_binding()?;
-        let page = self
+        let page_result = self
             .query
-            .reserve_page(anchor, after, self.policy.page_items)?;
+            .reserve_page(anchor, after, self.policy.page_items);
         self.ensure_query_binding()?;
+        let page = page_result?;
         validate_event_page(
             anchor.identity,
             after.map(committed_from_reserve_cursor),
@@ -821,10 +898,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         loop {
             budget.take()?;
             self.ensure_query_binding()?;
-            let page =
+            let page_result =
                 self.query
-                    .reserve_provider_page(anchor, after, RESERVE_QUERY_MAX_ITEMS_V1)?;
+                    .reserve_provider_page(anchor, after, RESERVE_QUERY_MAX_ITEMS_V1);
             self.ensure_query_binding()?;
+            let page = page_result?;
             if page.finalized_cursor.height != anchor.identity.height
                 || page.finalized_cursor.block_hash != anchor.identity.block_hash
                 || page.accounts.len()
@@ -2787,7 +2865,9 @@ pub struct ReputationJournalDeliveryPolicyV1 {
     version: u8,
     chain_id: ChainId,
     finalized_query_handle: String,
+    finalized_query_qualification: ReputationRuntimeProviderQualificationV1,
     transaction_submitter_handle: String,
+    transaction_submitter_qualification: ReputationRuntimeProviderQualificationV1,
     page_items: u32,
     max_pages_per_tick: u32,
     max_submissions_per_tick: u32,
@@ -2802,17 +2882,28 @@ impl ReputationJournalDeliveryPolicyV1 {
     pub fn strict_v1(
         chain_id: ChainId,
         finalized_query_handle: impl Into<String>,
+        finalized_query_qualification: ReputationRuntimeProviderQualificationV1,
         transaction_submitter_handle: impl Into<String>,
     ) -> Result<Self, ReputationRuntimeError> {
         let page_items = u32::try_from(REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1)
             .map_err(|_| ReputationRuntimeError::InvalidRuntimePolicy)?;
+        let finalized_query_handle = validate_runtime_handle(finalized_query_handle.into())?;
+        let transaction_submitter_handle =
+            validate_runtime_handle(transaction_submitter_handle.into())?;
+        let transaction_submitter_qualification = ReputationRuntimeProviderQualificationV1::new(
+            REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+            reputation_journal_submitter_policy_digest_v1(
+                &chain_id,
+                &transaction_submitter_handle,
+            )?,
+        );
         let policy = Self {
             version: REPUTATION_JOURNAL_DELIVERY_POLICY_VERSION_V1,
             chain_id,
-            finalized_query_handle: validate_runtime_handle(finalized_query_handle.into())?,
-            transaction_submitter_handle: validate_runtime_handle(
-                transaction_submitter_handle.into(),
-            )?,
+            finalized_query_handle,
+            finalized_query_qualification,
+            transaction_submitter_handle,
+            transaction_submitter_qualification,
             page_items,
             max_pages_per_tick: REPUTATION_JOURNAL_DELIVERY_MAX_PAGES_PER_TICK_V1,
             max_submissions_per_tick: REPUTATION_JOURNAL_DELIVERY_MAX_SUBMISSIONS_PER_TICK_V1,
@@ -2833,6 +2924,17 @@ impl ReputationJournalDeliveryPolicyV1 {
             || self.max_submissions_per_tick == 0
             || self.max_submissions_per_tick
                 > REPUTATION_JOURNAL_DELIVERY_MAX_SUBMISSIONS_PER_TICK_V1
+            || self.finalized_query_qualification.revision()
+                != REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1
+            || !self.finalized_query_qualification.is_valid()
+            || self.transaction_submitter_qualification.revision()
+                != REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1
+            || !self.transaction_submitter_qualification.is_valid()
+            || self.transaction_submitter_qualification.policy_digest()
+                != reputation_journal_submitter_policy_digest_v1(
+                    &self.chain_id,
+                    &self.transaction_submitter_handle,
+                )?
         {
             return Err(ReputationRuntimeError::InvalidRuntimePolicy);
         }
@@ -2840,6 +2942,63 @@ impl ReputationJournalDeliveryPolicyV1 {
         validate_runtime_handle(self.transaction_submitter_handle.clone())?;
         Ok(())
     }
+
+    /// Qualify or revalidate the exact finalized-query provider.
+    pub fn revalidate_query_provider(
+        &self,
+        query: &dyn ReputationFinalizedQueryV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        assert_runtime_provider_qualification(
+            &self.finalized_query_handle,
+            self.finalized_query_qualification,
+            query,
+        )
+    }
+
+    /// Qualify or revalidate the exact native transaction submitter.
+    pub fn revalidate_submitter_provider(
+        &self,
+        submitter: &dyn ReputationJournalTransactionSubmitterV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        assert_runtime_provider_qualification(
+            &self.transaction_submitter_handle,
+            self.transaction_submitter_qualification,
+            submitter,
+        )
+    }
+}
+
+/// Derive the public V1 policy digest for a chain-bound journal submitter.
+///
+/// The handle remains an independently configured identity; including its
+/// digest here prevents the same qualification from authorizing a substituted
+/// submitter role.
+pub fn reputation_journal_submitter_policy_digest_v1(
+    chain_id: &ChainId,
+    handle: &str,
+) -> Result<[u8; 32], ReputationRuntimeError> {
+    if chain_id.as_str().is_empty()
+        || chain_id.as_str().len() > super::REPUTATION_INGEST_MAX_CHAIN_ID_BYTES_V1
+    {
+        return Err(ReputationRuntimeError::InvalidRuntimePolicy);
+    }
+    let handle = validate_runtime_handle(handle.to_owned())?;
+    hash_canonical(
+        b"sorafs-reputation-journal-submitter-policy-v1",
+        &ReputationJournalSubmitterPolicyDigestMaterialV1 {
+            chain_id: chain_id.clone(),
+            handle_digest: domain_digest(
+                b"sorafs-reputation-runtime-handle-v1",
+                handle.as_bytes(),
+            )?,
+        },
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
+struct ReputationJournalSubmitterPolicyDigestMaterialV1 {
+    chain_id: ChainId,
+    handle_digest: [u8; 32],
 }
 
 /// Exact canonical append request sent to an injected transaction submitter.
@@ -2959,13 +3118,7 @@ impl ReputationJournalTransactionSubmitOutcomeV1 {
 /// reject any request whose `authority` is not the exact account derived from
 /// the selected signing key. A queued receipt is only a handoff
 /// acknowledgement; this interface has no method that can report finality.
-pub trait ReputationJournalTransactionSubmitterV1: Send + Sync + fmt::Debug {
-    /// Opaque deployment handle, stable for the submitter lifetime.
-    fn handle(&self) -> &str;
-
-    /// Verify authenticated signer and transaction-queue readiness.
-    fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1>;
-
+pub trait ReputationJournalTransactionSubmitterV1: ReputationRuntimeProviderV1 {
     /// Return whether one exact governed authority has a runtime-only signer.
     fn supports_authority(&self, authority: &AccountId) -> bool;
 
@@ -3071,12 +3224,19 @@ impl ReputationJournalDeliveryWorkerV1 {
         submitter: Arc<dyn ReputationJournalTransactionSubmitterV1>,
     ) -> Result<Self, ReputationRuntimeError> {
         policy.validate()?;
-        if outbox.policy.chain_id != policy.chain_id
-            || query.handle() != policy.finalized_query_handle
-            || submitter.handle() != policy.transaction_submitter_handle
-        {
+        if outbox.policy.chain_id != policy.chain_id {
             return Err(ReputationRuntimeError::RuntimeBindingMismatch);
         }
+        qualify_runtime_provider(
+            &policy.finalized_query_handle,
+            policy.finalized_query_qualification,
+            query.as_ref(),
+        )?;
+        qualify_runtime_provider(
+            &policy.transaction_submitter_handle,
+            policy.transaction_submitter_qualification,
+            submitter.as_ref(),
+        )?;
         Ok(Self {
             outbox,
             query,
@@ -3209,9 +3369,6 @@ impl ReputationJournalDeliveryWorkerV1 {
         &self,
     ) -> Result<ReputationJournalDeliveryTickOutcomeV1, ReputationRuntimeError> {
         self.ensure_bindings()?;
-        self.query.check_readiness()?;
-        self.submitter.check_readiness()?;
-        self.ensure_bindings()?;
 
         let mut pages = 0_u32;
         let mut committed = 0_u32;
@@ -3221,14 +3378,16 @@ impl ReputationJournalDeliveryWorkerV1 {
             }
             let scan = self.outbox.scan_status()?;
             let requested_after = scan.after;
-            let view = self.query.reputation_journal_delivery_view(
+            self.ensure_query_binding()?;
+            let view_result = self.query.reputation_journal_delivery_view(
                 &self.policy.chain_id,
                 u64::MAX,
                 FindSorafsReputationJournalAuthorityPolicy,
                 requested_after,
                 self.policy.page_items,
-            )?;
-            self.ensure_bindings()?;
+            );
+            self.ensure_query_binding()?;
+            let view = view_result?;
             view.validate(
                 &self.policy.chain_id,
                 requested_after,
@@ -3329,12 +3488,16 @@ impl ReputationJournalDeliveryWorkerV1 {
                 terminal_view.authority_policy.policy_digest,
                 current_identity,
             )?;
-            if !self.submitter.supports_authority(&submission.authority) {
+            self.ensure_submitter_binding()?;
+            let supports_authority = self.submitter.supports_authority(&submission.authority);
+            self.ensure_submitter_binding()?;
+            if !supports_authority {
                 return Err(ReputationRuntimeError::JournalSubmitterAuthorityMismatch);
             }
             let request = journal_transaction_request(submission)?;
+            self.ensure_submitter_binding()?;
             let outcome = self.submitter.submit(&request);
-            self.ensure_bindings()?;
+            self.ensure_submitter_binding()?;
             if outcome.receipt() == [0; 32] {
                 return Err(ReputationRuntimeError::InvalidExternalReceipt);
             }
@@ -3378,12 +3541,17 @@ impl ReputationJournalDeliveryWorkerV1 {
     }
 
     fn ensure_bindings(&self) -> Result<(), ReputationRuntimeError> {
-        if self.query.handle() != self.policy.finalized_query_handle
-            || self.submitter.handle() != self.policy.transaction_submitter_handle
-        {
-            return Err(ReputationRuntimeError::RuntimeBindingChanged);
-        }
-        Ok(())
+        self.ensure_query_binding()?;
+        self.ensure_submitter_binding()
+    }
+
+    fn ensure_query_binding(&self) -> Result<(), ReputationRuntimeError> {
+        self.policy.revalidate_query_provider(self.query.as_ref())
+    }
+
+    fn ensure_submitter_binding(&self) -> Result<(), ReputationRuntimeError> {
+        self.policy
+            .revalidate_submitter_provider(self.submitter.as_ref())
     }
 }
 
@@ -3479,13 +3647,7 @@ pub struct ReputationThresholdSigningRequestV1 {
 /// The client must reconcile by `idempotency_key`: returning `None` means the
 /// operation remains pending, and a later call must never sign different
 /// material under the same key.
-pub trait ReputationThresholdSignerClientV1: Send + Sync + fmt::Debug {
-    /// Opaque deployment handle, stable for the provider lifetime.
-    fn handle(&self) -> &str;
-
-    /// Verify authenticated connectivity and governed signer readiness.
-    fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1>;
-
+pub trait ReputationThresholdSignerClientV1: ReputationRuntimeProviderV1 {
     /// Submit or reconcile one exact unsigned-material operation.
     fn reconcile_signature(
         &self,
@@ -3515,13 +3677,7 @@ pub struct ReputationGovernanceDagPublicationRequestV1 {
 /// A successful acknowledgement is the exact signed DAG block read back from
 /// the governed publication service. A submitter-side success without this
 /// block remains pending.
-pub trait ReputationGovernanceDagClientV1: Send + Sync + fmt::Debug {
-    /// Opaque deployment handle, stable for the provider lifetime.
-    fn handle(&self) -> &str;
-
-    /// Verify authenticated publication/readback readiness.
-    fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1>;
-
+pub trait ReputationGovernanceDagClientV1: ReputationRuntimeProviderV1 {
     /// Publish or reconcile the exact snapshot, returning its signed DAG block
     /// only after authenticated readback.
     fn reconcile_publication(
@@ -3638,7 +3794,9 @@ impl StoredReputationGovernanceDagReadbackV1 {
 pub struct ReputationPublicationPolicyV1 {
     trust_policy_digest: [u8; 32],
     threshold_signer_handle: String,
+    threshold_signer_qualification: ReputationRuntimeProviderQualificationV1,
     governance_dag_handle: String,
+    governance_dag_qualification: ReputationRuntimeProviderQualificationV1,
     governance_publisher_peer_id: Vec<u8>,
     governance_publisher_public_key: [u8; 32],
     governance_publisher_key_digest: [u8; 32],
@@ -3686,12 +3844,56 @@ impl ReputationPublicationPolicyV1 {
         Ok(Self {
             trust_policy_digest,
             threshold_signer_handle,
+            threshold_signer_qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                trust_policy_digest,
+            ),
             governance_dag_handle,
+            governance_dag_qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                governance_publisher_key_digest,
+            ),
             governance_publisher_peer_id,
             governance_publisher_public_key,
             governance_publisher_key_digest,
             checkpoint_max_bytes,
         })
+    }
+
+    /// Return the independently governed threshold-signer qualification.
+    #[must_use]
+    pub const fn threshold_signer_qualification(&self) -> ReputationRuntimeProviderQualificationV1 {
+        self.threshold_signer_qualification
+    }
+
+    /// Return the independently governed Governance DAG qualification.
+    #[must_use]
+    pub const fn governance_dag_qualification(&self) -> ReputationRuntimeProviderQualificationV1 {
+        self.governance_dag_qualification
+    }
+
+    /// Qualify or revalidate the external threshold signer.
+    pub fn revalidate_threshold_signer(
+        &self,
+        signer: &dyn ReputationThresholdSignerClientV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        assert_runtime_provider_qualification(
+            &self.threshold_signer_handle,
+            self.threshold_signer_qualification,
+            signer,
+        )
+    }
+
+    /// Qualify or revalidate authenticated Governance DAG publication/readback.
+    pub fn revalidate_governance_dag(
+        &self,
+        governance_dag: &dyn ReputationGovernanceDagClientV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        assert_runtime_provider_qualification(
+            &self.governance_dag_handle,
+            self.governance_dag_qualification,
+            governance_dag,
+        )
     }
 
     fn digest(&self) -> Result<[u8; 32], ReputationRuntimeError> {
@@ -4123,11 +4325,19 @@ impl ReputationPublicationReconcilerV1 {
             .map_err(|_| ReputationRuntimeError::InvalidRuntimePolicy)?;
         if trust_policy.canonical_digest().ok() != Some(policy.trust_policy_digest)
             || projector.policy.snapshot_trust_policy_digest != policy.trust_policy_digest
-            || threshold_signer.handle() != policy.threshold_signer_handle
-            || governance_dag.handle() != policy.governance_dag_handle
         {
             return Err(ReputationRuntimeError::RuntimeBindingMismatch);
         }
+        qualify_runtime_provider(
+            &policy.threshold_signer_handle,
+            policy.threshold_signer_qualification,
+            threshold_signer.as_ref(),
+        )?;
+        qualify_runtime_provider(
+            &policy.governance_dag_handle,
+            policy.governance_dag_qualification,
+            governance_dag.as_ref(),
+        )?;
         let policy_digest = policy.digest()?;
         let store = AtomicCheckpointStore::new(
             root,
@@ -4192,7 +4402,10 @@ impl ReputationPublicationReconcilerV1 {
 
         if self.pending_publication()?.is_none() {
             let request = threshold_signing_request(&delivery)?;
-            let signed = match self.threshold_signer.reconcile_signature(&request) {
+            self.ensure_threshold_signer_binding()?;
+            let signed_result = self.threshold_signer.reconcile_signature(&request);
+            self.ensure_threshold_signer_binding()?;
+            let signed = match signed_result {
                 Ok(Some(signed)) => signed,
                 Ok(None) => return Ok(ReputationPublicationOutcomeV1::AwaitingThresholdSignature),
                 Err(failure) => {
@@ -4203,7 +4416,6 @@ impl ReputationPublicationReconcilerV1 {
                     );
                 }
             };
-            self.ensure_external_bindings()?;
             self.validate_signed_result(&delivery, &signed)?;
             self.store_signed_result(&delivery, signed)?;
         }
@@ -4219,7 +4431,10 @@ impl ReputationPublicationReconcilerV1 {
         self.validate_signed_result(&delivery, &pending.signed_result)?;
         if pending.governance_acknowledgement.is_none() {
             let request = governance_publication_request(&pending)?;
-            let block = match self.governance_dag.reconcile_publication(&request) {
+            self.ensure_governance_dag_binding()?;
+            let block_result = self.governance_dag.reconcile_publication(&request);
+            self.ensure_governance_dag_binding()?;
+            let block = match block_result {
                 Ok(Some(block)) => block,
                 Ok(None) => return Ok(ReputationPublicationOutcomeV1::AwaitingGovernanceDag),
                 Err(failure) => {
@@ -4230,7 +4445,6 @@ impl ReputationPublicationReconcilerV1 {
                     );
                 }
             };
-            self.ensure_external_bindings()?;
             let (acknowledgement, readback) = self.validate_governance_block(&pending, &block)?;
             self.store_governance_readback(acknowledgement, readback)?;
         }
@@ -4461,9 +4675,6 @@ impl ReputationPublicationReconcilerV1 {
     /// The identity check is repeated after the probes so an adapter cannot
     /// swap its governed binding during readiness validation.
     pub fn check_readiness(&self) -> Result<(), ReputationRuntimeError> {
-        self.ensure_external_bindings()?;
-        self.threshold_signer.check_readiness()?;
-        self.governance_dag.check_readiness()?;
         self.ensure_external_bindings()
     }
 
@@ -4628,12 +4839,18 @@ impl ReputationPublicationReconcilerV1 {
     }
 
     fn ensure_external_bindings(&self) -> Result<(), ReputationRuntimeError> {
-        if self.threshold_signer.handle() != self.policy.threshold_signer_handle
-            || self.governance_dag.handle() != self.policy.governance_dag_handle
-        {
-            return Err(ReputationRuntimeError::RuntimeBindingChanged);
-        }
-        Ok(())
+        self.ensure_threshold_signer_binding()?;
+        self.ensure_governance_dag_binding()
+    }
+
+    fn ensure_threshold_signer_binding(&self) -> Result<(), ReputationRuntimeError> {
+        self.policy
+            .revalidate_threshold_signer(self.threshold_signer.as_ref())
+    }
+
+    fn ensure_governance_dag_binding(&self) -> Result<(), ReputationRuntimeError> {
+        self.policy
+            .revalidate_governance_dag(self.governance_dag.as_ref())
     }
 
     fn commit_publication_candidate(
@@ -5189,6 +5406,9 @@ pub enum ReputationRuntimeError {
     /// An injected dependency changed identity after construction.
     #[error("reputation runtime dependency identity changed")]
     RuntimeBindingChanged,
+    /// A provider returned a zero or otherwise malformed public qualification.
+    #[error("reputation runtime provider qualification is invalid")]
+    InvalidProviderQualification,
     /// A finalized anchor is inert or carries an invalid timestamp.
     #[error("reputation finalized anchor is invalid")]
     InvalidFinalizedAnchor,
@@ -5330,12 +5550,72 @@ impl From<CheckpointStoreError> for ReputationRuntimeError {
 fn validate_runtime_handle(handle: String) -> Result<String, ReputationRuntimeError> {
     if handle.is_empty()
         || handle.len() > REPUTATION_RUNTIME_MAX_HANDLE_BYTES_V1
+        || !handle.is_ascii()
         || handle.trim() != handle
-        || handle.chars().any(char::is_control)
+        || handle
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(ReputationRuntimeError::InvalidRuntimePolicy);
+    }
+    let lowercase = handle.to_ascii_lowercase();
+    if lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
+            )
+        })
     {
         return Err(ReputationRuntimeError::InvalidRuntimePolicy);
     }
     Ok(handle)
+}
+
+fn qualify_runtime_provider<P: ReputationRuntimeProviderV1 + ?Sized>(
+    expected_handle: &str,
+    expected_qualification: ReputationRuntimeProviderQualificationV1,
+    provider: &P,
+) -> Result<(), ReputationRuntimeError> {
+    validate_runtime_handle(expected_handle.to_owned())?;
+    if !expected_qualification.is_valid()
+        || expected_qualification.revision()
+            != REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1
+    {
+        return Err(ReputationRuntimeError::InvalidRuntimePolicy);
+    }
+    if validate_runtime_handle(provider.handle().to_owned()).is_err()
+        || provider.handle() != expected_handle
+    {
+        return Err(ReputationRuntimeError::RuntimeBindingMismatch);
+    }
+    let qualification = provider.qualification()?;
+    if !qualification.is_valid() {
+        return Err(ReputationRuntimeError::InvalidProviderQualification);
+    }
+    if qualification != expected_qualification || provider.handle() != expected_handle {
+        return Err(ReputationRuntimeError::RuntimeBindingMismatch);
+    }
+    Ok(())
+}
+
+fn assert_runtime_provider_qualification<P: ReputationRuntimeProviderV1 + ?Sized>(
+    expected_handle: &str,
+    expected_qualification: ReputationRuntimeProviderQualificationV1,
+    provider: &P,
+) -> Result<(), ReputationRuntimeError> {
+    if provider.handle() != expected_handle {
+        return Err(ReputationRuntimeError::RuntimeBindingChanged);
+    }
+    let qualification = provider.qualification()?;
+    if !qualification.is_valid()
+        || qualification != expected_qualification
+        || provider.handle() != expected_handle
+    {
+        return Err(ReputationRuntimeError::RuntimeBindingChanged);
+    }
+    Ok(())
 }
 
 fn decode_runtime_checkpoint<T>(bytes: &[u8], max_bytes: u64) -> Result<T, ReputationRuntimeError>
@@ -5805,17 +6085,22 @@ mod tests {
     #[derive(Debug)]
     struct NullQuery {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
     }
 
-    impl ReputationFinalizedQueryV1 for NullQuery {
+    impl ReputationRuntimeProviderV1 for NullQuery {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationFinalizedQueryV1 for NullQuery {
         fn finalized_at_or_before(
             &self,
             _chain_id: &ChainId,
@@ -5893,18 +6178,23 @@ mod tests {
     #[derive(Debug)]
     struct ScriptedDeliveryQuery {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
         views: Mutex<VecDeque<ReputationJournalDeliveryFinalizedViewV1>>,
     }
 
-    impl ReputationFinalizedQueryV1 for ScriptedDeliveryQuery {
+    impl ReputationRuntimeProviderV1 for ScriptedDeliveryQuery {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationFinalizedQueryV1 for ScriptedDeliveryQuery {
         fn finalized_at_or_before(
             &self,
             _chain_id: &ChainId,
@@ -5991,18 +6281,23 @@ mod tests {
     #[derive(Debug)]
     struct RecordingJournalSubmitter {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
         requests: Mutex<Vec<ReputationJournalTransactionRequestV1>>,
     }
 
-    impl ReputationJournalTransactionSubmitterV1 for RecordingJournalSubmitter {
+    impl ReputationRuntimeProviderV1 for RecordingJournalSubmitter {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationJournalTransactionSubmitterV1 for RecordingJournalSubmitter {
         fn supports_authority(&self, _authority: &AccountId) -> bool {
             true
         }
@@ -6024,17 +6319,22 @@ mod tests {
     #[derive(Debug)]
     struct NullThresholdSigner {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
     }
 
-    impl ReputationThresholdSignerClientV1 for NullThresholdSigner {
+    impl ReputationRuntimeProviderV1 for NullThresholdSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationThresholdSignerClientV1 for NullThresholdSigner {
         fn reconcile_signature(
             &self,
             _request: &ReputationThresholdSigningRequestV1,
@@ -6046,17 +6346,22 @@ mod tests {
     #[derive(Debug)]
     struct NullGovernanceDag {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
     }
 
-    impl ReputationGovernanceDagClientV1 for NullGovernanceDag {
+    impl ReputationRuntimeProviderV1 for NullGovernanceDag {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationGovernanceDagClientV1 for NullGovernanceDag {
         fn reconcile_publication(
             &self,
             _request: &ReputationGovernanceDagPublicationRequestV1,
@@ -6071,6 +6376,8 @@ mod tests {
         trust_policy: ReputationSnapshotTrustPolicyV1,
         policy: ReputationPublicationPolicyV1,
     ) -> ReputationPublicationReconcilerV1 {
+        let signer_qualification = policy.threshold_signer_qualification();
+        let dag_qualification = policy.governance_dag_qualification();
         ReputationPublicationReconcilerV1::open(
             root,
             projector,
@@ -6078,9 +6385,11 @@ mod tests {
             policy,
             Arc::new(NullThresholdSigner {
                 handle: "signer-a".to_owned(),
+                qualification: signer_qualification,
             }),
             Arc::new(NullGovernanceDag {
                 handle: "dag-a".to_owned(),
+                qualification: dag_qualification,
             }),
         )
         .expect("publication reconciler")
@@ -6096,12 +6405,14 @@ mod tests {
         );
         let policy = ReputationFinalizedQueryPolicyV1::try_new(&ingest, "query-a", 32, 1_024)
             .expect("query policy");
+        let query_qualification = policy.query_qualification();
         let result = ReputationCommittedProjectorRuntimeV1::new(
             projector,
             &ingest,
             policy,
             Arc::new(NullQuery {
                 handle: "query-b".to_owned(),
+                qualification: query_qualification,
             }),
         );
         assert!(matches!(
@@ -6464,8 +6775,13 @@ mod tests {
             ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
             | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
         };
+        let query_qualification = ReputationRuntimeProviderQualificationV1::new(
+            REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+            [0xC1; 32],
+        );
         let query = Arc::new(ScriptedDeliveryQuery {
             handle: "ledger.finalized.primary".to_owned(),
+            qualification: query_qualification,
             views: Mutex::new(VecDeque::from([delivery_view(
                 10,
                 [0xB1; 32],
@@ -6476,6 +6792,14 @@ mod tests {
         });
         let submitter = Arc::new(RecordingJournalSubmitter {
             handle: "queue.reputation.journal".to_owned(),
+            qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                reputation_journal_submitter_policy_digest_v1(
+                    &ChainId::from("reputation-runtime-test"),
+                    "queue.reputation.journal",
+                )
+                .expect("submitter policy digest"),
+            ),
             requests: Mutex::new(Vec::new()),
         });
         let worker = ReputationJournalDeliveryWorkerV1::new(
@@ -6483,6 +6807,7 @@ mod tests {
             ReputationJournalDeliveryPolicyV1::strict_v1(
                 ChainId::from("reputation-runtime-test"),
                 query.handle.clone(),
+                query_qualification,
                 submitter.handle.clone(),
             )
             .expect("delivery policy"),
@@ -6768,6 +7093,8 @@ mod tests {
             REPUTATION_RUNTIME_MIN_CHECKPOINT_BYTES_V1,
         )
         .expect("publication policy");
+        let signer_qualification = policy.threshold_signer_qualification();
+        let dag_qualification = policy.governance_dag_qualification();
         let result = ReputationPublicationReconcilerV1::open(
             publication_root.path(),
             projector,
@@ -6775,9 +7102,11 @@ mod tests {
             policy,
             Arc::new(NullThresholdSigner {
                 handle: "signer-b".to_owned(),
+                qualification: signer_qualification,
             }),
             Arc::new(NullGovernanceDag {
                 handle: "dag-a".to_owned(),
+                qualification: dag_qualification,
             }),
         );
         assert!(matches!(
@@ -6919,6 +7248,8 @@ mod tests {
             [0xFF, 0x00, 0x01],
         )
         .expect("write corrupt publication checkpoint");
+        let signer_qualification = policy.threshold_signer_qualification();
+        let dag_qualification = policy.governance_dag_qualification();
         assert!(matches!(
             ReputationPublicationReconcilerV1::open(
                 publication_root.path(),
@@ -6927,9 +7258,11 @@ mod tests {
                 policy,
                 Arc::new(NullThresholdSigner {
                     handle: "signer-a".to_owned(),
+                    qualification: signer_qualification,
                 }),
                 Arc::new(NullGovernanceDag {
                     handle: "dag-a".to_owned(),
+                    qualification: dag_qualification,
                 }),
             ),
             Err(ReputationRuntimeError::InvalidCheckpoint)

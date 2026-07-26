@@ -38,14 +38,19 @@ pub mod store;
 pub mod telemetry;
 mod transparency;
 
-use governance::FilesystemGovernancePublisher;
+use governance::{FilesystemGovernancePublisher, qualify_governance_dag_runtime_signer_provider};
 pub use governance::{
     GovernanceDagAuthenticationScope, GovernanceDagRequestAuthenticator,
-    GovernanceDagRuntimeSigner, GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
+    GovernanceDagRuntimeProviderQualificationV1, GovernanceDagRuntimeSigner,
+    GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
     GovernanceDagSealedStateSlot, governance_dag_sealed_state_revision,
 };
 pub use governance_service::{
-    GovernanceDagServiceError, GovernanceDagServiceRuntimeProviders, run_governance_dag_service,
+    GovernanceDagServiceError, GovernanceDagServiceLauncherError,
+    GovernanceDagServiceRuntimeProviderBindingsV1,
+    GovernanceDagServiceRuntimeProviderRegistryErrorV1,
+    GovernanceDagServiceRuntimeProviderRegistryV1, GovernanceDagServiceRuntimeProviders,
+    run_governance_dag_service, run_governance_dag_service_with_runtime_registry,
 };
 pub use moderation::{
     MODERATION_SCREENING_ADMISSION_RECEIPT_VERSION_V1,
@@ -381,8 +386,11 @@ pub use transparency::{
     PrivacyCyclePrfInputErrorV1, PrivacyCyclePrfInputV1, PrivacyCyclePrfOutputV1,
     PrivacyCyclePrfProviderErrorV1, PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestErrorV1,
     PrivacyCyclePrfRequestV1, PrivacyReleaseAnchorErrorV1, PrivacyReleaseAnchorHeadV1,
-    PrivacyReleaseAnchorV1, PrivacySourceEventRecordOutcomeV1, ProofTokenIssuanceIngestError,
-    TransparencyLedgerIngestError, TransparencyLedgerSourceEntry,
+    PrivacyReleaseAnchorV1, PrivacySourceEventRecordOutcomeV1, ProductionPrivacyCyclePrfProviderV1,
+    ProductionPrivacyReleaseAnchorV1, ProductionTransparencyRuntimeProviderV1,
+    ProofTokenIssuanceIngestError, QualifiedPrivacyCyclePrfProviderV1,
+    QualifiedPrivacyReleaseAnchorV1, TransparencyLedgerIngestError, TransparencyLedgerSourceEntry,
+    TransparencyRuntimeProviderQualificationErrorV1, TransparencyRuntimeProviderQualificationV1,
     appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
     gar_enforcement_receipt_source_entry, moderation_evidence_viewer_audit_report_source_entry,
     privacy_aggregate_cycle_id, privacy_metric_schema_digest, privacy_population_inventory_digest,
@@ -2067,11 +2075,8 @@ impl std::fmt::Debug for NodeRuntimeDeps {
                 &self.privacy_release_anchor.is_some(),
             )
             .field(
-                "governance_dag_signer_handle",
-                &self
-                    .governance_dag_signer
-                    .as_ref()
-                    .map(|signer| signer.handle()),
+                "governance_dag_signer",
+                &self.governance_dag_signer.is_some(),
             )
             .finish()
     }
@@ -4088,6 +4093,39 @@ impl NodeHandle {
                     .to_owned(),
             ));
         }
+        let governance_dag_runtime_binding = if governance_dir.is_some() {
+            let peer_id = governance_dag_publisher_peer_id
+                .expect("configured Governance DAG peer id checked above");
+            let handle = governance_dag_signer_handle
+                .expect("configured Governance DAG signer handle checked above");
+            let public_key_hex = governance_dag_publisher_public_key_hex
+                .expect("configured Governance DAG public key checked above");
+            if public_key_hex.len() != 64
+                || !public_key_hex
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(NodeInitError::GovernancePublisher(
+                    "Governance DAG publisher public key is not canonical lowercase hex".to_owned(),
+                ));
+            }
+            let public_key: [u8; 32] = hex::decode(&public_key_hex)
+                .expect("validated lowercase public key hex")
+                .try_into()
+                .expect("validated 32-byte public key");
+            let signer =
+                governance_dag_signer.expect("injected Governance DAG signer checked above");
+            let signer = qualify_governance_dag_runtime_signer_provider(
+                handle,
+                peer_id.into_bytes(),
+                public_key,
+                signer,
+            )
+            .map_err(|error| NodeInitError::GovernancePublisher(error.to_string()))?;
+            Some(signer)
+        } else {
+            None
+        };
         let moderation_screening_authority = if config.moderation_screening_enabled() {
             if !config.enabled() {
                 return Err(NodeInitError::ModerationScreeningAuthorityBundle {
@@ -4443,39 +4481,16 @@ impl NodeHandle {
             // The supervised Torii repair forwarder resumes each protocol on its first
             // immediate scan and once per subsequent scan.
             if let Some(dir) = governance_dir.clone() {
+                let signer = governance_dag_runtime_binding
+                    .expect("configured Governance DAG dependencies qualified above");
+                signer
+                    .assert_qualification()
+                    .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
                 let publisher = FilesystemGovernancePublisher::try_new(dir.clone())
                     .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
-                let publisher = match (
-                    governance_dag_publisher_peer_id.clone(),
-                    governance_dag_signer_handle.clone(),
-                    governance_dag_publisher_public_key_hex.clone(),
-                    governance_dag_signer.clone(),
-                ) {
-                    (Some(peer_id), Some(handle), Some(public_key_hex), Some(signer)) => {
-                        let public_key = hex::decode(&public_key_hex).map_err(|_| {
-                            NodeInitError::GovernancePublisher(
-                                "Governance DAG publisher public key is not canonical hex"
-                                    .to_owned(),
-                            )
-                        })?;
-                        let public_key: [u8; 32] = public_key.try_into().map_err(|_| {
-                            NodeInitError::GovernancePublisher(
-                                "Governance DAG publisher public key must be 32 bytes".to_owned(),
-                            )
-                        })?;
-                        publisher
-                            .with_runtime_dag_signer_provider(
-                                handle,
-                                peer_id.into_bytes(),
-                                public_key,
-                                signer,
-                            )
-                            .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?
-                    }
-                    _ => {
-                        unreachable!("configured Governance DAG dependencies validated above");
-                    }
-                };
+                let publisher = publisher
+                    .with_qualified_runtime_dag_signer_provider(signer)
+                    .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
                 iroha_logger::info!(
                     path = ?dir,
                     signed_runtime_dag = true,
@@ -13038,7 +13053,7 @@ mod tests {
         str::FromStr,
         sync::{
             Arc, Barrier, Mutex,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -13172,28 +13187,6 @@ mod tests {
                 sorafs_car::compute_por_root(payload, plan)
                     .expect("derive canonical fixture PoR root"),
             )
-    }
-
-    fn subsequent_por_challenge(base: &PorChallengeV1, seconds: u64) -> PorChallengeV1 {
-        let mut challenge = base.clone();
-        challenge.epoch_id = challenge.epoch_id.saturating_add(1);
-        challenge.drand_round = challenge.drand_round.saturating_add(1);
-        challenge.issued_at = challenge.issued_at.saturating_add(seconds);
-        challenge.deadline_at = challenge.deadline_at.saturating_add(seconds);
-        challenge.seed = sorafs_manifest::por::derive_challenge_seed(
-            &challenge.drand_randomness,
-            challenge.vrf_output.as_ref(),
-            &challenge.manifest_digest,
-            challenge.epoch_id,
-        );
-        challenge.challenge_id = sorafs_manifest::por::derive_challenge_id(
-            &challenge.seed,
-            &challenge.manifest_digest,
-            &challenge.provider_id,
-            challenge.epoch_id,
-            challenge.drand_round,
-        );
-        challenge
     }
 
     fn storage_config_with_temp_dir() -> (StorageConfig, TempDir) {
@@ -13651,10 +13644,14 @@ mod tests {
             height: fixture.ingest_cursor.height + 1,
             block_hash: [0x92; 32],
         };
-        handle
+        let outbox = handle
             .provider_ingest_outbox
             .as_ref()
-            .expect("provider ingest outbox")
+            .expect("provider ingest outbox");
+        outbox
+            .observe_finalized_snapshot(cancellation_cursor, 2_000)
+            .expect("observe finalized cancellation snapshot");
+        outbox
             .cancel(
                 inserted.job_id(),
                 ProviderIngestFinalizedCancellationV1 {
@@ -19907,6 +19904,73 @@ mod tests {
     }
 
     #[test]
+    fn governance_signer_qualification_precedes_durable_node_state() {
+        let temp = tempfile::tempdir().expect("signer qualification temp dir");
+        let root = temp.path().canonicalize().expect("canonical temp root");
+        let data_dir = root.join("storage");
+        let governance_dir = root.join("governance");
+        let signer = Arc::new(TestGovernanceDagSigner::new());
+        let config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(data_dir.clone())
+            .governance_dir(Some(governance_dir.clone()))
+            .governance_dag_publisher_peer_id(Some(
+                String::from_utf8(signer.publisher_peer_id().to_vec())
+                    .expect("test peer id is UTF-8"),
+            ))
+            .governance_dag_signer_handle(Some(signer.handle().to_owned()))
+            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
+            .build();
+        signer.qualification_refuse.store(true, Ordering::SeqCst);
+
+        let error = NodeHandle::try_new_with_runtime_deps(
+            config,
+            NodeRuntimeDeps::default().with_governance_dag_signer(signer),
+        )
+        .expect_err("stale signer must fail before node durability opens");
+        let rendered = error.to_string();
+        assert!(rendered.contains("stale"));
+        assert!(!rendered.contains("must-never-escape"));
+        assert!(
+            !data_dir.exists(),
+            "storage must not open before Governance DAG signer qualification"
+        );
+        assert!(
+            !governance_dir.exists(),
+            "publisher root must not open before Governance DAG signer qualification"
+        );
+    }
+
+    #[test]
+    fn governance_signer_rejects_test_marked_binding_before_durable_state() {
+        let temp = tempfile::tempdir().expect("test-marked signer temp dir");
+        let root = temp.path().canonicalize().expect("canonical temp root");
+        let data_dir = root.join("storage");
+        let governance_dir = root.join("governance");
+        let signer = Arc::new(TestGovernanceDagSigner::new());
+        let config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(data_dir.clone())
+            .governance_dir(Some(governance_dir.clone()))
+            .governance_dag_publisher_peer_id(Some(
+                String::from_utf8(signer.publisher_peer_id().to_vec())
+                    .expect("test peer id is UTF-8"),
+            ))
+            .governance_dag_signer_handle(Some("pkcs11:governance-dag:test".to_owned()))
+            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
+            .build();
+
+        let error = NodeHandle::try_new_with_runtime_deps(
+            config,
+            NodeRuntimeDeps::default().with_governance_dag_signer(signer),
+        )
+        .expect_err("test-marked signer handle must fail before node durability opens");
+        assert!(error.to_string().contains("test-marked"));
+        assert!(!data_dir.exists());
+        assert!(!governance_dir.exists());
+    }
+
+    #[test]
     fn publish_appeal_finance_weekly_rollup_writes_governance_publisher() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
@@ -22430,15 +22494,17 @@ mod tests {
         handle: String,
         publisher_peer_id: Vec<u8>,
         key_pair: KeyPair,
+        qualification_refuse: AtomicBool,
     }
 
     impl TestGovernanceDagSigner {
         fn new() -> Self {
             Self {
-                handle: "pkcs11:governance-dag:node-test".to_owned(),
+                handle: "pkcs11:governance-dag:node-primary".to_owned(),
                 publisher_peer_id: b"12D3KooWNodeTestGovernancePublisher".to_vec(),
                 key_pair: KeyPair::try_from_seed(vec![0x39; 32], Algorithm::Ed25519)
                     .expect("derive test Governance DAG key"),
+                qualification_refuse: AtomicBool::new(false),
             }
         }
 
@@ -22456,6 +22522,15 @@ mod tests {
     impl GovernanceDagRuntimeSigner for TestGovernanceDagSigner {
         fn handle(&self) -> &str {
             &self.handle
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            if self.qualification_refuse.load(Ordering::SeqCst) {
+                return Err("hsm_credential=must-never-escape".to_owned());
+            }
+            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
+                1, [0x84; 32],
+            ))
         }
 
         fn publisher_peer_id(&self) -> &[u8] {

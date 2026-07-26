@@ -175,6 +175,28 @@ fn bounded_clean_text(
     Ok(())
 }
 
+fn bounded_production_runtime_handle(
+    field: &'static str,
+    value: &str,
+) -> Result<(), PopCredentialServiceError> {
+    bounded_clean_text(field, value, 256)?;
+    let lowercase = value.to_ascii_lowercase();
+    if !value.is_ascii()
+        || value.bytes().any(|byte| byte.is_ascii_whitespace())
+        || lowercase
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .any(|component| {
+                matches!(
+                    component,
+                    "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
+                )
+            })
+    {
+        return Err(PopCredentialServiceError::InvalidInput { field });
+    }
+    Ok(())
+}
+
 fn encode_canonical<T: norito::core::NoritoSerialize>(
     value: &T,
 ) -> Result<Vec<u8>, PopCredentialServiceError> {
@@ -256,11 +278,10 @@ impl PopCredentialServicePolicyV1 {
         }
         nonzero_digest("issuer_policy_digest", self.issuer_policy_digest)?;
         bounded_clean_text("issuer_id", &self.issuer_id, 256)?;
-        bounded_clean_text("issuer_hsm_key_id", &self.issuer_hsm_key_id, 256)?;
-        bounded_clean_text(
+        bounded_production_runtime_handle("issuer_hsm_key_id", &self.issuer_hsm_key_id)?;
+        bounded_production_runtime_handle(
             "enrollment_recipient_key_id",
             &self.enrollment_recipient_key_id,
-            256,
         )?;
         PublicKey::from_bytes(Algorithm::Ed25519, &self.issuer_public_key).map_err(|_| {
             PopCredentialServiceError::InvalidInput {
@@ -2920,7 +2941,7 @@ impl PopWalletVault {
         root: impl AsRef<Path>,
         key_wrapper: Arc<dyn PopWalletKeyWrapper>,
     ) -> Result<Self, PopCredentialServiceError> {
-        bounded_clean_text("wallet_wrapping_key_id", key_wrapper.active_key_id(), 256)?;
+        bounded_production_runtime_handle("wallet_wrapping_key_id", key_wrapper.active_key_id())?;
         fs::create_dir_all(root.as_ref()).map_err(|_| PopCredentialServiceError::CheckpointIo)?;
         Ok(Self {
             root: root.as_ref().to_path_buf(),
@@ -3009,7 +3030,7 @@ impl PopWalletVault {
         private: &PopWalletVaultPlaintextV1,
     ) -> Result<(), PopCredentialServiceError> {
         let wrapping_key_id = self.key_wrapper.active_key_id().to_owned();
-        bounded_clean_text("wallet_wrapping_key_id", &wrapping_key_id, 256)?;
+        bounded_production_runtime_handle("wallet_wrapping_key_id", &wrapping_key_id)?;
         let metadata = PopWalletVaultMetadataV1 {
             version: POP_WALLET_VAULT_ENVELOPE_VERSION_V1,
             credential_commitment,
@@ -3092,7 +3113,7 @@ impl PopWalletVault {
         {
             return Err(PopCredentialServiceError::PoisonedCheckpoint);
         }
-        bounded_clean_text("wallet_wrapping_key_id", &envelope.wrapping_key_id, 256)
+        bounded_production_runtime_handle("wallet_wrapping_key_id", &envelope.wrapping_key_id)
             .map_err(|_| PopCredentialServiceError::PoisonedCheckpoint)?;
         let metadata_bytes = encode_canonical(&envelope.metadata)?;
         let context = digest_domain(WALLET_VAULT_AAD_DOMAIN_V1, &metadata_bytes);
@@ -3216,7 +3237,7 @@ impl PopWalletVault {
         credential_commitment: [u8; 32],
         replacement: &dyn PopWalletKeyWrapper,
     ) -> Result<(), PopCredentialServiceError> {
-        bounded_clean_text("wallet_wrapping_key_id", replacement.active_key_id(), 256)?;
+        bounded_production_runtime_handle("wallet_wrapping_key_id", replacement.active_key_id())?;
         let path = self.credential_path(credential_commitment);
         let bytes = read_local_checkpoint_bounded(&path, POP_WALLET_VAULT_MAX_BYTES_V1)
             .map_err(|_| PopCredentialServiceError::CheckpointIo)?
@@ -3410,6 +3431,18 @@ pub enum PopCredentialServiceError {
     /// A runtime-only draft, witness, wallet, or clock provider is unavailable.
     #[error("PoP runtime provider unavailable")]
     RuntimeProviderUnavailable,
+    /// The enabled service was not supplied its deployment provider registry.
+    #[error("PoP runtime provider registry was not injected")]
+    RuntimeProviderRegistryMissing,
+    /// The registry identity or expected external policy does not match config.
+    #[error("PoP runtime provider registry does not match configured policy")]
+    RuntimeProviderRegistryMismatch,
+    /// The registry or its external policy control plane is unavailable.
+    #[error("PoP runtime provider registry is unavailable or stale")]
+    RuntimeProviderRegistryUnavailable,
+    /// Registry identity or policy changed across a guarded operation.
+    #[error("PoP runtime provider registry identity or policy changed")]
+    RuntimeProviderRegistryDrift,
     /// Issuance material failed cross-binding validation.
     #[error("invalid PoP issuance material")]
     InvalidIssuance,
@@ -3613,6 +3646,31 @@ mod tests {
     fn injected_sensitive_failure(bytes: &mut [u8]) -> Result<(), PopCredentialServiceError> {
         let _guard = SensitiveBytesGuard::new(bytes);
         Err(PopCredentialServiceError::Encryption)
+    }
+
+    #[test]
+    fn production_runtime_handles_reject_test_markers_and_non_ascii() {
+        assert_eq!(
+            bounded_production_runtime_handle(
+                "issuer_hsm_key_id",
+                "pkcs11:token=pop;object=issuer-primary",
+            ),
+            Ok(())
+        );
+        for handle in [
+            "pkcs11:token=pop;object=test",
+            "kms://pop/mock/wallet",
+            "kms://pop/placeholder/enrollment",
+            "kms://pop/private key",
+            "kms://pop/ключ",
+        ] {
+            assert!(matches!(
+                bounded_production_runtime_handle("runtime_handle", handle),
+                Err(PopCredentialServiceError::InvalidInput {
+                    field: "runtime_handle"
+                })
+            ));
+        }
     }
 
     #[test]

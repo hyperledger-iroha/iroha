@@ -659,7 +659,12 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
     }
 
     func testValidatesOrderbookFixtureWhenNativeBridgeIsAvailable() throws {
-        try XCTSkipIf(!SorafsReferenceValidators.isNativeAvailable, "SoraFS reference bridge unavailable")
+        guard try requireNativeCapability(
+            SorafsReferenceValidators.isNativeAvailable,
+            "SoraFS reference bridge unavailable"
+        ) else {
+            return
+        }
         let payload = try fixture("sorafs_manifest/orderbook/order_request_v1.to")
         let json = try SorafsReferenceValidators.validateOrderbookPayloadJSON(
             kind: .orderRequest,
@@ -703,11 +708,67 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         }
     }
 
+    func testAppealFinanceCancelAssetLockValidationProfiles() throws {
+        guard SorafsReferenceValidators.isAppealFinanceNativeAvailable else {
+            return XCTFail("ABI-21 appeal-finance reference bridge is required")
+        }
+        let profiles: [(path: String, status: String, code: String, category: String)] = [
+            (
+                "sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
+                "Ok",
+                "SFS-OK-000",
+                "validation"
+            ),
+            (
+                "sorafs_manifest/appeal_finance/negative/"
+                    + "cancel_asset_lock_legacy_missing_expected_v1.to",
+                "Error",
+                "SFS-NORITO-001",
+                "norito"
+            ),
+            (
+                "sorafs_manifest/appeal_finance/negative/"
+                    + "cancel_asset_lock_zero_expected_v1.to",
+                "Error",
+                "SFS-VAL-001",
+                "validation"
+            ),
+        ]
+        for profile in profiles {
+            let label = URL(fileURLWithPath: profile.path).lastPathComponent
+            let json = try SorafsReferenceValidators.validateAppealFinanceCancelAssetLockJSON(
+                payload: try fixture(profile.path),
+                label: label,
+                generatedAtUnix: 123
+            )
+            let data = try XCTUnwrap(json.data(using: .utf8))
+            let outcome = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: data) as? [String: Any]
+            )
+            XCTAssertEqual(outcome["status"] as? String, profile.status, profile.path)
+            XCTAssertEqual(outcome["code"] as? String, profile.code, profile.path)
+            XCTAssertEqual(outcome["category"] as? String, profile.category, profile.path)
+            XCTAssertEqual((outcome["version"] as? NSNumber)?.intValue, 1, profile.path)
+            XCTAssertEqual(
+                (outcome["generated_at"] as? NSNumber)?.uint64Value,
+                123,
+                profile.path
+            )
+            XCTAssertTrue(
+                (outcome["telemetry_tags"] as? [String] ?? [])
+                    .contains("sorafs.reference.appeal_finance"),
+                profile.path
+            )
+        }
+    }
+
     func testValidatesLinkedFixtureBundleWhenNativeBridgeIsAvailable() throws {
-        try XCTSkipIf(
-            !SorafsReferenceValidators.isFixtureBundleNativeAvailable,
+        guard try requireNativeCapability(
+            SorafsReferenceValidators.isFixtureBundleNativeAvailable,
             "SoraFS fixture-bundle reference bridge unavailable"
-        )
+        ) else {
+            return
+        }
         let json = try SorafsReferenceValidators.validateFixtureBundleJSON(
             payloads: [
                 SorafsFixtureBundlePayloadInput(
@@ -742,10 +803,12 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
     }
 
     func testValidatesEveryReferenceSdkBundleOutcomeByteForByte() throws {
-        try XCTSkipIf(
-            !SorafsReferenceValidators.isFixtureBundleNativeAvailable,
+        guard try requireNativeCapability(
+            SorafsReferenceValidators.isFixtureBundleNativeAvailable,
             "SoraFS fixture-bundle reference bridge unavailable"
-        )
+        ) else {
+            return
+        }
         let outcomePaths = Self.referenceBundleProfiles.map(\.outcomePath)
         XCTAssertEqual(outcomePaths.count, 9)
         XCTAssertEqual(outcomePaths, outcomePaths.sorted())
@@ -772,10 +835,12 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
     }
 
     func testValidatesModerationGovernanceLogNodeOutcomeByteForByte() throws {
-        try XCTSkipIf(
-            !SorafsReferenceValidators.isGovernanceLogNodeNativeAvailable,
+        guard try requireNativeCapability(
+            SorafsReferenceValidators.isGovernanceLogNodeNativeAvailable,
             "SoraFS governance-log-node reference bridge unavailable"
-        )
+        ) else {
+            return
+        }
         let expectedNodeCid = try XCTUnwrap(
             Data(
                 hexString: "9a2dc9a930494cbc70f0e4cab25df893"
@@ -797,7 +862,12 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
     }
 
     func testValidatesAllPdpOutcomeFixturesWhenNativeBridgeIsAvailable() throws {
-        try XCTSkipIf(!SorafsReferenceValidators.isNativeAvailable, "SoraFS reference bridge unavailable")
+        guard try requireNativeCapability(
+            SorafsReferenceValidators.isNativeAvailable,
+            "SoraFS reference bridge unavailable"
+        ) else {
+            return
+        }
         let commitment = try fixture("sorafs_manifest/pdp/commitment_v1.to")
         let challenge = try fixture("sorafs_manifest/pdp/challenge_v1.to")
         let proof = try fixture("sorafs_manifest/pdp/proof_v1.to")
@@ -1079,20 +1149,33 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
     }
 
     private func requireGovernanceDagNativeBridge() throws -> Bool {
-        guard !SorafsReferenceValidators.isGovernanceDagNativeAvailable else {
-            return true
-        }
+        try requireNativeCapability(
+            SorafsReferenceValidators.isGovernanceDagNativeAvailable,
+            "SoraFS governance DAG reference bridge unavailable"
+        )
+    }
+
+    private func requireNativeCapability(
+        _ available: Bool,
+        _ unavailableMessage: String
+    ) throws -> Bool {
+        guard !available else { return true }
         if ProcessInfo.processInfo.environment[
             Self.nativeValidationRequiredEnvironment
         ] == "1" {
-            XCTFail(Self.nativeValidationRequiredMessage)
+            XCTFail("\(Self.nativeValidationRequiredMessage) \(unavailableMessage)")
             return false
         }
-        throw XCTSkip("SoraFS governance DAG reference bridge unavailable")
+        throw XCTSkip(unavailableMessage)
     }
 
     func testSignsOrderbookFixtureWhenNativeBridgeIsAvailable() throws {
-        try XCTSkipIf(!SorafsReferenceValidators.isOrderbookSigningAvailable, "SoraFS orderbook signing bridge unavailable")
+        guard try requireNativeCapability(
+            SorafsReferenceValidators.isOrderbookSigningAvailable,
+            "SoraFS orderbook signing bridge unavailable"
+        ) else {
+            return
+        }
         let payload = try fixture("sorafs_manifest/orderbook/order_request_v1.to")
         let signed = try SorafsReferenceValidators.signOrderbookPayload(
             kind: .orderRequest,
@@ -1104,10 +1187,12 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
     }
 
     func testDerivesCanonicalOrderIdAndRejectsExplicitMismatchWhenNativeBridgeIsAvailable() throws {
-        try XCTSkipIf(
-            !SorafsReferenceValidators.isOrderbookFieldBuilderAvailable,
+        guard try requireNativeCapability(
+            SorafsReferenceValidators.isOrderbookFieldBuilderAvailable,
             "SoraFS orderbook field-builder bridge unavailable"
-        )
+        ) else {
+            return
+        }
         let owner = Data("buyer@sora".utf8)
         let orderId = try SorafsReferenceValidators.deriveOrderbookOrderId(
             ownerAccount: owner,

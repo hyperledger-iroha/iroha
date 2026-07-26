@@ -32,6 +32,12 @@ from .numeric_v1 import (
     NumericV1Error,
     NumericV1Schema,
 )
+from .cancel_asset_lock import (
+    CANCEL_ASSET_LOCK_WIRE_ID_V1,
+    CancelAssetLockV1,
+    decode_cancel_asset_lock_v1,
+    encode_cancel_asset_lock_v1,
+)
 from .sorafs_replication import (
     CompleteReplicationOrderInstruction,
     ExpireReplicationOrderInstruction,
@@ -973,6 +979,10 @@ _BASE_EXPORTS = [
     "slugify_alias",
     "plan_dataspace",
     "write_dataspace_plan",
+    "CANCEL_ASSET_LOCK_WIRE_ID_V1",
+    "CancelAssetLockV1",
+    "encode_cancel_asset_lock_v1",
+    "decode_cancel_asset_lock_v1",
     "IssueReplicationOrderInstruction",
     "CompleteReplicationOrderInstruction",
     "ExpireReplicationOrderInstruction",
@@ -1130,6 +1140,7 @@ _CRYPTO_EXPORTS: List[str] = [
     "SORAFS_REFERENCE_MAX_LABEL_BYTES_V1",
     "SorafsGovernanceDagBlockInput",
     "SorafsFixtureBundlePayloadInput",
+    "validate_appeal_finance_cancel_asset_lock",
     "validate_orderbook_payload",
     "sign_orderbook_payload",
     "derive_orderbook_order_id",
@@ -1305,6 +1316,7 @@ try:
         SORAFS_REFERENCE_MAX_LABEL_BYTES_V1,
         SorafsGovernanceDagBlockInput,
         SorafsFixtureBundlePayloadInput,
+        validate_appeal_finance_cancel_asset_lock,
         validate_orderbook_payload,
         sign_orderbook_payload,
         derive_orderbook_order_id,

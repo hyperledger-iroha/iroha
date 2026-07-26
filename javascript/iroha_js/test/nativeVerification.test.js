@@ -124,6 +124,48 @@ variantTest("verifyNativeBinding succeeds when checksum matches manifest entry",
   });
 });
 
+variantTest("getNativeBinding rejects a checksum-valid dirty-source artifact", async () => {
+  __resetNativeStateForTests();
+  const previousNativeDir = process.env.IROHA_JS_NATIVE_DIR;
+  try {
+    await withTempDir(async (dir) => {
+      const bindingPath = path.join(dir, "iroha_js_host.node");
+      const manifestPath = path.join(dir, "iroha_js_host.checksums.json");
+      const contents = Buffer.from("dirty-source-native-stub");
+      await fs.writeFile(bindingPath, contents);
+      await fs.writeFile(
+        manifestPath,
+        `${JSON.stringify({
+          entries: {
+            [`${process.platform}-${process.arch}`]: {
+              sha256: sha256(contents),
+              source_git_revision: "a".repeat(40),
+              source_tree_clean: false,
+            },
+          },
+        })}\n`,
+      );
+      process.env.IROHA_JS_NATIVE_DIR = dir;
+      assert.throws(
+        () => getNativeBinding(),
+        (error) => {
+          assert.match(error.message, /dirty source tree/u);
+          assert.equal(error.code, "ERR_IROHA_NATIVE_BINDING");
+          assert.equal(error.nativeStatus, "source_provenance_error");
+          return true;
+        },
+      );
+    });
+  } finally {
+    if (previousNativeDir === undefined) {
+      delete process.env.IROHA_JS_NATIVE_DIR;
+    } else {
+      process.env.IROHA_JS_NATIVE_DIR = previousNativeDir;
+    }
+    __resetNativeStateForTests();
+  }
+});
+
 variantTest("Darwin verification accepts only signing-container changes", async () => {
   __resetNativeStateForTests();
   await withTempDir(async (dir) => {

@@ -4,6 +4,8 @@ use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json::{self, FastJsonWrite, JsonDeserialize};
 
 use crate::{account::AccountId, asset::AssetDefinitionId, name::Name};
 
@@ -11,11 +13,13 @@ use crate::{account::AccountId, asset::AssetDefinitionId, name::Name};
 pub const KOTODAMA_ESCROW_ID_PREFIX: &str = "kotodama-native-escrow:";
 
 /// Stable identifier for a native asset escrow.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+///
+/// In the first-release V1 contract, Norito binary and JSON codecs delegate
+/// directly to [`Hash`]: the binary payload is exactly 32 hash bytes and JSON
+/// is one scalar hash literal. The wrapper remains a distinct nominal Rust and
+/// [`IntoSchema`] type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+#[repr(transparent)]
 pub struct EscrowId(pub Hash);
 
 impl EscrowId {
@@ -35,6 +39,53 @@ impl EscrowId {
     #[must_use]
     pub fn from_kotodama_name(name: &Name) -> Self {
         Self(Hash::new(format!("{KOTODAMA_ESCROW_ID_PREFIX}{name}")))
+    }
+}
+
+impl norito::core::NoritoSerialize for EscrowId {
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+    }
+}
+
+impl<'de> norito::core::NoritoDeserialize<'de> for EscrowId {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("archived escrow id must be a canonical hash")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived.cast()).map(Self)
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for EscrowId {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        <Hash as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
+            .map(|(hash, used)| (Self(hash), used))
+    }
+}
+
+#[cfg(feature = "json")]
+impl FastJsonWrite for EscrowId {
+    fn write_json(&self, out: &mut String) {
+        self.0.write_json(out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for EscrowId {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        Hash::json_deserialize(parser).map(Self)
     }
 }
 
@@ -290,7 +341,10 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
-    use norito::codec::{Decode, Encode};
+    use norito::{
+        codec::{Decode, Encode},
+        core::DecodeFromSlice,
+    };
 
     #[derive(Encode)]
     struct ForgedAssetEscrowRecord {
@@ -394,6 +448,71 @@ mod tests {
         assert_eq!(
             EscrowId::from_kotodama_name(&name),
             EscrowId::new(Hash::new("kotodama-native-escrow:aitai_offer"))
+        );
+    }
+
+    #[test]
+    fn escrow_id_norito_is_transparent_hash_bytes() {
+        let id = EscrowId::new(Hash::new("sorafs-appeal-cancel-asset-lock-v1"));
+        let encoded = id.encode();
+        assert_eq!(encoded, id.0.encode());
+        assert_eq!(encoded.len(), Hash::LENGTH);
+        assert_eq!(encoded.as_slice(), id.as_hash().as_ref());
+        let (decoded, used) =
+            EscrowId::decode_from_slice(&encoded).expect("decode transparent escrow id");
+        assert_eq!(decoded, id);
+        assert_eq!(used, encoded.len());
+    }
+
+    #[test]
+    fn escrow_id_keeps_distinct_schema_identity() {
+        assert_eq!(EscrowId::type_name(), "EscrowId");
+        assert_eq!(Hash::type_name(), "Hash");
+        assert_ne!(EscrowId::type_name(), Hash::type_name());
+
+        let schema = EscrowId::schema();
+        assert!(schema.contains_key::<EscrowId>());
+        assert!(schema.contains_key::<Hash>());
+        assert!(matches!(
+            schema.get::<EscrowId>(),
+            Some(iroha_schema::Metadata::Tuple(fields))
+                if fields.types == [core::any::TypeId::of::<Hash>()]
+        ));
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn escrow_id_json_is_one_canonical_hash_literal() {
+        let id = EscrowId::new(Hash::new("sorafs-appeal-cancel-asset-lock-v1"));
+        let encoded = norito::json::to_json(&id).expect("encode escrow id JSON");
+        assert_eq!(
+            encoded,
+            r#""hash:73CCD4E0DD69AD434DB75056B600AA4F74C8FC5556B11BDC799DFDB7EA29851F#434B""#
+        );
+        assert_eq!(
+            norito::json::from_json::<EscrowId>(&encoded).expect("decode escrow id JSON"),
+            id
+        );
+        assert!(
+            norito::json::from_json::<EscrowId>(&format!("[{encoded}]")).is_err(),
+            "the retired tuple-array JSON representation must be rejected"
+        );
+        let raw_hex = hex::encode_upper(id.as_hash().as_ref());
+        assert!(
+            norito::json::from_json::<EscrowId>(&format!(r#""{raw_hex}""#)).is_err(),
+            "a raw-hex alias must not decode as EscrowId"
+        );
+        assert!(
+            norito::json::from_json::<EscrowId>(&format!(r#"{{"hash":{encoded}}}"#)).is_err(),
+            "an object alias must not decode as EscrowId"
+        );
+
+        let nested_instruction =
+            format!(r#"{{"escrow_id":[{encoded}],"expected_remaining_amount":"20"}}"#);
+        assert!(
+            norito::json::from_json::<crate::isi::escrow::CancelAssetLock>(&nested_instruction)
+                .is_err(),
+            "native CancelAssetLock JSON must reject a nested EscrowId array"
         );
     }
 

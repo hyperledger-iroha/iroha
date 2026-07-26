@@ -1,6 +1,6 @@
 ---
 title: SoraFS Provider Reputation Oracle
-summary: SFM-3 implementation status for the native committed journal, reputation V1 scoring, proofs, local APIs, and remaining service rollout.
+summary: SFM-3 implementation status for the native committed journal, reputation V1 scoring, proofs, committed-derived APIs, and remaining service rollout.
 ---
 
 # SoraFS Provider Reputation Oracle
@@ -69,14 +69,17 @@ Checked-in response-file examples cover provider and metrics canaries.
 
 ## Goals & Scope
 - Produce deterministic, governance-auditable reputation scores for each SoraFS provider to inform routing, incentives, staking, and compliance decisions.
-- Combine operational metrics (PoR, PDP, PoTR, latency, disputes, settlement breaches) into a single score published weekly, with daily incremental updates.
+- Combine operational metrics (PoR, PDP, PoTR, latency, disputes, settlement
+  breaches) into one score on the governance-approved publication cycle. V1
+  does not define a separate daily-delta format or a hard-coded weekly
+  schedule.
 - Provide Merkle-verifiable snapshots, public APIs, and SDK tooling, while ensuring privacy and resilience.
 
 ## Target Architecture
 | Component | Responsibility | Notes |
 |-----------|----------------|-------|
 | Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration, the queue-backed journal submitter, exact historical-query injection boundary, and supervised scheduling/reconciliation are wired; the production historical adapter, integrated validation, and reviewed deployment evidence remain open. |
-| Scoring engine (`reputation_engine`) | Aggregates metrics, runs scoring algorithm (EigenTrust-style), applies policy penalties, generates snapshots. | Runs hourly; writes outputs to database + object storage. |
+| Scoring engine (`reputation_engine`) | Aggregates finalized projections, runs the fixed-point EigenTrust-style algorithm, applies policy penalties, and generates canonical snapshot material. | Runs on the configured supervised interval and writes only the bounded durable checkpoint/outbox; publication becomes visible through the authenticated Governance DAG and committed-derived projection. |
 | Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open. |
 | API gateway (`sorafs_reputation_api`) | Exposes read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist. |
 | CLI/SDK modules | `sorafs reputation` commands; SDK helper functions for verification and weighting. | Integrates with orchestrator, indexer, orderbook, incentives. |
@@ -124,38 +127,14 @@ Checked-in response-file examples cover provider and metrics canaries.
   database, telemetry exporter, or Governance DAG mirror may cache or project
   them, but cannot replace the committed journal as input authority.
 
-Schema (PostgreSQL):
-```sql
-CREATE TABLE provider_metrics (
-    provider_id TEXT,
-    period_start TIMESTAMPTZ,
-    period_end TIMESTAMPTZ,
-    metric_kind TEXT,
-    metric_value DOUBLE PRECISION,
-    metadata JSONB,
-    PRIMARY KEY (provider_id, period_start, metric_kind)
-);
-CREATE TABLE provider_scores (
-    provider_id TEXT PRIMARY KEY,
-    score NUMERIC(6,5),
-    calculated_at TIMESTAMPTZ,
-    degradation_flags TEXT[],
-    details JSONB,
-    snapshot_id UUID
-);
-CREATE TABLE reputation_snapshots (
-    snapshot_id UUID PRIMARY KEY,
-    generated_at TIMESTAMPTZ,
-    alpha NUMERIC(4,2),
-    weights JSONB,
-    merkle_root BYTEA,
-    cid TEXT,
-    storage_uri TEXT
-);
-```
-
-These tables are rebuildable service projections and publication outputs.
-They are not an independent authoritative event journal.
+The V1 service does not define a PostgreSQL authority or an object-storage
+schema. Its durable local state is the canonical bounded checkpoint containing
+the five physical finalized cursors, rebuildable metric projections, exact
+replay receipts, and unsigned publication outbox. The authenticated publication
+projection retains an immutable suffix capped at 1,024 snapshots and the
+configured checkpoint byte ceiling. Operators may maintain additional caches
+or archives, but those stores are never accepted as journal, signer-policy, or
+publication authority.
 
 ## Scoring Algorithm
 - **Base scores** per provider `i`:
@@ -171,19 +150,26 @@ They are not an independent authoritative event journal.
   Default weights: `w_por=0.22`, `w_pdp=0.20`, `w_potr=0.18`, `w_latency=0.15`, `w_dispute=0.10`, `w_token=0.05`, `w_repair=0.10`. Governance can update via `ReputationConfigUpdateV1`.
 - **EigenTrust iteration**:
   ```
-  R = α * C * R + (1 - α) * t
+  R_bps = (α_bps * C_bps * R_bps + (10000 - α_bps) * t_bps) / 10000
   ```
-  where `α = 0.85`, `t` baseline trust vector derived from stake weight + historical reliability, `C` pairwise trust matrix built from settlement satisfaction (buyer feedback). Converges when `||R_{k+1} - R_k||_1 < 1e-6` or `k=100`.
+  where `α_bps = 8500`, `t_bps` is the canonical baseline trust vector, and
+  `C_bps` is built from settlement-satisfaction edges. Every multiply, divide,
+  remainder assignment, and convergence comparison uses checked integers.
+  Iteration stops when the L1 delta is at most one basis point or after 100
+  iterations.
 - **Degradation penalties**:
   - Reserve lifecycle `Warning`, `Grace`, `Delinquent` multiply by `[0.9, 0.75, 0.5]`.
   - PoR/PDP success <90% 7-day → ×0.8; <80% → ×0.6.
   - Active dispute or slashing event sets `degradation_flag = "probation"` and clamps score ≤0.20.
 - **Smoothing**: `R_final = 0.7 * R_current + 0.3 * R_prev`.
 - **Bounds**: `0.05 ≤ R_final ≤ 0.99`. Providers below 0.15 flagged.
-- **Transparency**: `details` JSON field includes metrics, weights, penalties applied.
+- **Transparency**: the canonical provider record carries the exact bounded raw
+  metrics and degradation flags; the signed snapshot binds weights and scoring
+  parameters.
 
 ## Publication & Verification
-- Weekly snapshot (Monday 00:00 UTC) produced as `ReputationSnapshotV1`:
+- Each governance-scheduled cycle produces a canonical
+  `ReputationSnapshotV1`:
   ```norito
   struct ReputationSnapshotV1 {
       version: u8,
@@ -203,8 +189,12 @@ They are not an independent authoritative event journal.
   }
   ```
 - Merkle tree built over `H(provider_id || score || degradation_flags || raw_metrics_hash)`; leaves sorted lexicographically by provider ID.
-- Snapshot stored in S3 (`s3://sorafs-reputation/<snapshot_id>.json`) and pinned to IPFS; root recorded in Governance DAG `ReputationSnapshotNode`.
-- Daily incremental diffs (`ReputationDeltaV1`) capturing score deltas and new flags; clients can apply to previous snapshot.
+- Exact unsigned material enters the durable outbox, is threshold-signed
+  externally, and is published to the authenticated Governance DAG. Only
+  reconciled readback/head inclusion may update the committed-derived public
+  projection.
+- V1 publishes complete snapshots and sequenced snapshot events. It has no
+  authoritative S3 layout or `ReputationDeltaV1` daily-diff fallback.
 - Torii broadcasts `ReputationSnapshotEvent` with `snapshot_id`, `merkle_root`, `generated_at`.
   The local implementation records this as sequenced `ReputationSnapshotEventV1`
   rows that can be listed through `GET /v1/sorafs/reputation/events`.
@@ -507,7 +497,11 @@ They are not an independent authoritative event journal.
   requires the governed authentication policy and `reputation.read` scope.
 - Rate limiting: 120 requests/min per client, bursts allowed for internal services.
 - Privacy: Raw consumer feedback aggregated before inclusion; no PII stored.
-- Data retention: raw events retained 12 months (hot) + 5 years (cold archive).
+- Retention is not hard-coded as a 12-month/5-year service promise. Committed
+  journal history follows ledger/governance retention, while the online
+  authenticated snapshot projection uses the bounded 1,024-entry immutable
+  suffix and checkpoint byte ceiling. Any longer operational archive is
+  deployment policy and cannot become authority.
 
 ## Testing Strategy
 - Native journal tests cover strict policy rotation/predecessor forks, recorder
@@ -537,14 +531,15 @@ They are not an independent authoritative event journal.
    publication/readback/head-inclusion adapters to the already-supervised
    runtime. Reconcile canonical publication acknowledgements without
    introducing a local signing-key fallback.
-4. Integrate the regional publisher/API and SDK reads against the committed
-   projection, exercise exact retained snapshot-id lookup and bounded eviction,
-   and run four-peer end-to-end tests with orchestrator/indexer consumers.
+4. Deploy the supervised publisher and API against the committed projection,
+   exercise exact retained snapshot-id lookup and bounded eviction, and run
+   four-peer end-to-end tests with orchestrator/indexer consumers.
 5. Staging bake: run for 2 weeks, comparing manual calculations to engine outputs.
 6. Governance approval for initial weights (`ReputationConfigV1`) and publication schedule.
 7. Production rollout:
    - Stage 0: generate snapshots without publishing (shadow mode).
-   - Stage 1: publish weekly snapshots, mark routing usage optional.
+   - Stage 1: publish on the approved governance schedule, with routing usage
+     optional.
    - Stage 2: enforce routing/incentive integration (threshold alerts active).
 8. Update documentation (`docs/source/sorafs/reputation_operator.md`, portal page, dashboards). Record status/roadmap update.
 
@@ -633,8 +628,8 @@ Remaining production gates:
 - Complete integrated source validation; expose dedicated authenticated SDK
   journal transaction/query builders; validate the wired fixed-view
   active-policy query and durable queue-backed PoR/countable-token submission
-  and finality reconciler; replace the retained local GET/event model with
-  committed-derived reads; deploy external threshold-signing and authenticated
+  and finality reconciler; validate the existing committed-derived GET/event
+  reads under restart and failover; deploy external threshold-signing and authenticated
   Governance DAG publication/readback adapters; and complete reviewed
   four-peer rotation, retry/failover, and recovery evidence.
 - Capture live run evidence for snapshot freshness, ingest lag, low-score

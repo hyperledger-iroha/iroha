@@ -42,6 +42,7 @@ const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const UINT128_MASK = (1n << 128n) - 1n;
 const HASH_LITERAL_RE = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/;
+const CANONICAL_HASH_LITERAL_RE = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/;
 const MULTIHASH_LITERAL_RE = /^([0-9a-fA-F]+)$/;
 const DEFAULT_SM2_DISTINGUISHED_ID = new Uint8Array(16);
 const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
@@ -71,6 +72,9 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
 ];
 const CANCEL_ASSET_LOCK_WIRE_ID =
   "iroha_data_model::isi::escrow::CancelAssetLock";
+const CANCEL_ASSET_LOCK_V1_SCHEMA_HASH = schemaHashForTypeName(
+  CANCEL_ASSET_LOCK_WIRE_ID,
+);
 const RECORD_SCCP_MESSAGE_WIRE_ID =
   "iroha_data_model::isi::bridge::RecordSccpMessage";
 const ISSUE_REPLICATION_ORDER_WIRE_ID =
@@ -2080,7 +2084,92 @@ function decodeRecordSccpMessagePayload(payload, innerFlags) {
   return { payload_bytes: Array.from(payloadBytes) };
 }
 
-function encodeCancelAssetLockInstruction(value) {
+function assertWellFormedUtf16(value, context) {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new TypeError(`${context} must not contain unpaired UTF-16 surrogates`);
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      throw new TypeError(`${context} must not contain unpaired UTF-16 surrogates`);
+    }
+  }
+}
+
+function normalizeStrictCancelAssetLockV1(value) {
+  const prototype =
+    value !== null && typeof value === "object"
+      ? Object.getPrototypeOf(value)
+      : undefined;
+  if (
+    prototype !== Object.prototype &&
+    prototype !== null
+  ) {
+    throw new TypeError("CancelAssetLockV1 must be a plain object");
+  }
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.length !== 2 ||
+    !keys.includes("escrow_id") ||
+    !keys.includes("expected_remaining_amount")
+  ) {
+    throw new TypeError(
+      "CancelAssetLockV1 must contain exactly escrow_id and expected_remaining_amount",
+    );
+  }
+
+  const { escrow_id: escrowId, expected_remaining_amount: expectedRemainingAmount } =
+    value;
+  if (typeof escrowId !== "string") {
+    throw new TypeError("CancelAssetLockV1.escrow_id must be a string");
+  }
+  assertWellFormedUtf16(escrowId, "CancelAssetLockV1.escrow_id");
+  const hashMatch = CANONICAL_HASH_LITERAL_RE.exec(escrowId);
+  if (hashMatch === null) {
+    throw new TypeError(
+      "CancelAssetLockV1.escrow_id must be one canonical uppercase checksummed hash literal",
+    );
+  }
+  const [, hashBody, checksum] = hashMatch;
+  const expectedChecksum = computeHashLiteralCrc("hash", hashBody);
+  if (checksum !== expectedChecksum) {
+    throw new TypeError(
+      `CancelAssetLockV1.escrow_id has invalid checksum; expected ${expectedChecksum}`,
+    );
+  }
+  const hashBytes = Buffer.from(hashBody, "hex");
+  if ((hashBytes[hashBytes.length - 1] & 1) === 0) {
+    throw new TypeError(
+      "CancelAssetLockV1.escrow_id must use a native hash with its marker bit set",
+    );
+  }
+
+  if (typeof expectedRemainingAmount !== "string") {
+    throw new TypeError(
+      "CancelAssetLockV1.expected_remaining_amount must be a canonical quantity string",
+    );
+  }
+  assertWellFormedUtf16(
+    expectedRemainingAmount,
+    "CancelAssetLockV1.expected_remaining_amount",
+  );
+  const quantity = NumericV1.decodeQuantityJson(expectedRemainingAmount);
+  if (quantity.mantissa <= 0n) {
+    throw new RangeError(
+      "CancelAssetLockV1.expected_remaining_amount must be greater than zero",
+    );
+  }
+
+  return {
+    escrow_id: escrowId,
+    expected_remaining_amount: expectedRemainingAmount,
+  };
+}
+
+function encodeCancelAssetLockPayload(value) {
   if (!isPlainObject(value)) {
     throw new TypeError("CancelAssetLock must be an object");
   }
@@ -2117,7 +2206,14 @@ function encodeCancelAssetLockInstruction(value) {
       ),
     ],
   ]);
-  return encodeInstructionEnvelope(CANCEL_ASSET_LOCK_WIRE_ID, payload);
+  return payload;
+}
+
+function encodeCancelAssetLockInstruction(value) {
+  return encodeInstructionEnvelope(
+    CANCEL_ASSET_LOCK_WIRE_ID,
+    encodeCancelAssetLockPayload(value),
+  );
 }
 
 function decodeCancelAssetLockInstructionPayload(payload) {
@@ -2145,6 +2241,66 @@ function decodeCancelAssetLockInstructionPayload(payload) {
       expected_remaining_amount: expectedRemainingAmount,
     },
   };
+}
+
+/**
+ * Encode the schema-bound bare `CancelAssetLock` V1 archive.
+ *
+ * The input is the exact two-field wire object. Hash bytes, hex strings,
+ * base64 strings, camel-case aliases, and nested compatibility shapes are not
+ * accepted for either field.
+ *
+ * @param {{escrow_id: string, expected_remaining_amount: string}} value
+ * @returns {Buffer}
+ */
+export function encodeCancelAssetLockV1(value) {
+  const canonical = normalizeStrictCancelAssetLockV1(value);
+  const payload = withNoritoCompactLengths(() =>
+    encodeCancelAssetLockPayload(canonical),
+  );
+  return frameNoritoPayload(
+    payload,
+    CANCEL_ASSET_LOCK_V1_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+  );
+}
+
+/**
+ * Decode one exact schema-bound bare `CancelAssetLock` V1 archive.
+ *
+ * Only byte containers are accepted. Textual hex/base64 aliases, arrays,
+ * padding, substituted schemas or flags, and trailing bytes are rejected.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @returns {{escrow_id: string, expected_remaining_amount: string}}
+ */
+export function decodeCancelAssetLockV1(bytes) {
+  if (!isBinaryLike(bytes)) {
+    throw new TypeError(
+      "CancelAssetLockV1 archive must be a Buffer, ArrayBuffer, or typed array",
+    );
+  }
+  const archive = toBuffer(bytes);
+  const frame = validateNoritoFrame(archive, {
+    context: "CancelAssetLockV1",
+    expectedSchemaHash: CANCEL_ASSET_LOCK_V1_SCHEMA_HASH,
+    expectedPaddingLength: 0,
+    requireNonEmptyPayload: true,
+  });
+  if (frame.flags !== COMPACT_LEN_FLAG) {
+    throw new Error(
+      "CancelAssetLockV1 must use exactly the compact-length Norito flag",
+    );
+  }
+  const decoded = withNoritoCompactLengths(
+    () => decodeCancelAssetLockInstructionPayload(frame.payload).CancelAssetLock,
+  );
+  const canonical = normalizeStrictCancelAssetLockV1(decoded);
+  const reencoded = encodeCancelAssetLockV1(canonical);
+  if (!archive.equals(reencoded)) {
+    throw new Error("CancelAssetLockV1 archive is not byte-canonical");
+  }
+  return canonical;
 }
 
 function decodeMintPayload(payload) {

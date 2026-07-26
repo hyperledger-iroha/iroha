@@ -82,8 +82,19 @@ all of these non-secret policy values:
 - an authenticated range limit and bounded collection limits;
 - the WebAuthn relying-party id and exact canonical HTTPS origins;
 - opaque production handles for WebAuthn, grant, erasure, and Ed25519 receipt
-  signing services; and
+  signing services;
+- the independently governed non-zero revision and 32-byte public policy digest
+  for each of those four runtime providers; and
 - the exact governed Ed25519 receipt-verification key.
+
+The qualification keys are the exact
+`webauthn_revision`/`webauthn_policy_digest_hex`,
+`grant_revision`/`grant_policy_digest_hex`,
+`erasure_revision`/`erasure_policy_digest_hex`, and
+`receipt_signer_revision`/`receipt_signer_policy_digest_hex` pairs. They are
+required when the service is enabled, forbidden as stale bindings when it is
+disabled, and accept only non-zero revisions plus canonical lowercase non-zero
+32-byte digests.
 
 Torii exposes runtime injection seams whose opaque handles and public key must
 match configuration exactly. Startup fails closed for missing, partial, or
@@ -91,6 +102,19 @@ mismatched dependencies. There is no file key, environment secret, `KeyPair`,
 or in-process production fallback. The standard launcher intentionally does not
 construct real WebAuthn, grant, HSM signer, or KMS implementations; deployment
 owners must construct and inject those runtime dependencies.
+
+Each external security provider must expose its active non-zero
+deployment/policy revision and non-zero public-policy digest through a typed,
+payload-free readiness result. Before reading or creating the evidence-viewer
+checkpoint, the service validates the configured and injected handles, rejects
+test/development markers and substitutions, and requires each provider's exact
+qualification to match the independently configured expected revision and
+digest. It also pins the receipt signer's governed Ed25519 public key. Every
+WebAuthn, grant, signing, and erasure call revalidates that configured identity
+and policy both before and after the operation. A stale or changed provider
+therefore fails closed, including when it changes while an operation is in
+flight. Vendor diagnostic text remains inside protected provider telemetry and
+cannot enter service errors or debug output.
 
 The injected boundaries are:
 
@@ -230,8 +254,9 @@ events to `/v1/evidence/log/{session_id_hex}`.
 ## Remaining Production Blockers
 
 - Construct and inject deployment-owned WebAuthn, rotating-grant, PKCS#11/HSM
-  receipt-signer, and KMS/erasure implementations, with startup identity and
-  readiness checks.
+  receipt-signer, and KMS/erasure implementations that satisfy the shipped
+  qualification contract; collect external readiness, rotation, and revocation
+  evidence for those real services.
 - Build a deployment-owned transparency producer adapter that consumes only
   `EvidenceViewerTransparencyProjectionV1`, durably acknowledges the exact
   signed checkpoint anchor and `(sequence, digest)` cursor, anchors a monotonic
@@ -261,10 +286,11 @@ cargo test -p iroha_torii_shared route_catalog
 Release validation must additionally exercise unauthorized and operator-only
 accounts, revoked assignments, challenge/assertion/grant replay, expiry and
 rotation, wrong case/object/policy binding, malformed and oversized inputs,
-range substitution, receipt/signature/chain tampering, checkpoint corruption
-and filesystem attacks, crash points around atomic persistence, concurrent
-legal-hold/erasure requests, KMS ambiguity, viewer CSP/offline controls, and
-payload/secret log scanning.
+range substitution, missing/substituted/test-marked/stale provider startup,
+provider revision and policy drift before and during operations,
+receipt/signature/chain tampering, checkpoint corruption and filesystem attacks,
+crash points around atomic persistence, concurrent legal-hold/erasure requests,
+KMS ambiguity, viewer CSP/offline controls, and payload/secret log scanning.
 
 Deployment promotion remains gated by:
 

@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/sorafs_reference_sdk_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: d7cbef46931979f35e0febdde92ac50d8ab34921915e0d8c044a070153da4e72
-source_last_modified: "2026-07-26T10:50:04.516212+00:00"
+source_hash: f0349459c137c808c4c7a786d091c5ecff3232a2c74dd47468893ec9f6ee0a20
+source_last_modified: "2026-07-26T20:47:24.061602+00:00"
 translation_last_reviewed: null
 ---
 

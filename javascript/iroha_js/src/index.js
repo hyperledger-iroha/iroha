@@ -184,7 +184,9 @@ export {
 export {
   encodeAccountIdNoritoValue,
   encodeAssetDefinitionIdNoritoValue,
+  encodeCancelAssetLockV1,
   encodeQuantityNoritoValue,
+  decodeCancelAssetLockV1,
   noritoDecodeBlockProofs,
   noritoEncodeInstruction,
   noritoDecodeInstruction,
@@ -599,6 +601,7 @@ export {
   validatePdpChallengeProof,
   validatePdpCommitmentChallenge,
   validatePdpPayload,
+  validateAppealFinanceCancelAssetLock,
   validateOrderbookPayload,
   signOrderbookPayload,
   deriveOrderbookOrderId,

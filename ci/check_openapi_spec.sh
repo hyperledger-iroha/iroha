@@ -20,11 +20,9 @@ case "${REQUIRE_SIGNED}" in
 esac
 
 XTASK_VERIFY_POLICY_ARGS=()
-VERSION_VERIFY_POLICY_ARGS=()
 SIGNATURE_VERIFY_POLICY_ARGS=(--allow-unsigned=2025-q2)
 if [[ "${REQUIRE_SIGNED}" == "0" ]]; then
   XTASK_VERIFY_POLICY_ARGS+=(--allow-unsigned)
-  VERSION_VERIFY_POLICY_ARGS+=(--allow-unsigned)
   SIGNATURE_VERIFY_POLICY_ARGS+=(--allow-unsigned=latest --allow-unsigned=current)
 fi
 
@@ -45,7 +43,24 @@ run_xtask() {
     "${args[@]}"
 }
 
-GENERATED_SPEC="${TMP_DIR}/torii.json"
+require_clean_checkout() {
+  if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)" ]]; then
+    echo "error: Torii OpenAPI release generation requires a clean checkout." >&2
+    echo "Commit or remove every tracked and untracked source change, then rerun from the pinned commit." >&2
+    exit 1
+  fi
+}
+
+EXPECTED_GENERATOR_COMMIT="$(
+  git -C "${REPO_ROOT}" rev-parse --verify 'HEAD^{commit}'
+)"
+if [[ ! "${EXPECTED_GENERATOR_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "error: Torii OpenAPI release generation requires a lowercase 40-hex Git commit." >&2
+  exit 1
+fi
+
+GENERATED_SPEC_FIRST="${TMP_DIR}/torii-first.json"
+GENERATED_SPEC_SECOND="${TMP_DIR}/torii-second.json"
 
 print_refresh_help() {
   cat >&2 <<'EOF'
@@ -65,16 +80,41 @@ OPENAPI_ALLOWED_SIGNERS_FILE=<operator-allowlist-path> when running this gate.
 The checked-in allowlist is intentionally empty. The immutable 2025-q2
 development snapshot remains explicitly unsigned in either mode; signed mode
 requires the mutable root/latest/current release artifacts to be signed.
+This gate always requires a clean checkout and clean mutable generator
+provenance bound to the exact checked-out commit. --allow-unsigned relaxes only
+the detached-signature requirement; it never permits generator_dirty.
 EOF
 }
 
+require_clean_checkout
+
+if ! diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}" >/dev/null; then
+  diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}" || true
+  echo "error: checked-in latest/current OpenAPI manifests are not byte-identical." >&2
+  print_refresh_help
+  exit 1
+fi
+
 (
   cd "${REPO_ROOT}"
-  run_xtask openapi --output "${GENERATED_SPEC}"
+  node docs/portal/scripts/verify-openapi-versions.mjs \
+    --expected-generator-commit="${EXPECTED_GENERATOR_COMMIT}"
 )
 
-if ! diff -u "${SPEC_PATH}" "${GENERATED_SPEC}" >/dev/null; then
-  diff -u "${SPEC_PATH}" "${GENERATED_SPEC}" || true
+(
+  cd "${REPO_ROOT}"
+  run_xtask openapi --output "${GENERATED_SPEC_FIRST}"
+  run_xtask openapi --output "${GENERATED_SPEC_SECOND}"
+)
+
+if ! diff -u "${GENERATED_SPEC_FIRST}" "${GENERATED_SPEC_SECOND}" >/dev/null; then
+  diff -u "${GENERATED_SPEC_FIRST}" "${GENERATED_SPEC_SECOND}" || true
+  echo "error: two Torii OpenAPI generation passes produced different bytes." >&2
+  exit 1
+fi
+
+if ! diff -u "${SPEC_PATH}" "${GENERATED_SPEC_FIRST}" >/dev/null; then
+  diff -u "${SPEC_PATH}" "${GENERATED_SPEC_FIRST}" || true
   echo "error: docs/portal/static/openapi/torii.json is stale." >&2
   print_refresh_help
   exit 1
@@ -86,6 +126,8 @@ if ! diff -u "${SPEC_PATH}" "${CURRENT_SPEC_PATH}" >/dev/null; then
   print_refresh_help
   exit 1
 fi
+
+require_clean_checkout
 
 (
   cd "${REPO_ROOT}"
@@ -108,8 +150,10 @@ fi
 (
   cd "${REPO_ROOT}"
   node docs/portal/scripts/verify-openapi-versions.mjs \
-    "${VERSION_VERIFY_POLICY_ARGS[@]}"
+    --expected-generator-commit="${EXPECTED_GENERATOR_COMMIT}"
   node docs/portal/scripts/check-openapi-signatures.mjs \
     --allowed-signers="${ALLOWED_SIGNERS_PATH}" \
     "${SIGNATURE_VERIFY_POLICY_ARGS[@]}"
 )
+
+require_clean_checkout

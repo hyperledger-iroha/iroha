@@ -9,27 +9,40 @@ CancelAssetLock {
 }
 ```
 
+`EscrowId` remains a nominal Rust type and retains its distinct `IntoSchema`
+identity. Its V1 codec is nevertheless transparent: the binary field is the
+same `0x20 <32-byte hash>` sequence as `Hash`, and JSON is one scalar
+`hash:...` literal. The redundant nested `0x21 0x20 <hash>` binary form and a
+one-element JSON array are retired and rejected; there is no compatibility
+decoder. With the transparent field, `cancel_asset_lock_v1.to` is exactly 85
+bytes.
+
 `cancel_asset_lock_v1.{json,to}` is the canonical positive vector. The
 `negative/` directory contains:
 
 - the retired one-field layout, which both JSON and Norito decoders reject;
+- the retired nested `EscrowId` binary layout, whose redundant wrapper makes an
+  86-byte frame, which Norito decoders reject;
 - a noncanonical quantity spelling, which the JSON decoder rejects;
-- a canonical frame with trailing bytes, which the Norito decoder rejects;
 - a zero expected amount, which is structurally codec-valid but rejected by
   native ledger execution before custody is changed.
 
-Kotlin/JVM, mirrored Java Android, and Swift tests encode the same native
-frame, compare it byte-for-byte with `cancel_asset_lock_v1.to` when the
-generated fixture is present, and reject the legacy, trailing-byte, and zero
-vectors at their public SDK boundaries.
+Strict decoder tests also append trailing bytes to the canonical frame and
+require rejection; the closed eight-file payload set uses the retired nested
+identifier as its dedicated 86-byte binary negative.
+
+Rust, JavaScript/TypeScript, Python, Kotlin/JVM, mirrored Java Android, Swift,
+and C# tests consume the same files at their public SDK boundaries. The
+generated files are mandatory: an absent fixture is a failing test, not a
+capability skip.
 
 Regenerate the payloads from the typed Rust model, then reseal the signed
 reference-SDK inventory:
 
 ```sh
-cargo run -p iroha_data_model --features test-fixtures \
+cargo run --locked -p iroha_data_model --features test-fixtures \
   --bin cancel_asset_lock_fixtures
-cargo run -p sorafs_manifest --bin generate_por_fixtures
+cargo run --locked -p sorafs_manifest --bin generate_por_fixtures
 python3 scripts/check_sorafs_reference_sdk_fixtures.py
 ```
 

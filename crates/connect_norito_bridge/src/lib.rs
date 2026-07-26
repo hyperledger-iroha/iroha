@@ -33284,6 +33284,50 @@ fn java_sorafs_reference_validate_hedging_payload_json(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+    env: &mut jni::JNIEnv<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let payload_bytes = read_java_byte_array(env, &payload, "noritoBytes")
+            .ok_or_else(|| "invalid appeal-finance CancelAssetLock payload bytes".to_owned())?;
+        let label_bytes = read_java_byte_array(env, &label, "label")
+            .ok_or_else(|| "invalid appeal-finance CancelAssetLock label bytes".to_owned())?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+                payload_bytes.as_ptr(),
+                payload_bytes.len(),
+                label_bytes.as_ptr(),
+                label_bytes.len(),
+                generated_at,
+            )
+        };
+        unsafe {
+            java_sorafs_reference_buffer_to_array(
+                env,
+                buffer,
+                "SoraFS appeal-finance CancelAssetLock validation",
+            )
+        }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_sorafs_reference_validate_governance_log_node_json(
     env: &mut jni::JNIEnv<'_>,
     payload: jni::objects::JByteArray<'_>,
@@ -41458,6 +41502,24 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     target_os = "macos",
     target_os = "windows"
 ))]
+/// Reports that the Kotlin/JVM ABI contains appeal-finance validator symbols.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::JNI_TRUE
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
@@ -41515,6 +41577,32 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     java_sorafs_reference_validate_hedging_payload_json(
         &mut env,
         kind,
+        payload,
+        label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+/// JNI entrypoint for Kotlin/JVM appeal-finance `CancelAssetLock` validation.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+        &mut env,
         payload,
         label,
         generated_at,
@@ -41947,6 +42035,24 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     target_os = "macos",
     target_os = "windows"
 ))]
+/// Reports that the Java Android ABI contains appeal-finance validator symbols.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasAppealFinanceSymbols(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::JNI_TRUE
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
@@ -42004,6 +42110,32 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     java_sorafs_reference_validate_hedging_payload_json(
         &mut env,
         kind,
+        payload,
+        label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+/// JNI entrypoint for Java Android appeal-finance `CancelAssetLock` validation.
+///
+/// # Safety
+/// The JVM must supply valid JNI references for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateAppealFinanceCancelAssetLockJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+        &mut env,
         payload,
         label,
         generated_at,
@@ -46631,6 +46763,36 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_hedging_json(
     let buffer = unsafe {
         sorafs_reference_ffi::sorafs_reference_validate_hedging_json(
             kind,
+            bytes_ptr,
+            bytes_len as usize,
+            label_ptr,
+            label_len as usize,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
+}
+
+/// Validate one canonical appeal-finance `CancelAssetLock` V1 payload.
+///
+/// The returned `ValidationOutcomeV1` JSON allocation must be released with
+/// [`connect_norito_free`].
+///
+/// # Safety
+/// Every non-null input pointer must remain valid for its corresponding length
+/// until this function returns. Output pointers must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+    bytes_ptr: *const c_uchar,
+    bytes_len: c_ulong,
+    label_ptr: *const c_uchar,
+    label_len: c_ulong,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
             bytes_ptr,
             bytes_len as usize,
             label_ptr,
@@ -55365,6 +55527,73 @@ mod sorafs_tests {
                 .and_then(JsonValue::as_str),
             Some("order_request_bad_signature_v1.to")
         );
+    }
+
+    #[test]
+    fn sorafs_reference_appeal_finance_cancel_asset_lock_profiles_via_bridge_ffi() {
+        for (relative_path, status, code, category) in [
+            (
+                "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
+                "Ok",
+                "SFS-OK-000",
+                "validation",
+            ),
+            (
+                "fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+                "Error",
+                "SFS-NORITO-001",
+                "norito",
+            ),
+            (
+                "fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
+                "Error",
+                "SFS-VAL-001",
+                "validation",
+            ),
+        ] {
+            let payload = repo_fixture(relative_path);
+            let label = relative_path
+                .rsplit('/')
+                .next()
+                .expect("fixture path contains a file name")
+                .as_bytes();
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let rc = unsafe {
+                connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
+                    payload.as_ptr(),
+                    payload.len() as c_ulong,
+                    label.as_ptr(),
+                    label.len() as c_ulong,
+                    123,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            assert_eq!(rc, 0, "{relative_path}: bridge validator call");
+            let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
+            assert_eq!(
+                outcome.get("status").and_then(JsonValue::as_str),
+                Some(status),
+                "{relative_path}"
+            );
+            assert_eq!(
+                outcome.get("code").and_then(JsonValue::as_str),
+                Some(code),
+                "{relative_path}"
+            );
+            assert_eq!(
+                outcome.get("category").and_then(JsonValue::as_str),
+                Some(category),
+                "{relative_path}"
+            );
+            assert_eq!(
+                outcome.get("generated_at").and_then(JsonValue::as_u64),
+                Some(123),
+                "{relative_path}"
+            );
+        }
     }
 
     #[test]

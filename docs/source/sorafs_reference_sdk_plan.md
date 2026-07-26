@@ -20,10 +20,14 @@ signing helpers, C FFI validation, cookbook fixtures, and manifest/CAR replay.
 Remaining SF-11 work is release evidence and SDK distribution: per-target
 published archives, signed release manifests, published downstream binding
 packages, and live operator smoke records.
-The canonical cross-domain fixture inventory is complete. It binds 82 payload
+The published and sealed cross-domain fixture inventory binds 82 payload
 artifacts, 30 `ValidationOutcomeV1` outcomes, and 38 negative payload vectors
-across ten exact parity profiles. Native artifact rebuilds and unskipped runtime
-replay on every supported SDK toolchain remain open release requirements.
+across ten exact parity profiles. All eight generated `CancelAssetLock`
+positive/negative files are checked in under
+`fixtures/sorafs_manifest/appeal_finance/`, are mandatory inputs to the
+offline checker and SDK suites, and are covered by the inventory signature.
+Native artifact rebuilds plus unskipped replay on every supported SDK toolchain
+remain open release requirements.
 `scripts/check_sorafs_reference_sdk_release_evidence.py` now provides the
 fail-closed SF-11 release evidence gate for those artifacts, including
 cross-artifact `release_manifest_digest_hex` binding from release archives,
@@ -68,14 +72,34 @@ for 82 payload artifacts, including 38 negative payload vectors, and 30
 `ValidationOutcomeV1` files. Its offline checker verifies the trusted
 fingerprint and signature and rejects duplicate or nonfinite JSON, path
 traversal, missing/extra/substituted files, symlinks, hardlinks, and parent
-directory replacement. The ten cross-SDK profiles comprise nine
-fixture-bundle outcomes plus a dedicated moderation governance-log-node
-outcome. JavaScript/TypeScript, Python, Swift, Kotlin/JVM, mirrored Java
-Android, and C# expose the native bundle and governance-log-node validation
+directory replacement. The ten cross-SDK profiles comprise nine fixture-bundle
+outcomes plus a dedicated moderation governance-log-node outcome. JavaScript/TypeScript,
+Python, Swift, Kotlin/JVM, mirrored Java Android, and C# expose the native
+bundle and governance-log-node validation
 surfaces with byte-exact fixture tests checked in. Those source and fixture
 assets do not constitute a native release run: capability-gated tests that skip
 because a checked-in native artifact lacks the current symbols remain open and
 must be rerun against rebuilt artifacts.
+
+Host-native evidence now uses
+`scripts/check_native_sdk_abi21_artifact.py`. For C/JNI, C#, Node, and Python it
+binds one non-linked artifact's stable byte length and SHA-256 to the exact clean
+Git commit, calls the bridge probe, requires ABI **exactly** 21, and verifies the
+lane's appeal-finance entrypoint inventory. Canonical evidence is reverified
+after the build and before the native-dependent suite; noncanonical manifests,
+symlinks, hardlinks, byte replacement, source drift, ABI 19/20/22, and missing
+symbols fail closed. Node staging, loading, and release-provenance collection
+also reject missing, dirty, or stale build provenance. The Python native lane is
+pinned to Python 3.12 and rejects any skipped reference-validation test.
+Apple/Swift and packaged Android/JNI artifacts remain covered by the separate
+source-sealed `check_mobile_sdk_artifacts.sh` contract, which verifies every
+slice, exact ABI 21, symbols, hashes, and source identity; they are not
+represented as host-manifest lanes.
+
+These gates deliberately reject the repository's current dirty-source Node
+artifact. They do not constitute a rebuilt release inventory. Clean native
+artifacts still must be produced and exercised for Linux x86_64, Linux aarch64,
+macOS x86_64, macOS aarch64, and Windows x86_64 before this lane can close.
 
 The existing `sorafs_manifest` crate exposes `ValidationOutcomeV1`,
 `validate_provider_advert_bytes`, `validate_provider_admission_envelope_bytes`,
@@ -360,6 +384,7 @@ CLI prints `docs_url` pointing to `docs/portal/docs/sorafs/reference-sdk/errors.
 - `sorafs_manifest::reference::validate_pdp_commitment_challenge_proof_bytes(...)`.
 - `sorafs_manifest::reference::validate_potr_receipt_bytes(...)`.
 - `sorafs_manifest::reference::validate_repair_payload_bytes(...)`.
+- `sorafs_manifest::reference::validate_appeal_finance_cancel_asset_lock_bytes(...)`.
 - `sorafs_manifest::reference::validate_fixture_bundle_payloads(...)`.
 - `sorafs_manifest::reference::validate_governance_log_node_bytes(...)`.
 - `sorafs_manifest::reference::validate_governance_dag_block_bytes(...)`.
@@ -378,23 +403,32 @@ convert decoded or raw Norito payloads into the shared validation functions.
   scenarios.
 - **Cross-SDK canonical fixtures:** `generate_por_fixtures` deterministically
   regenerates the release-wide signed inventory under
-  `fixtures/sorafs_manifest/`. The inventory binds 82 payload artifacts, 30
-  exact outcome files, and 38 negative payload vectors. The typed
-  `cancel_asset_lock_fixtures` generator freezes the appeal-finance
+  `fixtures/sorafs_manifest/`. The published inventory binds 82 payload
+  artifacts, 30 exact outcome files, and 38 negative payload vectors. The typed
+  `cancel_asset_lock_fixtures` generator and SDK tests freeze the appeal-finance
   `CancelAssetLock { escrow_id, expected_remaining_amount }` hard cut and its
-  missing-field, zero, noncanonical-quantity, and trailing-byte negatives.
-  Nine fixture-bundle
-  profiles cover routing/provider admission, orderbook, PDP, PoR, PoTR, and
-  repair; a tenth profile exercises moderation through the dedicated
-  governance-log-node validator, alongside the Governance DAG block/head
-  vectors in the same closed inventory.
+  missing-field, retired nested-identifier, zero, and noncanonical-quantity
+  negatives.
+  `EscrowId` keeps its nominal Rust and `IntoSchema` identity while V1 binary
+  and JSON serialization delegate directly to `Hash`: the field is exactly
+  `0x20 <32-byte hash>` on the wire and one scalar `hash:...` JSON literal.
+  The 85-byte canonical frame is byte-exact; the redundant 86-byte
+  `0x21 0x20 <hash>` representation and one-element JSON arrays are rejected.
+  All eight generated files are present and covered by the resealed inventory;
+  fixture lookup is mandatory, so absence is a test failure rather than a
+  capability skip.
+  Nine fixture-bundle profiles cover routing/provider admission, orderbook,
+  PDP, PoR, PoTR, and repair; a tenth profile exercises moderation through the
+  dedicated governance-log-node validator. The Governance DAG block/head
+  vectors are bound by the same closed inventory.
   `scripts/check_sorafs_reference_sdk_fixtures.py` verifies the inventory
   without network access. JavaScript/TypeScript, Python, Swift, Kotlin/JVM,
   mirrored Java Android, and C# have native wrapper and byte-exact fixture test
-  coverage checked in. Current native-dependent tests remain capability-gated;
-  any run skipped because its checked-in native artifact lacks current symbols
-  is not release evidence and must be repeated after the native artifacts are
-  rebuilt.
+  coverage checked in. Source-only local runs may remain capability-gated, but
+  release-required Swift, Kotlin/JVM, mirrored Java Android, C#, and Python
+  lanes fail when the exact ABI-21 bridge or required symbols are absent; the
+  Python lane additionally rejects any skipped reference test. None of those
+  source contracts substitutes for rerunning against clean rebuilt artifacts.
 - **Release packaging:** `scripts/package_sorafs_validate_release.sh` builds or
   packages `sorafs-validate`, stages `include/sorafs_reference.h`, runs fixture
   smoke checks, records per-file, binary, FFI-header, archive, and manifest
@@ -662,9 +696,10 @@ Implemented locally:
   algorithm labels.
 
 Remaining production gates:
-- Regenerate the fixtures, rebuild every checked-in and published native
-  artifact at the current ABI, and run all six SDK families' exact parity
-  suites without capability-gated skips.
+- Rebuild every checked-in and published native artifact from one clean pinned
+  commit for Linux x86_64, Linux aarch64, macOS x86_64, macOS aarch64, and
+  Windows x86_64, then run all six SDK families' exact parity suites without
+  capability-gated skips.
 - Run the packaging helper for the supported release targets and publish signed
   release manifests outside the repository using governed release keys, then
   require those artifacts to pass the SF-11 release evidence gate.

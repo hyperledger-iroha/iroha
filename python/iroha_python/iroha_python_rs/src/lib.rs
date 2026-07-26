@@ -160,12 +160,13 @@ use sorafs_manifest::{
         SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1, SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
         SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     },
-    sign_orderbook_payload_bytes_ed25519_v1, validate_fixture_bundle_payloads,
-    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
-    validate_governance_log_node_bytes, validate_orderbook_payload_bytes,
-    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
-    validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
-    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
+    sign_orderbook_payload_bytes_ed25519_v1, validate_appeal_finance_cancel_asset_lock_bytes,
+    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
+    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
+    validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
+    validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, OrchestratorConfig, RolloutPhase, TransportPolicy, fetch_via_gateway,
@@ -4719,6 +4720,21 @@ fn sorafs_fixed32_from_bytes_py(value: &[u8], context: &str) -> PyResult<[u8; 32
     fixed_array::<32>(value, context)
 }
 
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_appeal_finance_cancel_asset_lock_json")]
+fn sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
+    norito_bytes: &[u8],
+    label: &str,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    let outcome = validate_appeal_finance_cancel_asset_lock_bytes(
+        norito_bytes,
+        label.to_owned(),
+        generated_at_unix,
+    );
+    sorafs_validation_outcome_json(&outcome)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SorafsPdpPayloadKind {
     Commitment,
@@ -5262,6 +5278,42 @@ mod sorafs_reference_validation_py_tests {
         assert_eq!(outcome.status.as_str(), "Ok");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert_eq!(outcome.generated_at, 1_700_001_234);
+    }
+
+    #[test]
+    fn appeal_finance_cancel_asset_lock_native_outcomes_are_stable() {
+        let canonical = include_bytes!(
+            "../../../../fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to"
+        );
+        let zero = include_bytes!(
+            "../../../../fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to"
+        );
+
+        let accepted = sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
+            canonical,
+            "cancel_asset_lock_v1.to",
+            41,
+        )
+        .expect("validate canonical CancelAssetLock");
+        let accepted: norito::json::Value =
+            norito::json::from_json(&accepted).expect("accepted outcome JSON");
+        assert_eq!(
+            accepted.get("code").and_then(norito::json::Value::as_str),
+            Some("SFS-OK-000")
+        );
+
+        let rejected = sorafs_validate_appeal_finance_cancel_asset_lock_json_py(
+            zero,
+            "cancel_asset_lock_zero_expected_v1.to",
+            42,
+        )
+        .expect("validate zero-quantity CancelAssetLock");
+        let rejected: norito::json::Value =
+            norito::json::from_json(&rejected).expect("rejected outcome JSON");
+        assert_eq!(
+            rejected.get("code").and_then(norito::json::Value::as_str),
+            Some("SFS-VAL-001")
+        );
     }
 
     #[test]
@@ -11279,6 +11331,11 @@ mod tests {
     #[test]
     fn privacy_bridge_abi_version_python_function_is_additive_seven() {
         assert_eq!(privacy_bridge_abi_version_py(), 7);
+    }
+
+    #[test]
+    fn native_sdk_bridge_abi_version_is_exactly_twenty_one() {
+        assert_eq!(connect_norito_bridge_abi_version_py(), 21);
     }
 
     #[test]
@@ -19978,6 +20035,12 @@ fn privacy_bridge_abi_version_py() -> u32 {
 }
 
 #[pyfunction]
+#[pyo3(name = "connect_norito_bridge_abi_version")]
+fn connect_norito_bridge_abi_version_py() -> u32 {
+    21
+}
+
+#[pyfunction]
 #[pyo3(name = "privacy_proof_request_v1")]
 fn privacy_proof_request_v1_py(
     py: Python<'_>,
@@ -20113,6 +20176,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         sorafs_validate_orderbook_payload_json_py,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_appeal_finance_cancel_asset_lock_json_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(sorafs_sign_orderbook_payload_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         sorafs_derive_orderbook_order_id_py,
@@ -20221,6 +20288,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(privacy_bridge_abi_version_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        connect_norito_bridge_abi_version_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(privacy_proof_request_v1_py, module)?)?;
     module.add_function(wrap_pyfunction!(privacy_capabilities_v1_py, module)?)?;
     module.add_function(wrap_pyfunction!(privacy_build_proof_v1_py, module)?)?;

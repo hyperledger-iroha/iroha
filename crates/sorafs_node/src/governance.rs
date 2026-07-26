@@ -59,6 +59,36 @@ const GOVERNANCE_PUBLISHER_LOCK_FILE: &str = ".governance-publisher.lock";
 const GOVERNANCE_MUTABLE_INDEX_MAX_BYTES: usize = 64 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_HANDLE_MAX_BYTES: usize = 256;
 
+/// Public, non-secret qualification returned by a Governance DAG runtime provider.
+///
+/// `revision` identifies the deployment-owned adapter/policy revision and
+/// `policy_digest` binds the exact public provider policy. Runtime wrappers pin
+/// this observation at startup and require it to remain identical on every
+/// subsequent operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GovernanceDagRuntimeProviderQualificationV1 {
+    /// Non-zero deployment policy revision.
+    pub revision: u64,
+    /// Non-zero digest of the public provider policy.
+    pub policy_digest: [u8; 32],
+}
+
+impl GovernanceDagRuntimeProviderQualificationV1 {
+    /// Construct one public provider qualification.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Whether both first-release qualification fields are non-zero.
+    pub(crate) fn is_valid(self) -> bool {
+        self.revision != 0 && self.policy_digest.iter().any(|byte| *byte != 0)
+    }
+}
+
 /// Runtime-only signing boundary for the local Governance DAG publisher.
 ///
 /// Production implementations are expected to delegate to PKCS#11, an HSM, or
@@ -68,6 +98,14 @@ const GOVERNANCE_RUNTIME_HANDLE_MAX_BYTES: usize = 256;
 pub trait GovernanceDagRuntimeSigner: Send + Sync + fmt::Debug {
     /// Opaque, non-secret deployment handle for this signer.
     fn handle(&self) -> &str;
+
+    /// Qualify the active adapter and its public policy revision.
+    ///
+    /// Implementations must fail when the HSM/KMS adapter is unavailable,
+    /// revoked, stale, test-marked, or otherwise not production-ready. Provider
+    /// diagnostics can contain secrets and are therefore always redacted by the
+    /// caller.
+    fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
 
     /// Governed publisher peer identity bound to this signer.
     fn publisher_peer_id(&self) -> &[u8];
@@ -101,6 +139,12 @@ pub enum GovernanceDagAuthenticationScope {
 pub trait GovernanceDagRequestAuthenticator: Send + Sync + fmt::Debug {
     /// Opaque, non-secret deployment handle for this authenticator.
     fn handle(&self) -> &str;
+
+    /// Qualify the active adapter and its public policy revision.
+    ///
+    /// Implementations must fail when the credential boundary is unavailable,
+    /// revoked, stale, test-marked, or otherwise not production-ready.
+    fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
 
     /// Authenticate one exact outbound request.
     fn authenticate(
@@ -190,6 +234,13 @@ pub trait GovernanceDagSealedCheckpointStore: Send + Sync + fmt::Debug {
     /// Opaque, non-secret deployment handle for this store.
     fn handle(&self) -> &str;
 
+    /// Qualify the active adapter and its public policy revision.
+    ///
+    /// Implementations must fail when the sealed monotonic store is
+    /// unavailable, revoked, stale, test-marked, or otherwise not
+    /// production-ready.
+    fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
+
     /// Load and unseal the latest record for `slot`.
     fn load(
         &self,
@@ -232,10 +283,12 @@ pub(crate) struct FilesystemGovernancePublisher {
 }
 
 #[derive(Clone)]
-struct GovernanceRuntimeDagSigner {
+/// Startup-qualified signer pinned to one exact public provider policy.
+pub(crate) struct GovernanceRuntimeDagSigner {
     handle: String,
     publisher_peer_id: Vec<u8>,
     public_key: [u8; 32],
+    qualification: GovernanceDagRuntimeProviderQualificationV1,
     verification_key: PublicKey,
     provider: Arc<dyn GovernanceDagRuntimeSigner>,
 }
@@ -281,6 +334,16 @@ impl FilesystemGovernancePublisher {
             expected_public_key,
             signer,
         )?);
+        Ok(self)
+    }
+
+    /// Attach an already-qualified signer without resetting its pinned policy.
+    pub(crate) fn with_qualified_runtime_dag_signer_provider(
+        mut self,
+        signer: GovernanceRuntimeDagSigner,
+    ) -> Result<Self, GovernancePublishError> {
+        signer.assert_qualification()?;
+        self.runtime_dag_signer = Some(signer);
         Ok(self)
     }
 
@@ -968,25 +1031,39 @@ impl GovernanceRuntimeDagSigner {
                 "governance runtime DAG signer public key does not match configured public key",
             ));
         }
+        let qualification = provider.qualification().map_err(|_| {
+            GovernancePublishError::other(
+                "governance runtime DAG signer is unavailable, stale, or unqualified",
+            )
+        })?;
+        if !qualification.is_valid() {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG signer returned an invalid policy qualification",
+            ));
+        }
+        if provider.handle() != expected_handle
+            || provider.publisher_peer_id() != publisher_peer_id
+            || provider.public_key() != expected_public_key
+        {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG signer identity changed during startup qualification",
+            ));
+        }
         Ok(Self {
             handle: expected_handle,
             publisher_peer_id,
             public_key: expected_public_key,
+            qualification,
             verification_key,
             provider,
         })
     }
 
     fn sign(&self, payload: &[u8]) -> Result<GovernanceLogSignatureV1, GovernancePublishError> {
-        if self.provider.handle() != self.handle
-            || self.provider.publisher_peer_id() != self.publisher_peer_id
-            || self.provider.public_key() != self.public_key
-        {
-            return Err(GovernancePublishError::other(
-                "governance runtime DAG signer identity changed after injection",
-            ));
-        }
-        let signature_bytes = self.provider.sign(payload).map_err(|_| {
+        self.assert_qualification()?;
+        let signature_result = self.provider.sign(payload);
+        self.assert_qualification()?;
+        let signature_bytes = signature_result.map_err(|_| {
             GovernancePublishError::other(
                 "governance runtime DAG signer refused the canonical payload",
             )
@@ -1010,6 +1087,25 @@ impl GovernanceRuntimeDagSigner {
         })
     }
 
+    /// Revalidate the pinned signer identity and public provider policy.
+    pub(crate) fn assert_qualification(&self) -> Result<(), GovernancePublishError> {
+        let qualification = self.provider.qualification().map_err(|_| {
+            GovernancePublishError::other(
+                "governance runtime DAG signer is unavailable, stale, or unqualified",
+            )
+        })?;
+        if self.provider.handle() != self.handle
+            || self.provider.publisher_peer_id() != self.publisher_peer_id
+            || self.provider.public_key() != self.public_key
+            || qualification != self.qualification
+        {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG signer identity or policy changed after injection",
+            ));
+        }
+        Ok(())
+    }
+
     fn publisher_peer_id_hex(&self) -> String {
         hex::encode(&self.publisher_peer_id)
     }
@@ -1017,6 +1113,21 @@ impl GovernanceRuntimeDagSigner {
     fn publisher_public_key_hex(&self) -> String {
         hex::encode(&self.public_key)
     }
+}
+
+/// Qualify one exact runtime signer without opening the publisher filesystem.
+pub(crate) fn qualify_governance_dag_runtime_signer_provider(
+    expected_handle: String,
+    publisher_peer_id: Vec<u8>,
+    expected_public_key: [u8; 32],
+    provider: Arc<dyn GovernanceDagRuntimeSigner>,
+) -> Result<GovernanceRuntimeDagSigner, GovernancePublishError> {
+    GovernanceRuntimeDagSigner::try_new(
+        expected_handle,
+        publisher_peer_id,
+        expected_public_key,
+        provider,
+    )
 }
 
 fn validate_runtime_handle(
@@ -1032,6 +1143,20 @@ fn validate_runtime_handle(
     {
         return Err(GovernancePublishError::other(format!(
             "{label} handle must be 1..={GOVERNANCE_RUNTIME_HANDLE_MAX_BYTES} visible ASCII bytes without whitespace"
+        )));
+    }
+    let lowercase = handle.to_ascii_lowercase();
+    if lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
+            )
+        })
+    {
+        return Err(GovernancePublishError::other(format!(
+            "{label} handle is test-marked and cannot qualify a production adapter"
         )));
     }
     Ok(())
@@ -4443,7 +4568,7 @@ mod tests {
         fs, io,
         panic::{AssertUnwindSafe, catch_unwind},
         path::{Path, PathBuf},
-        sync::Arc,
+        sync::{Arc, atomic::AtomicBool},
         thread,
     };
 
@@ -4997,6 +5122,9 @@ mod tests {
         publisher_peer_id: Vec<u8>,
         key_pair: KeyPair,
         public_key_override: Option<[u8; 32]>,
+        qualification_revision: AtomicU64,
+        qualification_error: Option<String>,
+        drift_during_sign: AtomicBool,
         refuse_with: Option<String>,
         corrupt_signature: bool,
     }
@@ -5019,6 +5147,9 @@ mod tests {
                 key_pair: KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                     .expect("derive test runtime DAG signer"),
                 public_key_override: None,
+                qualification_revision: AtomicU64::new(1),
+                qualification_error: None,
+                drift_during_sign: AtomicBool::new(false),
                 refuse_with: None,
                 corrupt_signature: false,
             }
@@ -5040,6 +5171,16 @@ mod tests {
             &self.handle
         }
 
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            if let Some(error) = &self.qualification_error {
+                return Err(error.clone());
+            }
+            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
+                self.qualification_revision.load(Ordering::SeqCst),
+                [0x71; 32],
+            ))
+        }
+
         fn publisher_peer_id(&self) -> &[u8] {
             &self.publisher_peer_id
         }
@@ -5050,6 +5191,9 @@ mod tests {
         }
 
         fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+            if self.drift_during_sign.swap(false, Ordering::SeqCst) {
+                self.qualification_revision.fetch_add(1, Ordering::SeqCst);
+            }
             if let Some(error) = &self.refuse_with {
                 return Err(error.clone());
             }
@@ -5069,7 +5213,7 @@ mod tests {
     fn signed_runtime_publisher(root: &Path) -> FilesystemGovernancePublisher {
         let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
         let signer = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:test",
+            "pkcs11:governance-dag:primary",
             &peer_id,
             0x31,
         ));
@@ -5077,7 +5221,7 @@ mod tests {
         FilesystemGovernancePublisher::try_new(root.to_path_buf())
             .expect("publisher")
             .with_runtime_dag_signer_provider(
-                "pkcs11:governance-dag:test",
+                "pkcs11:governance-dag:primary",
                 peer_id,
                 public_key,
                 signer,
@@ -5292,7 +5436,7 @@ mod tests {
     fn runtime_dag_signer_rejects_invalid_handle_and_oversized_identity() {
         let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
         let signer = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:test",
+            "pkcs11:governance-dag:primary",
             &peer_id,
             0x31,
         ));
@@ -5322,10 +5466,92 @@ mod tests {
     }
 
     #[test]
+    fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
+        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
+        let signer = Arc::new(TestRuntimeDagSigner::new(
+            "pkcs11:governance-dag:primary",
+            &peer_id,
+            0x31,
+        ));
+        let error = GovernanceRuntimeDagSigner::try_new(
+            "pkcs11:governance-dag:test".to_owned(),
+            peer_id.clone(),
+            signer.public_key(),
+            signer,
+        )
+        .expect_err("test-marked configured handle must fail closed");
+        assert!(error.to_string().contains("test-marked"));
+
+        let mut stale = TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
+        stale.qualification_error = Some("hsm_token=must-never-escape".to_owned());
+        let stale = Arc::new(stale);
+        let error = GovernanceRuntimeDagSigner::try_new(
+            stale.handle().to_owned(),
+            peer_id.clone(),
+            stale.public_key(),
+            stale,
+        )
+        .expect_err("stale provider must fail startup qualification");
+        assert!(error.to_string().contains("stale"));
+        assert!(!error.to_string().contains("must-never-escape"));
+
+        let invalid = Arc::new(TestRuntimeDagSigner::new(
+            "pkcs11:governance-dag:primary",
+            &peer_id,
+            0x31,
+        ));
+        invalid.qualification_revision.store(0, Ordering::SeqCst);
+        let error = GovernanceRuntimeDagSigner::try_new(
+            invalid.handle().to_owned(),
+            peer_id.clone(),
+            invalid.public_key(),
+            invalid,
+        )
+        .expect_err("zero provider revision must fail startup qualification");
+        assert!(error.to_string().contains("invalid policy qualification"));
+
+        let signer = Arc::new(TestRuntimeDagSigner::new(
+            "pkcs11:governance-dag:primary",
+            &peer_id,
+            0x31,
+        ));
+        let wrapped = GovernanceRuntimeDagSigner::try_new(
+            signer.handle().to_owned(),
+            peer_id,
+            signer.public_key(),
+            signer.clone(),
+        )
+        .expect("qualify stable signer");
+        signer.qualification_revision.store(2, Ordering::SeqCst);
+        let error = wrapped
+            .sign(b"canonical governance payload")
+            .expect_err("provider policy drift must fail closed");
+        assert!(error.to_string().contains("policy changed"));
+
+        let signer = Arc::new(TestRuntimeDagSigner::new(
+            "pkcs11:governance-dag:primary",
+            b"12D3KooWRuntimeDagPublisher",
+            0x31,
+        ));
+        let wrapped = GovernanceRuntimeDagSigner::try_new(
+            signer.handle().to_owned(),
+            signer.publisher_peer_id().to_vec(),
+            signer.public_key(),
+            signer.clone(),
+        )
+        .expect("qualify stable signer");
+        signer.drift_during_sign.store(true, Ordering::SeqCst);
+        let error = wrapped
+            .sign(b"canonical governance payload")
+            .expect_err("provider policy drift during signing must discard the signature");
+        assert!(error.to_string().contains("policy changed"));
+    }
+
+    #[test]
     fn runtime_dag_signer_rejects_handle_peer_and_public_key_mismatch() {
         let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
         let signer = Arc::new(TestRuntimeDagSigner::new(
-            "pkcs11:governance-dag:test",
+            "pkcs11:governance-dag:primary",
             &peer_id,
             0x31,
         ));
@@ -5373,7 +5599,7 @@ mod tests {
             ),
         ] {
             let mut signer =
-                TestRuntimeDagSigner::new("pkcs11:governance-dag:test", &peer_id, 0x31);
+                TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
             signer.public_key_override = Some(public_key);
             let signer = Arc::new(signer);
             let error = GovernanceRuntimeDagSigner::try_new(
@@ -5390,7 +5616,8 @@ mod tests {
     #[test]
     fn runtime_dag_signer_redacts_provider_error_and_rejects_wrong_signature() {
         let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
-        let mut refusing = TestRuntimeDagSigner::new("pkcs11:governance-dag:test", &peer_id, 0x31);
+        let mut refusing =
+            TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
         refusing.refuse_with = Some("bearer=must-never-escape".to_owned());
         let refusing = Arc::new(refusing);
         let wrapped = GovernanceRuntimeDagSigner::try_new(
@@ -5406,7 +5633,8 @@ mod tests {
         assert!(error.to_string().contains("refused"));
         assert!(!error.to_string().contains("must-never-escape"));
 
-        let mut corrupt = TestRuntimeDagSigner::new("pkcs11:governance-dag:test", &peer_id, 0x31);
+        let mut corrupt =
+            TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
         corrupt.corrupt_signature = true;
         let corrupt = Arc::new(corrupt);
         let wrapped = GovernanceRuntimeDagSigner::try_new(

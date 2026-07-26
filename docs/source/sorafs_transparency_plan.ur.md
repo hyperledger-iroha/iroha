@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/sorafs_transparency_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: cb8a14e4bb47a7ecd29f89886a0993d9b07e11c4b07eba3fabfe3b34ff43a100
-source_last_modified: "2026-07-25T05:36:07.430633+00:00"
+source_hash: 6fb8bd68685b75c5f3a069d2a473bc3d0b04a42818ab87fe47494f7f5fcc8a54
+source_last_modified: "2026-07-26T21:02:39.206891+00:00"
 translation_last_reviewed: null
 ---
 

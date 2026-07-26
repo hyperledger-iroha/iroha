@@ -16,6 +16,30 @@ test('OpenAPI CI uses a locked graph and detached-only signing', async () => {
   assert.match(gate, /--signature-envelope/);
 });
 
+test('OpenAPI CI is clean, commit-bound, and two-pass', async () => {
+  const gate = await readFile(join(repoRoot, 'ci', 'check_openapi_spec.sh'), 'utf8');
+
+  assert.match(gate, /require_clean_checkout/);
+  assert.match(gate, /rev-parse --verify 'HEAD\^\{commit\}'/);
+  assert.match(
+    gate,
+    /--expected-generator-commit="\$\{EXPECTED_GENERATOR_COMMIT\}"/,
+  );
+  assert.equal(
+    Array.from(gate.matchAll(/run_xtask openapi --output/g)).length,
+    2,
+  );
+  assert.match(
+    gate,
+    /diff -u "\$\{GENERATED_SPEC_FIRST\}" "\$\{GENERATED_SPEC_SECOND\}"/,
+  );
+  assert.match(
+    gate,
+    /diff -u "\$\{MANIFEST_PATH\}" "\$\{CURRENT_MANIFEST_PATH\}"/,
+  );
+  assert.doesNotMatch(gate, /VERSION_VERIFY_POLICY_ARGS/);
+});
+
 test('OpenAPI workflow actions and tooling tests are pinned', async () => {
   const workflow = await readFile(
     join(repoRoot, '.github', 'workflows', 'openapi.yml'),

@@ -21,8 +21,8 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 use crate::{
     GovernanceDagAuthenticationScope, GovernanceDagRequestAuthenticator,
-    GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
-    GovernanceDagSealedStateSlot,
+    GovernanceDagRuntimeProviderQualificationV1, GovernanceDagSealedCheckpointStore,
+    GovernanceDagSealedStateRecord, GovernanceDagSealedStateSlot,
 };
 use axum::{
     Router,
@@ -126,9 +126,9 @@ pub enum GovernanceDagServiceError {
 #[derive(Clone, Default)]
 /// Deployment-owned runtime providers for the supervised Governance DAG service.
 ///
-/// An empty container is intentionally valid to construct so the packaged
-/// binary can fail closed with an explicit missing-provider error. Production
-/// supervisors attach opaque HSM/credential/checkpoint implementations through
+/// An empty container is intentionally constructible for assembly and negative
+/// tests, but startup rejects it before service state is opened. Production
+/// registries attach opaque HSM/credential/checkpoint implementations through
 /// the builder methods below.
 pub struct GovernanceDagServiceRuntimeProviders {
     ipfs_authenticator: Option<Arc<dyn GovernanceDagRequestAuthenticator>>,
@@ -140,27 +140,9 @@ impl fmt::Debug for GovernanceDagServiceRuntimeProviders {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("GovernanceDagServiceRuntimeProviders")
-            .field(
-                "ipfs_authenticator",
-                &self
-                    .ipfs_authenticator
-                    .as_ref()
-                    .map(|provider| provider.handle()),
-            )
-            .field(
-                "head_authenticator",
-                &self
-                    .head_authenticator
-                    .as_ref()
-                    .map(|provider| provider.handle()),
-            )
-            .field(
-                "checkpoint_store",
-                &self
-                    .checkpoint_store
-                    .as_ref()
-                    .map(|provider| provider.handle()),
-            )
+            .field("ipfs_authenticator", &self.ipfs_authenticator.is_some())
+            .field("head_authenticator", &self.head_authenticator.is_some())
+            .field("checkpoint_store", &self.checkpoint_store.is_some())
             .finish()
     }
 }
@@ -197,9 +179,91 @@ impl GovernanceDagServiceRuntimeProviders {
     }
 }
 
+/// Public stable-handle bindings requested from a deployment runtime registry.
+///
+/// This value contains no credentials, private keys, provider diagnostics, or
+/// endpoint secrets. A deployment registry uses it only to select already
+/// provisioned HSM/authentication/sealed-CAS adapters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GovernanceDagServiceRuntimeProviderBindingsV1 {
+    ipfs_authenticator_handle: String,
+    head_authenticator_handle: Option<String>,
+    checkpoint_store_handle: String,
+}
+
+impl GovernanceDagServiceRuntimeProviderBindingsV1 {
+    /// Stable handle for the Kubo/IPFS/IPNS authenticator.
+    #[must_use]
+    pub fn ipfs_authenticator_handle(&self) -> &str {
+        &self.ipfs_authenticator_handle
+    }
+
+    /// Stable handle for signed-head authentication, when that mode is active.
+    #[must_use]
+    pub fn head_authenticator_handle(&self) -> Option<&str> {
+        self.head_authenticator_handle.as_deref()
+    }
+
+    /// Stable handle for the sealed monotonic checkpoint store.
+    #[must_use]
+    pub fn checkpoint_store_handle(&self) -> &str {
+        &self.checkpoint_store_handle
+    }
+}
+
+/// Redacted deployment-registry resolution failure.
+///
+/// Variants deliberately carry no provider diagnostics because HSM, KMS, and
+/// credential-control-plane errors can contain secrets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum GovernanceDagServiceRuntimeProviderRegistryErrorV1 {
+    /// The deployment registry or its control plane is unavailable.
+    #[error("Governance DAG runtime provider registry is unavailable")]
+    Unavailable,
+    /// The deployment registry policy is stale or revoked.
+    #[error("Governance DAG runtime provider registry policy is stale or revoked")]
+    StaleOrRevoked,
+    /// The registry rejected the exact configured stable-handle bindings.
+    #[error("Governance DAG runtime provider registry rejected the configured bindings")]
+    RejectedBindings,
+}
+
+/// Deployment-owned factory for Governance DAG runtime providers.
+///
+/// Implementations resolve only the stable handles in `bindings`. Credentials,
+/// private keys, tokens, and provider diagnostics must stay inside the registry
+/// and returned adapters. The service independently qualifies every returned
+/// adapter and verifies its exact configured handle before touching durable
+/// service state.
+pub trait GovernanceDagServiceRuntimeProviderRegistryV1: Send + Sync {
+    /// Resolve one coherent provider set for the exact configured bindings.
+    fn resolve(
+        &self,
+        bindings: &GovernanceDagServiceRuntimeProviderBindingsV1,
+    ) -> Result<
+        GovernanceDagServiceRuntimeProviders,
+        GovernanceDagServiceRuntimeProviderRegistryErrorV1,
+    >;
+}
+
+/// Typed startup failure for the registry-aware Governance DAG launcher.
+#[derive(Debug, Error)]
+pub enum GovernanceDagServiceLauncherError {
+    /// The packaged launcher was not supplied a deployment runtime registry.
+    #[error("Governance DAG runtime provider registry was not injected")]
+    MissingRuntimeProviderRegistry,
+    /// The injected registry failed without exposing provider diagnostics.
+    #[error(transparent)]
+    RuntimeProviderRegistry(#[from] GovernanceDagServiceRuntimeProviderRegistryErrorV1),
+    /// Configuration or qualified service startup failed.
+    #[error(transparent)]
+    Service(#[from] GovernanceDagServiceError),
+}
+
 #[derive(Clone)]
 struct OpaqueAuthenticator {
     handle: String,
+    qualification: GovernanceDagRuntimeProviderQualificationV1,
     provider: Arc<dyn GovernanceDagRequestAuthenticator>,
 }
 
@@ -220,12 +284,32 @@ impl OpaqueAuthenticator {
         label: &'static str,
     ) -> Result<Self, GovernanceDagServiceError> {
         let handle = validate_runtime_handle(expected_handle, label)?;
-        if provider.handle() != handle {
+        let provider_handle = validate_runtime_handle(provider.handle(), label)?;
+        if provider_handle != handle {
             return Err(GovernanceDagServiceError::Config(format!(
                 "{label} provider handle does not match configured handle"
             )));
         }
-        Ok(Self { handle, provider })
+        let qualification = provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::Config(format!(
+                "{label} provider is unavailable, stale, or unqualified"
+            ))
+        })?;
+        if !qualification.is_valid() {
+            return Err(GovernanceDagServiceError::Config(format!(
+                "{label} provider returned an invalid policy qualification"
+            )));
+        }
+        if provider.handle() != handle {
+            return Err(GovernanceDagServiceError::Config(format!(
+                "{label} provider identity changed during startup qualification"
+            )));
+        }
+        Ok(Self {
+            handle,
+            qualification,
+            provider,
+        })
     }
 
     fn authenticate(
@@ -233,22 +317,36 @@ impl OpaqueAuthenticator {
         scope: GovernanceDagAuthenticationScope,
         request: RequestBuilder,
     ) -> Result<RequestBuilder, GovernanceDagServiceError> {
-        if self.provider.handle() != self.handle {
-            return Err(GovernanceDagServiceError::Network(
-                "Governance DAG authenticator identity changed after injection".to_owned(),
-            ));
-        }
-        self.provider.authenticate(scope, request).map_err(|_| {
+        self.assert_identity()?;
+        let result = self.provider.authenticate(scope, request);
+        self.assert_identity()?;
+        result.map_err(|_| {
             GovernanceDagServiceError::Network(
                 "Governance DAG authenticator refused the outbound request".to_owned(),
             )
         })
+    }
+
+    fn assert_identity(&self) -> Result<(), GovernanceDagServiceError> {
+        let qualification = self.provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::Network(
+                "Governance DAG authenticator is unavailable, stale, or unqualified".to_owned(),
+            )
+        })?;
+        if self.provider.handle() != self.handle || qualification != self.qualification {
+            return Err(GovernanceDagServiceError::Network(
+                "Governance DAG authenticator identity or policy changed after injection"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 }
 
 #[derive(Clone)]
 struct OpaqueCheckpointStore {
     handle: String,
+    qualification: GovernanceDagRuntimeProviderQualificationV1,
     provider: Arc<dyn GovernanceDagSealedCheckpointStore>,
 }
 
@@ -267,19 +365,45 @@ impl OpaqueCheckpointStore {
         provider: Arc<dyn GovernanceDagSealedCheckpointStore>,
     ) -> Result<Self, GovernanceDagServiceError> {
         let handle = validate_runtime_handle(expected_handle, "sealed checkpoint store")?;
-        if provider.handle() != handle {
+        let provider_handle =
+            validate_runtime_handle(provider.handle(), "sealed checkpoint store")?;
+        if provider_handle != handle {
             return Err(GovernanceDagServiceError::Config(
                 "sealed checkpoint store provider handle does not match configured handle"
                     .to_owned(),
             ));
         }
-        Ok(Self { handle, provider })
+        let qualification = provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::Config(
+                "sealed checkpoint store is unavailable, stale, or unqualified".to_owned(),
+            )
+        })?;
+        if !qualification.is_valid() {
+            return Err(GovernanceDagServiceError::Config(
+                "sealed checkpoint store returned an invalid policy qualification".to_owned(),
+            ));
+        }
+        if provider.handle() != handle {
+            return Err(GovernanceDagServiceError::Config(
+                "sealed checkpoint store identity changed during startup qualification".to_owned(),
+            ));
+        }
+        Ok(Self {
+            handle,
+            qualification,
+            provider,
+        })
     }
 
     fn assert_identity(&self) -> Result<(), GovernanceDagServiceError> {
-        if self.provider.handle() != self.handle {
+        let qualification = self.provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::State(
+                "sealed checkpoint store is unavailable, stale, or unqualified".to_owned(),
+            )
+        })?;
+        if self.provider.handle() != self.handle || qualification != self.qualification {
             return Err(GovernanceDagServiceError::State(
-                "sealed checkpoint store identity changed after injection".to_owned(),
+                "sealed checkpoint store identity or policy changed after injection".to_owned(),
             ));
         }
         Ok(())
@@ -453,6 +577,96 @@ pub async fn run_governance_dag_service(
     providers: GovernanceDagServiceRuntimeProviders,
 ) -> Result<(), GovernanceDagServiceError> {
     let view = load_service_config(config_path.as_ref())?;
+    run_governance_dag_service_from_view(view, once, providers).await
+}
+
+/// Run the supervised Governance DAG publisher through a deployment registry.
+///
+/// The registry receives only validated stable provider handles. The packaged
+/// launcher passes `None` when no supported deployment registry was linked and
+/// therefore fails with a typed error before service state is opened.
+///
+/// # Errors
+///
+/// Returns [`GovernanceDagServiceLauncherError::MissingRuntimeProviderRegistry`]
+/// when no registry was injected, a redacted typed registry error when provider
+/// construction fails, or the underlying fail-closed service startup error.
+pub async fn run_governance_dag_service_with_runtime_registry(
+    config_path: impl AsRef<Path>,
+    once: bool,
+    registry: Option<Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1>>,
+) -> Result<(), GovernanceDagServiceLauncherError> {
+    let view = load_service_config(config_path.as_ref())?;
+    let providers = resolve_runtime_registry_providers(&view, registry)?;
+    run_governance_dag_service_from_view(view, once, providers).await?;
+    Ok(())
+}
+
+fn resolve_runtime_registry_providers(
+    view: &SorafsGovernanceDagServiceView,
+    registry: Option<Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1>>,
+) -> Result<GovernanceDagServiceRuntimeProviders, GovernanceDagServiceLauncherError> {
+    let bindings = runtime_provider_bindings(view)?;
+    let registry =
+        registry.ok_or(GovernanceDagServiceLauncherError::MissingRuntimeProviderRegistry)?;
+    Ok(registry.resolve(&bindings)?)
+}
+
+fn runtime_provider_bindings(
+    view: &SorafsGovernanceDagServiceView,
+) -> Result<GovernanceDagServiceRuntimeProviderBindingsV1, GovernanceDagServiceError> {
+    let service = &view.service;
+    if !service.enabled {
+        return Err(GovernanceDagServiceError::Config(
+            "sorafs.storage.governance_dag_service.enabled must be true".to_owned(),
+        ));
+    }
+    let ipfs_authenticator_handle = validate_runtime_handle(
+        service
+            .ipfs_authenticator_handle
+            .as_deref()
+            .ok_or_else(|| {
+                GovernanceDagServiceError::Config("IPFS authenticator handle is missing".to_owned())
+            })?,
+        "IPFS authenticator",
+    )?;
+    let checkpoint_store_handle = validate_runtime_handle(
+        service.checkpoint_store_handle.as_deref().ok_or_else(|| {
+            GovernanceDagServiceError::Config("checkpoint store handle is missing".to_owned())
+        })?,
+        "sealed checkpoint store",
+    )?;
+    let head_authenticator_handle = match service.head_mode.as_str() {
+        "signed_http" => Some(validate_runtime_handle(
+            service
+                .head_authenticator_handle
+                .as_deref()
+                .ok_or_else(|| {
+                    GovernanceDagServiceError::Config(
+                        "signed-head authenticator handle is missing".to_owned(),
+                    )
+                })?,
+            "signed-head authenticator",
+        )?),
+        "ipns" => None,
+        _ => {
+            return Err(GovernanceDagServiceError::Config(
+                "head_mode must be signed_http or ipns".to_owned(),
+            ));
+        }
+    };
+    Ok(GovernanceDagServiceRuntimeProviderBindingsV1 {
+        ipfs_authenticator_handle,
+        head_authenticator_handle,
+        checkpoint_store_handle,
+    })
+}
+
+async fn run_governance_dag_service_from_view(
+    view: SorafsGovernanceDagServiceView,
+    once: bool,
+    providers: GovernanceDagServiceRuntimeProviders,
+) -> Result<(), GovernanceDagServiceError> {
     let mut service = Service::from_view(view, providers).await?;
     if once {
         service.reconcile_once().await?;
@@ -538,18 +752,6 @@ impl Service {
                 "sorafs.storage.governance_dag_service.enabled must be true".to_owned(),
             ));
         }
-        let source_dir = secure_existing_directory(
-            &view.source_dir.ok_or_else(|| {
-                GovernanceDagServiceError::Config("governance_dag_dir is missing".to_owned())
-            })?,
-            false,
-        )?;
-        let state_dir = service
-            .state_dir
-            .clone()
-            .unwrap_or_else(|| source_dir.join("governance-dag-service"));
-        let state_dir = secure_state_directory(&state_dir)?;
-        let state_lock = acquire_service_lock(&state_dir)?;
         let listen_addr = service.listen_addr.parse::<SocketAddr>().map_err(|_| {
             GovernanceDagServiceError::Config("listen_addr is not a socket address".to_owned())
         })?;
@@ -564,34 +766,30 @@ impl Service {
             })?,
             "publisher public key",
         )?;
+        let source_dir_path = view.source_dir.ok_or_else(|| {
+            GovernanceDagServiceError::Config("governance_dag_dir is missing".to_owned())
+        })?;
+        let ipfs_url = service.ipfs_api_url.clone().ok_or_else(|| {
+            GovernanceDagServiceError::Config("IPFS API URL is missing".to_owned())
+        })?;
+        let GovernanceDagServiceRuntimeProviders {
+            ipfs_authenticator,
+            head_authenticator,
+            checkpoint_store,
+        } = providers;
         let checkpoint_store_handle =
             service.checkpoint_store_handle.as_deref().ok_or_else(|| {
                 GovernanceDagServiceError::Config("checkpoint store handle is missing".to_owned())
             })?;
         let checkpoint_store = OpaqueCheckpointStore::try_new(
             checkpoint_store_handle,
-            providers.checkpoint_store.ok_or_else(|| {
+            checkpoint_store.ok_or_else(|| {
                 GovernanceDagServiceError::Config(
                     "sealed checkpoint store is enabled but no runtime provider was injected"
                         .to_owned(),
                 )
             })?,
         )?;
-
-        let runtime_config = RuntimeConfig {
-            source_dir,
-            state_dir,
-            listen_addr,
-            poll_interval: service.poll_interval,
-            max_response_bytes: service.max_response_bytes.0,
-            max_request_bytes: service.max_request_bytes.0,
-            mirror_max_entries: service.mirror_max_entries,
-            mirror_max_bytes: service.mirror_max_bytes.0,
-            max_head_age_secs: service.max_head_age_secs,
-            max_future_skew_secs: service.max_future_skew_secs,
-            allow_head_bootstrap: service.allow_head_bootstrap,
-            expected_public_key,
-        };
 
         let ipfs_authenticator_handle =
             service
@@ -604,7 +802,7 @@ impl Service {
                 })?;
         let ipfs_authenticator = OpaqueAuthenticator::try_new(
             ipfs_authenticator_handle,
-            providers.ipfs_authenticator.ok_or_else(|| {
+            ipfs_authenticator.ok_or_else(|| {
                 GovernanceDagServiceError::Config(
                     "IPFS authentication is enabled but no runtime provider was injected"
                         .to_owned(),
@@ -612,18 +810,17 @@ impl Service {
             })?,
             "IPFS authenticator",
         )?;
-        let ipfs_url = service.ipfs_api_url.as_deref().ok_or_else(|| {
-            GovernanceDagServiceError::Config("IPFS API URL is missing".to_owned())
-        })?;
-        let ipfs = build_pinned_endpoint(
-            ipfs_url,
-            ipfs_authenticator,
-            GovernanceDagAuthenticationScope::Ipfs,
-            &service,
-            true,
-        )
-        .await?;
-        let head_mode = match service.head_mode.as_str() {
+        enum QualifiedHeadMode {
+            SignedHttp {
+                url: String,
+                authenticator: OpaqueAuthenticator,
+            },
+            Ipns {
+                name: String,
+                key_name: String,
+            },
+        }
+        let qualified_head_mode = match service.head_mode.as_str() {
             "signed_http" => {
                 let handle = service
                     .head_authenticator_handle
@@ -634,30 +831,21 @@ impl Service {
                         )
                     })?;
                 let authenticator = OpaqueAuthenticator::try_new(
-                        handle,
-                        providers.head_authenticator.ok_or_else(|| {
-                            GovernanceDagServiceError::Config(
-                                "signed-head authentication is enabled but no runtime provider was injected"
-                                    .to_owned(),
-                            )
-                        })?,
-                        "signed-head authenticator",
-                    )?;
-                let url = service.signed_head_url.as_deref().ok_or_else(|| {
+                    handle,
+                    head_authenticator.ok_or_else(|| {
+                        GovernanceDagServiceError::Config(
+                            "signed-head authentication is enabled but no runtime provider was injected"
+                                .to_owned(),
+                        )
+                    })?,
+                    "signed-head authenticator",
+                )?;
+                let url = service.signed_head_url.clone().ok_or_else(|| {
                     GovernanceDagServiceError::Config("signed head URL is missing".to_owned())
                 })?;
-                HeadMode::SignedHttp(
-                    build_pinned_endpoint(
-                        url,
-                        authenticator,
-                        GovernanceDagAuthenticationScope::SignedHead,
-                        &service,
-                        false,
-                    )
-                    .await?,
-                )
+                QualifiedHeadMode::SignedHttp { url, authenticator }
             }
-            "ipns" => HeadMode::Ipns {
+            "ipns" => QualifiedHeadMode::Ipns {
                 name: validate_public_token(
                     service.ipns_name.as_deref().ok_or_else(|| {
                         GovernanceDagServiceError::Config("IPNS name is missing".to_owned())
@@ -677,8 +865,54 @@ impl Service {
                 ));
             }
         };
+
+        // Provider qualification above is deliberately complete before any
+        // mutable directory, lock, sealed checkpoint, or publication endpoint
+        // is opened.
+        let source_dir = secure_existing_directory(&source_dir_path, false)?;
+        let state_dir = service
+            .state_dir
+            .clone()
+            .unwrap_or_else(|| source_dir.join("governance-dag-service"));
+        let state_dir = secure_state_directory(&state_dir)?;
+        let state_lock = acquire_service_lock(&state_dir)?;
+        let runtime_config = RuntimeConfig {
+            source_dir,
+            state_dir,
+            listen_addr,
+            poll_interval: service.poll_interval,
+            max_response_bytes: service.max_response_bytes.0,
+            max_request_bytes: service.max_request_bytes.0,
+            mirror_max_entries: service.mirror_max_entries,
+            mirror_max_bytes: service.mirror_max_bytes.0,
+            max_head_age_secs: service.max_head_age_secs,
+            max_future_skew_secs: service.max_future_skew_secs,
+            allow_head_bootstrap: service.allow_head_bootstrap,
+            expected_public_key,
+        };
         let (checkpoint, checkpoint_revision) = load_checkpoint(&checkpoint_store)?;
         let (intent, intent_revision) = load_publish_intent(&checkpoint_store)?;
+        let ipfs = build_pinned_endpoint(
+            &ipfs_url,
+            ipfs_authenticator,
+            GovernanceDagAuthenticationScope::Ipfs,
+            &service,
+            true,
+        )
+        .await?;
+        let head_mode = match qualified_head_mode {
+            QualifiedHeadMode::SignedHttp { url, authenticator } => HeadMode::SignedHttp(
+                build_pinned_endpoint(
+                    &url,
+                    authenticator,
+                    GovernanceDagAuthenticationScope::SignedHead,
+                    &service,
+                    false,
+                )
+                .await?,
+            ),
+            QualifiedHeadMode::Ipns { name, key_name } => HeadMode::Ipns { name, key_name },
+        };
         let checkpoint_generation_floor = checkpoint
             .as_ref()
             .map_or(0, |checkpoint| checkpoint.generation);
@@ -1090,6 +1324,20 @@ fn validate_runtime_handle(value: &str, label: &str) -> Result<String, Governanc
             "{label} handle must be 1..={MAX_RUNTIME_HANDLE_BYTES} visible ASCII bytes without whitespace"
         )));
     }
+    let lowercase = value.to_ascii_lowercase();
+    if lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
+            )
+        })
+    {
+        return Err(GovernanceDagServiceError::Config(format!(
+            "{label} handle is test-marked and cannot qualify a production adapter"
+        )));
+    }
     Ok(value.to_owned())
 }
 
@@ -1272,7 +1520,9 @@ fn load_sealed_record(
     slot: GovernanceDagSealedStateSlot,
 ) -> Result<Option<GovernanceDagSealedStateRecord>, GovernanceDagServiceError> {
     store.assert_identity()?;
-    let record = store.provider.load(slot).map_err(|_| {
+    let record = store.provider.load(slot);
+    store.assert_identity()?;
+    let record = record.map_err(|_| {
         GovernanceDagServiceError::State("sealed checkpoint store read failed".to_owned())
     })?;
     let Some(record) = record else {
@@ -1306,14 +1556,15 @@ fn save_sealed_record(
     store.assert_identity()?;
     let next = GovernanceDagSealedStateRecord::new(slot, generation, payload);
     let revision = next.revision;
-    store
+    let result = store
         .provider
-        .compare_and_swap(slot, expected_revision, next.clone())
-        .map_err(|_| {
-            GovernanceDagServiceError::State(format!(
-                "sealed checkpoint store compare-and-swap failed for {label}"
-            ))
-        })?;
+        .compare_and_swap(slot, expected_revision, next.clone());
+    store.assert_identity()?;
+    result.map_err(|_| {
+        GovernanceDagServiceError::State(format!(
+            "sealed checkpoint store compare-and-swap failed for {label}"
+        ))
+    })?;
     let observed = load_sealed_record(store, slot)?.ok_or_else(|| {
         GovernanceDagServiceError::State(format!(
             "sealed checkpoint store lost {label} after compare-and-swap"
@@ -1337,14 +1588,15 @@ fn delete_publish_intent(
         )
     })?;
     store.assert_identity()?;
-    store
+    let result = store
         .provider
-        .delete(GovernanceDagSealedStateSlot::PublishIntent, revision)
-        .map_err(|_| {
-            GovernanceDagServiceError::State(
-                "sealed checkpoint store publish-intent delete failed".to_owned(),
-            )
-        })?;
+        .delete(GovernanceDagSealedStateSlot::PublishIntent, revision);
+    store.assert_identity()?;
+    result.map_err(|_| {
+        GovernanceDagServiceError::State(
+            "sealed checkpoint store publish-intent delete failed".to_owned(),
+        )
+    })?;
     if load_sealed_record(store, GovernanceDagSealedStateSlot::PublishIntent)?.is_some() {
         return Err(GovernanceDagServiceError::State(
             "sealed checkpoint store retained publish intent after delete".to_owned(),
@@ -3897,7 +4149,7 @@ mod tests {
         process::{Child, Command, Stdio},
         sync::{
             Arc, Mutex as StdMutex,
-            atomic::{AtomicBool, Ordering as AtomicOrdering},
+            atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
         },
     };
 
@@ -3938,13 +4190,16 @@ mod tests {
     const KUBO_INTEGRATION_ENV: &str = "SORAFS_RUN_KUBO_INTEGRATION";
     const KUBO_BIN_ENV: &str = "SORAFS_KUBO_BIN";
     const KUBO_IPNS_KEY_ALIAS: &str = "sorafs-gdag-integration";
-    const TEST_IPFS_AUTH_HANDLE: &str = "vault:governance/ipfs:test";
-    const TEST_HEAD_AUTH_HANDLE: &str = "vault:governance/head:test";
-    const TEST_CHECKPOINT_STORE_HANDLE: &str = "kms:governance/checkpoint:test";
+    const TEST_IPFS_AUTH_HANDLE: &str = "vault:governance/ipfs:primary";
+    const TEST_HEAD_AUTH_HANDLE: &str = "vault:governance/head:primary";
+    const TEST_CHECKPOINT_STORE_HANDLE: &str = "kms:governance/checkpoint:primary";
 
     struct TestAuthenticator {
         handle: String,
         bearer_token: StdMutex<String>,
+        qualification_revision: AtomicU64,
+        qualification_refuse: AtomicBool,
+        drift_during_authentication: AtomicBool,
         refuse: AtomicBool,
     }
 
@@ -3963,6 +4218,9 @@ mod tests {
             Self {
                 handle: handle.to_owned(),
                 bearer_token: StdMutex::new(bearer_token.to_owned()),
+                qualification_revision: AtomicU64::new(1),
+                qualification_refuse: AtomicBool::new(false),
+                drift_during_authentication: AtomicBool::new(false),
                 refuse: AtomicBool::new(false),
             }
         }
@@ -3977,11 +4235,28 @@ mod tests {
             &self.handle
         }
 
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            if self.qualification_refuse.load(AtomicOrdering::SeqCst) {
+                return Err("auth_token=must-never-escape".to_owned());
+            }
+            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
+                self.qualification_revision.load(AtomicOrdering::SeqCst),
+                [0x81; 32],
+            ))
+        }
+
         fn authenticate(
             &self,
             _scope: GovernanceDagAuthenticationScope,
             request: RequestBuilder,
         ) -> Result<RequestBuilder, String> {
+            if self
+                .drift_during_authentication
+                .swap(false, AtomicOrdering::SeqCst)
+            {
+                self.qualification_revision
+                    .fetch_add(1, AtomicOrdering::SeqCst);
+            }
             if self.refuse.load(AtomicOrdering::SeqCst) {
                 return Err(format!(
                     "bearer={}",
@@ -4004,6 +4279,9 @@ mod tests {
     struct TestSealedStore {
         handle: String,
         inner: StdMutex<TestSealedStoreInner>,
+        qualification_revision: AtomicU64,
+        qualification_refuse: AtomicBool,
+        drift_during_operation: AtomicBool,
         refuse: AtomicBool,
     }
 
@@ -4021,7 +4299,20 @@ mod tests {
             Self {
                 handle: handle.to_owned(),
                 inner: StdMutex::new(TestSealedStoreInner::default()),
+                qualification_revision: AtomicU64::new(1),
+                qualification_refuse: AtomicBool::new(false),
+                drift_during_operation: AtomicBool::new(false),
                 refuse: AtomicBool::new(false),
+            }
+        }
+
+        fn maybe_drift(&self) {
+            if self
+                .drift_during_operation
+                .swap(false, AtomicOrdering::SeqCst)
+            {
+                self.qualification_revision
+                    .fetch_add(1, AtomicOrdering::SeqCst);
             }
         }
 
@@ -4051,10 +4342,21 @@ mod tests {
             &self.handle
         }
 
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            if self.qualification_refuse.load(AtomicOrdering::SeqCst) {
+                return Err("kms_access_token=must-never-escape".to_owned());
+            }
+            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
+                self.qualification_revision.load(AtomicOrdering::SeqCst),
+                [0x82; 32],
+            ))
+        }
+
         fn load(
             &self,
             slot: GovernanceDagSealedStateSlot,
         ) -> Result<Option<GovernanceDagSealedStateRecord>, String> {
+            self.maybe_drift();
             if self.refuse.load(AtomicOrdering::SeqCst) {
                 return Err("kms_access_token=must-never-escape".to_owned());
             }
@@ -4068,6 +4370,7 @@ mod tests {
             expected_revision: Option<[u8; 32]>,
             next: GovernanceDagSealedStateRecord,
         ) -> Result<(), String> {
+            self.maybe_drift();
             if self.refuse.load(AtomicOrdering::SeqCst) {
                 return Err("kms_access_token=must-never-escape".to_owned());
             }
@@ -4114,6 +4417,7 @@ mod tests {
             slot: GovernanceDagSealedStateSlot,
             expected_revision: [u8; 32],
         ) -> Result<(), String> {
+            self.maybe_drift();
             if self.refuse.load(AtomicOrdering::SeqCst) {
                 return Err("kms_access_token=must-never-escape".to_owned());
             }
@@ -4151,6 +4455,49 @@ mod tests {
                 "test-only-head-bearer",
             ))),
             checkpoint_store: Some(checkpoint_store),
+        }
+    }
+
+    struct TestRuntimeProviderRegistry {
+        providers: GovernanceDagServiceRuntimeProviders,
+        failure: Option<GovernanceDagServiceRuntimeProviderRegistryErrorV1>,
+        observed_bindings: StdMutex<Option<GovernanceDagServiceRuntimeProviderBindingsV1>>,
+    }
+
+    impl TestRuntimeProviderRegistry {
+        fn returning(providers: GovernanceDagServiceRuntimeProviders) -> Self {
+            Self {
+                providers,
+                failure: None,
+                observed_bindings: StdMutex::new(None),
+            }
+        }
+
+        fn failing(failure: GovernanceDagServiceRuntimeProviderRegistryErrorV1) -> Self {
+            Self {
+                providers: GovernanceDagServiceRuntimeProviders::default(),
+                failure: Some(failure),
+                observed_bindings: StdMutex::new(None),
+            }
+        }
+    }
+
+    impl GovernanceDagServiceRuntimeProviderRegistryV1 for TestRuntimeProviderRegistry {
+        fn resolve(
+            &self,
+            bindings: &GovernanceDagServiceRuntimeProviderBindingsV1,
+        ) -> Result<
+            GovernanceDagServiceRuntimeProviders,
+            GovernanceDagServiceRuntimeProviderRegistryErrorV1,
+        > {
+            *self
+                .observed_bindings
+                .lock()
+                .expect("lock observed registry bindings") = Some(bindings.clone());
+            if let Some(failure) = self.failure {
+                return Err(failure);
+            }
+            Ok(self.providers.clone())
         }
     }
 
@@ -4578,6 +4925,12 @@ mod tests {
     impl GovernanceDagRuntimeSigner for PublisherTestSigner {
         fn handle(&self) -> &str {
             &self.handle
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
+                1, [0x83; 32],
+            ))
         }
 
         fn publisher_peer_id(&self) -> &[u8] {
@@ -5459,7 +5812,7 @@ listen_addr = "127.0.0.1:0"
         let source_dir = root.path().join("source");
         let publisher_peer_id = b"12D3KooWGovernanceServiceTest".to_vec();
         let signer = Arc::new(PublisherTestSigner {
-            handle: "pkcs11:governance-dag:source-test".to_owned(),
+            handle: "pkcs11:governance-dag:source-primary".to_owned(),
             peer_id: publisher_peer_id.clone(),
             signer: TestSigner::new(0x76),
         });
@@ -5754,6 +6107,34 @@ enabled = false
             OpaqueCheckpointStore::try_new("kms:governance/checkpoint:other", provider.clone())
                 .expect_err("mismatched checkpoint provider handle must fail");
         assert!(mismatch.to_string().contains("does not match"));
+
+        provider
+            .qualification_revision
+            .store(2, AtomicOrdering::SeqCst);
+        let error =
+            load_checkpoint(&store).expect_err("checkpoint provider policy drift must fail");
+        assert!(error.to_string().contains("policy changed"));
+        provider
+            .qualification_revision
+            .store(1, AtomicOrdering::SeqCst);
+
+        let drifting_provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let drifting_store = test_checkpoint_store(drifting_provider.clone());
+        drifting_provider
+            .drift_during_operation
+            .store(true, AtomicOrdering::SeqCst);
+        let error = load_checkpoint(&drifting_store)
+            .expect_err("policy drift during a sealed read must discard its result");
+        assert!(error.to_string().contains("policy changed"));
+
+        let drifting_provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let drifting_store = test_checkpoint_store(drifting_provider.clone());
+        drifting_provider
+            .drift_during_operation
+            .store(true, AtomicOrdering::SeqCst);
+        let error = save_checkpoint(&drifting_store, None, &checkpoint)
+            .expect_err("policy drift during sealed CAS must fail closed");
+        assert!(error.to_string().contains("policy changed"));
 
         let mut inner = provider.inner.lock().expect("lock test store");
         let record = inner.checkpoint.as_mut().expect("checkpoint record");
@@ -6087,6 +6468,42 @@ enabled = false
             Some("Bearer rotated-secret-token")
         );
 
+        provider
+            .qualification_revision
+            .store(2, AtomicOrdering::SeqCst);
+        let error = authenticator
+            .authenticate(
+                GovernanceDagAuthenticationScope::Ipfs,
+                client.get("https://example.invalid/"),
+            )
+            .expect_err("authenticator policy drift must fail closed");
+        assert!(error.to_string().contains("policy changed"));
+        provider
+            .qualification_revision
+            .store(1, AtomicOrdering::SeqCst);
+
+        let drifting_provider = Arc::new(TestAuthenticator::new(
+            TEST_IPFS_AUTH_HANDLE,
+            "must-not-be-returned",
+        ));
+        let drifting_authenticator = OpaqueAuthenticator::try_new(
+            TEST_IPFS_AUTH_HANDLE,
+            drifting_provider.clone(),
+            "IPFS authenticator",
+        )
+        .expect("bind stable runtime authenticator");
+        drifting_provider
+            .drift_during_authentication
+            .store(true, AtomicOrdering::SeqCst);
+        let error = drifting_authenticator
+            .authenticate(
+                GovernanceDagAuthenticationScope::Ipfs,
+                client.get("https://example.invalid/"),
+            )
+            .expect_err("policy drift during authentication must discard the request");
+        assert!(error.to_string().contains("policy changed"));
+        assert!(!error.to_string().contains("must-not-be-returned"));
+
         provider.refuse.store(true, AtomicOrdering::SeqCst);
         let error = authenticator
             .authenticate(
@@ -6107,9 +6524,119 @@ enabled = false
     }
 
     #[tokio::test]
+    async fn runtime_registry_injection_reaches_startup_with_exact_bindings() {
+        let root = secure_temp_dir();
+        let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+        let registry = Arc::new(TestRuntimeProviderRegistry::returning(
+            test_runtime_providers(Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE))),
+        ));
+        let runtime_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> =
+            registry.clone();
+        let providers = resolve_runtime_registry_providers(&view, Some(runtime_registry))
+            .expect("registry resolves the configured providers");
+        let _service = Service::from_view(view, providers)
+            .await
+            .expect("registry providers reach qualified service startup");
+
+        let observed = registry
+            .observed_bindings
+            .lock()
+            .expect("lock observed registry bindings")
+            .clone()
+            .expect("registry was called");
+        assert_eq!(observed.ipfs_authenticator_handle(), TEST_IPFS_AUTH_HANDLE);
+        assert_eq!(
+            observed.head_authenticator_handle(),
+            Some(TEST_HEAD_AUTH_HANDLE)
+        );
+        assert_eq!(
+            observed.checkpoint_store_handle(),
+            TEST_CHECKPOINT_STORE_HANDLE
+        );
+        assert!(state_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn runtime_registry_failures_precede_service_state() {
+        let root = secure_temp_dir();
+        let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+
+        let missing = resolve_runtime_registry_providers(&view, None)
+            .expect_err("missing registry must fail closed");
+        assert!(matches!(
+            missing,
+            GovernanceDagServiceLauncherError::MissingRuntimeProviderRegistry
+        ));
+        assert!(!state_dir.exists());
+
+        let stale_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> =
+            Arc::new(TestRuntimeProviderRegistry::failing(
+                GovernanceDagServiceRuntimeProviderRegistryErrorV1::StaleOrRevoked,
+            ));
+        let stale = resolve_runtime_registry_providers(&view, Some(stale_registry))
+            .expect_err("stale registry must fail closed");
+        assert!(matches!(
+            stale,
+            GovernanceDagServiceLauncherError::RuntimeProviderRegistry(
+                GovernanceDagServiceRuntimeProviderRegistryErrorV1::StaleOrRevoked
+            )
+        ));
+        assert!(!state_dir.exists());
+
+        let default_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> = Arc::new(
+            TestRuntimeProviderRegistry::returning(GovernanceDagServiceRuntimeProviders::default()),
+        );
+        let providers = resolve_runtime_registry_providers(&view, Some(default_registry))
+            .expect("registry may return an incomplete set for service qualification to reject");
+        let error = Service::from_view(view.clone(), providers)
+            .await
+            .err()
+            .expect("empty provider set must fail startup");
+        assert!(error.to_string().contains("no runtime provider"));
+        assert!(!state_dir.exists());
+
+        for provider_handle in [
+            "kms:governance/checkpoint:other",
+            "kms:governance/checkpoint:test",
+        ] {
+            let registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> =
+                Arc::new(TestRuntimeProviderRegistry::returning(
+                    test_runtime_providers(Arc::new(TestSealedStore::new(provider_handle))),
+                ));
+            let providers = resolve_runtime_registry_providers(&view, Some(registry))
+                .expect("registry returns provider for startup qualification");
+            let error = Service::from_view(view.clone(), providers)
+                .await
+                .err()
+                .expect("substituted or test provider must fail startup");
+            if provider_handle.ends_with(":test") {
+                assert!(error.to_string().contains("test-marked"));
+            } else {
+                assert!(error.to_string().contains("does not match"));
+            }
+            assert!(!state_dir.exists());
+        }
+    }
+
+    #[tokio::test]
     async fn service_fails_closed_when_runtime_providers_are_missing_or_mismatched() {
         let root = secure_temp_dir();
         let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
 
         let error = Service::from_view(
             view.clone(),
@@ -6119,6 +6646,10 @@ enabled = false
         .err()
         .expect("missing sealed store must fail");
         assert!(error.to_string().contains("no runtime provider"));
+        assert!(
+            !state_dir.exists(),
+            "missing provider must fail before mutable state is opened"
+        );
 
         let mismatched_store = Arc::new(TestSealedStore::new("kms:governance/checkpoint:other"));
         let error = Service::from_view(
@@ -6132,6 +6663,10 @@ enabled = false
         .err()
         .expect("mismatched sealed store handle must fail");
         assert!(error.to_string().contains("does not match"));
+        assert!(
+            !state_dir.exists(),
+            "substituted provider must fail before mutable state is opened"
+        );
 
         let checkpoint_store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
         let error = Service::from_view(
@@ -6161,6 +6696,120 @@ enabled = false
         .err()
         .expect("missing signed-head authenticator must fail");
         assert!(error.to_string().contains("signed-head authentication"));
+        assert!(!state_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn service_rejects_stale_providers_before_state_access() {
+        let root = secure_temp_dir();
+        let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+        let stale_store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        stale_store
+            .qualification_refuse
+            .store(true, AtomicOrdering::SeqCst);
+        let error = Service::from_view(view.clone(), test_runtime_providers(stale_store))
+            .await
+            .err()
+            .expect("stale sealed store must fail startup");
+        let rendered = error.to_string();
+        assert!(rendered.contains("stale"));
+        assert!(!rendered.contains("must-never-escape"));
+        assert!(
+            !state_dir.exists(),
+            "stale provider must fail before mutable state is opened"
+        );
+
+        let stale_ipfs = Arc::new(TestAuthenticator::new(
+            TEST_IPFS_AUTH_HANDLE,
+            "test-only-ipfs",
+        ));
+        stale_ipfs
+            .qualification_refuse
+            .store(true, AtomicOrdering::SeqCst);
+        let error = Service::from_view(
+            view.clone(),
+            GovernanceDagServiceRuntimeProviders {
+                checkpoint_store: Some(Arc::new(TestSealedStore::new(
+                    TEST_CHECKPOINT_STORE_HANDLE,
+                ))),
+                ipfs_authenticator: Some(stale_ipfs),
+                head_authenticator: Some(Arc::new(TestAuthenticator::new(
+                    TEST_HEAD_AUTH_HANDLE,
+                    "test-only-head",
+                ))),
+            },
+        )
+        .await
+        .err()
+        .expect("stale IPFS authenticator must fail startup");
+        assert!(error.to_string().contains("stale"));
+        assert!(!state_dir.exists());
+
+        let stale_head = Arc::new(TestAuthenticator::new(
+            TEST_HEAD_AUTH_HANDLE,
+            "test-only-head",
+        ));
+        stale_head
+            .qualification_refuse
+            .store(true, AtomicOrdering::SeqCst);
+        let error = Service::from_view(
+            view.clone(),
+            GovernanceDagServiceRuntimeProviders {
+                checkpoint_store: Some(Arc::new(TestSealedStore::new(
+                    TEST_CHECKPOINT_STORE_HANDLE,
+                ))),
+                ipfs_authenticator: Some(Arc::new(TestAuthenticator::new(
+                    TEST_IPFS_AUTH_HANDLE,
+                    "test-only-ipfs",
+                ))),
+                head_authenticator: Some(stale_head),
+            },
+        )
+        .await
+        .err()
+        .expect("stale signed-head authenticator must fail startup");
+        assert!(error.to_string().contains("stale"));
+        assert!(!state_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn service_rejects_test_marked_provider_before_state_access() {
+        let root = secure_temp_dir();
+        let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+        let mut test_marked_view = view;
+        test_marked_view.service.checkpoint_store_handle =
+            Some("kms:governance/checkpoint:test".to_owned());
+        let error = Service::from_view(
+            test_marked_view,
+            GovernanceDagServiceRuntimeProviders {
+                checkpoint_store: Some(Arc::new(TestSealedStore::new(
+                    "kms:governance/checkpoint:test",
+                ))),
+                ipfs_authenticator: Some(Arc::new(TestAuthenticator::new(
+                    TEST_IPFS_AUTH_HANDLE,
+                    "test-only-ipfs",
+                ))),
+                head_authenticator: Some(Arc::new(TestAuthenticator::new(
+                    TEST_HEAD_AUTH_HANDLE,
+                    "test-only-head",
+                ))),
+            },
+        )
+        .await
+        .err()
+        .expect("test-marked provider handle must fail startup");
+        assert!(error.to_string().contains("test-marked"));
+        assert!(!state_dir.exists());
     }
 
     #[tokio::test]

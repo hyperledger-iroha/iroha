@@ -7,6 +7,7 @@ export PATH
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SOURCE_SEAL="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
+ABI21_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi21_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 PINNED_TOOLCHAIN="1.93.1"
 REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library"
@@ -18,6 +19,7 @@ fail() {
 
 for required_file in \
   "$SOURCE_SEAL" \
+  "$ABI21_ARTIFACT_CHECKER" \
   "$HERMETIC_RUNNER" \
   "$ROOT_DIR/rust-toolchain.toml" \
   "$ROOT_DIR/kotlin/gradlew" \
@@ -364,6 +366,7 @@ run_exact_gradle() {
       --set "HOME=$USER_HOME_DIR" \
       --set "IROHA_NATIVE_LIBRARY_PATH=$native_directory" \
       --set "IROHA_REQUIRE_KAGEMUSHA_NATIVE=1" \
+      --set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1" \
       --set "JAVA_HOME=$JAVA_HOME_DIR" \
       --set "LANG=C.UTF-8" \
       --set "LC_ALL=C.UTF-8" \
@@ -438,6 +441,17 @@ esac
 [[ -f "$NATIVE_LIBRARY" && ! -L "$NATIVE_LIBRARY" ]] \
   || fail "fresh host bridge library is missing: $NATIVE_LIBRARY"
 NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
+NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi21.json"
+"$PYTHON_BINARY" -I "$ABI21_ARTIFACT_CHECKER" record \
+  --artifact "$NATIVE_LIBRARY" \
+  --manifest "$NATIVE_EVIDENCE" \
+  --source-root "$ROOT_DIR" \
+  --sdk c-jni \
+  --target "$HOST_TRIPLE"
+"$PYTHON_BINARY" -I "$ABI21_ARTIFACT_CHECKER" verify \
+  --artifact "$NATIVE_LIBRARY" \
+  --manifest "$NATIVE_EVIDENCE" \
+  --source-root "$ROOT_DIR"
 SYMBOLS_FILE="$BUILD_SESSION/native-symbols.txt"
 "$NM_BINARY" -g "$NATIVE_LIBRARY" >"$SYMBOLS_FILE"
 "$PYTHON_BINARY" -I - "$SYMBOLS_FILE" <<'PY'

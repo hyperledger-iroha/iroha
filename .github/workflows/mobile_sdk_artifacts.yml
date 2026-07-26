@@ -26,7 +26,24 @@ on:
       - "kotlin/**"
       - "java/iroha_android/**"
       - "crates/connect_norito_bridge/**"
+      - "crates/iroha_core/src/smartcontracts/isi/escrow.rs"
+      - "crates/iroha_data_model/src/bin/cancel_asset_lock_fixtures.rs"
+      - "crates/iroha_data_model/src/escrow.rs"
+      - "crates/iroha_data_model/src/events/data/escrow.rs"
+      - "crates/iroha_data_model/src/isi/escrow.rs"
+      - "crates/iroha_data_model/src/testing/cancel_asset_lock.rs"
+      - "crates/kotodama_lang/src/samples/native_escrow.ko"
+      - "crates/kotodama_lang/src/samples/native_escrow.to"
+      - "crates/sorafs_manifest/**"
+      - "fixtures/sorafs_manifest/appeal_finance/**"
       - "fixtures/sorafs_manifest/governance/**"
+      - "fixtures/sorafs_manifest/reference_sdk/**"
+      - "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json"
+      - "integration_tests/tests/native_escrow.rs"
+      - "scripts/check_sorafs_reference_sdk_fixtures.py"
+      - "scripts/check_native_sdk_abi21_artifact.py"
+      - "scripts/tests/check_native_sdk_abi21_artifact_test.py"
+      - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
   push:
     tags:
       - "v*"
@@ -67,7 +84,9 @@ jobs:
       - name: Shell syntax
         run: bash -n ci/check_kagemusha_candidate_android_lab.sh ci/check_kagemusha_jvm_native_bridge.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh
       - name: Python syntax
-        run: python3 -I -m py_compile scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/exec_with_file_lock.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
+        run: python3 -I -m py_compile scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_abi21_artifact.py scripts/tests/check_native_sdk_abi21_artifact_test.py scripts/exec_with_file_lock.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
+      - name: Host native ABI-21 artifact checker fixtures
+        run: python3 -m pytest -q scripts/tests/check_native_sdk_abi21_artifact_test.py
       - name: Android app native archive authenticator fixtures
         run: python3 -I scripts/tests/check_android_app_native_archive_test.py
       - name: Kotlin production reflection guard

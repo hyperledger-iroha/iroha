@@ -22,6 +22,7 @@ import {
   probeNativeBindingExports,
   publishNativeBinding,
   recoverNativeBindingPublication,
+  REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   REQUIRED_NATIVE_EXPORTS,
 } from "../scripts/copy-native.mjs";
 import { verifyNativeBinding } from "../src/native.js";
@@ -81,6 +82,12 @@ await publishNativeBinding({
       native_sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
       source_git_revision: ${JSON.stringify(SOURCE_REVISION)},
       source_tree_clean: true,
+    };
+  },
+  readSourceState() {
+    return {
+      sourceGitRevision: ${JSON.stringify(SOURCE_REVISION)},
+      sourceTreeClean: true,
     };
   },
   log() {},
@@ -156,6 +163,12 @@ function publicationOptions(layout, overrides = {}) {
     cargoProfile: "debug",
     readBuildProvenance(source) {
       return fixtureBuildProvenance(source);
+    },
+    readSourceState() {
+      return {
+        sourceGitRevision: SOURCE_REVISION,
+        sourceTreeClean: true,
+      };
     },
     ...overrides,
   };
@@ -706,11 +719,17 @@ test("required-export probe accepts a complete module and rejects missing symbol
   const incomplete = path.join(root, "incomplete.cjs");
   writeFileSync(
     complete,
-    `module.exports = { ${REQUIRED_NATIVE_EXPORTS.map((name) => `${name}() {}`).join(", ")} };\n`,
+    `module.exports = { ${REQUIRED_NATIVE_EXPORTS.map((name) =>
+      name === "connectNoritoBridgeAbiVersion"
+        ? `${name}() { return ${REQUIRED_NATIVE_BRIDGE_ABI_VERSION}; }`
+        : `${name}() {}`).join(", ")} };\n`,
   );
   writeFileSync(incomplete, "module.exports = { noritoEncodeInstruction() {} };\n");
 
-  assert.doesNotThrow(() => probeNativeBindingExports(complete));
+  assert.equal(
+    probeNativeBindingExports(complete),
+    REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+  );
   assert.throws(
     () => probeNativeBindingExports(incomplete),
     /missing required native exports.*noritoDecodeInstruction.*compileKotodama/u,
@@ -719,6 +738,49 @@ test("required-export probe accepts a complete module and rejects missing symbol
     () => probeNativeBindingExports(complete, ["not-valid!"]),
     /non-empty identifier array/u,
   );
+  assert.throws(
+    () =>
+      probeNativeBindingExports(
+        complete,
+        REQUIRED_NATIVE_EXPORTS,
+        REQUIRED_NATIVE_BRIDGE_ABI_VERSION - 2,
+      ),
+    /ABI mismatch.*expected 19.*found 21/u,
+  );
+});
+
+test("native publication rejects dirty or stale source provenance", async (t) => {
+  const layout = createLayout(t);
+  writeFileSync(layout.source, Buffer.from("native source provenance fixture"));
+
+  await assert.rejects(
+    publishNativeBinding(
+      publicationOptions(layout, {
+        readBuildProvenance(source) {
+          return {
+            ...fixtureBuildProvenance(source),
+            source_tree_clean: false,
+          };
+        },
+      }),
+    ),
+    /requires build provenance and current source to be clean/u,
+  );
+  await assert.rejects(
+    publishNativeBinding(
+      publicationOptions(layout, {
+        readSourceState() {
+          return {
+            sourceGitRevision: "b".repeat(40),
+            sourceTreeClean: true,
+          };
+        },
+      }),
+    ),
+    /does not match the current source revision/u,
+  );
+  assert.equal(existsSync(layout.bindingPath), false);
+  assert.equal(existsSync(layout.manifestPath), false);
 });
 
 test(

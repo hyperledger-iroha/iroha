@@ -48,6 +48,8 @@ pub const EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1: usize = 4 * 1024;
 pub const EVIDENCE_VIEWER_MAX_WEBAUTHN_ASSERTION_BYTES_V1: usize = 64 * 1024;
 /// Maximum configured checkpoint size.
 pub const EVIDENCE_VIEWER_MAX_CHECKPOINT_BYTES_V1: u64 = 64 * 1024 * 1024;
+/// Maximum accepted opaque runtime-provider handle size.
+pub const EVIDENCE_VIEWER_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 
 const CHALLENGE_BINDING_DOMAIN_V1: &[u8] = b"sorafs.evidence-viewer.challenge-binding.v1";
 const SESSION_REQUEST_DOMAIN_V1: &[u8] = b"sorafs.evidence-viewer.session-request.v1";
@@ -94,12 +96,20 @@ pub struct EvidenceViewerConfigV1 {
     pub webauthn_allowed_origins: Vec<String>,
     /// Governed identity of the injected WebAuthn runtime.
     pub webauthn_handle: String,
+    /// Independently governed WebAuthn adapter and policy qualification.
+    pub expected_webauthn_qualification: EvidenceViewerRuntimeProviderQualificationV1,
     /// Governed identity of the injected rotating-grant runtime.
     pub grant_handle: String,
+    /// Independently governed grant adapter and policy qualification.
+    pub expected_grant_qualification: EvidenceViewerRuntimeProviderQualificationV1,
     /// Governed identity of the injected irreversible-erasure runtime.
     pub erasure_handle: String,
+    /// Independently governed erasure adapter and policy qualification.
+    pub expected_erasure_qualification: EvidenceViewerRuntimeProviderQualificationV1,
     /// Opaque runtime signer handle.
     pub receipt_signer_handle: String,
+    /// Independently governed receipt-signer adapter and policy qualification.
+    pub expected_receipt_signer_qualification: EvidenceViewerRuntimeProviderQualificationV1,
     /// Governed Ed25519 receipt-verification key.
     pub receipt_signer_public_key: [u8; 32],
 }
@@ -139,6 +149,10 @@ impl EvidenceViewerConfigV1 {
             || !is_production_runtime_handle(&self.grant_handle)
             || !is_production_runtime_handle(&self.erasure_handle)
             || !is_production_runtime_handle(&self.receipt_signer_handle)
+            || !self.expected_webauthn_qualification.is_valid()
+            || !self.expected_grant_qualification.is_valid()
+            || !self.expected_erasure_qualification.is_valid()
+            || !self.expected_receipt_signer_qualification.is_valid()
         {
             return Err(EvidenceViewerErrorV1::InvalidConfig);
         }
@@ -268,11 +282,126 @@ pub enum EvidenceViewerExternalErrorV1 {
     Backpressure,
 }
 
-/// Runtime-only WebAuthn boundary.
-pub trait EvidenceViewerWebAuthnBoundaryV1: Send + Sync + fmt::Debug {
-    /// Opaque, non-secret runtime service handle.
+/// Public, non-secret qualification for an evidence-viewer runtime provider.
+///
+/// `revision` identifies the deployment-owned adapter and public policy
+/// revision. `policy_digest` binds that exact public policy. The evidence
+/// viewer pins both values before opening durable state and requires the same
+/// values before and after every external security-provider operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvidenceViewerRuntimeProviderQualificationV1 {
+    revision: u64,
+    policy_digest: [u8; 32],
+}
+
+impl EvidenceViewerRuntimeProviderQualificationV1 {
+    /// Construct one provider qualification observation.
+    ///
+    /// The evidence-viewer service rejects zero revisions and all-zero policy
+    /// digests.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Return the non-zero deployment adapter/policy revision.
+    #[must_use]
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    /// Return the non-zero digest of the public provider policy.
+    #[must_use]
+    pub const fn policy_digest(self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    fn is_valid(self) -> bool {
+        self.revision != 0 && !is_zero_digest(self.policy_digest)
+    }
+}
+
+/// Stable, payload-free evidence-viewer provider qualification failures.
+///
+/// Provider implementations retain credentials, key identifiers, and vendor
+/// diagnostics behind the typed readiness boundary. Startup and per-operation
+/// checks expose only these fixed classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum EvidenceViewerRuntimeProviderQualificationErrorV1 {
+    /// The configured opaque provider handle is malformed.
+    #[error("configured evidence-viewer runtime provider handle is invalid")]
+    InvalidConfiguredHandle,
+    /// The configured handle is explicitly marked for test or development use.
+    #[error("configured evidence-viewer runtime provider handle is test-marked")]
+    TestMarkedConfiguredHandle,
+    /// The injected provider's opaque handle is malformed.
+    #[error("injected evidence-viewer runtime provider handle is invalid")]
+    InvalidProviderHandle,
+    /// The injected provider advertises a test- or development-marked handle.
+    #[error("injected evidence-viewer runtime provider handle is test-marked")]
+    TestMarkedProviderHandle,
+    /// The configured provider revision or public policy digest is zero.
+    #[error("configured evidence-viewer runtime provider qualification is invalid")]
+    InvalidConfiguredQualification,
+    /// The injected provider does not match the configured stable handle.
+    #[error("evidence-viewer runtime provider handle does not match configured handle")]
+    SubstitutedProvider,
+    /// Qualification could not prove that the provider is current and usable.
+    #[error("evidence-viewer runtime provider is unavailable, stale, or unqualified")]
+    UnavailableOrStale,
+    /// The provider returned a zero revision or all-zero public policy digest.
+    #[error("evidence-viewer runtime provider returned an invalid qualification")]
+    InvalidQualification,
+    /// The provider does not match the independently governed qualification.
+    #[error("evidence-viewer runtime provider qualification does not match configuration")]
+    QualificationMismatch,
+    /// The provider identity or public policy changed after it was pinned.
+    #[error("evidence-viewer runtime provider identity or policy changed after qualification")]
+    IdentityOrPolicyChanged,
+    /// The receipt signer does not expose the exact governed verification key.
+    #[error("evidence-viewer receipt signer public key does not match configuration")]
+    SignerPublicKeyChanged,
+}
+
+/// Fixed readiness failures returned by an evidence-viewer runtime provider.
+///
+/// Implementations retain vendor diagnostics inside protected provider
+/// telemetry and return only these payload-free classes to the service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum EvidenceViewerRuntimeProviderReadinessErrorV1 {
+    /// The provider or a required credential is temporarily unavailable.
+    #[error("evidence-viewer runtime provider unavailable")]
+    Unavailable,
+    /// The provider is revoked, stale, unauthorized, or otherwise ineligible.
+    #[error("evidence-viewer runtime provider rejected qualification")]
+    Rejected,
+}
+
+/// Stable identity and readiness exposed by an external evidence-viewer provider.
+///
+/// Implementations own all credentials, signing keys, authentication material,
+/// and provider-specific diagnostics. The handle, revision, and policy digest
+/// are bounded non-secret deployment metadata. `qualification` must fail when
+/// the provider is unavailable, revoked, stale, test-marked, or otherwise not
+/// production-ready. Vendor diagnostics must not cross this typed boundary.
+pub trait EvidenceViewerRuntimeProviderV1: Send + Sync + fmt::Debug {
+    /// Return the stable opaque deployment handle for this provider.
     fn handle(&self) -> &str;
 
+    /// Qualify the active adapter and its public policy revision.
+    fn qualification(
+        &self,
+    ) -> Result<
+        EvidenceViewerRuntimeProviderQualificationV1,
+        EvidenceViewerRuntimeProviderReadinessErrorV1,
+    >;
+}
+
+/// Runtime-only WebAuthn boundary.
+pub trait EvidenceViewerWebAuthnBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     /// Issue an unpredictable challenge bound to exact non-secret claims.
     fn issue_challenge(
         &self,
@@ -318,10 +447,7 @@ pub struct EvidenceViewerGrantClaimsV1 {
 }
 
 /// Runtime-only rotating-grant boundary.
-pub trait EvidenceViewerGrantBoundaryV1: Send + Sync + fmt::Debug {
-    /// Opaque, non-secret runtime service handle.
-    fn handle(&self) -> &str;
-
+pub trait EvidenceViewerGrantBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     /// Issue one unforgeable grant for exact claims.
     fn issue(
         &self,
@@ -342,10 +468,7 @@ pub trait EvidenceViewerGrantBoundaryV1: Send + Sync + fmt::Debug {
 }
 
 /// Runtime-only Ed25519 receipt signer.
-pub trait EvidenceViewerReceiptSignerV1: Send + Sync + fmt::Debug {
-    /// Opaque, non-secret runtime signer handle.
-    fn handle(&self) -> &str;
-
+pub trait EvidenceViewerReceiptSignerV1: EvidenceViewerRuntimeProviderV1 {
     /// Exact Ed25519 public key.
     fn public_key(&self) -> [u8; 32];
 
@@ -354,10 +477,7 @@ pub trait EvidenceViewerReceiptSignerV1: Send + Sync + fmt::Debug {
 }
 
 /// Runtime-only erasure/KMS boundary.
-pub trait EvidenceViewerErasureBoundaryV1: Send + Sync + fmt::Debug {
-    /// Opaque, non-secret runtime service handle.
-    fn handle(&self) -> &str;
-
+pub trait EvidenceViewerErasureBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     /// Irreversibly erase or cryptographically destroy one exact object.
     ///
     /// The service records success only after this boundary reports a definite
@@ -394,10 +514,267 @@ impl fmt::Debug for EvidenceViewerRuntimeDepsV1 {
         formatter
             .debug_struct("EvidenceViewerRuntimeDepsV1")
             .field("authorization_reader", &"<runtime-only>")
-            .field("webauthn_handle", &self.webauthn.handle())
-            .field("grant_handle", &self.grants.handle())
-            .field("receipt_signer_handle", &self.receipt_signer.handle())
-            .field("erasure_handle", &self.erasure.handle())
+            .field("webauthn", &"<runtime-only>")
+            .field("grants", &"<runtime-only>")
+            .field("receipt_signer", &"<runtime-only>")
+            .field("erasure", &"<runtime-only>")
+            .finish()
+    }
+}
+
+struct QualifiedEvidenceViewerProviderV1<P: EvidenceViewerRuntimeProviderV1 + ?Sized> {
+    handle: String,
+    qualification: EvidenceViewerRuntimeProviderQualificationV1,
+    provider: Arc<P>,
+}
+
+impl<P: EvidenceViewerRuntimeProviderV1 + ?Sized> QualifiedEvidenceViewerProviderV1<P> {
+    fn try_new(
+        expected_handle: &str,
+        expected_qualification: EvidenceViewerRuntimeProviderQualificationV1,
+        provider: Arc<P>,
+    ) -> Result<Self, EvidenceViewerRuntimeProviderQualificationErrorV1> {
+        validate_evidence_viewer_runtime_provider_handle(expected_handle, true)?;
+        if !expected_qualification.is_valid() {
+            return Err(
+                EvidenceViewerRuntimeProviderQualificationErrorV1::InvalidConfiguredQualification,
+            );
+        }
+        qualify_evidence_viewer_runtime_provider(
+            expected_handle,
+            expected_qualification,
+            provider.as_ref(),
+        )?;
+        Ok(Self {
+            handle: expected_handle.to_owned(),
+            qualification: expected_qualification,
+            provider,
+        })
+    }
+
+    fn revalidate(&self) -> Result<(), EvidenceViewerRuntimeProviderQualificationErrorV1> {
+        assert_evidence_viewer_runtime_provider_qualification(
+            &self.handle,
+            self.qualification,
+            self.provider.as_ref(),
+        )
+    }
+
+    fn invoke<T>(
+        &self,
+        operation: impl FnOnce(&P) -> Result<T, EvidenceViewerExternalErrorV1>,
+    ) -> Result<T, EvidenceViewerExternalErrorV1> {
+        self.revalidate()
+            .map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?;
+        let result = operation(self.provider.as_ref());
+        self.revalidate()
+            .map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?;
+        result
+    }
+}
+
+impl<P: EvidenceViewerRuntimeProviderV1 + ?Sized> fmt::Debug
+    for QualifiedEvidenceViewerProviderV1<P>
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedEvidenceViewerProviderV1")
+            .field("handle", &self.handle)
+            .field("qualification", &self.qualification)
+            .field("provider", &"<runtime-only>")
+            .finish()
+    }
+}
+
+impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerWebAuthnBoundaryV1> {
+    fn issue_challenge(
+        &self,
+        binding_digest: [u8; 32],
+        expires_at_unix_ms: u64,
+    ) -> Result<OpaqueEvidenceViewerSecretV1, EvidenceViewerExternalErrorV1> {
+        self.invoke(|provider| provider.issue_challenge(binding_digest, expires_at_unix_ms))
+    }
+
+    fn verify_and_consume(
+        &self,
+        challenge: &str,
+        assertion: &[u8],
+        binding_digest: [u8; 32],
+        rp_id: &str,
+        allowed_origins: &[String],
+        now_unix_ms: u64,
+    ) -> Result<EvidenceViewerWebAuthnResultV1, EvidenceViewerExternalErrorV1> {
+        self.invoke(|provider| {
+            provider.verify_and_consume(
+                challenge,
+                assertion,
+                binding_digest,
+                rp_id,
+                allowed_origins,
+                now_unix_ms,
+            )
+        })
+    }
+}
+
+impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerGrantBoundaryV1> {
+    fn issue(
+        &self,
+        claims: &EvidenceViewerGrantClaimsV1,
+    ) -> Result<OpaqueEvidenceViewerSecretV1, EvidenceViewerExternalErrorV1> {
+        self.invoke(|provider| provider.issue(claims))
+    }
+
+    fn verify(
+        &self,
+        token: &str,
+        claims: &EvidenceViewerGrantClaimsV1,
+        now_unix_ms: u64,
+    ) -> Result<(), EvidenceViewerExternalErrorV1> {
+        self.invoke(|provider| provider.verify(token, claims, now_unix_ms))
+    }
+
+    fn revoke(&self, token_digest: [u8; 32]) -> Result<(), EvidenceViewerExternalErrorV1> {
+        self.invoke(|provider| provider.revoke(token_digest))
+    }
+}
+
+impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerErasureBoundaryV1> {
+    fn erase(
+        &self,
+        operation_id: [u8; 32],
+        quarantine_id: [u8; 16],
+        object_id: [u8; 16],
+        evidence_digest: [u8; 32],
+    ) -> Result<[u8; 32], EvidenceViewerExternalErrorV1> {
+        self.invoke(|provider| {
+            provider.erase(operation_id, quarantine_id, object_id, evidence_digest)
+        })
+    }
+}
+
+struct QualifiedEvidenceViewerReceiptSignerV1 {
+    inner: QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerReceiptSignerV1>,
+    public_key: [u8; 32],
+}
+
+impl QualifiedEvidenceViewerReceiptSignerV1 {
+    fn try_new(
+        expected_handle: &str,
+        expected_qualification: EvidenceViewerRuntimeProviderQualificationV1,
+        expected_public_key: [u8; 32],
+        provider: Arc<dyn EvidenceViewerReceiptSignerV1>,
+    ) -> Result<Self, EvidenceViewerRuntimeProviderQualificationErrorV1> {
+        let inner = QualifiedEvidenceViewerProviderV1::try_new(
+            expected_handle,
+            expected_qualification,
+            provider,
+        )?;
+        let public_key = Self::read_qualified_public_key(&inner)?;
+        if public_key != expected_public_key {
+            return Err(EvidenceViewerRuntimeProviderQualificationErrorV1::SignerPublicKeyChanged);
+        }
+        Ok(Self {
+            inner,
+            public_key: expected_public_key,
+        })
+    }
+
+    fn read_qualified_public_key(
+        inner: &QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerReceiptSignerV1>,
+    ) -> Result<[u8; 32], EvidenceViewerRuntimeProviderQualificationErrorV1> {
+        inner.revalidate()?;
+        let public_key = inner.provider.public_key();
+        inner.revalidate()?;
+        Ok(public_key)
+    }
+
+    fn sign(&self, message: &[u8]) -> Result<[u8; 64], EvidenceViewerExternalErrorV1> {
+        let public_key_before = Self::read_qualified_public_key(&self.inner)
+            .map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?;
+        if public_key_before != self.public_key {
+            return Err(EvidenceViewerExternalErrorV1::Unavailable);
+        }
+        let result = self.inner.provider.sign(message);
+        let public_key_after = Self::read_qualified_public_key(&self.inner)
+            .map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?;
+        if public_key_after != self.public_key {
+            return Err(EvidenceViewerExternalErrorV1::Unavailable);
+        }
+        result
+    }
+}
+
+impl fmt::Debug for QualifiedEvidenceViewerReceiptSignerV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedEvidenceViewerReceiptSignerV1")
+            .field("inner", &self.inner)
+            .field("public_key", &self.public_key)
+            .finish()
+    }
+}
+
+struct QualifiedEvidenceViewerRuntimeDepsV1 {
+    authorization_reader: Arc<dyn EvidenceViewerFinalizedAuthorizationReaderV1>,
+    webauthn: QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerWebAuthnBoundaryV1>,
+    grants: QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerGrantBoundaryV1>,
+    receipt_signer: QualifiedEvidenceViewerReceiptSignerV1,
+    erasure: QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerErasureBoundaryV1>,
+}
+
+impl QualifiedEvidenceViewerRuntimeDepsV1 {
+    fn try_new(
+        config: &EvidenceViewerConfigV1,
+        deps: EvidenceViewerRuntimeDepsV1,
+    ) -> Result<Self, EvidenceViewerRuntimeProviderQualificationErrorV1> {
+        let EvidenceViewerRuntimeDepsV1 {
+            authorization_reader,
+            webauthn,
+            grants,
+            receipt_signer,
+            erasure,
+        } = deps;
+        let webauthn = QualifiedEvidenceViewerProviderV1::try_new(
+            &config.webauthn_handle,
+            config.expected_webauthn_qualification,
+            webauthn,
+        )?;
+        let grants = QualifiedEvidenceViewerProviderV1::try_new(
+            &config.grant_handle,
+            config.expected_grant_qualification,
+            grants,
+        )?;
+        let receipt_signer = QualifiedEvidenceViewerReceiptSignerV1::try_new(
+            &config.receipt_signer_handle,
+            config.expected_receipt_signer_qualification,
+            config.receipt_signer_public_key,
+            receipt_signer,
+        )?;
+        let erasure = QualifiedEvidenceViewerProviderV1::try_new(
+            &config.erasure_handle,
+            config.expected_erasure_qualification,
+            erasure,
+        )?;
+        Ok(Self {
+            authorization_reader,
+            webauthn,
+            grants,
+            receipt_signer,
+            erasure,
+        })
+    }
+}
+
+impl fmt::Debug for QualifiedEvidenceViewerRuntimeDepsV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedEvidenceViewerRuntimeDepsV1")
+            .field("authorization_reader", &"<runtime-only>")
+            .field("webauthn", &self.webauthn)
+            .field("grants", &self.grants)
+            .field("receipt_signer", &self.receipt_signer)
+            .field("erasure", &self.erasure)
             .finish()
     }
 }
@@ -1142,7 +1519,7 @@ impl Default for EvidenceViewerStateV1 {
 /// Production evidence-viewer service.
 pub struct EvidenceViewerServiceV1 {
     config: EvidenceViewerConfigV1,
-    deps: EvidenceViewerRuntimeDepsV1,
+    deps: QualifiedEvidenceViewerRuntimeDepsV1,
     node: NodeHandle,
     state: Mutex<EvidenceViewerStateV1>,
 }
@@ -1220,14 +1597,8 @@ impl EvidenceViewerServiceV1 {
         node: NodeHandle,
     ) -> Result<Self, EvidenceViewerErrorV1> {
         config.validate()?;
-        if deps.webauthn.handle() != config.webauthn_handle
-            || deps.grants.handle() != config.grant_handle
-            || deps.erasure.handle() != config.erasure_handle
-            || deps.receipt_signer.handle() != config.receipt_signer_handle
-            || deps.receipt_signer.public_key() != config.receipt_signer_public_key
-        {
-            return Err(EvidenceViewerErrorV1::InvalidConfig);
-        }
+        let deps = QualifiedEvidenceViewerRuntimeDepsV1::try_new(&config, deps)
+            .map_err(map_provider_qualification_error)?;
         let (state, needs_initial_checkpoint) = match read_local_checkpoint_bounded(
             &config.checkpoint_path,
             config.checkpoint_max_bytes,
@@ -3881,17 +4252,28 @@ fn is_canonical_rp_id(rp_id: &str) -> bool {
 }
 
 fn is_production_runtime_handle(value: &str) -> bool {
-    if value.is_empty()
-        || value.len() > 256
-        || !value.is_ascii()
-        || value
+    validate_evidence_viewer_runtime_provider_handle(value, true).is_ok()
+}
+
+fn validate_evidence_viewer_runtime_provider_handle(
+    handle: &str,
+    configured: bool,
+) -> Result<(), EvidenceViewerRuntimeProviderQualificationErrorV1> {
+    if handle.is_empty()
+        || handle.len() > EVIDENCE_VIEWER_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1
+        || !handle.is_ascii()
+        || handle
             .bytes()
             .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
     {
-        return false;
+        return Err(if configured {
+            EvidenceViewerRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle
+        } else {
+            EvidenceViewerRuntimeProviderQualificationErrorV1::InvalidProviderHandle
+        });
     }
-    let lowercase = value.to_ascii_lowercase();
-    !lowercase
+    let lowercase = handle.to_ascii_lowercase();
+    if lowercase
         .split(|character: char| !character.is_ascii_alphanumeric())
         .any(|component| {
             matches!(
@@ -3899,6 +4281,60 @@ fn is_production_runtime_handle(value: &str) -> bool {
                 "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
             )
         })
+    {
+        return Err(if configured {
+            EvidenceViewerRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle
+        } else {
+            EvidenceViewerRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
+        });
+    }
+    Ok(())
+}
+
+fn qualify_evidence_viewer_runtime_provider<P: EvidenceViewerRuntimeProviderV1 + ?Sized>(
+    expected_handle: &str,
+    expected_qualification: EvidenceViewerRuntimeProviderQualificationV1,
+    provider: &P,
+) -> Result<(), EvidenceViewerRuntimeProviderQualificationErrorV1> {
+    validate_evidence_viewer_runtime_provider_handle(provider.handle(), false)?;
+    if provider.handle() != expected_handle {
+        return Err(EvidenceViewerRuntimeProviderQualificationErrorV1::SubstitutedProvider);
+    }
+    let qualification = provider
+        .qualification()
+        .map_err(|_| EvidenceViewerRuntimeProviderQualificationErrorV1::UnavailableOrStale)?;
+    if !qualification.is_valid() {
+        return Err(EvidenceViewerRuntimeProviderQualificationErrorV1::InvalidQualification);
+    }
+    if qualification != expected_qualification {
+        return Err(EvidenceViewerRuntimeProviderQualificationErrorV1::QualificationMismatch);
+    }
+    if provider.handle() != expected_handle {
+        return Err(EvidenceViewerRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged);
+    }
+    Ok(())
+}
+
+fn assert_evidence_viewer_runtime_provider_qualification<
+    P: EvidenceViewerRuntimeProviderV1 + ?Sized,
+>(
+    expected_handle: &str,
+    expected_qualification: EvidenceViewerRuntimeProviderQualificationV1,
+    provider: &P,
+) -> Result<(), EvidenceViewerRuntimeProviderQualificationErrorV1> {
+    if provider.handle() != expected_handle {
+        return Err(EvidenceViewerRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged);
+    }
+    let qualification = provider
+        .qualification()
+        .map_err(|_| EvidenceViewerRuntimeProviderQualificationErrorV1::UnavailableOrStale)?;
+    if !qualification.is_valid() {
+        return Err(EvidenceViewerRuntimeProviderQualificationErrorV1::InvalidQualification);
+    }
+    if provider.handle() != expected_handle || qualification != expected_qualification {
+        return Err(EvidenceViewerRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged);
+    }
+    Ok(())
 }
 
 fn is_canonical_https_origin(origin: &str, rp_id: &str) -> bool {
@@ -4232,6 +4668,28 @@ fn len_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
+fn map_provider_qualification_error(
+    error: EvidenceViewerRuntimeProviderQualificationErrorV1,
+) -> EvidenceViewerErrorV1 {
+    match error {
+        EvidenceViewerRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle
+        | EvidenceViewerRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle
+        | EvidenceViewerRuntimeProviderQualificationErrorV1::InvalidConfiguredQualification
+        | EvidenceViewerRuntimeProviderQualificationErrorV1::InvalidProviderHandle
+        | EvidenceViewerRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
+        | EvidenceViewerRuntimeProviderQualificationErrorV1::SubstitutedProvider
+        | EvidenceViewerRuntimeProviderQualificationErrorV1::SignerPublicKeyChanged => {
+            EvidenceViewerErrorV1::InvalidConfig
+        }
+        EvidenceViewerRuntimeProviderQualificationErrorV1::UnavailableOrStale
+        | EvidenceViewerRuntimeProviderQualificationErrorV1::InvalidQualification
+        | EvidenceViewerRuntimeProviderQualificationErrorV1::QualificationMismatch
+        | EvidenceViewerRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged => {
+            EvidenceViewerErrorV1::RuntimeUnavailable
+        }
+    }
+}
+
 fn map_external_error(error: EvidenceViewerExternalErrorV1) -> EvidenceViewerErrorV1 {
     match error {
         EvidenceViewerExternalErrorV1::Unavailable
@@ -4278,9 +4736,20 @@ mod tests {
             webauthn_rp_id: "review.example".to_owned(),
             webauthn_allowed_origins: vec!["https://review.example".to_owned()],
             webauthn_handle: "webauthn:prod-evidence-viewer".to_owned(),
+            expected_webauthn_qualification: EvidenceViewerRuntimeProviderQualificationV1::new(
+                1, [0xA1; 32],
+            ),
             grant_handle: "kms:prod-evidence-grants".to_owned(),
+            expected_grant_qualification: EvidenceViewerRuntimeProviderQualificationV1::new(
+                1, [0xA2; 32],
+            ),
             erasure_handle: "kms:prod-evidence-erasure".to_owned(),
+            expected_erasure_qualification: EvidenceViewerRuntimeProviderQualificationV1::new(
+                1, [0xA4; 32],
+            ),
             receipt_signer_handle: "pkcs11:prod-evidence-receipts".to_owned(),
+            expected_receipt_signer_qualification:
+                EvidenceViewerRuntimeProviderQualificationV1::new(1, [0xA3; 32]),
             receipt_signer_public_key: public_key,
         }
     }
@@ -4394,8 +4863,97 @@ mod tests {
         consumed: bool,
     }
 
+    struct MockProviderQualification {
+        revision: AtomicU64,
+        policy_digest: Mutex<[u8; 32]>,
+        failure: Mutex<Option<EvidenceViewerRuntimeProviderReadinessErrorV1>>,
+        policy_drift_after_operation: Mutex<Option<[u8; 32]>>,
+    }
+
+    impl MockProviderQualification {
+        fn new(policy_byte: u8) -> Self {
+            Self {
+                revision: AtomicU64::new(1),
+                policy_digest: Mutex::new([policy_byte; 32]),
+                failure: Mutex::new(None),
+                policy_drift_after_operation: Mutex::new(None),
+            }
+        }
+
+        fn observe(
+            &self,
+        ) -> Result<
+            EvidenceViewerRuntimeProviderQualificationV1,
+            EvidenceViewerRuntimeProviderReadinessErrorV1,
+        > {
+            if let Some(error) = self
+                .failure
+                .lock()
+                .map_err(|_| EvidenceViewerRuntimeProviderReadinessErrorV1::Unavailable)?
+                .as_ref()
+                .copied()
+            {
+                return Err(error);
+            }
+            let policy_digest = *self
+                .policy_digest
+                .lock()
+                .map_err(|_| EvidenceViewerRuntimeProviderReadinessErrorV1::Unavailable)?;
+            Ok(EvidenceViewerRuntimeProviderQualificationV1::new(
+                self.revision.load(Ordering::SeqCst),
+                policy_digest,
+            ))
+        }
+
+        fn set_revision(&self, revision: u64) {
+            self.revision.store(revision, Ordering::SeqCst);
+        }
+
+        fn set_policy_digest(&self, policy_digest: [u8; 32]) {
+            *self
+                .policy_digest
+                .lock()
+                .expect("provider qualification policy lock") = policy_digest;
+        }
+
+        fn set_failure(&self, failure: Option<EvidenceViewerRuntimeProviderReadinessErrorV1>) {
+            *self
+                .failure
+                .lock()
+                .expect("provider qualification failure lock") = failure;
+        }
+
+        fn drift_policy_after_next_operation(&self, policy_digest: [u8; 32]) {
+            *self
+                .policy_drift_after_operation
+                .lock()
+                .expect("provider qualification drift lock") = Some(policy_digest);
+        }
+
+        fn operation_guard(&self) -> MockProviderOperationGuard<'_> {
+            MockProviderOperationGuard(self)
+        }
+    }
+
+    struct MockProviderOperationGuard<'a>(&'a MockProviderQualification);
+
+    impl Drop for MockProviderOperationGuard<'_> {
+        fn drop(&mut self) {
+            if let Some(policy_digest) = self
+                .0
+                .policy_drift_after_operation
+                .lock()
+                .expect("provider qualification drift lock")
+                .take()
+            {
+                self.0.set_policy_digest(policy_digest);
+            }
+        }
+    }
+
     struct MockWebAuthn {
         handle: String,
+        qualification: MockProviderQualification,
         sequence: AtomicU64,
         challenges: Mutex<BTreeMap<String, MockChallenge>>,
     }
@@ -4410,22 +4968,39 @@ mod tests {
         fn new(handle: &str) -> Self {
             Self {
                 handle: handle.to_owned(),
+                qualification: MockProviderQualification::new(0xA1),
                 sequence: AtomicU64::new(0),
                 challenges: Mutex::new(BTreeMap::new()),
             }
         }
+
+        fn issue_call_count(&self) -> u64 {
+            self.sequence.load(Ordering::SeqCst)
+        }
     }
 
-    impl EvidenceViewerWebAuthnBoundaryV1 for MockWebAuthn {
+    impl EvidenceViewerRuntimeProviderV1 for MockWebAuthn {
         fn handle(&self) -> &str {
             &self.handle
         }
 
+        fn qualification(
+            &self,
+        ) -> Result<
+            EvidenceViewerRuntimeProviderQualificationV1,
+            EvidenceViewerRuntimeProviderReadinessErrorV1,
+        > {
+            self.qualification.observe()
+        }
+    }
+
+    impl EvidenceViewerWebAuthnBoundaryV1 for MockWebAuthn {
         fn issue_challenge(
             &self,
             binding_digest: [u8; 32],
             expires_at_unix_ms: u64,
         ) -> Result<OpaqueEvidenceViewerSecretV1, EvidenceViewerExternalErrorV1> {
+            let _operation = self.qualification.operation_guard();
             let sequence = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
             let token = format!("webauthn-{}-{sequence}", hex::encode(binding_digest));
             self.challenges
@@ -4451,6 +5026,7 @@ mod tests {
             allowed_origins: &[String],
             now_unix_ms: u64,
         ) -> Result<EvidenceViewerWebAuthnResultV1, EvidenceViewerExternalErrorV1> {
+            let _operation = self.qualification.operation_guard();
             if !assertion.starts_with(b"valid-webauthn-assertion")
                 || rp_id != "review.example"
                 || allowed_origins.len() != 1
@@ -4486,6 +5062,7 @@ mod tests {
 
     struct MockGrantBoundary {
         handle: String,
+        qualification: MockProviderQualification,
         sequence: AtomicU64,
         issued: Mutex<BTreeMap<String, EvidenceViewerGrantClaimsV1>>,
         revoked: Mutex<BTreeSet<[u8; 32]>>,
@@ -4501,6 +5078,7 @@ mod tests {
         fn new(handle: &str) -> Self {
             Self {
                 handle: handle.to_owned(),
+                qualification: MockProviderQualification::new(0xA2),
                 sequence: AtomicU64::new(0),
                 issued: Mutex::new(BTreeMap::new()),
                 revoked: Mutex::new(BTreeSet::new()),
@@ -4524,15 +5102,27 @@ mod tests {
         }
     }
 
-    impl EvidenceViewerGrantBoundaryV1 for MockGrantBoundary {
+    impl EvidenceViewerRuntimeProviderV1 for MockGrantBoundary {
         fn handle(&self) -> &str {
             &self.handle
         }
 
+        fn qualification(
+            &self,
+        ) -> Result<
+            EvidenceViewerRuntimeProviderQualificationV1,
+            EvidenceViewerRuntimeProviderReadinessErrorV1,
+        > {
+            self.qualification.observe()
+        }
+    }
+
+    impl EvidenceViewerGrantBoundaryV1 for MockGrantBoundary {
         fn issue(
             &self,
             claims: &EvidenceViewerGrantClaimsV1,
         ) -> Result<OpaqueEvidenceViewerSecretV1, EvidenceViewerExternalErrorV1> {
+            let _operation = self.qualification.operation_guard();
             let claims_bytes =
                 norito::to_bytes(claims).map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?;
             let sequence = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
@@ -4553,6 +5143,7 @@ mod tests {
             claims: &EvidenceViewerGrantClaimsV1,
             now_unix_ms: u64,
         ) -> Result<(), EvidenceViewerExternalErrorV1> {
+            let _operation = self.qualification.operation_guard();
             if self
                 .revoked
                 .lock()
@@ -4575,6 +5166,7 @@ mod tests {
         }
 
         fn revoke(&self, token_digest: [u8; 32]) -> Result<(), EvidenceViewerExternalErrorV1> {
+            let _operation = self.qualification.operation_guard();
             self.revoked
                 .lock()
                 .map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?
@@ -4585,8 +5177,10 @@ mod tests {
 
     struct MockReceiptSigner {
         handle: String,
+        qualification: MockProviderQualification,
         signing_key: SigningKey,
         corrupt_signatures: AtomicBool,
+        public_key_calls: AtomicUsize,
         sign_calls: AtomicUsize,
     }
 
@@ -4600,8 +5194,10 @@ mod tests {
         fn new(handle: &str, signing_key: SigningKey) -> Self {
             Self {
                 handle: handle.to_owned(),
+                qualification: MockProviderQualification::new(0xA3),
                 signing_key,
                 corrupt_signatures: AtomicBool::new(false),
+                public_key_calls: AtomicUsize::new(0),
                 sign_calls: AtomicUsize::new(0),
             }
         }
@@ -4613,18 +5209,36 @@ mod tests {
         fn sign_call_count(&self) -> usize {
             self.sign_calls.load(Ordering::SeqCst)
         }
+
+        fn public_key_call_count(&self) -> usize {
+            self.public_key_calls.load(Ordering::SeqCst)
+        }
     }
 
-    impl EvidenceViewerReceiptSignerV1 for MockReceiptSigner {
+    impl EvidenceViewerRuntimeProviderV1 for MockReceiptSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
 
+        fn qualification(
+            &self,
+        ) -> Result<
+            EvidenceViewerRuntimeProviderQualificationV1,
+            EvidenceViewerRuntimeProviderReadinessErrorV1,
+        > {
+            self.qualification.observe()
+        }
+    }
+
+    impl EvidenceViewerReceiptSignerV1 for MockReceiptSigner {
         fn public_key(&self) -> [u8; 32] {
+            let _operation = self.qualification.operation_guard();
+            self.public_key_calls.fetch_add(1, Ordering::SeqCst);
             self.signing_key.verifying_key().to_bytes()
         }
 
         fn sign(&self, message: &[u8]) -> Result<[u8; 64], EvidenceViewerExternalErrorV1> {
+            let _operation = self.qualification.operation_guard();
             self.sign_calls.fetch_add(1, Ordering::SeqCst);
             let mut signature = self.signing_key.sign(message).to_bytes();
             if self.corrupt_signatures.load(Ordering::SeqCst) {
@@ -4636,6 +5250,7 @@ mod tests {
 
     struct MockErasureBoundary {
         handle: String,
+        qualification: MockProviderQualification,
         calls: Mutex<Vec<([u8; 32], [u8; 16], [u8; 16], [u8; 32])>>,
         commits: Mutex<BTreeMap<[u8; 32], [u8; 32]>>,
         commit_then_unavailable_once: AtomicBool,
@@ -4651,6 +5266,7 @@ mod tests {
         fn new(handle: &str) -> Self {
             Self {
                 handle: handle.to_owned(),
+                qualification: MockProviderQualification::new(0xA4),
                 calls: Mutex::new(Vec::new()),
                 commits: Mutex::new(BTreeMap::new()),
                 commit_then_unavailable_once: AtomicBool::new(false),
@@ -4671,11 +5287,22 @@ mod tests {
         }
     }
 
-    impl EvidenceViewerErasureBoundaryV1 for MockErasureBoundary {
+    impl EvidenceViewerRuntimeProviderV1 for MockErasureBoundary {
         fn handle(&self) -> &str {
             &self.handle
         }
 
+        fn qualification(
+            &self,
+        ) -> Result<
+            EvidenceViewerRuntimeProviderQualificationV1,
+            EvidenceViewerRuntimeProviderReadinessErrorV1,
+        > {
+            self.qualification.observe()
+        }
+    }
+
+    impl EvidenceViewerErasureBoundaryV1 for MockErasureBoundary {
         fn erase(
             &self,
             operation_id: [u8; 32],
@@ -4683,6 +5310,7 @@ mod tests {
             object_id: [u8; 16],
             evidence_digest: [u8; 32],
         ) -> Result<[u8; 32], EvidenceViewerExternalErrorV1> {
+            let _operation = self.qualification.operation_guard();
             self.calls
                 .lock()
                 .map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?
@@ -4778,6 +5406,7 @@ mod tests {
         deps: EvidenceViewerRuntimeDepsV1,
         node: NodeHandle,
         authorization: Arc<MockAuthorizationReader>,
+        webauthn: Arc<MockWebAuthn>,
         grants: Arc<MockGrantBoundary>,
         signer: Arc<MockReceiptSigner>,
         erasure: Arc<MockErasureBoundary>,
@@ -4844,7 +5473,7 @@ mod tests {
             config.checkpoint_path = root.join("evidence-viewer.to");
             let deps = EvidenceViewerRuntimeDepsV1 {
                 authorization_reader: authorization.clone(),
-                webauthn,
+                webauthn: webauthn.clone(),
                 grants: grants.clone(),
                 receipt_signer: signer.clone(),
                 erasure: erasure.clone(),
@@ -4855,6 +5484,7 @@ mod tests {
                 deps,
                 node,
                 authorization,
+                webauthn,
                 grants,
                 signer,
                 erasure,
@@ -5059,6 +5689,20 @@ mod tests {
             config.webauthn_handle = unsafe_handle;
             assert_eq!(config.validate(), Err(EvidenceViewerErrorV1::InvalidConfig));
         }
+        let mut zero_revision = valid_config(key.verifying_key().to_bytes());
+        zero_revision.expected_grant_qualification =
+            EvidenceViewerRuntimeProviderQualificationV1::new(0, [0xA2; 32]);
+        assert_eq!(
+            zero_revision.validate(),
+            Err(EvidenceViewerErrorV1::InvalidConfig)
+        );
+        let mut zero_policy_digest = valid_config(key.verifying_key().to_bytes());
+        zero_policy_digest.expected_receipt_signer_qualification =
+            EvidenceViewerRuntimeProviderQualificationV1::new(1, [0; 32]);
+        assert_eq!(
+            zero_policy_digest.validate(),
+            Err(EvidenceViewerErrorV1::InvalidConfig)
+        );
     }
 
     #[test]
@@ -6267,6 +6911,200 @@ mod tests {
             .expect("state rolled back after signer drift");
         assert_eq!(status.session_count, 0);
         assert_eq!(status.receipt_count, 0);
+    }
+
+    #[test]
+    fn provider_qualification_fails_before_checkpoint_access() {
+        let fixture = EvidenceViewerFixture::new();
+        assert!(!fixture.config.checkpoint_path.exists());
+
+        let test_marked_webauthn = Arc::new(MockWebAuthn::new("webauthn:test-evidence-viewer"));
+        let test_marked_deps = EvidenceViewerRuntimeDepsV1 {
+            webauthn: test_marked_webauthn,
+            ..fixture.deps.clone()
+        };
+        assert_eq!(
+            EvidenceViewerServiceV1::open(
+                fixture.config.clone(),
+                test_marked_deps,
+                fixture.node.clone(),
+            )
+            .expect_err("test-marked WebAuthn provider must fail startup"),
+            EvidenceViewerErrorV1::InvalidConfig
+        );
+
+        let mismatched_grants = Arc::new(MockGrantBoundary::new(&fixture.config.grant_handle));
+        mismatched_grants.qualification.set_revision(2);
+        let mismatched_deps = EvidenceViewerRuntimeDepsV1 {
+            grants: mismatched_grants,
+            ..fixture.deps.clone()
+        };
+        assert_eq!(
+            EvidenceViewerServiceV1::open(
+                fixture.config.clone(),
+                mismatched_deps,
+                fixture.node.clone(),
+            )
+            .expect_err("provider revision outside deployment policy must fail startup"),
+            EvidenceViewerErrorV1::RuntimeUnavailable
+        );
+
+        let stale_grants = Arc::new(MockGrantBoundary::new(&fixture.config.grant_handle));
+        stale_grants.qualification.set_failure(Some(
+            EvidenceViewerRuntimeProviderReadinessErrorV1::Unavailable,
+        ));
+        let stale_deps = EvidenceViewerRuntimeDepsV1 {
+            grants: stale_grants,
+            ..fixture.deps.clone()
+        };
+        let stale_error =
+            EvidenceViewerServiceV1::open(fixture.config.clone(), stale_deps, fixture.node.clone())
+                .expect_err("stale grant provider must fail startup");
+        assert_eq!(stale_error, EvidenceViewerErrorV1::RuntimeUnavailable);
+        assert!(!format!("{stale_error:?} {stale_error}").contains(MOCK_PROVIDER_SECRET));
+
+        let unavailable_signer = Arc::new(MockReceiptSigner::new(
+            &fixture.config.receipt_signer_handle,
+            SigningKey::from_bytes(&[0x51; 32]),
+        ));
+        unavailable_signer.qualification.set_failure(Some(
+            EvidenceViewerRuntimeProviderReadinessErrorV1::Rejected,
+        ));
+        let unavailable_signer_deps = EvidenceViewerRuntimeDepsV1 {
+            receipt_signer: unavailable_signer.clone(),
+            ..fixture.deps.clone()
+        };
+        assert_eq!(
+            EvidenceViewerServiceV1::open(
+                fixture.config.clone(),
+                unavailable_signer_deps,
+                fixture.node.clone(),
+            )
+            .expect_err("unqualified receipt signer must fail startup"),
+            EvidenceViewerErrorV1::RuntimeUnavailable
+        );
+        assert_eq!(
+            unavailable_signer.public_key_call_count(),
+            0,
+            "signer metadata must not be trusted before expected qualification"
+        );
+
+        let drifting_signer = Arc::new(MockReceiptSigner::new(
+            &fixture.config.receipt_signer_handle,
+            SigningKey::from_bytes(&[0x51; 32]),
+        ));
+        drifting_signer
+            .qualification
+            .drift_policy_after_next_operation([0xB3; 32]);
+        let drifting_signer_deps = EvidenceViewerRuntimeDepsV1 {
+            receipt_signer: drifting_signer.clone(),
+            ..fixture.deps.clone()
+        };
+        assert_eq!(
+            EvidenceViewerServiceV1::open(
+                fixture.config.clone(),
+                drifting_signer_deps,
+                fixture.node.clone(),
+            )
+            .expect_err("qualification drift during signer-key read must fail startup"),
+            EvidenceViewerErrorV1::RuntimeUnavailable
+        );
+        assert_eq!(drifting_signer.public_key_call_count(), 1);
+        assert_eq!(drifting_signer.sign_call_count(), 0);
+
+        let invalid_signer = Arc::new(MockReceiptSigner::new(
+            &fixture.config.receipt_signer_handle,
+            SigningKey::from_bytes(&[0x51; 32]),
+        ));
+        invalid_signer.qualification.set_policy_digest([0; 32]);
+        let invalid_signer_deps = EvidenceViewerRuntimeDepsV1 {
+            receipt_signer: invalid_signer,
+            ..fixture.deps.clone()
+        };
+        assert_eq!(
+            EvidenceViewerServiceV1::open(
+                fixture.config.clone(),
+                invalid_signer_deps,
+                fixture.node.clone(),
+            )
+            .expect_err("zero signer policy digest must fail startup"),
+            EvidenceViewerErrorV1::RuntimeUnavailable
+        );
+
+        let invalid_erasure = Arc::new(MockErasureBoundary::new(&fixture.config.erasure_handle));
+        invalid_erasure.qualification.set_revision(0);
+        let invalid_erasure_deps = EvidenceViewerRuntimeDepsV1 {
+            erasure: invalid_erasure,
+            ..fixture.deps.clone()
+        };
+        assert_eq!(
+            EvidenceViewerServiceV1::open(
+                fixture.config.clone(),
+                invalid_erasure_deps,
+                fixture.node.clone(),
+            )
+            .expect_err("zero erasure-provider revision must fail startup"),
+            EvidenceViewerErrorV1::RuntimeUnavailable
+        );
+
+        assert!(
+            !fixture.config.checkpoint_path.exists(),
+            "qualification must finish before checkpoint creation or loading"
+        );
+        assert_eq!(
+            fixture.signer.sign_call_count(),
+            0,
+            "qualification failure must precede signer operations"
+        );
+    }
+
+    #[test]
+    fn provider_policy_drift_is_checked_before_and_after_external_operations() {
+        let fixture = EvidenceViewerFixture::new();
+        let service = fixture.open();
+        let request = |idempotency_key| EvidenceViewerChallengeRequestV1 {
+            case_id: CASE_ID.to_owned(),
+            round_id: ROUND_ID.to_owned(),
+            quarantine_id: fixture.quarantine_id,
+            viewer_account: JUROR_ACCOUNT.to_owned(),
+            role: EvidenceViewerRoleV1::Juror,
+            purpose: REVIEW_PURPOSE.to_owned(),
+            idempotency_key,
+            now_unix_ms: BASE_UNIX_MS,
+        };
+
+        fixture.webauthn.qualification.set_policy_digest([0xB1; 32]);
+        assert_eq!(
+            service
+                .issue_challenge(request([0x51; 32]))
+                .expect_err("pre-operation policy drift must fail closed"),
+            EvidenceViewerErrorV1::RuntimeUnavailable
+        );
+        assert_eq!(
+            fixture.webauthn.issue_call_count(),
+            0,
+            "provider operation must not run after failed preflight"
+        );
+
+        fixture.webauthn.qualification.set_policy_digest([0xA1; 32]);
+        fixture
+            .webauthn
+            .qualification
+            .drift_policy_after_next_operation([0xB2; 32]);
+        assert_eq!(
+            service
+                .issue_challenge(request([0x52; 32]))
+                .expect_err("post-operation policy drift must discard the result"),
+            EvidenceViewerErrorV1::RuntimeUnavailable
+        );
+        assert_eq!(fixture.webauthn.issue_call_count(), 1);
+        assert_eq!(
+            service
+                .audit_status()
+                .expect("failed external operation must not mutate checkpoint state")
+                .challenge_count,
+            0
+        );
     }
 
     #[test]

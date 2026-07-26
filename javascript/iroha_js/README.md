@@ -4059,6 +4059,30 @@ characters); the on-wire `EscrowId` remains 32 bytes. The precondition is
 mandatory, positive, and canonically spelled; the retired one-field
 cancellation and lossy JavaScript numbers are rejected before encoding.
 
+For the appeal-finance fixture boundary, use the strict bare archive codec with
+an already finalized canonical escrow hash:
+
+```js
+import {
+  decodeCancelAssetLockV1,
+  encodeCancelAssetLockV1,
+  validateAppealFinanceCancelAssetLock,
+} from "@iroha/iroha-js";
+
+const archive = encodeCancelAssetLockV1({
+  escrow_id:
+    "hash:73CCD4E0DD69AD434DB75056B600AA4F74C8FC5556B11BDC799DFDB7EA29851F#434B",
+  expected_remaining_amount: "20",
+});
+const fields = decodeCancelAssetLockV1(archive);
+const diagnostic = validateAppealFinanceCancelAssetLock(archive);
+```
+
+This codec accepts exactly the two snake-case string fields and exact archive
+bytes. Raw hex/base64, byte-array field aliases, nested identifiers, padding,
+substituted schemas or flags, and trailing bytes are rejected. The validation
+outcome is diagnostic and does not itself authorize settlement.
+
 ### SoraFS replication-order instructions
 
 The V1 helpers emit the exact native Rust/Norito variants. IDs must be non-zero

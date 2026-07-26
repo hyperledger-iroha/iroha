@@ -15207,20 +15207,24 @@ def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> Non
         "ProviderIngestSignerPolicyObservationV1::Missing",
         "ProviderIngestFailureClassV1::SignerPolicyChanged",
         "policy == signing_context.signer_policy",
-        "finalized_signer_policy_rotation_or_revocation_invalidates_after_restart",
+        "finalized_signer_policy_change_invalidates_only_unexposed_bytes_after_restart",
         "signer_policy_floor_rejects_rollback_equivocation_and_identity_substitution",
         "ProviderIngestOutboxError::SignerPolicyRollback",
     ):
         assert guard in outbox
     for guard in (
         "fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1",
-        "signer.signer_policy() != claim.context().signer_policy",
+        "fn current_eligibility(",
+        "exact_current_signer_policy",
         "record_completion_signer_resolution_failure",
-        "signer_policy_rotation_invalidates_retained_transaction_before_observation",
+        "signer_policy_rotation_reconciles_exposed_transaction_before_authority_change",
+        "policy_rotation_after_durable_begin_never_reaches_ingress_exposure",
     ):
         assert guard in runtime
     assert "self.signer.signer_policy()" in daemon
-    assert "same-owner rotation or revocation" in closure
+    assert "self.current_eligibility()?" in daemon
+    assert "newer finalized owner/policy" in closure
+    assert "invalidates only `Signing` or provably never-exposed `Signed`" in closure
     assert "What remains is a persisted governed signer-policy" not in closure
 
 
@@ -18017,7 +18021,7 @@ def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -
         "Torii's local-authoritative snapshot POST and the matching CLI publication command are removed. Latest, provider, weights, and event reads now consume only the fresh committed-derived projection after signed snapshot validation and authenticated Governance DAG readback. Snapshot-id reads resolve the exact authenticated snapshot from the durable immutable suffix capped at 1,024 entries and the publication-checkpoint byte ceiling; unknown or evicted ids return `404`.",
         "Capacity-dispute registration appends `Opened` atomically with the canonical dispute record, and `ResolveSorafsCapacityDispute` atomically updates that record and appends the exact revision-two `Resolved` event.",
         "Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration, the queue-backed journal submitter, exact historical-query injection boundary, and supervised scheduling/reconciliation are wired; the production historical adapter, integrated validation, and reviewed deployment evidence remain open.",
-        "Scoring engine (`reputation_engine`) | Aggregates metrics, runs scoring algorithm (EigenTrust-style), applies policy penalties, generates snapshots. | Runs hourly; writes outputs to database + object storage.",
+        "Scoring engine (`reputation_engine`) | Aggregates finalized projections, runs the fixed-point EigenTrust-style algorithm, applies policy penalties, and generates canonical snapshot material. | Runs on the configured supervised interval and writes only the bounded durable checkpoint/outbox; publication becomes visible through the authenticated Governance DAG and committed-derived projection.",
         "Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open.",
         "API gateway (`sorafs_reputation_api`) | Exposes read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist.",
         "Strict non-secret `iroha_config` policy construction and the supervised finalized-query/threshold-signing/publication worker are implemented.",
@@ -18028,7 +18032,7 @@ def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -
         "Production rollout:",
         "Supply and exercise the immutable historical finalized-query adapter plus the queue-backed governed PoR/regional counted stream-token transaction submitter; wire the actual PoR and token owners to the durable callbacks.",
         "Supply external threshold signer and authenticated Governance DAG publication/readback/head-inclusion adapters to the already-supervised runtime.",
-        "Integrate the regional publisher/API and SDK reads against the committed projection, exercise exact retained snapshot-id lookup and bounded eviction, and run four-peer end-to-end tests with orchestrator/indexer consumers.",
+        "Deploy the supervised publisher and API against the committed projection, exercise exact retained snapshot-id lookup and bounded eviction, and run four-peer end-to-end tests with orchestrator/indexer consumers.",
         "Capture live run evidence for snapshot freshness, ingest lag, low-score handling, SSE/WebSocket event delivery, and routing/incentive consumption",
         "Publish governance-approved weights with the governed `weights_digest_hex` carried by publish/latest rollout evidence, then archive the first production snapshot `.to`/JSON artifacts and proof replay evidence.",
         "Exercise rollback/stale-snapshot procedures before routing or incentives rely",

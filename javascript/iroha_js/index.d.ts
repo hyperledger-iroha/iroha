@@ -5215,6 +5215,12 @@ export interface SorafsOrderbookValidationOptions {
   generated_at?: number | bigint;
 }
 
+export interface SorafsAppealFinanceValidationOptions {
+  label?: string;
+  generatedAtUnix?: number | bigint;
+  generated_at?: number | bigint;
+}
+
 export interface SorafsPdpPayloadValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
@@ -5299,6 +5305,11 @@ export function validateOrderbookPayload(
   kind: SorafsOrderbookPayloadKind,
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
   options?: SorafsOrderbookValidationOptions,
+): SorafsValidationOutcome;
+
+export function validateAppealFinanceCancelAssetLock(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: SorafsAppealFinanceValidationOptions,
 ): SorafsValidationOutcome;
 
 export function signOrderbookPayload(
@@ -5787,8 +5798,10 @@ type ToriiRuntimeNamespaceExport =
   | "verifyIdentifierResolutionReceipt";
 
 type NoritoRuntimeNamespaceExport =
-    "encodeAccountIdNoritoValue"
+    "decodeCancelAssetLockV1"
+  | "encodeAccountIdNoritoValue"
   | "encodeAssetDefinitionIdNoritoValue"
+  | "encodeCancelAssetLockV1"
   | "encodeQuantityNoritoValue"
   | "inspectSubscriptionTriggerAction"
   | "noritoDecodeBlockProofs"
@@ -13929,6 +13942,14 @@ export function encodeQuantityNoritoValue(
   value: QuantityInput,
   context?: string,
 ): Uint8Array;
+/** Encode the exact schema-bound bare `CancelAssetLock` V1 archive. */
+export function encodeCancelAssetLockV1(
+  value: Readonly<CancelAssetLockV1>,
+): Buffer;
+/** Decode an exact schema-bound bare `CancelAssetLock` V1 archive. */
+export function decodeCancelAssetLockV1(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+): CancelAssetLockV1;
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
 export function noritoDecodeBlockProofs(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
@@ -14645,6 +14666,12 @@ export interface CancelAssetLockInstruction {
     escrow_id: string;
     expected_remaining_amount: string;
   };
+}
+
+/** Exact two-field value carried by a bare `CancelAssetLock` V1 archive. */
+export interface CancelAssetLockV1 {
+  readonly escrow_id: string;
+  readonly expected_remaining_amount: string;
 }
 
 /** Maximum UTF-8 bytes accepted for a CancelAssetLock lock-id preimage. */

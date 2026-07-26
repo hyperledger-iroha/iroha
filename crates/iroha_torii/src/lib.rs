@@ -51296,6 +51296,7 @@ impl SoraFsAppealSettlementSubmitter {
         config: &iroha_config::parameters::actual::SorafsAppealFinanceSettlement,
         storage_data_dir: &Path,
         runtime_signers: Option<Arc<SoraFsAppealFinanceRuntimeSignersV1>>,
+        finalized_startup_height: u64,
         checkpoint_runtime: Arc<
             dyn sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointRuntime,
         >,
@@ -51306,6 +51307,15 @@ impl SoraFsAppealSettlementSubmitter {
             AppealFinanceCheckpointAuthenticationPolicyV1, AppealFinanceTransactionForwarder,
             AppealFinanceTransactionForwarderPolicyV1,
         };
+
+        qualify_appeal_finance_runtime_signer_inventory(
+            &config.submitter_signers,
+            runtime_signers.as_deref(),
+            finalized_startup_height,
+        )
+        .unwrap_or_else(|error| {
+            panic!("SoraFS appeal-finance runtime signer inventory is invalid: {error:?}")
+        });
 
         let state_dir = storage_data_dir.join("appeal-finance-transaction-forwarder");
         let policy = AppealFinanceTransactionForwarderPolicyV1 {
@@ -51478,13 +51488,7 @@ impl SoraFsAppealFinanceRuntimeSignersV1 {
         let mut registry = BTreeMap::new();
         for signer in signers {
             let handle = signer.handle();
-            if handle.is_empty()
-                || handle.len() > 256
-                || !handle.is_ascii()
-                || handle
-                    .bytes()
-                    .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-            {
+            if !is_production_appeal_finance_runtime_handle(handle) {
                 return Err(SoraFsAppealFinanceRuntimeSignerRegistryError::InvalidHandle);
             }
             let public_key = signer.public_key();
@@ -51506,16 +51510,95 @@ impl SoraFsAppealFinanceRuntimeSignersV1 {
     }
 }
 
+#[cfg(feature = "app_api")]
+fn is_production_appeal_finance_runtime_handle(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 256
+        || !value.is_ascii()
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return false;
+    }
+    let lowercase = value.to_ascii_lowercase();
+    !lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
+            )
+        })
+}
+
 /// Appeal-finance runtime signer registry error.
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraFsAppealFinanceRuntimeSignerRegistryError {
-    /// Handle is empty, unbounded, or noncanonical.
+    /// Handle is empty, unbounded, noncanonical, or test-marked.
     InvalidHandle,
     /// Handle is duplicated.
     DuplicateHandle,
     /// Provider key is not Ed25519.
     InvalidPublicKey,
+}
+
+#[cfg(feature = "app_api")]
+fn qualify_appeal_finance_runtime_signer_inventory(
+    bindings: &[iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding],
+    registry: Option<&SoraFsAppealFinanceRuntimeSignersV1>,
+    finalized_startup_height: u64,
+) -> Result<(), SoraFsAppealFinanceRuntimeSignerQualificationError> {
+    if bindings.is_empty() {
+        return Ok(());
+    }
+    let registry =
+        registry.ok_or(SoraFsAppealFinanceRuntimeSignerQualificationError::RegistryMissing)?;
+    for binding in bindings.iter().filter(|binding| {
+        binding
+            .revoked_at_block_height
+            .is_none_or(|height| finalized_startup_height < height)
+    }) {
+        let provider = registry.get(&binding.handle).ok_or_else(|| {
+            SoraFsAppealFinanceRuntimeSignerQualificationError::ProviderMissing {
+                handle: binding.handle.clone(),
+            }
+        })?;
+        if provider.handle() != binding.handle {
+            return Err(
+                SoraFsAppealFinanceRuntimeSignerQualificationError::HandleMismatch {
+                    handle: binding.handle.clone(),
+                },
+            );
+        }
+        let public_key = provider.public_key();
+        if public_key != binding.public_key {
+            return Err(
+                SoraFsAppealFinanceRuntimeSignerQualificationError::PublicKeyMismatch {
+                    handle: binding.handle.clone(),
+                },
+            );
+        }
+        if AccountId::new(public_key) != binding.authority {
+            return Err(
+                SoraFsAppealFinanceRuntimeSignerQualificationError::AccountIdMismatch {
+                    handle: binding.handle.clone(),
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SoraFsAppealFinanceRuntimeSignerQualificationError {
+    RegistryMissing,
+    ProviderMissing { handle: String },
+    HandleMismatch { handle: String },
+    PublicKeyMismatch { handle: String },
+    AccountIdMismatch { handle: String },
 }
 
 #[cfg(feature = "app_api")]
@@ -51529,10 +51612,14 @@ enum SoraFsAppealFinanceSignerSelectionError {
 
 #[cfg(all(test, feature = "app_api"))]
 mod appeal_finance_runtime_signer_tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
     use iroha_data_model::transaction::TransactionBuilder;
     use sorafs_node::appeal_finance_transaction_forwarder::{
-        APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1, AppealFinanceTransactionForwarder,
+        APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1, AppealFinanceCheckpointExternalError,
+        AppealFinanceCheckpointRuntime, AppealFinanceCheckpointRuntimeIdentityV1,
+        AppealFinanceSealedCheckpointRecordV1, AppealFinanceTransactionForwarder,
         AppealFinanceTransactionForwarderPolicyV1,
     };
 
@@ -51572,6 +51659,45 @@ mod appeal_finance_runtime_signer_tests {
         })
     }
 
+    #[derive(Debug, Default)]
+    struct UnexpectedCheckpointRuntime {
+        identity_called: AtomicBool,
+    }
+
+    impl AppealFinanceCheckpointRuntime for UnexpectedCheckpointRuntime {
+        fn identity(
+            &self,
+        ) -> Result<AppealFinanceCheckpointRuntimeIdentityV1, AppealFinanceCheckpointExternalError>
+        {
+            self.identity_called.store(true, Ordering::SeqCst);
+            Err(AppealFinanceCheckpointExternalError::Unavailable)
+        }
+
+        fn sign_digest(
+            &self,
+            _digest: [u8; 32],
+        ) -> Result<[u8; 64], AppealFinanceCheckpointExternalError> {
+            Err(AppealFinanceCheckpointExternalError::Unavailable)
+        }
+
+        fn load_latest(
+            &self,
+        ) -> Result<
+            Option<AppealFinanceSealedCheckpointRecordV1>,
+            AppealFinanceCheckpointExternalError,
+        > {
+            Err(AppealFinanceCheckpointExternalError::Unavailable)
+        }
+
+        fn compare_and_swap_latest(
+            &self,
+            _expected_revision: Option<[u8; 32]>,
+            _next: &AppealFinanceSealedCheckpointRecordV1,
+        ) -> Result<(), AppealFinanceCheckpointExternalError> {
+            Err(AppealFinanceCheckpointExternalError::Unavailable)
+        }
+    }
+
     fn submitter(
         bindings: Vec<iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding>,
         providers: Vec<Arc<dyn SoraFsAppealFinanceTransactionSigner>>,
@@ -51607,6 +51733,250 @@ mod appeal_finance_runtime_signer_tests {
             result,
             Err(SoraFsAppealFinanceRuntimeSignerRegistryError::DuplicateHandle)
         ));
+    }
+
+    #[test]
+    fn registry_rejects_test_marked_opaque_handles() {
+        let result =
+            SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider("hsm:test:appeal", key(2))]);
+        assert!(matches!(
+            result,
+            Err(SoraFsAppealFinanceRuntimeSignerRegistryError::InvalidHandle)
+        ));
+    }
+
+    #[test]
+    fn startup_qualification_rejects_missing_registry() {
+        let configured = key(6);
+        let authority = AccountId::new(configured.public_key().clone());
+        let bindings = vec![
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                handle: "hsm:appeal-current".to_owned(),
+                authority,
+                public_key: configured.public_key().clone(),
+                valid_from_block_height: 1,
+                revoked_at_block_height: None,
+            },
+        ];
+
+        assert!(matches!(
+            qualify_appeal_finance_runtime_signer_inventory(&bindings, None, 7),
+            Err(SoraFsAppealFinanceRuntimeSignerQualificationError::RegistryMissing)
+        ));
+    }
+
+    #[test]
+    fn construction_rejects_missing_registry_before_checkpoint_or_state_access() {
+        let configured = key(6);
+        let authority = AccountId::new(configured.public_key().clone());
+        let mut config = iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
+        config.submitter_signers = vec![
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                handle: "hsm:appeal-current".to_owned(),
+                authority,
+                public_key: configured.public_key().clone(),
+                valid_from_block_height: 1,
+                revoked_at_block_height: None,
+            },
+        ];
+        let storage_dir = tempfile::tempdir().expect("temporary storage directory");
+        let checkpoint_runtime = Arc::new(UnexpectedCheckpointRuntime::default());
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+            let checkpoint_runtime = checkpoint_runtime.clone();
+            || {
+                SoraFsAppealSettlementSubmitter::from_config(
+                    &config,
+                    storage_dir.path(),
+                    None,
+                    1,
+                    checkpoint_runtime,
+                )
+            }
+        }));
+
+        assert!(result.is_err(), "missing registry must reject construction");
+        assert!(
+            !checkpoint_runtime.identity_called.load(Ordering::SeqCst),
+            "checkpoint runtime must remain untouched"
+        );
+        assert!(
+            !storage_dir
+                .path()
+                .join("appeal-finance-transaction-forwarder")
+                .exists(),
+            "durable state must not be opened before signer qualification"
+        );
+    }
+
+    #[test]
+    fn startup_qualification_rejects_missing_active_or_future_provider() {
+        let configured = key(7);
+        let authority = AccountId::new(configured.public_key().clone());
+        let bindings = vec![
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                handle: "hsm:appeal-current".to_owned(),
+                authority: authority.clone(),
+                public_key: configured.public_key().clone(),
+                valid_from_block_height: 1,
+                revoked_at_block_height: Some(10),
+            },
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                handle: "hsm:appeal-future".to_owned(),
+                authority,
+                public_key: configured.public_key().clone(),
+                valid_from_block_height: 10,
+                revoked_at_block_height: None,
+            },
+        ];
+        let only_future = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
+            "hsm:appeal-future",
+            configured.clone(),
+        )])
+        .expect("valid future-only registry");
+        assert!(matches!(
+            qualify_appeal_finance_runtime_signer_inventory(
+                &bindings,
+                Some(&only_future),
+                5
+            ),
+            Err(
+                SoraFsAppealFinanceRuntimeSignerQualificationError::ProviderMissing {
+                    handle
+                }
+            ) if handle == "hsm:appeal-current"
+        ));
+
+        let only_current = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
+            "hsm:appeal-current",
+            configured,
+        )])
+        .expect("valid current-only registry");
+        assert!(matches!(
+            qualify_appeal_finance_runtime_signer_inventory(
+                &bindings,
+                Some(&only_current),
+                5
+            ),
+            Err(
+                SoraFsAppealFinanceRuntimeSignerQualificationError::ProviderMissing {
+                    handle
+                }
+            ) if handle == "hsm:appeal-future"
+        ));
+    }
+
+    #[test]
+    fn startup_qualification_rejects_key_and_account_substitution() {
+        let configured = key(8);
+        let substituted = key(9);
+        let authority = AccountId::new(configured.public_key().clone());
+        let binding = iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+            handle: "hsm:appeal-current".to_owned(),
+            authority: authority.clone(),
+            public_key: configured.public_key().clone(),
+            valid_from_block_height: 1,
+            revoked_at_block_height: None,
+        };
+        let substituted_key_registry = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
+            "hsm:appeal-current",
+            substituted.clone(),
+        )])
+        .expect("valid substituted-key registry");
+        assert!(matches!(
+            qualify_appeal_finance_runtime_signer_inventory(
+                std::slice::from_ref(&binding),
+                Some(&substituted_key_registry),
+                1
+            ),
+            Err(SoraFsAppealFinanceRuntimeSignerQualificationError::PublicKeyMismatch { .. })
+        ));
+
+        let substituted_account_binding =
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                authority: AccountId::new(substituted.public_key().clone()),
+                ..binding
+            };
+        let configured_registry = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
+            "hsm:appeal-current",
+            configured,
+        )])
+        .expect("valid configured-key registry");
+        assert!(matches!(
+            qualify_appeal_finance_runtime_signer_inventory(
+                std::slice::from_ref(&substituted_account_binding),
+                Some(&configured_registry),
+                1
+            ),
+            Err(SoraFsAppealFinanceRuntimeSignerQualificationError::AccountIdMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn startup_qualification_allows_omitted_revoked_historical_provider() {
+        let configured = key(10);
+        let authority = AccountId::new(configured.public_key().clone());
+        let bindings = vec![
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                handle: "hsm:appeal-retired".to_owned(),
+                authority: authority.clone(),
+                public_key: configured.public_key().clone(),
+                valid_from_block_height: 1,
+                revoked_at_block_height: Some(10),
+            },
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                handle: "hsm:appeal-current".to_owned(),
+                authority,
+                public_key: configured.public_key().clone(),
+                valid_from_block_height: 10,
+                revoked_at_block_height: None,
+            },
+        ];
+        let registry = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
+            "hsm:appeal-current",
+            configured,
+        )])
+        .expect("valid current registry");
+
+        qualify_appeal_finance_runtime_signer_inventory(&bindings, Some(&registry), 10)
+            .expect("already-revoked historical providers may be omitted");
+    }
+
+    #[test]
+    fn startup_qualification_accepts_complete_rotation_inventory() {
+        let configured = key(11);
+        let authority = AccountId::new(configured.public_key().clone());
+        let bindings = vec![
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                handle: "hsm:appeal-retired".to_owned(),
+                authority: authority.clone(),
+                public_key: configured.public_key().clone(),
+                valid_from_block_height: 1,
+                revoked_at_block_height: Some(10),
+            },
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                handle: "hsm:appeal-current".to_owned(),
+                authority: authority.clone(),
+                public_key: configured.public_key().clone(),
+                valid_from_block_height: 10,
+                revoked_at_block_height: Some(20),
+            },
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                handle: "hsm:appeal-future".to_owned(),
+                authority,
+                public_key: configured.public_key().clone(),
+                valid_from_block_height: 20,
+                revoked_at_block_height: None,
+            },
+        ];
+        let registry = SoraFsAppealFinanceRuntimeSignersV1::new(vec![
+            provider("hsm:appeal-current", configured.clone()),
+            provider("hsm:appeal-future", configured),
+        ])
+        .expect("valid rotation registry");
+
+        qualify_appeal_finance_runtime_signer_inventory(&bindings, Some(&registry), 10)
+            .expect("current and future rotation providers qualify at startup");
     }
 
     #[test]
@@ -51898,7 +52268,6 @@ const SORAFS_EVIDENCE_VIEWER_MISSING_RUNTIME_DEPENDENCIES: &str = "missing_runti
 const SORAFS_EVIDENCE_VIEWER_UNEXPECTED_RUNTIME_DEPENDENCIES: &str =
     "unexpected_runtime_dependencies";
 #[cfg(feature = "app_api")]
-const SORAFS_EVIDENCE_VIEWER_RUNTIME_IDENTITY_MISMATCH: &str = "runtime_identity_mismatch";
 #[cfg(feature = "app_api")]
 const SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED: &str = "initialization_failed";
 
@@ -56350,57 +56719,71 @@ impl Torii {
         ) {
             (None, None, None, None, None) => (None, None),
             (Some(policy), Some(webauthn), Some(grants), Some(receipt_signer), Some(erasure)) => {
-                if webauthn.handle() != policy.webauthn_handle
-                    || grants.handle() != policy.grant_handle
-                    || erasure.handle() != policy.erasure_handle
-                    || receipt_signer.handle() != policy.receipt_signer_handle
-                    || receipt_signer.public_key() != policy.receipt_signer_public_key
-                {
-                    (None, Some(SORAFS_EVIDENCE_VIEWER_RUNTIME_IDENTITY_MISMATCH))
-                } else {
-                    let millis = |duration: std::time::Duration| {
-                        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-                    };
-                    let service_config = sorafs_node::evidence_viewer::EvidenceViewerConfigV1 {
-                        checkpoint_path: policy.checkpoint_path.clone(),
-                        checkpoint_max_bytes: policy.checkpoint_max_bytes.0,
-                        session_ttl_ms: millis(policy.session_ttl),
-                        grant_ttl_ms: millis(policy.grant_ttl),
-                        challenge_ttl_ms: millis(policy.challenge_ttl),
-                        max_range_bytes: policy.max_range_bytes.0,
-                        max_challenges: policy.max_challenges,
-                        max_sessions: policy.max_sessions,
-                        max_receipts: policy.max_receipts,
-                        max_idempotency_records: policy.max_idempotency_records,
-                        retention_after_expiry_ms: millis(policy.retention_after_expiry),
-                        webauthn_rp_id: policy.webauthn_rp_id.clone(),
-                        webauthn_allowed_origins: policy.webauthn_allowed_origins.clone(),
-                        webauthn_handle: policy.webauthn_handle.clone(),
-                        grant_handle: policy.grant_handle.clone(),
-                        erasure_handle: policy.erasure_handle.clone(),
-                        receipt_signer_handle: policy.receipt_signer_handle.clone(),
-                        receipt_signer_public_key: policy.receipt_signer_public_key,
-                    };
-                    let service_deps =
-                        sorafs_node::evidence_viewer::EvidenceViewerRuntimeDepsV1 {
-                            authorization_reader: Arc::new(
-                                sorafs::evidence_viewer_runtime::ToriiEvidenceViewerFinalizedAuthorizationReaderV1::new(
-                                    Arc::clone(&state),
-                                ),
+                let millis = |duration: std::time::Duration| {
+                    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+                };
+                let service_config = sorafs_node::evidence_viewer::EvidenceViewerConfigV1 {
+                    checkpoint_path: policy.checkpoint_path.clone(),
+                    checkpoint_max_bytes: policy.checkpoint_max_bytes.0,
+                    session_ttl_ms: millis(policy.session_ttl),
+                    grant_ttl_ms: millis(policy.grant_ttl),
+                    challenge_ttl_ms: millis(policy.challenge_ttl),
+                    max_range_bytes: policy.max_range_bytes.0,
+                    max_challenges: policy.max_challenges,
+                    max_sessions: policy.max_sessions,
+                    max_receipts: policy.max_receipts,
+                    max_idempotency_records: policy.max_idempotency_records,
+                    retention_after_expiry_ms: millis(policy.retention_after_expiry),
+                    webauthn_rp_id: policy.webauthn_rp_id.clone(),
+                    webauthn_allowed_origins: policy.webauthn_allowed_origins.clone(),
+                    webauthn_handle: policy.webauthn_handle.clone(),
+                    expected_webauthn_qualification:
+                        sorafs_node::evidence_viewer::
+                            EvidenceViewerRuntimeProviderQualificationV1::new(
+                                policy.webauthn_revision,
+                                policy.webauthn_policy_digest,
                             ),
-                            webauthn,
-                            grants,
-                            receipt_signer,
-                            erasure,
-                        };
-                    match sorafs_node::evidence_viewer::EvidenceViewerServiceV1::open(
-                        service_config,
-                        service_deps,
-                        sorafs_node.clone(),
-                    ) {
-                        Ok(service) => (Some(Arc::new(service)), None),
-                        Err(_) => (None, Some(SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED)),
-                    }
+                    grant_handle: policy.grant_handle.clone(),
+                    expected_grant_qualification:
+                        sorafs_node::evidence_viewer::
+                            EvidenceViewerRuntimeProviderQualificationV1::new(
+                                policy.grant_revision,
+                                policy.grant_policy_digest,
+                            ),
+                    erasure_handle: policy.erasure_handle.clone(),
+                    expected_erasure_qualification:
+                        sorafs_node::evidence_viewer::
+                            EvidenceViewerRuntimeProviderQualificationV1::new(
+                                policy.erasure_revision,
+                                policy.erasure_policy_digest,
+                            ),
+                    receipt_signer_handle: policy.receipt_signer_handle.clone(),
+                    expected_receipt_signer_qualification:
+                        sorafs_node::evidence_viewer::
+                            EvidenceViewerRuntimeProviderQualificationV1::new(
+                                policy.receipt_signer_revision,
+                                policy.receipt_signer_policy_digest,
+                            ),
+                    receipt_signer_public_key: policy.receipt_signer_public_key,
+                };
+                let service_deps = sorafs_node::evidence_viewer::EvidenceViewerRuntimeDepsV1 {
+                    authorization_reader: Arc::new(
+                        sorafs::evidence_viewer_runtime::ToriiEvidenceViewerFinalizedAuthorizationReaderV1::new(
+                            Arc::clone(&state),
+                        ),
+                    ),
+                    webauthn,
+                    grants,
+                    receipt_signer,
+                    erasure,
+                };
+                match sorafs_node::evidence_viewer::EvidenceViewerServiceV1::open(
+                    service_config,
+                    service_deps,
+                    sorafs_node.clone(),
+                ) {
+                    Ok(service) => (Some(Arc::new(service)), None),
+                    Err(_) => (None, Some(SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED)),
                 }
             }
             _ => (None, sorafs_evidence_viewer_dependency_error),
@@ -56655,11 +57038,14 @@ impl Torii {
                     panic!(
                         "SoraFS appeal-finance submitters require a runtime checkpoint HSM/KMS provider"
                     )
-                });
+            });
+            let finalized_startup_height = u64::try_from(state.committed_height())
+                .expect("committed block height must fit the finalized u64 height domain");
             SoraFsAppealSettlementSubmitter::from_config(
                 &config.sorafs_appeal_finance_settlement,
                 &config.sorafs_storage.data_dir,
                 shared_sorafs_appeal_finance_runtime_signers,
+                finalized_startup_height,
                 checkpoint_runtime,
             )
         });
@@ -58325,12 +58711,15 @@ fn build_sorafs_gateway_security(
                 .unwrap_or_else(|err| {
                     panic!("invalid torii.sorafs.gateway.compliance checkpoint storage: {err}")
                 });
-            let controller = GatewayComplianceController::new(
+            let controller = GatewayComplianceController::new_with_feed_transport(
                 gateway_compliance_controller_config(config),
                 Arc::new(store),
+                transport.as_ref(),
             )
             .unwrap_or_else(|err| {
-                panic!("invalid torii.sorafs.gateway.compliance policy/checkpoint: {err}")
+                panic!(
+                    "invalid torii.sorafs.gateway.compliance runtime provider/policy/checkpoint: {err}"
+                )
             });
             (Some(Arc::new(controller)), Some(transport))
         }
@@ -58398,6 +58787,28 @@ mod gateway_runtime_config_tests {
     struct TestComplianceFeedTransport;
 
     impl sorafs::gateway::GatewayComplianceFeedTransport for TestComplianceFeedTransport {
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs::gateway::GatewayComplianceFeedTransportIdentityV1,
+            sorafs::gateway::GatewayComplianceFeedTransportProbeError,
+        > {
+            let pins_by_hostname = BTreeMap::from([(
+                "feed.example.test".to_owned(),
+                BTreeSet::from([[0x71; 32], [0x72; 32]]),
+            )]);
+            Ok(sorafs::gateway::GatewayComplianceFeedTransportIdentityV1 {
+                provider_handle: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1
+                    .to_owned(),
+                revision: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+                policy_digest: sorafs::gateway::gateway_compliance_feed_transport_policy_digest(
+                    &pins_by_hostname,
+                )
+                .expect("test feed policy digest"),
+                test_marked: false,
+            })
+        }
+
         fn resolve(
             &self,
             _hostname: &str,

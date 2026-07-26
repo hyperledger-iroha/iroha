@@ -242,13 +242,35 @@ class ContractCall:
         object.__setattr__(self, "arguments", arguments)
 
 
-TransactionExecutableEntry: TypeAlias = Union["Instruction", ContractCall]
-
 if TYPE_CHECKING:
-    Instruction: TypeAlias = Any
+    TransactionExecutableEntry: TypeAlias = Any
+
+    class _InstructionTypingMeta(type):
+        """Expose dynamically forwarded native builders to static analyzers."""
+
+        def __getattr__(cls, name: str) -> Any: ...
+
+    class Instruction(Any, metaclass=_InstructionTypingMeta):
+        """Typed surface of the dynamically forwarded native instruction value."""
+
+        @classmethod
+        def from_json(cls, payload: str) -> Instruction: ...
+
+        @staticmethod
+        def cancel_asset_lock(
+            escrow_id: str,
+            expected_remaining_amount: str,
+        ) -> Instruction:
+            """Build the exact two-argument V1 cancellation instruction."""
+
+            ...
+
+        def to_json(self) -> str: ...
+
     SignedTransactionEnvelope: TypeAlias = Any
     TransactionBuilder: TypeAlias = Any
 else:
+    TransactionExecutableEntry: TypeAlias = Union["Instruction", ContractCall]
     _NativeInstruction = _crypto.Instruction
 
     def _normalize_zk_ace_allowed_accounts(allowed_accounts: Any) -> list[str]:

@@ -237,12 +237,13 @@ use sorafs_manifest::{
         SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1, SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
         SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     },
-    sign_orderbook_payload_bytes_ed25519_v1, validate_fixture_bundle_payloads,
-    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
-    validate_governance_log_node_bytes, validate_orderbook_payload_bytes,
-    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
-    validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
-    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
+    sign_orderbook_payload_bytes_ed25519_v1, validate_appeal_finance_cancel_asset_lock_bytes,
+    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
+    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
+    validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
+    validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, GatewayOrchestratorError, OrchestratorConfig, OrchestratorError,
@@ -6617,6 +6618,19 @@ fn parse_sorafs_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 
     parse_zk_ace_fixed32(value, context)
 }
 
+/// Validate a canonical appeal-finance `CancelAssetLock` V1 payload.
+#[napi]
+pub fn sorafs_validate_appeal_finance_cancel_asset_lock_json(
+    bytes: Uint8Array,
+    label: String,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    let outcome =
+        validate_appeal_finance_cancel_asset_lock_bytes(bytes.as_ref(), label, generated_at);
+    json::to_string(&outcome).map_err(norito_to_napi)
+}
+
 /// Validate a Norito-encoded orderbook payload and return canonical outcome JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -7272,6 +7286,40 @@ mod sorafs_orderbook_validation_tests {
         assert_eq!(outcome.status.as_str(), "Ok");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert_eq!(outcome.generated_at, 1_700_001_234);
+    }
+
+    #[test]
+    fn appeal_finance_cancel_asset_lock_native_outcomes_are_stable() {
+        let canonical = include_bytes!(
+            "../../../fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to"
+        );
+        let zero = include_bytes!(
+            "../../../fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to"
+        );
+
+        let accepted = sorafs_validate_appeal_finance_cancel_asset_lock_json(
+            Uint8Array::from(canonical.to_vec()),
+            "cancel_asset_lock_v1.to".to_owned(),
+            41,
+        )
+        .expect("validate canonical CancelAssetLock");
+        let accepted: json::Value = json::from_json(&accepted).expect("accepted outcome JSON");
+        assert_eq!(
+            accepted.get("code").and_then(json::Value::as_str),
+            Some("SFS-OK-000")
+        );
+
+        let rejected = sorafs_validate_appeal_finance_cancel_asset_lock_json(
+            Uint8Array::from(zero.to_vec()),
+            "cancel_asset_lock_zero_expected_v1.to".to_owned(),
+            42,
+        )
+        .expect("validate zero-quantity CancelAssetLock");
+        let rejected: json::Value = json::from_json(&rejected).expect("rejected outcome JSON");
+        assert_eq!(
+            rejected.get("code").and_then(json::Value::as_str),
+            Some("SFS-VAL-001")
+        );
     }
 
     #[test]

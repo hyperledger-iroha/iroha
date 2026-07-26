@@ -1198,15 +1198,16 @@ fn no_store_response(mut response: Response) -> Response {
 fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response {
     use GatewayComplianceError::{
         CatalogEquivocation, CatalogNotFresh, CheckpointConflict, Decompression, DnsRebinding,
-        DuplicateSigner, Encoding, FetchTimeout, GatewayEquivocation, GatewayQuorumNotMet,
-        HistoryFull, IdempotencyConflict, IdempotencyRegistryFull, InvalidAcknowledgement,
-        InvalidCatalog, InvalidCheckpoint, InvalidFeed, InvalidPolicy, InvalidPredecessor,
-        InvalidRollback, InvalidSignature, LeaseHeld, MissingRequiredFeed, MutationTimeInvalid,
-        NoLastKnownGood, NoServingCatalog, NoStagedCatalog, NonCanonical, NonPublicAddress,
-        Persistence, PolicyDigestMismatch, PromotionTargetMismatch, QuorumNotMet, ResourceLimit,
-        RevokedSigner, RollbackTargetMismatch, SequenceOverflow, StatePoisoned, TimeOverflow,
-        TooManyRedirects, TrustPinMismatch, UnknownFeed, UnsafeAddressSet, UnsafeUrl,
-        UntrustedSigner,
+        DuplicateSigner, Encoding, FeedTransportNotQualified, FeedTransportStale,
+        FeedTransportSubstituted, FeedTransportTestMarked, FeedTransportUnavailable, FetchTimeout,
+        GatewayEquivocation, GatewayQuorumNotMet, HistoryFull, IdempotencyConflict,
+        IdempotencyRegistryFull, InvalidAcknowledgement, InvalidCatalog, InvalidCheckpoint,
+        InvalidFeed, InvalidPolicy, InvalidPredecessor, InvalidRollback, InvalidSignature,
+        LeaseHeld, MissingRequiredFeed, MutationTimeInvalid, NoLastKnownGood, NoServingCatalog,
+        NoStagedCatalog, NonCanonical, NonPublicAddress, Persistence, PolicyDigestMismatch,
+        PromotionTargetMismatch, QuorumNotMet, ResourceLimit, RevokedSigner,
+        RollbackTargetMismatch, SequenceOverflow, StatePoisoned, TimeOverflow, TooManyRedirects,
+        TrustPinMismatch, UnknownFeed, UnsafeAddressSet, UnsafeUrl, UntrustedSigner,
     };
 
     let (status, code, message) = match &error {
@@ -1241,6 +1242,15 @@ fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response 
             StatusCode::SERVICE_UNAVAILABLE,
             "controller_clock_rejected",
             "the gateway compliance controller rejected a zero or regressed operation clock",
+        ),
+        FeedTransportNotQualified
+        | FeedTransportUnavailable
+        | FeedTransportSubstituted
+        | FeedTransportStale
+        | FeedTransportTestMarked => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "feed_transport_unavailable",
+            "the authenticated gateway compliance feed transport is unavailable",
         ),
         LeaseHeld => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1384,6 +1394,11 @@ mod tests {
         );
         assert_eq!(
             gateway_compliance_error_response(GatewayComplianceError::CheckpointConflict).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            gateway_compliance_error_response(GatewayComplianceError::FeedTransportSubstituted)
+                .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
         let signature_response =

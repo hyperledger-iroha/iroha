@@ -295,8 +295,12 @@ pub trait ProviderIngestCompletionSignerV1: Send + Sync + 'static {
     /// Revalidate the live owner/key/policy authority represented by this
     /// signer and return its exact current policy identity.
     ///
-    /// Implementations must fail closed when the authority is unavailable,
-    /// revoked, rotated, or no longer matches the signer instance.
+    /// This method runs on the async worker thread and therefore must be a
+    /// bounded, non-blocking read of a locally maintained eligibility snapshot;
+    /// it must never perform HSM/KMS, network, filesystem, or other blocking
+    /// I/O. Implementations must update that snapshot on revocation/rotation
+    /// and fail closed when it is stale or unavailable. The timed [`Self::sign`]
+    /// operation remains responsible for the HSM/KMS-side atomic check.
     fn current_eligibility(
         &self,
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerErrorV1>;
@@ -3361,16 +3365,18 @@ mod tests {
             .expect("retain signed bytes after unavailable preflight");
         assert_eq!(first.completions_signed, 1);
         assert_eq!(first.completion_submissions, 0);
-        assert!(matches!(
-            runtime.outbox.status(ingress.job_id).unwrap().state,
+        let next_attempt_at_ms = match runtime.outbox.status(ingress.job_id).unwrap().state {
             ProviderIngestDeliveryStateV1::LocalStored {
-                completion: ProviderIngestCompletionStateV1::Signed {
-                    ever_exposed: false,
-                    ..
-                },
+                completion:
+                    ProviderIngestCompletionStateV1::Signed {
+                        next_attempt_at_ms,
+                        ever_exposed: false,
+                        ..
+                    },
                 ..
-            }
-        ));
+            } => next_attempt_at_ms,
+            other => panic!("expected a signed retry, got {other:?}"),
+        };
 
         *ingress.prepare_error.lock().unwrap() = None;
         runtime
@@ -3381,7 +3387,10 @@ mod tests {
             .signer_resolver
             .eligibility_flip_to_revision
             .store(2, Ordering::SeqCst);
-        runtime.clock.base_ms.store(20_000, Ordering::SeqCst);
+        runtime
+            .clock
+            .base_ms
+            .store(next_attempt_at_ms, Ordering::SeqCst);
 
         let second = runtime
             .tick()

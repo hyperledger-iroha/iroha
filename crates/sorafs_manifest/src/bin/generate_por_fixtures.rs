@@ -1379,18 +1379,18 @@ fn write_reference_sdk_fixture_inventory(fixtures_root: &Path) -> Result<(), Box
             "invalid_missing_expected_remaining_amount",
         ),
         (
+            "appeal_finance/negative/cancel_asset_lock_nested_escrow_id_v1.to",
+            "appeal_finance",
+            "cancel_asset_lock",
+            "norito",
+            "invalid_nested_escrow_id",
+        ),
+        (
             "appeal_finance/negative/cancel_asset_lock_noncanonical_quantity_v1.json",
             "appeal_finance",
             "cancel_asset_lock",
             "json",
             "invalid_noncanonical_quantity",
-        ),
-        (
-            "appeal_finance/negative/cancel_asset_lock_trailing_bytes_v1.to",
-            "appeal_finance",
-            "cancel_asset_lock",
-            "norito",
-            "noncanonical_trailing_bytes",
         ),
         (
             "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.json",

@@ -171,6 +171,7 @@ public final class SorafsReferenceValidatorsTests {
     rejectsOrderbookSettlementReceiptFieldsBeforeNativeDispatch();
     rejectsNoncanonicalXorQuantitiesBeforeNativeDispatch();
     validatesOrderbookFixtureWhenNativeBridgeIsAvailable();
+    validatesAppealFinanceCancelAssetLockProfiles();
     validatesEveryPdpOutcomeFixtureWhenNativeBridgeIsAvailable();
     validatesLinkedFixtureBundleWhenNativeBridgeIsAvailable();
     validatesEveryReferenceSdkBundleOutcomeByteForByte();
@@ -230,12 +231,15 @@ public final class SorafsReferenceValidatorsTests {
     assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 21;
     assert !SorafsReferenceValidators.isBridgeAbiSupported(20);
     assert SorafsReferenceValidators.isBridgeAbiSupported(21);
+    assert !SorafsReferenceValidators.isBridgeAbiSupported(22);
     assert !SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, false);
     assert SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, true);
     assert !SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, false);
     assert SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, true);
     assert !SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, false);
     assert SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, true);
+    assert !SorafsReferenceValidators.isAppealFinanceBridgeSupported(21, false);
+    assert SorafsReferenceValidators.isAppealFinanceBridgeSupported(21, true);
     assert SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 == 256;
     assert SorafsReferenceValidators.GOVERNANCE_DAG_MAX_BLOCKS_V1 == 64;
     assert SorafsReferenceValidators.GOVERNANCE_DAG_CID_BYTES_V1 == 32;
@@ -554,7 +558,7 @@ public final class SorafsReferenceValidatorsTests {
   }
 
   private static void validatesOrderbookFixtureWhenNativeBridgeIsAvailable() throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
+    if (!requireNativeBridge()) {
       return;
     }
     final byte[] payload =
@@ -594,7 +598,7 @@ public final class SorafsReferenceValidatorsTests {
 
   private static void validatesEveryPdpOutcomeFixtureWhenNativeBridgeIsAvailable()
       throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
+    if (!requireNativeBridge()) {
       return;
     }
     final byte[] commitment =
@@ -666,9 +670,46 @@ public final class SorafsReferenceValidatorsTests {
     }
   }
 
+  private static void validatesAppealFinanceCancelAssetLockProfiles() throws IOException {
+    if (!requireNativeBridge()) {
+      throw new AssertionError("ABI-21 appeal-finance reference bridge is required");
+    }
+    final String[][] profiles = {
+      {"cancel_asset_lock_v1.to", "Ok", "SFS-OK-000", "validation"},
+      {
+        "negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+        "Error",
+        "SFS-NORITO-001",
+        "norito"
+      },
+      {
+        "negative/cancel_asset_lock_zero_expected_v1.to",
+        "Error",
+        "SFS-VAL-001",
+        "validation"
+      },
+    };
+    for (final String[] profile : profiles) {
+      final String path = profile[0];
+      final String label = path.substring(path.lastIndexOf('/') + 1);
+      final String outcome =
+          SorafsReferenceValidators.validateAppealFinanceCancelAssetLockJson(
+              sorafsFixture(path),
+              label,
+              123L);
+      assert outcome.contains("\"status\": \"" + profile[1] + "\"") : path + ": " + outcome;
+      assert outcome.contains("\"code\": \"" + profile[2] + "\"") : path + ": " + outcome;
+      assert outcome.contains("\"category\": \"" + profile[3] + "\"") : path + ": " + outcome;
+      assert outcome.contains("\"version\": 1") : path + ": " + outcome;
+      assert outcome.contains("\"generated_at\": 123") : path + ": " + outcome;
+      assert outcome.contains("\"sorafs.reference.appeal_finance\"")
+          : path + ": " + outcome;
+    }
+  }
+
   private static void validatesLinkedFixtureBundleWhenNativeBridgeIsAvailable()
       throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
+    if (!requireNativeBridge()) {
       return;
     }
     final String outcome =
@@ -691,7 +732,7 @@ public final class SorafsReferenceValidatorsTests {
 
   private static void validatesEveryReferenceSdkBundleOutcomeByteForByte()
       throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
+    if (!requireNativeBridge()) {
       return;
     }
     assert REFERENCE_BUNDLE_PROFILES.length == 9;
@@ -728,7 +769,7 @@ public final class SorafsReferenceValidatorsTests {
 
   private static void validatesModerationGovernanceLogNodeOutcomeByteForByte()
       throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
+    if (!requireNativeBridge()) {
       return;
     }
     final String actual =
@@ -750,8 +791,7 @@ public final class SorafsReferenceValidatorsTests {
 
   private static void validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable()
       throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
-      requireGovernanceDagNativeBridge();
+    if (!requireNativeBridge()) {
       return;
     }
     final byte[] first =
@@ -892,15 +932,19 @@ public final class SorafsReferenceValidatorsTests {
         .equals(predecessorOutcome) : predecessorOutcome;
   }
 
-  private static void requireGovernanceDagNativeBridge() {
+  private static boolean requireNativeBridge() {
+    if (SorafsReferenceValidators.isNativeAvailable()) {
+      return true;
+    }
     if ("1".equals(System.getenv("IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"))) {
       throw new AssertionError(
-          "ABI-21 connect_norito_bridge with Governance DAG symbols is required.");
+          "ABI-21 connect_norito_bridge with all SoraFS reference symbols is required.");
     }
+    return false;
   }
 
   private static void signsOrderbookFixtureWhenNativeBridgeIsAvailable() throws IOException {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
+    if (!requireNativeBridge()) {
       return;
     }
     final byte[] payload =
@@ -913,7 +957,7 @@ public final class SorafsReferenceValidatorsTests {
   }
 
   private static void derivesCanonicalOrderIdWhenNativeBridgeIsAvailable() {
-    if (!SorafsReferenceValidators.isNativeAvailable()) {
+    if (!requireNativeBridge()) {
       return;
     }
     final byte[] owner = "buyer@sora".getBytes(StandardCharsets.UTF_8);

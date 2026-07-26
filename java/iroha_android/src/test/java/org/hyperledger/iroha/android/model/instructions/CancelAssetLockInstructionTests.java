@@ -29,11 +29,26 @@ public final class CancelAssetLockInstructionTests {
       "sorafs-appeal-cancel-asset-lock-v1";
   private static final String FIXTURE_ESCROW_ID =
       "hash:73CCD4E0DD69AD434DB75056B600AA4F74C8FC5556B11BDC799DFDB7EA29851F#434B";
+  private static final String[] REQUIRED_FIXTURE_NAMES = {
+    "cancel_asset_lock_v1.json",
+    "cancel_asset_lock_v1.to",
+    "negative/cancel_asset_lock_legacy_missing_expected_v1.json",
+    "negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+    "negative/cancel_asset_lock_nested_escrow_id_v1.to",
+    "negative/cancel_asset_lock_noncanonical_quantity_v1.json",
+    "negative/cancel_asset_lock_zero_expected_v1.json",
+    "negative/cancel_asset_lock_zero_expected_v1.to"
+  };
   private static final byte[] CANONICAL_PAYLOAD =
       hexToBytes(
           "4e5254300000b5c8a665a7de80e2eef75ccb287078fa002d00000000000000"
               + "d5f0a9bf0af707a1022073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11bdc"
               + "799dfdb7ea29851f0b0501000000140400000000");
+  private static final byte[] RETIRED_NESTED_ESCROW_ID_PAYLOAD =
+      hexToBytes(
+          "4e5254300000b5c8a665a7de80e2eef75ccb287078fa002e00000000000000"
+              + "0e55fb7ed463b87302212073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11b"
+              + "dc799dfdb7ea29851f0b0501000000140400000000");
 
   @Test
   public void builderDerivesNativeEscrowIdAndEmitsOnlyV1Fields() {
@@ -166,6 +181,7 @@ public final class CancelAssetLockInstructionTests {
 
   @Test
   public void wireDecoderIsStrictAndRoundtripsCanonicalFrame() {
+    assertEquals(85, CANONICAL_PAYLOAD.length);
     final CancelAssetLockInstruction decoded =
         CancelAssetLockInstruction.fromWirePayload(CANONICAL_PAYLOAD);
     assertEquals(FIXTURE_ESCROW_ID, decoded.escrowId());
@@ -182,35 +198,47 @@ public final class CancelAssetLockInstructionTests {
     expectIllegalArgument(
         () -> CancelAssetLockInstruction.fromWirePayload(legacyOneFieldFrame()),
         "accepted the retired one-field frame");
+    assertEquals(86, RETIRED_NESTED_ESCROW_ID_PAYLOAD.length);
+    assertArrayEquals(
+        new byte[] {0x21, 0x20},
+        Arrays.copyOfRange(RETIRED_NESTED_ESCROW_ID_PAYLOAD, 40, 42));
+    expectIllegalArgument(
+        () ->
+            CancelAssetLockInstruction.fromWirePayload(
+                RETIRED_NESTED_ESCROW_ID_PAYLOAD),
+        "accepted the retired nested EscrowId frame");
   }
 
   @Test
-  public void checkedInAppealFinanceFixturesMatchWhenPresent() throws Exception {
-    final Path root = findFixtureRoot();
-    if (root == null) {
-      return;
+  public void checkedInAppealFinanceFixturesAreMandatoryAndByteExact()
+      throws Exception {
+    final Path root = requireFixtureRoot();
+    final Map<String, byte[]> fixtures = new LinkedHashMap<>();
+    for (final String relative : REQUIRED_FIXTURE_NAMES) {
+      final byte[] bytes = readMandatoryFixture(root, relative);
+      assertTrue("Mandatory fixture `" + relative + "` is empty", bytes.length > 0);
+      fixtures.put(relative, bytes);
     }
+    assertEquals(8, fixtures.size());
     assertArrayEquals(
-        Files.readAllBytes(root.resolve("cancel_asset_lock_v1.to")),
+        fixtures.get("cancel_asset_lock_v1.to"),
         CancelAssetLockWirePayloadEncoder.encodePayload(
             CancelAssetLockInstruction.builder()
                 .setLockId(FIXTURE_LOCK_ID)
                 .setExpectedRemainingAmount("20")
                 .build()));
+    assertArrayEquals(
+        RETIRED_NESTED_ESCROW_ID_PAYLOAD,
+        fixtures.get("negative/cancel_asset_lock_nested_escrow_id_v1.to"));
     for (final String relative :
         new String[] {
           "negative/cancel_asset_lock_legacy_missing_expected_v1.to",
-          "negative/cancel_asset_lock_trailing_bytes_v1.to",
+          "negative/cancel_asset_lock_nested_escrow_id_v1.to",
           "negative/cancel_asset_lock_zero_expected_v1.to"
         }) {
       expectIllegalArgument(
           () -> {
-            try {
-              CancelAssetLockInstruction.fromWirePayload(
-                  Files.readAllBytes(root.resolve(relative)));
-            } catch (final java.io.IOException error) {
-              throw new IllegalStateException(error);
-            }
+            CancelAssetLockInstruction.fromWirePayload(fixtures.get(relative));
           },
           "accepted " + relative);
     }
@@ -236,17 +264,32 @@ public final class CancelAssetLockInstructionTests {
         });
   }
 
-  private static Path findFixtureRoot() {
-    for (final Path candidate :
-        new Path[] {
-          Paths.get("../../fixtures/sorafs_manifest/appeal_finance"),
-          Paths.get("fixtures/sorafs_manifest/appeal_finance")
-        }) {
-      if (Files.isRegularFile(candidate.resolve("cancel_asset_lock_v1.to"))) {
+  private static Path requireFixtureRoot() {
+    final Path[] candidates = {
+      Paths.get("../../../fixtures/sorafs_manifest/appeal_finance"),
+      Paths.get("../../fixtures/sorafs_manifest/appeal_finance"),
+      Paths.get("fixtures/sorafs_manifest/appeal_finance")
+    };
+    for (final Path candidate : candidates) {
+      if (Files.isDirectory(candidate)) {
         return candidate;
       }
     }
-    return null;
+    throw new AssertionError(
+        "Missing mandatory CancelAssetLock fixture directory; searched: "
+            + Arrays.toString(candidates));
+  }
+
+  private static byte[] readMandatoryFixture(
+      final Path root, final String relative) throws java.io.IOException {
+    final Path path = root.resolve(relative);
+    assertTrue(
+        "Missing mandatory CancelAssetLock fixture `"
+            + relative
+            + "` at "
+            + path,
+        Files.isRegularFile(path));
+    return Files.readAllBytes(path);
   }
 
   private static byte[] hexToBytes(final String value) {

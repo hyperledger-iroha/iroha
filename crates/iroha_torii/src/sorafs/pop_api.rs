@@ -49,6 +49,7 @@ pub const POP_PROOF_REQUEST_MAX_BYTES_V1: usize =
 pub const POP_WALLET_DELIVERY_RESPONSE_MAX_BYTES_V1: usize =
     canonical_base64_max_len(POP_WALLET_DELIVERY_MAX_BYTES_V1) + 8 * 1024;
 const POP_CANONICAL_DECODE_MAX_DEPTH_V1: usize = 64;
+const POP_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 const POP_ISSUE_TRIGGER_BINDING_DOMAIN_V1: &[u8] = b"sorafs.pop.issue-trigger.v1";
 const POP_WALLET_WITNESS_SYNC_BINDING_DOMAIN_V1: &[u8] = b"sorafs.pop.wallet-witness-sync-api.v1";
 
@@ -112,6 +113,14 @@ pub struct PopCredentialRuntimeConfigV1 {
     pub worker_interval: Duration,
     /// Maximum absolute skew between finalized and runtime clock time.
     pub max_finalized_time_skew: Duration,
+    /// Exact non-secret wallet wrapping-key handle.
+    pub wallet_wrapping_key_id: String,
+    /// Exact non-secret deployment runtime-provider registry handle.
+    pub runtime_provider_registry_handle: String,
+    /// Exact non-zero deployment registry policy revision.
+    pub runtime_provider_registry_revision: u64,
+    /// Exact deployment registry policy digest.
+    pub runtime_provider_registry_policy_digest: [u8; 32],
 }
 
 impl PopCredentialRuntimeConfigV1 {
@@ -125,11 +134,21 @@ impl PopCredentialRuntimeConfigV1 {
             || self.worker_interval > Duration::from_secs(60 * 60)
             || self.max_finalized_time_skew > Duration::from_secs(5 * 60)
             || self.max_finalized_time_skew.subsec_nanos() != 0
+            || self.runtime_provider_registry_revision == 0
+            || self.runtime_provider_registry_policy_digest == [0; 32]
         {
             return Err(PopCredentialServiceError::InvalidInput {
                 field: "pop_runtime_config",
             });
         }
+        validate_pop_runtime_provider_handle(
+            &self.runtime_provider_registry_handle,
+            "runtime_provider_registry_handle",
+        )?;
+        validate_pop_runtime_provider_handle(
+            &self.wallet_wrapping_key_id,
+            "wallet_wrapping_key_id",
+        )?;
         Ok(())
     }
 }
@@ -166,7 +185,249 @@ impl From<&iroha_config::parameters::actual::SorafsPopCredentialService>
             wallet_state_dir: value.wallet_state_dir.clone(),
             worker_interval: value.worker_interval,
             max_finalized_time_skew: value.max_finalized_time_skew,
+            wallet_wrapping_key_id: value.wallet_wrapping_key_id.clone(),
+            runtime_provider_registry_handle: value.runtime_provider_registry_handle.clone(),
+            runtime_provider_registry_revision: value.runtime_provider_registry_revision,
+            runtime_provider_registry_policy_digest: value.runtime_provider_registry_policy_digest,
         }
+    }
+}
+
+fn validate_pop_runtime_provider_handle(
+    value: &str,
+    field: &'static str,
+) -> Result<(), PopCredentialServiceError> {
+    if value.is_empty()
+        || value.len() > POP_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1
+        || !value.is_ascii()
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(PopCredentialServiceError::InvalidInput { field });
+    }
+    let lowercase = value.to_ascii_lowercase();
+    if lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
+            )
+        })
+    {
+        return Err(PopCredentialServiceError::InvalidInput { field });
+    }
+    Ok(())
+}
+
+/// Exact public bindings supplied to a deployment-owned PoP provider registry.
+///
+/// The request contains stable handles and finalized public policy identity
+/// only. Durable paths, credentials, recipient secrets, witnesses,
+/// attestations, wallet material, and PII are deliberately excluded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PopCredentialRuntimeProviderBindingsV1 {
+    issuer_policy_digest: [u8; 32],
+    issuer_id: String,
+    issuer_hsm_key_id: String,
+    issuer_public_key: [u8; 32],
+    enrollment_recipient_key_id: String,
+    wallet_wrapping_key_id: String,
+}
+
+impl PopCredentialRuntimeProviderBindingsV1 {
+    fn from_config(config: &PopCredentialRuntimeConfigV1) -> Self {
+        Self {
+            issuer_policy_digest: config.service_policy.issuer_policy_digest,
+            issuer_id: config.service_policy.issuer_id.clone(),
+            issuer_hsm_key_id: config.service_policy.issuer_hsm_key_id.clone(),
+            issuer_public_key: config.service_policy.issuer_public_key,
+            enrollment_recipient_key_id: config.service_policy.enrollment_recipient_key_id.clone(),
+            wallet_wrapping_key_id: config.wallet_wrapping_key_id.clone(),
+        }
+    }
+
+    /// Exact active finalized issuer-policy digest.
+    #[must_use]
+    pub const fn issuer_policy_digest(&self) -> [u8; 32] {
+        self.issuer_policy_digest
+    }
+
+    /// Exact governed public issuer identity.
+    #[must_use]
+    pub fn issuer_id(&self) -> &str {
+        &self.issuer_id
+    }
+
+    /// Exact non-secret HSM key handle.
+    #[must_use]
+    pub fn issuer_hsm_key_id(&self) -> &str {
+        &self.issuer_hsm_key_id
+    }
+
+    /// Exact governed issuer public key.
+    #[must_use]
+    pub const fn issuer_public_key(&self) -> [u8; 32] {
+        self.issuer_public_key
+    }
+
+    /// Exact non-secret encrypted-enrollment recipient handle.
+    #[must_use]
+    pub fn enrollment_recipient_key_id(&self) -> &str {
+        &self.enrollment_recipient_key_id
+    }
+
+    /// Exact non-secret wallet wrapping-key handle.
+    #[must_use]
+    pub fn wallet_wrapping_key_id(&self) -> &str {
+        &self.wallet_wrapping_key_id
+    }
+}
+
+/// Public identity of one deployment-owned PoP provider-registry policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PopCredentialRuntimeProviderQualificationV1 {
+    /// Non-zero external provider policy revision.
+    pub revision: u64,
+    /// Non-zero digest of the exact external provider policy.
+    pub policy_digest: [u8; 32],
+}
+
+impl PopCredentialRuntimeProviderQualificationV1 {
+    /// Construct one public provider qualification.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            revision,
+            policy_digest,
+        }
+    }
+
+    const fn is_valid(self) -> bool {
+        self.revision != 0 && self.policy_digest != [0; 32]
+    }
+}
+
+/// Stable redacted failure returned by a deployment provider registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PopCredentialRuntimeProviderRegistryErrorV1 {
+    /// The provider control plane is unavailable.
+    Unavailable,
+    /// The provider policy is stale or revoked.
+    StaleOrRevoked,
+    /// The registry rejected the exact configured public bindings.
+    RejectedBindings,
+}
+
+/// Deployment-owned factory for all PoP private runtime dependencies.
+///
+/// Implementations must change `qualification` whenever any HSM, KMS,
+/// authentication, enrollment-recipient, wallet, witness, finalized-query, or
+/// transaction adapter identity/policy changes. `resolve` receives only public
+/// bindings and must never persist or log private material.
+pub trait PopCredentialRuntimeProviderRegistryV1: Send + Sync + fmt::Debug {
+    /// Exact stable non-secret registry handle.
+    fn handle(&self) -> &str;
+
+    /// Current independently administered public policy qualification.
+    fn qualification(
+        &self,
+    ) -> Result<
+        PopCredentialRuntimeProviderQualificationV1,
+        PopCredentialRuntimeProviderRegistryErrorV1,
+    >;
+
+    /// Resolve one coherent runtime provider set for the exact public bindings.
+    fn resolve(
+        &self,
+        bindings: &PopCredentialRuntimeProviderBindingsV1,
+    ) -> Result<PopCredentialRuntimeSecretsV1, PopCredentialRuntimeProviderRegistryErrorV1>;
+}
+
+#[derive(Clone)]
+struct QualifiedPopCredentialRuntimeProviderRegistryV1 {
+    handle: String,
+    qualification: PopCredentialRuntimeProviderQualificationV1,
+    registry: Arc<dyn PopCredentialRuntimeProviderRegistryV1>,
+}
+
+impl fmt::Debug for QualifiedPopCredentialRuntimeProviderRegistryV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedPopCredentialRuntimeProviderRegistryV1")
+            .field("handle", &self.handle)
+            .field("qualification", &self.qualification)
+            .finish_non_exhaustive()
+    }
+}
+
+impl QualifiedPopCredentialRuntimeProviderRegistryV1 {
+    fn try_new(
+        config: &PopCredentialRuntimeConfigV1,
+        registry: Option<Arc<dyn PopCredentialRuntimeProviderRegistryV1>>,
+    ) -> Result<Self, PopCredentialServiceError> {
+        let registry = registry.ok_or(PopCredentialServiceError::RuntimeProviderRegistryMissing)?;
+        validate_pop_runtime_provider_handle(registry.handle(), "runtime_provider_registry_handle")
+            .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryMismatch)?;
+        if registry.handle() != config.runtime_provider_registry_handle {
+            return Err(PopCredentialServiceError::RuntimeProviderRegistryMismatch);
+        }
+        let qualification = registry
+            .qualification()
+            .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryUnavailable)?;
+        let expected = PopCredentialRuntimeProviderQualificationV1::new(
+            config.runtime_provider_registry_revision,
+            config.runtime_provider_registry_policy_digest,
+        );
+        if !qualification.is_valid() || qualification != expected {
+            return Err(PopCredentialServiceError::RuntimeProviderRegistryMismatch);
+        }
+        let rechecked_qualification = registry
+            .qualification()
+            .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryUnavailable)?;
+        if registry.handle() != config.runtime_provider_registry_handle
+            || rechecked_qualification != qualification
+        {
+            return Err(PopCredentialServiceError::RuntimeProviderRegistryDrift);
+        }
+        Ok(Self {
+            handle: config.runtime_provider_registry_handle.clone(),
+            qualification,
+            registry,
+        })
+    }
+
+    fn assert_qualification(&self) -> Result<(), PopCredentialServiceError> {
+        let qualification = self
+            .registry
+            .qualification()
+            .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryUnavailable)?;
+        if self.registry.handle() != self.handle || qualification != self.qualification {
+            return Err(PopCredentialServiceError::RuntimeProviderRegistryDrift);
+        }
+        Ok(())
+    }
+
+    fn resolve(
+        &self,
+        bindings: &PopCredentialRuntimeProviderBindingsV1,
+    ) -> Result<PopCredentialRuntimeSecretsV1, PopCredentialServiceError> {
+        self.assert_qualification()?;
+        let result = self
+            .registry
+            .resolve(bindings)
+            .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryUnavailable);
+        self.assert_qualification()?;
+        result
+    }
+
+    fn finish<T>(
+        &self,
+        result: Result<T, PopCredentialServiceError>,
+    ) -> Result<T, PopCredentialServiceError> {
+        self.assert_qualification()?;
+        result
     }
 }
 
@@ -256,9 +517,295 @@ impl fmt::Debug for PopCredentialRuntimeSecretsV1 {
     }
 }
 
+const POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1: &str = "PoP runtime provider unavailable";
+
+#[derive(Clone)]
+struct QualifiedPopIssuerHsmV1 {
+    inner: Arc<dyn PopIssuerHsm>,
+    key_id: String,
+    public_key: [u8; 32],
+    registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
+}
+
+impl fmt::Debug for QualifiedPopIssuerHsmV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedPopIssuerHsmV1")
+            .field("key_id", &self.key_id)
+            .field("private_provider", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl QualifiedPopIssuerHsmV1 {
+    fn identity_matches(&self) -> bool {
+        self.inner.key_id() == self.key_id && self.inner.public_key() == self.public_key
+    }
+}
+
+impl PopIssuerHsm for QualifiedPopIssuerHsmV1 {
+    fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
+
+    fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], String> {
+        self.registry
+            .assert_qualification()
+            .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
+        if !self.identity_matches() {
+            return Err(POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned());
+        }
+        let result = self.inner.sign_digest(digest);
+        if !self.identity_matches() {
+            return Err(POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned());
+        }
+        self.registry
+            .assert_qualification()
+            .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
+        result.map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())
+    }
+}
+
+#[derive(Clone)]
+struct QualifiedPopWalletKeyWrapperV1 {
+    inner: Arc<dyn PopWalletKeyWrapper>,
+    active_key_id: String,
+    registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
+}
+
+impl fmt::Debug for QualifiedPopWalletKeyWrapperV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedPopWalletKeyWrapperV1")
+            .field("active_key_id", &self.active_key_id)
+            .field("private_provider", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl QualifiedPopWalletKeyWrapperV1 {
+    fn identity_matches(&self) -> bool {
+        self.inner.active_key_id() == self.active_key_id
+    }
+
+    fn guard<T>(&self, operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        self.registry
+            .assert_qualification()
+            .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
+        if !self.identity_matches() {
+            return Err(POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned());
+        }
+        let result = operation();
+        if !self.identity_matches() {
+            return Err(POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned());
+        }
+        self.registry
+            .assert_qualification()
+            .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
+        result.map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())
+    }
+}
+
+impl PopWalletKeyWrapper for QualifiedPopWalletKeyWrapperV1 {
+    fn active_key_id(&self) -> &str {
+        &self.active_key_id
+    }
+
+    fn wrap_dek(&self, context: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+        self.guard(|| self.inner.wrap_dek(context, dek))
+    }
+
+    fn unwrap_dek(
+        &self,
+        key_id: &str,
+        context: [u8; 32],
+        wrapped_dek: &[u8],
+    ) -> Result<[u8; 32], String> {
+        self.guard(|| self.inner.unwrap_dek(key_id, context, wrapped_dek))
+    }
+}
+
+#[derive(Clone)]
+struct QualifiedPopCredentialApiAuthenticatorV1 {
+    inner: Arc<dyn PopCredentialApiAuthenticator>,
+    registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
+}
+
+impl fmt::Debug for QualifiedPopCredentialApiAuthenticatorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("QualifiedPopCredentialApiAuthenticatorV1([REDACTED])")
+    }
+}
+
+impl PopCredentialApiAuthenticator for QualifiedPopCredentialApiAuthenticatorV1 {
+    fn authenticate(
+        &self,
+        opaque_credential: &[u8],
+        action: PopCredentialApiActionV1,
+        request_binding: [u8; 32],
+        now_epoch: u64,
+    ) -> Result<sorafs_node::pop_credentials::PopAuthenticatedPrincipalV1, String> {
+        self.registry
+            .assert_qualification()
+            .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
+        let result = self
+            .inner
+            .authenticate(opaque_credential, action, request_binding, now_epoch);
+        self.registry
+            .assert_qualification()
+            .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
+        result.map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())
+    }
+}
+
+#[derive(Clone)]
+struct QualifiedPopRegistrySubmitterV1 {
+    inner: Arc<dyn PopRegistrySubmitter>,
+    registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
+}
+
+impl fmt::Debug for QualifiedPopRegistrySubmitterV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("QualifiedPopRegistrySubmitterV1([REDACTED])")
+    }
+}
+
+impl PopRegistrySubmitter for QualifiedPopRegistrySubmitterV1 {
+    fn submit(
+        &self,
+        idempotency_key: [u8; 32],
+        operation: &sorafs_node::pop_credentials::PopRegistryOperationV1,
+    ) -> Result<(), String> {
+        self.registry
+            .assert_qualification()
+            .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
+        let result = self.inner.submit(idempotency_key, operation);
+        self.registry
+            .assert_qualification()
+            .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
+        result.map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())
+    }
+}
+
+#[derive(Clone)]
+struct QualifiedPopFinalizedRegistryReaderV1 {
+    inner: Arc<dyn PopFinalizedRegistryReader>,
+    registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
+}
+
+impl fmt::Debug for QualifiedPopFinalizedRegistryReaderV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("QualifiedPopFinalizedRegistryReaderV1([REDACTED])")
+    }
+}
+
+impl PopFinalizedRegistryReader for QualifiedPopFinalizedRegistryReaderV1 {
+    fn next_after(
+        &self,
+        cursor: Option<sorafs_node::pop_credentials::PopFinalizedCursorV1>,
+    ) -> Result<Option<PopFinalizedRegistryProjectionV1>, String> {
+        self.registry
+            .assert_qualification()
+            .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
+        let result = self.inner.next_after(cursor);
+        self.registry
+            .assert_qualification()
+            .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
+        result.map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())
+    }
+}
+
+#[derive(Clone)]
+struct QualifiedPopIssuanceDraftProviderV1 {
+    inner: Arc<dyn PopIssuanceDraftProviderV1>,
+    registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
+}
+
+impl fmt::Debug for QualifiedPopIssuanceDraftProviderV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("QualifiedPopIssuanceDraftProviderV1([REDACTED])")
+    }
+}
+
+impl PopIssuanceDraftProviderV1 for QualifiedPopIssuanceDraftProviderV1 {
+    fn resolve(
+        &self,
+        request_id: [u8; 32],
+        now_epoch: u64,
+    ) -> Result<PopIssuanceDraftV1, PopPrivateMaterialProviderErrorV1> {
+        self.registry
+            .assert_qualification()
+            .map_err(|_| PopPrivateMaterialProviderErrorV1::Unavailable)?;
+        let result = self.inner.resolve(request_id, now_epoch);
+        self.registry
+            .assert_qualification()
+            .map_err(|_| PopPrivateMaterialProviderErrorV1::Unavailable)?;
+        result.map_err(|_| PopPrivateMaterialProviderErrorV1::Unavailable)
+    }
+}
+
+#[derive(Clone)]
+struct QualifiedPopWalletWitnessProviderV1 {
+    inner: Arc<dyn PopWalletWitnessProviderV1>,
+    registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
+}
+
+impl fmt::Debug for QualifiedPopWalletWitnessProviderV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("QualifiedPopWalletWitnessProviderV1([REDACTED])")
+    }
+}
+
+impl PopWalletWitnessProviderV1 for QualifiedPopWalletWitnessProviderV1 {
+    fn resolve(
+        &self,
+        credential_commitment: [u8; 32],
+        projection: &PopFinalizedRegistryProjectionV1,
+    ) -> Result<PopMembershipWitnessV1, PopPrivateMaterialProviderErrorV1> {
+        self.registry
+            .assert_qualification()
+            .map_err(|_| PopPrivateMaterialProviderErrorV1::Unavailable)?;
+        let result = self.inner.resolve(credential_commitment, projection);
+        self.registry
+            .assert_qualification()
+            .map_err(|_| PopPrivateMaterialProviderErrorV1::Unavailable)?;
+        result.map_err(|_| PopPrivateMaterialProviderErrorV1::Unavailable)
+    }
+}
+
+#[derive(Clone)]
+struct QualifiedPopFinalizedTimeProviderV1 {
+    inner: Arc<dyn PopFinalizedTimeProviderV1>,
+    registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
+}
+
+impl fmt::Debug for QualifiedPopFinalizedTimeProviderV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("QualifiedPopFinalizedTimeProviderV1([REDACTED])")
+    }
+}
+
+impl PopFinalizedTimeProviderV1 for QualifiedPopFinalizedTimeProviderV1 {
+    fn sample(&self) -> Result<PopFinalizedTimeSampleV1, PopFinalizedTimeProviderErrorV1> {
+        self.registry
+            .assert_qualification()
+            .map_err(|_| PopFinalizedTimeProviderErrorV1::Unavailable)?;
+        let result = self.inner.sample();
+        self.registry
+            .assert_qualification()
+            .map_err(|_| PopFinalizedTimeProviderErrorV1::Unavailable)?;
+        result.map_err(|_| PopFinalizedTimeProviderErrorV1::Unavailable)
+    }
+}
+
 /// Torii-owned PoP issuer, registry reconciler, wallet, and verifier runtime.
 pub struct PopCredentialToriiRuntimeV1 {
     config: PopCredentialRuntimeConfigV1,
+    provider_registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
     api: PopCredentialApiV1,
     authenticator: Arc<dyn PopCredentialApiAuthenticator>,
     service: Mutex<PopCredentialService>,
@@ -285,35 +832,101 @@ impl fmt::Debug for PopCredentialToriiRuntimeV1 {
 }
 
 impl PopCredentialToriiRuntimeV1 {
-    /// Construct the runtime from explicit config and injected key providers.
+    /// Construct the runtime through an explicit deployment provider registry.
+    ///
+    /// Registry identity, revision, policy digest, and resolved public HSM
+    /// identity are checked before issuer or wallet state is opened.
     pub fn open(
         config: PopCredentialRuntimeConfigV1,
-        secrets: PopCredentialRuntimeSecretsV1,
+        registry: Option<Arc<dyn PopCredentialRuntimeProviderRegistryV1>>,
     ) -> Result<Self, PopCredentialServiceError> {
         config.validate()?;
-        let authenticator = Arc::clone(&secrets.authenticator);
+        let provider_registry =
+            QualifiedPopCredentialRuntimeProviderRegistryV1::try_new(&config, registry)?;
+        let bindings = PopCredentialRuntimeProviderBindingsV1::from_config(&config);
+        let secrets = provider_registry.resolve(&bindings)?;
+        provider_registry.assert_qualification()?;
+        validate_pop_runtime_provider_handle(secrets.issuer_hsm.key_id(), "issuer_hsm_key_id")
+            .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryMismatch)?;
+        validate_pop_runtime_provider_handle(
+            secrets.wallet_key_wrapper.active_key_id(),
+            "wallet_wrapping_key_id",
+        )
+        .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryMismatch)?;
+        if secrets.issuer_hsm.key_id() != config.service_policy.issuer_hsm_key_id
+            || secrets.issuer_hsm.public_key() != config.service_policy.issuer_public_key
+        {
+            return Err(PopCredentialServiceError::HsmPolicyMismatch);
+        }
+        if secrets.wallet_key_wrapper.active_key_id() != config.wallet_wrapping_key_id {
+            return Err(PopCredentialServiceError::RuntimeProviderRegistryMismatch);
+        }
+        let issuer_hsm: Arc<dyn PopIssuerHsm> = Arc::new(QualifiedPopIssuerHsmV1 {
+            inner: secrets.issuer_hsm,
+            key_id: config.service_policy.issuer_hsm_key_id.clone(),
+            public_key: config.service_policy.issuer_public_key,
+            registry: provider_registry.clone(),
+        });
+        let wallet_key_wrapper: Arc<dyn PopWalletKeyWrapper> =
+            Arc::new(QualifiedPopWalletKeyWrapperV1 {
+                inner: secrets.wallet_key_wrapper,
+                active_key_id: config.wallet_wrapping_key_id.clone(),
+                registry: provider_registry.clone(),
+            });
+        let authenticator: Arc<dyn PopCredentialApiAuthenticator> =
+            Arc::new(QualifiedPopCredentialApiAuthenticatorV1 {
+                inner: secrets.authenticator,
+                registry: provider_registry.clone(),
+            });
+        let registry_submitter: Arc<dyn PopRegistrySubmitter> =
+            Arc::new(QualifiedPopRegistrySubmitterV1 {
+                inner: secrets.registry_submitter,
+                registry: provider_registry.clone(),
+            });
+        let registry_reader: Arc<dyn PopFinalizedRegistryReader> =
+            Arc::new(QualifiedPopFinalizedRegistryReaderV1 {
+                inner: secrets.registry_reader,
+                registry: provider_registry.clone(),
+            });
+        let issuance_draft_provider: Arc<dyn PopIssuanceDraftProviderV1> =
+            Arc::new(QualifiedPopIssuanceDraftProviderV1 {
+                inner: secrets.issuance_draft_provider,
+                registry: provider_registry.clone(),
+            });
+        let wallet_witness_provider: Arc<dyn PopWalletWitnessProviderV1> =
+            Arc::new(QualifiedPopWalletWitnessProviderV1 {
+                inner: secrets.wallet_witness_provider,
+                registry: provider_registry.clone(),
+            });
+        let finalized_time_provider: Arc<dyn PopFinalizedTimeProviderV1> =
+            Arc::new(QualifiedPopFinalizedTimeProviderV1 {
+                inner: secrets.finalized_time_provider,
+                registry: provider_registry.clone(),
+            });
         let service = PopCredentialService::open(
             &config.issuer_state_dir,
             config.service_policy.clone(),
             secrets.enrollment_recipient_secret,
-            Arc::clone(&secrets.issuer_hsm),
+            issuer_hsm,
         )?;
         if service.policy() != &config.service_policy {
             return Err(PopCredentialServiceError::WrongPolicy);
         }
-        let wallet = PopWalletVault::open(&config.wallet_state_dir, secrets.wallet_key_wrapper)?;
+        let wallet = PopWalletVault::open(&config.wallet_state_dir, wallet_key_wrapper)?;
+        provider_registry.assert_qualification()?;
         Ok(Self {
             config,
-            api: PopCredentialApiV1::new(secrets.authenticator),
+            provider_registry,
+            api: PopCredentialApiV1::new(Arc::clone(&authenticator)),
             authenticator,
             service: Mutex::new(service),
-            registry_submitter: secrets.registry_submitter,
-            registry_reader: secrets.registry_reader,
-            issuance_draft_provider: secrets.issuance_draft_provider,
+            registry_submitter,
+            registry_reader,
+            issuance_draft_provider,
             wallet,
             wallet_recipient_secret: secrets.wallet_recipient_secret,
-            wallet_witness_provider: secrets.wallet_witness_provider,
-            finalized_time_provider: secrets.finalized_time_provider,
+            wallet_witness_provider,
+            finalized_time_provider,
             accepted_finalized_time: std::sync::Mutex::new(None),
         })
     }
@@ -325,22 +938,26 @@ impl PopCredentialToriiRuntimeV1 {
     }
 
     fn current_epoch(&self) -> Result<u64, PopCredentialServiceError> {
-        let mut accepted = self
-            .accepted_finalized_time
-            .lock()
+        self.provider_registry.assert_qualification()?;
+        let result = (|| {
+            let mut accepted = self
+                .accepted_finalized_time
+                .lock()
+                .map_err(|_| PopCredentialServiceError::RuntimeProviderUnavailable)?;
+            let sample = self
+                .finalized_time_provider
+                .sample()
+                .map_err(|_| PopCredentialServiceError::RuntimeProviderUnavailable)?;
+            validate_finalized_time_sample(
+                accepted.as_ref(),
+                &sample,
+                self.config.max_finalized_time_skew.as_secs(),
+            )
             .map_err(|_| PopCredentialServiceError::RuntimeProviderUnavailable)?;
-        let sample = self
-            .finalized_time_provider
-            .sample()
-            .map_err(|_| PopCredentialServiceError::RuntimeProviderUnavailable)?;
-        validate_finalized_time_sample(
-            accepted.as_ref(),
-            &sample,
-            self.config.max_finalized_time_skew.as_secs(),
-        )
-        .map_err(|_| PopCredentialServiceError::RuntimeProviderUnavailable)?;
-        *accepted = Some(sample);
-        Ok(sample.finalized_epoch)
+            *accepted = Some(sample);
+            Ok(sample.finalized_epoch)
+        })();
+        self.provider_registry.finish(result)
     }
 
     /// Run bounded retry-safe submission and finalized-chain reconciliation.
@@ -352,6 +969,12 @@ impl PopCredentialToriiRuntimeV1 {
                 tokio::select! {
                     _ = shutdown.receive() => break,
                     _ = ticker.tick() => {
+                        if self.provider_registry.assert_qualification().is_err() {
+                            iroha_logger::warn!(
+                                "SoraFS PoP runtime provider qualification failed before worker access"
+                            );
+                            continue;
+                        }
                         let mut service = self.service.lock().await;
                         let now_epoch = match self.current_epoch() {
                             Ok(now) => now,
@@ -373,6 +996,12 @@ impl PopCredentialToriiRuntimeV1 {
                                 "SoraFS PoP finalized-registry reconciliation step failed"
                             );
                         }
+                        drop(service);
+                        if self.provider_registry.assert_qualification().is_err() {
+                            iroha_logger::warn!(
+                                "SoraFS PoP runtime provider qualification changed during worker access"
+                            );
+                        }
                     }
                 }
             }
@@ -384,10 +1013,15 @@ impl PopCredentialToriiRuntimeV1 {
         credential: &[u8],
         canonical_enrollment: &[u8],
     ) -> Result<PopEnrollmentStatusV1, PopCredentialServiceError> {
-        let mut service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api
-            .submit_enrollment(&mut *service, credential, canonical_enrollment, now_epoch)
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let mut service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api
+                .submit_enrollment(&mut *service, credential, canonical_enrollment, now_epoch)
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn enrollment_status(
@@ -395,10 +1029,15 @@ impl PopCredentialToriiRuntimeV1 {
         credential: &[u8],
         request_id: [u8; 32],
     ) -> Result<PopEnrollmentStatusV1, PopCredentialServiceError> {
-        let service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api
-            .enrollment_status(&service, credential, request_id, now_epoch)
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api
+                .enrollment_status(&service, credential, request_id, now_epoch)
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn record_approval(
@@ -406,10 +1045,15 @@ impl PopCredentialToriiRuntimeV1 {
         credential: &[u8],
         approval: PopApprovalV1,
     ) -> Result<PopEnrollmentStatusV1, PopCredentialServiceError> {
-        let mut service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api
-            .record_approval(&mut *service, credential, approval, now_epoch)
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let mut service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api
+                .record_approval(&mut *service, credential, approval, now_epoch)
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn issue(
@@ -417,23 +1061,28 @@ impl PopCredentialToriiRuntimeV1 {
         credential: &[u8],
         request_id: [u8; 32],
     ) -> Result<[u8; 32], PopCredentialServiceError> {
-        let mut service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        authorize_private_provider_access(
-            self.authenticator.as_ref(),
-            credential,
-            PopCredentialApiActionV1::TriggerCredentialIssuance,
-            pop_digest_domain(POP_ISSUE_TRIGGER_BINDING_DOMAIN_V1, &request_id),
-            now_epoch,
-        )?;
-        let draft = self
-            .issuance_draft_provider
-            .resolve(request_id, now_epoch)
-            .map_err(|_| PopCredentialServiceError::RuntimeProviderUnavailable)?;
-        if draft.request_id != request_id {
-            return Err(PopCredentialServiceError::InvalidIssuance);
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let mut service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            authorize_private_provider_access(
+                self.authenticator.as_ref(),
+                credential,
+                PopCredentialApiActionV1::TriggerCredentialIssuance,
+                pop_digest_domain(POP_ISSUE_TRIGGER_BINDING_DOMAIN_V1, &request_id),
+                now_epoch,
+            )?;
+            let draft = self
+                .issuance_draft_provider
+                .resolve(request_id, now_epoch)
+                .map_err(|_| PopCredentialServiceError::RuntimeProviderUnavailable)?;
+            if draft.request_id != request_id {
+                return Err(PopCredentialServiceError::InvalidIssuance);
+            }
+            service.issue(draft, now_epoch, &mut OsRng)
         }
-        service.issue(draft, now_epoch, &mut OsRng)
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn enqueue_revocation(
@@ -441,45 +1090,65 @@ impl PopCredentialToriiRuntimeV1 {
         credential: &[u8],
         revocations: PopRevocationListV1,
     ) -> Result<[u8; 32], PopCredentialServiceError> {
-        let mut service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api
-            .enqueue_revocation(&mut *service, credential, revocations, now_epoch)
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let mut service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api
+                .enqueue_revocation(&mut *service, credential, revocations, now_epoch)
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn submit_next(
         &self,
         credential: &[u8],
     ) -> Result<PopOutboxSubmitOutcomeV1, PopCredentialServiceError> {
-        let mut service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api.submit_next(
-            &mut *service,
-            credential,
-            self.registry_submitter.as_ref(),
-            now_epoch,
-        )
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let mut service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api.submit_next(
+                &mut *service,
+                credential,
+                self.registry_submitter.as_ref(),
+                now_epoch,
+            )
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn reconcile_next(&self, credential: &[u8]) -> Result<bool, PopCredentialServiceError> {
-        let mut service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api.reconcile_next(
-            &mut *service,
-            credential,
-            self.registry_reader.as_ref(),
-            now_epoch,
-        )
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let mut service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api.reconcile_next(
+                &mut *service,
+                credential,
+                self.registry_reader.as_ref(),
+                now_epoch,
+            )
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn finalized_projection(
         &self,
         credential: &[u8],
     ) -> Result<Option<PopFinalizedRegistryProjectionV1>, PopCredentialServiceError> {
-        let service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api
-            .finalized_projection(&service, credential, now_epoch)
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api
+                .finalized_projection(&service, credential, now_epoch)
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn wallet_delivery(
@@ -487,10 +1156,15 @@ impl PopCredentialToriiRuntimeV1 {
         credential: &[u8],
         request_id: [u8; 32],
     ) -> Result<Vec<u8>, PopCredentialServiceError> {
-        let service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api
-            .wallet_delivery(&service, credential, request_id, now_epoch)
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api
+                .wallet_delivery(&service, credential, request_id, now_epoch)
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn import_wallet_delivery(
@@ -498,16 +1172,21 @@ impl PopCredentialToriiRuntimeV1 {
         credential: &[u8],
         request_id: [u8; 32],
     ) -> Result<[u8; 32], PopCredentialServiceError> {
-        let service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api.import_wallet_delivery(
-            &service,
-            &self.wallet,
-            &self.wallet_recipient_secret,
-            credential,
-            request_id,
-            now_epoch,
-        )
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api.import_wallet_delivery(
+                &service,
+                &self.wallet,
+                &self.wallet_recipient_secret,
+                credential,
+                request_id,
+                now_epoch,
+            )
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn acknowledge_wallet_delivery(
@@ -515,10 +1194,15 @@ impl PopCredentialToriiRuntimeV1 {
         credential: &[u8],
         request_id: [u8; 32],
     ) -> Result<(), PopCredentialServiceError> {
-        let mut service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api
-            .acknowledge_wallet_delivery(&mut *service, credential, request_id, now_epoch)
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let mut service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api
+                .acknowledge_wallet_delivery(&mut *service, credential, request_id, now_epoch)
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn synchronize_wallet_witness(
@@ -526,27 +1210,32 @@ impl PopCredentialToriiRuntimeV1 {
         credential: &[u8],
         credential_commitment: [u8; 32],
     ) -> Result<(), PopCredentialServiceError> {
-        let service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        authorize_private_provider_access(
-            self.authenticator.as_ref(),
-            credential,
-            PopCredentialApiActionV1::SynchronizeWalletWitness,
-            pop_digest_domain(
-                POP_WALLET_WITNESS_SYNC_BINDING_DOMAIN_V1,
-                &credential_commitment,
-            ),
-            now_epoch,
-        )?;
-        let projection = service
-            .finalized_projection()
-            .ok_or(PopCredentialServiceError::NotSynchronized)?;
-        let witness = self
-            .wallet_witness_provider
-            .resolve(credential_commitment, projection)
-            .map_err(|_| PopCredentialServiceError::RuntimeProviderUnavailable)?;
-        self.wallet
-            .synchronize_witness(credential_commitment, projection, &witness)
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            authorize_private_provider_access(
+                self.authenticator.as_ref(),
+                credential,
+                PopCredentialApiActionV1::SynchronizeWalletWitness,
+                pop_digest_domain(
+                    POP_WALLET_WITNESS_SYNC_BINDING_DOMAIN_V1,
+                    &credential_commitment,
+                ),
+                now_epoch,
+            )?;
+            let projection = service
+                .finalized_projection()
+                .ok_or(PopCredentialServiceError::NotSynchronized)?;
+            let witness = self
+                .wallet_witness_provider
+                .resolve(credential_commitment, projection)
+                .map_err(|_| PopCredentialServiceError::RuntimeProviderUnavailable)?;
+            self.wallet
+                .synchronize_witness(credential_commitment, projection, &witness)
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn prove_membership(
@@ -556,17 +1245,22 @@ impl PopCredentialToriiRuntimeV1 {
         challenge_digest: [u8; 32],
         verifier_context: &str,
     ) -> Result<PopMembershipProofV1, PopCredentialServiceError> {
-        let service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api.prove_membership(
-            &service,
-            &self.wallet,
-            credential,
-            credential_commitment,
-            challenge_digest,
-            verifier_context,
-            now_epoch,
-        )
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api.prove_membership(
+                &service,
+                &self.wallet,
+                credential,
+                credential_commitment,
+                challenge_digest,
+                verifier_context,
+                now_epoch,
+            )
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 
     async fn verify_membership(
@@ -576,16 +1270,21 @@ impl PopCredentialToriiRuntimeV1 {
         challenge_digest: [u8; 32],
         verifier_context: &str,
     ) -> Result<(), PopCredentialServiceError> {
-        let mut service = self.service.lock().await;
-        let now_epoch = self.current_epoch()?;
-        self.api.verify_membership(
-            &mut *service,
-            credential,
-            proof,
-            challenge_digest,
-            verifier_context,
-            now_epoch,
-        )
+        self.provider_registry.assert_qualification()?;
+        let result = async {
+            let mut service = self.service.lock().await;
+            let now_epoch = self.current_epoch()?;
+            self.api.verify_membership(
+                &mut *service,
+                credential,
+                proof,
+                challenge_digest,
+                verifier_context,
+                now_epoch,
+            )
+        }
+        .await;
+        self.provider_registry.finish(result)
     }
 }
 
@@ -1486,6 +2185,9 @@ fn valid_context(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+
+    use iroha_crypto::{Algorithm, HybridKeyPair, KeyPair, Signature};
 
     #[derive(Debug)]
     struct FixedAuthenticator {
@@ -1515,6 +2217,221 @@ mod tests {
         }
     }
 
+    struct TestRuntimeHsm {
+        key_id: String,
+        keypair: KeyPair,
+    }
+
+    impl fmt::Debug for TestRuntimeHsm {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("TestRuntimeHsm")
+                .field("key_id", &self.key_id)
+                .field("private_key", &"[REDACTED]")
+                .finish()
+        }
+    }
+
+    impl PopIssuerHsm for TestRuntimeHsm {
+        fn key_id(&self) -> &str {
+            &self.key_id
+        }
+
+        fn public_key(&self) -> [u8; 32] {
+            self.keypair
+                .public_key()
+                .to_bytes()
+                .1
+                .try_into()
+                .expect("Ed25519 public key width")
+        }
+
+        fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], String> {
+            Signature::try_new(self.keypair.private_key(), &digest)
+                .map_err(|_| "HSM signing failed".to_owned())?
+                .payload()
+                .try_into()
+                .map_err(|_| "HSM signature width changed".to_owned())
+        }
+    }
+
+    struct TestWalletKeyWrapper {
+        key_id: String,
+        wrapping_key: [u8; 32],
+    }
+
+    impl fmt::Debug for TestWalletKeyWrapper {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("TestWalletKeyWrapper")
+                .field("key_id", &self.key_id)
+                .field("wrapping_key", &"[REDACTED]")
+                .finish()
+        }
+    }
+
+    impl PopWalletKeyWrapper for TestWalletKeyWrapper {
+        fn active_key_id(&self) -> &str {
+            &self.key_id
+        }
+
+        fn wrap_dek(&self, context: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+            Ok(dek
+                .iter()
+                .zip(self.wrapping_key)
+                .zip(context)
+                .map(|((&byte, key), aad)| byte ^ key ^ aad)
+                .collect())
+        }
+
+        fn unwrap_dek(
+            &self,
+            key_id: &str,
+            context: [u8; 32],
+            wrapped_dek: &[u8],
+        ) -> Result<[u8; 32], String> {
+            if key_id != self.key_id || wrapped_dek.len() != 32 {
+                return Err("wallet key unavailable".to_owned());
+            }
+            let mut dek = [0; 32];
+            for (index, output) in dek.iter_mut().enumerate() {
+                *output = wrapped_dek[index] ^ self.wrapping_key[index] ^ context[index];
+            }
+            Ok(dek)
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoopRegistrySubmitter;
+
+    impl PopRegistrySubmitter for NoopRegistrySubmitter {
+        fn submit(
+            &self,
+            _idempotency_key: [u8; 32],
+            _operation: &sorafs_node::pop_credentials::PopRegistryOperationV1,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct EmptyRegistryReader;
+
+    impl PopFinalizedRegistryReader for EmptyRegistryReader {
+        fn next_after(
+            &self,
+            _cursor: Option<sorafs_node::pop_credentials::PopFinalizedCursorV1>,
+        ) -> Result<Option<PopFinalizedRegistryProjectionV1>, String> {
+            Ok(None)
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnavailableIssuanceDraftProvider;
+
+    impl PopIssuanceDraftProviderV1 for UnavailableIssuanceDraftProvider {
+        fn resolve(
+            &self,
+            _request_id: [u8; 32],
+            _now_epoch: u64,
+        ) -> Result<PopIssuanceDraftV1, PopPrivateMaterialProviderErrorV1> {
+            Err(PopPrivateMaterialProviderErrorV1::Unavailable)
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnavailableWalletWitnessProvider;
+
+    impl PopWalletWitnessProviderV1 for UnavailableWalletWitnessProvider {
+        fn resolve(
+            &self,
+            _credential_commitment: [u8; 32],
+            _projection: &PopFinalizedRegistryProjectionV1,
+        ) -> Result<PopMembershipWitnessV1, PopPrivateMaterialProviderErrorV1> {
+            Err(PopPrivateMaterialProviderErrorV1::Unavailable)
+        }
+    }
+
+    #[derive(Debug)]
+    struct FixedFinalizedTimeProvider {
+        calls: AtomicUsize,
+        revision: Arc<AtomicU64>,
+        drift_on_sample: AtomicBool,
+    }
+
+    impl PopFinalizedTimeProviderV1 for FixedFinalizedTimeProvider {
+        fn sample(&self) -> Result<PopFinalizedTimeSampleV1, PopFinalizedTimeProviderErrorV1> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.drift_on_sample.load(Ordering::SeqCst) {
+                self.revision.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(finalized_time_sample(1, 0x31, 100, 100))
+        }
+    }
+
+    struct TestRuntimeProviderRegistry {
+        handle: String,
+        revision: Arc<AtomicU64>,
+        policy_digest: [u8; 32],
+        qualification_refused: AtomicBool,
+        drift_on_resolve: AtomicBool,
+        secrets: std::sync::Mutex<Option<PopCredentialRuntimeSecretsV1>>,
+        observed_bindings: std::sync::Mutex<Option<PopCredentialRuntimeProviderBindingsV1>>,
+    }
+
+    impl fmt::Debug for TestRuntimeProviderRegistry {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("TestRuntimeProviderRegistry")
+                .field("handle", &self.handle)
+                .field("private_providers", &"[REDACTED]")
+                .finish()
+        }
+    }
+
+    impl PopCredentialRuntimeProviderRegistryV1 for TestRuntimeProviderRegistry {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            PopCredentialRuntimeProviderQualificationV1,
+            PopCredentialRuntimeProviderRegistryErrorV1,
+        > {
+            if self.qualification_refused.load(Ordering::SeqCst) {
+                return Err(PopCredentialRuntimeProviderRegistryErrorV1::StaleOrRevoked);
+            }
+            Ok(PopCredentialRuntimeProviderQualificationV1::new(
+                self.revision.load(Ordering::SeqCst),
+                self.policy_digest,
+            ))
+        }
+
+        fn resolve(
+            &self,
+            bindings: &PopCredentialRuntimeProviderBindingsV1,
+        ) -> Result<PopCredentialRuntimeSecretsV1, PopCredentialRuntimeProviderRegistryErrorV1>
+        {
+            *self
+                .observed_bindings
+                .lock()
+                .map_err(|_| PopCredentialRuntimeProviderRegistryErrorV1::Unavailable)? =
+                Some(bindings.clone());
+            let secrets = self
+                .secrets
+                .lock()
+                .map_err(|_| PopCredentialRuntimeProviderRegistryErrorV1::Unavailable)?
+                .take()
+                .ok_or(PopCredentialRuntimeProviderRegistryErrorV1::Unavailable)?;
+            if self.drift_on_resolve.load(Ordering::SeqCst) {
+                self.revision.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(secrets)
+        }
+    }
+
     fn finalized_time_sample(
         height: u64,
         hash_byte: u8,
@@ -1527,6 +2444,357 @@ mod tests {
             finalized_epoch,
             observed_epoch,
         }
+    }
+
+    fn ed25519(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("derive test Ed25519 key")
+    }
+
+    fn public_key_bytes(keypair: &KeyPair) -> [u8; 32] {
+        keypair
+            .public_key()
+            .to_bytes()
+            .1
+            .try_into()
+            .expect("Ed25519 public key width")
+    }
+
+    fn runtime_fixture(
+        root: &std::path::Path,
+        expected_registry_handle: &str,
+        provider_registry_handle: &str,
+    ) -> (
+        PopCredentialRuntimeConfigV1,
+        Arc<TestRuntimeProviderRegistry>,
+        Arc<FixedFinalizedTimeProvider>,
+    ) {
+        let hsm = Arc::new(TestRuntimeHsm {
+            key_id: "pkcs11:pop/issuer:primary".to_owned(),
+            keypair: ed25519(0x41),
+        });
+        let approver_a = ed25519(0x42);
+        let approver_b = ed25519(0x43);
+        let config = PopCredentialRuntimeConfigV1 {
+            service_policy: PopCredentialServicePolicyV1 {
+                version: POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1,
+                issuer_policy_digest: [0x51; 32],
+                issuer_id: "pop-issuer-runtime-primary".to_owned(),
+                issuer_hsm_key_id: hsm.key_id.clone(),
+                issuer_public_key: hsm.public_key(),
+                enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
+                approval_quorum: 2,
+                approval_signers: vec![
+                    PopApprovalSignerV1 {
+                        signer_id: "approver-a".to_owned(),
+                        public_key: public_key_bytes(&approver_a),
+                        revoked_at_epoch: None,
+                    },
+                    PopApprovalSignerV1 {
+                        signer_id: "approver-b".to_owned(),
+                        public_key: public_key_bytes(&approver_b),
+                        revoked_at_epoch: None,
+                    },
+                ],
+                max_pending_enrollments: 16,
+                max_outbox_entries: 16,
+                max_dead_letters: 16,
+                max_seen_nullifiers: 16,
+                max_submission_attempts: 3,
+            },
+            issuer_state_dir: root.join("issuer"),
+            wallet_state_dir: root.join("wallet"),
+            worker_interval: Duration::from_secs(1),
+            max_finalized_time_skew: Duration::from_secs(30),
+            wallet_wrapping_key_id: "kms:pop/wallet:primary".to_owned(),
+            runtime_provider_registry_handle: expected_registry_handle.to_owned(),
+            runtime_provider_registry_revision: 7,
+            runtime_provider_registry_policy_digest: [0x61; 32],
+        };
+        let mut rng = OsRng;
+        let enrollment_recipient =
+            HybridKeyPair::generate(&mut rng).expect("enrollment recipient key");
+        let wallet_recipient = HybridKeyPair::generate(&mut rng).expect("wallet recipient key");
+        let revision = Arc::new(AtomicU64::new(7));
+        let finalized_time_provider = Arc::new(FixedFinalizedTimeProvider {
+            calls: AtomicUsize::new(0),
+            revision: Arc::clone(&revision),
+            drift_on_sample: AtomicBool::new(false),
+        });
+        let secrets = PopCredentialRuntimeSecretsV1 {
+            enrollment_recipient_secret: enrollment_recipient.secret().clone(),
+            issuer_hsm: hsm,
+            authenticator: Arc::new(FixedAuthenticator {
+                principal_digest: [0x71; 32],
+                expires_at_epoch: 1_000,
+                reject: false,
+                calls: AtomicUsize::new(0),
+            }),
+            registry_submitter: Arc::new(NoopRegistrySubmitter),
+            registry_reader: Arc::new(EmptyRegistryReader),
+            issuance_draft_provider: Arc::new(UnavailableIssuanceDraftProvider),
+            wallet_recipient_secret: wallet_recipient.secret().clone(),
+            wallet_key_wrapper: Arc::new(TestWalletKeyWrapper {
+                key_id: "kms:pop/wallet:primary".to_owned(),
+                wrapping_key: [0x72; 32],
+            }),
+            wallet_witness_provider: Arc::new(UnavailableWalletWitnessProvider),
+            finalized_time_provider: finalized_time_provider.clone(),
+        };
+        let registry = Arc::new(TestRuntimeProviderRegistry {
+            handle: provider_registry_handle.to_owned(),
+            revision,
+            policy_digest: [0x61; 32],
+            qualification_refused: AtomicBool::new(false),
+            drift_on_resolve: AtomicBool::new(false),
+            secrets: std::sync::Mutex::new(Some(secrets)),
+            observed_bindings: std::sync::Mutex::new(None),
+        });
+        (config, registry, finalized_time_provider)
+    }
+
+    fn as_runtime_registry(
+        registry: &Arc<TestRuntimeProviderRegistry>,
+    ) -> Arc<dyn PopCredentialRuntimeProviderRegistryV1> {
+        registry.clone()
+    }
+
+    fn assert_startup_failure_before_state(
+        config: PopCredentialRuntimeConfigV1,
+        registry: Option<Arc<dyn PopCredentialRuntimeProviderRegistryV1>>,
+        expected: PopCredentialServiceError,
+    ) {
+        let issuer_state_dir = config.issuer_state_dir.clone();
+        let wallet_state_dir = config.wallet_state_dir.clone();
+        let error = PopCredentialToriiRuntimeV1::open(config, registry)
+            .err()
+            .expect("runtime startup must fail");
+        assert_eq!(error, expected);
+        assert!(!issuer_state_dir.exists());
+        assert!(!wallet_state_dir.exists());
+    }
+
+    #[test]
+    fn runtime_registry_pins_public_bindings_and_blocks_preexisting_drift() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, finalized_time) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        let runtime =
+            PopCredentialToriiRuntimeV1::open(config.clone(), Some(as_runtime_registry(&registry)))
+                .expect("exact provider registry must qualify");
+
+        let observed = registry
+            .observed_bindings
+            .lock()
+            .expect("observed binding lock")
+            .clone()
+            .expect("registry observed public bindings");
+        assert_eq!(
+            observed.issuer_policy_digest(),
+            config.service_policy.issuer_policy_digest
+        );
+        assert_eq!(observed.issuer_id(), config.service_policy.issuer_id);
+        assert_eq!(
+            observed.issuer_hsm_key_id(),
+            config.service_policy.issuer_hsm_key_id
+        );
+        assert_eq!(
+            observed.issuer_public_key(),
+            config.service_policy.issuer_public_key
+        );
+        assert_eq!(
+            observed.enrollment_recipient_key_id(),
+            config.service_policy.enrollment_recipient_key_id
+        );
+        assert_eq!(
+            observed.wallet_wrapping_key_id(),
+            config.wallet_wrapping_key_id
+        );
+        assert!(config.issuer_state_dir.exists());
+        assert!(config.wallet_state_dir.exists());
+
+        registry.revision.store(8, Ordering::SeqCst);
+        assert_eq!(
+            runtime.current_epoch(),
+            Err(PopCredentialServiceError::RuntimeProviderRegistryDrift)
+        );
+        assert_eq!(finalized_time.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn runtime_registry_discards_a_provider_result_when_policy_drifts_during_call() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, finalized_time) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        let runtime =
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("exact provider registry must qualify");
+        finalized_time.drift_on_sample.store(true, Ordering::SeqCst);
+
+        assert_eq!(
+            runtime.current_epoch(),
+            Err(PopCredentialServiceError::RuntimeProviderRegistryDrift)
+        );
+        assert_eq!(finalized_time.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            runtime
+                .accepted_finalized_time
+                .lock()
+                .expect("accepted-time lock")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn runtime_startup_rejects_missing_substituted_and_test_registries_before_state() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, _, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        assert_startup_failure_before_state(
+            config,
+            None,
+            PopCredentialServiceError::RuntimeProviderRegistryMissing,
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:secondary",
+        );
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::RuntimeProviderRegistryMismatch,
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:test",
+            "runtime:pop:providers:test",
+        );
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::InvalidInput {
+                field: "runtime_provider_registry_handle",
+            },
+        );
+    }
+
+    #[test]
+    fn runtime_startup_rejects_stale_mismatched_and_drifting_qualification() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        registry.qualification_refused.store(true, Ordering::SeqCst);
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::RuntimeProviderRegistryUnavailable,
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        registry.revision.store(8, Ordering::SeqCst);
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::RuntimeProviderRegistryMismatch,
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (mut config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        config.runtime_provider_registry_policy_digest = [0x62; 32];
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::RuntimeProviderRegistryMismatch,
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        registry.drift_on_resolve.store(true, Ordering::SeqCst);
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::RuntimeProviderRegistryDrift,
+        );
+    }
+
+    #[test]
+    fn runtime_startup_rejects_substituted_hsm_and_wallet_identities_before_state() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (mut config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        config.service_policy.issuer_public_key = public_key_bytes(&ed25519(0x77));
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::HsmPolicyMismatch,
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (mut config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        config.wallet_wrapping_key_id = "kms:pop:wallet:secondary".to_owned();
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::RuntimeProviderRegistryMismatch,
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        registry
+            .secrets
+            .lock()
+            .expect("runtime secrets lock")
+            .as_mut()
+            .expect("runtime secrets")
+            .wallet_key_wrapper = Arc::new(TestWalletKeyWrapper {
+            key_id: "kms:pop:wallet:test".to_owned(),
+            wrapping_key: [0x72; 32],
+        });
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::RuntimeProviderRegistryMismatch,
+        );
     }
 
     #[test]

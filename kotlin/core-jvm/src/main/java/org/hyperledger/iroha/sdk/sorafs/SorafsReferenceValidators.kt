@@ -133,7 +133,7 @@ class SorafsReferenceValidators private constructor() {
         fun isNativeAvailable(): Boolean = nativeAvailable
 
         internal fun isBridgeAbiSupported(version: Int): Boolean =
-            version >= REQUIRED_BRIDGE_ABI_VERSION
+            version == REQUIRED_BRIDGE_ABI_VERSION
 
         internal fun isGovernanceDagBridgeSupported(version: Int, hasSymbols: Boolean): Boolean =
             isBridgeAbiSupported(version) && hasSymbols
@@ -142,6 +142,11 @@ class SorafsReferenceValidators private constructor() {
             isBridgeAbiSupported(version) && hasSymbols
 
         internal fun isGovernanceLogNodeBridgeSupported(
+            version: Int,
+            hasSymbols: Boolean,
+        ): Boolean = isBridgeAbiSupported(version) && hasSymbols
+
+        internal fun isAppealFinanceBridgeSupported(
             version: Int,
             hasSymbols: Boolean,
         ): Boolean = isBridgeAbiSupported(version) && hasSymbols
@@ -212,6 +217,29 @@ class SorafsReferenceValidators private constructor() {
                     generatedAtUnix,
                 ),
                 "SoraFS hedging validation",
+            )
+        }
+
+        /** Validate one canonical appeal-finance `CancelAssetLock` V1 payload. */
+        @JvmStatic
+        @JvmOverloads
+        fun validateAppealFinanceCancelAssetLockJson(
+            noritoBytes: ByteArray,
+            label: String? = null,
+            generatedAtUnix: Long = currentEpochSeconds(),
+        ): String {
+            requireGeneratedAt(generatedAtUnix)
+            val payload = boundedReferencePayload(noritoBytes, "noritoBytes")
+            val labelBytes = labelBytes(label, "cancel_asset_lock_v1.to")
+            requireAggregateReferenceBytes(payload.size, labelBytes.size)
+            requireNative()
+            return requireJsonOutput(
+                nativeValidateAppealFinanceCancelAssetLockJson(
+                    payload,
+                    labelBytes,
+                    generatedAtUnix,
+                ),
+                "SoraFS appeal-finance CancelAssetLock validation",
             )
         }
 
@@ -863,6 +891,10 @@ class SorafsReferenceValidators private constructor() {
                     isGovernanceLogNodeBridgeSupported(
                         abiVersion,
                         nativeHasGovernanceLogNodeSymbols(),
+                    ) &&
+                    isAppealFinanceBridgeSupported(
+                        abiVersion,
+                        nativeHasAppealFinanceSymbols(),
                     )
             } catch (_: UnsatisfiedLinkError) {
                 false
@@ -883,6 +915,9 @@ class SorafsReferenceValidators private constructor() {
         private external fun nativeHasGovernanceLogNodeSymbols(): Boolean
 
         @JvmStatic
+        private external fun nativeHasAppealFinanceSymbols(): Boolean
+
+        @JvmStatic
         private external fun nativeValidateOrderbookPayloadJson(
             kind: Int,
             payload: ByteArray,
@@ -901,6 +936,13 @@ class SorafsReferenceValidators private constructor() {
         @JvmStatic
         private external fun nativeValidateHedgingPayloadJson(
             kind: Int,
+            payload: ByteArray,
+            label: ByteArray,
+            generatedAtUnix: Long,
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeValidateAppealFinanceCancelAssetLockJson(
             payload: ByteArray,
             label: ByteArray,
             generatedAtUnix: Long,

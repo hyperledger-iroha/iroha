@@ -356,10 +356,11 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         'cron: "41 3 * * *"',
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
-        'python-version: "3.11"',
+        'python-version: "3.12"',
         "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
         'node-version: "24"',
         "runs-on: macos-14",
+        "bash ci/check_sorafs_python_native_sdk.sh",
         "bash ci/sdk_sorafs_orchestrator.sh",
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ),
@@ -414,7 +415,8 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
         NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
         "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
         "guard try requireGovernanceDagNativeBridge() else",
-        "throw XCTSkip(\"SoraFS governance DAG reference bridge unavailable\")",
+        "XCTFail(\"\\(Self.nativeValidationRequiredMessage) \\(unavailableMessage)\")",
+        "throw XCTSkip(unavailableMessage)",
     ),
     KOTLIN_GOVERNANCE_VALIDATOR_TEST: (
         NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
@@ -424,8 +426,8 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
     ),
     JAVA_GOVERNANCE_VALIDATOR_TEST: (
         NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
-        "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
-        "      requireGovernanceDagNativeBridge();\n",
+        "ABI-21 connect_norito_bridge with all SoraFS reference symbols is required.",
+        "    if (!requireNativeBridge()) {\n",
     ),
 }
 
