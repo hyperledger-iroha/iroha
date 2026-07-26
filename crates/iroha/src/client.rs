@@ -16641,6 +16641,24 @@ impl Client {
             .send()
     }
 
+    /// Compatibility helper: POST `/v1/aliases/resolve` with an account-alias literal.
+    ///
+    /// New code should prefer [`Self::resolve_account_alias_unsigned`] or
+    /// [`Self::resolve_account_alias_authenticated`] for strict typed response
+    /// substitution checks.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, JSON serialization, or the HTTP call fails.
+    pub fn post_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
+        let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
     /// Convenience: POST `/v1/accounts/resolve` with an account literal.
     ///
     /// # Errors

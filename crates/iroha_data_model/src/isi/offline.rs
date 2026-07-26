@@ -2,8 +2,33 @@ use super::*;
 use crate::offline::{
     KagemushaRecursiveSpendRedeemRequestV4, KagemushaRecursiveSpendReleaseActivationV4,
     KagemushaRecursiveSpendTopUpRequestV4, OfflineDeviceAttestationPolicy,
-    OfflineDeviceAttestationRegistration,
+    OfflineDeviceAttestationRegistration, OfflineNoteAuditBundle, OfflineNoteIssue,
+    OfflineNoteRedeem,
 };
+
+isi! {
+    /// Issue a legacy BOI offline bearer note into ledger-recognized escrow.
+    pub struct IssueOfflineNote {
+        /// Compact note issuance record.
+        pub issue: OfflineNoteIssue,
+    }
+}
+
+isi! {
+    /// Redeem a ledger-recognized legacy BOI offline bearer note.
+    pub struct RedeemOfflineNote {
+        /// Compact proof and consumed nullifiers.
+        pub redemption: OfflineNoteRedeem,
+    }
+}
+
+isi! {
+    /// Anchor an optional legacy BOI offline-note audit lineage.
+    pub struct AuditOfflineNote {
+        /// Compact audit payload.
+        pub audit: OfflineNoteAuditBundle,
+    }
+}
 
 iroha_data_model_derive::model_single! {
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +128,33 @@ impl crate::seal::Instruction for RedeemKagemushaRecursiveV4 {}
 impl crate::seal::Instruction for ActivateKagemushaRecursiveReleaseV4 {}
 impl crate::seal::Instruction for RegisterOfflineDeviceAttestation {}
 impl crate::seal::Instruction for SetOfflineDeviceAttestationPolicy {}
+impl crate::seal::Instruction for IssueOfflineNote {}
+impl crate::seal::Instruction for RedeemOfflineNote {}
+impl crate::seal::Instruction for AuditOfflineNote {}
+
+impl IssueOfflineNote {
+    /// Construct a legacy note issuance instruction.
+    #[must_use]
+    pub fn new(issue: OfflineNoteIssue) -> Self {
+        Self { issue }
+    }
+}
+
+impl RedeemOfflineNote {
+    /// Construct a legacy note redemption instruction.
+    #[must_use]
+    pub fn new(redemption: OfflineNoteRedeem) -> Self {
+        Self { redemption }
+    }
+}
+
+impl AuditOfflineNote {
+    /// Construct an optional legacy note audit instruction.
+    #[must_use]
+    pub fn new(audit: OfflineNoteAuditBundle) -> Self {
+        Self { audit }
+    }
+}
 
 impl TopUpKagemushaRecursiveV4 {
     /// Construct a scale-bound ABI-21 Kagemusha top-up instruction.
@@ -156,6 +208,40 @@ impl SetOfflineDeviceAttestationPolicy {
 fn offline_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
+
+macro_rules! impl_decode_one_legacy_offline_field {
+    ($ty:ident { $field:ident: $field_ty:ty }) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let flags = offline_decode_flags();
+                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                    return super::decode_packed_instruction_payload::<Self>(bytes);
+                }
+
+                let mut offset = 0usize;
+                let $field = super::decode_aos_canonical_field::<$field_ty>(
+                    super::read_aos_field(bytes, &mut offset, flags)?,
+                    flags,
+                )?;
+                if offset != bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access(bytes, offset);
+                Ok((Self { $field }, offset))
+            }
+        }
+    };
+}
+
+impl_decode_one_legacy_offline_field!(IssueOfflineNote {
+    issue: OfflineNoteIssue
+});
+impl_decode_one_legacy_offline_field!(RedeemOfflineNote {
+    redemption: OfflineNoteRedeem
+});
+impl_decode_one_legacy_offline_field!(AuditOfflineNote {
+    audit: OfflineNoteAuditBundle
+});
 
 macro_rules! impl_decode_one_canonical_offline_field {
     ($ty:ident { $field:ident: $field_ty:ty }) => {

@@ -3,8 +3,10 @@
 //! The module exposes one lifecycle: exact online top-up, recursive
 //! offline split/spend, and exact online redemption.
 
+mod legacy_note;
 mod receiver_snapshot;
 
+pub use legacy_note::*;
 pub use receiver_snapshot::*;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
