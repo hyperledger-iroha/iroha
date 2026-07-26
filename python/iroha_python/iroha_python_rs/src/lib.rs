@@ -946,6 +946,10 @@ fn zk_ace_public_inputs_json_value(
         json::Value::String(hex_encode(public_inputs.tx_digest)),
     );
     value.insert(
+        "authorization_digest".to_owned(),
+        json::Value::String(hex_encode(public_inputs.authorization_digest)),
+    );
+    value.insert(
         "chain_id".to_owned(),
         json::Value::String(public_inputs.chain_id.to_string()),
     );
@@ -1076,6 +1080,10 @@ fn zk_ace_authorization_json(
     root.insert(
         "tx_digest".to_owned(),
         json::Value::String(hex_encode(public_inputs.tx_digest)),
+    );
+    root.insert(
+        "authorization_digest".to_owned(),
+        json::Value::String(hex_encode(public_inputs.authorization_digest)),
     );
     root.insert(
         "replay_nullifier".to_owned(),
@@ -7047,6 +7055,7 @@ mod tests {
         let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
             [0x11; 32],
             [0x22; 32],
+            [0x22; 32],
             ChainId::from_str("fc56984b-2be7-431d-840e-21514d1883f0").expect("chain id parses"),
             [0x33; 32],
             [0x44; 32],
@@ -7073,6 +7082,12 @@ mod tests {
         );
         assert_eq!(
             object.get("tx_digest").and_then(json::Value::as_str),
+            Some("2222222222222222222222222222222222222222222222222222222222222222")
+        );
+        assert_eq!(
+            object
+                .get("authorization_digest")
+                .and_then(json::Value::as_str),
             Some("2222222222222222222222222222222222222222222222222222222222222222")
         );
         assert_eq!(

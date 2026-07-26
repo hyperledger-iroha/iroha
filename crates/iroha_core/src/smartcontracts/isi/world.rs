@@ -15377,6 +15377,7 @@ pub mod isi {
                 iroha_data_model::zk::ZkAcePublicInputsV1::transparent_transfer(
                     *self.identity_commitment(),
                     *self.tx_digest(),
+                    *self.tx_digest(),
                     self.chain_id().clone(),
                     *self.replay_nullifier(),
                     *self.policy_hash(),
@@ -15424,7 +15425,7 @@ pub mod isi {
             st.zk_ace_replay_nullifiers.insert(*self.replay_nullifier());
 
             let source_asset_id =
-                shield_public_asset_id(state_transaction, self.asset(), self.from())?;
+                privacy_public_asset_id(state_transaction, self.asset(), self.from())?;
             let transfer =
                 Transfer::asset_quantity(source_asset_id, self.amount().clone(), self.to().clone());
             transfer.execute(self.from(), state_transaction)?;
@@ -15581,7 +15582,7 @@ pub mod isi {
         }
     }
 
-    fn shield_public_asset_id(
+    pub(crate) fn privacy_public_asset_id(
         state_transaction: &StateTransaction<'_, '_>,
         asset_def_id: &AssetDefinitionId,
         account_id: &AccountId,
@@ -15698,7 +15699,7 @@ pub mod isi {
                 }
                 ConfidentialPolicyMode::ShieldedOnly => {}
             }
-            let asset_id = shield_public_asset_id(state_transaction, &def_id, self.from())?;
+            let asset_id = privacy_public_asset_id(state_transaction, &def_id, self.from())?;
             self.enc_payload().validate().map_err(|err| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     err.to_string(),
@@ -27259,6 +27260,7 @@ seiyaku GovernanceLifecycle {
             );
             let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
                 identity_commitment,
+                tx_digest,
                 tx_digest,
                 chain_id,
                 replay_nullifier,

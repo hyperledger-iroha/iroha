@@ -170,6 +170,21 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_bootstrap_privacy_zk_ams_registry_v1(v);
     } else if let Some(v) = isi
         .as_any()
+        .downcast_ref::<crate::isi::privacy::RegisterPrivacyZkAcePolicyV1>()
+    {
+        visitor.visit_register_privacy_zk_ace_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RotatePrivacyZkAcePolicyV1>()
+    {
+        visitor.visit_rotate_privacy_zk_ace_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RevokePrivacyZkAcePolicyV1>()
+    {
+        visitor.visit_revoke_privacy_zk_ace_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
         .downcast_ref::<crate::isi::privacy::SubmitPrivacyProofV1>()
     {
         visitor.visit_submit_privacy_proof_v1(v);
@@ -623,6 +638,15 @@ macro_rules! instruction_visitors {
             ),
             visit_bootstrap_privacy_zk_ams_registry_v1(
                 &$crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1
+            ),
+            visit_register_privacy_zk_ace_policy_v1(
+                &$crate::isi::privacy::RegisterPrivacyZkAcePolicyV1
+            ),
+            visit_rotate_privacy_zk_ace_policy_v1(
+                &$crate::isi::privacy::RotatePrivacyZkAcePolicyV1
+            ),
+            visit_revoke_privacy_zk_ace_policy_v1(
+                &$crate::isi::privacy::RevokePrivacyZkAcePolicyV1
             ),
             visit_submit_privacy_proof_v1(&$crate::isi::privacy::SubmitPrivacyProofV1),
             visit_publish_pedersen_params(&PublishPedersenParams),

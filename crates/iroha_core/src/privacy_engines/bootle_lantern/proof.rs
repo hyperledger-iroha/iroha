@@ -1045,7 +1045,7 @@ fn zeroize_response_attempt<const N1: usize, const N2: usize>(
 }
 
 /// Complete native presentation proof failure.
-#[derive(Debug, Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PresentationProofErrorV1 {
     /// The transcript named another compiled application relation.
     #[error("Bootle/Lantern transcript relation digest mismatch")]

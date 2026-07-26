@@ -10,4 +10,6 @@ pub mod jindo;
 pub mod p256;
 pub mod vega;
 pub mod verange;
+#[cfg(feature = "zk-stark")]
+pub mod zk_ace;
 pub mod zk_ams;

@@ -8,10 +8,10 @@
 //! component composed with the admission relation. It is an Iroha
 //! experimental profile and is not wire-compatible with the paper prototype.
 //!
-//! Batch admission remains fail-closed until the sibling setup-free,
-//! zero-knowledge relaxed-R1CS finalizer is complete.  Keeping the complete
-//! provisioning primitive here allows its algebra and wire to be tested
-//! independently without making the protocol activatable.
+//! Batch admission composes an exact low-s ES256 credential relation, a
+//! setup-free masked relaxed-R1CS proof, and one transcript-bound Ristretto
+//! possession proof per ordered anchor. Provisioning then consumes those
+//! admitted seed keys through the closed LSAG suite below.
 
 use curve25519_dalek::{
     RistrettoPoint, constants::RISTRETTO_BASEPOINT_POINT, ristretto::CompressedRistretto,
@@ -32,22 +32,18 @@ use iroha_zkp_halo2::vega::{
     verify_zk_ams_admission_relation_v1,
 };
 use p256::{
-    AffinePoint as P256AffinePoint, EncodedPoint as P256EncodedPoint, FieldBytes as P256FieldBytes,
+    AffinePoint as P256AffinePoint, FieldBytes as P256FieldBytes,
     ProjectivePoint as P256ProjectivePoint, Scalar as P256Scalar,
     ecdsa::{
         Signature as P256Signature, VerifyingKey as P256VerifyingKey,
         signature::hazmat::PrehashVerifier as _,
     },
     elliptic_curve::{
-        Field as _, PrimeField as _,
-        bigint::U256,
-        group::Group as _,
-        ops::Reduce,
-        sec1::{FromEncodedPoint as _, ToEncodedPoint as _},
+        PrimeField as _, bigint::U256, group::Group as _, ops::Reduce, sec1::ToEncodedPoint as _,
     },
 };
 use rand_core_06::{CryptoRng, RngCore};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use sha3::{Digest, Sha3_256, Sha3_512};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -73,8 +69,11 @@ pub const ZK_AMS_MIN_RING_SIZE_V1: usize = 16;
 pub const ZK_AMS_MAX_RING_SIZE_V1: usize = 64;
 /// Exact admitted ring sizes.
 pub const ZK_AMS_RING_SIZES_V1: [usize; 3] = [16, 32, 64];
-/// Hard cap checked before Norito proof decoding.
-pub const MAX_ZK_AMS_LSAG_PROOF_BYTES_V1: usize = 4 * 1024;
+/// Exact maximum canonical Norito size for the closed 64-member LSAG wire.
+///
+/// The fixed fields occupy 45 bytes and each canonical `[u8; 32]` response
+/// occupies 65 bytes in this wire profile: `45 + 64 * 65 = 4_205`.
+pub const MAX_ZK_AMS_LSAG_PROOF_BYTES_V1: usize = 4_205;
 /// Hard cap checked before holder-possession proof decoding.
 pub const MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1: usize = 256;
 /// Hard cap checked before the composed batch proof is decoded.
@@ -1401,4 +1400,700 @@ fn append_field(hash: &mut Sha3_512, label: &[u8], value: &[u8]) -> Result<(), Z
     hash.update(value_len.to_be_bytes());
     hash.update(value);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        ChainId,
+        privacy::{
+            PrivacyEngineManifestDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
+            PrivacyParameterIdV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
+            PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+        },
+    };
+    use p256::ecdsa::SigningKey as P256SigningKey;
+    use rand_core_06::Error as RngError;
+
+    use super::*;
+
+    #[derive(Clone, Copy)]
+    struct TestRng(u64);
+
+    impl TestRng {
+        const fn new(seed: u64) -> Self {
+            Self(seed)
+        }
+    }
+
+    impl RngCore for TestRng {
+        fn next_u32(&mut self) -> u32 {
+            self.next_u64() as u32
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let mut value = self.0;
+            value ^= value << 13;
+            value ^= value >> 7;
+            value ^= value << 17;
+            self.0 = value;
+            value
+        }
+
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            rand_core_06::impls::fill_bytes_via_next(self, destination);
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            self.fill_bytes(destination);
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for TestRng {}
+
+    struct ZeroRng;
+
+    impl RngCore for ZeroRng {
+        fn next_u32(&mut self) -> u32 {
+            0
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            0
+        }
+
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            destination.fill(0);
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            destination.fill(0);
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for ZeroRng {}
+
+    fn seed_secret(value: u8) -> ZkAmsSeedSecretV1 {
+        let mut bytes = [0_u8; 32];
+        bytes[0] = value;
+        ZkAmsSeedSecretV1::from_bytes(bytes).expect("small scalar is canonical and nonzero")
+    }
+
+    fn sorted_ring(size: usize) -> Vec<([u8; 32], ZkAmsSeedSecretV1)> {
+        let mut ring = (1..=size)
+            .map(|index| {
+                let secret =
+                    seed_secret(u8::try_from(index).expect("test ring is bounded to 64 members"));
+                (zk_ams_seed_public_key_v1(&secret), secret)
+            })
+            .collect::<Vec<_>>();
+        ring.sort_by_key(|(public, _)| *public);
+        ring
+    }
+
+    fn binding() -> TranscriptBindingV1<'static> {
+        TranscriptBindingV1 {
+            chain_id: b"taira-zk-ams-test",
+            genesis_hash: [0x11; 32],
+            action_index: 7,
+            statement_digest: [0x12; 32],
+            parameter_id: [0x13; 32],
+            parameter_digest: [0x14; 32],
+            verifier_digest: [0x15; 32],
+            statement_schema_digest: [0x16; 32],
+            engine_manifest_digest: [0x17; 32],
+            generator_digest: zk_ams_generator_digest_v1(),
+        }
+    }
+
+    fn mutate_every_binding_axis() -> Vec<(&'static str, TranscriptBindingV1<'static>)> {
+        let mut mutations = Vec::new();
+        let mut changed = binding();
+        changed.chain_id = b"foreign-chain";
+        mutations.push(("chain", changed));
+        let mut changed = binding();
+        changed.genesis_hash[0] ^= 1;
+        mutations.push(("genesis", changed));
+        let mut changed = binding();
+        changed.action_index += 1;
+        mutations.push(("action-index", changed));
+        let mut changed = binding();
+        changed.statement_digest[0] ^= 1;
+        mutations.push(("statement", changed));
+        let mut changed = binding();
+        changed.parameter_id[0] ^= 1;
+        mutations.push(("parameter-id", changed));
+        let mut changed = binding();
+        changed.parameter_digest[0] ^= 1;
+        mutations.push(("parameter-digest", changed));
+        let mut changed = binding();
+        changed.verifier_digest[0] ^= 1;
+        mutations.push(("verifier", changed));
+        let mut changed = binding();
+        changed.statement_schema_digest[0] ^= 1;
+        mutations.push(("schema", changed));
+        let mut changed = binding();
+        changed.engine_manifest_digest[0] ^= 1;
+        mutations.push(("manifest", changed));
+        let mut changed = binding();
+        changed.generator_digest[0] ^= 1;
+        mutations.push(("generator", changed));
+        mutations
+    }
+
+    fn sign_fixture(
+        size: usize,
+        signer_index: usize,
+    ) -> (Vec<([u8; 32], ZkAmsSeedSecretV1)>, [u8; 32], Vec<u8>) {
+        let ring = sorted_ring(size);
+        let public = ring.iter().map(|(public, _)| *public).collect::<Vec<_>>();
+        let key_image = zk_ams_key_image_v1(&ring[signer_index].1).expect("key image");
+        let mut rng = TestRng::new(0x9e37_79b9_7f4a_7c15);
+        let proof = sign_zk_ams_provision_v1(
+            &binding(),
+            &public,
+            key_image,
+            signer_index,
+            &ring[signer_index].1,
+            &mut rng,
+        )
+        .expect("valid LSAG");
+        (ring, key_image, proof)
+    }
+
+    #[test]
+    fn seed_codec_and_key_images_are_canonical_deterministic_and_distinct() {
+        assert!(matches!(
+            ZkAmsSeedSecretV1::from_bytes([0; 32]),
+            Err(ZkAmsErrorV1::ZeroSecret)
+        ));
+        assert!(matches!(
+            ZkAmsSeedSecretV1::from_bytes([u8::MAX; 32]),
+            Err(ZkAmsErrorV1::InvalidScalar)
+        ));
+        assert!(matches!(
+            ZkAmsSeedSecretV1::generate(&mut ZeroRng),
+            Err(ZkAmsErrorV1::RandomnessExhausted)
+        ));
+
+        let first = seed_secret(1);
+        let second = seed_secret(2);
+        assert_ne!(
+            zk_ams_seed_public_key_v1(&first),
+            zk_ams_seed_public_key_v1(&second)
+        );
+        let first_image = zk_ams_key_image_v1(&first).expect("first key image");
+        assert_eq!(
+            first_image,
+            zk_ams_key_image_v1(&first).expect("deterministic key image")
+        );
+        assert_ne!(
+            first_image,
+            zk_ams_key_image_v1(&second).expect("second key image")
+        );
+        assert!(decode_nonidentity_point(first_image).is_ok());
+    }
+
+    #[test]
+    fn lsag_roundtrips_every_closed_ring_size_and_self_checks() {
+        for (case, size) in ZK_AMS_RING_SIZES_V1.into_iter().enumerate() {
+            let signer_index = (size / 2) + case;
+            let (ring, key_image, proof) = sign_fixture(size, signer_index);
+            let public = ring.iter().map(|(public, _)| *public).collect::<Vec<_>>();
+            verify_zk_ams_provision_v1(&binding(), &public, key_image, &proof)
+                .expect("valid LSAG proof");
+            assert_eq!(proof.len(), 45 + size * 65);
+            assert!(proof.len() <= MAX_ZK_AMS_LSAG_PROOF_BYTES_V1);
+            let decoded = norito::codec::decode_exact_from_slice::<ZkAmsLsagProofWireV1>(&proof)
+                .expect("exact proof wire");
+            assert_eq!(decoded.version, ZK_AMS_LSAG_PROOF_VERSION_V1);
+            assert_eq!(decoded.responses.len(), size);
+
+            let mut second_rng = TestRng::new(0x9e37_79b9_7f4a_7c15);
+            assert_eq!(
+                sign_zk_ams_provision_v1(
+                    &binding(),
+                    &public,
+                    key_image,
+                    signer_index,
+                    &ring[signer_index].1,
+                    &mut second_rng,
+                )
+                .expect("deterministic LSAG"),
+                proof
+            );
+        }
+    }
+
+    #[test]
+    fn lsag_rejects_invalid_ring_signer_image_and_randomness() {
+        let ring = sorted_ring(16);
+        let public = ring.iter().map(|(public, _)| *public).collect::<Vec<_>>();
+        let image = zk_ams_key_image_v1(&ring[3].1).expect("key image");
+
+        for invalid_size in [0, 1, 15, 17, 31, 33, 63, 65] {
+            let invalid = sorted_ring(invalid_size)
+                .into_iter()
+                .map(|(public, _)| public)
+                .collect::<Vec<_>>();
+            assert!(matches!(
+                verify_zk_ams_provision_v1(&binding(), &invalid, image, &[]),
+                Err(ZkAmsErrorV1::InvalidRingSize {
+                    actual
+                }) if actual == invalid_size
+            ));
+        }
+
+        let mut swapped = public.clone();
+        swapped.swap(0, 1);
+        assert!(matches!(
+            verify_zk_ams_provision_v1(&binding(), &swapped, image, &[]),
+            Err(ZkAmsErrorV1::NonCanonicalRing)
+        ));
+        let mut duplicate = public.clone();
+        duplicate[1] = duplicate[0];
+        assert!(matches!(
+            verify_zk_ams_provision_v1(&binding(), &duplicate, image, &[]),
+            Err(ZkAmsErrorV1::NonCanonicalRing)
+        ));
+
+        let mut rng = TestRng::new(4);
+        assert!(matches!(
+            sign_zk_ams_provision_v1(
+                &binding(),
+                &public,
+                image,
+                public.len(),
+                &ring[3].1,
+                &mut rng
+            ),
+            Err(ZkAmsErrorV1::SignerIndexOutOfBounds { .. })
+        ));
+        assert!(matches!(
+            sign_zk_ams_provision_v1(&binding(), &public, image, 3, &ring[4].1, &mut rng),
+            Err(ZkAmsErrorV1::SignerPublicKeyMismatch)
+        ));
+        let other_image = zk_ams_key_image_v1(&ring[4].1).expect("other key image");
+        assert!(matches!(
+            sign_zk_ams_provision_v1(&binding(), &public, other_image, 3, &ring[3].1, &mut rng),
+            Err(ZkAmsErrorV1::KeyImageMismatch)
+        ));
+        assert!(matches!(
+            verify_zk_ams_provision_v1(&binding(), &public, [0; 32], &[]),
+            Err(ZkAmsErrorV1::InvalidPoint)
+        ));
+        assert!(matches!(
+            sign_zk_ams_provision_v1(&binding(), &public, image, 3, &ring[3].1, &mut ZeroRng),
+            Err(ZkAmsErrorV1::RandomnessExhausted)
+        ));
+    }
+
+    #[test]
+    fn lsag_wire_transcript_ring_and_image_mutations_fail_closed() {
+        let signer_index = 7;
+        let (ring, key_image, proof) = sign_fixture(16, signer_index);
+        let public = ring.iter().map(|(public, _)| *public).collect::<Vec<_>>();
+
+        for (label, changed) in mutate_every_binding_axis() {
+            assert!(
+                verify_zk_ams_provision_v1(&changed, &public, key_image, &proof).is_err(),
+                "{label} replay must fail"
+            );
+        }
+        let other_image = zk_ams_key_image_v1(&ring[8].1).expect("other image");
+        assert!(verify_zk_ams_provision_v1(&binding(), &public, other_image, &proof).is_err());
+
+        let mut substituted = public.clone();
+        let outsider = seed_secret(90);
+        substituted[0] = zk_ams_seed_public_key_v1(&outsider);
+        substituted.sort();
+        assert_ne!(substituted, public);
+        assert!(verify_zk_ams_provision_v1(&binding(), &substituted, key_image, &proof).is_err());
+
+        for truncated_len in [
+            0,
+            1,
+            proof.len() / 4,
+            proof.len() / 2,
+            proof.len().saturating_sub(1),
+        ] {
+            assert!(
+                verify_zk_ams_provision_v1(&binding(), &public, key_image, &proof[..truncated_len])
+                    .is_err(),
+                "truncation at {truncated_len} must fail"
+            );
+        }
+        let mut trailing = proof.clone();
+        trailing.push(0);
+        assert!(matches!(
+            verify_zk_ams_provision_v1(&binding(), &public, key_image, &trailing),
+            Err(ZkAmsErrorV1::InvalidProofEncoding)
+        ));
+        assert!(matches!(
+            verify_zk_ams_provision_v1(
+                &binding(),
+                &public,
+                key_image,
+                &vec![0; MAX_ZK_AMS_LSAG_PROOF_BYTES_V1 + 1]
+            ),
+            Err(ZkAmsErrorV1::ProofTooLarge { .. })
+        ));
+
+        let mut decoded = norito::codec::decode_exact_from_slice::<ZkAmsLsagProofWireV1>(&proof)
+            .expect("decode proof");
+        decoded.version ^= 1;
+        let wrong_version = norito::codec::encode_adaptive(&decoded);
+        assert!(matches!(
+            verify_zk_ams_provision_v1(&binding(), &public, key_image, &wrong_version),
+            Err(ZkAmsErrorV1::InvalidProofEncoding)
+        ));
+        decoded.version = ZK_AMS_LSAG_PROOF_VERSION_V1;
+        decoded.responses[0] = [u8::MAX; 32];
+        let noncanonical_scalar = norito::codec::encode_adaptive(&decoded);
+        assert!(matches!(
+            verify_zk_ams_provision_v1(&binding(), &public, key_image, &noncanonical_scalar),
+            Err(ZkAmsErrorV1::InvalidScalar)
+        ));
+
+        let sample_count = 64_usize.min(proof.len());
+        for sample in 0..sample_count {
+            let offset = sample * proof.len() / sample_count;
+            let mut corrupted = proof.clone();
+            corrupted[offset] ^= 1_u8 << (sample % 8);
+            assert!(
+                verify_zk_ams_provision_v1(&binding(), &public, key_image, &corrupted).is_err(),
+                "corruption sample {sample} at {offset} must fail"
+            );
+        }
+    }
+
+    #[test]
+    fn possession_proof_binds_every_anchor_and_consensus_axis() {
+        let secret = seed_secret(19);
+        let public = zk_ams_seed_public_key_v1(&secret);
+        let phc_hash = [0x31; 32];
+        let relation_digest = [0x32; 32];
+        let mut rng = TestRng::new(0x1234_5678_90ab_cdef);
+        let proof = prove_zk_ams_admission_possession_v1(
+            &binding(),
+            3,
+            phc_hash,
+            public,
+            relation_digest,
+            &secret,
+            &mut rng,
+        )
+        .expect("possession proof");
+        verify_zk_ams_admission_possession_v1(
+            &binding(),
+            3,
+            phc_hash,
+            public,
+            relation_digest,
+            &proof,
+        )
+        .expect("valid possession proof");
+
+        for (label, changed) in mutate_every_binding_axis() {
+            assert!(
+                verify_zk_ams_admission_possession_v1(
+                    &changed,
+                    3,
+                    phc_hash,
+                    public,
+                    relation_digest,
+                    &proof
+                )
+                .is_err(),
+                "{label} replay must fail"
+            );
+        }
+        for (label, index, phc, key, relation) in [
+            ("anchor-index", 4, phc_hash, public, relation_digest),
+            ("phc", 3, [0x33; 32], public, relation_digest),
+            (
+                "seed-key",
+                3,
+                phc_hash,
+                zk_ams_seed_public_key_v1(&seed_secret(20)),
+                relation_digest,
+            ),
+            ("relation", 3, phc_hash, public, [0x34; 32]),
+        ] {
+            assert!(
+                verify_zk_ams_admission_possession_v1(
+                    &binding(),
+                    index,
+                    phc,
+                    key,
+                    relation,
+                    &proof
+                )
+                .is_err(),
+                "{label} substitution must fail"
+            );
+        }
+        assert!(matches!(
+            verify_zk_ams_admission_possession_v1(
+                &binding(),
+                3,
+                [0; 32],
+                public,
+                relation_digest,
+                &proof
+            ),
+            Err(ZkAmsErrorV1::InvalidBinding)
+        ));
+        assert!(matches!(
+            verify_zk_ams_admission_possession_v1(&binding(), 3, phc_hash, public, [0; 32], &proof),
+            Err(ZkAmsErrorV1::InvalidBinding)
+        ));
+        assert!(matches!(
+            prove_zk_ams_admission_possession_v1(
+                &binding(),
+                3,
+                phc_hash,
+                public,
+                relation_digest,
+                &seed_secret(21),
+                &mut rng
+            ),
+            Err(ZkAmsErrorV1::SignerPublicKeyMismatch)
+        ));
+
+        for truncated_len in [0, 1, proof.len() / 2, proof.len().saturating_sub(1)] {
+            assert!(
+                verify_zk_ams_admission_possession_v1(
+                    &binding(),
+                    3,
+                    phc_hash,
+                    public,
+                    relation_digest,
+                    &proof[..truncated_len],
+                )
+                .is_err()
+            );
+        }
+        let mut trailing = proof.clone();
+        trailing.push(0);
+        assert!(matches!(
+            verify_zk_ams_admission_possession_v1(
+                &binding(),
+                3,
+                phc_hash,
+                public,
+                relation_digest,
+                &trailing
+            ),
+            Err(ZkAmsErrorV1::InvalidProofEncoding)
+        ));
+        assert!(matches!(
+            verify_zk_ams_admission_possession_v1(
+                &binding(),
+                3,
+                phc_hash,
+                public,
+                relation_digest,
+                &vec![0; MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1 + 1]
+            ),
+            Err(ZkAmsErrorV1::PossessionProofTooLarge { .. })
+        ));
+        for offset in 0..proof.len() {
+            let mut corrupted = proof.clone();
+            corrupted[offset] ^= 1_u8 << (offset % 8);
+            assert!(
+                verify_zk_ams_admission_possession_v1(
+                    &binding(),
+                    3,
+                    phc_hash,
+                    public,
+                    relation_digest,
+                    &corrupted
+                )
+                .is_err(),
+                "possession corruption at {offset} must fail"
+            );
+        }
+    }
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive test account");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn typed_context() -> PrivacyStatementContextV1 {
+        PrivacyStatementContextV1 {
+            chain_id: ChainId::from("taira-zk-ams-test"),
+            action_index: 7,
+            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x21; 32]),
+            parameter_id: PrivacyParameterIdV1::new([0x22; 32]),
+            parameter_digest: PrivacyParameterDigestV1::new([0x23; 32]),
+            verifier_digest: PrivacyVerifierDigestV1::new([0x24; 32]),
+            statement_schema_digest: PrivacyStatementSchemaDigestV1::new([0x25; 32]),
+            engine_manifest_digest: PrivacyEngineManifestDigestV1::new([0x26; 32]),
+        }
+    }
+
+    fn issuer_key() -> PrivacyP256PointV1 {
+        let signing_key =
+            P256SigningKey::from_bytes((&[7_u8; 32]).into()).expect("fixed P-256 issuer key");
+        let encoded = signing_key.verifying_key().to_encoded_point(true);
+        let bytes: [u8; 33] = encoded.as_bytes().try_into().expect("compressed P-256 key");
+        PrivacyP256PointV1::new(bytes)
+    }
+
+    fn typed_provision_statement(
+        ring: &[([u8; 32], ZkAmsSeedSecretV1)],
+        key_image: [u8; 32],
+    ) -> IrohaZkAmsStatementV1 {
+        IrohaZkAmsStatementV1 {
+            context: typed_context(),
+            issuer_id: PrivacyIssuerIdV1::new([0x31; 32]),
+            issuer_public_key: issuer_key(),
+            issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1::new([0x32; 32]),
+            registry_id: PrivacyZkAmsRegistryIdV1::new([0x33; 32]),
+            registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1::new([0x34; 32]),
+            policy_id: PrivacyPolicyIdV1::new([0x35; 32]),
+            policy_digest: PrivacyPolicyDigestV1::new([0x36; 32]),
+            action: PrivacyZkAmsActionV1::ProvisionAccount(PrivacyZkAmsProvisionAccountV1 {
+                account_registry_root: PrivacyRootV1::new([0x37; 32]),
+                account_registry_root_epoch: 9,
+                admitted_seed_key_ring: ring
+                    .iter()
+                    .map(|(public, _)| PrivacyZkAmsSeedPublicKeyV1::new(*public))
+                    .collect(),
+                account_id: account(40),
+                key_image: PrivacyZkAmsKeyImageV1::new(key_image),
+            }),
+        }
+    }
+
+    fn binding_for_statement(statement: &IrohaZkAmsStatementV1) -> TranscriptBindingV1<'_> {
+        let statement_digest = PrivacyStatementV1::IrohaZkAmsV1(statement.clone())
+            .digest()
+            .expect("typed statement digest");
+        TranscriptBindingV1 {
+            chain_id: statement.context.chain_id.as_str().as_bytes(),
+            genesis_hash: [0x11; 32],
+            action_index: statement.context.action_index,
+            statement_digest: *statement_digest.as_bytes(),
+            parameter_id: *statement.context.parameter_id.as_bytes(),
+            parameter_digest: *statement.context.parameter_digest.as_bytes(),
+            verifier_digest: *statement.context.verifier_digest.as_bytes(),
+            statement_schema_digest: *statement.context.statement_schema_digest.as_bytes(),
+            engine_manifest_digest: *statement.context.engine_manifest_digest.as_bytes(),
+            generator_digest: zk_ams_generator_digest_v1(),
+        }
+    }
+
+    #[test]
+    fn typed_provisioning_binds_all_state_message_ring_and_image_fields() {
+        let signer_index = 5;
+        let ring = sorted_ring(16);
+        let key_image = zk_ams_key_image_v1(&ring[signer_index].1).expect("key image");
+        let statement = typed_provision_statement(&ring, key_image);
+        let binding = binding_for_statement(&statement);
+        let mut rng = TestRng::new(0xfeed_face_cafe_beef);
+        let proof = sign_zk_ams_provision_statement_v1(
+            &statement,
+            &binding,
+            signer_index,
+            &ring[signer_index].1,
+            &mut rng,
+        )
+        .expect("typed provisioning proof");
+        let effect = verify_zk_ams_provision_statement_v1(&statement, &binding, &proof)
+            .expect("typed provisioning verification");
+        let PrivacyZkAmsActionV1::ProvisionAccount(provision) = &statement.action else {
+            unreachable!()
+        };
+        assert_eq!(effect.issuer_id, statement.issuer_id);
+        assert_eq!(effect.registry_id, statement.registry_id);
+        assert_eq!(effect.current_root, provision.account_registry_root);
+        assert_eq!(effect.current_epoch, provision.account_registry_root_epoch);
+        assert_eq!(effect.ring, provision.admitted_seed_key_ring);
+        assert_eq!(effect.account_id, provision.account_id);
+        assert_eq!(effect.key_image, provision.key_image);
+
+        let mutations: [(&str, fn(&mut IrohaZkAmsStatementV1)); 12] = [
+            ("issuer", |value| value.issuer_id.0[0] ^= 1),
+            ("issuer-key", |value| value.issuer_public_key.0[0] ^= 1),
+            ("issuer-record", |value| {
+                value.issuer_policy_record_digest.0[0] ^= 1
+            }),
+            ("registry", |value| value.registry_id.0[0] ^= 1),
+            ("registry-record", |value| {
+                value.registry_record_digest.0[0] ^= 1
+            }),
+            ("policy", |value| value.policy_id.0[0] ^= 1),
+            ("policy-digest", |value| value.policy_digest.0[0] ^= 1),
+            ("transaction-intent", |value| {
+                value.context.transaction_intent_digest.0[0] ^= 1
+            }),
+            ("root", |value| {
+                let PrivacyZkAmsActionV1::ProvisionAccount(action) = &mut value.action else {
+                    unreachable!()
+                };
+                action.account_registry_root.0[0] ^= 1;
+            }),
+            ("epoch", |value| {
+                let PrivacyZkAmsActionV1::ProvisionAccount(action) = &mut value.action else {
+                    unreachable!()
+                };
+                action.account_registry_root_epoch += 1;
+            }),
+            ("account", |value| {
+                let PrivacyZkAmsActionV1::ProvisionAccount(action) = &mut value.action else {
+                    unreachable!()
+                };
+                action.account_id = account(41);
+            }),
+            ("key-image", |value| {
+                let PrivacyZkAmsActionV1::ProvisionAccount(action) = &mut value.action else {
+                    unreachable!()
+                };
+                action.key_image.0[0] ^= 1;
+            }),
+        ];
+        for (label, mutate) in mutations {
+            let mut changed = statement.clone();
+            mutate(&mut changed);
+            let changed_binding = binding_for_statement(&changed);
+            assert!(
+                verify_zk_ams_provision_statement_v1(&changed, &changed_binding, &proof).is_err(),
+                "{label} substitution must fail"
+            );
+        }
+        let mut changed = statement.clone();
+        let PrivacyZkAmsActionV1::ProvisionAccount(action) = &mut changed.action else {
+            unreachable!()
+        };
+        action.admitted_seed_key_ring.swap(0, 1);
+        let changed_binding = binding_for_statement(&changed);
+        assert!(matches!(
+            verify_zk_ams_provision_statement_v1(&changed, &changed_binding, &proof),
+            Err(ZkAmsErrorV1::NonCanonicalRing)
+        ));
+
+        let mut wrong_action = statement;
+        wrong_action.action = PrivacyZkAmsActionV1::BatchAdmission(PrivacyZkAmsBatchAdmissionV1 {
+            account_registry_root: PrivacyRootV1::new([1; 32]),
+            account_registry_root_epoch: 1,
+            next_account_registry_root: PrivacyRootV1::new([2; 32]),
+            next_account_registry_root_epoch: 2,
+            anchors: vec![PrivacyZkAmsAdmissionAnchorV1 {
+                phc_hash: iroha_data_model::privacy::PrivacyZkAmsPhcHashV1::new([3; 32]),
+                seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new(ring[0].0),
+            }],
+        });
+        let wrong_binding = binding_for_statement(&wrong_action);
+        assert!(matches!(
+            verify_zk_ams_provision_statement_v1(&wrong_action, &wrong_binding, &proof),
+            Err(ZkAmsErrorV1::InvalidStatement)
+        ));
+    }
 }

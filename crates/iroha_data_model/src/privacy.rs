@@ -40,6 +40,9 @@ pub const ZK_AMS_REGISTRY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
 /// Domain separator for canonical ZK-AMS registry bootstrap provenance.
 pub const ZK_AMS_REGISTRY_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-ams:registry-bootstrap:v1";
+/// Domain separator for canonical authoritative ZK-ACE policy records.
+pub const ZK_ACE_POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:zk-ace:policy-record:v1";
 
 /// Maximum privacy actions admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
@@ -54,6 +57,12 @@ pub const TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1: u32 = 4 * 1024 * 1024;
 /// Successor proofs advance this epoch by exactly one. Keeping the origin
 /// fixed prevents governance or a caller from creating ambiguous histories.
 pub const PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1: u64 = 1;
+/// The only authorization epoch admitted for a new ZK-ACE policy.
+pub const PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1: u64 = 1;
+/// Maximum number of source accounts in one authoritative ZK-ACE policy.
+pub const PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1: usize = 256;
+/// Maximum number of authoritative ZK-ACE policy lineages in world state.
+pub const PRIVACY_ZK_ACE_MAX_POLICIES_V1: usize = 4_096;
 /// Maximum encoded bytes admitted for one Taira privacy action.
 pub const TAIRA_PRIVACY_MAX_ACTION_BYTES_V1: u32 = 8 * 1024 * 1024;
 /// Maximum privacy bytes admitted in one Taira transaction.
@@ -488,6 +497,10 @@ define_privacy_digest!(
 define_privacy_digest!(
     /// Digest of the governed contents of a privacy policy.
     PrivacyPolicyDigestV1
+);
+define_privacy_digest!(
+    /// Self-digest of one complete authoritative ZK-ACE policy record.
+    PrivacyZkAcePolicyRecordDigestV1
 );
 define_privacy_digest!(
     /// Digest of one canonical committed Bootle/Lantern issuer-policy record.
@@ -4037,6 +4050,397 @@ pub struct PrivacyEncryptedOutputV1 {
     /// Canonical authenticated ciphertext bytes.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
     pub ciphertext: Vec<u8>,
+}
+
+/// Closed lifecycle of one authoritative ZK-ACE authorization policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "state", content = "value", deny_unknown_fields)
+)]
+pub enum PrivacyZkAcePolicyLifecycleV1 {
+    /// The policy can authorize a matching proof action.
+    #[cfg_attr(feature = "json", norito(rename = "active"))]
+    Active,
+    /// The policy was irreversibly revoked.
+    #[cfg_attr(feature = "json", norito(rename = "revoked"))]
+    Revoked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+struct PrivacyZkAcePolicyDigestMaterialV1 {
+    policy_id: PrivacyPolicyIdV1,
+    identity_commitment: PrivacyCommitmentV1,
+    policy_digest: PrivacyPolicyDigestV1,
+    authorization_epoch: u64,
+    asset_definition_id: AssetDefinitionId,
+    source_allowlist: Vec<AccountId>,
+    lifecycle: PrivacyZkAcePolicyLifecycleV1,
+}
+
+/// Complete authoritative policy selected by a ZK-ACE authorization statement.
+///
+/// `record_digest` commits every preceding field. The allowlist is stored in
+/// strict account-id order so snapshots, governance instructions, and proof
+/// preflight all have exactly one canonical representation.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivacyZkAcePolicyRecordV1 {
+    /// Stable lookup key for this policy lineage.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Exact identity commitment authorized by the current policy epoch.
+    pub identity_commitment: PrivacyCommitmentV1,
+    /// Digest of the governed authorization policy.
+    pub policy_digest: PrivacyPolicyDigestV1,
+    /// Strictly increasing governance epoch.
+    pub authorization_epoch: u64,
+    /// Exact transparent asset definition authorized by this policy.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Strictly sorted, unique, non-empty set of authorized source accounts.
+    pub source_allowlist: Vec<AccountId>,
+    /// Active or irreversibly revoked lifecycle.
+    pub lifecycle: PrivacyZkAcePolicyLifecycleV1,
+    /// Digest of every authoritative field above.
+    pub record_digest: PrivacyZkAcePolicyRecordDigestV1,
+}
+
+impl PrivacyZkAcePolicyRecordV1 {
+    /// Construct one canonical self-digested policy record.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero identifier, commitment, digest, or epoch; an empty,
+    /// oversized, unsorted, or duplicate allowlist; or a digest encoding
+    /// failure.
+    pub fn new(
+        policy_id: PrivacyPolicyIdV1,
+        identity_commitment: PrivacyCommitmentV1,
+        policy_digest: PrivacyPolicyDigestV1,
+        authorization_epoch: u64,
+        asset_definition_id: AssetDefinitionId,
+        source_allowlist: Vec<AccountId>,
+        lifecycle: PrivacyZkAcePolicyLifecycleV1,
+    ) -> Result<Self, PrivacyZkAcePolicyRecordValidationErrorV1> {
+        let mut record = Self {
+            policy_id,
+            identity_commitment,
+            policy_digest,
+            authorization_epoch,
+            asset_definition_id,
+            source_allowlist,
+            lifecycle,
+            record_digest: PrivacyZkAcePolicyRecordDigestV1::new([0; 32]),
+        };
+        record.validate_contents()?;
+        record.record_digest = record.compute_record_digest()?;
+        if record.record_digest.is_zero() {
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroRecordDigest);
+        }
+        Ok(record)
+    }
+
+    /// Validate an initial policy registration.
+    ///
+    /// # Errors
+    ///
+    /// Requires a valid active record at the canonical origin epoch.
+    pub fn validate_initial(
+        &self,
+    ) -> Result<(), PrivacyZkAcePolicyRecordValidationErrorV1> {
+        self.validate()?;
+        if self.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::InitialPolicyNotActive);
+        }
+        if self.authorization_epoch != PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1 {
+            return Err(
+                PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalInitialEpoch {
+                    actual: self.authorization_epoch,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Validate this record, including its canonical self-digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any malformed authoritative field or self-digest mismatch.
+    pub fn validate(&self) -> Result<(), PrivacyZkAcePolicyRecordValidationErrorV1> {
+        self.validate_contents()?;
+        if self.record_digest.is_zero() {
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroRecordDigest);
+        }
+        if self.compute_record_digest()? != self.record_digest {
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::RecordDigestMismatch);
+        }
+        Ok(())
+    }
+
+    /// Recompute the canonical digest of every authoritative record field.
+    ///
+    /// # Errors
+    ///
+    /// Returns an encoding error when the canonical digest material cannot be
+    /// serialized.
+    pub fn compute_record_digest(
+        &self,
+    ) -> Result<PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordValidationErrorV1> {
+        let material = PrivacyZkAcePolicyDigestMaterialV1 {
+            policy_id: self.policy_id,
+            identity_commitment: self.identity_commitment,
+            policy_digest: self.policy_digest,
+            authorization_epoch: self.authorization_epoch,
+            asset_definition_id: self.asset_definition_id.clone(),
+            source_allowlist: self.source_allowlist.clone(),
+            lifecycle: self.lifecycle,
+        };
+        let encoded = norito::to_bytes(&material)
+            .map_err(|_| PrivacyZkAcePolicyRecordValidationErrorV1::EncodingFailure)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(ZK_ACE_POLICY_RECORD_DIGEST_DOMAIN_V1);
+        hasher.update(
+            &u64::try_from(encoded.len())
+                .expect("Norito output length fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(&encoded);
+        Ok(PrivacyZkAcePolicyRecordDigestV1::new(
+            *hasher.finalize().as_bytes(),
+        ))
+    }
+
+    fn validate_contents(&self) -> Result<(), PrivacyZkAcePolicyRecordValidationErrorV1> {
+        if self.policy_id.is_zero() {
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroPolicyId);
+        }
+        if self.identity_commitment.is_zero() {
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroIdentityCommitment);
+        }
+        if self.policy_digest.is_zero() {
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroPolicyDigest);
+        }
+        if self.authorization_epoch == 0 {
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroAuthorizationEpoch);
+        }
+        if self.source_allowlist.is_empty() {
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::EmptySourceAllowlist);
+        }
+        if self.source_allowlist.len() > PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1 {
+            return Err(
+                PrivacyZkAcePolicyRecordValidationErrorV1::SourceAllowlistTooLarge {
+                    actual: self.source_allowlist.len(),
+                    max: PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1,
+                },
+            );
+        }
+        if self
+            .source_allowlist
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(
+                PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist,
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Failure while validating one authoritative ZK-ACE policy record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyZkAcePolicyRecordValidationErrorV1 {
+    /// The lookup identifier is all zero.
+    #[error("ZK-ACE policy id must be non-zero")]
+    ZeroPolicyId,
+    /// The identity commitment is all zero.
+    #[error("ZK-ACE identity commitment must be non-zero")]
+    ZeroIdentityCommitment,
+    /// The governed policy digest is all zero.
+    #[error("ZK-ACE policy digest must be non-zero")]
+    ZeroPolicyDigest,
+    /// Epoch zero is not a valid governed policy state.
+    #[error("ZK-ACE authorization epoch must be non-zero")]
+    ZeroAuthorizationEpoch,
+    /// Registration must begin at the canonical origin epoch.
+    #[error(
+        "initial ZK-ACE authorization epoch must be {PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1}, got {actual}"
+    )]
+    NonCanonicalInitialEpoch {
+        /// Rejected epoch.
+        actual: u64,
+    },
+    /// Registration cannot create an already-revoked policy.
+    #[error("initial ZK-ACE policy must be active")]
+    InitialPolicyNotActive,
+    /// A policy must authorize at least one source account.
+    #[error("ZK-ACE source allowlist must be non-empty")]
+    EmptySourceAllowlist,
+    /// The first-release fixed account bound was exceeded.
+    #[error("ZK-ACE source allowlist has {actual} entries; maximum is {max}")]
+    SourceAllowlistTooLarge {
+        /// Rejected entry count.
+        actual: usize,
+        /// Fixed first-release maximum.
+        max: usize,
+    },
+    /// The allowlist is not in strict unique account-id order.
+    #[error("ZK-ACE source allowlist must be strictly sorted and unique")]
+    NonCanonicalSourceAllowlist,
+    /// Canonical encoding of the self-digest material failed.
+    #[error("ZK-ACE policy record digest material could not be encoded")]
+    EncodingFailure,
+    /// A decoded record supplied an all-zero self-digest.
+    #[error("ZK-ACE policy record self-digest must be non-zero")]
+    ZeroRecordDigest,
+    /// Recomputing the complete record produced a different digest.
+    #[error("ZK-ACE policy record self-digest mismatch")]
+    RecordDigestMismatch,
+}
+
+/// Failure while validating a canonical ZK-ACE governance transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyZkAcePolicyTransitionValidationErrorV1 {
+    /// The persisted current record is malformed.
+    #[error("current ZK-ACE policy record is invalid: {0}")]
+    InvalidCurrent(PrivacyZkAcePolicyRecordValidationErrorV1),
+    /// The proposed successor record is malformed.
+    #[error("successor ZK-ACE policy record is invalid: {0}")]
+    InvalidSuccessor(PrivacyZkAcePolicyRecordValidationErrorV1),
+    /// A revoked policy cannot transition again.
+    #[error("current ZK-ACE policy is not active")]
+    CurrentNotActive,
+    /// A rotation must retain the stable policy identifier.
+    #[error("ZK-ACE transition changed policy id")]
+    PolicyIdMismatch,
+    /// An epoch cannot advance past `u64::MAX`.
+    #[error("ZK-ACE authorization epoch overflow")]
+    EpochOverflow,
+    /// The successor did not advance exactly one canonical epoch.
+    #[error("ZK-ACE successor epoch must be {expected}, got {actual}")]
+    NonCanonicalSuccessorEpoch {
+        /// Required successor epoch.
+        expected: u64,
+        /// Rejected successor epoch.
+        actual: u64,
+    },
+    /// A rotation successor must remain active.
+    #[error("ZK-ACE rotation successor must be active")]
+    RotationSuccessorNotActive,
+    /// A rotation must actually replace the identity commitment.
+    #[error("ZK-ACE rotation requires a distinct identity commitment")]
+    IdentityCommitmentUnchanged,
+    /// A revocation successor must be revoked.
+    #[error("ZK-ACE revocation successor must be revoked")]
+    RevocationSuccessorNotRevoked,
+    /// Revocation may change only lifecycle, epoch, and the resulting self-digest.
+    #[error("ZK-ACE revocation changed immutable policy contents")]
+    RevocationContentsChanged,
+}
+
+/// Validate an active-to-active canonical ZK-ACE rotation.
+///
+/// # Errors
+///
+/// Rejects malformed records, stale or skipped epochs, policy-id changes, and
+/// no-op identity rotations.
+pub fn validate_zk_ace_policy_rotation_v1(
+    current: &PrivacyZkAcePolicyRecordV1,
+    successor: &PrivacyZkAcePolicyRecordV1,
+) -> Result<(), PrivacyZkAcePolicyTransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyZkAcePolicyTransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyZkAcePolicyTransitionValidationErrorV1::InvalidSuccessor)?;
+    if current.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::CurrentNotActive);
+    }
+    if successor.policy_id != current.policy_id {
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::PolicyIdMismatch);
+    }
+    let expected = current
+        .authorization_epoch
+        .checked_add(1)
+        .ok_or(PrivacyZkAcePolicyTransitionValidationErrorV1::EpochOverflow)?;
+    if successor.authorization_epoch != expected {
+        return Err(
+            PrivacyZkAcePolicyTransitionValidationErrorV1::NonCanonicalSuccessorEpoch {
+                expected,
+                actual: successor.authorization_epoch,
+            },
+        );
+    }
+    if successor.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
+        return Err(
+            PrivacyZkAcePolicyTransitionValidationErrorV1::RotationSuccessorNotActive,
+        );
+    }
+    if successor.identity_commitment == current.identity_commitment {
+        return Err(
+            PrivacyZkAcePolicyTransitionValidationErrorV1::IdentityCommitmentUnchanged,
+        );
+    }
+    Ok(())
+}
+
+/// Validate an irreversible canonical ZK-ACE revocation.
+///
+/// # Errors
+///
+/// Rejects malformed records, stale or skipped epochs, and any mutation other
+/// than lifecycle, epoch, and the corresponding self-digest.
+pub fn validate_zk_ace_policy_revocation_v1(
+    current: &PrivacyZkAcePolicyRecordV1,
+    successor: &PrivacyZkAcePolicyRecordV1,
+) -> Result<(), PrivacyZkAcePolicyTransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyZkAcePolicyTransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyZkAcePolicyTransitionValidationErrorV1::InvalidSuccessor)?;
+    if current.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::CurrentNotActive);
+    }
+    if successor.policy_id != current.policy_id {
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::PolicyIdMismatch);
+    }
+    let expected = current
+        .authorization_epoch
+        .checked_add(1)
+        .ok_or(PrivacyZkAcePolicyTransitionValidationErrorV1::EpochOverflow)?;
+    if successor.authorization_epoch != expected {
+        return Err(
+            PrivacyZkAcePolicyTransitionValidationErrorV1::NonCanonicalSuccessorEpoch {
+                expected,
+                actual: successor.authorization_epoch,
+            },
+        );
+    }
+    if successor.lifecycle != PrivacyZkAcePolicyLifecycleV1::Revoked {
+        return Err(
+            PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationSuccessorNotRevoked,
+        );
+    }
+    if successor.identity_commitment != current.identity_commitment
+        || successor.policy_digest != current.policy_digest
+        || successor.asset_definition_id != current.asset_definition_id
+        || successor.source_allowlist != current.source_allowlist
+    {
+        return Err(
+            PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationContentsChanged,
+        );
+    }
+    Ok(())
 }
 
 /// ZK-ACE authorization statement for a public asset transfer.

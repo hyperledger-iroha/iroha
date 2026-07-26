@@ -245,6 +245,21 @@ impl From<crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1> for InstructionB
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::RegisterPrivacyZkAcePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyZkAcePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyZkAcePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyZkAcePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyZkAcePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyZkAcePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::SubmitPrivacyProofV1> for InstructionBox {
     fn from(i: crate::isi::privacy::SubmitPrivacyProofV1) -> Self {
         InstructionBox(Box::new(i))

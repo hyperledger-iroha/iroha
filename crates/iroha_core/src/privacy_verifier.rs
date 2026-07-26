@@ -8,16 +8,19 @@
 
 use iroha_data_model::{
     ChainId,
+    account::AccountId,
+    asset::AssetDefinitionId,
     privacy::{
         AnonymousPgcKOutOfNStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyConsensusLimitsV1, PrivacyNamespaceV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
-        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofEnvelopeValidationError, PrivacyProofV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootV1,
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyVeRangeBitLengthV1,
-        VegaExistingCredentialStatementV1,
+        PrivacyCommitmentV1, PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
+        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+        PrivacyProofEnvelopeValidationError, PrivacyProofV1, PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyVeRangeBitLengthV1, VegaExistingCredentialStatementV1,
     },
+    zk::ZkAcePrivacyPublicInputsV1,
 };
 use thiserror::Error;
 
@@ -35,6 +38,7 @@ use crate::{
             VeRangeBitLengthV1, VeRangeError, VeRangeParametersV1, VeRangeType1BatchStatementV1,
             verify_batch_encoded,
         },
+        zk_ace::{ZkAceNativeErrorV1, verify_zk_ace_privacy_v1},
         zk_ams::{
             VerifiedZkAmsBatchAdmissionV1, VerifiedZkAmsProvisionAccountV1, ZkAmsErrorV1,
             verify_zk_ams_batch_admission_v1, verify_zk_ams_provision_statement_v1,
@@ -152,6 +156,20 @@ impl VerifiedAnonymousPgcLedgerEffectV1 {
     }
 }
 
+/// Exact transparent mutation authorized by the direct native ZK-ACE engine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VerifiedZkAceAuthorizationV1 {
+    pub(crate) policy_id: PrivacyPolicyIdV1,
+    pub(crate) policy_digest: PrivacyPolicyDigestV1,
+    pub(crate) identity_commitment: PrivacyCommitmentV1,
+    pub(crate) authorization_epoch: u64,
+    pub(crate) source: AccountId,
+    pub(crate) destination: AccountId,
+    pub(crate) asset_definition_id: AssetDefinitionId,
+    pub(crate) amount: u128,
+    pub(crate) replay_nullifier: PrivacyNullifierV1,
+}
+
 /// Ledger mutation class produced only after successful native verification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum VerifiedPrivacyLedgerEffectsV1 {
@@ -163,6 +181,8 @@ pub(crate) enum VerifiedPrivacyLedgerEffectsV1 {
     ZkAmsBatchAdmission(VerifiedZkAmsBatchAdmissionV1),
     /// Atomic ZK-AMS provisioning key image and fresh account creation.
     ZkAmsProvisionAccount(VerifiedZkAmsProvisionAccountV1),
+    /// Atomic policy-scoped replay insertion and transparent asset transfer.
+    ZkAceAuthorization(VerifiedZkAceAuthorizationV1),
 }
 
 /// Fully verified, statement-derived effects ready for atomic admission.
@@ -283,6 +303,36 @@ pub(crate) fn verify_privacy_envelope_v1(
         })?;
 
     let ledger = match (&envelope.statement, &envelope.proof) {
+        (
+            PrivacyStatementV1::ZkAcePqAuthorizationV0(statement),
+            PrivacyProofV1::ZkAcePqAuthorizationV0(proof),
+        ) => {
+            let public_inputs =
+                ZkAcePrivacyPublicInputsV1::new(statement.clone(), context.genesis_hash);
+            verify_zk_ace_privacy_v1(
+                &public_inputs,
+                proof.as_bytes(),
+                context.consensus_limits.max_proof_bytes_per_action,
+            )
+            .map_err(|source| {
+                PrivacyVerificationErrorV1::NativeZkAce(Box::new(
+                    PrivacyZkAceVerificationFailureV1 { source },
+                ))
+            })?;
+            VerifiedPrivacyLedgerEffectsV1::ZkAceAuthorization(
+                VerifiedZkAceAuthorizationV1 {
+                    policy_id: statement.policy_id,
+                    policy_digest: statement.policy_digest,
+                    identity_commitment: statement.identity_commitment,
+                    authorization_epoch: statement.authorization_epoch,
+                    source: statement.source.clone(),
+                    destination: statement.destination.clone(),
+                    asset_definition_id: statement.asset_definition_id.clone(),
+                    amount: statement.amount,
+                    replay_nullifier: statement.replay_nullifier,
+                },
+            )
+        }
         (
             PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement),
             PrivacyProofV1::AnonymousPgcKOutOfNV1(proof),
@@ -657,6 +707,9 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     /// Native Vega decoding or verification failed.
     #[error(transparent)]
     NativeVega(Box<PrivacyVegaVerificationFailureV1>),
+    /// Direct native ZK-ACE decoding or verification failed.
+    #[error(transparent)]
+    NativeZkAce(Box<PrivacyZkAceVerificationFailureV1>),
     /// Native ZK-AMS decoding or verification failed.
     #[error(transparent)]
     NativeZkAms(Box<PrivacyZkAmsVerificationFailureV1>),
@@ -738,6 +791,12 @@ pub(crate) struct PrivacyJindoVerificationFailureV1 {
 #[error("native Vega verification failed: {source}")]
 pub(crate) struct PrivacyVegaVerificationFailureV1 {
     source: VegaMdlError,
+}
+
+#[derive(Debug, Error)]
+#[error("native ZK-ACE verification failed: {source}")]
+pub(crate) struct PrivacyZkAceVerificationFailureV1 {
+    source: ZkAceNativeErrorV1,
 }
 
 #[derive(Debug, Error)]
@@ -1561,6 +1620,10 @@ mod tests {
         let effect = match effects.ledger() {
             VerifiedPrivacyLedgerEffectsV1::AnonymousPgcPayment(effect) => effect,
             VerifiedPrivacyLedgerEffectsV1::None => panic!("missing PGC ledger effect"),
+            VerifiedPrivacyLedgerEffectsV1::ZkAmsBatchAdmission(_)
+            | VerifiedPrivacyLedgerEffectsV1::ZkAmsProvisionAccount(_) => {
+                panic!("unexpected ZK-AMS ledger effect")
+            }
         };
         assert_eq!(effect.namespace(), fixture.namespace);
         assert_eq!(effect.total_supply(), fixture.total_supply);
