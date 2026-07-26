@@ -4027,6 +4027,16 @@ fn runtime_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/privacy/capabilities".to_owned(),
+        Value::Object(json_get_operation(
+            "Runtime",
+            "Fetch committed privacy capabilities.",
+            "Return the exact closed privacy protocol registry, locally compiled profiles, governed activations, and singleton consensus policy from one authoritative committed state view.",
+            "#/components/schemas/PrivacyCapabilitySnapshotV1",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/node/query/projection/checkpoint".to_owned(),
         Value::Object(json_get_operation(
             "Runtime",
@@ -13178,28 +13188,23 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             norito::json!({
                 "type": "string",
                 "enum": [
-                    "halo2-ipa-pasta",
-                    "halo2-bn254",
-                    "groth16",
-                    "stark",
-                    "unsupported",
-                    "halo2-ipa-orchard",
-                    "groth16-bls12-377",
-                    "fcmp-plus-plus-curve-tree",
-                    "lattice-pcs-sis",
-                    "miden-stark",
-                    "aztec-plonkish-private-kernel",
-                    "pq-masp-stark-fri",
-                    "anonymous-pgc",
-                    "verange",
-                    "zkat",
-                    "recursive-anonymous-admission",
-                    "vega-existing-credential-zk",
-                    "silent-threshold-anoncred",
-                    "zk-x509",
-                    "sis-with-hints"
+                    "halo2/ipa",
+                    "halo2/pasta/kaigi-roster-v1",
+                    "halo2/pasta/kaigi-usage-v1",
+                    "halo2/pasta/ivm-overlay-bind",
+                    "halo2/pasta/ivm-execution-v1",
+                    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+                    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+                    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
+                    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+                    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+                    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+                    "stark/fri",
+                    "stark/fri/sha256-goldilocks",
+                    "stark/fri/poseidon2-goldilocks",
+                    "stark/fri/sha256_goldilocks.v1"
                 ],
-                "description": "Canonical JSON label of the verifier backend."
+                "description": "Exact first-release verifier-registry label. Aliases, protocol identifiers, and trusted-setup backends are rejected."
             }),
         ),
         (
@@ -26779,9 +26784,584 @@ fn shared_error_schema() -> Value {
     })
 }
 
+fn privacy_schema_ref(name: &str) -> Value {
+    norito::json!({ "$ref": (format!("#/components/schemas/{name}")) })
+}
+
+fn privacy_closed_tagged_unit_schema(tag: &str, content: &str, labels: &[&str]) -> Value {
+    let labels: Vec<String> = labels.iter().map(|label| (*label).to_owned()).collect();
+    let mut properties = Map::new();
+    properties.insert(
+        tag.to_owned(),
+        norito::json!({ "type": "string", "enum": (labels) }),
+    );
+    properties.insert(content.to_owned(), norito::json!({ "type": "null" }));
+    norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [(tag), (content)],
+        "properties": (properties)
+    })
+}
+
+fn privacy_tagged_variant_schema(
+    tag: &str,
+    label: &str,
+    content: &str,
+    content_schema: Value,
+) -> Value {
+    let mut properties = Map::new();
+    properties.insert(
+        tag.to_owned(),
+        norito::json!({ "type": "string", "const": (label) }),
+    );
+    properties.insert(content.to_owned(), content_schema);
+    norito::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [(tag), (content)],
+        "properties": (properties)
+    })
+}
+
+fn privacy_protocol_id_const_schema(label: &str) -> Value {
+    privacy_tagged_variant_schema(
+        "protocol",
+        label,
+        "value",
+        norito::json!({ "type": "null" }),
+    )
+}
+
+fn privacy_capability_schemas(schemas: &mut Map) {
+    const PROTOCOL_LABELS: [&str; 12] = [
+        "zk-ace-pq-authorization-v0",
+        "anonymous-pgc-k-out-of-n-v1",
+        "verange-transparent-range-v1",
+        "iroha-zk-ams-v1",
+        "vega-existing-credential-zk-v0",
+        "iroha-zk-x509-stark-p256-v0",
+        "iroha-jindo-polynomial-commitment-v0",
+        "iroha-bootle-lantern-anoncred-v1",
+        "orchard-halo2-actions-v1",
+        "monero-fcmp-plus-plus-v1",
+        "iroha-ivm-private-note-stark-v1",
+        "pq-masp-stark-v0",
+    ];
+    const PROOF_SYSTEM_LABELS: [&str; 10] = [
+        "stark-fri-sha256-goldilocks",
+        "stark-fri-poseidon2-goldilocks",
+        "zk-ams-transparent-stark-poseidon2-goldilocks-mlsags-ristretto255-sha3-512",
+        "anonymous-pgc-p256",
+        "iroha-verange-p256",
+        "vega-neutron-nova-spartan-hyrax-t256",
+        "jindo-polynomial-commitment",
+        "halo2-ipa-pasta",
+        "fcmp-plus-plus-curve-tree-bulletproofs",
+        "lantern-lnp22-module-linear-norm",
+    ];
+    const ENGINE_LABELS: [&str; 9] = [
+        "native-goldilocks-stark-fri",
+        "native-zk-ams-transparent-stark-mlsags-ristretto255",
+        "native-anonymous-pgc-p256",
+        "native-verange-p256",
+        "native-vega",
+        "native-jindo",
+        "native-halo2-orchard",
+        "native-fcmp-plus-plus",
+        "native-lantern-lnp22",
+    ];
+
+    schemas.insert(
+        "PrivacyProtocolIdV1".to_owned(),
+        privacy_closed_tagged_unit_schema("protocol", "value", &PROTOCOL_LABELS),
+    );
+    schemas.insert(
+        "PrivacyProofSystemIdV1".to_owned(),
+        privacy_closed_tagged_unit_schema("proof_system", "value", &PROOF_SYSTEM_LABELS),
+    );
+    schemas.insert(
+        "PrivacyEngineIdV1".to_owned(),
+        privacy_closed_tagged_unit_schema("engine", "value", &ENGINE_LABELS),
+    );
+    schemas.insert(
+        "PrivacyFixed32BytesV1".to_owned(),
+        norito::json!({
+            "type": "array",
+            "minItems": 32,
+            "maxItems": 32,
+            "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+        }),
+    );
+    schemas.insert(
+        "PrivacyConsensusLimitsV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "max_actions_per_transaction",
+                "max_actions_per_block",
+                "max_proof_bytes_per_action",
+                "max_action_bytes",
+                "max_privacy_bytes_per_transaction",
+                "max_privacy_bytes_per_block",
+                "max_statement_and_encrypted_output_bytes_per_transaction",
+                "max_nullifiers_per_action",
+                "max_commitments_per_action",
+                "retained_root_count"
+            ],
+            "properties": {
+                "max_actions_per_transaction": { "type": "integer", "format": "uint32", "minimum": 1 },
+                "max_actions_per_block": { "type": "integer", "format": "uint32", "minimum": 1 },
+                "max_proof_bytes_per_action": { "type": "integer", "format": "uint32", "minimum": 1 },
+                "max_action_bytes": { "type": "integer", "format": "uint32", "minimum": 1 },
+                "max_privacy_bytes_per_transaction": { "type": "integer", "format": "uint32", "minimum": 1 },
+                "max_privacy_bytes_per_block": { "type": "integer", "format": "uint32", "minimum": 1 },
+                "max_statement_and_encrypted_output_bytes_per_transaction": { "type": "integer", "format": "uint32", "minimum": 1 },
+                "max_nullifiers_per_action": { "type": "integer", "format": "uint32", "minimum": 1 },
+                "max_commitments_per_action": { "type": "integer", "format": "uint32", "minimum": 1 },
+                "retained_root_count": { "type": "integer", "format": "uint32", "minimum": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "PrivacyConsensusPolicyTighteningV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scheduled_at_height", "effective_at_height", "next_limits"],
+            "properties": {
+                "scheduled_at_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "effective_at_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "next_limits": { "$ref": "#/components/schemas/PrivacyConsensusLimitsV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "PrivacyConsensusPolicyV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["current_limits", "pending_tightening"],
+            "properties": {
+                "current_limits": { "$ref": "#/components/schemas/PrivacyConsensusLimitsV1" },
+                "pending_tightening": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/PrivacyConsensusPolicyTighteningV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+
+    let activation_limit_variants = vec![
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[0],
+            "limits",
+            norito::json!({ "type": "null" }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[1],
+            "limits",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["max_anonymity_set_size", "max_recipient_count"],
+                "properties": {
+                    "max_anonymity_set_size": { "type": "integer", "format": "uint32", "enum": [16, 32, 64] },
+                    "max_recipient_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 8 }
+                }
+            }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[2],
+            "limits",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["max_aggregation_count"],
+                "properties": {
+                    "max_aggregation_count": { "type": "integer", "format": "uint32", "minimum": 1 }
+                }
+            }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[3],
+            "limits",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["max_batch_size", "max_ring_size"],
+                "properties": {
+                    "max_batch_size": { "type": "integer", "format": "uint32", "minimum": 1 },
+                    "max_ring_size": { "type": "integer", "format": "uint32", "enum": [16, 32, 64] }
+                }
+            }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[4],
+            "limits",
+            norito::json!({ "type": "null" }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[5],
+            "limits",
+            norito::json!({ "type": "null" }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[6],
+            "limits",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["max_polynomial_count"],
+                "properties": {
+                    "max_polynomial_count": { "type": "integer", "format": "uint32", "minimum": 1 }
+                }
+            }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[7],
+            "limits",
+            norito::json!({ "type": "null" }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[8],
+            "limits",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["max_action_count"],
+                "properties": {
+                    "max_action_count": { "type": "integer", "format": "uint32", "minimum": 1 }
+                }
+            }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[9],
+            "limits",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["max_input_count", "max_output_count"],
+                "properties": {
+                    "max_input_count": { "type": "integer", "format": "uint32", "minimum": 1 },
+                    "max_output_count": { "type": "integer", "format": "uint32", "minimum": 1 }
+                }
+            }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[10],
+            "limits",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["max_input_count", "max_output_count"],
+                "properties": {
+                    "max_input_count": { "type": "integer", "format": "uint32", "minimum": 1 },
+                    "max_output_count": { "type": "integer", "format": "uint32", "minimum": 1 }
+                }
+            }),
+        ),
+        privacy_tagged_variant_schema(
+            "protocol",
+            PROTOCOL_LABELS[11],
+            "limits",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["max_input_count", "max_output_count"],
+                "properties": {
+                    "max_input_count": { "type": "integer", "format": "uint32", "minimum": 1 },
+                    "max_output_count": { "type": "integer", "format": "uint32", "minimum": 1 }
+                }
+            }),
+        ),
+    ];
+    schemas.insert(
+        "PrivacyProtocolActivationLimitsV1".to_owned(),
+        norito::json!({ "oneOf": (activation_limit_variants) }),
+    );
+    schemas.insert(
+        "PrivacyProtocolLimitsTighteningV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scheduled_at_height", "effective_at_height", "next_limits"],
+            "properties": {
+                "scheduled_at_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "effective_at_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "next_limits": { "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1" }
+            }
+        }),
+    );
+
+    let lifecycle_variants = vec![
+        privacy_tagged_variant_schema(
+            "state",
+            "proposed",
+            "record",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["proposed_at_height", "activate_at_height"],
+                "properties": {
+                    "proposed_at_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                    "activate_at_height": { "type": "integer", "format": "uint64", "minimum": 1 }
+                }
+            }),
+        ),
+        privacy_tagged_variant_schema(
+            "state",
+            "active",
+            "record",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["proposed_at_height", "activated_at_height", "state_since_height"],
+                "properties": {
+                    "proposed_at_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                    "activated_at_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                    "state_since_height": { "type": "integer", "format": "uint64", "minimum": 1 }
+                }
+            }),
+        ),
+        privacy_tagged_variant_schema(
+            "state",
+            "suspended",
+            "record",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["proposed_at_height", "activated_at_height", "state_since_height"],
+                "properties": {
+                    "proposed_at_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                    "activated_at_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                    "state_since_height": { "type": "integer", "format": "uint64", "minimum": 1 }
+                }
+            }),
+        ),
+        privacy_tagged_variant_schema(
+            "state",
+            "retired",
+            "record",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["proposed_at_height", "activated_at_height", "state_since_height"],
+                "properties": {
+                    "proposed_at_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                    "activated_at_height": {
+                        "oneOf": [
+                            { "type": "integer", "format": "uint64", "minimum": 1 },
+                            { "type": "null" }
+                        ]
+                    },
+                    "state_since_height": { "type": "integer", "format": "uint64", "minimum": 1 }
+                }
+            }),
+        ),
+    ];
+    schemas.insert(
+        "PrivacyProtocolLifecycleV1".to_owned(),
+        norito::json!({ "oneOf": (lifecycle_variants) }),
+    );
+    schemas.insert(
+        "PrivacyAssuranceV1".to_owned(),
+        privacy_closed_tagged_unit_schema("assurance", "value", &["experimental"]),
+    );
+    schemas.insert(
+        "PrivacyCompiledProfileSnapshotV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "protocol_id",
+                "proof_system_id",
+                "engine_id",
+                "parameter_id",
+                "parameter_digest",
+                "verifier_digest",
+                "statement_schema_digest",
+                "engine_manifest_digest",
+                "protocol_limits"
+            ],
+            "properties": {
+                "protocol_id": { "$ref": "#/components/schemas/PrivacyProtocolIdV1" },
+                "proof_system_id": { "$ref": "#/components/schemas/PrivacyProofSystemIdV1" },
+                "engine_id": { "$ref": "#/components/schemas/PrivacyEngineIdV1" },
+                "parameter_id": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" },
+                "parameter_digest": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" },
+                "verifier_digest": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" },
+                "statement_schema_digest": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" },
+                "engine_manifest_digest": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" },
+                "protocol_limits": { "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "PrivacyCompiledStatementSchemaErrorV1".to_owned(),
+        privacy_closed_tagged_unit_schema(
+            "schema_error",
+            "detail",
+            &["conflicting-stable-type-id", "missing-type-reference"],
+        ),
+    );
+    let unavailable_variants = vec![
+        privacy_tagged_variant_schema(
+            "reason",
+            "engine-unavailable",
+            "detail",
+            norito::json!({ "type": "null" }),
+        ),
+        privacy_tagged_variant_schema(
+            "reason",
+            "profile-initialization-failed",
+            "detail",
+            norito::json!({ "type": "null" }),
+        ),
+        privacy_tagged_variant_schema(
+            "reason",
+            "statement-schema-invalid",
+            "detail",
+            privacy_schema_ref("PrivacyCompiledStatementSchemaErrorV1"),
+        ),
+    ];
+    schemas.insert(
+        "PrivacyCompiledProfileUnavailableReasonV1".to_owned(),
+        norito::json!({ "oneOf": (unavailable_variants) }),
+    );
+    let profile_result_variants = vec![
+        privacy_tagged_variant_schema(
+            "status",
+            "available",
+            "value",
+            privacy_schema_ref("PrivacyCompiledProfileSnapshotV1"),
+        ),
+        privacy_tagged_variant_schema(
+            "status",
+            "unavailable",
+            "value",
+            privacy_schema_ref("PrivacyCompiledProfileUnavailableReasonV1"),
+        ),
+    ];
+    schemas.insert(
+        "PrivacyCompiledProfileResultV1".to_owned(),
+        norito::json!({ "oneOf": (profile_result_variants) }),
+    );
+    schemas.insert(
+        "PrivacyProtocolActivationRecordV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "protocol_id",
+                "proof_system_id",
+                "engine_id",
+                "parameter_id",
+                "parameter_digest",
+                "verifier_digest",
+                "statement_schema_digest",
+                "engine_manifest_digest",
+                "lifecycle",
+                "protocol_limits",
+                "pending_protocol_limits_tightening",
+                "assurance"
+            ],
+            "properties": {
+                "protocol_id": { "$ref": "#/components/schemas/PrivacyProtocolIdV1" },
+                "proof_system_id": { "$ref": "#/components/schemas/PrivacyProofSystemIdV1" },
+                "engine_id": { "$ref": "#/components/schemas/PrivacyEngineIdV1" },
+                "parameter_id": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" },
+                "parameter_digest": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" },
+                "verifier_digest": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" },
+                "statement_schema_digest": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" },
+                "engine_manifest_digest": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" },
+                "lifecycle": { "$ref": "#/components/schemas/PrivacyProtocolLifecycleV1" },
+                "protocol_limits": { "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1" },
+                "pending_protocol_limits_tightening": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/PrivacyProtocolLimitsTighteningV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "assurance": { "$ref": "#/components/schemas/PrivacyAssuranceV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "PrivacyCapabilityRowV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["protocol_id", "compiled_profile", "activation"],
+            "properties": {
+                "protocol_id": { "$ref": "#/components/schemas/PrivacyProtocolIdV1" },
+                "compiled_profile": { "$ref": "#/components/schemas/PrivacyCompiledProfileResultV1" },
+                "activation": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/PrivacyProtocolActivationRecordV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+
+    let ordered_protocol_rows = PROTOCOL_LABELS
+        .into_iter()
+        .map(|label| {
+            norito::json!({
+                "allOf": [
+                    { "$ref": "#/components/schemas/PrivacyCapabilityRowV1" },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "protocol_id": (privacy_protocol_id_const_schema(label))
+                        }
+                    }
+                ]
+            })
+        })
+        .collect::<Vec<_>>();
+    schemas.insert(
+        "PrivacyCapabilitySnapshotV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["version", "committed_height", "consensus_policy", "protocols"],
+            "properties": {
+                "version": { "type": "integer", "format": "uint32", "const": 1 },
+                "committed_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "consensus_policy": { "$ref": "#/components/schemas/PrivacyConsensusPolicyV1" },
+                "protocols": {
+                    "type": "array",
+                    "minItems": 12,
+                    "maxItems": 12,
+                    "prefixItems": (ordered_protocol_rows),
+                    "items": false
+                }
+            }
+        }),
+    );
+}
+
 fn components_section() -> Value {
     let mut components = Map::new();
     let mut schemas = openapi_schemas();
+    privacy_capability_schemas(&mut schemas);
     schemas.insert("AxtErrorDetails".to_owned(), axt_error_details_schema());
     schemas.insert("FeeErrorDetails".to_owned(), fee_error_details_schema());
     schemas.insert(
@@ -31786,6 +32366,75 @@ mod tests {
             status.get("oneOf").and_then(Value::as_array).map(Vec::len),
             Some(3)
         );
+    }
+
+    #[test]
+    fn generated_spec_exposes_only_the_closed_verifier_backend_registry_v1() {
+        let doc = generate_spec();
+        let schemas = component_schemas(&doc);
+        let backend = schemas
+            .get("OfflineProofBackend")
+            .and_then(Value::as_object)
+            .expect("offline proof backend schema");
+        let labels = backend
+            .get("enum")
+            .and_then(Value::as_array)
+            .expect("offline proof backend exact enum");
+        let actual = labels
+            .iter()
+            .map(|label| {
+                label
+                    .as_str()
+                    .expect("verifier-registry label must be a string")
+            })
+            .collect::<BTreeSet<_>>();
+        let expected = BTreeSet::from([
+            "halo2/ipa",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kaigi-usage-v1",
+            "halo2/pasta/ivm-overlay-bind",
+            "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+            "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
+            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "stark/fri",
+            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1",
+        ]);
+
+        assert_eq!(
+            labels.len(),
+            expected.len(),
+            "registry labels must be unique"
+        );
+        assert_eq!(actual, expected);
+        for retired_or_alias in [
+            "halo2-ipa-pasta",
+            "halo2-bn254",
+            "groth16",
+            "groth16-bls12-377",
+            "aztec-plonkish-private-kernel",
+            "zkat",
+            "silent-threshold-anoncred",
+            "penumbra-masp",
+            "unsupported",
+            "stark",
+            "stark/fri/latest",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "HALO2/IPA",
+            "halo2\u{ff0f}ipa",
+            "halo2/\u{200b}ipa",
+        ] {
+            assert!(
+                !actual.contains(retired_or_alias),
+                "{retired_or_alias:?} must not be advertised"
+            );
+        }
     }
 
     #[test]

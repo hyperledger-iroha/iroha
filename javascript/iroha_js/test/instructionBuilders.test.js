@@ -161,6 +161,7 @@ import {
   noritoDecodePrivacyProofEnvelope,
   noritoEncodeInstruction,
   noritoEncodePrivacyProofEnvelope,
+  validateNoritoFrame,
 } from "../src/norito.js";
 import {
   hasNoritoBinding,
@@ -319,6 +320,35 @@ function toByteArray(bytes) {
   return Array.from(Buffer.from(bytes));
 }
 
+function readCompactFieldPayload(buffer, offset, context) {
+  let cursor = offset;
+  let length = 0n;
+  let shift = 0n;
+  for (;;) {
+    if (cursor >= buffer.length) {
+      throw new RangeError(`${context} compact length overruns its buffer`);
+    }
+    const byte = buffer[cursor];
+    cursor += 1;
+    length |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      break;
+    }
+    shift += 7n;
+    if (shift >= 64n) {
+      throw new RangeError(`${context} compact length exceeds u64`);
+    }
+  }
+  if (length > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError(`${context} compact length exceeds the safe integer range`);
+  }
+  const end = cursor + Number(length);
+  if (end > buffer.length) {
+    throw new RangeError(`${context} payload overruns its buffer`);
+  }
+  return { payload: buffer.subarray(cursor, end), next: end };
+}
+
 function encodeAndDecode(instruction) {
   let encoded;
   try {
@@ -382,6 +412,27 @@ function withPureJsInstructionCodec(body) {
       delete globalThis.__IROHA_NORITO_BINDING__;
     }
   }
+}
+
+function assertNativeAndPureInstructionParity(instruction, context) {
+  const pureEncoded = Buffer.from(
+    withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
+  );
+  const nativeEncoded = Buffer.from(
+    nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction)),
+  );
+  assert.deepEqual(pureEncoded, nativeEncoded, `${context} bytes`);
+  assert.deepEqual(
+    JSON.parse(nativeBinding.noritoDecodeInstruction(pureEncoded)),
+    instruction,
+    `${context} native decode`,
+  );
+  assert.deepEqual(
+    withPureJsInstructionCodec(() => noritoDecodeInstruction(nativeEncoded)),
+    instruction,
+    `${context} pure decode`,
+  );
+  return pureEncoded;
 }
 
 function crc16(tag, body) {
@@ -580,6 +631,25 @@ baseTest("pure JS codec roundtrips CancelAssetLock and rejects the legacy shape"
         `pure JS codec accepted ${expected_remaining_amount}`,
       );
     }
+    for (const escrow_id of [
+      CANCEL_ASSET_LOCK_ESCROW_ID.slice(5, 69),
+      CANCEL_ASSET_LOCK_ESCROW_ID.replace(
+        /^hash:([0-9A-F]+)#/u,
+        (_, body) => `hash:${body.toLowerCase()}#`,
+      ),
+      CANCEL_ASSET_LOCK_ESCROW_ID.toLowerCase(),
+    ]) {
+      assert.throws(
+        () =>
+          noritoEncodeInstruction({
+            CancelAssetLock: {
+              ...instruction.CancelAssetLock,
+              escrow_id,
+            },
+          }),
+        /canonical uppercase hash/u,
+      );
+    }
   });
 });
 
@@ -635,6 +705,23 @@ test("native and pure JS codecs byte-match and cross-decode CancelAssetLock V1",
       ),
     /must be positive/,
   );
+  for (const escrowId of [
+    instruction.CancelAssetLock.escrow_id.slice(5, 69),
+    instruction.CancelAssetLock.escrow_id.toLowerCase(),
+  ]) {
+    assert.throws(
+      () =>
+        nativeBinding.noritoEncodeInstruction(
+          JSON.stringify({
+            CancelAssetLock: {
+              ...instruction.CancelAssetLock,
+              escrow_id: escrowId,
+            },
+          }),
+        ),
+      /canonical|hash:|uppercase|checksum/u,
+    );
+  }
 });
 
 test("buildMintAssetInstruction produces canonical Norito payload", () => {
@@ -883,6 +970,115 @@ test("buildTransferNftInstruction covers nft transfer", () => {
   });
 });
 
+test("NftId implicit universal and Name rules match native V1", () => {
+  const implicit = buildTransferNftInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    nftId: "dragon$wonderland",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const explicit = buildTransferNftInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    nftId: "dragon$wonderland.universal",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const pureImplicit = Buffer.from(
+    withPureJsInstructionCodec(() => noritoEncodeInstruction(implicit)),
+  );
+  const nativeImplicit = Buffer.from(
+    nativeBinding.noritoEncodeInstruction(JSON.stringify(implicit)),
+  );
+  const pureExplicit = Buffer.from(
+    withPureJsInstructionCodec(() => noritoEncodeInstruction(explicit)),
+  );
+  assert.deepEqual(pureImplicit, nativeImplicit);
+  assert.deepEqual(pureImplicit, pureExplicit);
+  assert.deepEqual(
+    JSON.parse(nativeBinding.noritoDecodeInstruction(pureImplicit)),
+    explicit,
+  );
+  assert.deepEqual(
+    withPureJsInstructionCodec(() => noritoDecodeInstruction(nativeImplicit)),
+    explicit,
+  );
+
+  const decomposed = buildTransferNftInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    nftId: "e\u0301$wonderland",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const composed = buildTransferNftInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    nftId: "é$wonderland.universal",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  assert.deepEqual(
+    Buffer.from(
+      withPureJsInstructionCodec(() => noritoEncodeInstruction(decomposed)),
+    ),
+    Buffer.from(nativeBinding.noritoEncodeInstruction(JSON.stringify(decomposed))),
+  );
+  assert.deepEqual(
+    Buffer.from(
+      withPureJsInstructionCodec(() => noritoEncodeInstruction(decomposed)),
+    ),
+    Buffer.from(
+      withPureJsInstructionCodec(() => noritoEncodeInstruction(composed)),
+    ),
+  );
+
+  const invalid = buildTransferNftInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    nftId: "bad@name$wonderland",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  assert.throws(
+    () =>
+      withPureJsInstructionCodec(() => noritoEncodeInstruction(invalid)),
+    /reserved Name character/u,
+  );
+  assert.throws(
+    () => nativeBinding.noritoEncodeInstruction(JSON.stringify(invalid)),
+    /parse|name|Nft/u,
+  );
+});
+
+test("nominal DomainId pure-JS frames byte-match native V1", () => {
+  const instructions = [
+    [
+      "Register.Domain",
+      {
+        Register: {
+          Domain: {
+            id: DOMAIN_ID,
+            logo: null,
+            metadata: { purpose: "parity" },
+          },
+        },
+      },
+    ],
+    [
+      "Transfer.Domain",
+      buildTransferDomainInstruction({
+        sourceAccountId: ACCOUNT_ID,
+        domainId: DOMAIN_ID,
+        destinationAccountId: ACCOUNT_ID,
+      }),
+    ],
+    [
+      "Transfer.Nft",
+      buildTransferNftInstruction({
+        sourceAccountId: ACCOUNT_ID,
+        nftId: NFT_ID,
+        destinationAccountId: ACCOUNT_ID,
+      }),
+    ],
+  ];
+  for (const [name, instruction] of instructions) {
+    const encoded = assertNativeAndPureInstructionParity(instruction, name);
+    assert.equal(encoded[39], 0x02, `${name} must use compact Norito framing`);
+  }
+});
+
 test("buildRegisterRwaInstruction normalizes richer lot payloads", () => {
   const instruction = buildRegisterRwaInstruction({
     rwa: {
@@ -922,6 +1118,11 @@ test("buildRegisterRwaInstruction normalizes richer lot payloads", () => {
       },
     },
   });
+  const encoded = assertNativeAndPureInstructionParity(
+    instruction,
+    "RegisterRwa",
+  );
+  assert.equal(encoded[39], 0x02, "RegisterRwa must use compact Norito framing");
 });
 
 test("buildTransferRwaInstruction covers rwa transfer", () => {
@@ -980,6 +1181,27 @@ test("rwa scalar instruction builders cover lifecycle operations", () => {
   assert.deepEqual(encodeAndDecode(freeze), {
     FreezeRwa: { rwa: RWA_ID },
   });
+  const freezeBytes = assertNativeAndPureInstructionParity(freeze, "FreezeRwa");
+  assert.equal(freezeBytes[39], 0x02, "FreezeRwa must use compact Norito framing");
+  const evenHashRwaId = RWA_ID.replace(/ef\$/u, "ee$");
+  assert.throws(
+    () =>
+      withPureJsInstructionCodec(() =>
+        noritoEncodeInstruction({
+          FreezeRwa: { rwa: evenHashRwaId },
+        }),
+      ),
+    /marker bit/u,
+  );
+  assert.throws(
+    () =>
+      nativeBinding.noritoEncodeInstruction(
+        JSON.stringify({
+          FreezeRwa: { rwa: evenHashRwaId },
+        }),
+      ),
+    /hash|parse|marker/u,
+  );
   assert.deepEqual(encodeAndDecode(unfreeze), {
     UnfreezeRwa: { rwa: RWA_ID },
   });
@@ -1274,6 +1496,11 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
   };
   assert.deepEqual(instruction, expected);
   assert.deepEqual(encodeAndDecode(instruction), expected);
+  const encoded = assertNativeAndPureInstructionParity(
+    instruction,
+    "Kaigi.CreateKaigi",
+  );
+  assert.equal(encoded[39], 0x02, "Kaigi.CreateKaigi must use compact Norito framing");
 });
 
 test("noritoDecodeInstruction decodes Kaigi manifests", () => {
@@ -2117,14 +2344,26 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
   };
   withPureJsInstructionCodec(() => {
     const encoded = noritoEncodeInstruction(instruction);
-    const wireFieldLength = Number(encoded.readBigUInt64LE(40));
-    const innerFieldOffset = 40 + 8 + wireFieldLength;
-    const innerFieldPayloadOffset = innerFieldOffset + 8;
-    const innerFrameOffset = innerFieldPayloadOffset + 8;
-    const innerSchemaHash = encoded.subarray(
-      innerFrameOffset + 6,
-      innerFrameOffset + 22,
+    const outerFrame = validateNoritoFrame(encoded);
+    assert.equal(outerFrame.flags, 0x02);
+    const wireField = readCompactFieldPayload(
+      outerFrame.payload,
+      0,
+      "CastPlainBallot.wire",
     );
+    const innerField = readCompactFieldPayload(
+      outerFrame.payload,
+      wireField.next,
+      "CastPlainBallot.inner",
+    );
+    assert.equal(innerField.next, outerFrame.payload.length);
+    const innerFrameLength = Number(innerField.payload.readBigUInt64LE(0));
+    const innerFrame = innerField.payload.subarray(8);
+    assert.equal(innerFrame.length, innerFrameLength);
+    const validatedInner = validateNoritoFrame(innerFrame, {
+      expectedTypeName: "iroha_data_model::isi::governance::CastPlainBallot",
+      expectedPaddingLength: 0,
+    });
     const expectedSchemaHash = createHash("sha256")
       .update(
         "norito:v1:type-name\0iroha_data_model::isi::governance::CastPlainBallot",
@@ -2133,7 +2372,7 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
       .digest()
       .subarray(0, 16);
     assert.equal(expectedSchemaHash.toString("hex"), "62b23313103064bc2c9d528ac3548949");
-    assert.deepEqual(innerSchemaHash, expectedSchemaHash);
+    assert.deepEqual(validatedInner.schemaHash, expectedSchemaHash);
     assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
 
     for (const amount of [
@@ -2163,6 +2402,23 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
       );
     }
   });
+});
+
+test("CastPlainBallot pure-JS bytes match native compact framing", () => {
+  const instruction = {
+    CastPlainBallot: {
+      referendum_id: "ref-quantity",
+      owner: ACCOUNT_ID_CANONICAL,
+      amount: "18446744073709551616.25",
+      duration_blocks: 50,
+      direction: 1,
+    },
+  };
+  const encoded = assertNativeAndPureInstructionParity(
+    instruction,
+    "CastPlainBallot",
+  );
+  assert.equal(encoded[39], 0x02);
 });
 
 test("buildEnactReferendumInstruction normalizes hashes and window defaults", () => {

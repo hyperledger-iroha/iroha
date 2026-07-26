@@ -311,6 +311,10 @@ fn validate_block_transaction_admission(
     tx: &SignedTransaction,
     routing: crate::queue::RoutingDecision,
 ) -> Result<crate::tx::StatefulAdmission, TransactionRejectionReason> {
+    state_tx.bind_privacy_transaction_intent_v1(None);
+    let privacy_intent_binding = crate::privacy::signed_privacy_transaction_intent_binding_v1(tx)
+        .map_err(TransactionRejectionReason::Validation)?;
+    state_tx.bind_privacy_transaction_intent_v1(privacy_intent_binding);
     StateBlock::validate_stateful_admission(tx, state_tx, Some(routing))
 }
 

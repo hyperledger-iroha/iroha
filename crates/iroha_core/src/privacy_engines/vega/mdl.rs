@@ -862,8 +862,9 @@ mod tests {
             PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineManifestDigestV1,
             PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacySessionTranscriptDigestV1,
             PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-            PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaMdlDigestAlgorithmV1,
-            PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
+            PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
+            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
         },
     };
     use iroha_zkp_halo2::vega::VegaT256ScalarV1;
@@ -982,6 +983,7 @@ mod tests {
         PrivacyStatementContextV1 {
             chain_id: ChainId::from("taira-vega-test"),
             action_index: 3,
+            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x26; 32]),
             parameter_id: PrivacyParameterIdV1::new([0x21; 32]),
             parameter_digest: PrivacyParameterDigestV1::new([0x22; 32]),
             verifier_digest: PrivacyVerifierDigestV1::new([0x23; 32]),

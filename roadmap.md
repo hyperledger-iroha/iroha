@@ -23527,8 +23527,10 @@ signed ancestor-linked solid-block header proof,
   predecessor on the same controlled runner. The documented predecessor lacks
   `Cargo.lock`, and the available older lock is incompatible, so no
   reproducible locked 5% comparison is claimed.
-- Run the C# SDK gate on a supported .NET 8 environment. `dotnet` is not
-  installed on the current host.
+- Run the Java and Kotlin SDK gates on a host with a usable Java runtime,
+  `kotlinc`, and Gradle; those toolchains are unavailable on the current host.
+- Run the C# SDK gate on a supported .NET 8 environment; `dotnet` is unavailable
+  on the current host.
 
 ## Privacy, ZK, and FHE
 

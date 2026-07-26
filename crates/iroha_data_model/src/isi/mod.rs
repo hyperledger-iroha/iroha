@@ -240,6 +240,11 @@ impl From<crate::isi::privacy::BootstrapPrivacyPgcAccountsV1> for InstructionBox
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::SubmitPrivacyProofV1> for InstructionBox {
     fn from(i: crate::isi::privacy::SubmitPrivacyProofV1) -> Self {
         InstructionBox(Box::new(i))
@@ -4100,7 +4105,7 @@ pub mod prelude {
         ministry::SubmitAgendaProposal,
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         privacy::{
-            BootstrapPrivacyPgcAccountsV1, PublishPrivacyRootV1,
+            BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
             RegisterPrivacyProtocolActivationV1, SchedulePrivacyConsensusPolicyTighteningV1,
             SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
             TransitionPrivacyProtocolLifecycleV1,

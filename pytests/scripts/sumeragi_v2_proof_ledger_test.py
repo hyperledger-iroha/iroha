@@ -26867,6 +26867,77 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
         assert name not in kura_source
 
 
+def test_multilane_inventory_checker_rejects_weakened_production_count(
+    tmp_path: Path,
+) -> None:
+    """The standalone inventory guard rejects a lower production count."""
+
+    overlay = tmp_path / "repo"
+    overlay.mkdir()
+    copied_paths = {
+        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
+        Path("scripts/run_sumeragi_v2_release_gates.sh"),
+    }
+    for source in ROOT_DIR.iterdir():
+        if source.name in {"ci", "scripts"}:
+            continue
+        (overlay / source.name).symlink_to(
+            source,
+            target_is_directory=source.is_dir(),
+        )
+    for directory in ("ci", "scripts"):
+        destination_dir = overlay / directory
+        destination_dir.mkdir()
+        for source in (ROOT_DIR / directory).iterdir():
+            relative = Path(directory) / source.name
+            destination = overlay / relative
+            if relative in copied_paths:
+                shutil.copy2(source, destination)
+            elif source.is_file() and not source.is_symlink():
+                os.link(source, destination)
+            else:
+                destination.symlink_to(
+                    source,
+                    target_is_directory=source.is_dir(),
+                )
+
+    checker = overlay / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
+    bash = shutil.which("bash")
+    assert bash is not None
+
+    baseline = subprocess.run(
+        [bash, str(checker)],
+        cwd=overlay,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert baseline.returncode == 0, baseline.stderr
+
+    runner = overlay / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    source = runner.read_text(encoding="utf-8")
+    canonical = "readonly expected_production_liveness_test_count=733"
+    weakened = "readonly expected_production_liveness_test_count=732"
+    assert source.count(canonical) == 1
+    runner.write_text(source.replace(canonical, weakened, 1), encoding="utf-8")
+
+    mutated = subprocess.run(
+        [bash, str(checker)],
+        cwd=overlay,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert mutated.returncode != 0
+    assert (
+        "required multilane release inventory token is missing or duplicated"
+        in mutated.stderr
+    )
+    assert canonical in mutated.stderr
+
+
 def test_tlaps_runner_rejects_backend_failure_even_when_tlapm_exits_zero() -> None:
     source = (
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlaps.sh"

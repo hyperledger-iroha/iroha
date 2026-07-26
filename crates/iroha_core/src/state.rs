@@ -3842,8 +3842,7 @@ pub struct World {
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
     /// Singleton chain-wide privacy admission policy and pending tightening.
-    pub(crate) privacy_consensus_policy:
-        Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
+    pub(crate) privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Immutable governed privacy activations keyed by closed protocol identity.
     pub(crate) privacy_activations: Storage<
         crate::privacy_state::PrivacyActivationKeyV1,
@@ -11364,6 +11363,51 @@ pub(crate) struct SccpIvmProvedExecutionBindingV1 {
     pub(crate) gas_used: u64,
 }
 
+/// Exact signed-transaction privacy submission authorized for this state transaction.
+///
+/// The binding is installed from the canonical signed payload before any executor
+/// effect.  Child execution paths may inspect it only through
+/// [`StateTransaction::consume_privacy_transaction_intent_v1`], which makes the
+/// authorization one-shot and prevents contracts, triggers, or IVM overlays from
+/// replaying a signed direct submission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyTransactionIntentBindingV1 {
+    digest: iroha_data_model::privacy::PrivacyTransactionIntentDigestV1,
+    submission_hash: Hash,
+    consumed: bool,
+}
+
+impl PrivacyTransactionIntentBindingV1 {
+    #[must_use]
+    const fn new(
+        digest: iroha_data_model::privacy::PrivacyTransactionIntentDigestV1,
+        submission_hash: Hash,
+    ) -> Self {
+        Self {
+            digest,
+            submission_hash,
+            consumed: false,
+        }
+    }
+}
+
+/// Failure while consuming a transaction-scoped privacy intent binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ThisError)]
+pub(crate) enum PrivacyTransactionIntentConsumptionErrorV1 {
+    /// No direct privacy submission was bound from the signed payload.
+    #[error("the current signed transaction has no bound direct privacy submission")]
+    MissingBinding,
+    /// The executing statement carries a stale or foreign transaction-intent digest.
+    #[error("privacy statement transaction-intent digest differs from the signed payload")]
+    DigestMismatch,
+    /// The executing instruction is not the exact direct submission signed by the authority.
+    #[error("privacy submission differs from the exact direct instruction in the signed payload")]
+    SubmissionMismatch,
+    /// The exact direct submission was already consumed in this state transaction.
+    #[error("the signed privacy submission has already been consumed")]
+    AlreadyConsumed,
+}
+
 /// Aggregated state changes for one transaction.
 pub struct StateTransaction<'block, 'state> {
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
@@ -11530,6 +11574,8 @@ pub struct StateTransaction<'block, 'state> {
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash:
         Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    /// One-shot binding to the exact direct privacy submission in the signed payload.
+    pub(crate) privacy_transaction_intent_binding: Option<PrivacyTransactionIntentBindingV1>,
     /// Original block entrypoint index for the current transaction, when known.
     pub(crate) current_entrypoint_index: Option<u64>,
     /// True while rebuilding state from already committed Kura blocks.
@@ -20149,6 +20195,16 @@ pub trait WorldReadOnly {
     /// Rotation history length counter (read-only).
     fn soradns_history_len(&self) -> &u64;
 
+    /// Authoritative singleton privacy policy (read-only).
+    fn privacy_consensus_policy(&self) -> &iroha_data_model::privacy::PrivacyConsensusPolicyV1;
+    /// Authoritative governed privacy activations (read-only).
+    fn privacy_activations(
+        &self,
+    ) -> &impl StorageReadOnly<
+        crate::privacy_state::PrivacyActivationKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+    >;
+
     /// ZK shielded ledger state (read-only) per asset definition.
     fn zk_assets(&self) -> &impl StorageReadOnly<AssetDefinitionId, ZkAssetState>;
     /// Anonymous elections state (read-only) keyed by election id.
@@ -21684,6 +21740,19 @@ macro_rules! impl_world_ro {
             }
             fn soradns_history_len(&self) -> &u64 {
                 &self.soradns_history_len
+            }
+            fn privacy_consensus_policy(
+                &self,
+            ) -> &iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
+                self.privacy_consensus_policy.get()
+            }
+            fn privacy_activations(
+                &self,
+            ) -> &impl StorageReadOnly<
+                crate::privacy_state::PrivacyActivationKeyV1,
+                iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+            > {
+                &self.privacy_activations
             }
             fn commit_qcs(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, Qc> {
                 &self.commit_qcs
@@ -44597,6 +44666,35 @@ pub trait StateReadOnly: WorldStateSnapshot {
         self.block_hashes().len()
     }
 
+    /// Build the exact privacy capability snapshot from this committed view.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic validation error if persisted privacy state is
+    /// inconsistent with this view's committed height or compiled profiles.
+    fn privacy_capability_snapshot_v1(
+        &self,
+    ) -> core::result::Result<
+        iroha_data_model::privacy::PrivacyCapabilitySnapshotV1,
+        iroha_data_model::privacy::PrivacyCapabilitySnapshotValidationErrorV1,
+    > {
+        let committed_height = u64::try_from(self.height())
+            .expect("supported target pointer widths always fit a state height into u64");
+        let world = self.world();
+        crate::privacy_profiles::committed_privacy_capability_snapshot_v1(
+            committed_height,
+            *world.privacy_consensus_policy(),
+            |protocol_id| {
+                world
+                    .privacy_activations()
+                    .get(&crate::privacy_state::PrivacyActivationKeyV1::new(
+                        protocol_id,
+                    ))
+                    .copied()
+            },
+        )
+    }
+
     /// Latest committed block hash (if any).
     fn latest_block_hash(&self) -> Option<HashOf<BlockHeader>> {
         self.block_hashes().iter().nth_back(0).copied()
@@ -47904,6 +48002,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
             current_tx_hash: None,
+            privacy_transaction_intent_binding: None,
             current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
             contract_lifecycle_transition_ordinal: 0,
@@ -60655,6 +60754,56 @@ impl StateTransaction<'_, '_> {
         self.privacy_actions_in_tx
     }
 
+    /// Install the exact direct privacy submission derived from a new signed payload.
+    ///
+    /// Passing `None` explicitly clears any previous transaction's binding. This
+    /// reset belongs at signed-transaction admission boundaries; child contract,
+    /// trigger, and IVM execution must never call it.
+    pub(crate) fn bind_privacy_transaction_intent_v1(
+        &mut self,
+        binding: Option<(
+            iroha_data_model::privacy::PrivacyTransactionIntentDigestV1,
+            Hash,
+        )>,
+    ) {
+        self.privacy_transaction_intent_binding = binding.map(|(digest, submission_hash)| {
+            PrivacyTransactionIntentBindingV1::new(digest, submission_hash)
+        });
+    }
+
+    /// Consume the exact signed direct privacy submission once.
+    ///
+    /// Validation is completed before flipping the one-shot bit, so a missing,
+    /// stale, or dynamically substituted instruction cannot poison the binding.
+    /// A later verifier failure still rolls the bit back because it lives only in
+    /// this transaction overlay.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed failure when the binding is missing, stale, substituted,
+    /// or already consumed.
+    pub(crate) fn consume_privacy_transaction_intent_v1(
+        &mut self,
+        actual_digest: iroha_data_model::privacy::PrivacyTransactionIntentDigestV1,
+        actual_submission_hash: Hash,
+    ) -> Result<(), PrivacyTransactionIntentConsumptionErrorV1> {
+        let binding = self
+            .privacy_transaction_intent_binding
+            .as_mut()
+            .ok_or(PrivacyTransactionIntentConsumptionErrorV1::MissingBinding)?;
+        if binding.digest != actual_digest {
+            return Err(PrivacyTransactionIntentConsumptionErrorV1::DigestMismatch);
+        }
+        if binding.submission_hash != actual_submission_hash {
+            return Err(PrivacyTransactionIntentConsumptionErrorV1::SubmissionMismatch);
+        }
+        if binding.consumed {
+            return Err(PrivacyTransactionIntentConsumptionErrorV1::AlreadyConsumed);
+        }
+        binding.consumed = true;
+        Ok(())
+    }
+
     /// Check whether one canonical privacy action can be reserved without
     /// changing transaction or block accounting.
     ///
@@ -64663,9 +64812,8 @@ pub(crate) mod deserialize {
         let pedersen_params = take_optional_default(&mut map, "pedersen_params")?;
         let poseidon_params = take_optional_default(&mut map, "poseidon_params")?;
         let runtime_upgrades = take_optional_default(&mut map, "runtime_upgrades")?;
-        let privacy_consensus_policy: Cell<
-            iroha_data_model::privacy::PrivacyConsensusPolicyV1,
-        > = take_required(&mut map, "privacy_consensus_policy")?;
+        let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
+            take_required(&mut map, "privacy_consensus_policy")?;
         let privacy_activations: Storage<
             crate::privacy_state::PrivacyActivationKeyV1,
             iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
@@ -65871,6 +66019,166 @@ mod tests {
             .expect("default test lane must be present in the manifest registry");
     }
 
+    fn world_with_privacy_tightenings(
+        protocol_scheduled_at_height: u64,
+        protocol_effective_at_height: u64,
+    ) -> (
+        World,
+        iroha_data_model::privacy::PrivacyConsensusLimitsV1,
+        iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1,
+    ) {
+        use iroha_data_model::privacy::{
+            PrivacyConsensusPolicyTighteningV1, PrivacyConsensusPolicyV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+            PrivacyProtocolLimitsTighteningV1,
+        };
+
+        let mut world = World::default();
+        let current_limits = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default();
+        let mut next_limits = current_limits;
+        next_limits.max_actions_per_block -= 1;
+        next_limits.retained_root_count -= 1;
+        world.privacy_consensus_policy = mv::cell::Cell::new(PrivacyConsensusPolicyV1 {
+            current_limits,
+            pending_tightening: Some(PrivacyConsensusPolicyTighteningV1 {
+                scheduled_at_height: 100,
+                effective_at_height: 400,
+                next_limits,
+            }),
+        });
+
+        let mut activation = crate::privacy_profiles::compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        )
+        .expect("compiled VeRange profile")
+        .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: 100,
+                activate_at_height: 400,
+            },
+        ));
+        let mut next_protocol_limits = activation.protocol_limits;
+        let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            ref mut limits,
+        ) = next_protocol_limits
+        else {
+            unreachable!("VeRange compiled profile")
+        };
+        limits.max_aggregation_count -= 1;
+        activation.pending_protocol_limits_tightening = Some(PrivacyProtocolLimitsTighteningV1 {
+            scheduled_at_height: protocol_scheduled_at_height,
+            effective_at_height: protocol_effective_at_height,
+            next_limits: next_protocol_limits,
+        });
+        world.privacy_activations.insert(
+            crate::privacy_state::PrivacyActivationKeyV1::new(
+                PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            ),
+            activation,
+        );
+        (world, next_limits, next_protocol_limits)
+    }
+
+    #[test]
+    fn privacy_policy_and_protocol_tightenings_apply_atomically_at_block_start() {
+        use iroha_data_model::privacy::{
+            PrivacyProtocolActivationLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        };
+
+        let (world, next_limits, next_protocol_limits) = world_with_privacy_tightenings(100, 400);
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(400_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let policy = *block.world.privacy_consensus_policy.get();
+        assert_eq!(policy.current_limits, next_limits);
+        assert_eq!(policy.pending_tightening, None);
+        assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
+        assert_eq!(block.privacy_budget_in_block.actions(), 0);
+        assert_eq!(block.privacy_budget_in_block.bytes(), 0);
+
+        let key = crate::privacy_state::PrivacyActivationKeyV1::new(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        );
+        let activation = *block
+            .world
+            .privacy_activations
+            .get(&key)
+            .expect("promoted activation");
+        assert_eq!(activation.protocol_limits, next_protocol_limits);
+        assert_eq!(activation.pending_protocol_limits_tightening, None);
+        assert!(matches!(
+            activation.lifecycle,
+            PrivacyProtocolLifecycleV1::Active(_)
+        ));
+        assert!(matches!(
+            activation.protocol_limits,
+            PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(_)
+        ));
+
+        {
+            let mut transaction = block.transaction();
+            transaction
+                .reserve_privacy_action(0, 1)
+                .expect("one action under tightened block budget");
+            transaction.apply();
+        }
+        let transaction = block.transaction();
+        assert!(
+            transaction.preflight_privacy_action(0, 1).is_err(),
+            "the due max-actions-per-block tightening must govern this exact block"
+        );
+    }
+
+    #[test]
+    fn missed_protocol_schedule_rolls_back_a_due_policy_start_hook() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use iroha_data_model::privacy::PrivacyProtocolIdV1;
+
+        let (world, _, _) = world_with_privacy_tightenings(99, 399);
+        let original_policy = *world.privacy_consensus_policy.view().get();
+        let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        );
+        let original_activation = *world
+            .privacy_activations
+            .view()
+            .get(&activation_key)
+            .expect("scheduled activation");
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(400_u64), None, None, None, 0, 0);
+
+        let error = catch_unwind(AssertUnwindSafe(|| {
+            let _block = state.block(header);
+        }))
+        .expect_err("missed protocol schedule must abort block construction");
+        let panic_text = error
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| error.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        assert!(panic_text.contains("missed"), "{panic_text}");
+        assert_eq!(
+            state.world.privacy_consensus_policy.view().get(),
+            &original_policy,
+            "a failed later start hook must not publish the earlier due policy write"
+        );
+        assert_eq!(
+            state.world.privacy_activations.view().get(&activation_key),
+            Some(&original_activation),
+            "a failed start hook must leave the base activation unchanged"
+        );
+    }
+
     #[test]
     fn privacy_action_budget_is_transactional_contiguous_and_fail_closed() {
         let state = State::new(
@@ -66015,6 +66323,73 @@ mod tests {
         }
         assert_eq!(block.privacy_budget_in_block.actions(), 2);
         assert_eq!(block.privacy_budget_in_block.bytes(), 64);
+    }
+
+    #[test]
+    fn privacy_transaction_intent_binding_is_exact_one_shot_and_transaction_scoped() {
+        use iroha_data_model::privacy::PrivacyTransactionIntentDigestV1;
+
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let digest_a = PrivacyTransactionIntentDigestV1::new([0xA1; 32]);
+        let digest_b = PrivacyTransactionIntentDigestV1::new([0xB2; 32]);
+        let submission_a = Hash::new(b"signed privacy submission A");
+        let submission_b = Hash::new(b"signed privacy submission B");
+
+        {
+            let mut transaction = block.transaction();
+            assert_eq!(
+                transaction
+                    .consume_privacy_transaction_intent_v1(digest_a, submission_a)
+                    .expect_err("ad-hoc or child execution has no signed direct binding"),
+                PrivacyTransactionIntentConsumptionErrorV1::MissingBinding
+            );
+            transaction.bind_privacy_transaction_intent_v1(Some((digest_a, submission_a)));
+            assert_eq!(
+                transaction
+                    .consume_privacy_transaction_intent_v1(digest_b, submission_a)
+                    .expect_err("stale digest"),
+                PrivacyTransactionIntentConsumptionErrorV1::DigestMismatch
+            );
+            assert_eq!(
+                transaction
+                    .consume_privacy_transaction_intent_v1(digest_a, submission_b)
+                    .expect_err("dynamic child substitution"),
+                PrivacyTransactionIntentConsumptionErrorV1::SubmissionMismatch
+            );
+            transaction
+                .consume_privacy_transaction_intent_v1(digest_a, submission_a)
+                .expect("the exact signed submission consumes once");
+            assert_eq!(
+                transaction
+                    .consume_privacy_transaction_intent_v1(digest_a, submission_a)
+                    .expect_err("child-overlay replay"),
+                PrivacyTransactionIntentConsumptionErrorV1::AlreadyConsumed
+            );
+
+            transaction.bind_privacy_transaction_intent_v1(Some((digest_b, submission_b)));
+            transaction
+                .consume_privacy_transaction_intent_v1(digest_b, submission_b)
+                .expect("a new signed payload reset clears the prior consumed bit");
+            // Dropping the overlay exercises rollback of the consumed bit.
+        }
+
+        let mut next_transaction = block.transaction();
+        assert_eq!(
+            next_transaction
+                .consume_privacy_transaction_intent_v1(digest_b, submission_b)
+                .expect_err("a new transaction never inherits a dropped binding"),
+            PrivacyTransactionIntentConsumptionErrorV1::MissingBinding
+        );
+        next_transaction.bind_privacy_transaction_intent_v1(Some((digest_a, submission_a)));
+        next_transaction
+            .consume_privacy_transaction_intent_v1(digest_a, submission_a)
+            .expect("rollback does not leak a consumed bit into the next transaction");
     }
 
     #[test]

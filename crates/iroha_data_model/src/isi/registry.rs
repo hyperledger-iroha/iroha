@@ -300,6 +300,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>,
     InstructionRegistry::register_slice::<privacy::PublishPrivacyRootV1>,
     InstructionRegistry::register_slice::<privacy::BootstrapPrivacyPgcAccountsV1>,
+    InstructionRegistry::register_slice::<privacy::BootstrapPrivacyZkAmsRegistryV1>,
     InstructionRegistry::register_slice::<privacy::SubmitPrivacyProofV1>,
     InstructionRegistry::register_slice::<kaigi::CreateKaigi>,
     InstructionRegistry::register_slice::<kaigi::JoinKaigi>,
@@ -432,12 +433,12 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<privacy::RegisterPrivacyProtocolActivationV1>(
         privacy::RegisterPrivacyProtocolActivationV1::WIRE_ID,
     );
-    registry =
-        registry.register_with_id_slice::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>(
+    registry = registry
+        .register_with_id_slice::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>(
             privacy::SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
         );
-    registry =
-        registry.register_with_id_slice::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>(
+    registry = registry
+        .register_with_id_slice::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>(
             privacy::SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
         );
     registry = registry.register_with_id_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>(
@@ -448,6 +449,9 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     );
     registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyPgcAccountsV1>(
         privacy::BootstrapPrivacyPgcAccountsV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyZkAmsRegistryV1>(
+        privacy::BootstrapPrivacyZkAmsRegistryV1::WIRE_ID,
     );
     registry = registry.register_with_id_slice::<privacy::SubmitPrivacyProofV1>(
         privacy::SubmitPrivacyProofV1::WIRE_ID,

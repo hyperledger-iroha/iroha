@@ -335,7 +335,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
             "WORKFLOW_REF: ${{ github.workflow_ref }}",
             "WORKFLOW_REPOSITORY: ${{ github.repository }}",
             "WORKFLOW_SHA: ${{ github.workflow_sha }}",
-            "actions/attest-build-provenance@v2",
+            "actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be",
             'gh release upload "$EVIDENCE_RELEASE_TAG"',
             'asset.get("digest")',
         ):

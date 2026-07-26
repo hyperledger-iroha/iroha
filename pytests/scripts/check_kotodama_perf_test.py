@@ -278,9 +278,34 @@ class KotodamaPerfGateTests(unittest.TestCase):
         base = self.root / "base.rs"
         candidate = self.root / "candidate.rs"
 
-        def write_inventory(path: Path, names: list[str]) -> None:
+        typed_body = """
+        c.bench_function(family.benchmark_name, |b| {
+            b.iter_batched(
+                || (),
+                |mut vm| {
+                    let gas = host
+                        .syscall(ivm::syscalls::SYSCALL_CORE_QUERY_PAGE, &mut vm);
+                    let items =
+                        ivm::list::read_words(&vm, vm.register(10), page_layout);
+                    assert_eq!(items.len(), QUERY_PAGE_CAPACITY_V1);
+                    let metrics = host.core_query_page_metrics();
+                    assert_eq!(metrics.host_queries, 1);
+                    assert_eq!(metrics.projection_decodes, 1);
+                    assert!(metrics.leaf_tlv_bytes > 0);
+                    assert!(metrics.projection_payload_bytes < raw_query_response_bytes);
+                    std::hint::black_box((gas, items, vm.register(11), metrics));
+                },
+                BatchSize::SmallInput,
+            )
+        });
+        """
+
+        def write_inventory(
+            path: Path, names: list[str], body: str = typed_body
+        ) -> None:
             path.write_text(
-                "\n".join(f'const _: &str = "{name}";' for name in names),
+                "\n".join(f'const _: &str = "{name}";' for name in names)
+                + body,
                 encoding="utf-8",
             )
 
@@ -342,6 +367,28 @@ class KotodamaPerfGateTests(unittest.TestCase):
                 PERF.GateError, f"missing: {misclassified}"
             ):
                 PERF.validate_revision_inventories((base,), (candidate,))
+
+        write_inventory(base, regression)
+        drifted_body = typed_body.replace(
+            "let metrics = host.core_query_page_metrics();",
+            "std::hint::black_box(0);\n"
+            "let metrics = host.core_query_page_metrics();",
+            1,
+        )
+        write_inventory(candidate, representative, drifted_body)
+        with self.assertRaisesRegex(
+            PERF.GateError, "typed-query timed body drift"
+        ):
+            PERF.validate_revision_inventories((base,), (candidate,))
+
+        missing_contract_body = typed_body.replace(
+            "assert_eq!(metrics.host_queries, 1);", "", 1
+        )
+        write_inventory(candidate, representative, missing_contract_body)
+        with self.assertRaisesRegex(
+            PERF.GateError, "timed contract is missing or reordered"
+        ):
+            PERF.validate_revision_inventories((base,), (candidate,))
 
     def test_only_comparable_benchmarks_require_base_evidence(self) -> None:
         populate(self.root, "base")
