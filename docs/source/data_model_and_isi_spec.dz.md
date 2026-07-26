@@ -107,7 +107,7 @@ IDs ཚུ་ལུ་ `Display`/`FromStr` round‐trip དང་ཅིག་ཁ
 དབྱེ་བ་ཚུ་: `Mint<O, D: Identifiable>` དང་ `Burn<O, D: Identifiable>`, `MintBox`/`BurnBox` སྦེ་སྒྲོམ་ནང་བཙུགས་ཡོདཔ་ཨིན།
 
 - རྒྱུ་དངོས་ (ཨང་གྲངས་) མིན་ཊི་/བརན་: ལྷག་ལུས་དང་ངེས་ཚིག་གི་ `total_quantity` བདེ་སྒྲིག་འབདཝ་ཨིན།
-  - སྔོན་སྒྲིག་གནས་སྟངས་: `Numeric` གནས་གོང་འདི་ `AssetDefinition.spec()` ལུ་གྲུབ་དགོ། མིན་ཊི་འདི་ `mintable` གིས་ཆོག་མཆན་བྱིན་ཡོདཔ་ཨིན།
+  - སྔོན་སྒྲིག་གནས་སྟངས་: `Quantity` གནས་གོང་འདི་ `AssetDefinition.spec()` ལུ་གྲུབ་དགོ། མིན་ཊི་འདི་ `mintable` གིས་ཆོག་མཆན་བྱིན་ཡོདཔ་ཨིན།
     - `Infinitely`: རྟག་བུ་རང་ཆོགཔ་ཨིན།
     - `Once`: ཚར་གཅིག་ཏག་ཏག་འབད་ཆོགཔ་ཨིན། དང་པ་ མིན་ཊི་གིས་ `mintable` ལས་ `Not` ལུ་བསྒྱིར་ཞིནམ་ལས་ `AssetDefinitionEvent::MintabilityChanged` དང་ རྩིས་ཞིབ་འབད་ཚུགས་པའི་དོན་ལུ་ ཁ་གསལ་གྱི་ `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` བཏོནམ་ཨིན།
     - `Limited(n)`: གིས་ `n` ཁ་སྐོང་མིན་ཊི་བཀོལ་སྤྱོད་འབད་བཅུགཔ་ཨིན། མཐར་འཁྱོལ་ཅན་གྱི་དངུལ་རྩིས་རེ་རེ་གིས་ གྱངས་ཁ་མར་ཕབ་འབདཝ་ཨིན། ཀླད་ཀོར་ལུ་ལྷོདཔ་ད་ ངེས་ཚིག་འདི་ `Not` ལུ་ཕིལཔ་འབད་དེ་ གོང་འཁོད་བཟུམ་སྦེ་ `MintabilityChanged` བྱུང་ལས་ཚུ་བཏོནམ་ཨིན།

@@ -74,6 +74,6 @@ THEOREM LockedBodyReproposalProgressObligation ==
 
 THEOREM RotatingLeaderProgressObligation ==
   \A initialContext:
-    RotatingLeaderProgressProperty(AsyncSpecAt(initialContext))
+    RotatingLeaderProgressProperty(AsyncLiveSpecAt(initialContext))
 
 =============================================================================

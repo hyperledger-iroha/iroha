@@ -719,9 +719,8 @@ mod tests {
         }
     }
 
-    fn quantity_frame(value: Numeric) -> Vec<u8> {
-        let quantity = Quantity::from_canonical_numeric(value).expect("canonical quantity");
-        QuantityValueV1::new(quantity)
+    fn quantity_frame(value: Quantity) -> Vec<u8> {
+        QuantityValueV1::new(value)
             .encode_frame()
             .expect("quantity frame")
     }
@@ -820,7 +819,7 @@ mod tests {
                 .clone(),
         );
         let account_payload = to_bytes(&account).expect("encode account");
-        let amount = Numeric::new(125_u32, 2);
+        let amount = "1.25".parse::<Quantity>().expect("canonical quantity");
         let amount_payload = quantity_frame(amount);
         let schema = JsonConstructionSchemaV1 {
             nodes: vec![
@@ -882,7 +881,7 @@ mod tests {
 
     #[test]
     fn build_json_recurses_through_list_and_active_only_option() {
-        let amount = Numeric::new(125_u32, 2);
+        let amount = "1.25".parse::<Quantity>().expect("canonical quantity");
         let amount_payload = quantity_frame(amount);
         let element_schema = StateValueSchemaV1 {
             nodes: vec![
@@ -936,7 +935,9 @@ mod tests {
     #[test]
     fn build_json_preserves_full_u64_and_scale_28_quantity_without_floats() {
         let maximum = Numeric::new(u64::MAX, 0);
-        let precise = Numeric::new(1_u32, 28);
+        let precise = "0.0000000000000000000000000001"
+            .parse::<Quantity>()
+            .expect("canonical scale-28 quantity");
         let schema = JsonConstructionSchemaV1 {
             nodes: vec![
                 JsonConstructionNodeV1::Array { arity: 2 },
@@ -1192,7 +1193,10 @@ mod tests {
         let option_layout = crate::sum::SumLayoutV1::option(1).expect("Option<quantity> layout");
 
         for (key, expected) in [
-            ("decimal", Some(Numeric::new(125_u32, 2))),
+            (
+                "decimal",
+                Some("1.25".parse::<Quantity>().expect("canonical quantity")),
+            ),
             ("trailing", None),
             ("integer", None),
             ("negative", None),
@@ -1225,7 +1229,7 @@ mod tests {
                     let amount = QuantityValueV1::decode_frame(amount.payload)
                         .expect("decode canonical quantity")
                         .into_quantity();
-                    assert_eq!(amount.as_numeric(), &expected);
+                    assert_eq!(amount, expected);
                 }
                 None => {
                     assert!(!some, "{key} must produce Option::none");

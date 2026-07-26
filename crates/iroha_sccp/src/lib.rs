@@ -6296,6 +6296,58 @@ mod tests {
         .expect("verified Solana proof-account call")
     }
 
+    fn assert_exact_compact_solana_proof_body_wire(account: &SccpSolanaDestinationProofAccountV1) {
+        let public_inputs = canonical_sccp_message_public_inputs_bytes(&account.public_inputs);
+        assert_eq!(
+            public_inputs.len(),
+            SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1
+        );
+
+        let statement_offset = SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1;
+        let proof_offset = statement_offset + 32;
+        let payload_len_offset = proof_offset + SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1;
+        let payload_offset = payload_len_offset + 2;
+        assert_eq!(&account.proof_body[..statement_offset], public_inputs);
+        assert_eq!(
+            &account.proof_body[statement_offset..proof_offset],
+            &account.statement_hash
+        );
+        assert_eq!(
+            &account.proof_body[proof_offset..payload_len_offset],
+            account.proof_bytes
+        );
+        assert_eq!(
+            u16::from_le_bytes(
+                account.proof_body[payload_len_offset..payload_offset]
+                    .try_into()
+                    .expect("two-byte payload length"),
+            ) as usize,
+            account.canonical_payload_bytes.len()
+        );
+        assert_eq!(
+            &account.proof_body[payload_offset..],
+            account.canonical_payload_bytes
+        );
+        assert_eq!(
+            account.proof_body.len(),
+            SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1
+                + 32
+                + SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1
+                + 2
+                + account.canonical_payload_bytes.len()
+        );
+        assert!(account.proof_body.len() <= SCCP_SOLANA_DESTINATION_PROOF_BODY_MAX_BYTES_V1);
+        assert_eq!(SCCP_SOLANA_DESTINATION_PROOF_BODY_MAX_BYTES_V1, 1_071);
+        assert_eq!(
+            account.header.body_sha256,
+            sha256_bytes(&account.proof_body)
+        );
+        assert_eq!(
+            usize::from(account.header.body_len),
+            account.proof_body.len()
+        );
+    }
+
     fn assert_request_rejected(request: &SccpGroth16Bn254ProofRequestV1) {
         assert!(encode_canonical_sccp_groth16_bn254_proof_request_v1(request).is_none());
         let bytes = to_bytes(request).expect("encode adversarial request");
@@ -6457,55 +6509,7 @@ mod tests {
         assert_eq!(account.payload_amount, 3);
         assert_eq!(account.amount, 3);
         assert_eq!(account.header.amount, 3);
-        let public_inputs = canonical_sccp_message_public_inputs_bytes(&account.public_inputs);
-        assert_eq!(
-            public_inputs.len(),
-            SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1
-        );
-
-        let statement_offset = SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1;
-        let proof_offset = statement_offset + 32;
-        let payload_len_offset = proof_offset + SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1;
-        let payload_offset = payload_len_offset + 2;
-        assert_eq!(&account.proof_body[..statement_offset], public_inputs);
-        assert_eq!(
-            &account.proof_body[statement_offset..proof_offset],
-            &account.statement_hash
-        );
-        assert_eq!(
-            &account.proof_body[proof_offset..payload_len_offset],
-            account.proof_bytes
-        );
-        assert_eq!(
-            u16::from_le_bytes(
-                account.proof_body[payload_len_offset..payload_offset]
-                    .try_into()
-                    .expect("two-byte payload length"),
-            ) as usize,
-            account.canonical_payload_bytes.len()
-        );
-        assert_eq!(
-            &account.proof_body[payload_offset..],
-            account.canonical_payload_bytes
-        );
-        assert_eq!(
-            account.proof_body.len(),
-            SCCP_SOLANA_DESTINATION_PUBLIC_INPUT_BYTES_V1
-                + 32
-                + SCCP_SOLANA_AGAVE_GROTH16_PROOF_BYTES_V1
-                + 2
-                + account.canonical_payload_bytes.len()
-        );
-        assert!(account.proof_body.len() <= SCCP_SOLANA_DESTINATION_PROOF_BODY_MAX_BYTES_V1);
-        assert_eq!(SCCP_SOLANA_DESTINATION_PROOF_BODY_MAX_BYTES_V1, 1_071);
-        assert_eq!(
-            account.header.body_sha256,
-            sha256_bytes(&account.proof_body)
-        );
-        assert_eq!(
-            usize::from(account.header.body_len),
-            account.proof_body.len()
-        );
+        assert_exact_compact_solana_proof_body_wire(account);
 
         let mut expected_init = vec![1, 3];
         expected_init.extend_from_slice(&account.header.body_len.to_le_bytes());

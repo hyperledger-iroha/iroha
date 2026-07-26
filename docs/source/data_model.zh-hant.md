@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   - 測試和固定裝置應先播種通用 `AccountId`，然後分別新增別名租約、別名權限和任何網域擁有的狀態，而不是將網域假設編碼到帳戶身分本身。
   - 公共單一帳戶查找現在專注於別名（`FindAliasesByAccountId`）；帳戶身分本身保持無網域狀態。### 資產定義與資產
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` 以文字方式公開為具有版本控制和校驗和的無前綴 Base58 位址。
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`。
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`。
   - `name` 是必需的面向人的顯示文本，並且不得包含 `#`/`@`。
   - `alias` 是可選的，並且必須是以下之一：
     - `<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`。
   - 建造者：`AssetDefinition::new(id, spec)` 或便利 `numeric(id)`； `name` 是必需的，並且必須透過 `.with_name(...)` 設定。
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`。
-- `Asset { id, value: Numeric }` 與儲存友善的 `AssetEntry`/`AssetValue`。- `AssetBalanceScope`：`Global` 用於無限制餘額，`Dataspace(DataSpaceId)` 用於資料空間限制餘額。
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` 公開用於摘要 API。
+- `Asset { id, value: Quantity }` 與儲存友善的 `AssetEntry`/`AssetValue`。- `AssetBalanceScope`：`Global` 用於無限制餘額，`Dataspace(DataSpaceId)` 用於資料空間限制餘額。
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` 公開用於摘要 API。
 
 ### NFT
 - `NftId { domain: DomainId, name: Name }`。
@@ -182,7 +182,7 @@ translator: machine-google-reviewed
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

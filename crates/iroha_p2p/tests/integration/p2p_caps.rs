@@ -103,14 +103,26 @@ async fn wait_for_consensus_cap_increase(start_cap: u64, timeout: Duration) -> O
 }
 
 #[cfg(feature = "p2p_ws")]
-async fn forward_one_ws_connection(listener: TcpListener, network: NetworkHandle<BigMsg>) {
-    let Ok((stream, remote)) = listener.accept().await else {
-        return;
-    };
-    let Ok((read, write)) = super::ws_io::accept_bounded(stream).await else {
-        return;
-    };
-    let _ = network.accept_stream(read, write, remote).await;
+async fn forward_one_ws_connection(
+    listener: TcpListener,
+    network: NetworkHandle<BigMsg>,
+) -> std::io::Result<()> {
+    let (stream, remote) = listener.accept().await?;
+    let (read, write) = super::ws_io::accept_bounded(stream).await?;
+    if network
+        .accept_stream(read, write, remote)
+        .await
+        .map_err(|error| {
+            std::io::Error::other(format!("network actor websocket handoff failed: {error}"))
+        })?
+    {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "network actor rejected websocket stream handoff",
+        ))
+    }
 }
 
 #[cfg(feature = "p2p_ws")]
@@ -814,9 +826,21 @@ async fn ws_global_frame_cap_disconnects() {
     let kp_listener = KeyPair::random();
     let kp_dialer = KeyPair::random();
 
+    let ws_listener = match TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => listener,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!(
+                "skipping ws_global_frame_cap_disconnects: loopback bind is forbidden: {err}"
+            );
+            return;
+        }
+        Err(err) => panic!("bind ws listener: {err}"),
+    };
+    let ws_addr = ws_listener.local_addr().expect("ws listener addr");
+
     let listener_addr = super::next_addr();
     let listener_cfg = make_config(&listener_addr, &listener_addr, 1_024, 16 * 1024);
-    let (network_listener, _child_listener) = match NetworkHandle::<BigMsg>::start(
+    let (network_listener, _child_listener) = NetworkHandle::<BigMsg>::start(
         kp_listener.clone(),
         listener_cfg,
         Some(chain.clone()),
@@ -825,19 +849,9 @@ async fn ws_global_frame_cap_disconnects() {
         ShutdownSignal::new(),
     )
     .await
-    {
-        Ok(ok) => ok,
-        Err(_) => return,
-    };
+    .expect("start websocket listener network");
 
-    let ws_listener = match TcpListener::bind("127.0.0.1:0").await {
-        Ok(listener) => listener,
-        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => return,
-        Err(err) => panic!("bind ws listener: {err}"),
-    };
-    let ws_addr = ws_listener.local_addr().expect("ws listener addr");
-
-    tokio::spawn(forward_one_ws_connection(
+    let forwarder = tokio::spawn(forward_one_ws_connection(
         ws_listener,
         network_listener.clone(),
     ));
@@ -845,7 +859,7 @@ async fn ws_global_frame_cap_disconnects() {
     let dialer_addr = super::next_addr();
     let mut dialer_cfg = make_config(&dialer_addr, &dialer_addr, 16 * 1024, 16 * 1024);
     dialer_cfg.prefer_ws_fallback = true;
-    let (net_dialer, _child_dialer) = match NetworkHandle::<BigMsg>::start(
+    let (net_dialer, _child_dialer) = NetworkHandle::<BigMsg>::start(
         kp_dialer.clone(),
         dialer_cfg,
         Some(chain.clone()),
@@ -854,10 +868,7 @@ async fn ws_global_frame_cap_disconnects() {
         ShutdownSignal::new(),
     )
     .await
-    {
-        Ok(ok) => ok,
-        Err(_) => return,
-    };
+    .expect("start websocket dialer network");
 
     // Listener only needs topology knowledge to accept the inbound session.
     let peer_dialer = Peer::new(dialer_addr.clone(), kp_dialer.public_key().clone());
@@ -874,16 +885,22 @@ async fn ws_global_frame_cap_disconnects() {
         listener_host.clone(),
     )]));
 
-    if !wait_for_peer_state(
-        &network_listener,
-        true,
-        Duration::from_millis(2_000),
-        Duration::from_millis(50),
-    )
-    .await
-    {
-        return;
-    }
+    tokio::time::timeout(Duration::from_millis(2_000), forwarder)
+        .await
+        .expect("websocket accept/handshake task timed out")
+        .expect("websocket accept/handshake task panicked")
+        .expect("websocket handshake or network handoff failed");
+
+    assert!(
+        wait_for_peer_state(
+            &network_listener,
+            true,
+            Duration::from_millis(2_000),
+            Duration::from_millis(50),
+        )
+        .await,
+        "websocket listener network did not observe the peer before the online timeout"
+    );
 
     assert_ws_global_cap_disconnects(&network_listener, &net_dialer, &peer_listener).await;
 }

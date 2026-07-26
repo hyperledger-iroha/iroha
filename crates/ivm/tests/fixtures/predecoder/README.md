@@ -5,7 +5,11 @@ This directory hosts golden vectors for the IVM opcode pre-decoder.
 
 Generate/refresh fixtures with:
 
-  cargo run -p ivm --bin ivm_predecoder_export
+  cargo run --locked -p ivm --bin ivm_fixture_export -- --write
+
+Check the tracked fixtures without changing them with:
+
+  cargo run --locked -p ivm --bin ivm_fixture_export -- --check
 
 This produces the following under `mixed/`:
 

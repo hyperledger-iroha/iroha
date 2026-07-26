@@ -1505,10 +1505,10 @@ pinned to the configured base.
   `buildBurnAssetInstruction`, `buildBurnTriggerRepetitionsInstruction`) so numeric
   inputs, metadata, and asset IDs are normalised identically to the convenience
   helpers. Pass the resulting objects directly to `buildTransaction`.
-- Use string quantities (`"10"`) for `Numeric` values whenever you want to avoid
-  JavaScript floating-point pitfalls; the builders accept `string | number |
-  bigint` but require plain decimal literals (no exponent), with up to 28
-  fractional digits and a 512-bit mantissa.
+- Use canonical strings (`"10"`), `KotodamaQuantity`, or `bigint` for `Quantity`
+  values. JavaScript `number` inputs are rejected because they cannot represent
+  the full lossless domain. Strings must be plain canonical decimal literals (no
+  exponent), with up to 28 fractional digits and a 512-bit mantissa.
 - Keep asset IDs in canonical holding form
   (`<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>`) when
   chaining mint and transfer steps. The helpers do not guess missing account or
@@ -4036,6 +4036,25 @@ literals only; address-format hints are no longer supported.
 the Torii responses (or synthesize an empty draft when Torii replies with `204 No Content`)
 so automation always receives a `tx_instructions` array to sign without checking
 for `null`.
+
+### Asset-lock cancellation
+
+Use the typed compare-and-cancel builder with the exact remaining quantity read
+from finalized ledger state:
+
+```js
+import { buildCancelAssetLockInstruction } from "@iroha/iroha-js";
+
+const cancel = buildCancelAssetLockInstruction({
+  lockId: "merchant-lock-001",
+  expectedRemainingAmount: "1500",
+});
+```
+
+The builder derives the native `EscrowId` with Blake2b-256 and emits only
+`escrow_id` plus `expected_remaining_amount`. The precondition is mandatory,
+positive, and canonically spelled; the retired one-field cancellation and
+lossy JavaScript numbers are rejected before encoding.
 
 ### SoraFS replication-order instructions
 

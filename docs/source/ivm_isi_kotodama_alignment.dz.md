@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T19:17:13.238594+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ translator: machine-google-reviewed
 
 ### B. ཡིག་དཔར་རྐྱབས་ཡོད་པའི་གནས་གོང་ཚུ་གི་དོན་ལུ་ གཏན་འབེབས་ཝི་ཨེམ་/ཧོསཊི་ཨེ་བི་ཨའི་ ངེས་འཛིན་འབད།
 - གཞི་བཀོད་འབད་ཡོད་པའི་སྒྲུབ་རྟགས་ཚུ་གི་དོན་ལུ་ ཝི་ཨེམ་ཕྱོགས་ལུ་ Norito ལག་ལེན་འཐབ།
-  - Pass pointers (in x10..x13, etc.) to VM memory regions containing Norito‑encoded values ​​for types like `AccountId`, `AssetDefinitionId`, `Numeric`, `Metadata`.
+  - Pass pointers (in x10..x13, etc.) to VM memory regions containing Norito‑encoded values ​​for types like `AccountId`, `AssetDefinitionId`, `Quantity`, `Metadata`.
   - ཧོསཊི་གིས་ བཱའིཊི་ཚུ་ `IVM` དྲན་ཚད་གྲོགས་རམ་པ་དང་ ཌི་ཀོཌི་ཚུ་ Norito དང་གཅིག་ཁར་ ལྷགཔ་ཨིན།
 - Kotodama གསང་ཡིག་ནང་ གྲོགས་རམ་ཉུང་ཤོས་ཚུ་ ཡིག་ཆའི་ཨའི་ཌི་ཚུ་ གསང་ཡིག་/དུས་རྒྱུན་ཆུ་རྫིང་ཚུ་ནང་ རིམ་སྒྲིག་འབད་ནིའི་དོན་ལུ་ ཡང་ན་ དྲན་ཚད་ནང་ གཞི་ཁྲམ་ཚུ་ གྲ་སྒྲིག་འབད་ནི་ལུ་ ཁ་སྐོང་འབད།
-- དངུལ་འབོར་ཚུ་ `Numeric` ཨིན་ དེ་ལས་ NoritoBytes གི་མཚོན་རྟགས་སྦེ་ ཆ་འཇོག་འབད་ཡོདཔ་ཨིན། གཞན་མི་མགུ་རྙོག་དྲགས་ཅན་གྱི་དབྱེ་བ་ཚུ་གིས་ཡང་ དཔག་བྱེད་ལས་བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+- རྒྱུ་དངོས་ཀྱི་གྲངས་ཚད་ཚུ་གིས་ སྤྱིར་བཏང་ `NoritoBytes` དཔག་བྱེད་མེན་པར་ དམིགས་བསལ་ `QuantityValueV1` pointer-ABI TLV (`PointerType::Quantity = 0x0010`) ལག་ལེན་འཐབ་ཨིན། མགུ་རྙོག་ཅན་གྱི་གནས་གོང་གཞན་ཚུ་གིས་ ཁོང་རའི་དཔག་བྱེད་དབྱེ་བ་ངེས་འཛིན་འབད་མི་ཚུ་ལག་ལེན་འཐབ་ཨིན།
 - འདི་ `crates/ivm/docs/calling_convention.md` ནང་ལུ་ཡིག་ཆ་བཟོ་ཞིནམ་ལས་ དཔེ་ཚུ་ཁ་སྐོང་བརྐྱབ།### C. ISI/Data Model དང་མཉམ་དུ་ syscall དང་ཁྱབ་ཁོངས།
 - བསྐྱར་མིང་བཏགས་ནིའི་དོན་ལུ་ ཨེན་ཨེཕ་ཊི་ཨེན་ཨེཕ་ཊི་འབྲེལ་བའི་ སི་ཀཱལ་ཚུ་: ཀེ་ནོ་ནིཀ་མིང་ཚུ་གིས་ ད་ལྟོ་ Norito དཔེ་རིས་ (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA`, ལ་སོགས་པ་ཚུ་ རྗེས་སུ་འཇུག་ཨིན།)
 - སི་སི་ཀཱལ་རེ་རེ་ལས་ ས་ཁྲ་བཟོ་ནིའི་ཐིག་ཁྲམ་ (doc + གསང་ཡིག་བསམ་བརྗོད་) འདི་ སི་ཀཱལ་རེ་རེ་ལས་ ཀོར་ཨའི་ཨེསི་ཨའི་ ཡིག་བརྡའི་རིག་པ་ལུ་ དཔར་བསྐྲུན་འབད་ཡོདཔ་ཨིན།

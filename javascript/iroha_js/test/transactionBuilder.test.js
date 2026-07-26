@@ -2968,7 +2968,7 @@ test("buildCastPlainBallotTransaction normalizes amount", () => {
         ballot: {
           referendumId: "ref-2",
           owner: AUTHORITY_ID_INPUT,
-          amount: 10,
+          amount: "10",
           durationBlocks: 5,
           direction: "aye",
         },
@@ -3308,7 +3308,7 @@ baseTest("proof builders reject padded inline verifier-key metadata", () => {
     [
       "feeAmount",
       { feeAmount: " 7" },
-      /privateKaigiFeeSpend\.feeAmount must not contain surrounding whitespace/u,
+      /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Kotodama V1 Quantity/u,
     ],
   ]) {
     assert.throws(
@@ -3335,7 +3335,7 @@ baseTest("proof builders reject padded inline verifier-key metadata", () => {
   }
 });
 
-baseTest("private Kaigi fee spend forwards canonical fractional Numeric fees", () => {
+baseTest("private Kaigi fee spend forwards canonical fractional Quantity fees", () => {
   const capturedFeeAmounts = [];
   const verifyingKey = {
     id: { backend: "halo2/ipa" },
@@ -3366,9 +3366,11 @@ baseTest("private Kaigi fee spend forwards canonical fractional Numeric fees", (
       for (const feeAmount of [
         "0",
         "7",
+        8n,
         "0.001",
         "0.00005",
         "0.0000000000000000000000000001",
+        "18446744073709551616.25",
       ]) {
         buildPrivateKaigiFeeSpend({
           chainId: "test-chain",
@@ -3384,13 +3386,15 @@ baseTest("private Kaigi fee spend forwards canonical fractional Numeric fees", (
   assert.deepEqual(capturedFeeAmounts, [
     "0",
     "7",
+    "8",
     "0.001",
     "0.00005",
     "0.0000000000000000000000000001",
+    "18446744073709551616.25",
   ]);
 });
 
-baseTest("private Kaigi fee spend rejects noncanonical Numeric fees before native dispatch", () => {
+baseTest("private Kaigi fee spend rejects lossy and noncanonical Quantity fees before native dispatch", () => {
   let nativeCalls = 0;
   const verifyingKey = {
     id: { backend: "halo2/ipa" },
@@ -3416,10 +3420,14 @@ baseTest("private Kaigi fee spend rejects noncanonical Numeric fees before nativ
     },
     () => {
       for (const feeAmount of [
+        1,
+        1.5,
         "",
         "1.0",
         "0.0",
         "01",
+        "1amt",
+        "1qty",
         ".5",
         "1.",
         "-0.1",
@@ -3430,13 +3438,13 @@ baseTest("private Kaigi fee spend rejects noncanonical Numeric fees before nativ
       ]) {
         assert.throws(
           () => build(feeAmount),
-          /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Numeric string/u,
+          /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Kotodama V1 Quantity|JavaScript numbers are rejected/u,
           `feeAmount=${feeAmount}`,
         );
       }
       assert.throws(
         () => build(" 0.001"),
-        /privateKaigiFeeSpend\.feeAmount must not contain surrounding whitespace/u,
+        /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Kotodama V1 Quantity/u,
       );
     },
   );

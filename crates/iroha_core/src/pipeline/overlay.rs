@@ -7567,12 +7567,7 @@ seiyaku ProtectedProvedOverlay {
                 .sign(kp.private_key())
             };
 
-        let invalid_envelope_cases: [(&str, fn(&mut ZkOpenVerifyEnvelope), &str); 7] = [
-            (
-                "unsupported backend",
-                |env| env.backend = BackendTag::Unsupported,
-                "backend is unsupported",
-            ),
+        let invalid_envelope_cases: [(&str, fn(&mut ZkOpenVerifyEnvelope), &str); 6] = [
             (
                 "empty circuit id",
                 |env| env.circuit_id.clear(),

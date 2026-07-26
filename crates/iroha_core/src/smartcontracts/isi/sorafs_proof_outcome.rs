@@ -453,7 +453,10 @@ fn prepare_pdp_outcome(
         })
         .transpose()?;
     let status = map_pdp_status(archive.decision);
-    if status.requires_proof() != provider_attestation.is_some() {
+    let has_provider_attestation = provider_attestation.is_some();
+    if (status.requires_proof() && !has_provider_attestation)
+        || (!status.allows_proof() && has_provider_attestation)
+    {
         return Err(invalid_parameter(
             "PDP terminal classification disagrees with proof presence",
         ));
@@ -573,6 +576,7 @@ fn validate_outcome_record(record: &ProofOutcomeRecordV1) -> Result<(), Instruct
     }
     match &record.projection {
         ProofOutcomeProjectionV1::Pdp(projection) => {
+            let has_proof = projection.proof_digest.is_some();
             if projection.source_sequence == 0
                 || projection.epoch_id == 0
                 || projection.sampled_segments == 0
@@ -581,7 +585,8 @@ fn validate_outcome_record(record: &ProofOutcomeRecordV1) -> Result<(), Instruct
                 || projection.response_deadline_unix <= projection.issued_at_unix
                 || projection.decided_at_unix < projection.issued_at_unix
                 || projection.proof_digest.is_some() != projection.provider_attestation.is_some()
-                || projection.status.requires_proof() != projection.proof_digest.is_some()
+                || (projection.status.requires_proof() && !has_proof)
+                || (!projection.status.allows_proof() && has_proof)
                 || (projection.status == PdpOutcomeStatusV1::Accepted)
                     != (projection.sampled_bytes > 0)
             {
@@ -1790,7 +1795,11 @@ mod tests {
         norito::to_bytes(&archive).expect("encode PDP archive")
     }
 
-    fn unsigned_pdp_archive(sequence: u64, unique: u8) -> Vec<u8> {
+    fn pdp_archive_without_proof(
+        sequence: u64,
+        unique: u8,
+        reason: PdpRejectionReasonV1,
+    ) -> Vec<u8> {
         let challenge = challenge(unique);
         let archive = PdpGovernanceArchiveV1 {
             version: PDP_GOVERNANCE_ARCHIVE_VERSION_V1,
@@ -1800,7 +1809,7 @@ mod tests {
             manifest_digest: challenge.manifest_digest,
             provider_id: challenge.provider_id,
             epoch_id: challenge.epoch_id,
-            decision: PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired),
+            decision: PdpTerminalDecisionV1::Rejected(reason),
             proof_digest: None,
             sampled_segments: 1,
             sampled_hot_leaves: 1,
@@ -1814,8 +1823,12 @@ mod tests {
         };
         archive
             .validate()
-            .expect("unsigned deadline-expired PDP archive validates");
+            .expect("PDP archive without proof validates");
         norito::to_bytes(&archive).expect("encode PDP archive")
+    }
+
+    fn unsigned_pdp_archive(sequence: u64, unique: u8) -> Vec<u8> {
+        pdp_archive_without_proof(sequence, unique, PdpRejectionReasonV1::DeadlineExpired)
     }
 
     fn pdp_submission(archive_payload: Vec<u8>) -> SubmitSorafsProofOutcome {
@@ -2010,6 +2023,24 @@ mod tests {
             panic!("expected PDP projection");
         };
         assert_eq!(projection.status, PdpOutcomeStatusV1::DeadlineExpired);
+        assert!(projection.proof_digest.is_none());
+        assert!(projection.provider_attestation.is_none());
+    }
+
+    #[test]
+    fn invalid_pdp_without_canonical_proof_prepares_and_validates() {
+        let payload = pdp_archive_without_proof(1, 0x23, PdpRejectionReasonV1::InvalidProof);
+        let prepared =
+            prepare_pdp_outcome(&payload).expect("prepare invalid PDP without canonical proof");
+        assert!(!prepared.has_provider_proof);
+
+        let record = prepared.into_record(account(&ed25519_keypair(0x02)), (NOW + 1) * 1_000);
+        validate_outcome_record(&record)
+            .expect("invalid PDP without canonical proof is a valid stored projection");
+        let ProofOutcomeProjectionV1::Pdp(projection) = record.projection else {
+            panic!("expected PDP projection");
+        };
+        assert_eq!(projection.status, PdpOutcomeStatusV1::InvalidProof);
         assert!(projection.proof_digest.is_none());
         assert!(projection.provider_attestation.is_none());
     }

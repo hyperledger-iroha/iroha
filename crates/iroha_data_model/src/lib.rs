@@ -143,6 +143,8 @@ pub mod permission;
 pub mod petal_stream;
 /// Zero-knowledge proof payload types
 pub mod proof;
+/// Canonical protocol-bound privacy proof and activation types.
+pub mod privacy;
 /// QR stream framing types for offline payload handoff.
 pub mod qr_stream;
 /// Query builders, predicates, and parameter types.
@@ -184,7 +186,6 @@ pub mod transactions;
 /// Trigger definitions and scheduling utilities.
 pub mod trigger;
 /// Parliament-governed validation-fee policy and transaction metadata bindings.
-#[cfg(feature = "governance")]
 pub mod validation_fee;
 /// Permission tokens and helpers related to validators.
 pub mod validator;
@@ -336,8 +337,6 @@ mod ffi {
     // NOTE: Makes sure that only one `dealloc` is exported per generated dynamic library
     #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
     mod dylib {
-        use std::alloc;
-
         iroha_ffi::def_ffi_fns! {dealloc}
     }
 }

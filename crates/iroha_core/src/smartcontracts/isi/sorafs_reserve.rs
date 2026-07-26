@@ -995,7 +995,7 @@ fn transfer(
         source,
         AssetId::of(policy.asset_definition.clone(), source.clone()),
         destination.clone(),
-        amount.clone().into_quantity().into_numeric(),
+        amount.clone().into_quantity(),
     )
     .map_err(|error| invalid_parameter(format!("reserve custody transfer failed: {error}")))
 }
@@ -2579,10 +2579,7 @@ mod tests {
             },
         },
     };
-    use iroha_primitives::{
-        json::Json,
-        numeric::{Numeric, Quantity},
-    };
+    use iroha_primitives::{json::Json, numeric::Quantity};
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -2613,7 +2610,9 @@ mod tests {
     }
 
     fn quantity_micro(micro: u128) -> Quantity {
-        Quantity::try_from_numeric(Numeric::new(micro, 6)).expect("micro-XOR fixture")
+        XorQuantity::try_from_micro(micro)
+            .expect("micro-XOR fixture")
+            .into_quantity()
     }
 
     fn xor_micro(micro: u128) -> XorQuantity {

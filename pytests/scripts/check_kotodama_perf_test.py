@@ -380,6 +380,16 @@ class KotodamaPerfGateTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "workflows" / "kotodama_perf.yml"
         ).read_text(encoding="utf-8")
+        representative_job = workflow.split(
+            "  representative-regression:\n", 1
+        )[1]
+        self.assertIn('      RUSTUP_TOOLCHAIN: "1.93.1"', representative_job)
+        toolchain_marker = "      - name: Install Rust toolchain\n"
+        self.assertEqual(representative_job.count(toolchain_marker), 1)
+        toolchain_step = representative_job.split(toolchain_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn("          toolchain: 1.93.1", toolchain_step)
         self.assertNotIn("Install the candidate benchmark harness", workflow)
         self.assertNotIn(
             "cp candidate/crates/ivm/benches/bench_kotodama.rs", workflow

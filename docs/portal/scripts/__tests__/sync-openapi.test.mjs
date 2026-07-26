@@ -661,14 +661,32 @@ test('syncOpenApi index is independent of source mtimes and preserves historical
   const options = {version: 'current', latest: true, mirrors: [], requireSigned: false};
   const context = testContext(tempRoot, outputDir, versionsDir, spec);
   await syncOpenApi(options, context);
+  const mutableOutputPaths = [
+    join(outputDir, 'torii.json'),
+    join(outputDir, 'manifest.json'),
+    join(currentDir, 'torii.json'),
+    join(currentDir, 'manifest.json'),
+    join(outputDir, 'versions.json'),
+  ];
+  const firstOutputs = await Promise.all(
+    mutableOutputPaths.map((path) => readFile(path)),
+  );
   const firstIndex = await readFile(join(outputDir, 'versions.json'), 'utf8');
 
   await utimes(join(outputDir, 'torii.json'), new Date(0), new Date(1_000));
   await utimes(join(currentDir, 'torii.json'), new Date(0), new Date(2_000));
   await utimes(join(historicalDir, 'torii.json'), new Date(0), new Date(3_000));
   await syncOpenApi(options, context);
+  const secondOutputs = await Promise.all(
+    mutableOutputPaths.map((path) => readFile(path)),
+  );
   const secondIndex = await readFile(join(outputDir, 'versions.json'), 'utf8');
 
+  assert.deepEqual(
+    secondOutputs,
+    firstOutputs,
+    'a second sync pass must leave every mutable tracked output byte-identical',
+  );
   assert.equal(secondIndex, firstIndex);
   const parsed = JSON.parse(secondIndex);
   assert.equal(parsed.generatedAt, generatedAt);

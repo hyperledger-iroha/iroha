@@ -66,7 +66,7 @@ use norito::{
 use sorafs_manifest::{
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_LOG_VERSION_V1, GovernanceDagBlockV1,
     GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureV1,
-    ReputationSnapshotEventV1,
+    ReputationSnapshotEventV1, ReputationSnapshotV1,
     reputation::signed::{ReputationSnapshotTrustPolicyV1, SignedReputationSnapshotV1},
 };
 use thiserror::Error;
@@ -92,7 +92,7 @@ pub const REPUTATION_PUBLICATION_CHECKPOINT_VERSION_V1: u8 = 1;
 pub const REPUTATION_GOVERNANCE_DAG_ACKNOWLEDGEMENT_VERSION_V1: u8 = 1;
 /// Committed reputation read-projection version.
 pub const REPUTATION_COMMITTED_READ_PROJECTION_VERSION_V1: u8 = 1;
-/// Maximum committed snapshot events retained by the read projection.
+/// Maximum authoritative snapshots and matching events retained by the read projection.
 pub const REPUTATION_COMMITTED_READ_MAX_EVENTS_V1: usize = 1_024;
 /// Canonical durable journal-producer checkpoint file.
 pub const REPUTATION_JOURNAL_PRODUCER_CHECKPOINT_FILE_NAME_V1: &str =
@@ -3828,21 +3828,25 @@ impl ReputationCommittedReadProjectionV1 {
         }
     }
 
-    fn commit(
+    fn append(
         &mut self,
         committed: ReputationCommittedSnapshotV1,
         policy: &ReputationPublicationPolicyV1,
         trust_policy: &ReputationSnapshotTrustPolicyV1,
         governance_readback: &StoredReputationGovernanceDagReadbackV1,
-    ) -> Result<(), ReputationRuntimeError> {
+    ) -> Result<bool, ReputationRuntimeError> {
         committed.validate(policy, trust_policy, governance_readback)?;
         if let Some(existing) = &self.latest {
             if existing == &committed {
-                return Ok(());
+                return Ok(false);
             }
-            if committed.sequence <= existing.sequence {
-                return Err(ReputationRuntimeError::PublicationCheckpointConflict);
-            }
+        }
+        if self
+            .events
+            .iter()
+            .any(|event| event.snapshot_id == committed.signed_result.snapshot.snapshot_id)
+        {
+            return Err(ReputationRuntimeError::PublicationCheckpointConflict);
         }
         let sequence = match self.events.last() {
             Some(event) => event
@@ -3861,25 +3865,11 @@ impl ReputationCommittedReadProjectionV1 {
             return Err(ReputationRuntimeError::PublicationCheckpointConflict);
         }
         self.events.push(event);
-        if self.events.len() > REPUTATION_COMMITTED_READ_MAX_EVENTS_V1 {
-            let overflow = self
-                .events
-                .len()
-                .checked_sub(REPUTATION_COMMITTED_READ_MAX_EVENTS_V1)
-                .ok_or(ReputationRuntimeError::PublicationCheckpointConflict)?;
-            self.events.drain(..overflow);
-        }
         self.latest = Some(committed);
-        Ok(())
+        Ok(true)
     }
 
-    fn validate(
-        &self,
-        policy: &ReputationPublicationPolicyV1,
-        policy_digest: [u8; 32],
-        trust_policy: &ReputationSnapshotTrustPolicyV1,
-        governance_readback: Option<&StoredReputationGovernanceDagReadbackV1>,
-    ) -> Result<(), ReputationRuntimeError> {
+    fn validate(&self, policy_digest: [u8; 32]) -> Result<(), ReputationRuntimeError> {
         if self.version != REPUTATION_COMMITTED_READ_PROJECTION_VERSION_V1
             || self.publication_policy_digest != policy_digest
             || self.events.len() > REPUTATION_COMMITTED_READ_MAX_EVENTS_V1
@@ -3902,9 +3892,6 @@ impl ReputationCommittedReadProjectionV1 {
             previous = Some(event);
         }
         if let Some(latest) = &self.latest {
-            let governance_readback =
-                governance_readback.ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
-            latest.validate(policy, trust_policy, governance_readback)?;
             let latest_event = self
                 .events
                 .last()
@@ -3917,8 +3904,6 @@ impl ReputationCommittedReadProjectionV1 {
             if latest_event != &expected_event {
                 return Err(ReputationRuntimeError::InvalidCheckpoint);
             }
-        } else if governance_readback.is_some() {
-            return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
         Ok(())
     }
@@ -3938,6 +3923,22 @@ pub trait ReputationCommittedReadApiV1: Send + Sync + fmt::Debug {
     fn committed_read_projection(
         &self,
     ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError>;
+
+    /// Return the exact retained authoritative snapshot identified by
+    /// `snapshot_id`.
+    ///
+    /// Unknown and evicted identifiers return `None`; implementations must not
+    /// substitute the latest snapshot.
+    fn committed_snapshot_by_id(
+        &self,
+        snapshot_id: [u8; 16],
+    ) -> Result<Option<ReputationSnapshotV1>, ReputationRuntimeError> {
+        Ok(self
+            .committed_read_projection()?
+            .latest
+            .filter(|committed| committed.signed_result.snapshot.snapshot_id == snapshot_id)
+            .map(|committed| committed.signed_result.snapshot))
+    }
 
     /// Return the retained committed events strictly after `sequence`.
     ///
@@ -3962,7 +3963,8 @@ struct ReputationPublicationCheckpointV1 {
     policy_digest: [u8; 32],
     pending: Option<StoredReputationPublicationV1>,
     committed_read: ReputationCommittedReadProjectionV1,
-    committed_governance_readback: Option<StoredReputationGovernanceDagReadbackV1>,
+    committed_snapshots: Vec<ReputationCommittedSnapshotV1>,
+    committed_governance_readbacks: Vec<StoredReputationGovernanceDagReadbackV1>,
 }
 
 impl ReputationPublicationCheckpointV1 {
@@ -3972,8 +3974,66 @@ impl ReputationPublicationCheckpointV1 {
             policy_digest,
             pending: None,
             committed_read: ReputationCommittedReadProjectionV1::empty(policy_digest),
-            committed_governance_readback: None,
+            committed_snapshots: Vec::new(),
+            committed_governance_readbacks: Vec::new(),
         }
+    }
+
+    fn commit_authoritative(
+        &mut self,
+        committed: ReputationCommittedSnapshotV1,
+        policy: &ReputationPublicationPolicyV1,
+        trust_policy: &ReputationSnapshotTrustPolicyV1,
+        governance_readback: StoredReputationGovernanceDagReadbackV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        self.commit_authoritative_with_retention_limit(
+            committed,
+            policy,
+            trust_policy,
+            governance_readback,
+            REPUTATION_COMMITTED_READ_MAX_EVENTS_V1,
+        )
+    }
+
+    fn commit_authoritative_with_retention_limit(
+        &mut self,
+        committed: ReputationCommittedSnapshotV1,
+        policy: &ReputationPublicationPolicyV1,
+        trust_policy: &ReputationSnapshotTrustPolicyV1,
+        governance_readback: StoredReputationGovernanceDagReadbackV1,
+        retention_limit: usize,
+    ) -> Result<(), ReputationRuntimeError> {
+        if retention_limit == 0 || retention_limit > REPUTATION_COMMITTED_READ_MAX_EVENTS_V1 {
+            return Err(ReputationRuntimeError::PublicationCheckpointConflict);
+        }
+        let appended = self.committed_read.append(
+            committed.clone(),
+            policy,
+            trust_policy,
+            &governance_readback,
+        )?;
+        if !appended {
+            return if self.committed_snapshots.last() == Some(&committed)
+                && self.committed_governance_readbacks.last() == Some(&governance_readback)
+            {
+                Ok(())
+            } else {
+                Err(ReputationRuntimeError::PublicationCheckpointConflict)
+            };
+        }
+        self.committed_snapshots.push(committed);
+        self.committed_governance_readbacks
+            .push(governance_readback);
+        let overflow = self
+            .committed_snapshots
+            .len()
+            .saturating_sub(retention_limit);
+        if overflow != 0 {
+            self.committed_snapshots.drain(..overflow);
+            self.committed_governance_readbacks.drain(..overflow);
+            self.committed_read.events.drain(..overflow);
+        }
+        Ok(())
     }
 }
 
@@ -4199,11 +4259,10 @@ impl ReputationPublicationReconcilerV1 {
             delivery_state: delivery.as_ref().map(|entry| entry.state),
             failed_attempts: delivery.map_or(0, |entry| entry.failed_attempts),
             signed_result_staged: pending.is_some(),
-            governance_acknowledged: pending
-                .and_then(|entry| entry.governance_acknowledgement)
-                .is_some()
-                || completed.is_some(),
-            complete: completed.is_some(),
+            governance_acknowledged: pending.map_or(completed.is_some(), |entry| {
+                entry.governance_acknowledgement.is_some()
+            }),
+            complete: pending.is_none() && completed.is_some(),
             signed_result_digest: pending
                 .map(|entry| entry.signed_result_digest)
                 .or_else(|| completed.map(|entry| entry.signed_result_digest)),
@@ -4227,6 +4286,27 @@ impl ReputationPublicationReconcilerV1 {
             .lock()
             .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
         Ok(state.checkpoint.committed_read.clone())
+    }
+
+    /// Return one exact retained authoritative snapshot by its identifier.
+    ///
+    /// Unknown and evicted identifiers return `None`; the latest snapshot is
+    /// never substituted for a miss.
+    pub fn committed_snapshot_by_id(
+        &self,
+        snapshot_id: [u8; 16],
+    ) -> Result<Option<ReputationSnapshotV1>, ReputationRuntimeError> {
+        self.ensure_publication_durable()?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+        Ok(state
+            .checkpoint
+            .committed_snapshots
+            .iter()
+            .find(|committed| committed.signed_result.snapshot.snapshot_id == snapshot_id)
+            .map(|committed| committed.signed_result.snapshot.clone()))
     }
 
     /// Return only the bounded committed-event suffix after `sequence`.
@@ -4335,7 +4415,23 @@ impl ReputationPublicationReconcilerV1 {
             }
             return Err(ReputationRuntimeError::PublicationCheckpointConflict);
         }
-        if state.checkpoint.committed_read.latest.is_some() {
+        if let Some(latest) = state.checkpoint.committed_read.latest.as_ref() {
+            if signed_result.snapshot.previous_snapshot_id
+                != Some(latest.signed_result.snapshot.snapshot_id)
+                || signed_result.snapshot.generated_at_unix
+                    <= latest.signed_result.snapshot.generated_at_unix
+                || state
+                    .checkpoint
+                    .committed_snapshots
+                    .iter()
+                    .any(|committed| {
+                        committed.signed_result.snapshot.snapshot_id
+                            == signed_result.snapshot.snapshot_id
+                    })
+            {
+                return Err(ReputationRuntimeError::PublicationCheckpointConflict);
+            }
+        } else if signed_result.snapshot.previous_snapshot_id.is_some() {
             return Err(ReputationRuntimeError::PublicationCheckpointConflict);
         }
         let mut candidate = state.checkpoint.clone();
@@ -4415,8 +4511,13 @@ impl ReputationPublicationReconcilerV1 {
             .state
             .lock()
             .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
-        if let Some(existing) = &state.checkpoint.committed_read.latest {
-            return if existing.governance_acknowledgement == acknowledgement {
+        if state.checkpoint.pending.is_none() {
+            return if state
+                .checkpoint
+                .committed_snapshots
+                .iter()
+                .any(|existing| existing.governance_acknowledgement == acknowledgement)
+            {
                 Ok(())
             } else {
                 Err(ReputationRuntimeError::PublicationCheckpointConflict)
@@ -4437,12 +4538,11 @@ impl ReputationPublicationReconcilerV1 {
         let committed = ReputationCommittedSnapshotV1::from_pending(pending, acknowledgement)?;
         let mut candidate = state.checkpoint.clone();
         candidate.pending = None;
-        candidate.committed_governance_readback = Some(governance_readback.clone());
-        candidate.committed_read.commit(
+        candidate.commit_authoritative(
             committed,
             &self.policy,
             &self.trust_policy,
-            &governance_readback,
+            governance_readback,
         )?;
         self.commit_publication_candidate(&mut state, candidate)
     }
@@ -4455,14 +4555,17 @@ impl ReputationPublicationReconcilerV1 {
             .state
             .lock()
             .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
-        if let Some(completed) = &state.checkpoint.committed_read.latest {
-            if completed.sequence == projector_ack.sequence
-                && completed.material_digest == projector_ack.material_digest
-                && completed.signed_result_digest == projector_ack.signed_result_digest
-            {
-                return Ok(ReputationPublicationOutcomeV1::ExactReplay);
-            }
-            return Err(ReputationRuntimeError::PublicationCheckpointConflict);
+        if state
+            .checkpoint
+            .committed_snapshots
+            .iter()
+            .any(|completed| {
+                completed.sequence == projector_ack.sequence
+                    && completed.material_digest == projector_ack.material_digest
+                    && completed.signed_result_digest == projector_ack.signed_result_digest
+            })
+        {
+            return Ok(ReputationPublicationOutcomeV1::ExactReplay);
         }
         let recover = state
             .checkpoint
@@ -4719,17 +4822,34 @@ fn validate_publication_checkpoint(
     if trust_policy.canonical_digest().ok() != Some(policy.trust_policy_digest)
         || checkpoint.version != REPUTATION_PUBLICATION_CHECKPOINT_VERSION_V1
         || checkpoint.policy_digest != policy_digest
-        || (checkpoint.pending.is_some() && checkpoint.committed_read.latest.is_some())
-        || (checkpoint.pending.is_some() && checkpoint.committed_governance_readback.is_some())
+        || checkpoint.committed_snapshots.len() != checkpoint.committed_governance_readbacks.len()
+        || checkpoint.committed_snapshots.len() != checkpoint.committed_read.events.len()
+        || checkpoint.committed_snapshots.len() > REPUTATION_COMMITTED_READ_MAX_EVENTS_V1
+        || checkpoint.committed_read.latest.as_ref() != checkpoint.committed_snapshots.last()
     {
         return Err(ReputationRuntimeError::InvalidCheckpoint);
     }
-    checkpoint.committed_read.validate(
-        policy,
-        policy_digest,
-        trust_policy,
-        checkpoint.committed_governance_readback.as_ref(),
-    )?;
+    checkpoint.committed_read.validate(policy_digest)?;
+    let mut retained_snapshot_ids = BTreeSet::new();
+    for ((committed, governance_readback), event) in checkpoint
+        .committed_snapshots
+        .iter()
+        .zip(&checkpoint.committed_governance_readbacks)
+        .zip(&checkpoint.committed_read.events)
+    {
+        committed.validate(policy, trust_policy, governance_readback)?;
+        if !retained_snapshot_ids.insert(committed.signed_result.snapshot.snapshot_id) {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+        let expected_event = ReputationSnapshotEventV1::from_snapshot(
+            event.sequence,
+            &committed.signed_result.snapshot,
+        )
+        .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+        if event != &expected_event {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+    }
     if let Some(pending) = &checkpoint.pending {
         verify_persisted_signed_result(&pending.signed_result, trust_policy)?;
         if pending.sequence == 0
@@ -4737,8 +4857,22 @@ fn validate_publication_checkpoint(
             || pending.signed_result_digest == [0; 32]
             || pending.signed_result.policy_digest != policy.trust_policy_digest
             || signed_result_digest(&pending.signed_result)? != pending.signed_result_digest
+            || retained_snapshot_ids.contains(&pending.signed_result.snapshot.snapshot_id)
         {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+        match checkpoint.committed_read.latest.as_ref() {
+            Some(latest)
+                if pending.signed_result.snapshot.previous_snapshot_id
+                    == Some(latest.signed_result.snapshot.snapshot_id)
+                    && pending.signed_result.snapshot.generated_at_unix
+                        > latest.signed_result.snapshot.generated_at_unix => {}
+            None if pending
+                .signed_result
+                .snapshot
+                .previous_snapshot_id
+                .is_none() => {}
+            _ => return Err(ReputationRuntimeError::InvalidCheckpoint),
         }
         match (
             pending.governance_acknowledgement,
@@ -4978,6 +5112,14 @@ impl ReputationRuntimeSupervisorV1 {
         self.publication.committed_read_projection()
     }
 
+    /// Return one exact retained authoritative snapshot by its identifier.
+    pub fn committed_snapshot_by_id(
+        &self,
+        snapshot_id: [u8; 16],
+    ) -> Result<Option<ReputationSnapshotV1>, ReputationRuntimeError> {
+        self.publication.committed_snapshot_by_id(snapshot_id)
+    }
+
     /// Return only the retained committed-event suffix after `sequence`.
     pub fn committed_events_after(
         &self,
@@ -4992,6 +5134,13 @@ impl ReputationCommittedReadApiV1 for ReputationRuntimeSupervisorV1 {
         &self,
     ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError> {
         self.publication.committed_read_projection()
+    }
+
+    fn committed_snapshot_by_id(
+        &self,
+        snapshot_id: [u8; 16],
+    ) -> Result<Option<ReputationSnapshotV1>, ReputationRuntimeError> {
+        self.publication.committed_snapshot_by_id(snapshot_id)
     }
 
     fn committed_events_after(
@@ -5523,11 +5672,12 @@ mod tests {
     fn governance_block(signed_result: &SignedReputationSnapshotV1) -> GovernanceDagBlockV1 {
         let signing_key = SigningKey::from_bytes(&[0xB1; 32]);
         let publisher_peer_id = b"peer-a".to_vec();
+        let publication_timestamp = signed_result.snapshot.generated_at_unix;
         let mut node = GovernanceLogNodeV1 {
             version: GOVERNANCE_LOG_VERSION_V1,
             node_cid: Vec::new(),
             prev_cid: None,
-            timestamp: FINALIZED_AT_MS / 1_000,
+            timestamp: publication_timestamp,
             publisher_peer_id: publisher_peer_id.clone(),
             payload: GovernanceLogPayloadV1::SignedReputationSnapshot(signed_result.clone()),
             publisher_signature: empty_governance_signature(),
@@ -5542,7 +5692,7 @@ mod tests {
             block_cid: Vec::new(),
             prev_block_cid: None,
             sequence: 0,
-            timestamp: FINALIZED_AT_MS / 1_000,
+            timestamp: publication_timestamp,
             publisher_peer_id,
             node,
             block_signature: empty_governance_signature(),
@@ -6695,6 +6845,12 @@ mod tests {
             .expect("committed projection");
         assert_eq!(committed.events.len(), 1);
         assert_eq!(
+            reconciler
+                .committed_snapshot_by_id(signed.snapshot.snapshot_id)
+                .expect("committed snapshot lookup"),
+            Some(signed.snapshot.clone())
+        );
+        assert_eq!(
             committed
                 .latest
                 .as_ref()
@@ -6756,6 +6912,145 @@ mod tests {
     }
 
     #[test]
+    fn publication_reconciler_retains_exact_successor_snapshots_across_restart() {
+        let projector_root = TempDir::new().expect("projector root");
+        let publication_root = TempDir::new().expect("publication root");
+        let trust = trust_policy();
+        let projector = Arc::new(
+            ReputationIngestService::open(projector_root.path(), ingest_policy(&trust))
+                .expect("projector"),
+        );
+        let policy = publication_policy(&trust);
+        let reconciler = open_publication_reconciler(
+            publication_root.path(),
+            Arc::clone(&projector),
+            trust.clone(),
+            policy.clone(),
+        );
+
+        let first = signed_snapshot(&trust, [0xB8; 16], None, FINALIZED_AT_MS / 1_000);
+        let first_delivery = signing_delivery(&first);
+        reconciler
+            .store_signed_result(&first_delivery, first.clone())
+            .expect("stage first signed result");
+        let first_digest = signed_result_digest(&first).expect("first signed result digest");
+        let (first_acknowledgement, first_readback) = governance_readback(
+            &policy,
+            first_delivery.sequence,
+            first_delivery.material_digest,
+            first_digest,
+            &first,
+        );
+        reconciler
+            .store_governance_readback(first_acknowledgement, first_readback)
+            .expect("store first Governance DAG readback");
+        reconciler
+            .complete_publication(first_acknowledgement)
+            .expect("complete first publication");
+
+        let unlinked = signed_snapshot(&trust, [0xBA; 16], None, FINALIZED_AT_MS / 1_000 + 1);
+        let unlinked_delivery = signing_delivery(&unlinked);
+        assert!(matches!(
+            reconciler.store_signed_result(&unlinked_delivery, unlinked),
+            Err(ReputationRuntimeError::PublicationCheckpointConflict)
+        ));
+
+        let second = signed_snapshot(
+            &trust,
+            [0xB9; 16],
+            Some(first.snapshot.snapshot_id),
+            FINALIZED_AT_MS / 1_000 + 1,
+        );
+        let second_delivery = signing_delivery(&second);
+        reconciler
+            .store_signed_result(&second_delivery, second.clone())
+            .expect("stage successor signed result");
+        let staged_status = reconciler.status().expect("staged successor status");
+        assert!(staged_status.signed_result_staged);
+        assert!(!staged_status.governance_acknowledged);
+        assert!(!staged_status.complete);
+        assert_eq!(
+            reconciler
+                .committed_snapshot_by_id(first.snapshot.snapshot_id)
+                .expect("lookup first while successor is staged"),
+            Some(first.snapshot.clone()),
+            "staging a successor must not mutate committed history"
+        );
+        assert_eq!(
+            reconciler
+                .committed_read_projection()
+                .expect("projection while successor is staged")
+                .latest
+                .as_ref()
+                .map(|committed| committed.signed_result.snapshot.snapshot_id),
+            Some(first.snapshot.snapshot_id)
+        );
+
+        let second_digest = signed_result_digest(&second).expect("second signed result digest");
+        let (second_acknowledgement, second_readback) = governance_readback(
+            &policy,
+            second_delivery.sequence,
+            second_delivery.material_digest,
+            second_digest,
+            &second,
+        );
+        reconciler
+            .store_governance_readback(second_acknowledgement, second_readback)
+            .expect("store successor Governance DAG readback");
+        let acknowledged_status = reconciler.status().expect("acknowledged successor status");
+        assert!(acknowledged_status.signed_result_staged);
+        assert!(acknowledged_status.governance_acknowledged);
+        assert!(!acknowledged_status.complete);
+        reconciler
+            .complete_publication(second_acknowledgement)
+            .expect("complete successor publication");
+        let completed_status = reconciler.status().expect("completed successor status");
+        assert!(!completed_status.signed_result_staged);
+        assert!(completed_status.governance_acknowledged);
+        assert!(completed_status.complete);
+
+        let projection = reconciler
+            .committed_read_projection()
+            .expect("successor projection");
+        assert_eq!(projection.events.len(), 2);
+        assert_eq!(
+            projection
+                .latest
+                .as_ref()
+                .map(|committed| committed.signed_result.snapshot.snapshot_id),
+            Some(second.snapshot.snapshot_id)
+        );
+        assert_eq!(
+            reconciler
+                .committed_snapshot_by_id(first.snapshot.snapshot_id)
+                .expect("lookup retained predecessor"),
+            Some(first.snapshot.clone())
+        );
+        assert_eq!(
+            reconciler
+                .committed_snapshot_by_id(second.snapshot.snapshot_id)
+                .expect("lookup retained successor"),
+            Some(second.snapshot.clone())
+        );
+        drop(reconciler);
+
+        let restored =
+            open_publication_reconciler(publication_root.path(), projector, trust, policy);
+        assert_eq!(
+            restored
+                .committed_snapshot_by_id(first.snapshot.snapshot_id)
+                .expect("lookup restored predecessor"),
+            Some(first.snapshot)
+        );
+        assert_eq!(
+            restored
+                .committed_snapshot_by_id(second.snapshot.snapshot_id)
+                .expect("lookup restored successor"),
+            Some(second.snapshot)
+        );
+    }
+
+    #[test]
     fn committed_projection_canonical_validation_rejects_reordering_and_overflow() {
         let trust = trust_policy();
         let policy = publication_policy(&trust);
@@ -6772,25 +7067,26 @@ mod tests {
             signed_result: signed.clone(),
             governance_acknowledgement: acknowledgement,
         };
-        let mut projection = ReputationCommittedReadProjectionV1::empty(policy_digest);
-        projection
-            .commit(committed.clone(), &policy, &trust, &governance_readback)
+        let mut checkpoint = ReputationPublicationCheckpointV1::empty(policy_digest);
+        checkpoint
+            .commit_authoritative(
+                committed.clone(),
+                &policy,
+                &trust,
+                governance_readback.clone(),
+            )
             .expect("commit projection");
-        projection
-            .validate(&policy, policy_digest, &trust, Some(&governance_readback))
+        checkpoint
+            .committed_read
+            .validate(policy_digest)
             .expect("validate projection");
-        projection
-            .commit(committed, &policy, &trust, &governance_readback)
+        checkpoint
+            .commit_authoritative(committed, &policy, &trust, governance_readback.clone())
             .expect("exact replay");
-        assert_eq!(projection.events.len(), 1);
+        assert_eq!(checkpoint.committed_read.events.len(), 1);
+        assert_eq!(checkpoint.committed_snapshots.len(), 1);
+        let projection = checkpoint.committed_read.clone();
 
-        let checkpoint = ReputationPublicationCheckpointV1 {
-            version: REPUTATION_PUBLICATION_CHECKPOINT_VERSION_V1,
-            policy_digest,
-            pending: None,
-            committed_read: projection.clone(),
-            committed_governance_readback: Some(governance_readback.clone()),
-        };
         let canonical = norito::to_bytes(&checkpoint).expect("canonical checkpoint");
         assert_eq!(
             decode_publication_checkpoint(&canonical, &policy, policy_digest, &trust)
@@ -6807,7 +7103,7 @@ mod tests {
         let mut reordered = projection.clone();
         reordered.events.push(reordered.events[0].clone());
         assert!(matches!(
-            reordered.validate(&policy, policy_digest, &trust, Some(&governance_readback)),
+            reordered.validate(policy_digest),
             Err(ReputationRuntimeError::InvalidCheckpoint)
         ));
 
@@ -6815,9 +7111,99 @@ mod tests {
         oversized.events =
             vec![oversized.events[0].clone(); REPUTATION_COMMITTED_READ_MAX_EVENTS_V1 + 1];
         assert!(matches!(
-            oversized.validate(&policy, policy_digest, &trust, Some(&governance_readback)),
+            oversized.validate(policy_digest),
             Err(ReputationRuntimeError::InvalidCheckpoint)
         ));
+    }
+
+    #[test]
+    fn committed_snapshot_history_is_bounded_ordered_and_restart_safe() {
+        let trust = trust_policy();
+        let policy = publication_policy(&trust);
+        let policy_digest = policy.digest().expect("publication policy digest");
+        let mut checkpoint = ReputationPublicationCheckpointV1::empty(policy_digest);
+        let mut previous_snapshot_id = None;
+
+        for offset in 0_u8..3 {
+            let snapshot_id = [0xC0 + offset; 16];
+            let signed = signed_snapshot(
+                &trust,
+                snapshot_id,
+                previous_snapshot_id,
+                FINALIZED_AT_MS / 1_000 + u64::from(offset),
+            );
+            let material_digest = [0xD0 + offset; 32];
+            let signed_result_digest = signed_result_digest(&signed).expect("signed result digest");
+            let sequence = u64::from(offset) + 1;
+            let (acknowledgement, governance_readback) = governance_readback(
+                &policy,
+                sequence,
+                material_digest,
+                signed_result_digest,
+                &signed,
+            );
+            let committed = ReputationCommittedSnapshotV1 {
+                sequence,
+                material_digest,
+                signed_result_digest,
+                signed_result: signed,
+                governance_acknowledgement: acknowledgement,
+            };
+            checkpoint
+                .commit_authoritative_with_retention_limit(
+                    committed,
+                    &policy,
+                    &trust,
+                    governance_readback,
+                    2,
+                )
+                .expect("commit bounded authoritative snapshot");
+            previous_snapshot_id = Some(snapshot_id);
+        }
+
+        assert_eq!(checkpoint.committed_snapshots.len(), 2);
+        assert_eq!(checkpoint.committed_governance_readbacks.len(), 2);
+        assert_eq!(
+            checkpoint
+                .committed_snapshots
+                .iter()
+                .map(|committed| committed.signed_result.snapshot.snapshot_id)
+                .collect::<Vec<_>>(),
+            vec![[0xC1; 16], [0xC2; 16]]
+        );
+        assert_eq!(
+            checkpoint
+                .committed_read
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(
+            checkpoint
+                .committed_read
+                .latest
+                .as_ref()
+                .map(|committed| committed.signed_result.snapshot.snapshot_id),
+            Some([0xC2; 16])
+        );
+        assert!(
+            checkpoint
+                .committed_snapshots
+                .iter()
+                .all(|committed| committed.signed_result.snapshot.snapshot_id != [0xC0; 16]),
+            "the oldest identifier must be unavailable after bounded eviction"
+        );
+        validate_publication_checkpoint(&checkpoint, &policy, policy_digest, &trust)
+            .expect("validate bounded history");
+
+        let canonical = norito::to_bytes(&checkpoint).expect("encode bounded history");
+        assert_eq!(
+            decode_publication_checkpoint(&canonical, &policy, policy_digest, &trust)
+                .expect("restore bounded history"),
+            checkpoint
+        );
     }
 
     #[test]
@@ -6838,7 +7224,8 @@ mod tests {
                 governance_readback: None,
             }),
             committed_read: ReputationCommittedReadProjectionV1::empty(policy_digest),
-            committed_governance_readback: None,
+            committed_snapshots: Vec::new(),
+            committed_governance_readbacks: Vec::new(),
         };
         let canonical = norito::to_bytes(&checkpoint).expect("canonical valid checkpoint");
         decode_publication_checkpoint(&canonical, &policy, policy_digest, &trust)
@@ -6888,17 +7275,10 @@ mod tests {
             signed_result: signed,
             governance_acknowledgement: acknowledgement,
         };
-        let mut projection = ReputationCommittedReadProjectionV1::empty(policy_digest);
-        projection
-            .commit(committed, &policy, &trust, &governance_readback)
+        let mut checkpoint = ReputationPublicationCheckpointV1::empty(policy_digest);
+        checkpoint
+            .commit_authoritative(committed, &policy, &trust, governance_readback)
             .expect("commit valid projection");
-        let mut checkpoint = ReputationPublicationCheckpointV1 {
-            version: REPUTATION_PUBLICATION_CHECKPOINT_VERSION_V1,
-            policy_digest,
-            pending: None,
-            committed_read: projection,
-            committed_governance_readback: Some(governance_readback),
-        };
         let canonical = norito::to_bytes(&checkpoint).expect("canonical valid checkpoint");
         decode_publication_checkpoint(&canonical, &policy, policy_digest, &trust)
             .expect("valid committed checkpoint");
@@ -6919,8 +7299,8 @@ mod tests {
         ));
 
         checkpoint
-            .committed_governance_readback
-            .as_mut()
+            .committed_governance_readbacks
+            .last_mut()
             .expect("committed Governance DAG readback")
             .block_signature
             .signature[0] ^= 0x01;

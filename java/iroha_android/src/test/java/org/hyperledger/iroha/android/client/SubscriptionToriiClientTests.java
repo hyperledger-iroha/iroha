@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
@@ -11,6 +12,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionActionRequest;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionActionResponse;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionCreateRequest;
@@ -58,7 +60,7 @@ public final class SubscriptionToriiClientTests {
     getSubscriptionParsesResponse();
     subscriptionActionsAndUsagePostBodies();
     listParamsRejectInvalidStatus();
-    usageRequestRejectsInvalidDelta();
+    usageRequestUsesCanonicalQuantityBoundary();
     propagatesNon2xxResponses();
     configBuildsSubscriptionToriiClient();
     configBuildsSubscriptionToriiClientDefault();
@@ -400,7 +402,7 @@ public final class SubscriptionToriiClientTests {
                     SubscriptionUsageRequest.builder()
                         .authority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
                         .unitKey("compute_ms")
-                        .delta("3600000")
+                        .delta(NumericV1.QuantityValue.parseCanonical("3600000"))
                         .usageTriggerId("sub-1$subscriptions#usage")
                         .build())
                 .join());
@@ -415,34 +417,51 @@ public final class SubscriptionToriiClientTests {
     }
   }
 
-  private static void usageRequestRejectsInvalidDelta() {
+  private static void usageRequestUsesCanonicalQuantityBoundary() {
+    final String[] canonicalValues = {
+      "0", "12.5", NumericV1.INT_MAX.toString(), "0." + repeat("0", 27) + "1"
+    };
+    for (final String canonical : canonicalValues) {
+      final NumericV1.QuantityValue quantity = NumericV1.decodeQuantityJson(canonical);
+      final SubscriptionUsageRequest request =
+          SubscriptionUsageRequest.builder()
+              .authority("alice")
+              .unitKey("compute_ms")
+              .delta(quantity)
+              .build();
+      assert quantity.equals(request.delta()) : "delta should retain its nominal Quantity type";
+      assert canonical.equals(request.toJsonMap().get("delta"))
+          : "delta should use canonical Quantity JSON";
+    }
+
+    final String[] invalidValues = {
+      "+1",
+      "01",
+      "00",
+      "00.1",
+      "1.0",
+      "1.20",
+      "0.0",
+      "-0",
+      "-1",
+      NumericV1.INT_MAX.add(BigInteger.ONE).toString(),
+      "0." + repeat("0", 28) + "1"
+    };
+    for (final String invalid : invalidValues) {
+      try {
+        NumericV1.decodeQuantityJson(invalid);
+        throw new AssertionError("expected non-canonical delta to throw: " + invalid);
+      } catch (final NumericV1.NumericException expected) {
+        // expected
+      }
+    }
+
     try {
-      SubscriptionUsageRequest.builder()
-          .authority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-          .unitKey("compute_ms")
-          .delta("-1")
-          .build();
-      throw new AssertionError("expected negative delta to throw");
-    } catch (final IllegalArgumentException expected) {
+      NumericV1.decodeQuantityJsonValue(Long.valueOf(1));
+      throw new AssertionError("expected numeric JSON delta to throw");
+    } catch (final NumericV1.NumericException expected) {
       // expected
     }
-    try {
-      SubscriptionUsageRequest.builder()
-          .authority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-          .unitKey("compute_ms")
-          .delta("invalid")
-          .build();
-      throw new AssertionError("expected invalid delta to throw");
-    } catch (final IllegalArgumentException expected) {
-      // expected
-    }
-    final SubscriptionUsageRequest request =
-        SubscriptionUsageRequest.builder()
-            .authority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-            .unitKey("compute_ms")
-            .delta("12.5")
-            .build();
-    assert "12.5".equals(request.delta()) : "delta should preserve numeric literal";
   }
 
   private static void propagatesNon2xxResponses() {
@@ -537,6 +556,14 @@ public final class SubscriptionToriiClientTests {
     } catch (final java.io.UnsupportedEncodingException ex) {
       throw new IllegalStateException("UTF-8 not supported", ex);
     }
+  }
+
+  private static String repeat(final String value, final int count) {
+    final StringBuilder repeated = new StringBuilder(value.length() * count);
+    for (int i = 0; i < count; i++) {
+      repeated.append(value);
+    }
+    return repeated.toString();
   }
 
   private static final class RecordingExecutor implements HttpTransportExecutor {

@@ -65,9 +65,12 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "zk.*",
   "VerifyingKey.*",
   "Rwa.*",
+  "CancelAssetLock",
   "SoraFS.ReplicationOrder.*",
   "RecordSccpMessage",
 ];
+const CANCEL_ASSET_LOCK_WIRE_ID =
+  "iroha_data_model::isi::escrow::CancelAssetLock";
 const RECORD_SCCP_MESSAGE_WIRE_ID =
   "iroha_data_model::isi::bridge::RecordSccpMessage";
 const ISSUE_REPLICATION_ORDER_WIRE_ID =
@@ -109,193 +112,112 @@ const CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH = Buffer.from(
 const BLOCK_PROOFS_TYPE_NAME =
   "iroha_data_model::block::proofs::BlockProofs";
 const BLOCK_MERKLE_MAX_HEIGHT = 32;
-const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
-  "iroha.mint": Buffer.from("ec0b538ed0e5b46ed163e0aedb335e73", "hex"),
-  "iroha.burn": Buffer.from("361f279124a0aad61978c80ff1c9ce0a", "hex"),
-  "iroha.register": Buffer.from("2e9fa44b44ac5295a0b34e05edcb4133", "hex"),
-  "iroha.transfer": Buffer.from("a4174c78d6341f8f98fc2adae8ed67b9", "hex"),
-  "iroha.custom": Buffer.from("6b86902a75600648d186d52cd662b229", "hex"),
-  "iroha.execute_trigger": Buffer.from(
-    "d8988afd2c1dee721564dd8d57841eff",
-    "hex",
-  ),
-  "iroha.rwa": Buffer.from("4a07cd02fdfb5fe81043a1ba7bf72123", "hex"),
-  [RECORD_SCCP_MESSAGE_WIRE_ID]: Buffer.from(
-    "d89e5307d9c06f39f39086ffff9fc5d0",
-    "hex",
-  ),
-  [ISSUE_REPLICATION_ORDER_WIRE_ID]: schemaHashForTypeName(
-    ISSUE_REPLICATION_ORDER_WIRE_ID,
-  ),
-  [COMPLETE_REPLICATION_ORDER_WIRE_ID]: schemaHashForTypeName(
-    COMPLETE_REPLICATION_ORDER_WIRE_ID,
-  ),
-  [EXPIRE_REPLICATION_ORDER_WIRE_ID]: schemaHashForTypeName(
-    EXPIRE_REPLICATION_ORDER_WIRE_ID,
-  ),
-  "iroha_data_model::isi::kaigi::CreateKaigi": Buffer.from(
-    "24ee2ad1d6a56d3524ee2ad1d6a56d35",
-    "hex",
-  ),
-  "iroha_data_model::isi::kaigi::JoinKaigi": Buffer.from(
-    "5077ea3be6f706825077ea3be6f70682",
-    "hex",
-  ),
-  "iroha_data_model::isi::kaigi::LeaveKaigi": Buffer.from(
-    "d74b8812a0a2681cd74b8812a0a2681c",
-    "hex",
-  ),
-  "iroha_data_model::isi::kaigi::EndKaigi": Buffer.from(
-    "85befda0409d3c0485befda0409d3c04",
-    "hex",
-  ),
-  "iroha_data_model::isi::kaigi::RecordKaigiUsage": Buffer.from(
-    "e20fb919a4056c21e20fb919a4056c21",
-    "hex",
-  ),
-  "iroha_data_model::isi::kaigi::SetKaigiRelayManifest": Buffer.from(
-    "726dd6413d1d2b01726dd6413d1d2b01",
-    "hex",
-  ),
-  "iroha_data_model::isi::kaigi::RegisterKaigiRelay": Buffer.from(
-    "b40e80079720b8a2b40e80079720b8a2",
-    "hex",
-  ),
-  "iroha_data_model::isi::governance::ProposeDeployContract": Buffer.from(
-    "d92fab6392e8299fd92fab6392e8299f",
-    "hex",
-  ),
-  "iroha_data_model::isi::governance::CastZkBallot": Buffer.from(
-    "58d9049c2c73912958d9049c2c739129",
-    "hex",
-  ),
-  "iroha_data_model::isi::governance::CastPlainBallot": Buffer.from(
-    "9969f69b4a99a0749969f69b4a99a074",
-    "hex",
-  ),
-  "iroha_data_model::isi::governance::EnactReferendum": Buffer.from(
-    "564da81425d228de564da81425d228de",
-    "hex",
-  ),
-  "iroha_data_model::isi::governance::FinalizeReferendum": Buffer.from(
-    "316f68c14913465e316f68c14913465e",
-    "hex",
-  ),
-  "iroha_data_model::isi::governance::PersistCouncilForEpoch": Buffer.from(
-    "25f004fc72a647fa25f004fc72a647fa",
-    "hex",
-  ),
-  "iroha_data_model::isi::social::ClaimTwitterFollowReward": Buffer.from(
-    "9c61d408efe778839c61d408efe77883",
-    "hex",
-  ),
-  "iroha_data_model::isi::social::SendToTwitter": Buffer.from(
-    "a1aef2203c4f83cda1aef2203c4f83cd",
-    "hex",
-  ),
-  "iroha_data_model::isi::social::CancelTwitterEscrow": Buffer.from(
-    "31c358e3880dbffe31c358e3880dbffe",
-    "hex",
-  ),
-  "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode": Buffer.from(
-    "fa62c9f0a5a3f8b756eef62b689e2a32",
-    "hex",
-  ),
-  "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes": Buffer.from(
-    "458b53cef6502236458b53cef6502236",
-    "hex",
-  ),
-  "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance": Buffer.from(
-    "351293113eec3144351293113eec3144",
-    "hex",
-  ),
-  "iroha_data_model::isi::smart_contract_code::ActivateContractInstance": Buffer.from(
-    "829e0d2a934213bf829e0d2a934213bf",
-    "hex",
-  ),
-  "iroha_data_model::isi::smart_contract_code::CommitContractDeployment": Buffer.from(
-    "2efc0e2e7080262cc3b17ad5866d6865",
-    "hex",
-  ),
-  "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk": Buffer.from(
-    "41ca98d8d78d9d8113909941490f8612",
-    "hex",
-  ),
-  "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload": Buffer.from(
-    "0406dbcf58c0c157bdc2c690d3faba54",
-    "hex",
-  ),
-  "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload": Buffer.from(
-    "ea496a080ec700168bae4fae3e679d2b",
-    "hex",
-  ),
-  "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes": Buffer.from(
-    "645fa1f41c603c82645fa1f41c603c82",
-    "hex",
-  ),
-  "iroha_data_model::isi::zk::RegisterZkAsset": Buffer.from(
-    "5d14a5ea7a6d1c255d14a5ea7a6d1c25",
-    "hex",
-  ),
-  "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool": Buffer.from(
-    "3b18eae8897ad15fabaafa03b589e243",
-    "hex",
-  ),
-  "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment": schemaHashForTypeName(
+const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
+  "iroha.mint": "iroha_data_model::isi::mint_burn::MintBox",
+  "iroha.burn": "iroha_data_model::isi::mint_burn::BurnBox",
+  "iroha.register": "iroha_data_model::isi::register::RegisterBox",
+  "iroha.transfer": "iroha_data_model::isi::transfer::TransferBox",
+  "iroha.custom": "iroha_data_model::isi::transparent::CustomInstruction",
+  "iroha.execute_trigger": "iroha_data_model::isi::transparent::ExecuteTrigger",
+  "iroha.rwa": "iroha_data_model::isi::rwa::RwaInstructionBox",
+  [CANCEL_ASSET_LOCK_WIRE_ID]: CANCEL_ASSET_LOCK_WIRE_ID,
+  [RECORD_SCCP_MESSAGE_WIRE_ID]: RECORD_SCCP_MESSAGE_WIRE_ID,
+  [ISSUE_REPLICATION_ORDER_WIRE_ID]: ISSUE_REPLICATION_ORDER_WIRE_ID,
+  [COMPLETE_REPLICATION_ORDER_WIRE_ID]: COMPLETE_REPLICATION_ORDER_WIRE_ID,
+  [EXPIRE_REPLICATION_ORDER_WIRE_ID]: EXPIRE_REPLICATION_ORDER_WIRE_ID,
+  "iroha_data_model::isi::kaigi::CreateKaigi":
+    "iroha_data_model::isi::kaigi::CreateKaigi",
+  "iroha_data_model::isi::kaigi::JoinKaigi":
+    "iroha_data_model::isi::kaigi::JoinKaigi",
+  "iroha_data_model::isi::kaigi::LeaveKaigi":
+    "iroha_data_model::isi::kaigi::LeaveKaigi",
+  "iroha_data_model::isi::kaigi::EndKaigi":
+    "iroha_data_model::isi::kaigi::EndKaigi",
+  "iroha_data_model::isi::kaigi::RecordKaigiUsage":
+    "iroha_data_model::isi::kaigi::RecordKaigiUsage",
+  "iroha_data_model::isi::kaigi::SetKaigiRelayManifest":
+    "iroha_data_model::isi::kaigi::SetKaigiRelayManifest",
+  "iroha_data_model::isi::kaigi::RegisterKaigiRelay":
+    "iroha_data_model::isi::kaigi::RegisterKaigiRelay",
+  "iroha_data_model::isi::governance::ProposeDeployContract":
+    "iroha_data_model::isi::governance::ProposeDeployContract",
+  "iroha_data_model::isi::governance::CastZkBallot":
+    "iroha_data_model::isi::governance::CastZkBallot",
+  "iroha_data_model::isi::governance::CastPlainBallot":
+    "iroha_data_model::isi::governance::CastPlainBallot",
+  "iroha_data_model::isi::governance::EnactReferendum":
+    "iroha_data_model::isi::governance::EnactReferendum",
+  "iroha_data_model::isi::governance::FinalizeReferendum":
+    "iroha_data_model::isi::governance::FinalizeReferendum",
+  "iroha_data_model::isi::governance::PersistCouncilForEpoch":
+    "iroha_data_model::isi::governance::PersistCouncilForEpoch",
+  "iroha_data_model::isi::social::ClaimTwitterFollowReward":
+    "iroha_data_model::isi::social::ClaimTwitterFollowReward",
+  "iroha_data_model::isi::social::SendToTwitter":
+    "iroha_data_model::isi::social::SendToTwitter",
+  "iroha_data_model::isi::social::CancelTwitterEscrow":
+    "iroha_data_model::isi::social::CancelTwitterEscrow",
+  "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode":
+    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode",
+  "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes":
+    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes",
+  "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance":
+    "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance",
+  "iroha_data_model::isi::smart_contract_code::ActivateContractInstance":
+    "iroha_data_model::isi::smart_contract_code::ActivateContractInstance",
+  "iroha_data_model::isi::smart_contract_code::CommitContractDeployment":
+    "iroha_data_model::isi::smart_contract_code::CommitContractDeployment",
+  "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk":
+    "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
+  "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload":
+    "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
+  "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload":
+    "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload",
+  "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes":
+    "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes",
+  "iroha_data_model::isi::zk::RegisterZkAsset":
+    "iroha_data_model::isi::zk::RegisterZkAsset",
+  "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool":
+    "iroha_data_model::isi::zk::RegisterAssetHiddenZkPool",
+  "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment":
     "iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment",
-  ),
-  "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment": schemaHashForTypeName(
+  "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment":
     "iroha_data_model::isi::zk::RotateZkAceIdentityCommitment",
-  ),
-  "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment": schemaHashForTypeName(
+  "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment":
     "iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment",
-  ),
-  "zk::ScheduleConfidentialPolicyTransition": Buffer.from(
-    "836fd710eab04142836fd710eab04142",
-    "hex",
-  ),
-  "zk::CancelConfidentialPolicyTransition": Buffer.from(
-    "c8b4798fe99aba33c8b4798fe99aba33",
-    "hex",
-  ),
-  "iroha_data_model::isi::zk::Shield": Buffer.from(
-    "644a69b3e27c574b644a69b3e27c574b",
-    "hex",
-  ),
-  "iroha_data_model::isi::zk::ZkTransfer": Buffer.from(
-    "a54e2391aea3a8b6a54e2391aea3a8b6",
-    "hex",
-  ),
-  "iroha_data_model::isi::zk::AssetHiddenZkTransfer": Buffer.from(
-    "db10e28def5ce4715a0a20eff60259fc",
-    "hex",
-  ),
-  "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer": schemaHashForTypeName(
+  "zk::ScheduleConfidentialPolicyTransition":
+    "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
+  "zk::CancelConfidentialPolicyTransition":
+    "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition",
+  "iroha_data_model::isi::zk::Shield":
+    "iroha_data_model::isi::zk::Shield",
+  "iroha_data_model::isi::zk::ZkTransfer":
+    "iroha_data_model::isi::zk::ZkTransfer",
+  "iroha_data_model::isi::zk::AssetHiddenZkTransfer":
+    "iroha_data_model::isi::zk::AssetHiddenZkTransfer",
+  "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer":
     "iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer",
-  ),
-  "iroha_data_model::isi::zk::Unshield": Buffer.from(
-    "eb6a8611ac89d632eb6a8611ac89d632",
-    "hex",
-  ),
-  "iroha_data_model::isi::zk::CreateElection": Buffer.from(
-    "6612c94b6f84c9cb6612c94b6f84c9cb",
-    "hex",
-  ),
-  "iroha_data_model::isi::zk::SubmitBallot": Buffer.from(
-    "4319232398af7d414319232398af7d41",
-    "hex",
-  ),
-  "iroha_data_model::isi::zk::FinalizeElection": Buffer.from(
-    "9cd931a79ced1cb69cd931a79ced1cb6",
-    "hex",
-  ),
-  "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey": schemaHashForTypeName(
+  "iroha_data_model::isi::zk::Unshield":
+    "iroha_data_model::isi::zk::Unshield",
+  "iroha_data_model::isi::zk::CreateElection":
+    "iroha_data_model::isi::zk::CreateElection",
+  "iroha_data_model::isi::zk::SubmitBallot":
+    "iroha_data_model::isi::zk::SubmitBallot",
+  "iroha_data_model::isi::zk::FinalizeElection":
+    "iroha_data_model::isi::zk::FinalizeElection",
+  "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey":
     "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
-  ),
-  "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey": schemaHashForTypeName(
+  "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey":
     "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
-  ),
 });
+const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
+  Object.fromEntries(
+    Object.entries(INNER_TYPE_NAME_BY_WIRE_ID).map(([wireId, typeName]) => [
+      wireId,
+      schemaHashForTypeName(typeName),
+    ]),
+  ),
+);
 const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({
   "iroha_data_model::isi::governance::CastPlainBallot": 8,
   "iroha_data_model::isi::zk::Shield": 8,
@@ -725,7 +647,7 @@ function encodeFeePaymentIntentValue(intent, context) {
             `${itemContext}.asset_definition_id`,
           ),
         ],
-        [encodeNumericValue(limit.max_amount, `${itemContext}.max_amount`)],
+        [encodeQuantityValue(limit.max_amount, `${itemContext}.max_amount`)],
       ]);
     }),
     (encoded) => encoded,
@@ -1819,6 +1741,10 @@ function encodePureJsInstructionPayload(instruction) {
     const payload = encodeExecuteTriggerPayload(instruction.ExecuteTrigger);
     return encodeInstructionEnvelope("iroha.execute_trigger", payload);
   }
+  if (Object.prototype.hasOwnProperty.call(instruction, "CancelAssetLock")) {
+    assertOnlyObjectKeys(instruction, ["CancelAssetLock"], "instruction");
+    return encodeCancelAssetLockInstruction(instruction.CancelAssetLock);
+  }
   if (
     isPlainObject(instruction.IssueReplicationOrder) ||
     isPlainObject(instruction.CompleteReplicationOrder) ||
@@ -1957,6 +1883,8 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
       return { ExecuteTrigger: decodeExecuteTriggerPayload(payload) };
     case "iroha.rwa":
       return decodeRwaInstructionPayload(payload);
+    case CANCEL_ASSET_LOCK_WIRE_ID:
+      return decodeCancelAssetLockInstructionPayload(payload);
     case ISSUE_REPLICATION_ORDER_WIRE_ID:
     case COMPLETE_REPLICATION_ORDER_WIRE_ID:
     case EXPIRE_REPLICATION_ORDER_WIRE_ID:
@@ -2152,6 +2080,73 @@ function decodeRecordSccpMessagePayload(payload, innerFlags) {
   return { payload_bytes: Array.from(payloadBytes) };
 }
 
+function encodeCancelAssetLockInstruction(value) {
+  if (!isPlainObject(value)) {
+    throw new TypeError("CancelAssetLock must be an object");
+  }
+  assertOnlyObjectKeys(
+    value,
+    ["escrow_id", "expected_remaining_amount"],
+    "CancelAssetLock",
+  );
+  for (const field of ["escrow_id", "expected_remaining_amount"]) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`CancelAssetLock.${field} is required`);
+    }
+  }
+  const expected = parseNumericLiteral(
+    value.expected_remaining_amount,
+    "CancelAssetLock.expected_remaining_amount",
+  );
+  if (expected.mantissa <= 0n) {
+    throw new RangeError(
+      "CancelAssetLock.expected_remaining_amount must be greater than zero",
+    );
+  }
+  const payload = encodeStructValue([
+    [
+      encodeEscrowIdValue(
+        value.escrow_id,
+        "CancelAssetLock.escrow_id",
+      ),
+    ],
+    [
+      encodeQuantityValue(
+        value.expected_remaining_amount,
+        "CancelAssetLock.expected_remaining_amount",
+      ),
+    ],
+  ]);
+  return encodeInstructionEnvelope(CANCEL_ASSET_LOCK_WIRE_ID, payload);
+}
+
+function decodeCancelAssetLockInstructionPayload(payload) {
+  const fields = decodeStructFields(payload, "CancelAssetLock", [
+    "escrow_id",
+    "expected_remaining_amount",
+  ]);
+  const expectedRemainingAmount = decodeQuantityValue(
+    fields.expected_remaining_amount,
+    "CancelAssetLock.expected_remaining_amount",
+  );
+  if (
+    NumericV1.decodeQuantityJson(expectedRemainingAmount).mantissa <= 0n
+  ) {
+    throw new RangeError(
+      "CancelAssetLock.expected_remaining_amount must be greater than zero",
+    );
+  }
+  return {
+    CancelAssetLock: {
+      escrow_id: decodeEscrowIdValue(
+        fields.escrow_id,
+        "CancelAssetLock.escrow_id",
+      ),
+      expected_remaining_amount: expectedRemainingAmount,
+    },
+  };
+}
+
 function decodeMintPayload(payload) {
   const reader = new BufferReader(payload, "Mint");
   const variantIndex = reader.readU32LE("variantIndex");
@@ -2337,7 +2332,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         CastPlainBallot: {
           referendum_id: decodeStringValue(fields.referendum_id, "CastPlainBallot.referendum_id"),
           owner: decodeAccountIdValue(fields.owner, "CastPlainBallot.owner"),
-          amount: decodeU128StringValue(fields.amount, "CastPlainBallot.amount"),
+          amount: decodeQuantityValue(fields.amount, "CastPlainBallot.amount"),
           duration_blocks: decodeU64NumberValue(
             fields.duration_blocks,
             "CastPlainBallot.duration_blocks",
@@ -2437,7 +2432,7 @@ function decodeSocialInstructionPayload(wireId, payload) {
       return {
         SendToTwitter: {
           binding_hash: decodeKeyedHashValue(fields.binding_hash, "SendToTwitter.binding_hash"),
-          amount: decodeNumericValue(fields.amount, "SendToTwitter.amount"),
+          amount: decodeQuantityValue(fields.amount, "SendToTwitter.amount"),
         },
       };
     }
@@ -3501,7 +3496,7 @@ function decodeRwaInstructionPayload(payload) {
         TransferRwa: {
           source: decodeAccountIdValue(fields.source, "TransferRwa.source"),
           rwa: decodeRwaIdValue(fields.rwa, "TransferRwa.rwa"),
-          quantity: decodeNumericValue(fields.quantity, "TransferRwa.quantity"),
+          quantity: decodeQuantityValue(fields.quantity, "TransferRwa.quantity"),
           destination: decodeAccountIdValue(fields.destination, "TransferRwa.destination"),
         },
       };
@@ -3548,7 +3543,7 @@ function decodeRwaInstructionPayload(payload) {
       return {
         ForceTransferRwa: {
           rwa: decodeRwaIdValue(fields.rwa, "ForceTransferRwa.rwa"),
-          quantity: decodeNumericValue(fields.quantity, "ForceTransferRwa.quantity"),
+          quantity: decodeQuantityValue(fields.quantity, "ForceTransferRwa.quantity"),
           destination: decodeAccountIdValue(fields.destination, "ForceTransferRwa.destination"),
         },
       };
@@ -3600,7 +3595,7 @@ function decodeSimpleRwaQuantityInstruction(payload, name) {
   return {
     [name]: {
       rwa: decodeRwaIdValue(fields.rwa, `${name}.rwa`),
-      quantity: decodeNumericValue(fields.quantity, `${name}.quantity`),
+      quantity: decodeQuantityValue(fields.quantity, `${name}.quantity`),
     },
   };
 }
@@ -4496,7 +4491,7 @@ function encodeSocialInstruction(instruction) {
       "iroha_data_model::isi::social::SendToTwitter",
       encodeStructValue([
         [encodeKeyedHashValue(instruction.SendToTwitter.binding_hash, "SendToTwitter.binding_hash")],
-        [encodeNumericValue(instruction.SendToTwitter.amount, "SendToTwitter.amount")],
+        [encodeQuantityValue(instruction.SendToTwitter.amount, "SendToTwitter.amount")],
       ]),
     );
   }
@@ -4721,7 +4716,7 @@ function encodeCastPlainBallotPayload(value) {
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.referendum_id, "CastPlainBallot.referendum_id"))],
     [encodeAccountIdValue(value.owner, "CastPlainBallot.owner")],
-    [encodeU128Value(value.amount, "CastPlainBallot.amount")],
+    [encodeQuantityValue(value.amount, "CastPlainBallot.amount")],
     [encodeU64NumberValue(value.duration_blocks, "CastPlainBallot.duration_blocks")],
     [encodeU8Value(value.direction, "CastPlainBallot.direction")],
   ]);
@@ -5043,7 +5038,7 @@ function encodeShieldPayload(value) {
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.asset, "zk.Shield.asset")],
     [encodeAccountIdValue(value.from, "zk.Shield.from")],
-    [encodeNumericValue(value.amount, "zk.Shield.amount")],
+    [encodeQuantityValue(value.amount, "zk.Shield.amount")],
     [encodeFixedBytesValue(value.note_commitment, 32, "zk.Shield.note_commitment")],
     [encodeConfidentialEncryptedPayloadValue(value.enc_payload, "zk.Shield.enc_payload")],
   ]);
@@ -5094,7 +5089,7 @@ function encodeSubmitZkAceAuthorizedTransferPayload(value) {
     [encodeAccountIdValue(value.from, "zk.SubmitZkAceAuthorizedTransfer.from")],
     [encodeAccountIdValue(value.to, "zk.SubmitZkAceAuthorizedTransfer.to")],
     [encodeAssetDefinitionIdValue(value.asset, "zk.SubmitZkAceAuthorizedTransfer.asset")],
-    [encodeNumericValue(value.amount, "zk.SubmitZkAceAuthorizedTransfer.amount")],
+    [encodeQuantityValue(value.amount, "zk.SubmitZkAceAuthorizedTransfer.amount")],
     [encodeFixedBytesValue(value.identity_commitment, 32, "zk.SubmitZkAceAuthorizedTransfer.identity_commitment")],
     [encodeFixedBytesValue(value.tx_digest, 32, "zk.SubmitZkAceAuthorizedTransfer.tx_digest")],
     [encodeNoritoStringValue(assertNonEmptyString(value.chain_id, "zk.SubmitZkAceAuthorizedTransfer.chain_id"))],
@@ -5110,7 +5105,7 @@ function encodeUnshieldPayload(value) {
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.asset, "zk.Unshield.asset")],
     [encodeAccountIdValue(value.to, "zk.Unshield.to")],
-    [encodeNumericValue(value.public_amount, "zk.Unshield.public_amount")],
+    [encodeQuantityValue(value.public_amount, "zk.Unshield.public_amount")],
     [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
       encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.inputs[${index}]`),
     )],
@@ -5397,7 +5392,7 @@ function encodeTransferRwaPayload(value) {
   return encodeStructValue([
     [encodeAccountIdValue(value.source, "TransferRwa.source")],
     [encodeRwaIdValue(value.rwa, "TransferRwa.rwa")],
-    [encodeNumericValue(value.quantity, "TransferRwa.quantity")],
+    [encodeQuantityValue(value.quantity, "TransferRwa.quantity")],
     [encodeAccountIdValue(value.destination, "TransferRwa.destination")],
   ]);
 }
@@ -5416,7 +5411,7 @@ function encodeMergeRwasPayload(value) {
 function encodeRedeemRwaPayload(value) {
   return encodeStructValue([
     [encodeRwaIdValue(value.rwa, "RedeemRwa.rwa")],
-    [encodeNumericValue(value.quantity, "RedeemRwa.quantity")],
+    [encodeQuantityValue(value.quantity, "RedeemRwa.quantity")],
   ]);
 }
 
@@ -5435,21 +5430,21 @@ function encodeUnfreezeRwaPayload(value) {
 function encodeHoldRwaPayload(value) {
   return encodeStructValue([
     [encodeRwaIdValue(value.rwa, "HoldRwa.rwa")],
-    [encodeNumericValue(value.quantity, "HoldRwa.quantity")],
+    [encodeQuantityValue(value.quantity, "HoldRwa.quantity")],
   ]);
 }
 
 function encodeReleaseRwaPayload(value) {
   return encodeStructValue([
     [encodeRwaIdValue(value.rwa, "ReleaseRwa.rwa")],
-    [encodeNumericValue(value.quantity, "ReleaseRwa.quantity")],
+    [encodeQuantityValue(value.quantity, "ReleaseRwa.quantity")],
   ]);
 }
 
 function encodeForceTransferRwaPayload(value) {
   return encodeStructValue([
     [encodeRwaIdValue(value.rwa, "ForceTransferRwa.rwa")],
-    [encodeNumericValue(value.quantity, "ForceTransferRwa.quantity")],
+    [encodeQuantityValue(value.quantity, "ForceTransferRwa.quantity")],
     [encodeAccountIdValue(value.destination, "ForceTransferRwa.destination")],
   ]);
 }
@@ -5479,7 +5474,7 @@ function encodeRemoveRwaKeyValuePayload(value) {
 function encodeNewRwaValue(value, context) {
   return encodeStructValue([
     [encodeArchivedDomainIdValue(value.domain, `${context}.domain`)],
-    [encodeNumericValue(value.quantity, `${context}.quantity`)],
+    [encodeQuantityValue(value.quantity, `${context}.quantity`)],
     [encodeNumericSpecValue(value.spec ?? { scale: null }, `${context}.spec`)],
     [encodeNoritoStringValue(assertNonEmptyString(value.primary_reference, `${context}.primary_reference`))],
     [encodeOptionValue(value.status, encodeNameValue, `${context}.status`)],
@@ -5504,7 +5499,7 @@ function decodeNewRwaValue(payload, context) {
   ]);
   return {
     domain: decodeArchivedDomainIdValue(fields.domain, `${context}.domain`),
-    quantity: decodeNumericValue(fields.quantity, `${context}.quantity`),
+    quantity: decodeQuantityValue(fields.quantity, `${context}.quantity`),
     spec: decodeNumericSpecValue(fields.spec, `${context}.spec`),
     primary_reference: decodeStringValue(
       fields.primary_reference,
@@ -5524,7 +5519,7 @@ function decodeNewRwaValue(payload, context) {
 function encodeRwaParentRefValue(value, context) {
   return encodeStructValue([
     [encodeRwaIdValue(value.rwa, `${context}.rwa`)],
-    [encodeNumericValue(value.quantity, `${context}.quantity`)],
+    [encodeQuantityValue(value.quantity, `${context}.quantity`)],
   ]);
 }
 
@@ -5532,7 +5527,7 @@ function decodeRwaParentRefValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["rwa", "quantity"]);
   return {
     rwa: decodeRwaIdValue(fields.rwa, `${context}.rwa`),
-    quantity: decodeNumericValue(fields.quantity, `${context}.quantity`),
+    quantity: decodeQuantityValue(fields.quantity, `${context}.quantity`),
   };
 }
 
@@ -5584,14 +5579,14 @@ function decodeRwaControlPolicyValue(payload, context) {
 
 function encodeAssetInstructionBody(value, context) {
   return Buffer.concat([
-    encodeNoritoField(encodeNumericValue(value.object, `${context}.object`)),
+    encodeNoritoField(encodeQuantityValue(value.object, `${context}.object`)),
     encodeNoritoField(encodeAssetIdValue(value.destination, `${context}.destination`)),
   ]);
 }
 
 function decodeAssetInstructionBody(payload, context) {
   const reader = new BufferReader(payload, context);
-  const object = decodeNumericValue(readNoritoField(reader, "object"), `${context}.object`);
+  const object = decodeQuantityValue(readNoritoField(reader, "object"), `${context}.object`);
   const destination = decodeAssetIdValue(
     readNoritoField(reader, "destination"),
     `${context}.destination`,
@@ -5603,7 +5598,7 @@ function decodeAssetInstructionBody(payload, context) {
 function encodeTransferAssetBody(value) {
   return Buffer.concat([
     encodeNoritoField(encodeAssetIdValue(value.source, "Transfer.Asset.source")),
-    encodeNoritoField(encodeNumericValue(value.object, "Transfer.Asset.object")),
+    encodeNoritoField(encodeQuantityValue(value.object, "Transfer.Asset.object")),
     encodeNoritoField(encodeAccountIdValue(value.destination, "Transfer.Asset.destination")),
   ]);
 }
@@ -5611,7 +5606,7 @@ function encodeTransferAssetBody(value) {
 function decodeTransferAssetBody(payload) {
   const reader = new BufferReader(payload, "Transfer.Asset");
   const source = decodeAssetIdValue(readNoritoField(reader, "source"), "Transfer.Asset.source");
-  const object = decodeNumericValue(readNoritoField(reader, "object"), "Transfer.Asset.object");
+  const object = decodeQuantityValue(readNoritoField(reader, "object"), "Transfer.Asset.object");
   const destination = decodeAccountIdValue(
     readNoritoField(reader, "destination"),
     "Transfer.Asset.destination",
@@ -5986,6 +5981,21 @@ function encodeHashValue(value, context) {
 
 function decodeHashValue(payload, context) {
   return decodeHashLiteral(payload, context);
+}
+
+function encodeEscrowIdValue(value, context) {
+  const bytes = encodeHashValue(value, context);
+  if ((bytes[bytes.length - 1] & 1) === 0) {
+    throw new TypeError(`${context} must use a native hash with its marker bit set`);
+  }
+  return bytes;
+}
+
+function decodeEscrowIdValue(payload, context) {
+  if (payload.length !== 32 || (payload[payload.length - 1] & 1) === 0) {
+    throw new TypeError(`${context} must use a native hash with its marker bit set`);
+  }
+  return decodeHashValue(payload, context);
 }
 
 function encodeStringValue(value, context) {
@@ -8155,7 +8165,7 @@ function assertOnlyObjectKeys(value, allowedKeys, context) {
   }
 }
 
-function encodeNumericValue(value, context) {
+function encodeQuantityValue(value, context) {
   const { mantissa, scale } = parseNumericLiteral(value, context);
   const mantissaBytes = bigintToTwosBytes(mantissa);
   const mantissaPayload = Buffer.concat([
@@ -8168,13 +8178,14 @@ function encodeNumericValue(value, context) {
   ]);
 }
 
-/** @internal Exact compact-length Numeric value encoding for typed policy codecs. */
-export function encodeNumericNoritoValue(value, context = "Numeric") {
+/** @internal Exact compact-length Quantity value encoding for typed policy codecs. */
+export function encodeQuantityNoritoValue(value, context = "Quantity") {
   return withNoritoCompactLengths(() =>
-    Uint8Array.from(encodeNumericValue(value, context)),
+    Uint8Array.from(encodeQuantityValue(value, context)),
   );
 }
 
+// Low-level wire decoder retained for the NumericV1-backed Quantity payload.
 function decodeNumericValue(payload, context) {
   const reader = new BufferReader(payload, context);
   const mantissaPayload = readNoritoField(reader, "mantissa");

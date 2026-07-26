@@ -191,8 +191,14 @@ global all-node application barrier.
 per-slot model claim. It includes Decision and Application receipts at
 `context.height + 1`, including the terminal `MaxHeight + 1` slot, and derives
 agreement from joined-source ownership plus the joined Core instance's
-`DecisionAgreement`, not from `decidedAt` or `CanonicalCommitForSlot`. The
-script is SANY-clean, but it has no fresh strict TLAPS receipt. Consequently
+`DecisionAgreement`. Canonical prefix history (`decidedAt[1..h]`) identifies
+the unique joined source context, but neither `decidedAt[h+1]` nor
+`CanonicalCommitForSlot` supplies current-slot subject equality.
+`IndexedFreshReceiptActionHasProductExtension` separately proves that the
+chain product admits every fresh Core receipt step under that independently
+established agreement, so the product relation is not filtering conflicts to
+manufacture the result. The script is SANY-clean, but it has no fresh strict
+TLAPS receipt. Consequently
 `IndexedChainSpecEstablishesExactPerSlotReceiptAgreement` remains
 `specified_unproved` and is not promoted.
 
@@ -235,12 +241,14 @@ valid under the old snapshot. Validators may cross the boundary at different
 times and still remain on one certified prefix.
 
 The separate `SumeragiV2TerminalIngressLifecycleProofs` model states only
-process-lifetime suffix safety: `TerminalReadOnly` and `TerminalRetired` are
-absorbing, the history-service owner exists exactly in the read-only mode,
-owner exit atomically retires detached and ingress owners, and no successful
-admission follows owner loss. Restart creates a fresh instance, and no
-eventual-exit fairness or Rust refinement is claimed. The script is SANY-clean
-but has no fresh strict TLAPS evidence, so
+process-lifetime suffix safety: the set
+`{TerminalReadOnly, TerminalRetired}` is forward-closed,
+`TerminalRetired` is individually absorbing, the history-service owner exists
+exactly in the read-only mode, owner exit atomically retires detached and
+ingress owners without increasing the successful-admission count, and no
+successful admission follows owner loss. Restart creates a fresh instance,
+and no eventual-exit fairness or Rust refinement is claimed. The script is
+SANY-clean but has no fresh strict TLAPS evidence, so
 `TerminalIngressProcessLifetimeAbsorbencyObligation` remains
 `specified_unproved`. It does not discharge or promote the terminal Rust trace
 refinement.
@@ -616,8 +624,9 @@ owner pair, an empty-corridor seal, an exact predecessor receipt, an immediate
 successor, retry preservation, and late-callback isolation. This applied-height
 model is orthogonal to the production responder lifecycle and does not
 authorize rolling service generation. Production permits that roll only for
-needed server-table compaction after terminal responder state, then persists
-the checked successor generation and empty server state as one
+needed server-table compaction—a full table or certified roster-geometry
+replacement—after terminal responder state, then persists the checked
+successor generation and empty server state as one
 `MergeSidecarLifecycleSnapshotV2` postimage. Active predecessor state or
 counter overflow returns `Capacity` without mutation. No Rust-to-TLA refinement
 for that production relation is claimed.
@@ -916,10 +925,12 @@ model exhausts seven bounded states without error and returns status 0. These
 are followed by the causal-capacity refill matrix, blind-successor/coalesced
 replacement, in-runner/independent Commit-discovery, and all-I/O/Consensus-only
 index mutations. An exhaustive one-validator configuration checks the logical
-ownership invariant through 983,041 generated states, 99,328 distinct states,
-and depth 49. The larger graph covers separate non-timeout-progress and
-TimeoutVote ingress reservations. These are bounded regression witnesses, not
-deductive proof and not a reason to promote a ledger entry. Two reply-route
+ownership invariant through 616,705 generated states, 62,464 distinct states,
+and depth 37. The bounded checker retains separate non-timeout-progress and
+TimeoutVote ingress reservations, closes the inherited acquisition state, and
+uses structurally equivalent finite-search definitions for powerset-valued
+production carriers. These are bounded regression witnesses, not deductive
+proof and not a reason to promote a ledger entry. Two reply-route
 mutations use the production-shared abstract kernel: resetting a cursor across
 a new connection tenure and replacing an alternate source both violate
 `RouteMutationSafety`, while the fixed prefix also covers exact retry, a later
@@ -1123,9 +1134,10 @@ The sole `MergeSidecarLifecycleSnapshotV2` persists geometry,
 server streams, and request gates. The unified server-stream table and gate
 table are bounded independently of P2P reply-source capacity, and restore
 validates the whole candidate before assignment. V1 is unsupported. Generation
-rolls only for necessary server-table compaction after every old stream, gate,
-transfer, and flush is terminal; its checked increment and empty responder
-state persist together before memory or Hint publication.
+rolls only for necessary server-table compaction—a full table or certified
+roster-geometry replacement—after every old stream, gate, transfer, and flush
+is terminal; its checked increment and empty responder state persist together
+before memory or Hint publication.
 The canonical module/test TSV inventory SHA-256 is
 `fd2176898c873bc00fae598689f6bf0ec2f9cd5de58ccf37fbe6713a061811da`.
 The added boundaries preserve the frozen predecessor CommitQC through

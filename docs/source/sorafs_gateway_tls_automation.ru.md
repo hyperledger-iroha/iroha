@@ -6,7 +6,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_tls_automation.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 914baf289898477f56df920d3382bb0f3dcfcb43249d38468bbad4a1f660825a
+source_hash: cac7ebfcd500348d610633e0260d6b4dcc5f2d262237cd9d4a9e0dcab4d2c3a7
 source_last_modified: "2026-07-25T15:12:37.376659+00:00"
 translation_last_reviewed: null
 ---

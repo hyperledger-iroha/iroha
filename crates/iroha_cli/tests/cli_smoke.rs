@@ -38,7 +38,7 @@ use iroha_data_model::{
     oracle::FeedId,
     soranet::incentives::{RelayBondLedgerEntryV1, RelayEpochMetricsV1, RelayRewardInstructionV1},
 };
-use iroha_primitives::numeric::{Numeric, Quantity, XorQuantity};
+use iroha_primitives::numeric::{Quantity, XorQuantity};
 use norito::{
     decode_from_bytes,
     derive::NoritoSerialize,
@@ -82,15 +82,14 @@ fn xor_quantity_from_value(value: &Value) -> XorQuantity {
     quantity
 }
 
-fn assert_numeric_xor(amount: &Numeric, expected: &str) {
+fn assert_quantity_xor(amount: &Quantity, expected: &str) {
     let expected = expected
         .parse::<XorQuantity>()
         .expect("expected canonical XOR quantity")
-        .into_quantity()
-        .into_numeric();
+        .into_quantity();
     assert_eq!(
         amount, &expected,
-        "numeric XOR amount mismatch for amount {amount}"
+        "XOR quantity mismatch for amount {amount}"
     );
 }
 
@@ -232,13 +231,13 @@ fn repo_instruction(instruction: &InstructionBox) -> &RepoInstructionBox {
         .expect("repo instruction payload")
 }
 
-fn transfer_parts(instruction: &InstructionBox) -> (&AssetId, &Numeric, &AccountId) {
+fn transfer_parts(instruction: &InstructionBox) -> (&AssetId, &Quantity, &AccountId) {
     let transfer_box = instruction
         .as_any()
         .downcast_ref::<TransferBox>()
         .expect("transfer instruction payload");
     match transfer_box {
-        TransferBox::Asset(inner) => (&inner.source, inner.object.as_numeric(), &inner.destination),
+        TransferBox::Asset(inner) => (&inner.source, &inner.object, &inner.destination),
         _ => panic!("expected asset transfer"),
     }
 }
@@ -808,7 +807,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
         &AssetId::new(xor_asset_id(), provider_account.clone())
     );
     assert_eq!(rent_destination, &treasury_account);
-    assert_numeric_xor(rent_amount_numeric, "120");
+    assert_quantity_xor(rent_amount_numeric, "120");
 
     let (reserve_source, reserve_amount_numeric, reserve_destination) =
         transfer_parts(&instructions[1]);
@@ -817,7 +816,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
         &AssetId::new(xor_asset_id(), provider_account.clone())
     );
     assert_eq!(reserve_destination, &reserve_account);
-    assert_numeric_xor(reserve_amount_numeric, "240");
+    assert_quantity_xor(reserve_amount_numeric, "240");
 }
 
 #[test]
@@ -2351,7 +2350,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
     let TransferBox::Asset(transfer) = transfer_box else {
         panic!("expected asset transfer, got {transfer_box:?}");
     };
-    assert_eq!(transfer.object.as_numeric(), &Numeric::from(25_u32));
+    assert_eq!(transfer.object, Quantity::from(25_u32));
     assert_eq!(transfer.destination, account_id("beneficiary"));
     assert_eq!(transfer.source.account, treasury);
 
@@ -3879,27 +3878,27 @@ fn da_rent_ledger_emits_transfer_plan() {
     let (rent_source, rent_amount, rent_destination) = transfer_parts(&instructions[0]);
     assert_eq!(rent_source, &payer_asset);
     assert_eq!(rent_destination, &treasury_account);
-    assert_numeric_xor(rent_amount, BASE);
+    assert_quantity_xor(rent_amount, BASE);
 
     let (reserve_source, reserve_amount, reserve_destination) = transfer_parts(&instructions[1]);
     assert_eq!(reserve_source, &treasury_asset);
     assert_eq!(reserve_destination, &protocol_account);
-    assert_numeric_xor(reserve_amount, RESERVE);
+    assert_quantity_xor(reserve_amount, RESERVE);
 
     let (provider_source, provider_amount, provider_destination) = transfer_parts(&instructions[2]);
     assert_eq!(provider_source, &treasury_asset);
     assert_eq!(provider_destination, &provider_account);
-    assert_numeric_xor(provider_amount, PROVIDER);
+    assert_quantity_xor(provider_amount, PROVIDER);
 
     let (pdp_source, pdp_amount, pdp_destination) = transfer_parts(&instructions[3]);
     assert_eq!(pdp_source, &treasury_asset);
     assert_eq!(pdp_destination, &pdp_account);
-    assert_numeric_xor(pdp_amount, PDP);
+    assert_quantity_xor(pdp_amount, PDP);
 
     let (potr_source, potr_amount, potr_destination) = transfer_parts(&instructions[4]);
     assert_eq!(potr_source, &treasury_asset);
     assert_eq!(potr_destination, &potr_account);
-    assert_numeric_xor(potr_amount, POTR);
+    assert_quantity_xor(potr_amount, POTR);
 }
 
 #[test]

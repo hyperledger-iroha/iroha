@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildBurnAssetInstruction,
+  buildCancelAssetLockInstruction,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
   buildBurnTriggerRepetitionsInstruction,
@@ -139,6 +140,7 @@ import {
   buildFinalizeElectionInstruction,
   encodeInstruction,
 } from "../src/instructionBuilders.js";
+import { blake2b256 } from "../src/blake2b.js";
 import {
   getPrivacyAlgorithmDescriptor,
   getPrivacyAlgorithmDescriptors,
@@ -159,7 +161,12 @@ import {
   noritoEncodeInstruction,
   noritoEncodePrivacyProofEnvelope,
 } from "../src/norito.js";
-import { hasNoritoBinding, makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
+import {
+  hasNoritoBinding,
+  makeNativeTest,
+  nativeBinding,
+  noritoRequiredMethods,
+} from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const zkAceNativeTest = makeNativeTest(baseTest, {
@@ -170,6 +177,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const SORA_I105_DISCRIMINANT = 0x2f1;
+const CANCEL_ASSET_LOCK_ESCROW_ID =
+  "hash:996264C84790C64086AAB0EF693A1D33EC18FC0B1C1229774C461A00939A6687#F2BD";
 
 function loadInstructionFixture(name) {
   const fixturePath = path.join(repoRoot, "fixtures", "norito_instructions", name);
@@ -349,6 +358,31 @@ function encodeAndDecode(instruction) {
   }
 }
 
+function withPureJsInstructionCodec(body) {
+  const hadBinding = Object.prototype.hasOwnProperty.call(
+    globalThis,
+    "__IROHA_NORITO_BINDING__",
+  );
+  const previous = globalThis.__IROHA_NORITO_BINDING__;
+  globalThis.__IROHA_NORITO_BINDING__ = {
+    noritoEncodeInstruction() {
+      throw new Error("unsupported instruction");
+    },
+    noritoDecodeInstruction() {
+      throw new Error("unsupported instruction");
+    },
+  };
+  try {
+    return body();
+  } finally {
+    if (hadBinding) {
+      globalThis.__IROHA_NORITO_BINDING__ = previous;
+    } else {
+      delete globalThis.__IROHA_NORITO_BINDING__;
+    }
+  }
+}
+
 function crc16(tag, body) {
   let crc = 0xffff;
   const processByte = (byte) => {
@@ -423,6 +457,152 @@ test("normalizeAssetHoldingId exported canonicalizes asset-holding identifiers",
   assert.equal(canonical, ASSET_ID_CANONICAL);
 });
 
+baseTest("buildCancelAssetLockInstruction emits the exact two-field V1 payload", () => {
+  const instruction = buildCancelAssetLockInstruction({
+    lockId: "merchant-lock-001",
+    expectedRemainingAmount: "1500",
+  });
+  assert.deepEqual(instruction, {
+    CancelAssetLock: {
+      escrow_id: CANCEL_ASSET_LOCK_ESCROW_ID,
+      expected_remaining_amount: "1500",
+    },
+  });
+  assert.equal(
+    instruction.CancelAssetLock.escrow_id,
+    normalizedHashHex(blake2b256(Buffer.from("merchant-lock-001", "utf8"))),
+  );
+});
+
+baseTest("buildCancelAssetLockInstruction rejects legacy and ambiguous inputs", () => {
+  assert.throws(
+    () => buildCancelAssetLockInstruction({ lockId: "merchant-lock-001" }),
+    /expectedRemainingAmount/,
+  );
+  assert.throws(
+    () =>
+      buildCancelAssetLockInstruction({
+        lockId: "merchant-lock-001",
+        expectedRemainingAmount: "1",
+        expected_remaining_amount: "1",
+      }),
+    /not supported/,
+  );
+  assert.throws(
+    () =>
+      buildCancelAssetLockInstruction({
+        lockId: "",
+        expectedRemainingAmount: "1",
+      }),
+    /non-empty string/,
+  );
+  assert.throws(
+    () =>
+      buildCancelAssetLockInstruction({
+        lockId: " merchant-lock-001",
+        expectedRemainingAmount: "1",
+      }),
+    /surrounding whitespace/,
+  );
+  for (const expectedRemainingAmount of [0n, "0", "-1", "01", "1.0", "+1", 1]) {
+    assert.throws(
+      () =>
+        buildCancelAssetLockInstruction({
+          lockId: "merchant-lock-001",
+          expectedRemainingAmount,
+        }),
+      undefined,
+      `accepted invalid expected remaining amount ${String(expectedRemainingAmount)}`,
+    );
+  }
+});
+
+baseTest("pure JS codec roundtrips CancelAssetLock and rejects the legacy shape", () => {
+  withPureJsInstructionCodec(() => {
+    const instruction = buildCancelAssetLockInstruction({
+      lockId: "merchant-lock-001",
+      expectedRemainingAmount: "1.25",
+    });
+    const encoded = noritoEncodeInstruction(instruction);
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+
+    assert.throws(
+      () =>
+        noritoEncodeInstruction({
+          CancelAssetLock: { escrow_id: instruction.CancelAssetLock.escrow_id },
+        }),
+      /expected_remaining_amount is required/,
+    );
+    for (const expected_remaining_amount of ["0", "01", "1.0"]) {
+      assert.throws(
+        () =>
+          noritoEncodeInstruction({
+            CancelAssetLock: {
+              escrow_id: instruction.CancelAssetLock.escrow_id,
+              expected_remaining_amount,
+            },
+          }),
+        undefined,
+        `pure JS codec accepted ${expected_remaining_amount}`,
+      );
+    }
+  });
+});
+
+test("native and pure JS codecs byte-match and cross-decode CancelAssetLock V1", () => {
+  const instruction = buildCancelAssetLockInstruction({
+    lockId: "merchant-lock-001",
+    expectedRemainingAmount: "1.25",
+  });
+  assert.equal(
+    instruction.CancelAssetLock.escrow_id,
+    CANCEL_ASSET_LOCK_ESCROW_ID,
+  );
+
+  const pureEncoded = withPureJsInstructionCodec(() =>
+    noritoEncodeInstruction(instruction),
+  );
+  const nativeEncoded = nativeBinding.noritoEncodeInstruction(
+    JSON.stringify(instruction),
+  );
+  assert.deepEqual(toByteArray(pureEncoded), toByteArray(nativeEncoded));
+
+  assert.deepEqual(
+    JSON.parse(nativeBinding.noritoDecodeInstruction(pureEncoded)),
+    instruction,
+  );
+  assert.deepEqual(
+    withPureJsInstructionCodec(() =>
+      noritoDecodeInstruction(nativeEncoded),
+    ),
+    instruction,
+  );
+
+  assert.throws(
+    () =>
+      nativeBinding.noritoEncodeInstruction(
+        JSON.stringify({
+          CancelAssetLock: {
+            escrow_id: instruction.CancelAssetLock.escrow_id,
+          },
+        }),
+      ),
+    /missing field/,
+  );
+  assert.throws(
+    () =>
+      nativeBinding.noritoEncodeInstruction(
+        JSON.stringify({
+          CancelAssetLock: {
+            escrow_id: instruction.CancelAssetLock.escrow_id,
+            expected_remaining_amount: "0",
+          },
+        }),
+      ),
+    /must be positive/,
+  );
+});
+
 test("buildMintAssetInstruction produces canonical Norito payload", () => {
   const instruction = buildMintAssetInstruction({ assetId: ASSET_ID, quantity: 42n });
   assert.deepEqual(instruction, {
@@ -478,7 +658,18 @@ test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
     },
   );
 
-  for (const quantity of [42, "+1", "01", "1.0", "1.2300", " 1", "1 ", "0.0"]) {
+  for (const quantity of [
+    42,
+    "+1",
+    "01",
+    "1.0",
+    "1.2300",
+    "1amt",
+    "1qty",
+    " 1",
+    "1 ",
+    "0.0",
+  ]) {
     assert.throws(
       () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity }),
       (error) => {
@@ -1832,7 +2023,7 @@ test("buildCastPlainBallotInstruction maps direction labels", () => {
   const instruction = buildCastPlainBallotInstruction({
     referendumId: "ref-2",
     owner: ACCOUNT_ID,
-    amount: "1000",
+    amount: "18446744073709551616.25",
     durationBlocks: 50,
     direction: "nay",
   });
@@ -1840,7 +2031,7 @@ test("buildCastPlainBallotInstruction maps direction labels", () => {
     CastPlainBallot: {
       referendum_id: "ref-2",
       owner: ACCOUNT_ID_CANONICAL,
-      amount: "1000",
+      amount: "18446744073709551616.25",
       duration_blocks: 50,
       direction: 1,
     },
@@ -1848,6 +2039,96 @@ test("buildCastPlainBallotInstruction maps direction labels", () => {
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
+});
+
+test("buildCastPlainBallotInstruction rejects lossy and noncanonical Quantity inputs", () => {
+  const overflowing = "9".repeat(155);
+  for (const amount of [
+    1,
+    "+1",
+    "01",
+    "1.0",
+    "1.2300",
+    "1amt",
+    "1qty",
+    " 1",
+    "1 ",
+    "-1",
+    overflowing,
+  ]) {
+    assert.throws(
+      () =>
+        buildCastPlainBallotInstruction({
+          referendumId: "ref-2",
+          owner: ACCOUNT_ID,
+          amount,
+          durationBlocks: 50,
+          direction: "nay",
+        }),
+      /canonical|JavaScript numbers are not lossless quantity inputs/u,
+      `amount ${String(amount)} must be rejected`,
+    );
+  }
+});
+
+baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quantity", () => {
+  const instruction = {
+    CastPlainBallot: {
+      referendum_id: "ref-quantity",
+      owner: ACCOUNT_ID_CANONICAL,
+      amount: "18446744073709551616.25",
+      duration_blocks: 50,
+      direction: 1,
+    },
+  };
+  withPureJsInstructionCodec(() => {
+    const encoded = noritoEncodeInstruction(instruction);
+    const wireFieldLength = Number(encoded.readBigUInt64LE(40));
+    const innerFieldOffset = 40 + 8 + wireFieldLength;
+    const innerFieldPayloadOffset = innerFieldOffset + 8;
+    const innerFrameOffset = innerFieldPayloadOffset + 8;
+    const innerSchemaHash = encoded.subarray(
+      innerFrameOffset + 6,
+      innerFrameOffset + 22,
+    );
+    const expectedSchemaHash = createHash("sha256")
+      .update(
+        "norito:v1:type-name\0iroha_data_model::isi::governance::CastPlainBallot",
+        "utf8",
+      )
+      .digest()
+      .subarray(0, 16);
+    assert.equal(expectedSchemaHash.toString("hex"), "62b23313103064bc2c9d528ac3548949");
+    assert.deepEqual(innerSchemaHash, expectedSchemaHash);
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+
+    for (const amount of [
+      1,
+      "+1",
+      "01",
+      "1.0",
+      "1.2300",
+      "1amt",
+      "1qty",
+      " 1",
+      "1 ",
+      "-1",
+      (1n << 511n).toString(),
+      "9".repeat(155),
+    ]) {
+      assert.throws(
+        () =>
+          noritoEncodeInstruction({
+            CastPlainBallot: {
+              ...instruction.CastPlainBallot,
+              amount,
+            },
+          }),
+        /canonical|JavaScript numbers are rejected|mantissa|negative/u,
+        `amount ${String(amount).slice(0, 32)} must be rejected`,
+      );
+    }
+  });
 });
 
 test("buildEnactReferendumInstruction normalizes hashes and window defaults", () => {
@@ -2362,6 +2643,9 @@ descriptorTest("ZK-ACE builders reject malformed proof and replay inputs", () =>
     "-1",
     "+1",
     "1.0",
+    "1.5",
+    "1amt",
+    "1qty",
     "1e3",
     0,
     -1,

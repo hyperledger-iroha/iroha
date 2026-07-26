@@ -22,6 +22,19 @@ MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+REPO_ROOT = MODULE_PATH.parents[1]
+CANCEL_FIXTURE_SUPPORT = (
+    REPO_ROOT
+    / "crates/iroha_data_model/src/testing/cancel_asset_lock.rs"
+)
+CANCEL_FIXTURE_GENERATOR = (
+    REPO_ROOT
+    / "crates/iroha_data_model/src/bin/cancel_asset_lock_fixtures.rs"
+)
+REFERENCE_INVENTORY_GENERATOR = (
+    REPO_ROOT
+    / "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs"
+)
 
 
 def copy_fixture_set(tmp_path: Path) -> Path:
@@ -65,7 +78,7 @@ def test_checked_in_inventory_is_valid_signed_and_domain_complete() -> None:
     """The repository inventory passes every offline check."""
 
     assert MODULE.validate_inventory(MODULE.DEFAULT_INVENTORY) == []
-    assert len(MODULE.EXPECTED_PAYLOADS) == 74
+    assert len(MODULE.EXPECTED_PAYLOADS) == 82
     assert len(MODULE.EXPECTED_OUTCOMES) == 30
     assert {
         row[0] for row in MODULE.EXPECTED_PAYLOADS.values()
@@ -73,6 +86,66 @@ def test_checked_in_inventory_is_valid_signed_and_domain_complete() -> None:
     assert {
         row[0] for row in MODULE.EXPECTED_OUTCOMES.values()
     } == MODULE.REQUIRED_OUTCOME_DOMAINS
+
+
+def test_cancel_asset_lock_hard_cut_vectors_are_closed_and_boundary_typed() -> None:
+    """The signed inventory carries the exact V1 CAS positive and negatives."""
+
+    rows = {
+        path: metadata
+        for path, metadata in MODULE.EXPECTED_PAYLOADS.items()
+        if path.startswith("appeal_finance/")
+    }
+    assert len(rows) == 8
+    assert {
+        metadata[3]
+        for metadata in rows.values()
+    } == {
+        "valid",
+        "invalid_missing_expected_remaining_amount",
+        "invalid_noncanonical_quantity",
+        "invalid_zero_expected_remaining_amount",
+        "noncanonical_trailing_bytes",
+    }
+    assert set(MODULE.EXPECTED_CANCEL_ASSET_LOCK_JSON) == {
+        path for path in rows if path.endswith(".json")
+    }
+
+
+def test_cancel_asset_lock_fixture_generator_is_atomic_and_fail_closed() -> None:
+    """The typed generator cannot follow links or publish partial fixture bytes."""
+
+    support = CANCEL_FIXTURE_SUPPORT.read_text(encoding="utf-8")
+    command = CANCEL_FIXTURE_GENERATOR.read_text(encoding="utf-8")
+    inventory = REFERENCE_INVENTORY_GENERATOR.read_text(encoding="utf-8")
+
+    for marker in (
+        "OpenOptions::new().write(true).create_new(true)",
+        "temporary.sync_all()",
+        "fs::rename(&temporary_path, path)",
+        "fs::symlink_metadata",
+        "ensure_single_hard_link",
+        "ensure_same_directory",
+        "Component::ParentDir",
+        "contains unexpected entry",
+    ):
+        assert marker in support
+    assert "fs::create_dir_all" not in support
+    assert "fs::write(path, bytes)" not in support
+    assert "write_fixtures(&args.output_dir, &fixtures)" in command
+
+    for relative in (
+        "appeal_finance/cancel_asset_lock_v1.json",
+        "appeal_finance/cancel_asset_lock_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_noncanonical_quantity_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_trailing_bytes_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
+    ):
+        assert relative in inventory
+        assert relative in MODULE.EXPECTED_PAYLOADS
 
 
 def test_payload_byte_tamper_is_rejected(tmp_path: Path) -> None:

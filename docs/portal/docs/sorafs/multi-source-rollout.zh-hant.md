@@ -4,8 +4,8 @@ direction: ltr
 source: docs/portal/docs/sorafs/multi-source-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ee784b5b073019d219d0dfb76d44f6d02a8dbb46c847bfb226f1f72b41ffb1d7
-source_last_modified: "2026-01-05T09:28:11.891621+00:00"
+source_hash: 6a510a005b4b14df18915a1166620f78e8a99fe9042de80bb916d7c3f38d32d9
+source_last_modified: "2026-07-26T10:32:32.940432+00:00"
 translation_last_reviewed: 2026-02-07
 id: multi-source-rollout
 title: Multi-Source Client Rollout & Blacklisting Runbook
@@ -34,20 +34,14 @@ translator: machine-google-reviewed
    - 所有候選提供商必鬚髮布包含範圍能力有效負載和流預算的 `ProviderAdvertV1` 信封。通過 `/v1/sorafs/providers` 進行驗證並與預期的功能字段進行比較。
    - 在每次金絲雀運行之前，提供延遲/故障率的遙測快照應小於 15 分鐘。
 2. **舞台配置。 **
-   - 將 Orchestrator JSON 配置保留在分層 `iroha_config` 樹中：
-
-     ```toml
-     [torii.sorafs.orchestrator]
-     config_path = "/etc/iroha/sorafs/orchestrator.json"
-     ```
-
-     使用特定於部署的限制更新 JSON（`max_providers`，重試預算）。將相同的文件提供給暫存/生產，以便差異保持較小。
+   - Store the canonical client-side orchestrator JSON at `/etc/iroha/sorafs/orchestrator.json`. This file is consumed explicitly by client/orchestrator workloads; it is not an `iroha_config` or Torii namespace. Update it with rollout-specific limits (`max_providers`, retry budgets), deploy the same reviewed file to staging/production, and pass it to every CLI fetch as `--orchestrator-config=/etc/iroha/sorafs/orchestrator.json`.
 3. **練習規範裝置。 **
    - 填充清單/令牌環境變量並運行確定性提取：
 
      ```bash
      sorafs_cli fetch \
        --plan fixtures/sorafs_manifest/ci_sample/payload.plan.json \
+       --orchestrator-config=/etc/iroha/sorafs/orchestrator.json \
        --manifest-id "$CANARY_MANIFEST_ID" \
        --provider name=alpha,provider-id="$PROVIDER_ALPHA_ID",gateway-key="$PROVIDER_ALPHA_GATEWAY_KEY",base-url=https://gw-alpha.example,stream-token="$PROVIDER_ALPHA_TOKEN" \
        --provider name=beta,provider-id="$PROVIDER_BETA_ID",gateway-key="$PROVIDER_BETA_GATEWAY_KEY",base-url=https://gw-beta.example,stream-token="$PROVIDER_BETA_TOKEN" \

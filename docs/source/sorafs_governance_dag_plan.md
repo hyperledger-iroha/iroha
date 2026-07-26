@@ -135,7 +135,7 @@ Implemented foundations include:
 - Torii PoR publishes validated `PorChallengePublicationV1` envelopes and
   validated weekly reports through the embedded node's durable signed outbox.
   Private coordinator, drand, and provider-VRF state is derived under the
-  single `torii.sorafs_por.state_dir`; PoR has no governance-output directory
+  single `sorafs.por.state_dir`; PoR has no governance-output directory
   or local unsigned publisher.
 - Taikai cache governance bundle generation via `cargo xtask sorafs-taikai-cache-bundle`.
 - Local operator commands:

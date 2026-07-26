@@ -22,8 +22,12 @@ use norito::json::{self, Map, Value};
 #[repr(transparent)]
 #[norito(transparent, decode_from_slice)]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct UniversalAccountId(Hash);
 
@@ -78,8 +82,12 @@ impl FromStr for UniversalAccountId {
 #[repr(transparent)]
 #[norito(transparent, decode_from_slice)]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct SmartContractId(Name);
 
@@ -129,7 +137,14 @@ impl FromStr for SmartContractId {
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "version", content = "state"))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub enum ManifestVersion {
     /// First capability manifest iteration.
     #[default]
@@ -146,7 +161,14 @@ impl From<ManifestVersion> for u16 {
 
 /// Capability manifest describing deterministic allowances for a UAID.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct AssetPermissionManifest {
     /// Schema version used to interpret the manifest.
     pub version: ManifestVersion,
@@ -708,7 +730,14 @@ fn parse_quantity(value: &Value, idx: usize) -> Result<Quantity, json::Error> {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct ManifestEntry {
     /// Capability scope matcher.
     pub scope: CapabilityScope,
@@ -736,7 +765,14 @@ pub struct ManifestEntry {
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "role", content = "details"))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub enum AmxRole {
     /// Transaction initiator (root of the AMX graph).
     Initiator,
@@ -748,7 +784,14 @@ pub enum AmxRole {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct CapabilityScope {
     /// Optional dataspace selector (defaults to manifest dataspace when omitted).
     #[norito(default)]
@@ -811,7 +854,14 @@ impl CapabilityScope {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[cfg_attr(feature = "json", norito(tag = "decision", content = "details"))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub enum ManifestEffect {
     /// Allow the scoped capability subject to the provided allowance.
     Allow(Allowance),
@@ -823,7 +873,14 @@ pub enum ManifestEffect {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct Allowance {
     /// Optional deterministic amount cap enforced by the host.
     #[norito(default)]
@@ -836,7 +893,14 @@ pub struct Allowance {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "window", content = "details"))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub enum AllowanceWindow {
     /// Per-slot accounting window.
     PerSlot,
@@ -862,7 +926,14 @@ impl AllowanceWindow {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct DenyDirective {
     /// Optional reason recorded for the deny rule.
     #[norito(default)]

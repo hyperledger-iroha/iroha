@@ -4,8 +4,8 @@ direction: ltr
 source: docs/portal/docs/sorafs/multi-source-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6d90c0796a29e2ae49c0019de7df2370c822b985e8247675bc6b8de93111f928
-source_last_modified: "2025-11-10T18:39:01.034083+00:00"
+source_hash: 6a510a005b4b14df18915a1166620f78e8a99fe9042de80bb916d7c3f38d32d9
+source_last_modified: "2026-07-26T10:32:32.940432+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
@@ -37,20 +37,14 @@ Asume que la pila de orquestación entregada bajo SF-6 ya está desplegada (`sor
    - Todos los proveedores candidatos deben publicar sobres `ProviderAdvertV1` con payloads de capacidad de rango y presupuestos de stream. Valídalo mediante `/v1/sorafs/providers` y compara con los campos de capacidad esperados.
    - Las instantáneas de telemetría que aportan tasas de latencia/fallo deben tener menos de 15 minutos antes de cada ejecución canaria.
 2. **Preparar la configuración.**
-   - Persiste la configuración JSON del orquestador en el árbol `iroha_config` por capas:
-
-     ```toml
-     [torii.sorafs.orchestrator]
-     config_path = "/etc/iroha/sorafs/orchestrator.json"
-     ```
-
-     Actualiza el JSON con límites específicos del rollout (`max_providers`, presupuestos de reintentos). Usa el mismo archivo en staging/producción para que las diferencias sean mínimas.
+   - Store the canonical client-side orchestrator JSON at `/etc/iroha/sorafs/orchestrator.json`. This file is consumed explicitly by client/orchestrator workloads; it is not an `iroha_config` or Torii namespace. Update it with rollout-specific limits (`max_providers`, retry budgets), deploy the same reviewed file to staging/production, and pass it to every CLI fetch as `--orchestrator-config=/etc/iroha/sorafs/orchestrator.json`.
 3. **Ejercitar los fixtures canónicos.**
    - Rellena las variables de entorno del manifiesto/token y ejecuta el fetch determinista:
 
      ```bash
      sorafs_cli fetch \
        --plan fixtures/sorafs_manifest/ci_sample/payload.plan.json \
+       --orchestrator-config=/etc/iroha/sorafs/orchestrator.json \
        --manifest-id "$CANARY_MANIFEST_ID" \
        --provider name=alpha,provider-id="$PROVIDER_ALPHA_ID",gateway-key="$PROVIDER_ALPHA_GATEWAY_KEY",base-url=https://gw-alpha.example,stream-token="$PROVIDER_ALPHA_TOKEN" \
        --provider name=beta,provider-id="$PROVIDER_BETA_ID",gateway-key="$PROVIDER_BETA_GATEWAY_KEY",base-url=https://gw-beta.example,stream-token="$PROVIDER_BETA_TOKEN" \

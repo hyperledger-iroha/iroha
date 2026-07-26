@@ -209,11 +209,16 @@ fn expose_ffi(attrs: Vec<syn::Attribute>, item: &TokenStream) -> TokenStream {
         };
     };
 
-    let ffi_type: Option<Attribute> = match ffi_type {
-        // A bare marker opts the model item into FFI generation. It is not a
-        // valid helper attribute for the generated `FfiType` derive.
-        Meta::Path(_) => None,
-        ffi_type @ Meta::List(_) => Some(parse_quote!(#[#ffi_type])),
+    let (ffi_type, ffi_export): (Attribute, Option<Attribute>) = match ffi_type {
+        // A bare marker opts the model item into FFI generation without
+        // promising a stable structural layout. Keep that default fail-closed
+        // by exporting the item through the opaque representation. Opaque
+        // model items deliberately expose no field accessors.
+        Meta::Path(_) => (parse_quote!(#[ffi_type(opaque)]), None),
+        ffi_type @ Meta::List(_) => (
+            parse_quote!(#[#ffi_type]),
+            Some(parse_quote!(#[iroha_ffi::ffi_export])),
+        ),
         ffi_type @ Meta::NameValue(_) => {
             return syn::Error::new_spanned(
                 ffi_type,
@@ -230,7 +235,7 @@ fn expose_ffi(attrs: Vec<syn::Attribute>, item: &TokenStream) -> TokenStream {
 
         #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
         #[derive(iroha_ffi::FfiType)]
-        #[iroha_ffi::ffi_export]
+        #ffi_export
         #ffi_type
         #(#attrs)*
         #item
@@ -355,8 +360,14 @@ fn ensure_field_docs(fields: &mut syn::Fields, owner: &syn::Ident, variant: Opti
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
+
     use syn::{
-        Attribute, Expr, File, Item, ItemEnum, ItemStruct, ItemUnion, Lit, Visibility, parse_quote,
+        Attribute, Expr, File, Item, ItemEnum, ItemStruct, ItemUnion, Lit, Visibility,
+        parse::Parser as _, parse_quote,
     };
 
     use super::*;
@@ -540,11 +551,19 @@ mod tests {
         );
         assert_eq!(
             rendered.matches("ffi_type").count(),
-            0,
-            "a bare marker is a sentinel and must not reach the FFI derive"
+            2,
+            "a bare marker must become an opaque policy in both FFI branches"
+        );
+        assert_eq!(
+            rendered.matches("ffi_type (opaque)").count(),
+            2,
+            "the default FFI representation must remain opaque:\n{rendered}"
         );
         assert!(rendered.contains("iroha_ffi :: FfiType"));
-        assert!(rendered.contains("iroha_ffi :: ffi_export"));
+        assert!(
+            !rendered.contains("iroha_ffi :: ffi_export"),
+            "default opaque models must not generate field accessors:\n{rendered}"
+        );
         assert!(rendered.contains("iroha_ffi :: ffi_import"));
     }
 
@@ -570,10 +589,225 @@ mod tests {
                     any(feature = "ffi_export", feature = "ffi_import"),
                     ffi_type(unsafe { robust })
                 )]
-                pub struct Robust;
+                #[repr(transparent)]
+                pub struct Robust(u32);
             },
             parse_quote!(#[ffi_type(unsafe { robust })]),
         );
+    }
+
+    #[test]
+    fn standalone_ffi_helpers_match_export_derive_predicate() {
+        const EXPECTED_DIRECT_FFI_TYPES: usize = 102;
+
+        let data_model_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_data_model");
+        if !data_model_root.join("Cargo.toml").is_file() {
+            // Registry packages contain only this derive crate. The complete
+            // monorepo audit runs whenever the sibling data-model source is
+            // present, without making published tests depend on external files.
+            return;
+        }
+
+        let mut sources = Vec::new();
+        collect_rust_sources(&data_model_root.join("src"), &mut sources);
+        for entry in fs::read_dir(&data_model_root).expect("read data-model crate root") {
+            let entry = entry.expect("read data-model crate-root entry");
+            let file_type = entry
+                .file_type()
+                .expect("inspect data-model crate-root entry");
+            assert!(
+                !file_type.is_symlink(),
+                "data-model production source entry must not be a symlink: {}",
+                entry.path().display()
+            );
+            if file_type.is_file() && entry.path().extension().is_some_and(|ext| ext == "rs") {
+                sources.push(entry.path());
+            }
+        }
+        sources.sort();
+
+        let mut direct_derives = 0;
+        for path in sources {
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            let file = syn::parse_file(&source)
+                .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
+            audit_standalone_ffi_predicates(&path, &file.items, false, &mut direct_derives);
+        }
+
+        assert_eq!(
+            direct_derives, EXPECTED_DIRECT_FFI_TYPES,
+            "the direct data-model FFI surface changed; review every new or removed type explicitly"
+        );
+    }
+
+    fn collect_rust_sources(directory: &Path, sources: &mut Vec<PathBuf>) {
+        let mut entries = fs::read_dir(directory)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", directory.display()))
+            .map(|entry| entry.expect("read data-model source entry"))
+            .collect::<Vec<_>>();
+        entries.sort_by_key(fs::DirEntry::path);
+
+        for entry in entries {
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .unwrap_or_else(|error| panic!("failed to inspect {}: {error}", path.display()));
+            assert!(
+                !file_type.is_symlink(),
+                "data-model production source entry must not be a symlink: {}",
+                path.display()
+            );
+            if file_type.is_dir() {
+                collect_rust_sources(&path, sources);
+            } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
+                sources.push(path);
+            }
+        }
+    }
+
+    fn audit_standalone_ffi_predicates(
+        path: &Path,
+        items: &[Item],
+        items_are_model_children: bool,
+        direct_derives: &mut usize,
+    ) {
+        let export_only: Meta =
+            parse_quote!(all(feature = "ffi_export", not(feature = "ffi_import")));
+        let export_only = normalized_tokens(&export_only);
+
+        for item in items {
+            let (name, attrs) = match item {
+                Item::Struct(item) => (item.ident.to_string(), Some(item.attrs.as_slice())),
+                Item::Enum(item) => (item.ident.to_string(), Some(item.attrs.as_slice())),
+                Item::Union(item) => (item.ident.to_string(), Some(item.attrs.as_slice())),
+                Item::Mod(item) => {
+                    if let Some((_, items)) = &item.content {
+                        let children_are_model_owned = item
+                            .attrs
+                            .iter()
+                            .any(|attr| path_ends_with(attr.path(), "model"));
+                        audit_standalone_ffi_predicates(
+                            path,
+                            items,
+                            children_are_model_owned,
+                            direct_derives,
+                        );
+                    }
+                    (item.ident.to_string(), None)
+                }
+                _ => continue,
+            };
+            let Some(attrs) = attrs else {
+                continue;
+            };
+
+            let (derive_predicates, helper_predicates) = ffi_attribute_predicates(path, attrs);
+            if derive_predicates.is_empty() {
+                assert!(
+                    items_are_model_children || helper_predicates.is_empty(),
+                    "{}: `{name}` has a standalone `ffi_type` helper without a direct FfiType derive",
+                    path.display()
+                );
+                continue;
+            }
+
+            *direct_derives += 1;
+            assert_eq!(
+                derive_predicates.len(),
+                1,
+                "{}: `{name}` must have exactly one direct FfiType derive predicate",
+                path.display()
+            );
+
+            for predicate in derive_predicates.iter().chain(&helper_predicates) {
+                assert_eq!(
+                    predicate.as_deref(),
+                    Some(export_only.as_str()),
+                    "{}: `{name}` has an FFI derive/helper outside the exact export-only predicate",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    fn ffi_attribute_predicates(
+        path: &Path,
+        attrs: &[Attribute],
+    ) -> (Vec<Option<String>>, Vec<Option<String>>) {
+        let mut derives = Vec::new();
+        let mut helpers = Vec::new();
+
+        for attr in attrs {
+            if attr.path().is_ident("cfg_attr") {
+                let Meta::List(list) = &attr.meta else {
+                    panic!("{}: cfg_attr must be a list", path.display());
+                };
+                let metas = Punctuated::<Meta, Token![,]>::parse_terminated
+                    .parse2(list.tokens.clone())
+                    .unwrap_or_else(|error| {
+                        panic!("{}: failed to parse cfg_attr: {error}", path.display())
+                    });
+                let mut metas = metas.into_iter();
+                let predicate = metas
+                    .next()
+                    .unwrap_or_else(|| panic!("{}: empty cfg_attr", path.display()));
+                let predicate = normalized_tokens(&predicate);
+
+                for meta in metas {
+                    if derive_contains_ffi_type(path, &meta) {
+                        derives.push(Some(predicate.clone()));
+                    }
+                    if path_ends_with(meta.path(), "ffi_type") {
+                        helpers.push(Some(predicate.clone()));
+                    }
+                }
+            } else {
+                if derive_contains_ffi_type(path, &attr.meta) {
+                    derives.push(None);
+                }
+                if path_ends_with(attr.path(), "ffi_type") {
+                    helpers.push(None);
+                }
+            }
+        }
+
+        (derives, helpers)
+    }
+
+    fn derive_contains_ffi_type(path: &Path, meta: &Meta) -> bool {
+        let Meta::List(list) = meta else {
+            return false;
+        };
+        if !path_ends_with(&list.path, "derive") {
+            return false;
+        }
+
+        Punctuated::<syn::Path, Token![,]>::parse_terminated
+            .parse2(list.tokens.clone())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{}: failed to parse derive attribute paths: {error}",
+                    path.display()
+                )
+            })
+            .iter()
+            .any(|derive| path_ends_with(derive, "FfiType"))
+    }
+
+    fn path_ends_with(path: &syn::Path, expected: &str) -> bool {
+        path.segments
+            .last()
+            .is_some_and(|segment| segment.ident == expected)
+    }
+
+    fn normalized_tokens(tokens: &impl ToTokens) -> String {
+        tokens
+            .to_token_stream()
+            .to_string()
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect()
     }
 
     fn assert_ffi_policy(input: syn::DeriveInput, expected: Attribute) {
@@ -589,6 +823,11 @@ mod tests {
         assert!(
             !rendered.contains("cfg_attr"),
             "the source-only cfg_attr wrapper leaked into generated output: {rendered}"
+        );
+        assert_eq!(
+            rendered.matches("iroha_ffi :: ffi_export").count(),
+            1,
+            "an explicit FFI policy must retain the type-level export generator:\n{rendered}"
         );
     }
 }

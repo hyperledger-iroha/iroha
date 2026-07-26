@@ -364,19 +364,16 @@ fn transfer_numeric_asset_for_escrow(
         state_transaction,
         source_id,
         destination_id,
-        amount.as_numeric(),
+        amount,
         source_policy,
     )?;
-    let control_update = prepare_outbound_asset_transfer_control_update(
-        state_transaction,
-        &source_id,
-        amount.as_numeric(),
-    )?;
+    let control_update =
+        prepare_outbound_asset_transfer_control_update(state_transaction, &source_id, amount)?;
     let delta = apply_resolved_numeric_asset_transfer_delta(
         state_transaction,
         &source_id,
         &destination_id,
-        amount.as_numeric(),
+        amount,
     )?;
     if let Some(record) = control_update {
         update_control_record(state_transaction, source_id.account(), record)?;
@@ -1080,7 +1077,7 @@ pub(crate) fn settle_orderbook_asset_lock(
     let control_update = prepare_outbound_asset_transfer_control_update(
         state_transaction,
         &event_source_id,
-        total.as_numeric(),
+        &total,
     )?;
     let mut plans = Vec::with_capacity(allocations.len());
     for (destination, amount) in allocations {
@@ -1089,7 +1086,7 @@ pub(crate) fn settle_orderbook_asset_lock(
             state_transaction,
             &event_source_id,
             &event_destination_id,
-            amount.as_numeric(),
+            &amount,
             NumericAssetTransferSourcePolicy::NativeEscrowCustody,
         )?;
         plans.push((
@@ -1141,7 +1138,7 @@ pub(crate) fn settle_orderbook_asset_lock(
             state_transaction,
             &source_id,
             &destination_id,
-            amount.as_numeric(),
+            &amount,
         )?;
         deltas.push(delta);
         #[allow(clippy::float_arithmetic)]
@@ -1994,6 +1991,7 @@ impl Execute for CancelAssetLock {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        ensure_positive(&self.expected_remaining_amount)?;
         let Some(mut record) = state_transaction
             .world
             .asset_escrows
@@ -2009,6 +2007,15 @@ impl Execute for CancelAssetLock {
         }
         if &record.seller != authority {
             return Err(validation_err("only lock opener may cancel lock"));
+        }
+        let spec = state_transaction
+            .numeric_spec_for(&record.asset_definition)
+            .map_err(Error::from)?;
+        assert_numeric_spec_with(self.expected_remaining_amount.as_numeric(), spec)?;
+        if record.remaining_amount != self.expected_remaining_amount {
+            return Err(validation_err(
+                "asset lock remaining amount changed since the cancellation was prepared",
+            ));
         }
         let custody_asset = custody_asset(&record);
         let seller_asset = party_asset(&record, &record.seller);
@@ -3187,7 +3194,7 @@ mod tests {
     ) {
         state_transaction
             .world
-            .deposit_numeric_asset(custody_asset, amount.as_numeric())
+            .deposit_numeric_asset(custody_asset, &amount)
             .expect("deposit closed custody dust");
     }
 
@@ -4072,7 +4079,7 @@ mod tests {
     }
 
     #[test]
-    fn asset_lock_cancel_refunds_remaining_after_destination_drawdown() {
+    fn asset_lock_stale_cancel_rejects_after_drawdown_before_exact_refund() {
         let source = fixture_account("lock-cancel-source");
         let destination = fixture_account("lock-cancel-destination");
         let observer = fixture_account("lock-cancel-observer");
@@ -4097,11 +4104,33 @@ mod tests {
         )
         .execute(&source, &mut tx)
         .expect("open destination-drawn lock");
+        let stale_cancel = CancelAssetLock::new(escrow_id, Quantity::from(40_u32));
         DrawdownAssetLock::new(escrow_id, Quantity::from(15_u32), Quantity::from(40_u32))
             .execute(&destination, &mut tx)
             .expect("destination draws down when no release authority is set");
 
-        let err = CancelAssetLock::new(escrow_id)
+        let err = stale_cancel
+            .execute(&source, &mut tx)
+            .expect_err("stale cancellation must not refund a changed amount");
+        assert!(
+            err.to_string().contains("remaining amount changed"),
+            "unexpected error: {err}"
+        );
+        let record = escrow_record(&tx, &escrow_id);
+        assert_eq!(record.status, AssetEscrowStatus::Locked);
+        assert_eq!(record.remaining_amount, Quantity::from(25_u32));
+        assert_eq!(
+            balance(&tx, &record.custody, &asset_definition),
+            Quantity::from(25_u32),
+            "rejected stale cancellation must preserve custody"
+        );
+        assert_eq!(
+            balance(&tx, &source, &asset_definition),
+            Quantity::from(60_u32),
+            "rejected stale cancellation must not credit the opener"
+        );
+
+        let err = CancelAssetLock::new(escrow_id, Quantity::from(25_u32))
             .execute(&destination, &mut tx)
             .expect_err("destination cannot cancel source-opened lock");
         assert!(
@@ -4109,7 +4138,7 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        CancelAssetLock::new(escrow_id)
+        CancelAssetLock::new(escrow_id, Quantity::from(25_u32))
             .execute(&source, &mut tx)
             .expect("source cancels remaining lock");
         let record = escrow_record(&tx, &escrow_id);
@@ -4452,6 +4481,14 @@ mod tests {
             Quantity::zero()
         );
 
+        let err = CancelAssetLock::new(lock_id, Quantity::zero())
+            .execute(&source, &mut tx)
+            .expect_err("zero cancellation precondition must be rejected");
+        assert!(
+            err.to_string().contains("non-zero"),
+            "unexpected error: {err}"
+        );
+
         DrawdownAssetLock::new(lock_id, Quantity::from(30_u32), Quantity::from(30_u32))
             .execute(&destination, &mut tx)
             .expect("draw down all funds");
@@ -4466,7 +4503,7 @@ mod tests {
             "closed lock cannot be drawn down again"
         );
         assert!(
-            CancelAssetLock::new(lock_id)
+            CancelAssetLock::new(lock_id, Quantity::from(30_u32))
                 .execute(&source, &mut tx)
                 .is_err(),
             "closed lock cannot be cancelled"
@@ -4545,7 +4582,7 @@ mod tests {
 
         let cancel_custody = escrow_record(&tx, &cancel_id).custody;
         freeze_outbound_asset_transfers(&mut tx, &source, &cancel_custody, &asset_definition);
-        let err = CancelAssetLock::new(cancel_id)
+        let err = CancelAssetLock::new(cancel_id, Quantity::from(20_u32))
             .execute(&source, &mut tx)
             .expect_err("custody freeze must block cancellation refund");
         assert!(
@@ -4626,7 +4663,7 @@ mod tests {
         let custody = escrow_record(&tx, &escrow_id).custody;
 
         assert!(
-            CancelAssetLock::new(escrow_id)
+            CancelAssetLock::new(escrow_id, Quantity::from(30_u32))
                 .execute(&destination, &mut tx)
                 .is_err(),
             "destination cannot cancel source-opened lock"
@@ -4653,7 +4690,7 @@ mod tests {
                 .is_err(),
             "cannot draw down more than remaining amount"
         );
-        CancelAssetLock::new(escrow_id)
+        CancelAssetLock::new(escrow_id, Quantity::from(20_u32))
             .execute(&source, &mut tx)
             .expect("source cancels remaining funds");
 
@@ -4664,7 +4701,7 @@ mod tests {
             "closed lock must reject drawdown"
         );
         assert!(
-            CancelAssetLock::new(escrow_id)
+            CancelAssetLock::new(escrow_id, Quantity::from(20_u32))
                 .execute(&source, &mut tx)
                 .is_err(),
             "closed lock must reject cancellation"

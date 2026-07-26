@@ -393,7 +393,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
         );
 
         client.submit_blocking(
-            CancelAssetLock::new(trusted_lock_id),
+            CancelAssetLock::new(trusted_lock_id, partially_drawn.remaining_amount.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         let cancelled = wait_for_escrow_status(

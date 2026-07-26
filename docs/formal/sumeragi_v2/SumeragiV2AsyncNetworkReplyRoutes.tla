@@ -26,7 +26,25 @@ VARIABLES
   asyncNextReplyDeliveryOrdinal,
   asyncReplyConnectionTenure,
   asyncReplySourceActive,
-  asyncNextReplyServiceIndex
+  asyncNextReplyServiceIndex,
+  asyncReplySemanticSequence,
+  asyncReplySemanticHash,
+  asyncReplyRequesterNextSequence,
+  asyncReplyRequesterClosedThrough,
+  asyncReplyClosePendingThrough,
+  asyncReplyCloseSentThrough,
+  asyncReplyCloseAcknowledgedThrough,
+  asyncReplyCloseRetryGeneration,
+  asyncReplyServiceGeneration,
+  asyncReplyResponderGeneration,
+  asyncReplyDurableResponderGeneration,
+  asyncReplyRequesterNextStreamEpoch,
+  asyncReplyRequesterStreamEpoch,
+  asyncReplyCloseStreamEpoch,
+  asyncReplyClosedPrefix,
+  asyncReplyAttemptLifecycleIdentities,
+  asyncReplyPendingHintResets,
+  asyncReplyDiscardedPartialIdentities
 
 AsyncReplyRoute ==
   INSTANCE SumeragiV2ReplyRouteOwnership WITH
@@ -44,12 +62,32 @@ AsyncReplyRoute ==
     rrNextDeliveryOrdinal <- asyncNextReplyDeliveryOrdinal,
     rrConnectionTenure <- asyncReplyConnectionTenure,
     rrSourceActive <- asyncReplySourceActive,
-    rrNextServiceIndex <- asyncNextReplyServiceIndex
+    rrNextServiceIndex <- asyncNextReplyServiceIndex,
+    rrSemanticSequence <- asyncReplySemanticSequence,
+    rrSemanticHash <- asyncReplySemanticHash,
+    rrRequesterNextSequence <- asyncReplyRequesterNextSequence,
+    rrRequesterClosedThrough <- asyncReplyRequesterClosedThrough,
+    rrClosePendingThrough <- asyncReplyClosePendingThrough,
+    rrCloseSentThrough <- asyncReplyCloseSentThrough,
+    rrCloseAcknowledgedThrough <- asyncReplyCloseAcknowledgedThrough,
+    rrCloseRetryGeneration <- asyncReplyCloseRetryGeneration,
+    rrServiceGeneration <- asyncReplyServiceGeneration,
+    rrResponderGeneration <- asyncReplyResponderGeneration,
+    rrDurableResponderGeneration <-
+      asyncReplyDurableResponderGeneration,
+    rrRequesterNextStreamEpoch <-
+      asyncReplyRequesterNextStreamEpoch,
+    rrRequesterStreamEpoch <- asyncReplyRequesterStreamEpoch,
+    rrCloseStreamEpoch <- asyncReplyCloseStreamEpoch,
+    rrClosedPrefix <- asyncReplyClosedPrefix,
+    rrAttemptLifecycleIdentities <-
+      asyncReplyAttemptLifecycleIdentities,
+    rrPendingHintResets <- asyncReplyPendingHintResets,
+    rrDiscardedPartialIdentities <-
+      asyncReplyDiscardedPartialIdentities
 
 AsyncReplyRouteVars ==
-  <<asyncReplyAttempts, asyncReplyPayloads,
-    asyncNextReplyDeliveryOrdinal, asyncReplyConnectionTenure,
-    asyncReplySourceActive, asyncNextReplyServiceIndex>>
+  AsyncReplyRoute!ReplyRouteV2Vars
 
 AsyncReplySemanticOf(item) ==
   AsyncReplySemanticIdentity(item.kind, item.envelope)
@@ -63,15 +101,16 @@ AsyncReplySemanticObserved(owner, source, semantic) ==
 
 AsyncObserveNewReplySource(owner, semantic, source) ==
   /\ AsyncReplySemanticObserved(owner, source, semantic)
-  /\ AsyncReplyRoute!ObserveNewReplySource(owner, semantic, source)
+  /\ AsyncReplyRoute!ObserveNewReplySourceV2(owner, semantic, source)
 
 AsyncObserveLaterReplyDelivery(owner, semantic, source) ==
   /\ AsyncReplySemanticObserved(owner, source, semantic)
-  /\ AsyncReplyRoute!ObserveLaterReplyDelivery(owner, semantic, source)
+  /\ AsyncReplyRoute!ObserveLaterReplyDeliveryV2(
+       owner, semantic, source)
 
 AsyncReconnectReplySource(owner, semantic, source) ==
   /\ AsyncReplySemanticObserved(owner, source, semantic)
-  /\ AsyncReplyRoute!ReconnectReplySource(owner, semantic, source)
+  /\ AsyncReplyRoute!ReconnectReplySourceV2(owner, semantic, source)
 
 (***************************************************************************
 An exact capability retry is a route-state stutter.  In particular, it cannot
@@ -79,52 +118,82 @@ move either cursor backward or reset the source's round-robin age.
 ***************************************************************************)
 AsyncExactReplyCapabilityRetry(owner, semantic, source) ==
   /\ AsyncReplySemanticObserved(owner, source, semantic)
-  /\ AsyncReplyRoute!RetryExactReplySource(owner, semantic, source)
+  /\ AsyncReplyRoute!RetryExactReplySourceV2(
+       owner, semantic, source)
 
 AsyncReplyRouteNext ==
   \/ \E owner \in ValidatorIds,
        semantic \in AsyncReplySemanticIdentities,
-       source \in ValidatorIds:
+       source \in AsyncReplyRoute!ReplySources:
        AsyncObserveNewReplySource(owner, semantic, source)
   \/ \E owner \in ValidatorIds,
        semantic \in AsyncReplySemanticIdentities,
-       source \in ValidatorIds:
+       source \in AsyncReplyRoute!ReplySources:
        AsyncObserveLaterReplyDelivery(owner, semantic, source)
-  \/ \E owner \in ValidatorIds, source \in ValidatorIds:
-       AsyncReplyRoute!RetireReplySource(owner, source)
+  \/ \E owner \in ValidatorIds,
+       source \in AsyncReplyRoute!ReplySources:
+       AsyncReplyRoute!RetireReplySourceV2(owner, source)
   \/ \E owner \in ValidatorIds,
        semantic \in AsyncReplySemanticIdentities,
-       source \in ValidatorIds:
+       source \in AsyncReplyRoute!ReplySources:
        AsyncReconnectReplySource(owner, semantic, source)
   \/ \E owner \in ValidatorIds,
        semantic \in AsyncReplySemanticIdentities,
-       source \in ValidatorIds:
-       AsyncReplyRoute!AcquireReplyTicket(owner, semantic, source)
+       source \in AsyncReplyRoute!ReplySources:
+       AsyncReplyRoute!AcquireReplyTicketV2(owner, semantic, source)
   \/ \E owner \in ValidatorIds,
        semantic \in AsyncReplySemanticIdentities:
-       AsyncReplyRoute!ServiceReplyRoute(owner, semantic)
+       AsyncReplyRoute!ServiceReplyRouteV2(owner, semantic)
   \/ \E owner \in ValidatorIds,
        semantic \in AsyncReplySemanticIdentities,
-       source \in ValidatorIds:
+       source \in AsyncReplyRoute!ReplySources:
        AsyncExactReplyCapabilityRetry(owner, semantic, source)
+  \/ \E witness \in AsyncReplyRoute!ReplyCloseWitnessSet:
+       AsyncReplyRoute!CloseSemanticRequestV2(witness)
+  \/ \E witness \in AsyncReplyRoute!ReplyCloseWitnessSet:
+       AsyncReplyRoute!PiggybackCloseSemanticRequestV2(witness)
+  \/ \E witness \in AsyncReplyRoute!ReplyCloseWitnessSet:
+       AsyncReplyRoute!RetryCloseSemanticRequestV2(witness)
+  \/ \E acknowledgement
+       \in AsyncReplyRoute!ReplyCloseAcknowledgementSet:
+       AsyncReplyRoute!AcknowledgeCloseSemanticRequestV2(
+         acknowledgement)
+  \/ \E owner \in ValidatorIds,
+       source \in AsyncReplyRoute!ReplySources:
+       /\ AsyncReplyRoute!RecoverReplyRouteState(owner, source)
+       /\ UNCHANGED AsyncReplyRoute!ReplyCoordinateVars
+  \/ \E owner \in ValidatorIds,
+       source \in AsyncReplyRoute!ReplySources:
+       AsyncReplyRoute!PersistFreshRequesterStreamEpoch(owner, source)
+  \/ \E hint \in AsyncReplyRoute!ReplyGenerationHintSet:
+       AsyncReplyRoute!PersistFreshEpochForGenerationHint(hint)
+  \/ \E reset \in AsyncReplyRoute!ReplyHintResetSet:
+       AsyncReplyRoute!DiscardPersistedHintPartialState(reset)
+  \/ \E source \in AsyncReplyRoute!ReplySources:
+       AsyncReplyRoute!PersistTerminalResponderGeneration(source)
+  \/ \E source \in AsyncReplyRoute!ReplySources:
+       AsyncReplyRoute!InstallPersistedResponderGeneration(source)
+  \/ \E requester \in ValidatorIds,
+       responder \in AsyncReplyRoute!ReplySources,
+       inputGeneration \in AsyncReplyRoute!ReplyServiceGenerations:
+       AsyncReplyRoute!RejectFutureGenerationWithoutMutation(
+         requester, responder, inputGeneration)
 
-AsyncReplyRouteInit == AsyncReplyRoute!ReplyRouteInit
+AsyncReplyRouteInit ==
+  /\ AsyncReplyRoute!ReplyRouteV2Init
+  /\ AsyncReplyRoute!ReplySources = ValidatorIds
 
+(* Keep production fairness definitionally identical to the ownership kernel.
+   This includes ticket acquisition, exact-item service, cumulative-close
+   retry, and exact close acknowledgement; a copied subset can silently make
+   terminal close work unfair. *)
 AsyncReplyRouteFairness ==
-  /\ \A owner \in ValidatorIds,
-       semantic \in AsyncReplySemanticIdentities,
-       source \in ValidatorIds:
-       WF_AsyncReplyRouteVars(
-         AsyncReplyRoute!AcquireReplyTicket(owner, semantic, source))
-  /\ \A owner \in ValidatorIds,
-       semantic \in AsyncReplySemanticIdentities:
-       WF_AsyncReplyRouteVars(
-         AsyncReplyRoute!ServiceReplyRoute(owner, semantic))
+  AsyncReplyRoute!ReplyRouteFairness
 
 AsyncAcquireAnyReplyTicket ==
   \E owner \in ValidatorIds,
      semantic \in AsyncReplySemanticIdentities,
-     source \in ValidatorIds:
+     source \in AsyncReplyRoute!ReplySources:
     AsyncReplyRoute!AcquireReplyTicket(owner, semantic, source)
 
 AsyncServiceAnyReplyRoute ==
@@ -148,6 +217,8 @@ AsyncReplyRouteOwnershipInvariant ==
   AsyncReplyRoute!ReplyRouteOwnershipInvariant
 AsyncReplyRouteSafetyInvariant ==
   AsyncReplyRoute!ReplyRouteSafetyInvariant
+AsyncReplyRouteFullSafetyInvariant ==
+  AsyncReplyRoute!ReplyRouteFullSafetyInvariant
 AsyncReplyTenureAwareReplayStep ==
   AsyncReplyRoute!ReplyTenureAwareReplayStep
 AsyncReplyTenureAwareReplay ==
@@ -166,6 +237,10 @@ AsyncReplySourceRoundRobinRank(owner, semantic, source) ==
   AsyncReplyRoute!ReplySourceRoundRobinRank(owner, semantic, source)
 AsyncReplySourceEventuallyProgresses(owner, semantic, source) ==
   AsyncReplyRoute!ReplySourceEventuallyProgresses(owner, semantic, source)
+AsyncReplyLifecycleJournal ==
+  AsyncReplyRoute!ReplyLifecycleJournal
+AsyncReplyCloseWorkEventuallyTerminates(requester, responder) ==
+  AsyncReplyRoute!ReplyCloseWorkEventuallyTerminates(requester, responder)
 
 AsyncProductionVars == <<AsyncAllVars, AsyncReplyRouteVars>>
 

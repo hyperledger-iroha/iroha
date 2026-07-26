@@ -529,6 +529,8 @@ pub enum AppealFinanceTransactionDeadLetterReasonV1 {
     PolicySuperseded,
     /// The durable reconciliation context is malformed or noncanonical.
     InvalidContext,
+    /// The governed signer binding is no longer active for the operation authority.
+    SignerBindingInactive,
 }
 
 /// Payload-free terminal delivery.
@@ -584,6 +586,7 @@ enum StoredDeadLetterReasonV1 {
     StaleFinalizedCursor,
     PolicySuperseded,
     InvalidContext,
+    SignerBindingInactive,
 }
 
 impl From<StoredDeadLetterReasonV1> for AppealFinanceTransactionDeadLetterReasonV1 {
@@ -595,6 +598,7 @@ impl From<StoredDeadLetterReasonV1> for AppealFinanceTransactionDeadLetterReason
             StoredDeadLetterReasonV1::StaleFinalizedCursor => Self::StaleFinalizedCursor,
             StoredDeadLetterReasonV1::PolicySuperseded => Self::PolicySuperseded,
             StoredDeadLetterReasonV1::InvalidContext => Self::InvalidContext,
+            StoredDeadLetterReasonV1::SignerBindingInactive => Self::SignerBindingInactive,
         }
     }
 }
@@ -1378,6 +1382,25 @@ impl AppealFinanceTransactionForwarder {
         self.commit_candidate(&mut state, candidate)
     }
 
+    /// Dead-letter an operation whose governed signer binding is terminally inactive.
+    pub fn mark_signer_binding_inactive(
+        &self,
+        operation_id: [u8; 32],
+        observed_cursor: AppealFinanceFinalizedCursorV1,
+    ) -> Result<(), AppealFinanceTransactionForwarderError> {
+        let mut state = self.lock_state()?;
+        let mut candidate = state.checkpoint.clone();
+        let position = pending_position(&candidate, operation_id)?;
+        validate_observed_cursor(&candidate.pending[position], observed_cursor)?;
+        self.move_to_dead_letter(
+            &mut candidate,
+            position,
+            StoredDeadLetterReasonV1::SignerBindingInactive,
+            observed_cursor,
+        )?;
+        self.commit_candidate(&mut state, candidate)
+    }
+
     /// Dead-letter a finalized cursor rollback or same-height fork.
     pub fn mark_stale_finalized_cursor(
         &self,
@@ -1766,12 +1789,14 @@ fn validate_operation(
             let Some(record) = expected_record else {
                 return Err(AppealFinanceTransactionForwarderError::InvalidOperation);
             };
+            validate_xor_quantity(instruction.expected_remaining_amount())?;
             validate_xor_quantity(&record.amount)?;
             validate_xor_quantity(&record.remaining_amount)?;
             if record.id != *instruction.escrow_id()
                 || record.kind != AssetEscrowKind::Lock
                 || record.status != AssetEscrowStatus::Locked
                 || record.remaining_amount.is_zero()
+                || &record.remaining_amount != instruction.expected_remaining_amount()
                 || &record.seller != authority
                 || !has_canonical_open_lock_lifecycle(record)
             {
@@ -2920,17 +2945,33 @@ mod tests {
         ));
 
         let mut poisoned_record = active_record();
-        poisoned_record.remaining_amount = invalid_xor;
+        poisoned_record.remaining_amount = invalid_xor.clone();
         let poisoned_cancel_context = AppealFinanceTransactionContextV1 {
             expected_record: Some(poisoned_record),
             ..drawdown_context()
         };
-        let cancel = AppealFinanceOperationV1::Cancel(CancelAssetLock::new(escrow_id()));
+        let cancel =
+            AppealFinanceOperationV1::Cancel(CancelAssetLock::new(escrow_id(), invalid_xor));
         assert!(matches!(
             forwarder.enqueue_unsigned_operation(account(1), cancel, &poisoned_cancel_context),
             Err(AppealFinanceTransactionForwarderError::InvalidOperation)
         ));
 
+        assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
+    }
+
+    #[test]
+    fn cancel_operation_binds_the_observed_remaining_amount() {
+        let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
+        let stale_cancel = AppealFinanceOperationV1::Cancel(CancelAssetLock::new(
+            escrow_id(),
+            Quantity::from(99_u32),
+        ));
+
+        assert!(matches!(
+            forwarder.enqueue_unsigned_operation(account(1), stale_cancel, &drawdown_context()),
+            Err(AppealFinanceTransactionForwarderError::InvalidOperation)
+        ));
         assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
     }
 
@@ -3105,7 +3146,10 @@ mod tests {
             .mark_semantic_finalized(first, cursor(8, 8))
             .unwrap();
 
-        let cancel = AppealFinanceOperationV1::Cancel(CancelAssetLock::new(escrow_id()));
+        let cancel = AppealFinanceOperationV1::Cancel(CancelAssetLock::new(
+            escrow_id(),
+            Quantity::from(100_u32),
+        ));
         let second = forwarder
             .enqueue_unsigned_operation(account(1), cancel, &context)
             .unwrap()
@@ -3169,7 +3213,10 @@ mod tests {
             operation_id: [2; 32],
             chain_id: drawdown.chain_id.clone(),
             authority: record.seller.clone(),
-            operation: AppealFinanceOperationV1::Cancel(CancelAssetLock::new(record.id)),
+            operation: AppealFinanceOperationV1::Cancel(CancelAssetLock::new(
+                record.id,
+                Quantity::from(40_u32),
+            )),
             expected_record: Some(after_drawdown.clone()),
             reconciliation_context: vec![2],
             baseline_finalized_cursor: cursor(8, 8),
@@ -3252,6 +3299,41 @@ mod tests {
         assert_eq!(
             invalid.dead_letters(8).unwrap()[0].reason,
             AppealFinanceTransactionDeadLetterReasonV1::InvalidContext
+        );
+    }
+
+    #[test]
+    fn inactive_signer_binding_is_a_payload_free_terminal_reason() {
+        let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
+        let operation_id = forwarder
+            .enqueue_unsigned_operation(account(4), drawdown_operation(), &drawdown_context())
+            .unwrap()
+            .operation_id();
+        let observed_cursor = cursor(8, 10);
+
+        forwarder
+            .mark_signer_binding_inactive(operation_id, observed_cursor)
+            .unwrap();
+
+        assert!(forwarder.pending_after(None, 8).unwrap().is_empty());
+        let dead_letters = forwarder.dead_letters(8).unwrap();
+        assert_eq!(dead_letters.len(), 1);
+        assert_eq!(dead_letters[0].operation_id, operation_id);
+        assert_eq!(
+            dead_letters[0].kind,
+            AppealFinanceTransactionKindV1::Drawdown
+        );
+        assert_eq!(
+            dead_letters[0].reason,
+            AppealFinanceTransactionDeadLetterReasonV1::SignerBindingInactive
+        );
+        assert_eq!(
+            dead_letters[0].observed_finalized_height,
+            observed_cursor.height
+        );
+        assert_eq!(
+            dead_letters[0].observed_finalized_block_hash,
+            observed_cursor.block_hash
         );
     }
 

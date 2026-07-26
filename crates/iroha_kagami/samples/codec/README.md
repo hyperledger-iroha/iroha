@@ -10,9 +10,13 @@ Use the codec sample regeneration tool to keep these binaries in sync with their
 cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml --
 ```
 
-The tool invokes `kagami advanced codec json-to-norito` for each JSON file and writes the resulting `.bin` into this directory. Run it whenever the JSON schema or the sample JSON changes.
+The tool encodes each typed sample with the current Norito implementation and
+writes the resulting `.bin` into this directory. Run it whenever the generated
+Iroha schema descriptors or a sample type changes.
 
 ## Requirements
 
 - Each generated binary must start with the `NRT0` header identifying a Norito archive.
-- The encoded data must validate against the JSON schema in `docs/source/references/schema.json`.
+- Each JSON/binary pair must round-trip through its registered Iroha type. The
+  generated descriptor inventory in `docs/source/references/schema.json` must
+  be regenerated with `kagami advanced schema` and remain non-empty.

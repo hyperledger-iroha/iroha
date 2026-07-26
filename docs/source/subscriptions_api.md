@@ -496,5 +496,5 @@ iroha_cli subscriptions subscription usage --subscription-id sub-001$subscriptio
 
 ## Determinism Checklist
 - All times are UTC; month math is pure integer logic.
-- Amounts are `Numeric` strings; no floating point arithmetic.
+- Amounts are `Quantity` strings; no floating point arithmetic.
 - No environment toggles; all behavior is configured via metadata and config.

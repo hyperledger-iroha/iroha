@@ -138,9 +138,11 @@ pub mod isi {
             OpenVerifyEnvelopeValidationError, StarkFriOpenProofV1,
         },
     };
+    #[cfg(test)]
+    use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
         json::Json,
-        numeric::{Numeric, NumericSpec, Quantity},
+        numeric::{Numeric, Quantity},
         unique_vec::PushResult,
     };
     #[cfg(feature = "telemetry")]
@@ -1214,13 +1216,6 @@ pub mod isi {
     }
 
     fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
-        if BackendTag::is_pending_production_backend_label(backend) {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "pending-production verifying key backends are not supported".into(),
-                ),
-            ));
-        }
         if crate::zk::is_production_claim_backend_label(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -1401,20 +1396,6 @@ pub mod isi {
         )
         .map_err(invalid_smart_contract_parameter)?;
         Ok(())
-    }
-
-    fn pending_production_verifying_key_backend_error() -> Error {
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            "pending-production verifying key backends are not supported".into(),
-        ))
-        .into()
-    }
-
-    fn pending_production_proof_backend_error() -> Error {
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            "pending-production proof backends are not supported".into(),
-        ))
-        .into()
     }
 
     fn production_claim_proof_backend_error() -> Error {
@@ -2242,15 +2223,6 @@ pub mod isi {
         out
     }
 
-    fn numeric_with_spec(amount: &Quantity, spec: NumericSpec) -> Result<Numeric, Error> {
-        spec.check(amount.as_numeric()).map_err(|_| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                "bond amount exceeds the asset's numeric scale".into(),
-            ))
-        })?;
-        Ok(amount.as_numeric().clone())
-    }
-
     /// Convert a public economic quantity to the fixed-width scalar used by a
     /// versioned proof circuit.
     ///
@@ -2386,14 +2358,16 @@ pub mod isi {
             state_transaction.gov.slash_receiver_account.clone(),
         );
         let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
-        let slash_numeric = numeric_with_spec(&slash_amount, spec)?;
-        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(&slash_numeric, spec)?;
+        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
+            slash_amount.as_numeric(),
+            spec,
+        )?;
         state_transaction
             .world
-            .withdraw_numeric_asset(&escrow_asset_id, &slash_numeric)?;
+            .withdraw_numeric_asset(&escrow_asset_id, &slash_amount)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&receiver_asset_id, &slash_numeric)?;
+            .deposit_numeric_asset(&receiver_asset_id, &slash_amount)?;
         record.amount = record
             .amount
             .try_sub(&slash_amount)
@@ -2598,14 +2572,13 @@ pub mod isi {
         }
         let (owner_asset_id, escrow_asset_id) = voting_asset_ids(&state_transaction.gov, authority);
         let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
-        let delta_numeric = numeric_with_spec(&delta, spec)?;
-        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(&delta_numeric, spec)?;
+        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(delta.as_numeric(), spec)?;
         state_transaction
             .world
-            .withdraw_numeric_asset(&owner_asset_id, &delta_numeric)?;
+            .withdraw_numeric_asset(&owner_asset_id, &delta)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&escrow_asset_id, &delta_numeric)?;
+            .deposit_numeric_asset(&escrow_asset_id, &delta)?;
         Ok(())
     }
 
@@ -2745,14 +2718,16 @@ pub mod isi {
         let receiver_asset_id =
             iroha_data_model::asset::AssetId::new(def_id, receiver_account.clone());
         let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
-        let slash_numeric = numeric_with_spec(&request.amount, spec)?;
-        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(&slash_numeric, spec)?;
+        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
+            request.amount.as_numeric(),
+            spec,
+        )?;
         state_transaction
             .world
-            .withdraw_numeric_asset(&escrow_asset_id, &slash_numeric)?;
+            .withdraw_numeric_asset(&escrow_asset_id, &request.amount)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&receiver_asset_id, &slash_numeric)?;
+            .deposit_numeric_asset(&receiver_asset_id, &request.amount)?;
         rec.amount = rec
             .amount
             .try_sub(&request.amount)
@@ -2866,14 +2841,16 @@ pub mod isi {
             state_transaction.gov.slash_receiver_account.clone(),
         );
         let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
-        let restore_numeric = numeric_with_spec(&amount, spec)?;
-        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(&restore_numeric, spec)?;
+        crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
+            amount.as_numeric(),
+            spec,
+        )?;
         state_transaction
             .world
-            .withdraw_numeric_asset(&receiver_asset_id, &restore_numeric)?;
+            .withdraw_numeric_asset(&receiver_asset_id, &amount)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&escrow_asset_id, &restore_numeric)?;
+            .deposit_numeric_asset(&escrow_asset_id, &amount)?;
         let mut ledger = state_transaction
             .world
             .governance_slashes
@@ -3048,16 +3025,6 @@ pub mod isi {
                             ),
                         ));
                     }
-                }
-                backend if backend.is_pending_production_backend() => {
-                    return Err(pending_production_verifying_key_backend_error());
-                }
-                _ => {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "verifying key backend must be Halo2IpaPasta or Stark".into(),
-                        ),
-                    ));
                 }
             }
             // Commitment sanity if stored key bytes are present.
@@ -9243,17 +9210,16 @@ pub mod isi {
                 let (owner_asset_id, escrow_asset_id) =
                     citizenship_asset_ids(&state_transaction.gov, &self.owner);
                 let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
-                let delta_numeric = numeric_with_spec(&delta, spec)?;
                 crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
-                    &delta_numeric,
+                    delta.as_numeric(),
                     spec,
                 )?;
                 state_transaction
                     .world
-                    .withdraw_numeric_asset(&owner_asset_id, &delta_numeric)?;
+                    .withdraw_numeric_asset(&owner_asset_id, &delta)?;
                 state_transaction
                     .world
-                    .deposit_numeric_asset(&escrow_asset_id, &delta_numeric)?;
+                    .deposit_numeric_asset(&escrow_asset_id, &delta)?;
             }
             let bonded_height = state_transaction._curr_block.height().get();
             let record = crate::state::CitizenshipRecord::new(
@@ -9304,17 +9270,16 @@ pub mod isi {
             let (owner_asset_id, escrow_asset_id) =
                 citizenship_asset_ids(&state_transaction.gov, &self.owner);
             let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
-            let amount_numeric = numeric_with_spec(&record.amount, spec)?;
             crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
-                &amount_numeric,
+                record.amount.as_numeric(),
                 spec,
             )?;
             state_transaction
                 .world
-                .withdraw_numeric_asset(&escrow_asset_id, &amount_numeric)?;
+                .withdraw_numeric_asset(&escrow_asset_id, &record.amount)?;
             state_transaction
                 .world
-                .deposit_numeric_asset(&owner_asset_id, &amount_numeric)?;
+                .deposit_numeric_asset(&owner_asset_id, &record.amount)?;
             state_transaction.world.citizens.remove(self.owner.clone());
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::CitizenRevoked(
@@ -9848,16 +9813,6 @@ pub mod isi {
                         ),
                     ));
                 }
-            }
-            backend if backend.is_pending_production_backend() => {
-                return Err(pending_production_verifying_key_backend_error());
-            }
-            _ => {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "verifying key backend must be Halo2IpaPasta or Stark".into(),
-                    ),
-                ));
             }
         }
         if let Some(vk) = &new.key {
@@ -10723,9 +10678,6 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key backend mismatch".into(),
             ));
-        }
-        if BackendTag::is_pending_production_backend_label(attachment.backend.as_str()) {
-            return Err(pending_production_proof_backend_error());
         }
         if crate::zk::is_production_claim_backend_label(attachment.backend.as_str()) {
             return Err(production_claim_proof_backend_error());
@@ -13227,7 +13179,7 @@ pub mod isi {
             authority,
             source,
             settlement.custody_account_id.clone(),
-            amount.into_numeric(),
+            amount,
         )
     }
 
@@ -13452,9 +13404,6 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key is not active".into(),
             ));
-        }
-        if rec.backend.is_pending_production_backend() {
-            return Err(pending_production_verifying_key_backend_error());
         }
         if rec.gas_schedule_id.is_none() {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -23565,7 +23514,7 @@ pub mod isi {
             let custody_asset = AssetId::new(settlement_asset, custody);
             let sender_before = sccp_asset_balance(&stx, &sender_asset);
             let custody_before = sccp_asset_balance(&stx, &custody_asset);
-            let locked_amount = Numeric::new(7_u64, 9);
+            let locked_amount = sccp_test_transfer_quantity();
 
             instruction
                 .execute(&ALICE_ID, &mut stx)
@@ -23598,13 +23547,13 @@ pub mod isi {
             assert_eq!(
                 sccp_asset_balance(&stx, &sender_asset),
                 sender_before
-                    .checked_sub(locked_amount.clone())
+                    .checked_sub(&locked_amount)
                     .expect("funded sender subtraction")
             );
             assert_eq!(
                 sccp_asset_balance(&stx, &custody_asset),
                 custody_before
-                    .checked_add(locked_amount)
+                    .checked_add(&locked_amount)
                     .expect("custody addition")
             );
         }
@@ -25790,12 +25739,7 @@ seiyaku GovernanceLifecycle {
                 validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
             );
 
-            for backend_tag in [
-                BackendTag::Unsupported,
-                BackendTag::Halo2Bn254,
-                BackendTag::Groth16,
-                BackendTag::Stark,
-            ] {
+            for backend_tag in [BackendTag::Stark] {
                 let mut bad_backend_rec = vk_rec.clone();
                 bad_backend_rec.backend = backend_tag;
                 let err = validate_open_verify_envelope_metadata(
@@ -26045,14 +25989,6 @@ seiyaku GovernanceLifecycle {
                 BackendTag::Halo2IpaPasta
             ));
             assert!(backend_requires_open_verify_envelope("halo2/ipa"));
-            assert!(!open_verify_backend_tag_matches(
-                "halo2/ipa",
-                BackendTag::Halo2Bn254
-            ));
-            assert!(!open_verify_backend_tag_matches(
-                "halo2/bn254",
-                BackendTag::Halo2Bn254
-            ));
             assert!(!open_verify_backend_tag_matches(
                 "halo2/bn254",
                 BackendTag::Halo2IpaPasta
@@ -26690,11 +26626,17 @@ seiyaku GovernanceLifecycle {
             (asset, custody)
         }
 
-        fn sccp_asset_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Numeric {
+        fn sccp_test_transfer_quantity() -> Quantity {
+            "0.000000007"
+                .parse()
+                .expect("canonical SCCP transfer quantity")
+        }
+
+        fn sccp_asset_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Quantity {
             stx.world
                 .asset(asset_id)
-                .map(|asset| asset.value().clone().into_inner().into_numeric())
-                .unwrap_or_else(|_| Numeric::new(0_u64, 0))
+                .map(|asset| asset.value().clone().into_inner())
+                .unwrap_or_else(|_| Quantity::zero())
         }
 
         #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26704,8 +26646,8 @@ seiyaku GovernanceLifecycle {
             ordered_index: BTreeSet<SccpOutboundMessageIndexKeyV1>,
             terminal: BTreeMap<SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1>,
             usage: SccpOutboundPendingUsageV1,
-            sender_balance: Numeric,
-            custody_balance: Numeric,
+            sender_balance: Quantity,
+            custody_balance: Quantity,
         }
 
         fn sccp_outbound_mutation_snapshot(
@@ -26752,8 +26694,8 @@ seiyaku GovernanceLifecycle {
                 crate::state::SccpVerifierWorkV1,
                 crate::state::SccpVerifierWorkV1,
             ),
-            custody_balance: Numeric,
-            recipient_balance: Numeric,
+            custody_balance: Quantity,
+            recipient_balance: Quantity,
             holders: Option<BTreeSet<AccountId>>,
             assets: Option<BTreeSet<AssetId>>,
             nonzero_holders: Option<BTreeSet<AccountId>>,
@@ -26985,7 +26927,7 @@ seiyaku GovernanceLifecycle {
             stx: &mut StateTransaction<'_, '_>,
             registry: Arc<crate::state::ValidatedSccpRegistryV1>,
             asset_spec: NumericSpec,
-            custody_amount: Numeric,
+            custody_amount: Quantity,
         ) -> (AssetDefinitionId, AccountId) {
             *stx.world.sccp_registry.get_mut() = registry.to_wire();
             stx.sccp_registry = registry;
@@ -27008,13 +26950,9 @@ seiyaku GovernanceLifecycle {
                 .expect("register SCCP settlement asset fixture");
             }
             if !custody_amount.is_zero() {
-                Mint::asset_quantity(
-                    Quantity::try_from_numeric(custody_amount)
-                        .expect("non-negative SCCP custody fixture"),
-                    AssetId::new(asset.clone(), custody.clone()),
-                )
-                .execute(&ALICE_ID, stx)
-                .expect("fund SCCP custody fixture");
+                Mint::asset_quantity(custody_amount, AssetId::new(asset.clone(), custody.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("fund SCCP custody fixture");
             }
             (asset, custody)
         }
@@ -27124,13 +27062,12 @@ seiyaku GovernanceLifecycle {
             )
         }
 
-        fn numeric_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Numeric {
+        fn quantity_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Quantity {
             stx.world
                 .assets
                 .get(asset_id)
                 .expect("asset balance exists")
                 .as_ref()
-                .as_numeric()
                 .clone()
         }
 
@@ -27532,8 +27469,11 @@ seiyaku GovernanceLifecycle {
 
             let alice_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
             let receiver_asset = AssetId::new(fixture.asset_def_id.clone(), fixture.receiver);
-            assert_eq!(numeric_balance(&stx, &alice_asset), Numeric::new(93, 0));
-            assert_eq!(numeric_balance(&stx, &receiver_asset), Numeric::new(7, 0));
+            assert_eq!(quantity_balance(&stx, &alice_asset), Quantity::from(93_u32));
+            assert_eq!(
+                quantity_balance(&stx, &receiver_asset),
+                Quantity::from(7_u32)
+            );
             assert!(
                 stx.world
                     .zk_assets
@@ -27652,19 +27592,22 @@ seiyaku GovernanceLifecycle {
                 .expect("ZK-ACE transfer should debit the definition home dataspace");
 
             assert_eq!(
-                numeric_balance(&stx, &home_source_asset),
-                Numeric::new(93, 0)
+                quantity_balance(&stx, &home_source_asset),
+                Quantity::from(93_u32)
             );
             let receiver_asset = AssetId::with_scope(
                 fixture.asset_def_id.clone(),
                 fixture.receiver.clone(),
                 AssetBalanceScope::Dataspace(home_dataspace),
             );
-            assert_eq!(numeric_balance(&stx, &receiver_asset), Numeric::new(7, 0));
+            assert_eq!(
+                quantity_balance(&stx, &receiver_asset),
+                Quantity::from(7_u32)
+            );
             let global_source_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
             assert_eq!(
-                numeric_balance(&stx, &global_source_asset),
-                Numeric::new(100, 0)
+                quantity_balance(&stx, &global_source_asset),
+                Quantity::from(100_u32)
             );
             let global_receiver_asset =
                 AssetId::new(fixture.asset_def_id.clone(), fixture.receiver.clone());
@@ -28023,8 +27966,11 @@ seiyaku GovernanceLifecycle {
             let alice_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
             let receiver_asset =
                 AssetId::new(fixture.asset_def_id.clone(), fixture.receiver.clone());
-            assert_eq!(numeric_balance(&stx, &alice_asset), Numeric::new(96, 0));
-            assert_eq!(numeric_balance(&stx, &receiver_asset), Numeric::new(4, 0));
+            assert_eq!(quantity_balance(&stx, &alice_asset), Quantity::from(96_u32));
+            assert_eq!(
+                quantity_balance(&stx, &receiver_asset),
+                Quantity::from(4_u32)
+            );
 
             iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment::new(
                 fixture.asset_def_id.clone(),
@@ -28074,7 +28020,6 @@ seiyaku GovernanceLifecycle {
         fn zk_ace_authorized_transfer_rejects_noncanonical_envelope_shape() {
             #[derive(Clone, Copy)]
             enum Tamper {
-                UnsupportedBackendTag,
                 EmptyCircuitId,
                 EmptyPublicInputs,
                 OversizedPublicInputs,
@@ -28105,11 +28050,6 @@ seiyaku GovernanceLifecycle {
             .expect("register ZK-ACE identity commitment");
 
             for (index, (case, tamper, expected_msg)) in [
-                (
-                    "unsupported_backend",
-                    Tamper::UnsupportedBackendTag,
-                    "invalid OpenVerifyEnvelope",
-                ),
                 (
                     "empty_circuit",
                     Tamper::EmptyCircuitId,
@@ -28152,7 +28092,6 @@ seiyaku GovernanceLifecycle {
                     vk_commitment,
                 );
                 let proof = mutate_zk_ace_envelope(proof, |envelope| match tamper {
-                    Tamper::UnsupportedBackendTag => envelope.backend = BackendTag::Unsupported,
                     Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
                     Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
                     Tamper::OversizedPublicInputs => {
@@ -28612,7 +28551,10 @@ seiyaku GovernanceLifecycle {
 
             let alice_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
             let receiver_asset = AssetId::new(fixture.asset_def_id.clone(), fixture.receiver);
-            assert_eq!(numeric_balance(&stx, &alice_asset), Numeric::new(100, 0));
+            assert_eq!(
+                quantity_balance(&stx, &alice_asset),
+                Quantity::from(100_u32)
+            );
             assert!(
                 stx.world.assets.get(&receiver_asset).is_none(),
                 "invalid proof must not create receiver asset"
@@ -28833,7 +28775,10 @@ seiyaku GovernanceLifecycle {
                     .expect_err("invalid confidential payload must fail closed");
                 let msg = smart_contract_instruction_error_message(err);
                 assert!(msg.contains(expected), "expected `{expected}` in `{msg}`");
-                assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+                assert_eq!(
+                    quantity_balance(&stx, &asset_ids[0]),
+                    Quantity::from(10_u32)
+                );
                 assert_eq!(commitment_count(&stx, &asset_def_id), 0);
             }
         }
@@ -28871,7 +28816,10 @@ seiyaku GovernanceLifecycle {
             shield_amount(&mut stx, &asset_def_id, 3)
                 .expect("shield must debit the account's scoped transparent balance");
 
-            assert_eq!(numeric_balance(&stx, &scoped_asset_id), Numeric::new(7, 0));
+            assert_eq!(
+                quantity_balance(&stx, &scoped_asset_id),
+                Quantity::from(7_u32)
+            );
             let universal_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
@@ -28923,7 +28871,7 @@ seiyaku GovernanceLifecycle {
             shield_amount(&mut stx, &asset_def_id, 3)
                 .expect("universal route should use the asset definition home dataspace");
 
-            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(7, 0));
+            assert_eq!(quantity_balance(&stx, &asset_ids[0]), Quantity::from(7_u32));
             let universal_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
@@ -28953,7 +28901,7 @@ seiyaku GovernanceLifecycle {
             shield_amount(&mut stx, &asset_def_id, 4)
                 .expect("non-universal route determines the restricted public bucket");
 
-            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(6, 0));
+            assert_eq!(quantity_balance(&stx, &asset_ids[0]), Quantity::from(6_u32));
             assert_eq!(commitment_count(&stx, &asset_def_id), 1);
         }
 
@@ -28979,8 +28927,11 @@ seiyaku GovernanceLifecycle {
             shield_amount(&mut stx, &asset_def_id, 4)
                 .expect("non-universal route must select the route bucket directly");
 
-            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
-            assert_eq!(numeric_balance(&stx, &asset_ids[1]), Numeric::new(7, 0));
+            assert_eq!(
+                quantity_balance(&stx, &asset_ids[0]),
+                Quantity::from(10_u32)
+            );
+            assert_eq!(quantity_balance(&stx, &asset_ids[1]), Quantity::from(7_u32));
             assert_eq!(commitment_count(&stx, &asset_def_id), 1);
         }
 
@@ -29005,7 +28956,10 @@ seiyaku GovernanceLifecycle {
                 ),
                 other => panic!("unexpected error: {other:?}"),
             }
-            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(
+                quantity_balance(&stx, &asset_ids[0]),
+                Quantity::from(10_u32)
+            );
             assert_eq!(commitment_count(&stx, &asset_def_id), 0);
         }
 
@@ -29038,8 +28992,14 @@ seiyaku GovernanceLifecycle {
                 ),
                 other => panic!("unexpected error: {other:?}"),
             }
-            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
-            assert_eq!(numeric_balance(&stx, &asset_ids[1]), Numeric::new(11, 0));
+            assert_eq!(
+                quantity_balance(&stx, &asset_ids[0]),
+                Quantity::from(10_u32)
+            );
+            assert_eq!(
+                quantity_balance(&stx, &asset_ids[1]),
+                Quantity::from(11_u32)
+            );
             assert_eq!(commitment_count(&stx, &asset_def_id), 0);
         }
 
@@ -29069,7 +29029,10 @@ seiyaku GovernanceLifecycle {
                 ),
                 other => panic!("unexpected error: {other:?}"),
             }
-            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(
+                quantity_balance(&stx, &asset_ids[0]),
+                Quantity::from(10_u32)
+            );
             assert_eq!(commitment_count(&stx, &asset_def_id), 0);
         }
 
@@ -29096,7 +29059,10 @@ seiyaku GovernanceLifecycle {
                     || err.to_string().contains("NotEnoughQuantity"),
                 "unexpected error: {err:?}"
             );
-            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+            assert_eq!(
+                quantity_balance(&stx, &asset_ids[0]),
+                Quantity::from(10_u32)
+            );
             assert_eq!(commitment_count(&stx, &asset_def_id), 0);
         }
 
@@ -29136,7 +29102,7 @@ seiyaku GovernanceLifecycle {
             shield_amount(&mut stx, &asset_def_id, 3)
                 .expect("global assets must keep using the global public bucket");
 
-            assert_eq!(numeric_balance(&stx, &asset_id), Numeric::new(7, 0));
+            assert_eq!(quantity_balance(&stx, &asset_id), Quantity::from(7_u32));
             let universal_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
@@ -29791,13 +29757,11 @@ seiyaku GovernanceLifecycle {
                     counterparty,
                     iroha_data_model::repo::RepoCashLeg {
                         asset_definition_id: cash_def.clone(),
-                        quantity: Quantity::try_from_numeric(Numeric::new(10, 0))
-                            .expect("repo cash-leg fixture must be a non-negative quantity"),
+                        quantity: Quantity::from(10_u32),
                     },
                     iroha_data_model::repo::RepoCollateralLeg::new(
                         collateral_def,
-                        Quantity::try_from_numeric(Numeric::new(12, 0))
-                            .expect("repo collateral-leg fixture must be a non-negative quantity"),
+                        Quantity::from(12_u32),
                     ),
                     250,
                     1_000,
@@ -30354,13 +30318,11 @@ seiyaku GovernanceLifecycle {
                 ALICE_ID.clone(),
                 iroha_data_model::repo::RepoCashLeg {
                     asset_definition_id: cash_def,
-                    quantity: Quantity::try_from_numeric(Numeric::new(10, 0))
-                        .expect("repo cash-leg fixture must be a non-negative quantity"),
+                    quantity: Quantity::from(10_u32),
                 },
                 iroha_data_model::repo::RepoCollateralLeg::new(
                     collateral_def,
-                    Quantity::try_from_numeric(Numeric::new(12, 0))
-                        .expect("repo collateral-leg fixture must be a non-negative quantity"),
+                    Quantity::from(12_u32),
                 ),
                 250,
                 1_000,
@@ -30388,8 +30350,7 @@ seiyaku GovernanceLifecycle {
                     role: iroha_data_model::isi::SettlementLegRole::Delivery,
                     leg: iroha_data_model::isi::SettlementLeg::new(
                         reward_def.clone(),
-                        Quantity::try_from_numeric(Numeric::new(1, 0))
-                            .expect("settlement-leg fixture must be a non-negative quantity"),
+                        Quantity::one(),
                         account_id.clone(),
                         ALICE_ID.clone(),
                     ),
@@ -31641,7 +31602,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 registry,
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             assert!(stx.tx_call_hash.is_none());
             let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
@@ -31675,14 +31636,14 @@ seiyaku GovernanceLifecycle {
                 after.custody_balance,
                 before
                     .custody_balance
-                    .checked_sub(Numeric::new(7_u64, 9))
+                    .checked_sub(&sccp_test_transfer_quantity())
                     .expect("funded custody subtraction")
             );
             assert_eq!(
                 after.recipient_balance,
                 before
                     .recipient_balance
-                    .checked_add(Numeric::new(7_u64, 9))
+                    .checked_add(&sccp_test_transfer_quantity())
                     .expect("recipient addition")
             );
             assert_eq!(after.transfer_transcripts, before.transfer_transcripts + 1);
@@ -31723,7 +31684,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 registry,
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             let recipient_asset = AssetId::new(asset.clone(), ALICE_ID.clone());
 
@@ -31776,12 +31737,12 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("the exact proof must succeed once the recipient has capacity");
             let after = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
-            let released = Numeric::new(7_u64, 9);
+            let released = sccp_test_transfer_quantity();
             assert_eq!(
                 after.custody_balance,
                 retry_before
                     .custody_balance
-                    .checked_sub(released.clone())
+                    .checked_sub(&released)
                     .expect("funded custody subtraction")
             );
             assert_eq!(after.recipient_balance, released);
@@ -31815,7 +31776,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 registry,
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             assert!(stx.tx_call_hash.is_none());
             let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
@@ -31830,14 +31791,14 @@ seiyaku GovernanceLifecycle {
                 after.custody_balance,
                 before
                     .custody_balance
-                    .checked_sub(Numeric::new(7_u64, 9))
+                    .checked_sub(&sccp_test_transfer_quantity())
                     .expect("funded replay custody subtraction")
             );
             assert_eq!(
                 after.recipient_balance,
                 before
                     .recipient_balance
-                    .checked_add(Numeric::new(7_u64, 9))
+                    .checked_add(&sccp_test_transfer_quantity())
                     .expect("replay recipient addition")
             );
             assert_eq!(after.proofs.len(), before.proofs.len() + 1);
@@ -31861,13 +31822,13 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 registry,
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
             let custody_before = sccp_asset_balance(&stx, &custody_asset);
             let recipient_before = sccp_asset_balance(&stx, &recipient_asset);
-            let released = Numeric::new(7_u64, 9);
+            let released = sccp_test_transfer_quantity();
             seed_sccp_test_tx_call_hash(&mut stx, 0x8D);
 
             SubmitBridgeProof::new(proof.clone())
@@ -31879,13 +31840,13 @@ seiyaku GovernanceLifecycle {
             assert_eq!(
                 custody_after,
                 custody_before
-                    .checked_sub(released.clone())
+                    .checked_sub(&released)
                     .expect("funded custody subtraction")
             );
             assert_eq!(
                 recipient_after,
                 recipient_before
-                    .checked_add(released)
+                    .checked_add(&released)
                     .expect("recipient addition")
             );
             let replay_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
@@ -31935,7 +31896,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 rotated,
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
@@ -31945,11 +31906,11 @@ seiyaku GovernanceLifecycle {
             SubmitBridgeProof::new(proof.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("proof under retained anchor A must settle after rotation to B");
-            let released = Numeric::new(7_u64, 9);
+            let released = sccp_test_transfer_quantity();
             assert_eq!(
                 sccp_asset_balance(&stx, &custody_asset),
                 custody_before
-                    .checked_sub(released.clone())
+                    .checked_sub(&released)
                     .expect("funded custody subtraction")
             );
             assert_eq!(sccp_asset_balance(&stx, &recipient_asset), released);
@@ -32164,7 +32125,7 @@ seiyaku GovernanceLifecycle {
                 &mut pre_cutoff,
                 Arc::clone(&retired),
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
@@ -32174,12 +32135,12 @@ seiyaku GovernanceLifecycle {
                 .expect("event finalized at the governed retirement cutoff must remain claimable");
             assert_eq!(
                 sccp_asset_balance(&pre_cutoff, &recipient_asset),
-                Numeric::new(7_u64, 9)
+                sccp_test_transfer_quantity()
             );
             assert_eq!(
                 sccp_asset_balance(&pre_cutoff, &custody_asset),
-                Numeric::new(100_u64, 0)
-                    .checked_sub(Numeric::new(7_u64, 9))
+                Quantity::from(100_u64)
+                    .checked_sub(&sccp_test_transfer_quantity())
                     .expect("funded custody subtraction")
             );
             let retired_route = retired
@@ -32271,7 +32232,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 registry,
                 NumericSpec::default(),
-                Numeric::new(0_u64, 0),
+                Quantity::zero(),
             );
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
@@ -32290,14 +32251,8 @@ seiyaku GovernanceLifecycle {
             assert_eq!(stx.world.proofs.iter().count(), proof_count_before);
             assert!(stx.world.sccp_inbound_messages.get(&replay_key).is_none());
             assert!(stx.bridge_receipt_proofs_available_in_tx.is_empty());
-            assert_eq!(
-                sccp_asset_balance(&stx, &custody_asset),
-                Numeric::new(0_u64, 0)
-            );
-            assert_eq!(
-                sccp_asset_balance(&stx, &recipient_asset),
-                Numeric::new(0_u64, 0)
-            );
+            assert_eq!(sccp_asset_balance(&stx, &custody_asset), Quantity::zero());
+            assert_eq!(sccp_asset_balance(&stx, &recipient_asset), Quantity::zero());
         }
 
         #[test]
@@ -32317,7 +32272,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 registry,
                 NumericSpec::integer(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
@@ -32334,10 +32289,7 @@ seiyaku GovernanceLifecycle {
                 .expect_err("settlement must not round a governed fractional payload amount");
 
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
-            assert_eq!(
-                sccp_asset_balance(&stx, &recipient_asset),
-                Numeric::new(0_u64, 0)
-            );
+            assert_eq!(sccp_asset_balance(&stx, &recipient_asset), Quantity::zero());
             assert!(stx.world.sccp_inbound_messages.get(&replay_key).is_none());
             assert!(stx.world.proofs.is_empty());
             assert!(stx.bridge_receipt_proofs_available_in_tx.is_empty());
@@ -32362,7 +32314,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 registry,
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
@@ -32380,10 +32332,7 @@ seiyaku GovernanceLifecycle {
 
             assert!(format!("{error:?}").contains("SORA-home asset"));
             assert_eq!(sccp_asset_balance(&stx, &custody_asset), custody_before);
-            assert_eq!(
-                sccp_asset_balance(&stx, &recipient_asset),
-                Numeric::new(0_u64, 0)
-            );
+            assert_eq!(sccp_asset_balance(&stx, &recipient_asset), Quantity::zero());
             assert!(stx.world.sccp_inbound_messages.get(&replay_key).is_none());
             assert!(stx.world.proofs.is_empty());
         }
@@ -32403,7 +32352,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 registry,
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             let proof_commitment = bridge_proof_hash_for_test(&proof);
             seed_sccp_test_tx_call_hash(&mut stx, 0x94);
@@ -32466,7 +32415,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 registry,
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             // Leave enough cheap proof-count/byte capacity for the adversarial replay so the
             // assertion below specifically proves that the durable lane/message index rejects
@@ -32562,7 +32511,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 registry,
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             seed_sccp_test_tx_call_hash(&mut stx, 0x96);
 
@@ -32633,7 +32582,7 @@ seiyaku GovernanceLifecycle {
                     &mut abandoned,
                     Arc::clone(&registry),
                     NumericSpec::default(),
-                    Numeric::new(100_u64, 0),
+                    Quantity::from(100_u64),
                 );
                 seed_sccp_test_tx_call_hash(&mut abandoned, 0x97);
                 SubmitBridgeProof::new(proof.clone())
@@ -32647,7 +32596,7 @@ seiyaku GovernanceLifecycle {
                 &mut retry,
                 registry,
                 NumericSpec::default(),
-                Numeric::new(100_u64, 0),
+                Quantity::from(100_u64),
             );
             seed_sccp_test_tx_call_hash(&mut retry, 0x97);
             assert!(retry.world.sccp_inbound_messages.get(&key).is_none());
@@ -34129,7 +34078,7 @@ seiyaku GovernanceLifecycle {
             soracloud_fhe_stark_vk_record(soracloud_full_bootstrap_material_vk_profile(), version)
         }
 
-        const PENDING_PRODUCTION_VERIFIER_LABELS: &[&str] = &[
+        const UNSUPPORTED_PROTOCOL_BACKEND_LABELS: &[&str] = &[
             "halo2/ipa/orchard",
             "halo2/ipa:zcash-orchard",
             "groth16/bls12-377",
@@ -34152,24 +34101,6 @@ seiyaku GovernanceLifecycle {
             "sis-with-hints",
         ];
 
-        const PENDING_PRODUCTION_VERIFIER_TAGS: &[BackendTag] = &[
-            BackendTag::Halo2IpaOrchard,
-            BackendTag::Groth16Bls12377,
-            BackendTag::FcmpPlusPlusCurveTree,
-            BackendTag::LatticePcsSis,
-            BackendTag::MidenStark,
-            BackendTag::AztecPlonkishPrivateKernel,
-            BackendTag::PqMaspStarkFri,
-            BackendTag::AnonymousPgc,
-            BackendTag::VeRange,
-            BackendTag::ZkAt,
-            BackendTag::RecursiveAnonymousAdmission,
-            BackendTag::VegaExistingCredentialZk,
-            BackendTag::SilentThresholdAnoncred,
-            BackendTag::ZkX509,
-            BackendTag::SisWithHints,
-        ];
-
         const PRODUCTION_CLAIM_VERIFIER_LABELS: &[&str] = &[
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",
@@ -34188,7 +34119,7 @@ seiyaku GovernanceLifecycle {
             "stark/fri/a-u-d-i-t-c-l-a-i-m",
         ];
 
-        fn pending_label_generic_record_profile(
+        fn unsupported_label_generic_record_profile(
             backend: &str,
         ) -> (BackendTag, &'static str, &'static str) {
             if backend.starts_with("stark/fri") {
@@ -36126,7 +36057,7 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn register_vk_rejects_non_ipa_backend() {
+        fn register_vk_rejects_cross_engine_backend_tag() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -36146,15 +36077,15 @@ seiyaku GovernanceLifecycle {
 
             let mut stx = state_block.transaction();
             let exec = Executor::default();
-            let id = VerifyingKeyId::new("halo2/bn254", "vk_bad_backend");
-            let vk_box = VerifyingKeyBox::new("halo2/bn254".into(), vec![1, 2, 3]);
+            let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_backend");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
             let mut rec = VerifyingKeyRecord::new_with_owner(
                 1,
                 "vk_bad_backend",
                 None,
                 "test",
-                BackendTag::Halo2Bn254,
-                "bn254",
+                BackendTag::Stark,
+                "goldilocks",
                 [0x41; 32],
                 hash_vk(&vk_box),
             );
@@ -36169,13 +36100,13 @@ seiyaku GovernanceLifecycle {
                 .expect_err("non-IPA backend must be rejected");
             let msg = smart_contract_error_message(err);
             assert!(
-                msg.contains("backend must be Halo2IpaPasta"),
+                msg.contains("must target stark/fri"),
                 "unexpected msg: {msg}"
             );
         }
 
         #[test]
-        fn register_vk_rejects_pending_production_record_tags() {
+        fn register_vk_rejects_protocol_names_as_backend_labels() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -36194,64 +36125,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
 
             let exec = Executor::default();
-            for (idx, backend_tag) in PENDING_PRODUCTION_VERIFIER_TAGS.iter().copied().enumerate() {
-                let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new("halo2/ipa", format!("vk_pending_tag_{idx}"));
-                let mut rec = VerifyingKeyRecord::new_with_owner(
-                    1,
-                    format!("pending-tag-{idx}"),
-                    None,
-                    "test",
-                    backend_tag,
-                    "pallas",
-                    [0x6A; 32],
-                    [0x6B; 32],
-                );
-                rec.status = ConfidentialStatus::Active;
-                rec.gas_schedule_id = Some("halo2_default".into());
-                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
-                    id: id.clone(),
-                    record: rec,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("pending-production verifier tag must be rejected");
-                let msg = smart_contract_error_message(err);
-                assert!(
-                    msg.contains("pending-production verifying key backends"),
-                    "unexpected msg for {}: {msg}",
-                    backend_tag.canonical_label()
-                );
-                assert!(
-                    stx.world.verifying_keys.get(&id).is_none(),
-                    "{} must not be admitted to WSV",
-                    backend_tag.canonical_label()
-                );
-            }
-        }
-
-        #[test]
-        fn register_vk_rejects_pending_production_backend_labels() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
-            stx.apply();
-
-            let exec = Executor::default();
-            for (idx, backend) in PENDING_PRODUCTION_VERIFIER_LABELS
+            for (idx, backend) in UNSUPPORTED_PROTOCOL_BACKEND_LABELS
                 .iter()
                 .copied()
                 .enumerate()
@@ -36260,10 +36134,10 @@ seiyaku GovernanceLifecycle {
                 let id = VerifyingKeyId::new(backend, format!("vk_pending_label_{idx}"));
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
                 let (record_backend, curve, schedule) =
-                    pending_label_generic_record_profile(backend);
+                    unsupported_label_generic_record_profile(backend);
                 let mut rec = VerifyingKeyRecord::new_with_owner(
                     1,
-                    format!("{backend}:pending-production-circuit"),
+                    format!("{backend}:unsupported-protocol-circuit"),
                     None,
                     "test",
                     record_backend,
@@ -36282,10 +36156,10 @@ seiyaku GovernanceLifecycle {
                 .into();
                 let err = exec
                     .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("pending-production verifier label must be rejected");
+                    .expect_err("protocol name must not be accepted as a verifier engine");
                 let msg = smart_contract_error_message(err);
                 assert!(
-                    msg.contains("pending-production verifying key backends"),
+                    msg.contains("unsupported verifying key backends"),
                     "unexpected msg for {backend}: {msg}"
                 );
                 assert!(
@@ -36320,7 +36194,7 @@ seiyaku GovernanceLifecycle {
                 let id = VerifyingKeyId::new(backend, format!("vk_production_claim_{idx}"));
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
                 let (record_backend, curve, schedule) =
-                    pending_label_generic_record_profile(backend);
+                    unsupported_label_generic_record_profile(backend);
                 let mut rec = VerifyingKeyRecord::new_with_owner(
                     1,
                     format!("{backend}:claimed-production-circuit"),
@@ -37805,22 +37679,22 @@ seiyaku GovernanceLifecycle {
                 .expect("register vk");
             stx.apply();
 
-            // Attempt to update with an unsupported backend tag
+            // Attempt to update with a different supported engine tag.
             let mut stx = state_block.transaction();
             let mut new_rec = VerifyingKeyRecord::new_with_owner(
                 2,
                 "vk_update",
                 None,
                 "test",
-                BackendTag::Halo2Bn254,
-                "bn254",
+                BackendTag::Stark,
+                "goldilocks",
                 [0x52; 32],
                 hash_vk(&vk_box),
             );
             new_rec.vk_len = 3;
             new_rec.status = ConfidentialStatus::Active;
-            new_rec.key = Some(VerifyingKeyBox::new("halo2/bn254".into(), vec![4, 5, 6]));
-            new_rec.gas_schedule_id = Some("halo2_default".into());
+            new_rec.key = Some(VerifyingKeyBox::new("stark/fri".into(), vec![4, 5, 6]));
+            new_rec.gas_schedule_id = Some("stark_default".into());
             let upd: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id: id.clone(),
                 record: new_rec,
@@ -37834,74 +37708,6 @@ seiyaku GovernanceLifecycle {
                 msg.contains("backend cannot change"),
                 "unexpected msg: {msg}"
             );
-        }
-
-        #[test]
-        fn update_vk_rejects_pending_production_record_tags_from_legacy_state() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            bootstrap_alice_account(&mut stx);
-            let perm = Permission::new(
-                "CanManageVerifyingKeys".parse().unwrap(),
-                iroha_primitives::json::Json::new(()),
-            );
-            Grant::account_permission(perm, ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant manage vk");
-            stx.apply();
-
-            let exec = Executor::default();
-            for (idx, backend_tag) in PENDING_PRODUCTION_VERIFIER_TAGS.iter().copied().enumerate() {
-                let id = VerifyingKeyId::new("halo2/ipa", format!("vk_pending_update_tag_{idx}"));
-                let mut old_rec = VerifyingKeyRecord::new_with_owner(
-                    1,
-                    format!("pending-update-tag-{idx}"),
-                    None,
-                    "test",
-                    backend_tag,
-                    "pallas",
-                    [0x6D; 32],
-                    [0x6E; 32],
-                );
-                old_rec.status = ConfidentialStatus::Active;
-                old_rec.gas_schedule_id = Some("halo2_default".into());
-
-                let mut seed_stx = state_block.transaction();
-                seed_stx
-                    .world
-                    .verifying_keys
-                    .insert(id.clone(), old_rec.clone());
-                seed_stx
-                    .world
-                    .verifying_keys_by_circuit
-                    .insert((old_rec.circuit_id.clone(), old_rec.version), id.clone());
-                seed_stx.apply();
-
-                let mut new_rec = old_rec;
-                new_rec.version = 2;
-                new_rec.public_inputs_schema_hash = [0x6F; 32];
-                new_rec.commitment = [0x70; 32];
-                let upd: InstructionBox = verifying_keys::UpdateVerifyingKey {
-                    id: id.clone(),
-                    record: new_rec,
-                }
-                .into();
-                let mut stx = state_block.transaction();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
-                    .expect_err("pending-production verifier tag update must be rejected");
-                let msg = smart_contract_error_message(err);
-                assert!(
-                    msg.contains("pending-production verifying key backends"),
-                    "unexpected msg for {}: {msg}",
-                    backend_tag.canonical_label()
-                );
-            }
         }
 
         #[test]
@@ -37930,21 +37736,21 @@ seiyaku GovernanceLifecycle {
                     BackendTag::Halo2IpaPasta,
                     "pallas",
                     "halo2_default",
-                    "pending-production verifying key backends",
+                    "unsupported verifying key backends",
                 ),
                 (
                     "stark/fri/miden",
                     BackendTag::Stark,
                     "goldilocks",
                     "stark_default",
-                    "pending-production verifying key backends",
+                    "unsupported verifying key backends",
                 ),
                 (
                     "anonymous-pgc",
                     BackendTag::Halo2IpaPasta,
                     "pallas",
                     "halo2_default",
-                    "pending-production verifying key backends",
+                    "unsupported verifying key backends",
                 ),
                 (
                     "halo2/mock",
@@ -38415,8 +38221,8 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn verify_proof_rejects_pending_production_backend_labels_before_registry_lookup() {
-            for (idx, backend) in PENDING_PRODUCTION_VERIFIER_LABELS
+        fn verify_proof_rejects_protocol_names_before_registry_lookup() {
+            for (idx, backend) in UNSUPPORTED_PROTOCOL_BACKEND_LABELS
                 .iter()
                 .copied()
                 .enumerate()
@@ -38452,12 +38258,10 @@ seiyaku GovernanceLifecycle {
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
                 let err = exec
                     .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
-                    .expect_err(
-                        "pending-production proof backend must reject before registry lookup",
-                    );
+                    .expect_err("protocol name must reject before registry lookup");
                 let msg = smart_contract_error_message(err);
                 assert!(
-                    msg.contains("pending-production proof backends"),
+                    msg.contains("unsupported proof backends"),
                     "unexpected msg for {backend}: {msg}"
                 );
             }
@@ -38509,107 +38313,8 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn verify_proof_preverified_cache_does_not_bypass_pending_production_record_tags() {
-            for (idx, backend_tag) in PENDING_PRODUCTION_VERIFIER_TAGS.iter().copied().enumerate() {
-                let kura = Kura::blank_kura_for_testing();
-                let query_handle = LiveQueryStore::start_test();
-                let state = State::new(World::default(), kura, query_handle);
-
-                let header = iroha_data_model::block::BlockHeader::new(
-                    NonZeroU64::new(1).unwrap(),
-                    None,
-                    None,
-                    None,
-                    0,
-                    0,
-                );
-                let mut block = state.block(header);
-                let exec = Executor::default();
-
-                let vk_id =
-                    VerifyingKeyId::new("halo2/ipa", format!("vk_pending_record_tag_{idx}"));
-                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
-                let vk_commitment = hash_vk(&vk_box);
-                let public_inputs = vec![1, 2, 3, idx as u8];
-                let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
-                let circuit_id = format!("circuit_pending_record_tag_{idx}");
-                let mut rec = VerifyingKeyRecord::new_with_owner(
-                    1,
-                    circuit_id.clone(),
-                    None,
-                    "test",
-                    backend_tag,
-                    "pallas",
-                    public_inputs_schema_hash,
-                    vk_commitment,
-                );
-                rec.vk_len = 3;
-                rec.status = ConfidentialStatus::Active;
-                rec.key = Some(vk_box);
-                rec.gas_schedule_id = Some("halo2_default".into());
-
-                let envelope = OpenVerifyEnvelope {
-                    backend: BackendTag::Halo2IpaPasta,
-                    circuit_id: circuit_id.clone(),
-                    vk_hash: vk_commitment,
-                    public_inputs,
-                    proof_bytes: vec![4, 5, 6, idx as u8],
-                    aux: Vec::new(),
-                };
-                let proof_box = ProofBox::new(
-                    "halo2/ipa".into(),
-                    norito::to_bytes(&envelope).expect("encode envelope"),
-                );
-                let attachment =
-                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
-
-                let mut stx = block.transaction();
-                bootstrap_alice_account(&mut stx);
-                stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
-                stx.world
-                    .verifying_keys_by_circuit
-                    .insert((rec.circuit_id.clone(), rec.version), vk_id.clone());
-                stx.apply();
-
-                let mut map = BTreeMap::new();
-                map.insert(
-                    crate::zk::PreverifiedProofKey::new(
-                        &attachment.proof,
-                        &attachment.vk_ref,
-                        vk_commitment,
-                    ),
-                    true,
-                );
-                block.set_preverified_batch(Arc::new(map));
-
-                let mut stx_verify = block.transaction();
-                let verify: InstructionBox =
-                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = exec
-                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
-                    .expect_err(
-                        "pending-production verifier record must reject before preverify lookup",
-                    );
-                let msg = smart_contract_error_message(err);
-                assert!(
-                    msg.contains("pending-production verifying key backends"),
-                    "unexpected msg for {}: {msg}",
-                    backend_tag.canonical_label()
-                );
-            }
-        }
-
-        #[test]
-        fn verify_proof_preverified_cache_does_not_bypass_non_admitted_record_tags() {
-            for (idx, backend_tag) in [
-                BackendTag::Unsupported,
-                BackendTag::Halo2Bn254,
-                BackendTag::Groth16,
-                BackendTag::Stark,
-            ]
-            .into_iter()
-            .enumerate()
-            {
+        fn verify_proof_preverified_cache_does_not_bypass_cross_engine_record_tag() {
+            for (idx, backend_tag) in [BackendTag::Stark].into_iter().enumerate() {
                 let kura = Kura::blank_kura_for_testing();
                 let query_handle = LiveQueryStore::start_test();
                 let state = State::new(World::default(), kura, query_handle);

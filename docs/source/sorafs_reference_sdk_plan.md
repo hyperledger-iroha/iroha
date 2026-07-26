@@ -20,8 +20,8 @@ signing helpers, C FFI validation, cookbook fixtures, and manifest/CAR replay.
 Remaining SF-11 work is release evidence and SDK distribution: per-target
 published archives, signed release manifests, published downstream binding
 packages, and live operator smoke records.
-The canonical cross-domain fixture inventory is complete. It binds 74 payload
-artifacts, 30 `ValidationOutcomeV1` outcomes, and 32 negative payload vectors
+The canonical cross-domain fixture inventory is complete. It binds 82 payload
+artifacts, 30 `ValidationOutcomeV1` outcomes, and 38 negative payload vectors
 across ten exact parity profiles. Native artifact rebuilds and unskipped runtime
 replay on every supported SDK toolchain remain open release requirements.
 `scripts/check_sorafs_reference_sdk_release_evidence.py` now provides the
@@ -61,10 +61,10 @@ block and chain validation plus CID-mismatch and block-reordering negatives
 share the deterministic
 `fixtures/sorafs_manifest/governance/dag_*_v1.to` inventory.
 `reference_sdk_validation_inventory_v1.json` is the test-only Ed25519-signed,
-schema-closed release-wide inventory for routing/provider admission, orderbook,
-PDP, PoR, PoTR, repair, Governance DAG, and moderation. It binds the exact
+schema-closed release-wide inventory for appeal finance, routing/provider
+admission, orderbook, PDP, PoR, PoTR, repair, Governance DAG, and moderation. It binds the exact
 sorted path set, byte lengths, SHA-256 digests, and canonical JSON/Norito bytes
-for 74 payload artifacts, including 32 negative payload vectors, and 30
+for 82 payload artifacts, including 38 negative payload vectors, and 30
 `ValidationOutcomeV1` files. Its offline checker verifies the trusted
 fingerprint and signature and rejects duplicate or nonfinite JSON, path
 traversal, missing/extra/substituted files, symlinks, hardlinks, and parent
@@ -378,8 +378,12 @@ convert decoded or raw Norito payloads into the shared validation functions.
   scenarios.
 - **Cross-SDK canonical fixtures:** `generate_por_fixtures` deterministically
   regenerates the release-wide signed inventory under
-  `fixtures/sorafs_manifest/`. The inventory binds 74 payload artifacts, 30
-  exact outcome files, and 32 negative payload vectors. Nine fixture-bundle
+  `fixtures/sorafs_manifest/`. The inventory binds 82 payload artifacts, 30
+  exact outcome files, and 38 negative payload vectors. The typed
+  `cancel_asset_lock_fixtures` generator freezes the appeal-finance
+  `CancelAssetLock { escrow_id, expected_remaining_amount }` hard cut and its
+  missing-field, zero, noncanonical-quantity, and trailing-byte negatives.
+  Nine fixture-bundle
   profiles cover routing/provider admission, orderbook, PDP, PoR, PoTR, and
   repair; a tenth profile exercises moderation through the dedicated
   governance-log-node validator, alongside the Governance DAG block/head
@@ -636,8 +640,8 @@ Implemented locally:
   PDP fixture members, with `crates/sorafs_manifest/include/sorafs_reference.h`
   and `ci/check_sorafs_reference_ffi_header.sh` providing the local binding
   contract guard.
-- The test-only signed, schema-closed reference SDK inventory with 74 payload
-  artifacts, 30 outcomes, 32 negative payload vectors, and ten exact profiles,
+- The test-only signed, schema-closed reference SDK inventory with 82 payload
+  artifacts, 30 outcomes, 38 negative payload vectors, and ten exact profiles,
   including the dedicated moderation governance-log-node validator and
   source-level coverage across JavaScript/TypeScript, Python, Swift,
   Kotlin/JVM, mirrored Java Android, and C#.

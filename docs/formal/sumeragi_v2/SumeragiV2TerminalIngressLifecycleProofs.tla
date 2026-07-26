@@ -333,6 +333,8 @@ EveryServiceOwnerExitRetiresStep ==
        /\ terminalIngressMode' = TerminalRetired
        /\ terminalIngressOwners' = 0
        /\ terminalDetachedOwners' = 0
+       /\ terminalSuccessfulAdmissions' =
+            terminalSuccessfulAdmissions
 
 NoPostOwnerAdmissionStep ==
   ~terminalServiceOwner

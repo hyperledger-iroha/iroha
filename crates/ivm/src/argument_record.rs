@@ -3363,7 +3363,10 @@ mod tests {
         let quantity = QuantityValueV1::decode_frame(quantity.payload)
             .expect("decode quantity")
             .into_quantity();
-        assert_eq!(quantity.as_numeric(), &Numeric::new(125, 2));
+        assert_eq!(
+            quantity,
+            "1.25".parse::<Quantity>().expect("canonical quantity")
+        );
 
         let (some, second) =
             crate::sum::read_words(&vm, list[1][0], option_layout).expect("read second Option");

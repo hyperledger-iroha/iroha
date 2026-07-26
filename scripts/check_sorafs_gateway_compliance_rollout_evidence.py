@@ -18,7 +18,6 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
-    record_artifact_error,
     render_and_write_checker_summary,
     validate_checker_preflight,
 )
@@ -47,6 +46,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     record_evidence_validation_errors,
     record_explicit_evidence_validation_errors,
     record_observed_evidence_value,
+    record_string_tuple_binding_errors,
     require_2xx_status,
     require_bool_true,
     require_config_backed_governance_approval,
@@ -1256,6 +1256,20 @@ def validate_catalog_history_references(
 ) -> None:
     """Invalidate predecessor-bound artifacts outside the promoted history."""
 
+    canonical_valid_bindings = {
+        (
+            catalog_digest,
+            str(catalog_sequence),
+            predecessor_digest,
+            str(predecessor_sequence),
+        )
+        for (
+            catalog_digest,
+            catalog_sequence,
+            predecessor_digest,
+            predecessor_sequence,
+        ) in valid_bindings
+    }
     if valid_bindings:
         for kind_name, artifact in bound_artifacts:
             if not evidence_artifact_is_valid(artifact):
@@ -1263,28 +1277,41 @@ def validate_catalog_history_references(
             binding = catalog_history_binding(
                 evidence_artifact_fingerprint(artifact)
             )
-            if binding not in valid_bindings:
-                record_artifact_error(
-                    artifact,
-                    (
-                        f"{kind_name} catalog history must match a valid "
-                        "catalog_promotion catalog history"
-                    ),
-                    errors,
+            canonical_binding = (
+                ()
+                if binding is None
+                else (
+                    binding[0],
+                    str(binding[1]),
+                    binding[2],
+                    str(binding[3]),
                 )
+            )
+            record_string_tuple_binding_errors(
+                artifact,
+                canonical_binding,
+                canonical_valid_bindings,
+                errors,
+                message=(
+                    f"{kind_name} catalog history must match a valid "
+                    "catalog_promotion catalog history"
+                ),
+            )
         return
     if not set(required_kinds).intersection(PREDECESSOR_BOUND_KINDS):
         return
     for kind_name, artifact in bound_artifacts:
         if not evidence_artifact_is_valid(artifact):
             continue
-        record_artifact_error(
+        record_string_tuple_binding_errors(
             artifact,
-            (
+            (),
+            canonical_valid_bindings,
+            errors,
+            message=(
                 f"{kind_name} catalog history requires exactly one valid "
                 "catalog_promotion catalog history"
             ),
-            errors,
         )
 
 

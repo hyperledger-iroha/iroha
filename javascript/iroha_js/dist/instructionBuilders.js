@@ -1,5 +1,6 @@
 import { Buffer } from "buffer";
 import { createHash } from "./cryptoHash.js";
+import { blake2b256 } from "./blake2b.js";
 import {
   noritoEncodeInstruction,
   noritoDecodePrivacyProofEnvelope,
@@ -283,7 +284,7 @@ function readSingleAlias(source, aliases, name, description) {
   return { key: present[0], value: source[present[0]] };
 }
 
-function asNumericQuantity(value, name) {
+function asQuantity(value, name) {
   try {
     if (value instanceof KotodamaQuantity) {
       return NumericV1.encodeQuantityJson(value);
@@ -310,8 +311,25 @@ function asNumericQuantity(value, name) {
   }
 }
 
+function asPositiveQuantity(value, name) {
+  const canonical = asQuantity(value, name);
+  if (NumericV1.decodeQuantityJson(canonical).mantissa <= 0n) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be greater than zero`,
+      name,
+    );
+  }
+  return canonical;
+}
+
+function normalizeAssetLockId(value, name) {
+  const lockId = assertExactNonBlankString(value, name);
+  return canonicalHashLiteral(blake2b256(Buffer.from(lockId, "utf8")));
+}
+
 function asPositiveProofScalarQuantity(value, name) {
-  const canonical = asNumericQuantity(value, name);
+  const canonical = asQuantity(value, name);
   const quantity = NumericV1.decodeQuantityJson(canonical);
   if (quantity.scale !== 0 || quantity.mantissa <= 0n || quantity.mantissa > U128_MAX_BIGINT) {
     fail(
@@ -544,7 +562,7 @@ function normalizeRwaParentRefs(value, path) {
     const source = normalizeJsonObjectLike(entry, `${path}[${index}]`);
     return {
       rwa: normalizeRwaId(source.rwa, `${path}[${index}].rwa`),
-      quantity: asNumericQuantity(source.quantity, `${path}[${index}].quantity`),
+      quantity: asQuantity(source.quantity, `${path}[${index}].quantity`),
     };
   });
 }
@@ -599,7 +617,7 @@ function normalizeRegisterRwaPayload(value, path = "rwa") {
   const source = normalizeJsonObjectLike(value, path);
   return {
     domain: assertString(source.domain, `${path}.domain`),
-    quantity: asNumericQuantity(source.quantity, `${path}.quantity`),
+    quantity: asQuantity(source.quantity, `${path}.quantity`),
     spec: normalizeJsonValue(assertPlainObject(source.spec, `${path}.spec`), `${path}.spec`),
     primary_reference: assertString(
       source.primaryReference ?? source.primary_reference,
@@ -10555,37 +10573,6 @@ function rejectPublicInputKey(target, key, canonicalKey, name) {
   );
 }
 
-function normalizeUintString(value, name) {
-  if (typeof value === "bigint") {
-    if (value < 0n) {
-      fail(
-        ValidationErrorCode.VALUE_OUT_OF_RANGE,
-        `${name} must be greater than or equal to zero`,
-        name,
-      );
-    }
-    return value.toString(10);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
-    }
-    return Math.trunc(value).toString(10);
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!/^(?:0|[1-9]\d*)$/.test(trimmed)) {
-      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a decimal string`, name);
-    }
-    return trimmed.replace(/^0+(?=\d)/, "") || "0";
-  }
-  fail(
-    ValidationErrorCode.INVALID_NUMERIC,
-    `${name} must be a decimal string, number, or bigint`,
-    name,
-  );
-}
-
 function normalizeDirection(value, name) {
   if (value === undefined || value === null) {
     return 0;
@@ -10778,6 +10765,37 @@ export function buildExpireReplicationOrderInstruction(options) {
 }
 
 /**
+ * Build the canonical compare-and-cancel `CancelAssetLock` instruction.
+ *
+ * `lockId` is hashed with the native Blake2b-256 escrow-id derivation. The
+ * expected remaining amount is mandatory, positive, and encoded using the
+ * exact canonical Quantity spelling observed in finalized ledger state.
+ *
+ * @param {{lockId: string, expectedRemainingAmount: KotodamaQuantity|string|bigint}} options
+ * @returns {{CancelAssetLock: {escrow_id: string, expected_remaining_amount: string}}}
+ */
+export function buildCancelAssetLockInstruction(options) {
+  const source = assertPlainObject(options, "cancelAssetLock");
+  assertAllowedFields(
+    source,
+    new Set(["lockId", "expectedRemainingAmount"]),
+    "cancelAssetLock",
+  );
+  return {
+    CancelAssetLock: {
+      escrow_id: normalizeAssetLockId(
+        source.lockId,
+        "cancelAssetLock.lockId",
+      ),
+      expected_remaining_amount: asPositiveQuantity(
+        source.expectedRemainingAmount,
+        "cancelAssetLock.expectedRemainingAmount",
+      ),
+    },
+  };
+}
+
+/**
  * Build a `Mint::Asset` instruction payload.
  * @param {{ assetHoldingId: string, quantity: KotodamaQuantity|string|bigint }} options
  * @returns {{Mint: {Asset: {object: string, destination: string}}}}
@@ -10787,7 +10805,7 @@ export function buildMintAssetInstruction({ assetHoldingId, assetId, quantity })
     assetHoldingId ?? assetId,
     assetHoldingId !== undefined ? "assetHoldingId" : "assetId",
   );
-  const object = asNumericQuantity(quantity, "quantity");
+  const object = asQuantity(quantity, "quantity");
   return {
     Mint: {
       Asset: {
@@ -10808,7 +10826,7 @@ export function buildBurnAssetInstruction({ assetHoldingId, assetId, quantity })
     assetHoldingId ?? assetId,
     assetHoldingId !== undefined ? "assetHoldingId" : "assetId",
   );
-  const object = asNumericQuantity(quantity, "quantity");
+  const object = asQuantity(quantity, "quantity");
   return {
     Burn: {
       Asset: {
@@ -10880,7 +10898,7 @@ export function buildTransferAssetInstruction({
     destinationAccountId,
     "destinationAccountId",
   );
-  const object = asNumericQuantity(quantity, "quantity");
+  const object = asQuantity(quantity, "quantity");
   return {
     Transfer: {
       Asset: {
@@ -11002,7 +11020,7 @@ export function buildTransferRwaInstruction({
     TransferRwa: {
       source: normalizeAccountId(sourceAccountId, "sourceAccountId"),
       rwa: normalizeRwaId(rwaId, "rwaId"),
-      quantity: asNumericQuantity(quantity, "quantity"),
+      quantity: asQuantity(quantity, "quantity"),
       destination: normalizeAccountId(destinationAccountId, "destinationAccountId"),
     },
   };
@@ -11032,7 +11050,7 @@ export function buildRedeemRwaInstruction({ rwaId, quantity }) {
   return {
     RedeemRwa: {
       rwa: normalizeRwaId(rwaId, "rwaId"),
-      quantity: asNumericQuantity(quantity, "quantity"),
+      quantity: asQuantity(quantity, "quantity"),
     },
   };
 }
@@ -11072,7 +11090,7 @@ export function buildHoldRwaInstruction({ rwaId, quantity }) {
   return {
     HoldRwa: {
       rwa: normalizeRwaId(rwaId, "rwaId"),
-      quantity: asNumericQuantity(quantity, "quantity"),
+      quantity: asQuantity(quantity, "quantity"),
     },
   };
 }
@@ -11086,7 +11104,7 @@ export function buildReleaseRwaInstruction({ rwaId, quantity }) {
   return {
     ReleaseRwa: {
       rwa: normalizeRwaId(rwaId, "rwaId"),
-      quantity: asNumericQuantity(quantity, "quantity"),
+      quantity: asQuantity(quantity, "quantity"),
     },
   };
 }
@@ -11104,7 +11122,7 @@ export function buildForceTransferRwaInstruction({
   return {
     ForceTransferRwa: {
       rwa: normalizeRwaId(rwaId, "rwaId"),
-      quantity: asNumericQuantity(quantity, "quantity"),
+      quantity: asQuantity(quantity, "quantity"),
       destination: normalizeAccountId(destinationAccountId, "destinationAccountId"),
     },
   };
@@ -11704,7 +11722,7 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
       );
     }
     previousKind = kindIndex;
-    const maxAmount = asNumericQuantity(item.max_amount, `${itemContext}.max_amount`);
+    const maxAmount = asQuantity(item.max_amount, `${itemContext}.max_amount`);
     if (NumericV1.decodeQuantityJson(maxAmount).mantissa <= 0n) {
       fail(
         ValidationErrorCode.INVALID_NUMERIC,
@@ -12258,7 +12276,7 @@ export function buildCastPlainBallotInstruction(options) {
         "referendumId",
       ),
       owner: normalizeAccountId(source.owner, "owner"),
-      amount: normalizeUintString(source.amount, "amount"),
+      amount: asQuantity(source.amount, "amount"),
       duration_blocks: asNonNegativeInteger(
         source.durationBlocks ?? source.duration_blocks,
         "durationBlocks",
@@ -12359,7 +12377,7 @@ export function buildSendToTwitterInstruction(options) {
         binding,
         "sendToTwitter.bindingHash",
       ),
-      amount: asNumericQuantity(amountValue, "sendToTwitter.amount"),
+      amount: asQuantity(amountValue, "sendToTwitter.amount"),
     },
   };
 }
@@ -18468,7 +18486,7 @@ export function buildShieldInstruction(options) {
       "shield.asset",
     ),
     from: normalizeAccountId(source.fromAccountId ?? source.from, "shield.from"),
-    amount: asNumericQuantity(source.amount, "shield.amount"),
+    amount: asQuantity(source.amount, "shield.amount"),
     note_commitment: normalizeFixedBytes(source.noteCommitment ?? source.note_commitment, "shield.noteCommitment", 32),
     enc_payload: normalizeConfidentialEncryptedPayload(
       source.encPayload ?? source.enc_payload ?? source.encryptedPayload,
@@ -18617,7 +18635,7 @@ export function buildUnshieldInstruction(options) {
       "unshield.asset",
     ),
     to: normalizeAccountId(source.toAccountId ?? source.to ?? source.destinationAccountId, "unshield.to"),
-    public_amount: asNumericQuantity(
+    public_amount: asQuantity(
       source.publicAmount ?? source.public_amount,
       "unshield.publicAmount",
     ),

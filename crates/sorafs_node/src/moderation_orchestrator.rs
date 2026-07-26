@@ -2327,40 +2327,39 @@ impl ModerationOrchestratorV1 {
                     kind: StoredExternalWorkKindV1::Lookup,
                     work_digest,
                 };
-                if attempted.contains(&identity) {
-                    position += 1;
-                    continue;
+                if !attempted.contains(&identity) {
+                    let mut candidate = entry.clone();
+                    let generation = next_external_work_generation(candidate.work_generation)?;
+                    let claim = external_work_claim(
+                        StoredExternalWorkKindV1::Lookup,
+                        candidate.operation_id,
+                        generation,
+                        work_digest,
+                        cursor,
+                        finalized_at_unix_ms,
+                    )?;
+                    let mut probes = candidate
+                        .retired_envelopes
+                        .iter()
+                        .map(|record| ExternalLookupProbeV1 {
+                            transaction_id: record.transaction_id,
+                        })
+                        .collect::<Vec<_>>();
+                    if include_active_lookup && let Some(transaction_id) = candidate.transaction_id
+                    {
+                        probes.push(ExternalLookupProbeV1 { transaction_id });
+                    }
+                    candidate.work_generation = generation;
+                    candidate.work_claim = Some(claim.clone());
+                    state.outbox[position] = candidate;
+                    self.persist_checkpoint_locked(state)?;
+                    return Ok(Some(PreparedExternalWorkV1::Lookup {
+                        identity,
+                        claim,
+                        operation_id: state.outbox[position].operation_id,
+                        probes,
+                    }));
                 }
-                let mut candidate = entry.clone();
-                let generation = next_external_work_generation(candidate.work_generation)?;
-                let claim = external_work_claim(
-                    StoredExternalWorkKindV1::Lookup,
-                    candidate.operation_id,
-                    generation,
-                    work_digest,
-                    cursor,
-                    finalized_at_unix_ms,
-                )?;
-                let mut probes = candidate
-                    .retired_envelopes
-                    .iter()
-                    .map(|record| ExternalLookupProbeV1 {
-                        transaction_id: record.transaction_id,
-                    })
-                    .collect::<Vec<_>>();
-                if include_active_lookup && let Some(transaction_id) = candidate.transaction_id {
-                    probes.push(ExternalLookupProbeV1 { transaction_id });
-                }
-                candidate.work_generation = generation;
-                candidate.work_claim = Some(claim.clone());
-                state.outbox[position] = candidate;
-                self.persist_checkpoint_locked(state)?;
-                return Ok(Some(PreparedExternalWorkV1::Lookup {
-                    identity,
-                    claim,
-                    operation_id: state.outbox[position].operation_id,
-                    probes,
-                }));
             }
 
             if retired_history_fence_transaction_id(entry).is_some() {
@@ -7260,7 +7259,7 @@ mod tests {
             version: MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
             finalized_height: height,
             finalized_block_hash: block_hash,
-            finalized_at_unix_ms: 1,
+            finalized_at_unix_ms: height.max(1),
             policy: Some(ModerationLedgerPolicyRecord {
                 policy,
                 policy_digest,
@@ -7958,12 +7957,9 @@ mod tests {
         assert!(!first.replay);
         assert_eq!(submitter.calls(), 1);
 
-        reader.replace(snapshot_with_policy(
-            2,
-            [2; 32],
-            policy(2),
-            rotated_governance,
-        ));
+        let mut rotated_snapshot = snapshot_with_policy(2, [2; 32], policy(2), rotated_governance);
+        rotated_snapshot.events[0].sequence = 2;
+        reader.replace(rotated_snapshot);
         let replay = orchestrator
             .submit(original_governance, action, [0xA1; 32])
             .expect("retained historical replay");

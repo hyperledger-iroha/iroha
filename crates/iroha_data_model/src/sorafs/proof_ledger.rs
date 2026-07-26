@@ -112,7 +112,7 @@ pub enum PdpOutcomeStatusV1 {
     SubmissionLate,
     /// The proof claimed a timestamp beyond governed clock skew.
     FutureTimestamp,
-    /// An authenticated proof failed binding, coverage, or Merkle verification.
+    /// A submitted proof was malformed, unauthorized, misbound, or failed verification.
     InvalidProof,
     /// The provider admission disappeared while the challenge was pending.
     AdmissionRevoked,
@@ -126,6 +126,15 @@ impl PdpOutcomeStatusV1 {
     /// Whether the terminal archive must carry an authenticated proof.
     #[must_use]
     pub const fn requires_proof(self) -> bool {
+        matches!(
+            self,
+            Self::Accepted | Self::SubmissionLate | Self::FutureTimestamp
+        )
+    }
+
+    /// Whether the terminal archive may carry an authenticated proof.
+    #[must_use]
+    pub const fn allows_proof(self) -> bool {
         matches!(
             self,
             Self::Accepted | Self::SubmissionLate | Self::FutureTimestamp | Self::InvalidProof
@@ -181,7 +190,8 @@ pub struct PdpOutcomeProjectionV1 {
     pub epoch_id: u64,
     /// Stable terminal classification.
     pub status: PdpOutcomeStatusV1,
-    /// Canonical provider-signed proof digest, absent when no proof was submitted.
+    /// Canonical provider-signed proof digest, absent when no canonical proof
+    /// evidence was retained.
     #[cfg_attr(
         feature = "json",
         norito(with = "crate::json_helpers::fixed_bytes::option")
@@ -393,4 +403,34 @@ pub struct ProofOutcomeFinalizedEventPageV1 {
     pub has_more: bool,
     /// Exclusive continuation cursor, present only when `has_more` is true.
     pub next_after: Option<ProofOutcomeFinalizedEventCursorV1>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PdpOutcomeStatusV1;
+
+    #[test]
+    fn pdp_proof_presence_contract_is_tri_state() {
+        for status in [
+            PdpOutcomeStatusV1::Accepted,
+            PdpOutcomeStatusV1::SubmissionLate,
+            PdpOutcomeStatusV1::FutureTimestamp,
+        ] {
+            assert!(status.requires_proof());
+            assert!(status.allows_proof());
+        }
+
+        assert!(!PdpOutcomeStatusV1::InvalidProof.requires_proof());
+        assert!(PdpOutcomeStatusV1::InvalidProof.allows_proof());
+
+        for status in [
+            PdpOutcomeStatusV1::DeadlineExpired,
+            PdpOutcomeStatusV1::AdmissionRevoked,
+            PdpOutcomeStatusV1::AdmissionInactive,
+            PdpOutcomeStatusV1::StorageUnavailable,
+        ] {
+            assert!(!status.requires_proof());
+            assert!(!status.allows_proof());
+        }
+    }
 }

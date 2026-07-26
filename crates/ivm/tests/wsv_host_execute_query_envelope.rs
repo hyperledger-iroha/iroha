@@ -2,7 +2,7 @@
 //! Ensures the mock WSV host parses query envelopes and returns results as INPUT TLVs.
 
 use iroha_crypto::PublicKey;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use ivm::{
     IVM, Memory, PointerType,
     instruction::wide,
@@ -85,7 +85,7 @@ fn query_get_balance_returns_json_tlv() {
     );
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), rose.clone()),
-        Numeric::from(42_u64),
+        Quantity::from(42_u64),
     )]);
     let host = WsvHost::new_with_subject(wsv, alice.clone(), Default::default());
 
@@ -119,8 +119,8 @@ fn query_get_balance_returns_json_tlv() {
     assert_eq!(tlv.type_id as u16, PointerType::Json as u16);
     let v: norito::json::Value = common::json_from_payload(tlv.payload);
     let bal = v.get("balance").and_then(|v| v.as_str()).unwrap();
-    let bal: Numeric = bal.parse().expect("parse numeric balance");
-    assert_eq!(bal, Numeric::from(42_u64));
+    let bal: Quantity = bal.parse().expect("parse quantity balance");
+    assert_eq!(bal, Quantity::from(42_u64));
 }
 
 #[test]

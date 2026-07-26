@@ -83,7 +83,10 @@ use super::{
 };
 use crate::{
     kura::Kura,
-    merge_sidecar::{CertifiedMergeSidecarMessage, MergeSidecarLimits, MergeSigningGuardLimits},
+    merge_sidecar::{
+        CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarMessage, MergeSidecarLimits,
+        MergeSigningGuardLimits,
+    },
     native_amx::NativeAmxMessage,
     queue::{GlobalQueueSelectionLease, Queue},
     state::State,
@@ -2931,10 +2934,27 @@ fn apply_certified_merge_sidecar_closed_prefixes(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
 ) -> Result<(), V2RunnerError> {
-    for prefix in lane_work.drain_closed_sidecar_prefixes() {
+    apply_certified_merge_sidecar_closed_prefixes_with(lane_work, |prefix| {
         services
-            .close_certified_merge_sidecar_prefix(&prefix)
-            .map_err(V2RunnerError::Service)?;
+            .close_certified_merge_sidecar_prefix(prefix)
+            .map(|_| ())
+    })
+}
+
+fn apply_certified_merge_sidecar_closed_prefixes_with(
+    lane_work: &mut V2LaneWorkAdapter,
+    mut apply: impl FnMut(&CertifiedMergeSidecarClosedPrefix) -> Result<(), String>,
+) -> Result<(), V2RunnerError> {
+    let mut prefixes = std::collections::VecDeque::from(lane_work.drain_closed_sidecar_prefixes());
+    let had_prefixes = !prefixes.is_empty();
+    while let Some(prefix) = prefixes.pop_front() {
+        if let Err(error) = apply(&prefix) {
+            lane_work.requeue_closed_sidecar_prefixes(std::iter::once(prefix).chain(prefixes));
+            return Err(V2RunnerError::Service(error));
+        }
+    }
+    if had_prefixes {
+        lane_work.confirm_closed_sidecar_prefix_handoff();
     }
     Ok(())
 }
@@ -4162,6 +4182,97 @@ mod tests {
                 .retains_reply_route_for_test(&reply_route)
                 .expect("inspect direct CloseAck route in worker ownership")
         );
+    }
+
+    #[test]
+    fn closed_sidecar_prefix_handoff_requeues_only_failed_suffix() {
+        let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+        let mut adapter = fixture.adapter;
+        let responder = fixture.request.responder.clone();
+        let service_generation = fixture.request.service_generation;
+        let stream_epoch = fixture.request.stream_epoch;
+        let closed_through = fixture.request.semantic_sequence.get();
+        let second_requester = fixture
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .find(|peer| peer != &responder && peer != &fixture.requester)
+            .expect("runner prefix retry fixture has a second remote requester");
+        let requesters = [fixture.requester, second_requester];
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 2);
+
+        for requester in &requesters {
+            let reply_route = routes.mint_via(requester.clone(), hub.clone());
+            let mut close = CertifiedMergeSidecarCloseV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                service_generation,
+                stream_epoch,
+                closed_through,
+                close_id: Hash::prehashed([0; Hash::LENGTH]),
+                requester: requester.clone(),
+                responder: responder.clone(),
+            };
+            close.close_id = close.canonical_close_id();
+            assert_eq!(
+                adapter.accept_relay_message(
+                    LaneRelayMessage::CertifiedMergeSidecar {
+                        sender: requester.clone(),
+                        reply_route: Some(reply_route),
+                        message: CertifiedMergeSidecarMessage::Close(close),
+                    },
+                    0,
+                ),
+                V2LaneIngressOutcome::Inserted
+            );
+        }
+
+        let mut first_applied = Vec::new();
+        let mut calls = 0usize;
+        let error = apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |prefix| {
+            calls = calls.saturating_add(1);
+            if calls == 2 {
+                Err("injected exact-output close failure".to_owned())
+            } else {
+                first_applied.push(prefix.clone());
+                Ok(())
+            }
+        })
+        .expect_err("the second exact-output close fails");
+        assert!(matches!(
+            error,
+            V2RunnerError::Service(ref reason)
+                if reason == "injected exact-output close failure"
+        ));
+        assert_eq!(first_applied.len(), 1);
+
+        let mut retry_applied = Vec::new();
+        apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |prefix| {
+            retry_applied.push(prefix.clone());
+            Ok(())
+        })
+        .expect("retry applies the retained failed suffix");
+        assert_eq!(retry_applied.len(), 1);
+        assert_ne!(
+            retry_applied[0], first_applied[0],
+            "the already-applied prefix must not be repeated"
+        );
+        let applied_requesters = first_applied
+            .iter()
+            .chain(&retry_applied)
+            .map(|prefix| prefix.requester.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            applied_requesters,
+            requesters.into_iter().collect(),
+            "the successful prefix plus the retried suffix cover the exact drained batch"
+        );
+
+        apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, |_| {
+            panic!("a confirmed handoff must leave no prefix for another retry")
+        })
+        .expect("the confirmed handoff is empty");
     }
 
     #[test]

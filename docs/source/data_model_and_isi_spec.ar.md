@@ -107,7 +107,7 @@ translator: machine-google-reviewed
 الأنواع: `Mint<O, D: Identifiable>` و`Burn<O, D: Identifiable>`، في صندوق كـ `MintBox`/`BurnBox`.
 
 - الأصول (الرقمية) النعناع/الحرق: ضبط الأرصدة وتعريف `total_quantity`.
-  - الشروط المسبقة: يجب أن تفي قيمة `Numeric` بـ `AssetDefinition.spec()`؛ النعناع المسموح به بواسطة `mintable`:
+  - الشروط المسبقة: يجب أن تفي قيمة `Quantity` بـ `AssetDefinition.spec()`؛ النعناع المسموح به بواسطة `mintable`:
     - `Infinitely`: مسموح به دائمًا.
     - `Once`: مسموح به مرة واحدة بالضبط؛ تقلب أول قطعة نعناع `mintable` إلى `Not` وتصدر `AssetDefinitionEvent::MintabilityChanged`، بالإضافة إلى `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` التفصيلية لقابلية التدقيق.
     - `Limited(n)`: يسمح بعمليات النعناع الإضافية لـ `n`. كل نعناع ناجح ينقص العداد؛ عندما يصل إلى الصفر، ينقلب التعريف إلى `Not` ويصدر نفس أحداث `MintabilityChanged` كما هو مذكور أعلاه.

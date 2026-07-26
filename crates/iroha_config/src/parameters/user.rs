@@ -15831,11 +15831,11 @@ impl AccountOnboarding {
                 "torii.account_onboarding.auto_renew.term_years must be greater than zero",
             );
         }
-        let max_amount = match Numeric::from_str(&config.max_amount) {
-            Ok(amount) if amount > Numeric::zero() && amount.to_string() == config.max_amount => {
+        let max_amount = match Quantity::from_str(&config.max_amount) {
+            Ok(amount) if !amount.is_zero() && amount.to_string() == config.max_amount => {
                 Some(amount)
             }
-            Ok(amount) if amount <= Numeric::zero() => {
+            Ok(amount) if amount.is_zero() => {
                 emit_torii_config_error(
                     emitter,
                     "torii.account_onboarding.auto_renew.max_amount must be greater than zero",
@@ -15848,6 +15848,13 @@ impl AccountOnboarding {
                     format!(
                         "torii.account_onboarding.auto_renew.max_amount must use canonical form `{amount}`"
                     ),
+                );
+                None
+            }
+            Err(iroha_primitives::numeric::NumericOperationError::NegativeQuantity) => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.account_onboarding.auto_renew.max_amount must be greater than zero",
                 );
                 None
             }
@@ -17953,19 +17960,24 @@ fn emit_sorafs_appeal_finance_error(emitter: &mut Emitter<ParseError>, message: 
 fn is_canonical_sorafs_appeal_policy_version(value: &str) -> bool {
     const MAX_VERSION_BYTES: usize = 128;
 
-    !value.is_empty()
-        && value.len() <= MAX_VERSION_BYTES
-        && value
+    if value.is_empty() || value.len() > MAX_VERSION_BYTES {
+        return false;
+    }
+    let Some((name, revision)) = value.rsplit_once("-v") else {
+        return false;
+    };
+    !name.is_empty()
+        && name.split('-').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+        && revision
             .as_bytes()
             .first()
-            .is_some_and(u8::is_ascii_alphanumeric)
-        && value
-            .as_bytes()
-            .last()
-            .is_some_and(u8::is_ascii_alphanumeric)
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            .is_some_and(|byte| matches!(byte, b'1'..=b'9'))
+        && revision.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 impl SorafsAppealPricingPolicy {
@@ -17976,7 +17988,7 @@ impl SorafsAppealPricingPolicy {
         if !is_canonical_sorafs_appeal_policy_version(&self.version) {
             emit_sorafs_appeal_finance_error(
                 emitter,
-                "sorafs.appeal_finance_settlement.pricing.version must be 1..=128 bytes of canonical visible ASCII",
+                "sorafs.appeal_finance_settlement.pricing.version must be a lowercase kebab identifier ending in canonical positive `-vN`",
             );
         }
         if !(1..=MAX_QUOTE_TTL_SECS).contains(&self.quote_ttl_secs) {
@@ -18102,7 +18114,7 @@ impl SorafsAppealSettlementPolicy {
         if !is_canonical_sorafs_appeal_policy_version(&self.version) {
             emit_sorafs_appeal_finance_error(
                 emitter,
-                "sorafs.appeal_finance_settlement.settlement.version must be 1..=128 bytes of canonical visible ASCII",
+                "sorafs.appeal_finance_settlement.settlement.version must be a lowercase kebab identifier ending in canonical positive `-vN`",
             );
         }
         if !(1..=MAX_PANEL_SIZE).contains(&self.default_panel_size) {
@@ -22540,7 +22552,9 @@ impl SorafsPrivacyAggregateScheduleConfig {
         }
         if self.enabled
             && (self.first_cycle_start_unix == 0
-                || self.first_cycle_start_unix % self.cycle_seconds.max(1) != 0)
+                || !self
+                    .first_cycle_start_unix
+                    .is_multiple_of(self.cycle_seconds.max(1)))
         {
             invalid(
                 "sorafs.storage.privacy_aggregates.first_cycle_start_unix must be nonzero and cycle-aligned when enabled"
@@ -23144,6 +23158,27 @@ mod sorafs_repair_gc_tests {
             emitter.into_result().is_err(),
             "pricing and settlement must not derive different default panel sizes"
         );
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_rejects_noncanonical_policy_versions() {
+        for version in [
+            "Baseline-v1",
+            "baseline_v1",
+            "baseline-v0",
+            "baseline-v01",
+            "baseline-v1-revision-2",
+        ] {
+            let mut config = SorafsAppealFinanceSettlement::default();
+            config.pricing.version = version.to_owned();
+
+            let mut emitter = Emitter::new();
+            let _ = config.parse(&mut emitter);
+            assert!(
+                emitter.into_result().is_err(),
+                "noncanonical policy version `{version}` must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -26454,7 +26489,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(onboarding.credentials[1].token_hash, [0xcd; 32]);
         let auto_renew = onboarding.auto_renew.expect("native auto-renew configured");
         assert_eq!(auto_renew.term_years.get(), 2);
-        assert_eq!(auto_renew.max_amount, Numeric::from(25_u32));
+        assert_eq!(auto_renew.max_amount, Quantity::from(25_u32));
         assert_eq!(
             auto_renew.renew_before_expiry,
             Duration::from_millis(86_400_000)

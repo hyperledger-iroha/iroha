@@ -4,8 +4,8 @@ direction: ltr
 source: docs/portal/docs/sorafs/multi-source-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ee784b5b073019d219d0dfb76d44f6d02a8dbb46c847bfb226f1f72b41ffb1d7
-source_last_modified: "2026-01-05T09:28:11.891621+00:00"
+source_hash: 6a510a005b4b14df18915a1166620f78e8a99fe9042de80bb916d7c3f38d32d9
+source_last_modified: "2026-07-26T10:32:32.940432+00:00"
 translation_last_reviewed: 2026-02-07
 id: multi-source-rollout
 title: Multi-Source Client Rollout & Blacklisting Runbook
@@ -34,14 +34,7 @@ translator: machine-google-reviewed
    - འདེམས་ངོ་ཆ་མཉམ་གྱིས་ `ProviderAdvertV1` གི་ ཁྱབ་ཚད་ཀྱི་ནུས་པ་དང་ རྒྱུན་ལམ་གྱི་འཆར་དངུལ་ཚུ་ དཔར་བསྐྲུན་འབད་དགོ། `/v1/sorafs/providers` བརྒྱུད་དེ་ བདེན་དཔྱད་འབད་ཞིནམ་ལས་ རེ་བ་བསྐྱེད་པའི་ལྕོགས་གྲུབ་ས་སྒོ་ཚུ་དང་ག་བསྡུར་འབད།
    - ཊེ་ལི་མི་ཊི་པར་རིས་ཚུ་ བཀྲམ་སྤེལ་འབད་བའི་ འཕྲོ་མཐུད་/འཐུས་ཤོར་གྱི་ཚད་གཞི་ཚུ་ ཀེ་རི་རེ་རེ་གི་ཧེ་མ་ སྐར་མ་༡༥ ལས་ ཉུངམ་སྦེ་དགོ།
 2. **གནས་རིམ་རིམ་སྒྲིག་།**
-   - སྙན་ཆའི་སྡེ་ཚན་ I18NI0000009X ཤིང་ནང་ རོལ་དབྱངས་ཚོགས་པ་ JSON རིམ་སྒྲིག་འབད།
-
-     ```toml
-     [torii.sorafs.orchestrator]
-     config_path = "/etc/iroha/sorafs/orchestrator.json"
-     ```
-
-     JSON འདི་ བསྐོར་ཐེངས་དམིགས་བསལ་ཚད་གཞི་ (`max_providers`, བསྐྱར་ལོག་འཆར་དངུལ་) དང་ཅིག་ཁར་ དུས་མཐུན་བཟོ། ཡིག་སྣོད་གཅིགཔོ་འདི་ གནས་རིམ་དང་ ཐོན་སྐྱེད་ལུ་ དབྱེ་བ་ཆུང་ཀུ་སྦེ་སྡོད་ནི་ལུ་ འབད་དགོ།
+   - Store the canonical client-side orchestrator JSON at `/etc/iroha/sorafs/orchestrator.json`. This file is consumed explicitly by client/orchestrator workloads; it is not an `iroha_config` or Torii namespace. Update it with rollout-specific limits (`max_providers`, retry budgets), deploy the same reviewed file to staging/production, and pass it to every CLI fetch as `--orchestrator-config=/etc/iroha/sorafs/orchestrator.json`.
 3. **ལུས་རྩལ་གྱི་སྒྲིག་བཀོད་ཚུ།**
    - གསལ་སྟོན་/བརྡ་མཚོན་མཐའ་འཁོར་འགྱུར་ཅན་ཚུ་ ཕྱིར་འཐོན་འབད་ཞིནམ་ལས་ གཏན་འབེབས་བཟོ་ནིའི་ གཡོག་བཀོལ།
 

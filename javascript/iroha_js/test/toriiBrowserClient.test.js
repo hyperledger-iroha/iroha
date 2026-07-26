@@ -4,11 +4,13 @@ import { readFileSync } from "node:fs";
 import { sha256 } from "@noble/hashes/sha2";
 
 import { AccountAddress } from "../src/address.js";
+import { blake2b256 } from "../src/blake2b.js";
 import {
   ToriiBrowserClient,
   ToriiBrowserHttpError,
   ToriiBrowserStreamGapError,
 } from "../src/toriiBrowserClient.js";
+import { browserSignedTransactionHashHex } from "../src/transactionCodec.js";
 import * as browserSdk from "../src/browser.js";
 import * as browserDistSdk from "../dist/browser.js";
 
@@ -44,6 +46,44 @@ function jsonResponse(payload, init = {}) {
     status: init.status ?? 200,
     headers: { "content-type": "application/json", ...(init.headers ?? {}) },
   });
+}
+
+function hashLiteral(hex) {
+  const body = hex.toUpperCase();
+  let crc = 0xffff;
+  for (const byte of Buffer.from(`hash:${body}`, "utf8")) {
+    crc ^= (byte & 0xff) << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 0x8000) !== 0
+          ? ((crc << 1) ^ 0x1021) & 0xffff
+          : (crc << 1) & 0xffff;
+    }
+  }
+  return `hash:${body}#${crc.toString(16).toUpperCase().padStart(4, "0")}`;
+}
+
+function compactHashSignedTransactionFixture() {
+  const fixture = readFileSync(
+    new URL(
+      "../../../fixtures/norito_rpc/iroha_compact_hash_vector.properties",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const prefix = "versioned.base64=";
+  const encoded = fixture
+    .split(/\r?\n/u)
+    .find((line) => line.startsWith(prefix))
+    ?.slice(prefix.length);
+  assert.ok(encoded, "compact-hash fixture must contain versioned signed bytes");
+  return Buffer.from(encoded, "base64");
+}
+
+function innerSignedTransactionHashHexForTest(versionedSignedTransaction) {
+  const digest = Buffer.from(blake2b256(versionedSignedTransaction.subarray(1)));
+  digest[digest.length - 1] |= 1;
+  return digest.toString("hex");
 }
 
 function blockProofResponseFixture() {
@@ -832,6 +872,68 @@ test("ToriiBrowserClient submits multisig Norito payloads to registered routes",
   assert.equal(calls[1].init.headers["Content-Type"], "application/x-norito");
   assert.equal(calls[2].url, "https://torii.example/v1/contracts/call/multisig/approve");
   assert.equal(calls[2].init.headers["Content-Type"], "application/x-norito");
+});
+
+test("ToriiBrowserClient validates distinct entrypoint and signed-wire receipt hashes", async () => {
+  const signedTransaction = compactHashSignedTransactionFixture();
+  const entrypointHash = browserSignedTransactionHashHex(signedTransaction);
+  const signedTransactionHash =
+    innerSignedTransactionHashHexForTest(signedTransaction);
+  assert.notEqual(
+    signedTransactionHash,
+    entrypointHash,
+    "the inner signed-wire hash must remain distinct from the External entrypoint hash",
+  );
+
+  const correctHeaders = {
+    "x-iroha-entrypoint-hash": hashLiteral(entrypointHash),
+    "x-iroha-transaction-hash": hashLiteral(entrypointHash),
+    "x-iroha-signed-transaction-hash": hashLiteral(signedTransactionHash),
+  };
+  const acceptedClient = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () =>
+      jsonResponse({ accepted: true }, { status: 202, headers: correctHeaders }),
+  });
+  assert.deepEqual(await acceptedClient.submitTransaction(signedTransaction), {
+    accepted: true,
+  });
+
+  const forgedHash = "01".repeat(32);
+  for (const [label, override, expectedHeader] of [
+    [
+      "swapped entrypoint domain",
+      { "x-iroha-entrypoint-hash": hashLiteral(signedTransactionHash) },
+      "x-iroha-entrypoint-hash",
+    ],
+    [
+      "swapped signed-wire domain",
+      { "x-iroha-signed-transaction-hash": hashLiteral(entrypointHash) },
+      "x-iroha-signed-transaction-hash",
+    ],
+    [
+      "forged compatibility hash",
+      { "x-iroha-transaction-hash": hashLiteral(forgedHash) },
+      "x-iroha-transaction-hash",
+    ],
+    [
+      "forged signed-wire hash",
+      { "x-iroha-signed-transaction-hash": hashLiteral(forgedHash) },
+      "x-iroha-signed-transaction-hash",
+    ],
+  ]) {
+    const client = new ToriiBrowserClient("https://torii.example", {
+      fetchImpl: async () =>
+        jsonResponse(
+          { accepted: true },
+          { status: 202, headers: { ...correctHeaders, ...override } },
+        ),
+    });
+    await assert.rejects(
+      client.submitTransaction(signedTransaction),
+      new RegExp(`${expectedHeader} does not match`, "u"),
+      label,
+    );
+  }
 });
 
 test("ToriiBrowserClient waits for exact global persisted Applied finality", async () => {

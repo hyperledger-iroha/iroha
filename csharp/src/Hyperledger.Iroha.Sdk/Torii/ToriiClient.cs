@@ -3926,17 +3926,17 @@ public sealed partial class ToriiClient : IDisposable
         ValidateExactTokenText(value, field);
     }
 
-    private static void ValidateOptionalCanonicalNonNegativeNumericText(string? value, string field)
+    private static void ValidateOptionalCanonicalQuantityText(string? value, string field)
     {
         if (value is null)
         {
             return;
         }
 
-        ValidateCanonicalNonNegativeNumericText(value, field);
+        ValidateCanonicalQuantityText(value, field);
     }
 
-    private static void ValidateCanonicalNonNegativeNumericText(string? value, string field)
+    private static void ValidateCanonicalQuantityText(string? value, string field)
     {
         ValidateExactNonEmptyText(value, field, message => new JsonException(message));
         _ = ToriiQuantityJson.RequireCanonicalQuantity(value, field);

@@ -47,12 +47,34 @@ mutations = {
     ),
     "missing-exact-recovery.tla": (
         "THEOREM IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress ==\n"
-        "  /\\ IndexedChainSpec\n"
+        "  /\\ IndexedLiveChainSpec\n"
         "  /\\ IndexedExactHistoricalRecoveryProgress\n"
         "  /\\ IndexedSuccessorActivationProgress\n",
         "THEOREM IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress ==\n"
-        "  /\\ IndexedChainSpec\n"
+        "  /\\ IndexedLiveChainSpec\n"
         "  /\\ IndexedSuccessorActivationProgress\n",
+    ),
+    "missing-install-generation-budget.tla": (
+        "THEOREM IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress ==\n"
+        "  /\\ IndexedLiveChainSpec\n"
+        "  /\\ IndexedExactHistoricalRecoveryProgress\n",
+        "THEOREM IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress ==\n"
+        "  /\\ IndexedChainSpec\n"
+        "  /\\ IndexedExactHistoricalRecoveryProgress\n",
+    ),
+    "wrapper-missing-install-generation-budget.tla": (
+        "THEOREM IndexedHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs ==\n"
+        "  /\\ IndexedLiveChainSpec\n"
+        "  /\\ IndexedHistoricalRecoveryTemporalPrerequisites\n",
+        "THEOREM IndexedHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs ==\n"
+        "  /\\ IndexedChainSpec\n"
+        "  /\\ IndexedHistoricalRecoveryTemporalPrerequisites\n",
+    ),
+    "release-missing-install-generation-budget.tla": (
+        "THEOREM HeightLivenessObligation ==\n"
+        "  IndexedLiveChainSpec => IndexedHeightLivenessProperty\n",
+        "THEOREM HeightLivenessObligation ==\n"
+        "  IndexedChainSpec => IndexedHeightLivenessProperty\n",
     ),
     "tautological-implication.tla": (
         "IndexedExactHeightLivenessProperty ==\n"
@@ -84,6 +106,9 @@ for filename, (old, new) in mutations.items():
 PY
 
 for mutation in weak-node-height.tla missing-exact-recovery.tla \
+  missing-install-generation-budget.tla \
+  wrapper-missing-install-generation-budget.tla \
+  release-missing-install-generation-budget.tla \
   tautological-implication.tla wrong-predecessor-height.tla; do
   set +e
   python3 "$CONTRACT_CHECKER" "$run_dir/$mutation" \
@@ -101,6 +126,15 @@ for mutation in weak-node-height.tla missing-exact-recovery.tla \
     missing-exact-recovery.tla)
       marker="IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress must state only"
       ;;
+    missing-install-generation-budget.tla)
+      marker="IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress must state only"
+      ;;
+    wrapper-missing-install-generation-budget.tla)
+      marker="IndexedHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs must state only"
+      ;;
+    release-missing-install-generation-budget.tla)
+      marker="HeightLivenessObligation must state only"
+      ;;
     tautological-implication.tla)
       marker="IndexedExactHeightLivenessProperty must equal only"
       ;;
@@ -115,7 +149,7 @@ for mutation in weak-node-height.tla missing-exact-recovery.tla \
   fi
 done
 
-echo "[source] exact next-context, exact-recovery, non-tautology, and height-1 contracts reject their mutations"
+echo "[source] exact next-context, exact-recovery, finite-generation-budget, non-tautology, and height-1 contracts reject their mutations"
 
 if $source_only; then
   exit 0

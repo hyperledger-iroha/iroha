@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   - ტესტები და მოწყობილობები ჯერ უნივერსალური `AccountId` უნდა ჩათესონ, შემდეგ დაემატოს ალიასის იჯარა, მეტსახელის ნებართვები და დომენის მფლობელობაში მყოფი ნებისმიერი სახელმწიფო ცალ-ცალკე, ნაცვლად იმისა, რომ დაშიფროს დომენის დაშვებები თავად ანგარიშის იდენტურობაში.
   - საჯარო სინგულარული ანგარიშის ძებნა ახლა ფოკუსირებულია მეტსახელებზე (`FindAliasesByAccountId`); თავად ანგარიშის იდენტიფიკაცია რჩება დომენის გარეშე.### აქტივების განმარტებები და აქტივები
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` ტექსტურად არის გამოსახული, როგორც უპრეფიქსის Base58 მისამართი ვერსიითა და გამშვები ჯამით.
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`.
   - `name` საჭიროა ადამიანის მიმართული ეკრანის ტექსტი და არ უნდა შეიცავდეს `#`/`@`.
   - `alias` არჩევითია და უნდა იყოს ერთ-ერთი:
     - `<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - მშენებლები: `AssetDefinition::new(id, spec)` ან კომფორტული `numeric(id)`; `name` საჭიროა და უნდა დაყენდეს `.with_name(...)`-ის მეშვეობით.
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }` შესანახად მოსახერხებელი `AssetEntry`/`AssetValue`.- `AssetBalanceScope`: `Global` შეუზღუდავი ნაშთებისთვის და `Dataspace(DataSpaceId)` მონაცემთა სივრცით შეზღუდული ნაშთებისთვის.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` გამოფენილია შემაჯამებელი API-ებისთვის.
+- `Asset { id, value: Quantity }` შესანახად მოსახერხებელი `AssetEntry`/`AssetValue`.- `AssetBalanceScope`: `Global` შეუზღუდავი ნაშთებისთვის და `Dataspace(DataSpaceId)` მონაცემთა სივრცით შეზღუდული ნაშთებისთვის.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` გამოფენილია შემაჯამებელი API-ებისთვის.
 
 ### NFTs
 - `NftId { domain: DomainId, name: Name }`.
@@ -182,7 +182,7 @@ translator: machine-google-reviewed
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

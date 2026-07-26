@@ -351,6 +351,62 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
         let page_layout =
             ivm::list::ListLayoutV1::try_new(QUERY_PAGE_CAPACITY_V1 as u64, family.words_per_item)
                 .expect("typed query-page List layout");
+
+        // Prove the performance contract on the exact production path before
+        // Criterion samples it. Keeping these assertions outside the timed
+        // loop prevents validation overhead from contaminating the result.
+        host.reset_core_query_page_metrics();
+        let mut preflight_vm = IVM::new(u64::MAX);
+        preflight_vm.set_register(10, family.tag.as_u64());
+        preflight_vm.set_register(11, 0);
+        preflight_vm.set_register(12, QUERY_PAGE_CAPACITY_V1 as u64);
+        host.syscall(ivm::syscalls::SYSCALL_CORE_QUERY_PAGE, &mut preflight_vm)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "preflight typed {:?} production page query: {error:?}",
+                    family.tag
+                )
+            });
+        let preflight_items =
+            ivm::list::read_words(&preflight_vm, preflight_vm.register(10), page_layout)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "preflight materialize typed {:?} production page: {error:?}",
+                        family.tag
+                    )
+                });
+        assert_eq!(
+            preflight_items.len(),
+            QUERY_PAGE_CAPACITY_V1,
+            "one full typed {:?} production page",
+            family.tag
+        );
+        let preflight_metrics = host
+            .core_query_page_metrics()
+            .expect("typed page-query counters enabled");
+        assert_eq!(
+            preflight_metrics.host_queries, 1,
+            "one host query per typed {:?} production page",
+            family.tag
+        );
+        assert_eq!(
+            preflight_metrics.projection_decodes, 1,
+            "one projection decode per typed {:?} production page",
+            family.tag
+        );
+        assert!(
+            preflight_metrics.leaf_tlv_bytes > 0,
+            "typed {:?} leaves must be encoded exactly once before materialization",
+            family.tag
+        );
+        assert!(
+            preflight_metrics.projection_payload_bytes < raw_query_response_bytes,
+            "typed {:?} projection payload ({} bytes) must be smaller than the raw QueryResponse envelope ({} bytes)",
+            family.tag,
+            preflight_metrics.projection_payload_bytes,
+            raw_query_response_bytes,
+        );
+
         c.bench_function(family.benchmark_name, |b| {
             b.iter_batched(
                 || {
@@ -371,37 +427,9 @@ fn bench_typed_core_query_pages(c: &mut Criterion) {
                         .unwrap_or_else(|error| {
                             panic!("materialize typed {:?} page: {error:?}", family.tag)
                         });
-                    assert_eq!(
-                        items.len(),
-                        QUERY_PAGE_CAPACITY_V1,
-                        "one full typed {:?} page",
-                        family.tag
-                    );
                     let metrics = host
                         .core_query_page_metrics()
                         .expect("typed page-query counters enabled");
-                    assert_eq!(
-                        metrics.host_queries, 1,
-                        "one host query per typed {:?} page",
-                        family.tag
-                    );
-                    assert_eq!(
-                        metrics.projection_decodes, 1,
-                        "one projection decode per typed {:?} page",
-                        family.tag
-                    );
-                    assert!(
-                        metrics.leaf_tlv_bytes > 0,
-                        "typed {:?} leaves must be encoded exactly once before materialization",
-                        family.tag
-                    );
-                    assert!(
-                        metrics.projection_payload_bytes < raw_query_response_bytes,
-                        "typed {:?} projection payload ({} bytes) must be smaller than the raw QueryResponse envelope ({} bytes)",
-                        family.tag,
-                        metrics.projection_payload_bytes,
-                        raw_query_response_bytes,
-                    );
                     std::hint::black_box((gas, items, vm.register(11), metrics));
                 },
                 BatchSize::SmallInput,

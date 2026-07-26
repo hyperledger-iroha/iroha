@@ -8420,25 +8420,30 @@ pub(crate) async fn handle_get_sorafs_reputation_snapshot(
         Ok(snapshot_id) => snapshot_id,
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
     };
-    let (_, projection) = match ready_reputation_committed_projection(&state) {
+    let (reader, _) = match ready_reputation_committed_projection(&state) {
         Ok(projection) => projection,
         Err(response) => return response,
     };
-    let snapshot = match reputation_snapshot_from_committed_projection(&projection) {
-        Ok(snapshot) => snapshot,
-        Err(response) => return response,
+    let snapshot = match reader.committed_snapshot_by_id(snapshot_id) {
+        Ok(Some(snapshot)) => snapshot,
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("reputation snapshot `{snapshot_id_hex}` was not found"),
+            );
+        }
+        Err(_) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "committed reputation runtime is unavailable",
+            );
+        }
     };
-    if snapshot.snapshot_id != snapshot_id {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            format!("reputation snapshot `{snapshot_id_hex}` was not found"),
-        );
-    }
-    let etag = reputation_snapshot_etag(snapshot, limit);
+    let etag = reputation_snapshot_etag(&snapshot, limit);
     if let Some(response) = reputation_not_modified_response(&headers, &etag) {
         return response;
     }
-    match reputation_snapshot_summary_json(snapshot, limit) {
+    match reputation_snapshot_summary_json(&snapshot, limit) {
         Ok(value) => reputation_json_response(value, &etag),
         Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
     }
@@ -11550,10 +11555,11 @@ async fn submit_appeal_finance_deposit_settlement_step(
             ),
         ));
     };
-    if submitter
-        .signer_for(&step.required_authority, finalized_cursor.height)
-        .is_err()
-    {
+    if execution.steps.iter().any(|planned_step| {
+        submitter
+            .signer_for(&planned_step.required_authority, finalized_cursor.height)
+            .is_err()
+    }) {
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             appeal_finance_deposit_settlement_submission_json(
@@ -11585,9 +11591,10 @@ async fn submit_appeal_finance_deposit_settlement_step(
             step.amount_xor.clone(),
             record.remaining_amount.clone(),
         )),
-        "cancel_refund" => {
-            AppealFinanceOperationV1::Cancel(CancelAssetLock::new(expected.escrow_id))
-        }
+        "cancel_refund" => AppealFinanceOperationV1::Cancel(CancelAssetLock::new(
+            expected.escrow_id,
+            record.remaining_amount.clone(),
+        )),
         other => {
             return Err(json_error(
                 StatusCode::BAD_REQUEST,
@@ -11723,6 +11730,13 @@ enum AppealFinanceSubmissionDispositionV1 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppealFinanceDeliverySubmitOutcomeV1 {
+    Submitted,
+    Deferred,
+    DeadLettered,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppealFinanceCommittedExternalOutcomeV1 {
     Applied,
     Rejected,
@@ -11731,7 +11745,11 @@ enum AppealFinanceCommittedExternalOutcomeV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppealFinanceAuthoritativeTransactionOutcomeV1 {
     Absent,
-    Applied,
+    Applied {
+        block_height: u64,
+        block_hash: [u8; 32],
+        block_timestamp_ms: u64,
+    },
     Rejected,
     Unavailable,
 }
@@ -11754,6 +11772,7 @@ fn classify_local_appeal_finance_submission(
 fn classify_exact_appeal_finance_entrypoint_outcome(
     expected_hash: &HashOf<SignedTransaction>,
     block_available: bool,
+    applied_block: Option<(u64, [u8; 32], u64)>,
     results: impl IntoIterator<
         Item = (
             HashOf<SignedTransaction>,
@@ -11774,9 +11793,16 @@ fn classify_exact_appeal_finance_entrypoint_outcome(
         return AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable;
     }
     match outcome {
-        AppealFinanceCommittedExternalOutcomeV1::Applied => {
-            AppealFinanceAuthoritativeTransactionOutcomeV1::Applied
-        }
+        AppealFinanceCommittedExternalOutcomeV1::Applied => applied_block.map_or(
+            AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable,
+            |(block_height, block_hash, block_timestamp_ms)| {
+                AppealFinanceAuthoritativeTransactionOutcomeV1::Applied {
+                    block_height,
+                    block_hash,
+                    block_timestamp_ms,
+                }
+            },
+        ),
         AppealFinanceCommittedExternalOutcomeV1::Rejected => {
             AppealFinanceAuthoritativeTransactionOutcomeV1::Rejected
         }
@@ -11793,6 +11819,7 @@ fn inspect_indexed_appeal_finance_transaction(
         return classify_exact_appeal_finance_entrypoint_outcome(
             transaction_hash,
             false,
+            None,
             std::iter::empty::<(
                 HashOf<SignedTransaction>,
                 AppealFinanceCommittedExternalOutcomeV1,
@@ -11805,10 +11832,14 @@ fn inspect_indexed_appeal_finance_transaction(
     if block.header().height().get() != block_height_u64 || block.hash() != expected_block_hash {
         return AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable;
     }
+    let block_timestamp_ms =
+        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
+    let block_hash = *expected_block_hash.as_ref();
     let external_entrypoint_count = block.external_entrypoint_count();
     classify_exact_appeal_finance_entrypoint_outcome(
         transaction_hash,
         true,
+        Some((block_height_u64, block_hash, block_timestamp_ms)),
         block
             .entrypoint_results()
             .take(external_entrypoint_count)
@@ -11880,6 +11911,7 @@ mod appeal_finance_authoritative_outcome_tests {
             classify_exact_appeal_finance_entrypoint_outcome(
                 &expected,
                 false,
+                None,
                 Vec::<(
                     HashOf<SignedTransaction>,
                     AppealFinanceCommittedExternalOutcomeV1,
@@ -11891,6 +11923,7 @@ mod appeal_finance_authoritative_outcome_tests {
             classify_exact_appeal_finance_entrypoint_outcome(
                 &expected,
                 true,
+                Some((1, [2; 32], 3)),
                 [(
                     transaction_hash(2),
                     AppealFinanceCommittedExternalOutcomeV1::Applied,
@@ -11902,6 +11935,7 @@ mod appeal_finance_authoritative_outcome_tests {
             classify_exact_appeal_finance_entrypoint_outcome(
                 &expected,
                 true,
+                Some((1, [2; 32], 3)),
                 [
                     (
                         expected.clone(),
@@ -11921,18 +11955,24 @@ mod appeal_finance_authoritative_outcome_tests {
             classify_exact_appeal_finance_entrypoint_outcome(
                 &applied,
                 true,
+                Some((7, [9; 32], 11)),
                 [(
                     applied.clone(),
                     AppealFinanceCommittedExternalOutcomeV1::Applied,
                 )],
             ),
-            AppealFinanceAuthoritativeTransactionOutcomeV1::Applied
+            AppealFinanceAuthoritativeTransactionOutcomeV1::Applied {
+                block_height: 7,
+                block_hash: [9; 32],
+                block_timestamp_ms: 11,
+            }
         );
         let rejected = transaction_hash(4);
         assert_eq!(
             classify_exact_appeal_finance_entrypoint_outcome(
                 &rejected,
                 true,
+                Some((8, [10; 32], 12)),
                 [(
                     rejected.clone(),
                     AppealFinanceCommittedExternalOutcomeV1::Rejected,
@@ -12067,30 +12107,96 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                 continue;
             }
         };
+        let exact_transaction_applied = signed_transaction.as_ref().and_then(|_| {
+            if let Some(AppealFinanceAuthoritativeTransactionOutcomeV1::Applied {
+                block_height,
+                block_hash,
+                block_timestamp_ms,
+            }) = transaction_outcome
+            {
+                Some((block_height, block_hash, block_timestamp_ms))
+            } else {
+                None
+            }
+        });
+        if let Some((applied_block_height, applied_block_hash, applied_block_timestamp_ms)) =
+            exact_transaction_applied
+        {
+            let receipt_ready = match &request.operation {
+                sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceOperationV1::Open(
+                    _,
+                ) => true,
+                _ => {
+                    let Some(post_record) = appeal_finance_exact_applied_post_record(
+                        &request,
+                        applied_block_timestamp_ms,
+                    ) else {
+                        if submitter
+                            .forwarder
+                            .mark_invalid_context(delivery.operation_id, finalized_cursor)
+                            .is_ok()
+                        {
+                            scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                        } else {
+                            scan.deferred = scan.deferred.saturating_add(1);
+                        }
+                        continue;
+                    };
+                    publish_finalized_appeal_finance_receipt(
+                        state,
+                        submitter,
+                        &request,
+                        &delivery,
+                        applied_block_height,
+                        applied_block_hash,
+                        &post_record,
+                    )
+                }
+            };
+            if !receipt_ready {
+                scan.deferred = scan.deferred.saturating_add(1);
+                continue;
+            }
+            let followup_enqueued = if matches!(
+                &request.operation,
+                sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceOperationV1::Drawdown(
+                    _
+                )
+            ) {
+                let Some(record) = record.as_ref() else {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    continue;
+                };
+                let Some(enqueued) =
+                    enqueue_appeal_finance_followup(submitter, &request, finalized_cursor, record)
+                else {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    continue;
+                };
+                enqueued
+            } else {
+                false
+            };
+            match submitter
+                .forwarder
+                .mark_semantic_finalized(delivery.operation_id, finalized_cursor)
+            {
+                Ok(()) => {
+                    scan.finalized = scan.finalized.saturating_add(1);
+                    if followup_enqueued {
+                        scan.followups_enqueued = scan.followups_enqueued.saturating_add(1);
+                    }
+                }
+                Err(_) => scan.deferred = scan.deferred.saturating_add(1),
+            }
+            continue;
+        }
         match reconciliation {
             AppealFinanceOperationReconciliationV1::Finalized => {
                 let Some(record) = record.as_ref() else {
                     scan.deferred = scan.deferred.saturating_add(1);
                     continue;
                 };
-                let receipt_ready = matches!(
-                    request.operation,
-                    sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceOperationV1::Open(
-                        _
-                    )
-                ) || delivery.signed_transaction_bytes.is_none()
-                    || publish_finalized_appeal_finance_receipt(
-                        state,
-                        submitter,
-                        &request,
-                        &delivery,
-                        finalized_cursor,
-                        record,
-                    );
-                if !receipt_ready {
-                    scan.deferred = scan.deferred.saturating_add(1);
-                    continue;
-                }
                 let Some(followup_enqueued) =
                     enqueue_appeal_finance_followup(submitter, &request, finalized_cursor, record)
                 else {
@@ -12112,18 +12218,57 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                 continue;
             }
             AppealFinanceOperationReconciliationV1::Conflict => {
-                if submitter
-                    .forwarder
-                    .mark_finalized_conflict(delivery.operation_id, finalized_cursor)
-                    .is_ok()
-                {
-                    scan.dead_lettered = scan.dead_lettered.saturating_add(1);
-                } else {
-                    scan.deferred = scan.deferred.saturating_add(1);
+                match transaction_outcome {
+                    Some(AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable) => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                    }
+                    Some(AppealFinanceAuthoritativeTransactionOutcomeV1::Rejected) => {
+                        match mark_appeal_finance_transaction_rejected(
+                            submitter,
+                            delivery.operation_id,
+                            finalized_cursor,
+                        ) {
+                            Some(true) => {
+                                scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                            }
+                            Some(false) | None => {
+                                scan.deferred = scan.deferred.saturating_add(1);
+                            }
+                        }
+                    }
+                    Some(
+                        AppealFinanceAuthoritativeTransactionOutcomeV1::Absent
+                        | AppealFinanceAuthoritativeTransactionOutcomeV1::Applied { .. },
+                    )
+                    | None => {
+                        if submitter
+                            .forwarder
+                            .mark_finalized_conflict(delivery.operation_id, finalized_cursor)
+                            .is_ok()
+                        {
+                            scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                        } else {
+                            scan.deferred = scan.deferred.saturating_add(1);
+                        }
+                    }
                 }
                 continue;
             }
             AppealFinanceOperationReconciliationV1::Ready => {}
+        }
+        if matches!(
+            transaction_outcome,
+            Some(AppealFinanceAuthoritativeTransactionOutcomeV1::Rejected)
+        ) {
+            match mark_appeal_finance_transaction_rejected(
+                submitter,
+                delivery.operation_id,
+                finalized_cursor,
+            ) {
+                Some(true) => scan.dead_lettered = scan.dead_lettered.saturating_add(1),
+                Some(false) | None => scan.deferred = scan.deferred.saturating_add(1),
+            }
+            continue;
         }
         if policy_status == AppealFinanceOutboxPolicyStatusV1::Superseded
             && matches!(
@@ -12145,35 +12290,34 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
             continue;
         }
 
-        let active_signer = match submitter.signer_for(&request.authority, finalized_cursor.height)
-        {
-            Ok(signer) => Some(signer),
-            Err(crate::SoraFsAppealFinanceSignerSelectionError::NotYetActive) => {
-                scan.deferred = scan.deferred.saturating_add(1);
-                continue;
-            }
-            Err(crate::SoraFsAppealFinanceSignerSelectionError::NoActiveBinding) => {
-                if submitter
-                    .forwarder
-                    .mark_finalized_conflict(delivery.operation_id, finalized_cursor)
-                    .is_ok()
-                {
-                    scan.dead_lettered = scan.dead_lettered.saturating_add(1);
-                } else {
-                    scan.deferred = scan.deferred.saturating_add(1);
-                }
-                continue;
-            }
-            Err(
-                crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
-                | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
-            ) => None,
-        };
         match delivery.state {
             AppealFinanceTransactionDeliveryStateV1::Ready => {
-                let Some(signer) = active_signer else {
-                    scan.deferred = scan.deferred.saturating_add(1);
-                    continue;
+                let signer = match submitter.signer_for(&request.authority, finalized_cursor.height)
+                {
+                    Ok(signer) => signer,
+                    Err(crate::SoraFsAppealFinanceSignerSelectionError::NotYetActive) => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                        continue;
+                    }
+                    Err(crate::SoraFsAppealFinanceSignerSelectionError::NoActiveBinding) => {
+                        if submitter
+                            .forwarder
+                            .mark_signer_binding_inactive(delivery.operation_id, finalized_cursor)
+                            .is_ok()
+                        {
+                            scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                        } else {
+                            scan.deferred = scan.deferred.saturating_add(1);
+                        }
+                        continue;
+                    }
+                    Err(
+                        crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
+                        | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
+                    ) => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                        continue;
+                    }
                 };
                 let claimed = match submitter
                     .forwarder
@@ -12187,10 +12331,18 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                 };
                 let signed = sign_sorafs_appeal_finance_delivery(state, signer, &claimed).await;
                 let Some(bytes) = signed else {
-                    let _ = submitter
-                        .forwarder
-                        .mark_signing_failed(delivery.operation_id, finalized_cursor);
-                    scan.deferred = scan.deferred.saturating_add(1);
+                    match mark_appeal_finance_signing_failed(
+                        submitter,
+                        delivery.operation_id,
+                        finalized_cursor,
+                    ) {
+                        Some(true) => {
+                            scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                        }
+                        Some(false) | None => {
+                            scan.deferred = scan.deferred.saturating_add(1);
+                        }
+                    }
                     continue;
                 };
                 if submitter
@@ -12198,14 +12350,22 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     .store_signed_transaction(delivery.operation_id, &bytes)
                     .is_err()
                 {
-                    let _ = submitter
-                        .forwarder
-                        .mark_signing_failed(delivery.operation_id, finalized_cursor);
-                    scan.deferred = scan.deferred.saturating_add(1);
+                    match mark_appeal_finance_signing_failed(
+                        submitter,
+                        delivery.operation_id,
+                        finalized_cursor,
+                    ) {
+                        Some(true) => {
+                            scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                        }
+                        Some(false) | None => {
+                            scan.deferred = scan.deferred.saturating_add(1);
+                        }
+                    }
                     continue;
                 }
                 scan.signed = scan.signed.saturating_add(1);
-                if submit_sorafs_appeal_finance_delivery(
+                match submit_sorafs_appeal_finance_delivery(
                     state,
                     submitter,
                     delivery.operation_id,
@@ -12214,9 +12374,15 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                 )
                 .await
                 {
-                    scan.submitted = scan.submitted.saturating_add(1);
-                } else {
-                    scan.deferred = scan.deferred.saturating_add(1);
+                    AppealFinanceDeliverySubmitOutcomeV1::Submitted => {
+                        scan.submitted = scan.submitted.saturating_add(1);
+                    }
+                    AppealFinanceDeliverySubmitOutcomeV1::Deferred => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                    }
+                    AppealFinanceDeliverySubmitOutcomeV1::DeadLettered => {
+                        scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                    }
                 }
             }
             AppealFinanceTransactionDeliveryStateV1::Signed => {
@@ -12224,11 +12390,33 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     scan.deferred = scan.deferred.saturating_add(1);
                     continue;
                 };
-                if active_signer.is_none() {
-                    scan.deferred = scan.deferred.saturating_add(1);
-                    continue;
+                match submitter.active_binding_for(&request.authority, finalized_cursor.height) {
+                    Ok(_) => {}
+                    Err(crate::SoraFsAppealFinanceSignerSelectionError::NotYetActive) => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                        continue;
+                    }
+                    Err(crate::SoraFsAppealFinanceSignerSelectionError::NoActiveBinding) => {
+                        if submitter
+                            .forwarder
+                            .mark_signer_binding_inactive(delivery.operation_id, finalized_cursor)
+                            .is_ok()
+                        {
+                            scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                        } else {
+                            scan.deferred = scan.deferred.saturating_add(1);
+                        }
+                        continue;
+                    }
+                    Err(
+                        crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
+                        | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
+                    ) => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                        continue;
+                    }
                 }
-                if submit_sorafs_appeal_finance_delivery(
+                match submit_sorafs_appeal_finance_delivery(
                     state,
                     submitter,
                     delivery.operation_id,
@@ -12237,9 +12425,15 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                 )
                 .await
                 {
-                    scan.submitted = scan.submitted.saturating_add(1);
-                } else {
-                    scan.deferred = scan.deferred.saturating_add(1);
+                    AppealFinanceDeliverySubmitOutcomeV1::Submitted => {
+                        scan.submitted = scan.submitted.saturating_add(1);
+                    }
+                    AppealFinanceDeliverySubmitOutcomeV1::Deferred => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                    }
+                    AppealFinanceDeliverySubmitOutcomeV1::DeadLettered => {
+                        scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                    }
                 }
             }
             AppealFinanceTransactionDeliveryStateV1::Ambiguous
@@ -12256,13 +12450,21 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     crate::pipeline_status_local_entry(state, &hash).map(|(entry, _)| entry.kind);
                 match transaction_outcome {
                     Some(AppealFinanceAuthoritativeTransactionOutcomeV1::Rejected) => {
-                        let _ = submitter
-                            .forwarder
-                            .mark_transaction_rejected(delivery.operation_id, finalized_cursor);
-                        scan.deferred = scan.deferred.saturating_add(1);
+                        match mark_appeal_finance_transaction_rejected(
+                            submitter,
+                            delivery.operation_id,
+                            finalized_cursor,
+                        ) {
+                            Some(true) => {
+                                scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                            }
+                            Some(false) | None => {
+                                scan.deferred = scan.deferred.saturating_add(1);
+                            }
+                        }
                     }
                     Some(
-                        AppealFinanceAuthoritativeTransactionOutcomeV1::Applied
+                        AppealFinanceAuthoritativeTransactionOutcomeV1::Applied { .. }
                         | AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable,
                     )
                     | None => {
@@ -12277,10 +12479,18 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                             )
                         ) =>
                     {
-                        let _ = submitter
-                            .forwarder
-                            .mark_transaction_rejected(delivery.operation_id, finalized_cursor);
-                        scan.deferred = scan.deferred.saturating_add(1);
+                        match mark_appeal_finance_transaction_rejected(
+                            submitter,
+                            delivery.operation_id,
+                            finalized_cursor,
+                        ) {
+                            Some(true) => {
+                                scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                            }
+                            Some(false) | None => {
+                                scan.deferred = scan.deferred.saturating_add(1);
+                            }
+                        }
                     }
                     Some(AppealFinanceAuthoritativeTransactionOutcomeV1::Absent)
                         if local_pending
@@ -12302,10 +12512,18 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     Some(AppealFinanceAuthoritativeTransactionOutcomeV1::Absent)
                         if finalized_cursor.height > delivery.baseline_finalized_height =>
                     {
-                        let _ = submitter
-                            .forwarder
-                            .mark_finalized_absent(delivery.operation_id, finalized_cursor);
-                        scan.deferred = scan.deferred.saturating_add(1);
+                        match mark_appeal_finance_finalized_absent(
+                            submitter,
+                            delivery.operation_id,
+                            finalized_cursor,
+                        ) {
+                            Some(true) => {
+                                scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                            }
+                            Some(false) | None => {
+                                scan.deferred = scan.deferred.saturating_add(1);
+                            }
+                        }
                     }
                     Some(AppealFinanceAuthoritativeTransactionOutcomeV1::Absent) => {
                         scan.deferred = scan.deferred.saturating_add(1);
@@ -12313,11 +12531,156 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                 }
             }
             AppealFinanceTransactionDeliveryStateV1::Signing => {
-                scan.deferred = scan.deferred.saturating_add(1);
+                match submitter.active_binding_for(&request.authority, finalized_cursor.height) {
+                    Ok(_) => {
+                        match mark_appeal_finance_signing_failed(
+                            submitter,
+                            delivery.operation_id,
+                            finalized_cursor,
+                        ) {
+                            Some(true) => {
+                                scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                            }
+                            Some(false) | None => {
+                                scan.deferred = scan.deferred.saturating_add(1);
+                            }
+                        }
+                    }
+                    Err(crate::SoraFsAppealFinanceSignerSelectionError::NotYetActive) => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                    }
+                    Err(crate::SoraFsAppealFinanceSignerSelectionError::NoActiveBinding) => {
+                        if submitter
+                            .forwarder
+                            .mark_signer_binding_inactive(delivery.operation_id, finalized_cursor)
+                            .is_ok()
+                        {
+                            scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                        } else {
+                            scan.deferred = scan.deferred.saturating_add(1);
+                        }
+                    }
+                    Err(
+                        crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
+                        | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
+                    ) => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                    }
+                }
             }
         }
     }
     scan
+}
+
+fn appeal_finance_operation_is_terminal(
+    submitter: &crate::SoraFsAppealSettlementSubmitter,
+    operation_id: [u8; 32],
+) -> Option<bool> {
+    use sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionForwarderError;
+
+    match submitter
+        .forwarder
+        .operation_for_reconciliation(operation_id)
+    {
+        Ok(_) => Some(false),
+        Err(AppealFinanceTransactionForwarderError::UnknownOperation) => Some(true),
+        Err(_) => None,
+    }
+}
+
+fn mark_appeal_finance_transaction_rejected(
+    submitter: &crate::SoraFsAppealSettlementSubmitter,
+    operation_id: [u8; 32],
+    finalized_cursor: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceFinalizedCursorV1,
+) -> Option<bool> {
+    submitter
+        .forwarder
+        .mark_transaction_rejected(operation_id, finalized_cursor)
+        .ok()?;
+    appeal_finance_operation_is_terminal(submitter, operation_id)
+}
+
+fn mark_appeal_finance_signing_failed(
+    submitter: &crate::SoraFsAppealSettlementSubmitter,
+    operation_id: [u8; 32],
+    finalized_cursor: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceFinalizedCursorV1,
+) -> Option<bool> {
+    submitter
+        .forwarder
+        .mark_signing_failed(operation_id, finalized_cursor)
+        .ok()?;
+    appeal_finance_operation_is_terminal(submitter, operation_id)
+}
+
+fn mark_appeal_finance_finalized_absent(
+    submitter: &crate::SoraFsAppealSettlementSubmitter,
+    operation_id: [u8; 32],
+    finalized_cursor: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceFinalizedCursorV1,
+) -> Option<bool> {
+    submitter
+        .forwarder
+        .mark_finalized_absent(operation_id, finalized_cursor)
+        .ok()?;
+    appeal_finance_operation_is_terminal(submitter, operation_id)
+}
+
+fn mark_appeal_finance_retryable_submission_failed(
+    submitter: &crate::SoraFsAppealSettlementSubmitter,
+    operation_id: [u8; 32],
+    finalized_cursor: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceFinalizedCursorV1,
+) -> AppealFinanceDeliverySubmitOutcomeV1 {
+    if submitter
+        .forwarder
+        .mark_retryable_submission_failed(operation_id, finalized_cursor)
+        .is_err()
+    {
+        return AppealFinanceDeliverySubmitOutcomeV1::Deferred;
+    }
+    if appeal_finance_operation_is_terminal(submitter, operation_id) == Some(true) {
+        AppealFinanceDeliverySubmitOutcomeV1::DeadLettered
+    } else {
+        AppealFinanceDeliverySubmitOutcomeV1::Deferred
+    }
+}
+
+fn appeal_finance_exact_applied_post_record(
+    request: &sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionSigningRequestV1,
+    applied_block_timestamp_ms: u64,
+) -> Option<AssetEscrowRecord> {
+    use sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceOperationV1;
+
+    let mut record = request.expected_record.clone()?;
+    match &request.operation {
+        AppealFinanceOperationV1::Open(_) => return None,
+        AppealFinanceOperationV1::Drawdown(instruction) => {
+            if record.id != *instruction.escrow_id()
+                || record.remaining_amount != *instruction.expected_remaining_amount()
+            {
+                return None;
+            }
+            record.remaining_amount = record
+                .remaining_amount
+                .checked_sub(instruction.amount())
+                .ok()?;
+            if record.remaining_amount.is_zero() {
+                record.status = AssetEscrowStatus::DrawnDown;
+                record.closed_at_ms = Some(applied_block_timestamp_ms);
+            }
+        }
+        AppealFinanceOperationV1::Cancel(instruction) => {
+            if record.id != *instruction.escrow_id() {
+                return None;
+            }
+            if record.remaining_amount != *instruction.expected_remaining_amount() {
+                return None;
+            }
+            record.status = AssetEscrowStatus::Cancelled;
+            record.remaining_amount = Quantity::zero();
+            record.closed_at_ms = Some(applied_block_timestamp_ms);
+        }
+    }
+    Some(record)
 }
 
 async fn sign_sorafs_appeal_finance_delivery(
@@ -12378,9 +12741,9 @@ async fn submit_sorafs_appeal_finance_delivery(
     operation_id: [u8; 32],
     transaction_bytes: &[u8],
     finalized_cursor: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceFinalizedCursorV1,
-) -> bool {
+) -> AppealFinanceDeliverySubmitOutcomeV1 {
     let Some(transaction) = decode_appeal_finance_signed_transaction(transaction_bytes) else {
-        return false;
+        return AppealFinanceDeliverySubmitOutcomeV1::Deferred;
     };
     let accepted = match crate::routing::accept_transaction_for_ingress(
         state.chain_id.clone(),
@@ -12390,10 +12753,14 @@ async fn submit_sorafs_appeal_finance_delivery(
     ) {
         Ok(accepted) => accepted,
         Err(_) => {
-            let _ = submitter
-                .forwarder
-                .mark_transaction_rejected(operation_id, finalized_cursor);
-            return false;
+            return match mark_appeal_finance_transaction_rejected(
+                submitter,
+                operation_id,
+                finalized_cursor,
+            ) {
+                Some(true) => AppealFinanceDeliverySubmitOutcomeV1::DeadLettered,
+                Some(false) | None => AppealFinanceDeliverySubmitOutcomeV1::Deferred,
+            };
         }
     };
     let durable_retry_claim = match state
@@ -12402,10 +12769,11 @@ async fn submit_sorafs_appeal_finance_delivery(
     {
         Ok(claim) => claim,
         Err(_) => {
-            let _ = submitter
-                .forwarder
-                .mark_retryable_submission_failed(operation_id, finalized_cursor);
-            return false;
+            return mark_appeal_finance_retryable_submission_failed(
+                submitter,
+                operation_id,
+                finalized_cursor,
+            );
         }
     };
     let routing_plan = if let Some(claim) = durable_retry_claim.as_ref() {
@@ -12417,21 +12785,22 @@ async fn submit_sorafs_appeal_finance_delivery(
         {
             Ok(plan) => plan,
             Err(_) => {
-                let _ = submitter
-                    .forwarder
-                    .mark_retryable_submission_failed(operation_id, finalized_cursor);
-                return false;
+                return mark_appeal_finance_retryable_submission_failed(
+                    submitter,
+                    operation_id,
+                    finalized_cursor,
+                );
             }
         }
     };
     let routing_decision = routing_plan.coordinator_route();
     let exact_bytes = match submitter.forwarder.begin_submission(operation_id) {
         Ok(bytes) => bytes,
-        Err(_) => return false,
+        Err(_) => return AppealFinanceDeliverySubmitOutcomeV1::Deferred,
     };
     if exact_bytes != transaction_bytes {
         let _ = submitter.forwarder.mark_not_submitted(operation_id);
-        return false;
+        return AppealFinanceDeliverySubmitOutcomeV1::Deferred;
     }
     let disposition = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
         match crate::routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
@@ -12464,21 +12833,32 @@ async fn submit_sorafs_appeal_finance_delivery(
     };
     match disposition {
         AppealFinanceSubmissionDispositionV1::Submitted => {
-            submitter.forwarder.mark_submitted(operation_id).is_ok()
+            if submitter.forwarder.mark_submitted(operation_id).is_ok() {
+                AppealFinanceDeliverySubmitOutcomeV1::Submitted
+            } else {
+                AppealFinanceDeliverySubmitOutcomeV1::Deferred
+            }
         }
         AppealFinanceSubmissionDispositionV1::DefinitelyNotSubmitted => {
-            let _ = submitter
-                .forwarder
-                .mark_retryable_submission_failed(operation_id, finalized_cursor);
-            false
+            mark_appeal_finance_retryable_submission_failed(
+                submitter,
+                operation_id,
+                finalized_cursor,
+            )
         }
         AppealFinanceSubmissionDispositionV1::Rejected => {
-            let _ = submitter
-                .forwarder
-                .mark_transaction_rejected(operation_id, finalized_cursor);
-            false
+            match mark_appeal_finance_transaction_rejected(
+                submitter,
+                operation_id,
+                finalized_cursor,
+            ) {
+                Some(true) => AppealFinanceDeliverySubmitOutcomeV1::DeadLettered,
+                Some(false) | None => AppealFinanceDeliverySubmitOutcomeV1::Deferred,
+            }
         }
-        AppealFinanceSubmissionDispositionV1::Ambiguous => false,
+        AppealFinanceSubmissionDispositionV1::Ambiguous => {
+            AppealFinanceDeliverySubmitOutcomeV1::Deferred
+        }
     }
 }
 
@@ -12568,6 +12948,7 @@ fn decode_appeal_finance_deposit_outbox_context(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppealFinanceOutboxPolicyStatusV1 {
     Active,
+    Grandfathered,
     Superseded,
     InvalidContext,
 }
@@ -12578,7 +12959,7 @@ fn appeal_finance_outbox_policy_status(
 ) -> AppealFinanceOutboxPolicyStatusV1 {
     use sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceOperationV1;
 
-    let (policy_digest, expected) = match &request.operation {
+    let (policy_digest, expected, grandfathered_continuation) = match &request.operation {
         AppealFinanceOperationV1::Open(instruction) => {
             let Some(context) =
                 decode_appeal_finance_deposit_outbox_context(&request.reconciliation_context)
@@ -12597,12 +12978,15 @@ fn appeal_finance_outbox_policy_status(
             {
                 return AppealFinanceOutboxPolicyStatusV1::InvalidContext;
             }
-            (context.policy_digest, context.expected)
+            (context.policy_digest, context.expected, false)
         }
         AppealFinanceOperationV1::Drawdown(instruction) => {
             let Some(context) =
                 decode_appeal_finance_outbox_context(&request.reconciliation_context)
             else {
+                return AppealFinanceOutboxPolicyStatusV1::InvalidContext;
+            };
+            let Some(record) = request.expected_record.as_ref() else {
                 return AppealFinanceOutboxPolicyStatusV1::InvalidContext;
             };
             let Ok(drawdown_xor) = context
@@ -12612,31 +12996,74 @@ fn appeal_finance_outbox_policy_status(
             else {
                 return AppealFinanceOutboxPolicyStatusV1::InvalidContext;
             };
-            if instruction.amount() != &drawdown_xor {
+            let required_authority = context
+                .expected
+                .release_authority_account
+                .as_ref()
+                .unwrap_or(&context.expected.destination_account);
+            if drawdown_xor.is_zero()
+                || instruction.amount() != &drawdown_xor
+                || instruction.expected_remaining_amount() != &record.remaining_amount
+                || record.remaining_amount != context.expected.deposit_xor
+                || &request.authority != required_authority
+                || !appeal_finance_locked_record_matches_expectation(&context.expected, record)
+            {
                 return AppealFinanceOutboxPolicyStatusV1::InvalidContext;
             }
-            (context.policy_digest, context.expected)
+            (context.policy_digest, context.expected, false)
         }
-        AppealFinanceOperationV1::Cancel(_) => {
+        AppealFinanceOperationV1::Cancel(instruction) => {
             let Some(context) =
                 decode_appeal_finance_outbox_context(&request.reconciliation_context)
             else {
                 return AppealFinanceOutboxPolicyStatusV1::InvalidContext;
             };
-            (context.policy_digest, context.expected)
+            let Some(record) = request.expected_record.as_ref() else {
+                return AppealFinanceOutboxPolicyStatusV1::InvalidContext;
+            };
+            if context.settlement.refund_xor.is_zero()
+                || &request.authority != &context.expected.payer_account
+                || record.remaining_amount != context.settlement.refund_xor
+                || record.id != *instruction.escrow_id()
+                || record.remaining_amount != *instruction.expected_remaining_amount()
+                || !appeal_finance_locked_record_matches_expectation(&context.expected, record)
+            {
+                return AppealFinanceOutboxPolicyStatusV1::InvalidContext;
+            }
+            (context.policy_digest, context.expected, true)
         }
     };
     if expected.escrow_id != *request.operation.escrow_id()
-        || expected.asset_definition_id != policy.asset_definition_id
         || XorQuantity::try_from_quantity(expected.deposit_xor).is_err()
     {
         return AppealFinanceOutboxPolicyStatusV1::InvalidContext;
     }
     if policy_digest == policy.policy_digest {
-        AppealFinanceOutboxPolicyStatusV1::Active
+        if expected.asset_definition_id == policy.asset_definition_id {
+            AppealFinanceOutboxPolicyStatusV1::Active
+        } else {
+            AppealFinanceOutboxPolicyStatusV1::InvalidContext
+        }
+    } else if grandfathered_continuation {
+        AppealFinanceOutboxPolicyStatusV1::Grandfathered
     } else {
         AppealFinanceOutboxPolicyStatusV1::Superseded
     }
+}
+
+fn appeal_finance_locked_record_matches_expectation(
+    expected: &AppealFinanceDepositExpectation,
+    record: &AssetEscrowRecord,
+) -> bool {
+    record.kind == AssetEscrowKind::Lock
+        && record.status == AssetEscrowStatus::Locked
+        && !record.remaining_amount.is_zero()
+        && record.accepted_at_ms.is_none()
+        && record.payment_sent_at_ms.is_none()
+        && record.disputed_at_ms.is_none()
+        && record.closed_at_ms.is_none()
+        && record.resolution.is_none()
+        && appeal_finance_deposit_static_mismatches(expected, record).is_empty()
 }
 
 fn appeal_finance_step_for_operation<'a>(
@@ -12667,7 +13094,8 @@ fn publish_finalized_appeal_finance_receipt(
     submitter: &crate::SoraFsAppealSettlementSubmitter,
     request: &sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionSigningRequestV1,
     delivery: &sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionPendingV1,
-    finalized_cursor: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceFinalizedCursorV1,
+    finalized_block_height: u64,
+    finalized_block_hash: [u8; 32],
     record: &AssetEscrowRecord,
 ) -> bool {
     if !state.sorafs_node.has_governance_publisher() {
@@ -12728,7 +13156,9 @@ fn publish_finalized_appeal_finance_receipt(
         &reconciliation,
         step,
         &tx_hash_hex,
-        submitter.signer_count(finalized_cursor.height),
+        finalized_block_height,
+        finalized_block_hash,
+        submitter.signer_count(request.baseline_finalized_cursor.height),
         generated_at_unix_ms,
     ) else {
         return false;
@@ -12781,18 +13211,17 @@ fn enqueue_appeal_finance_followup(
     else {
         return Some(false);
     };
-    if step.action != "cancel_refund"
-        || submitter
-            .signer_for(&step.required_authority, finalized_cursor.height)
-            .is_err()
-    {
+    if step.action != "cancel_refund" {
         return None;
     }
     submitter
         .forwarder
         .enqueue_unsigned_operation(
             step.required_authority.clone(),
-            AppealFinanceOperationV1::Cancel(CancelAssetLock::new(context.expected.escrow_id)),
+            AppealFinanceOperationV1::Cancel(CancelAssetLock::new(
+                context.expected.escrow_id,
+                record.remaining_amount.clone(),
+            )),
             &AppealFinanceTransactionContextV1 {
                 chain_id: request.chain_id.clone(),
                 finalized_cursor,
@@ -16557,11 +16986,15 @@ fn appeal_finance_deposit_settlement_receipt(
     reconciliation: &AppealFinanceDepositSettlementReconciliation,
     step: &AppealFinanceSettlementStep,
     tx_hash_hex: &str,
+    finalized_block_height: u64,
+    finalized_block_hash: [u8; 32],
     configured_signer_count: usize,
     generated_at_unix_ms: u64,
 ) -> Result<SoraFsAppealFinanceSettlementReceiptV1, String> {
     if appeal_finance_policy_digest == [0; 32]
         || !is_canonical_appeal_finance_policy_version(appeal_finance_config_version)
+        || finalized_block_height == 0
+        || finalized_block_hash == [0; 32]
     {
         return Err("invalid SoraFS appeal finance receipt policy binding".to_owned());
     }
@@ -16574,6 +17007,8 @@ fn appeal_finance_deposit_settlement_receipt(
         step,
         tx_hash_hex,
         &reconciliation.reconciliation_digest_hex,
+        finalized_block_height,
+        finalized_block_hash,
         generated_at_unix_ms,
     );
     let xor_quantity = |field: &str, value: &Quantity| {
@@ -16586,6 +17021,8 @@ fn appeal_finance_deposit_settlement_receipt(
         case_id: expected.case_id.clone(),
         round_id: expected.round_id.clone(),
         generated_at_unix_ms,
+        finalized_block_height,
+        finalized_block_hash,
         appeal_finance_config_version: appeal_finance_config_version.to_owned(),
         appeal_finance_policy_digest,
         outcome: appeal_finance_manifest_outcome_from_verdict(verdict),
@@ -16635,6 +17072,8 @@ fn appeal_finance_settlement_receipt_id(
     step: &AppealFinanceSettlementStep,
     tx_hash_hex: &str,
     reconciliation_digest_hex: &str,
+    finalized_block_height: u64,
+    finalized_block_hash: [u8; 32],
     generated_at_unix_ms: u64,
 ) -> [u8; 16] {
     let mut material = String::from("sorafs.appeal_finance.settlement_receipt.id.v1\n");
@@ -16660,6 +17099,16 @@ fn appeal_finance_settlement_receipt_id(
         &mut material,
         "reconciliation_digest_hex",
         reconciliation_digest_hex,
+    );
+    push_digest_field(
+        &mut material,
+        "finalized_block_height",
+        finalized_block_height,
+    );
+    push_digest_field(
+        &mut material,
+        "finalized_block_hash_hex",
+        hex::encode(finalized_block_hash),
     );
     push_digest_field(&mut material, "generated_at_unix_ms", generated_at_unix_ms);
     let digest = blake3_hash(material.as_bytes());
@@ -17217,19 +17666,24 @@ fn required_appeal_finance_label(field: &'static str, raw: &str) -> Result<Strin
 fn is_canonical_appeal_finance_policy_version(value: &str) -> bool {
     const MAX_VERSION_BYTES: usize = 128;
 
-    !value.is_empty()
-        && value.len() <= MAX_VERSION_BYTES
-        && value
+    if value.is_empty() || value.len() > MAX_VERSION_BYTES {
+        return false;
+    }
+    let Some((name, revision)) = value.rsplit_once("-v") else {
+        return false;
+    };
+    !name.is_empty()
+        && name.split('-').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+        && revision
             .as_bytes()
             .first()
-            .is_some_and(u8::is_ascii_alphanumeric)
-        && value
-            .as_bytes()
-            .last()
-            .is_some_and(u8::is_ascii_alphanumeric)
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            .is_some_and(|byte| matches!(byte, b'1'..=b'9'))
+        && revision.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn appeal_finance_deposit_expectation_is_canonical(
@@ -33859,6 +34313,7 @@ mod advert_tests {
     #[derive(Debug)]
     struct StaticReputationCommittedReaderV1 {
         projection: ReputationCommittedReadProjectionV1,
+        retained_snapshots: Vec<ReputationSnapshotV1>,
     }
 
     impl ReputationCommittedReadApiV1 for StaticReputationCommittedReaderV1 {
@@ -33867,16 +34322,43 @@ mod advert_tests {
         ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError> {
             Ok(self.projection.clone())
         }
+
+        fn committed_snapshot_by_id(
+            &self,
+            snapshot_id: [u8; 16],
+        ) -> Result<Option<ReputationSnapshotV1>, ReputationRuntimeError> {
+            Ok(self
+                .retained_snapshots
+                .iter()
+                .find(|snapshot| snapshot.snapshot_id == snapshot_id)
+                .cloned())
+        }
     }
 
     fn attach_reputation_committed_projection(
         app: &mut SharedAppState,
         projection: ReputationCommittedReadProjectionV1,
     ) {
+        let retained_snapshots = projection
+            .latest
+            .iter()
+            .map(|committed| committed.signed_result.snapshot.clone())
+            .collect();
+        attach_reputation_committed_history(app, projection, retained_snapshots);
+    }
+
+    fn attach_reputation_committed_history(
+        app: &mut SharedAppState,
+        projection: ReputationCommittedReadProjectionV1,
+        retained_snapshots: Vec<ReputationSnapshotV1>,
+    ) {
         Arc::get_mut(app)
             .expect("unique app state")
             .sorafs_reputation_committed_reader =
-            Some(Arc::new(StaticReputationCommittedReaderV1 { projection }));
+            Some(Arc::new(StaticReputationCommittedReaderV1 {
+                projection,
+                retained_snapshots,
+            }));
     }
 
     fn committed_reputation_projection_fixture(
@@ -33934,6 +34416,18 @@ mod advert_tests {
     }
 
     fn reputation_snapshot_fixture() -> SignedReputationSnapshotV1 {
+        let generated_at_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_secs();
+        reputation_snapshot_fixture_with_identity([0xAB; 16], None, generated_at_unix)
+    }
+
+    fn reputation_snapshot_fixture_with_identity(
+        snapshot_id: [u8; 16],
+        previous_snapshot_id: Option<[u8; 16]>,
+        generated_at_unix: u64,
+    ) -> SignedReputationSnapshotV1 {
         let metrics_a = ReputationProviderMetricsV1 {
             version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
             por_success_bps: 9_800,
@@ -33975,16 +34469,12 @@ mod advert_tests {
             },
         ];
         inputs.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
-        let generated_at_unix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock after epoch")
-            .as_secs();
         let snapshot = build_reputation_snapshot(
-            [0xAB; 16],
+            snapshot_id,
             generated_at_unix,
             ReputationWeightsV1::default(),
             &inputs,
-            None,
+            previous_snapshot_id,
         )
         .expect("build reputation snapshot");
         let scoring_evidence = ReputationScoringEvidenceV1 {
@@ -34850,6 +35340,15 @@ mod advert_tests {
         authority: &AccountId,
         height: u64,
     ) {
+        let expected_remaining_amount = app
+            .state
+            .view()
+            .world()
+            .asset_escrows()
+            .get(&expected.escrow_id)
+            .expect("appeal finance asset lock")
+            .remaining_amount
+            .clone();
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero block height"),
             None,
@@ -34862,7 +35361,7 @@ mod advert_tests {
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
         tx.tx_call_hash = Some(Hash::prehashed([0xB2; Hash::LENGTH]));
-        CancelAssetLock::new(expected.escrow_id)
+        CancelAssetLock::new(expected.escrow_id, expected_remaining_amount)
             .execute(authority, &mut tx)
             .expect("cancel appeal finance asset lock");
         tx.apply();
@@ -35336,7 +35835,7 @@ mod advert_tests {
 
         let mut changed =
             iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
-        changed.pricing.version = "baseline-v1-revision-2".to_owned();
+        changed.pricing.version = "baseline-revision-v2".to_owned();
         let changed =
             AppealFinanceRuntimePolicy::from_config(&changed).expect("valid changed policy");
         assert_ne!(first.policy_digest, changed.policy_digest);
@@ -35364,6 +35863,22 @@ mod advert_tests {
         mismatched_panel.settlement.default_panel_size =
             mismatched_panel.pricing.default_panel_size + 1;
         assert!(AppealFinanceRuntimePolicy::from_config(&mismatched_panel).is_err());
+
+        for version in [
+            "Baseline-v1",
+            "baseline_v1",
+            "baseline-v0",
+            "baseline-v01",
+            "baseline-v1-revision-2",
+        ] {
+            let mut invalid =
+                iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
+            invalid.pricing.version = version.to_owned();
+            assert!(
+                AppealFinanceRuntimePolicy::from_config(&invalid).is_err(),
+                "noncanonical runtime policy version `{version}` must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -35412,12 +35927,23 @@ mod advert_tests {
             drawdown_xor,
             expected.deposit_xor.clone(),
         ));
+        let mut expected_record = appeal_finance_deposit_status_record(
+            expected.payer_account.clone(),
+            Some(expected.destination_account.clone()),
+            expected.release_authority_account.clone(),
+        );
+        expected_record.id = expected.escrow_id;
+        expected_record.asset_definition = expected.asset_definition_id.clone();
+        expected_record.amount = expected.deposit_xor.clone();
+        expected_record.remaining_amount = expected.deposit_xor.clone();
+        expected_record.expires_at_ms = expected.expires_at_ms;
+        expected_record.evidence_hashes = expected.evidence_hashes.clone();
         let mut request = AppealFinanceTransactionSigningRequestV1 {
             operation_id: [0xA1; 32],
             chain_id: ChainId::from("appeal-finance-policy-rotation-test"),
             authority: auth.provider.account.clone(),
             operation,
-            expected_record: None,
+            expected_record: Some(expected_record.clone()),
             reconciliation_context: encoded,
             baseline_finalized_cursor: AppealFinanceFinalizedCursorV1 {
                 height: 1,
@@ -35428,15 +35954,78 @@ mod advert_tests {
             appeal_finance_outbox_policy_status(&request, &policy),
             AppealFinanceOutboxPolicyStatusV1::Active
         );
+        let drawdown_post = appeal_finance_exact_applied_post_record(&request, 41)
+            .expect("derive exact committed drawdown post-state");
+        assert_eq!(drawdown_post.remaining_amount, breakdown.refund_xor);
+        assert_eq!(drawdown_post.status, AssetEscrowStatus::Locked);
+        assert_eq!(drawdown_post.closed_at_ms, None);
 
         let mut rotated =
             iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
-        rotated.pricing.version = "baseline-v1-rotated".to_owned();
+        rotated.pricing.version = "baseline-rotated-v2".to_owned();
         let rotated =
             AppealFinanceRuntimePolicy::from_config(&rotated).expect("valid rotated policy");
         assert_eq!(
             appeal_finance_outbox_policy_status(&request, &rotated),
             AppealFinanceOutboxPolicyStatusV1::Superseded
+        );
+
+        expected_record.remaining_amount = breakdown.refund_xor.clone();
+        request.operation = AppealFinanceOperationV1::Cancel(CancelAssetLock::new(
+            expected.escrow_id,
+            expected_record.remaining_amount.clone(),
+        ));
+        request.authority = expected.payer_account.clone();
+        request.expected_record = Some(expected_record);
+        assert_eq!(
+            appeal_finance_outbox_policy_status(&request, &rotated),
+            AppealFinanceOutboxPolicyStatusV1::Grandfathered
+        );
+        let cancel_post = appeal_finance_exact_applied_post_record(&request, 42)
+            .expect("derive exact committed cancellation post-state");
+        assert!(cancel_post.remaining_amount.is_zero());
+        assert_eq!(cancel_post.status, AssetEscrowStatus::Cancelled);
+        assert_eq!(cancel_post.closed_at_ms, Some(42));
+
+        let refund_only_verdict = AppealVerdict::Decision(AppealDecision::Overturn);
+        let refund_only = policy
+            .settlement()
+            .settle(
+                expected.deposit_xor.clone(),
+                panel_size,
+                refund_only_verdict,
+            )
+            .expect("valid refund-only settlement");
+        assert_eq!(refund_only.refund_xor, expected.deposit_xor);
+        assert!(refund_only.treasury_xor.is_zero());
+        assert!(refund_only.held_xor.is_zero());
+        let refund_only_context = AppealFinanceSettlementOutboxContextV1 {
+            version: APPEAL_FINANCE_SETTLEMENT_OUTBOX_CONTEXT_VERSION_V1,
+            policy_digest: policy.policy_digest,
+            settlement: AppealFinanceSettlementSnapshotV1::from_policy_and_breakdown(
+                &policy,
+                &refund_only,
+            ),
+            expected: expected.clone(),
+            outcome: refund_only_verdict.to_string(),
+            panel_size,
+        };
+        request.reconciliation_context =
+            norito::to_bytes(&refund_only_context).expect("encode refund-only settlement context");
+        let mut refund_only_record = request
+            .expected_record
+            .clone()
+            .expect("cancel pre-operation record");
+        refund_only_record.remaining_amount = expected.deposit_xor.clone();
+        request.operation = AppealFinanceOperationV1::Cancel(CancelAssetLock::new(
+            expected.escrow_id,
+            refund_only_record.remaining_amount.clone(),
+        ));
+        request.expected_record = Some(refund_only_record);
+        assert_eq!(
+            appeal_finance_outbox_policy_status(&request, &rotated),
+            AppealFinanceOutboxPolicyStatusV1::Grandfathered,
+            "a validated refund-only cancellation must not strand custody on policy rotation"
         );
 
         let mut tampered = context;
@@ -39788,6 +40377,65 @@ mod advert_tests {
         assert_eq!(response.headers().get(ETAG), Some(&events_etag));
     }
 
+    #[tokio::test]
+    async fn reputation_snapshot_route_returns_exact_retained_history_and_rejects_evicted_ids() {
+        let generated_at_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_secs();
+        let older = reputation_snapshot_fixture_with_identity([0xA9; 16], None, generated_at_unix);
+        let newer = reputation_snapshot_fixture_with_identity(
+            [0xAA; 16],
+            Some(older.snapshot.snapshot_id),
+            generated_at_unix + 1,
+        );
+        let projection = committed_reputation_projection_fixture(newer.clone());
+        let (mut app, _dir) = sorafs_app_state_with_reputation_storage();
+        attach_reputation_committed_history(
+            &mut app,
+            projection.clone(),
+            vec![older.snapshot.clone(), newer.snapshot.clone()],
+        );
+
+        let response = handle_get_sorafs_reputation_snapshot(
+            State(app.clone()),
+            HeaderMap::new(),
+            Path(hex::encode(older.snapshot.snapshot_id)),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect retained historical body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode retained historical JSON");
+        assert_eq!(
+            value.get("snapshot_id_hex").and_then(Value::as_str),
+            Some(hex::encode(older.snapshot.snapshot_id).as_str())
+        );
+        assert_ne!(
+            value.get("snapshot_id_hex").and_then(Value::as_str),
+            Some(hex::encode(newer.snapshot.snapshot_id).as_str()),
+            "the snapshot-id route must not substitute the latest snapshot"
+        );
+
+        let (mut evicted_app, _evicted_dir) = sorafs_app_state_with_reputation_storage();
+        attach_reputation_committed_history(
+            &mut evicted_app,
+            projection,
+            vec![newer.snapshot.clone()],
+        );
+        let response = handle_get_sorafs_reputation_snapshot(
+            State(evicted_app),
+            HeaderMap::new(),
+            Path(hex::encode(older.snapshot.snapshot_id)),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
     #[test]
     fn reputation_websocket_frames_wrap_events_and_lag_payloads() {
         let snapshot = reputation_snapshot_fixture();
@@ -39824,6 +40472,7 @@ mod advert_tests {
         let reader: Arc<dyn ReputationCommittedReadApiV1> =
             Arc::new(StaticReputationCommittedReaderV1 {
                 projection: committed_reputation_projection_fixture(envelope),
+                retained_snapshots: Vec::new(),
             });
         let stream = reputation_committed_event_stream(vec![retained.clone()], reader, 0);
         tokio::pin!(stream);

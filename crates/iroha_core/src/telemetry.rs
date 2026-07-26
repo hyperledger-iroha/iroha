@@ -77,7 +77,8 @@ pub use iroha_telemetry::metrics::{
     LaneSettlementBuffer, LaneSettlementSnapshot, LaneSwaplineSnapshot, Metrics,
     MicropaymentCreditSnapshot, MicropaymentSampleStatus, MicropaymentTicketCounters,
     NexusDataspaceTeuStatus, NexusLaneRuntimeUpgradeHookStatus, NexusLaneTeuBuckets,
-    NexusLaneTeuStatus, SchedulerLayerWidthBuckets, TxGossipCaps, TxGossipSnapshot, TxGossipStatus,
+    NexusLaneTeuStatus, SchedulerLayerWidthBuckets, SorafsReserveFinalizedProjection, TxGossipCaps,
+    TxGossipSnapshot, TxGossipStatus,
 };
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError, SoranetSecureAggregator};
 use ivm::host::{ZkCurve, ZkHalo2Backend, ZkHalo2Config};
@@ -119,8 +120,9 @@ const PHASE_COMMIT: &str = "commit";
 const PHASE_NEW_VIEW: &str = "new_view";
 const PIPELINE_BUCKET_LABELS: [&str; 8] = ["1", "2", "4", "8", "16", "32", "64", "128"];
 
-fn numeric_metric_parts(amount: &Numeric) -> (u64, u64) {
+fn quantity_metric_parts(amount: &Quantity) -> (u64, u64) {
     let units = amount
+        .as_numeric()
         .try_mantissa_u128()
         .map(|value| u64::try_from(value).unwrap_or(u64::MAX))
         .unwrap_or(u64::MAX);
@@ -4357,11 +4359,11 @@ impl StateTelemetry {
     pub fn observe_oracle_reward(
         &self,
         feed_id: &iroha_data_model::oracle::FeedId,
-        amount: &Numeric,
+        amount: &Quantity,
     ) {
         if self.is_enabled() {
             let label = feed_id.as_str();
-            let amt = amount.try_mantissa_u128().unwrap_or(0);
+            let amt = amount.as_numeric().try_mantissa_u128().unwrap_or(0);
             self.metrics
                 .oracle_rewards_total
                 .with_label_values(&[label])
@@ -4374,12 +4376,12 @@ impl StateTelemetry {
     pub fn observe_oracle_penalty(
         &self,
         feed_id: &iroha_data_model::oracle::FeedId,
-        amount: &Numeric,
+        amount: &Quantity,
         _kind: OraclePenaltyKind,
     ) {
         if self.is_enabled() {
             let label = feed_id.as_str();
-            let amt = amount.try_mantissa_u128().unwrap_or(0);
+            let amt = amount.as_numeric().try_mantissa_u128().unwrap_or(0);
             self.metrics
                 .oracle_penalties_total
                 .with_label_values(&[label])
@@ -4393,7 +4395,7 @@ impl StateTelemetry {
     pub fn observe_oracle_reward(
         &self,
         feed_id: &iroha_data_model::oracle::FeedId,
-        amount: &Numeric,
+        amount: &Quantity,
     ) {
     }
 
@@ -4403,7 +4405,7 @@ impl StateTelemetry {
     pub fn observe_oracle_penalty(
         &self,
         feed_id: &iroha_data_model::oracle::FeedId,
-        amount: &Numeric,
+        amount: &Quantity,
         _kind: OraclePenaltyKind,
     ) {
     }
@@ -4445,17 +4447,17 @@ impl StateTelemetry {
     }
 
     /// Add to the total fee amount for the current (latest) block.
-    pub fn add_block_fee_amount(&self, delta_amount: &Numeric) {
+    pub fn add_block_fee_amount(&self, delta_amount: &Quantity) {
         if self.is_enabled() {
-            let current = Numeric::new(
+            let current = Quantity::from_canonical_numeric(Numeric::new(
                 self.metrics.block_fee_total_units.get(),
                 u32::try_from(self.metrics.block_fee_total_scale.get()).unwrap_or(u32::MAX),
-            );
+            ))
+            .expect("block fee metric must remain in the quantity domain");
             let updated = current
-                .checked_add(delta_amount.clone())
-                .expect("block fee metric exceeds supported numeric bounds")
-                .trim_trailing_zeros();
-            let (units, scale) = numeric_metric_parts(&updated);
+                .checked_add(delta_amount)
+                .expect("block fee metric exceeds supported numeric bounds");
+            let (units, scale) = quantity_metric_parts(&updated);
             self.metrics.block_fee_total_units.set(units);
             self.metrics.block_fee_total_scale.set(scale);
         }
@@ -6635,29 +6637,13 @@ impl Telemetry {
     }
 
     /// Publish one complete, reconciled `SoraFS` reserve projection.
-    #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_reserve_finalized_projection(
         &self,
-        finalized_height: u64,
-        lifecycle_stage_counts: [u64; 5],
-        credit_principal_micro_xor: [u128; 5],
-        credit_shortfall_micro_xor: [u128; 5],
-        accrued_interest_micro_xor: [u128; 5],
-        open_appeals: u64,
-        custody_counts: [u64; 3],
-        chain_reconciled_counts: [u64; 2],
+        projection: &SorafsReserveFinalizedProjection,
     ) {
         if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.record_sorafs_reserve_finalized_projection(
-                finalized_height,
-                lifecycle_stage_counts,
-                credit_principal_micro_xor,
-                credit_shortfall_micro_xor,
-                accrued_interest_micro_xor,
-                open_appeals,
-                custody_counts,
-                chain_reconciled_counts,
-            );
+            self.metrics
+                .record_sorafs_reserve_finalized_projection(projection);
         }
     }
 
@@ -9956,16 +9942,16 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
 
-        telemetry.record_sorafs_reserve_finalized_projection(
-            42,
-            [2, 0, 0, 0, 1],
-            [120_000_000, 0, 0, 0, 7_000_000],
-            [5_000_000, 0, 0, 0, 1_000_000],
-            [45_000, 0, 0, 0, 9_000],
-            3,
-            [1, 2, 1],
-            [2, 1],
-        );
+        telemetry.record_sorafs_reserve_finalized_projection(&SorafsReserveFinalizedProjection {
+            finalized_height: 42,
+            lifecycle_stage_counts: [2, 0, 0, 0, 1],
+            credit_principal_micro_xor: [120_000_000, 0, 0, 0, 7_000_000],
+            credit_shortfall_micro_xor: [5_000_000, 0, 0, 0, 1_000_000],
+            accrued_interest_micro_xor: [45_000, 0, 0, 0, 9_000],
+            open_appeals: 3,
+            custody_counts: [1, 2, 1],
+            chain_reconciled_counts: [2, 1],
+        });
         assert_eq!(
             metrics
                 .torii_sorafs_reserve_finalized_projection_height
@@ -10032,9 +10018,16 @@ mod tests {
         );
 
         telemetry.disable();
-        telemetry.record_sorafs_reserve_finalized_projection(
-            84, [0; 5], [0; 5], [0; 5], [0; 5], 0, [0; 3], [0; 2],
-        );
+        telemetry.record_sorafs_reserve_finalized_projection(&SorafsReserveFinalizedProjection {
+            finalized_height: 84,
+            lifecycle_stage_counts: [0; 5],
+            credit_principal_micro_xor: [0; 5],
+            credit_shortfall_micro_xor: [0; 5],
+            accrued_interest_micro_xor: [0; 5],
+            open_appeals: 0,
+            custody_counts: [0; 3],
+            chain_reconciled_counts: [0; 2],
+        });
         telemetry.mark_sorafs_reserve_finalized_projection_unready();
         telemetry.record_sorafs_reserve_finalized_projection_failure();
         telemetry.record_sorafs_reserve_service_request("top_up", "accepted");
@@ -11935,7 +11928,11 @@ mod tests {
     fn block_fee_units_reset_clears_gauge() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
-        telemetry.add_block_fee_amount(&Numeric::new(42, 3));
+        telemetry.add_block_fee_amount(
+            &"0.042"
+                .parse::<Quantity>()
+                .expect("canonical block fee quantity"),
+        );
         assert_eq!(metrics.block_fee_total_units.get(), 42);
         assert_eq!(metrics.block_fee_total_scale.get(), 3);
         telemetry.reset_block_fee_units();

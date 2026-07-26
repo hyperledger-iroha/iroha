@@ -444,7 +444,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             }
 
             let expected_value = prev_value
-                .checked_add(Numeric::from(u32::try_from(CHECKS_COUNT)?))
+                .checked_add(&Quantity::from(u32::try_from(CHECKS_COUNT)?))
                 .expect("value increment should fit");
             let poll_delay = std::cmp::max(
                 Duration::from_millis(200),

@@ -7,11 +7,11 @@ use std::{fs, path::Path};
 use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1,
-    OrderCancelV1, OrderRequestV1, OrderbookValidationPayloadKindV1,
-    SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelV1,
-    SettlementReceiptV1, TradeEventV1, derive_orderbook_order_id_v1,
-    validate_orderbook_payload_bytes, verify_order_cancel_signature_v1,
-    verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
+    OrderCancelV1, OrderRequestV1, OrderbookValidationPayloadKindV1, SETTLEMENT_CHANNEL_VERSION_V1,
+    SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelV1, SettlementReceiptV1, TradeEventV1,
+    derive_orderbook_order_id_v1, validate_orderbook_payload_bytes,
+    verify_order_cancel_signature_v1, verify_order_request_signature_v1,
+    verify_settlement_receipt_signature_v1,
 };
 use tempfile::tempdir;
 

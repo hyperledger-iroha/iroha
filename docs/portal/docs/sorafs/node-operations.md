@@ -15,10 +15,10 @@ This runbook walks operators through validating an embedded `sorafs-node` deploy
 
 ## 1. Prerequisites
 
-- Enable the storage worker in `torii.sorafs.storage`:
+- Enable the storage worker in `sorafs.storage`:
 
   ```toml
-  [torii.sorafs.storage]
+  [sorafs.storage]
   enabled = true
   data_dir = "./storage/sorafs"
   max_capacity_bytes = 21474836480    # 20 GiB
@@ -26,7 +26,7 @@ This runbook walks operators through validating an embedded `sorafs-node` deploy
   max_pins = 1000
   por_sample_interval_secs = 600
 
-  [torii.sorafs.storage.metering_smoothing]
+  [sorafs.storage.metering_smoothing]
   gib_hours_enabled = true
   gib_hours_alpha = 0.25
   por_success_enabled = true
@@ -113,7 +113,7 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
 
 ## 4. Capacity Rejection Test
 
-1. Temporarily lower `torii.sorafs.storage.max_capacity_bytes` to a small value (for example the size of a single manifest).
+1. Temporarily lower `sorafs.storage.max_capacity_bytes` to a small value (for example the size of a single manifest).
 2. Let one finalized replication assignment complete through the provider outbox.
 3. Reconcile a second assignment of similar size. The provider worker must reject it before storage mutation with `storage capacity exceeded`; no HTTP request can reserve capacity or change this result.
 4. Restore the normal capacity limit when finished.

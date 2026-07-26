@@ -1290,7 +1290,7 @@ fn read_release_manifest(path: &Path) -> color_eyre::Result<Vec<u8>> {
         .unwrap_or(usize::MAX)
         .min(MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES as usize);
     let mut bytes = Vec::with_capacity(capacity);
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES + 1)
         .read_to_end(&mut bytes)
         .wrap_err("failed to read release prebuilt manifest")?;
@@ -14597,7 +14597,12 @@ exit 0
         }
         // Single-peer DA startup is still stall-prone in test environments.
         // Use a quorum-representative topology while preserving fallback-genesis coverage.
-        let builder = NetworkBuilder::new().with_peers(4);
+        let builder = NetworkBuilder::new()
+            .with_peers(4)
+            // Fallback-genesis coverage is not a low-latency consensus gate.
+            // Give follower body validation a contention-tolerant signed
+            // round budget, matching the focused four-peer query surface.
+            .with_block_cadence(Duration::from_secs(4));
         {
             let _program_guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
             tokio::time::timeout(
@@ -14616,7 +14621,10 @@ exit 0
         // The binary was resolved above. Keep a release runner's lookup-only,
         // source-manifest-bound program contract intact for the actual startup.
         let network = build_with_isolated_permit_async(builder).await;
-        let net = tokio::time::timeout(Duration::from_secs(90), network.start_all())
+        let startup_timeout = network
+            .peer_startup_timeout()
+            .saturating_add(Duration::from_secs(30));
+        let net = tokio::time::timeout(startup_timeout, network.start_all())
             .await
             .expect("fallback startup should complete within timeout");
         assert!(net.is_ok(), "network should start with fallback genesis");

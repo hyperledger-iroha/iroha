@@ -74,7 +74,7 @@ scrub owned buffers on drop.
 ## Runtime Dependencies and Configuration
 
 Production behavior is configured under
-`torii.sorafs.storage.evidence_viewer`. Enabling it requires SoraFS storage and
+`sorafs.storage.evidence_viewer`. Enabling it requires SoraFS storage and
 all of these non-secret policy values:
 
 - an absolute private checkpoint file and bounded checkpoint size;

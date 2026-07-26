@@ -10,7 +10,7 @@ use iroha::{
         Registered,
         account::{Account, AccountId},
         asset::{Asset, AssetDefinition},
-        isi::{Instruction, InstructionBox},
+        isi::InstructionBox,
         prelude::*,
     },
 };
@@ -26,13 +26,11 @@ fn start_default(
 #[test]
 // This test suite is also covered at the UI level in the iroha_cli tests
 // in test_tranfer_assets.py
-fn simulate_transfer_numeric() {
-    let starting_amount =
-        Quantity::try_from_numeric(numeric!(200)).expect("starting quantity must be non-negative");
-    let amount_to_transfer =
-        Quantity::try_from_numeric(numeric!(20)).expect("transfer quantity must be non-negative");
+fn simulate_transfer_quantity() {
+    let starting_amount = Quantity::from(200_u32);
+    let amount_to_transfer = Quantity::from(20_u32);
     simulate_transfer(
-        "simulate_transfer_numeric",
+        "simulate_transfer_quantity",
         starting_amount,
         &amount_to_transfer,
         |id| {
@@ -48,7 +46,7 @@ fn wait_for_asset_value(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
     account_id: &AccountId,
-    expected_value: &Numeric,
+    expected_value: &Quantity,
     context: &str,
 ) {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -65,7 +63,7 @@ fn wait_for_asset_value(
                     if asset.id().definition() == asset_definition_id
                         && asset.id().account() == account_id
                     {
-                        matching_values.push(asset.value().clone().into_numeric());
+                        matching_values.push(asset.value().clone());
                     }
                 }
                 let present = matching_values.iter().any(|value| value == expected_value);
@@ -87,19 +85,14 @@ fn wait_for_asset_value(
     );
 }
 
-fn simulate_transfer<T>(
+fn simulate_transfer(
     context: &'static str,
-    starting_amount: T,
-    amount_to_transfer: &T,
+    starting_amount: Quantity,
+    amount_to_transfer: &Quantity,
     asset_definition_ctr: impl FnOnce(AssetDefinitionId) -> <AssetDefinition as Registered>::With,
-    mint_ctr: impl FnOnce(T, AssetId) -> Mint<Quantity, Asset>,
-    transfer_ctr: impl FnOnce(AssetId, T, AccountId) -> Transfer<Asset, T, Account>,
-) where
-    T: std::fmt::Debug + Clone + Into<Numeric>,
-    Mint<T, Asset>: Instruction,
-    Transfer<Asset, T, Account>: Instruction,
-    InstructionBox: From<Transfer<Asset, T, Account>>,
-{
+    mint_ctr: impl FnOnce(Quantity, AssetId) -> Mint<Quantity, Asset>,
+    transfer_ctr: impl FnOnce(AssetId, Quantity, AccountId) -> Transfer<Asset, Quantity, Account>,
+) {
     let Some((network, rt)) = start_default(context) else {
         return;
     };
@@ -159,7 +152,7 @@ fn simulate_transfer<T>(
         "transfer asset",
     )
     .expect("failed to synchronize after asset transfer");
-    let expected_value: Numeric = amount_to_transfer.clone().into();
+    let expected_value = amount_to_transfer.clone();
     wait_for_asset_value(
         &iroha,
         &asset_definition_id,

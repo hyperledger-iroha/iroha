@@ -117,7 +117,7 @@ A `halt` flag freezes all viral flows without touching the underlying Twitter bi
 For tooling:
 - The CLI offers `iroha social claim-twitter-follow-reward|send-to-twitter|cancel-twitter-escrow`
   subcommands that accept a Norito JSON `KeyedHash` payload (binding hash) and, for sends, a
-  `Numeric` amount, then build and submit the corresponding instructions.
+  `Quantity` amount, then build and submit the corresponding instructions.
 - The JS SDK mirrors these helpers via
   `buildClaimTwitterFollowRewardInstruction`, `buildSendToTwitterInstruction`, and
   `buildCancelTwitterEscrowInstruction`, which accept the same keyed-hash shape and quantities and

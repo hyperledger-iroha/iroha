@@ -484,7 +484,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     chain_id: ChainId,
     genesis_crypto: Option<ManifestCrypto>,
     da_proof_policies: Option<DaProofPolicyBundle>,
-    _nexus_config: Option<ActualNexus>,
+    nexus_config: Option<ActualNexus>,
     _zk_config: Option<ActualZk>,
     consensus_handshake_meta: Option<Parameter>,
     consensus_mode_override: Option<SumeragiConsensusMode>,
@@ -511,6 +511,11 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."))
     }
+    let da_proof_policies = da_proof_policies.or_else(|| {
+        nexus_config
+            .as_ref()
+            .map(|nexus| iroha_core::da::active_proof_policy_bundle_at_height(nexus, 1))
+    });
     let chain = chain_id.clone();
     let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
     let genesis_id = sanitize_account_id(&genesis_account);
@@ -1683,7 +1688,9 @@ mod tests {
     fn populate_genesis_results_uses_supplied_nexus_config_for_custom_staking_genesis() {
         use std::num::NonZeroU32;
 
-        use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId};
+        use iroha_data_model::nexus::{
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+        };
         use iroha_data_model::{
             isi::{
                 Register,
@@ -1722,6 +1729,16 @@ mod tests {
         };
         let catalog = LaneCatalog::new(lane_count, vec![lane_zero, lane_one.clone()])
             .expect("lane catalog should validate");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: lane_one.dataspace_id,
+                alias: lane_one.alias.clone(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog should validate");
         let nexus = ActualNexus {
             enabled: true,
             staking: iroha_config::parameters::actual::NexusStaking {
@@ -1730,6 +1747,7 @@ mod tests {
             },
             lane_catalog: catalog.clone(),
             lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog),
+            dataspace_catalog,
             ..Default::default()
         };
 

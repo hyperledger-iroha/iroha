@@ -3789,6 +3789,14 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(receipt.generated_at_unix_ms),
             );
             labels.insert(
+                "finalized_block_height".into(),
+                JsonValue::from(receipt.finalized_block_height),
+            );
+            labels.insert(
+                "finalized_block_hash_hex".into(),
+                JsonValue::from(hex::encode(receipt.finalized_block_hash)),
+            );
+            labels.insert(
                 "appeal_finance_config_version".into(),
                 JsonValue::from(receipt.appeal_finance_config_version.clone()),
             );
@@ -4367,6 +4375,14 @@ fn appeal_finance_settlement_receipt_json(
         JsonValue::from(receipt.generated_at_unix_ms),
     );
     metadata.insert(
+        "finalized_block_height".into(),
+        JsonValue::from(receipt.finalized_block_height),
+    );
+    metadata.insert(
+        "finalized_block_hash_hex".into(),
+        JsonValue::from(hex::encode(receipt.finalized_block_hash)),
+    );
+    metadata.insert(
         "appeal_finance_config_version".into(),
         JsonValue::from(receipt.appeal_finance_config_version.clone()),
     );
@@ -4857,6 +4873,8 @@ mod tests {
             case_id: "case-42".to_string(),
             round_id: Some("round-1".to_string()),
             generated_at_unix_ms: 1_800_000_032_000,
+            finalized_block_height: 42,
+            finalized_block_hash: [0x43; 32],
             appeal_finance_config_version: "baseline-v1".to_string(),
             appeal_finance_policy_digest: [0x44; 32],
             outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
@@ -4869,9 +4887,9 @@ mod tests {
             amount_xor: xor("420"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
-            reconciliation_status: "pending_forwarder_submission".to_string(),
-            observed_lifecycle_status: "locked".to_string(),
-            observed_remaining_xor: xor("420"),
+            reconciliation_status: "settled".to_string(),
+            observed_lifecycle_status: "drawn_down".to_string(),
+            observed_remaining_xor: xor("0"),
             deposit_xor: xor("420"),
             refund_xor: xor("0"),
             treasury_xor: xor("210"),
@@ -6186,6 +6204,35 @@ mod tests {
     }
 
     #[test]
+    fn appeal_finance_settlement_receipt_path_digest_binds_finalized_cursor() {
+        let temp = tempdir().expect("tempdir");
+        let publisher = signed_runtime_publisher(temp.path());
+        let (receipt, encoded) = sample_appeal_finance_settlement_receipt();
+        let digest_hex = blake3::hash(&encoded).to_hex().to_string();
+        let path = publisher.appeal_finance_settlement_receipt_path(&receipt, &digest_hex);
+
+        let mut changed_height = receipt.clone();
+        changed_height.finalized_block_height += 1;
+        let changed_height_encoded =
+            norito::to_bytes(&changed_height).expect("encode changed-height receipt");
+        let changed_height_digest_hex = blake3::hash(&changed_height_encoded).to_hex().to_string();
+        let changed_height_path = publisher
+            .appeal_finance_settlement_receipt_path(&changed_height, &changed_height_digest_hex);
+        assert_ne!(changed_height_digest_hex, digest_hex);
+        assert_ne!(changed_height_path, path);
+
+        let mut changed_hash = receipt;
+        changed_hash.finalized_block_hash[0] ^= 0x01;
+        let changed_hash_encoded =
+            norito::to_bytes(&changed_hash).expect("encode changed-hash receipt");
+        let changed_hash_digest_hex = blake3::hash(&changed_hash_encoded).to_hex().to_string();
+        let changed_hash_path = publisher
+            .appeal_finance_settlement_receipt_path(&changed_hash, &changed_hash_digest_hex);
+        assert_ne!(changed_hash_digest_hex, digest_hex);
+        assert_ne!(changed_hash_path, path);
+    }
+
+    #[test]
     fn filesystem_publisher_writes_appeal_finance_settlement_receipt_files_and_runtime_dag() {
         let temp = tempdir().expect("tempdir");
         let publisher = signed_runtime_publisher(temp.path());
@@ -6218,6 +6265,7 @@ mod tests {
         let json_body = fs::read(&json_path).expect("read settlement receipt json");
         let json_value: JsonValue = json::from_slice(&json_body).expect("receipt json");
         let expected_policy_digest_hex = hex::encode(receipt.appeal_finance_policy_digest);
+        let expected_finalized_block_hash_hex = hex::encode(receipt.finalized_block_hash);
         assert_eq!(
             json_value
                 .get("metadata")
@@ -6231,6 +6279,20 @@ mod tests {
                 .and_then(|value| value.get("appeal_finance_policy_digest_hex"))
                 .and_then(JsonValue::as_str),
             Some(expected_policy_digest_hex.as_str())
+        );
+        assert_eq!(
+            json_value
+                .get("metadata")
+                .and_then(|value| value.get("finalized_block_height"))
+                .and_then(JsonValue::as_u64),
+            Some(receipt.finalized_block_height)
+        );
+        assert_eq!(
+            json_value
+                .get("metadata")
+                .and_then(|value| value.get("finalized_block_hash_hex"))
+                .and_then(JsonValue::as_str),
+            Some(expected_finalized_block_hash_hex.as_str())
         );
 
         let index_bytes =
@@ -6254,6 +6316,26 @@ mod tests {
                 .and_then(JsonValue::as_str),
             Some(expected_policy_digest_hex.as_str())
         );
+        assert_eq!(
+            index
+                .get("entries")
+                .and_then(JsonValue::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("labels"))
+                .and_then(|labels| labels.get("finalized_block_height"))
+                .and_then(JsonValue::as_u64),
+            Some(receipt.finalized_block_height)
+        );
+        assert_eq!(
+            index
+                .get("entries")
+                .and_then(JsonValue::as_array)
+                .and_then(|entries| entries.first())
+                .and_then(|entry| entry.get("labels"))
+                .and_then(|labels| labels.get("finalized_block_hash_hex"))
+                .and_then(JsonValue::as_str),
+            Some(expected_finalized_block_hash_hex.as_str())
+        );
 
         let runtime_index = runtime_index(temp.path());
         assert_eq!(
@@ -6276,6 +6358,8 @@ mod tests {
                 assert_eq!(value.receipt_id, receipt.receipt_id);
                 assert_eq!(value.case_id, receipt.case_id);
                 assert_eq!(value.submitted_step, receipt.submitted_step);
+                assert_eq!(value.finalized_block_height, receipt.finalized_block_height);
+                assert_eq!(value.finalized_block_hash, receipt.finalized_block_hash);
             }
             other => panic!("unexpected runtime DAG payload: {other:?}"),
         }

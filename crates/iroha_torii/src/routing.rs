@@ -15661,12 +15661,9 @@ mod contract_state_tests {
         );
 
         let quantity_text = "987654321098765432109876543210.000000000000000001";
-        let quantity = Quantity::try_from_numeric(
-            quantity_text
-                .parse::<Numeric>()
-                .expect("parse exact quantity"),
-        )
-        .expect("canonical exact quantity");
+        let quantity = quantity_text
+            .parse::<Quantity>()
+            .expect("parse canonical exact quantity");
         let quantity = QuantityValueV1::new(quantity)
             .encode_frame()
             .expect("encode exact quantity frame");
@@ -22004,8 +22001,8 @@ fn canonical_quantity_string(value: &Value, allow_zero: bool) -> Option<String> 
     if literal.is_empty() || literal.trim() != literal {
         return None;
     }
-    let quantity = literal.parse::<Numeric>().ok()?;
-    if quantity.mantissa().is_negative() || (!allow_zero && quantity.is_zero()) {
+    let quantity = literal.parse::<Quantity>().ok()?;
+    if !allow_zero && quantity.is_zero() {
         return None;
     }
     (quantity.to_string() == literal).then(|| literal.to_owned())
@@ -22762,6 +22759,34 @@ mod multisig_contract_call_tests {
             execute_trigger.args, payload,
             "contract-call trigger execution must carry the normalized payload because the trigger host receives ExecuteTrigger args"
         );
+    }
+
+    #[test]
+    fn canonical_quantity_string_rejects_signed_and_noncanonical_payloads() {
+        assert_eq!(
+            canonical_quantity_string(&norito::json!("1.25"), false).as_deref(),
+            Some("1.25")
+        );
+        assert_eq!(
+            canonical_quantity_string(&norito::json!("0"), true).as_deref(),
+            Some("0")
+        );
+
+        let oversized = Value::from("9".repeat(200));
+        for hostile in [
+            norito::json!("-1"),
+            norito::json!("+1"),
+            norito::json!("01"),
+            norito::json!("1.0"),
+            norito::json!(1),
+            oversized,
+        ] {
+            assert!(
+                canonical_quantity_string(&hostile, false).is_none(),
+                "hostile quantity payload must be rejected: {hostile:?}"
+            );
+        }
+        assert!(canonical_quantity_string(&norito::json!("0"), false).is_none());
     }
 
     #[test]
@@ -29081,7 +29106,6 @@ fn mk_record_from_inputs(
     use iroha_data_model::{
         confidential::ConfidentialStatus,
         proof::{VerifyingKeyBox, VerifyingKeyRecord},
-        zk::BackendTag,
     };
     let VkRecordInputs {
         backend,
@@ -29100,6 +29124,14 @@ fn mk_record_from_inputs(
         activation_height,
         withdraw_height,
     } = inputs;
+    let backend_tag =
+        iroha_core::zk::production_verify_backend_tag(backend.as_str()).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "unsupported generic OpenVerify backend `{backend}`"
+                )),
+            ))
+        })?;
     let mut key_opt = None;
     let commitment: [u8; 32];
     let vk_len_value;
@@ -29153,7 +29185,6 @@ fn mk_record_from_inputs(
             ),
         )));
     }
-    let backend_tag = BackendTag::from_catalog_label(backend.as_str());
     let schema_hash = parse_hex32_str(
         &public_inputs_schema_hash_hex,
         "public_inputs_schema_hash_hex",
@@ -29305,10 +29336,8 @@ fn vk_detail_to_json(
 
 #[cfg(all(test, feature = "app_api"))]
 mod vk_record_input_tests {
-    use iroha_data_model::confidential::ConfidentialStatus;
-    use iroha_data_model::zk::BackendTag;
-
     use super::*;
+    use iroha_data_model::confidential::ConfidentialStatus;
 
     fn sample_hex32(fill: u8) -> String {
         hex::encode([fill; 32])
@@ -29416,16 +29445,17 @@ mod vk_record_input_tests {
     }
 
     #[test]
-    fn mk_record_from_inputs_preserves_pending_protocol_backend_tags() {
-        for (backend, expected) in [
-            ("halo2/ipa/orchard", BackendTag::Halo2IpaOrchard),
-            ("groth16/bls12-377", BackendTag::Groth16Bls12377),
-            ("penumbra-masp", BackendTag::Groth16Bls12377),
-            ("monero-fcmp++", BackendTag::FcmpPlusPlusCurveTree),
-            ("sis-with-hints", BackendTag::SisWithHints),
-            ("post-quantum-masp", BackendTag::PqMaspStarkFri),
+    fn mk_record_from_inputs_rejects_protocol_names_as_generic_backends() {
+        for backend in [
+            "halo2/ipa/orchard",
+            "groth16/bls12-377",
+            "penumbra-masp",
+            "monero-fcmp++",
+            "sis-with-hints",
+            "post-quantum-masp",
+            "unknown/privacy/backend",
         ] {
-            let record = mk_record_from_inputs(VkRecordInputs {
+            let error = mk_record_from_inputs(VkRecordInputs {
                 backend: backend.to_string(),
                 version: 1,
                 status: Some(ConfidentialStatus::Proposed),
@@ -29442,15 +29472,12 @@ mod vk_record_input_tests {
                 activation_height: None,
                 withdraw_height: None,
             })
-            .expect("record created");
-
-            assert_eq!(
-                record.backend, expected,
-                "{backend} must not collapse into a generic supported backend",
-            );
+            .expect_err("protocol names must not be accepted as generic verifier engines");
             assert!(
-                record.backend.is_pending_production_backend(),
-                "{backend} must remain pending production",
+                error
+                    .to_string()
+                    .contains("unsupported generic OpenVerify backend"),
+                "unexpected error for {backend}: {error}",
             );
         }
     }
@@ -63515,18 +63542,11 @@ fn onboarding_owner_auto_renew_follow_up(
                 code: "alias.onboarding.policy_missing",
                 message: "the account-alias SNS policy is missing".to_owned(),
             })?;
-    let max_amount =
-        Quantity::from_canonical_numeric(defaults.max_amount.clone()).map_err(|error| {
-            Error::AppConflict {
-                code: "alias.onboarding.auto_renew_cap_invalid",
-                message: format!("configured auto-renew cap is not a quantity: {error}"),
-            }
-        })?;
     let desired = AliasAutoRenewConfigV1 {
         term_years: defaults.term_years,
         policy_version: policy.policy_version,
         payment_asset: configured_fee_asset,
-        max_amount,
+        max_amount: defaults.max_amount.clone(),
         renew_before_expiry_ms: defaults.renew_before_expiry_ms,
         retry_backoff_ms: defaults.retry_backoff_ms,
         max_failures: defaults.max_failures,

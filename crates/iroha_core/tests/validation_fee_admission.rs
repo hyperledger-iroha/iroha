@@ -56,15 +56,11 @@ use iroha_data_model::{
         ValidationFeeTreasuryPayoutRecipientV1,
     },
 };
-use iroha_primitives::{
-    json::Json,
-    numeric::{Numeric, NumericSpec},
-};
+use iroha_primitives::{json::Json, numeric::NumericSpec};
 use mv::storage::StorageReadOnly;
 use sha2::Sha256;
 
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
-const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
 const TEST_LIFECYCLE_WINDOW_END_HEIGHT: u64 = 2;
 const TEST_LIFECYCLE_ENACTMENT_HEIGHT: u64 = TEST_LIFECYCLE_WINDOW_END_HEIGHT + 1;
 const TEST_POLICY_WINDOW_END_HEIGHT: u64 = 4;
@@ -72,9 +68,10 @@ const TEST_POLICY_ENACTMENT_HEIGHT: u64 = TEST_POLICY_WINDOW_END_HEIGHT + 3_600;
 const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
     TEST_POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
 
-fn quantity(mantissa: u64, scale: u32) -> Quantity {
-    Quantity::try_from_numeric(Numeric::new(mantissa, scale))
-        .expect("non-negative validation-fee fixture quantity")
+fn quantity(value: &str) -> Quantity {
+    value
+        .parse()
+        .expect("canonical validation-fee fixture quantity")
 }
 
 fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
@@ -1233,10 +1230,7 @@ fn signed_batch_transfer_with_principal_amounts(
                 user.clone(),
                 policy_treasury_account(policy),
                 fee_asset.clone(),
-                quantity(
-                    2 * TEST_VALIDATION_FEE_MINOR_UNITS,
-                    TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-                ),
+                quantity("0.2"),
             ),
         ],
     )
@@ -1577,13 +1571,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         &recipient,
         &fee_asset,
         Quantity::from(1_u32),
-        Some((
-            quantity(
-                TEST_VALIDATION_FEE_MINOR_UNITS - 1,
-                TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-            ),
-            policy_treasury_account(&policy),
-        )),
+        Some((quantity("0.09"), policy_treasury_account(&policy))),
         metadata_for_policy(&policy, 1),
     );
     let accepted = accept_transaction(&state, underpaid_fee_tx);
@@ -1658,7 +1646,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
         &user_key_pair,
         &recipient,
         &fee_asset,
-        quantity(9_995, TEST_VALIDATION_FEE_ASSET_SCALE.into()),
+        quantity("99.95"),
         Some((policy.fee.clone(), policy_treasury_account(&policy))),
         metadata_for_policy(&policy, 1),
     );
@@ -1899,10 +1887,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
                 user.clone(),
                 policy_treasury_account(&policy),
                 fee_asset.clone(),
-                quantity(
-                    2 * TEST_VALIDATION_FEE_MINOR_UNITS,
-                    TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-                ),
+                quantity("0.2"),
             ),
         ],
     );
@@ -1950,10 +1935,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
                 user.clone(),
                 policy_treasury_account(&policy),
                 fee_asset.clone(),
-                quantity(
-                    2 * TEST_VALIDATION_FEE_MINOR_UNITS,
-                    TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-                ),
+                quantity("0.2"),
             ),
         ],
     );
@@ -1991,13 +1973,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &user_key_pair,
         &recipient,
         &fee_asset,
-        Some((
-            quantity(
-                TEST_VALIDATION_FEE_MINOR_UNITS + 1,
-                TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-            ),
-            policy_treasury_account(&policy),
-        )),
+        Some((quantity("0.11"), policy_treasury_account(&policy))),
         metadata_for_policy(&policy, 1),
     );
     let mut fee_amount_mutation_tx = exact_fee_tx.clone();

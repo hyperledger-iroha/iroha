@@ -57,6 +57,11 @@ public final class KagemushaRecursiveSpendProverTest {
     publicSurfaceIsKagemushaOnly();
   }
 
+  @org.junit.Test
+  public void scaledAmountsAreExactAndNeverRoundUnderJUnit() {
+    scaledAmountsAreExactAndNeverRound();
+  }
+
   private static void heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting() {
     final CountDownLatch entered = new CountDownLatch(1);
     final CountDownLatch release = new CountDownLatch(1);
@@ -1127,7 +1132,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void scaledAmountsAreExactAndNeverRound() {
     final KagemushaScaledAmount amount = KagemushaScaledAmount.fromDecimal("10.75", 9);
     assert amount.atomicUnits().equals("10750000000");
-    assert amount.scaledNumericDecimal().equals("10.750000000");
+    assert amount.fixedScaleDecimal().equals("10.750000000");
     assert amount.displayDecimal().equals("10.75");
     assert KagemushaScaledAmount.sum(
             Arrays.asList(
@@ -1135,7 +1140,7 @@ public final class KagemushaRecursiveSpendProverTest {
                 KagemushaScaledAmount.fromDecimal("6.25", 9)))
         .atomicUnits().equals("10750000000");
     assert KagemushaScaledAmount.fromAtomicUnits("1", 9)
-        .scaledNumericDecimal().equals("0.000000001");
+        .fixedScaleDecimal().equals("0.000000001");
     assert KagemushaScaledAmount.fromAtomicUnits(
             KagemushaScaledAmount.MAXIMUM_ATOMIC_UNITS, 28)
         .atomicUnits().equals(KagemushaScaledAmount.MAXIMUM_ATOMIC_UNITS);

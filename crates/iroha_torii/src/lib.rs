@@ -21227,8 +21227,10 @@ fn signed_transaction_hash_for_entrypoint(
     entrypoint: &TransactionEntrypoint,
 ) -> Option<HashOf<SignedTransaction>> {
     match entrypoint {
-        TransactionEntrypoint::External(signed) => Some(signed.hash()),
-        TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
+        TransactionEntrypoint::External(signed) => Some(HashOf::new(signed)),
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            Some(HashOf::new(reveal.signed_transaction()))
+        }
         TransactionEntrypoint::SealedCommitment(_)
         | TransactionEntrypoint::PrivateKaigi(_)
         | TransactionEntrypoint::Time(_) => None,
@@ -50920,7 +50922,7 @@ struct AccountOnboardingSigner {
 #[derive(Clone)]
 struct AccountOnboardingAutoRenewDefaults {
     term_years: u8,
-    max_amount: iroha_primitives::numeric::Numeric,
+    max_amount: iroha_primitives::numeric::Quantity,
     renew_before_expiry_ms: u64,
     retry_backoff_ms: u64,
     max_failures: u32,
@@ -51357,12 +51359,12 @@ impl SoraFsAppealSettlementSubmitter {
         }
     }
 
-    fn signer_for(
-        &self,
+    fn active_binding_for<'a>(
+        &'a self,
         authority: &AccountId,
         finalized_height: u64,
     ) -> Result<
-        Arc<dyn SoraFsAppealFinanceTransactionSigner>,
+        &'a iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding,
         SoraFsAppealFinanceSignerSelectionError,
     > {
         let binding = self
@@ -51388,6 +51390,18 @@ impl SoraFsAppealSettlementSubmitter {
                 },
             );
         };
+        Ok(binding)
+    }
+
+    fn signer_for(
+        &self,
+        authority: &AccountId,
+        finalized_height: u64,
+    ) -> Result<
+        Arc<dyn SoraFsAppealFinanceTransactionSigner>,
+        SoraFsAppealFinanceSignerSelectionError,
+    > {
+        let binding = self.active_binding_for(authority, finalized_height)?;
         let provider = self
             .runtime_signers
             .as_ref()
@@ -51614,6 +51628,35 @@ mod appeal_finance_runtime_signer_tests {
         assert!(matches!(
             submitter.signer_for(&authority, 1),
             Err(SoraFsAppealFinanceSignerSelectionError::IdentityMismatch)
+        ));
+    }
+
+    #[test]
+    fn active_binding_observation_does_not_require_runtime_signer_provider() {
+        let configured = key(4);
+        let authority = AccountId::new(configured.public_key().clone());
+        let submitter = submitter(
+            vec![
+                iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                    handle: "hsm:appeal-offline".to_owned(),
+                    authority: authority.clone(),
+                    public_key: configured.public_key().clone(),
+                    valid_from_block_height: 1,
+                    revoked_at_block_height: None,
+                },
+            ],
+            Vec::new(),
+        );
+        assert_eq!(
+            submitter
+                .active_binding_for(&authority, 1)
+                .expect("configured binding remains active")
+                .handle,
+            "hsm:appeal-offline"
+        );
+        assert!(matches!(
+            submitter.signer_for(&authority, 1),
+            Err(SoraFsAppealFinanceSignerSelectionError::ProviderMissing)
         ));
     }
 
@@ -66882,6 +66925,23 @@ pub(crate) mod tests_runtime_handlers {
         let expectation = super::queue_plan_synced_acceptance_expectation(&request)
             .expect("exact-claim expectation must be valid")
             .expect("exact-claim fixture must be strict");
+        let expected_signed_hash = expectation
+            .signed_transaction_hash
+            .as_ref()
+            .expect("external exact-claim fixture must have a signed transaction hash");
+        assert_eq!(
+            Some(expected_signed_hash),
+            expectation
+                .admission_binding
+                .signed_transaction_hash
+                .as_ref(),
+            "ingress must expect the same inner signed-wire hash carried by the durable binding"
+        );
+        assert_ne!(
+            expected_signed_hash.as_ref(),
+            expectation.entrypoint_hash.as_ref(),
+            "the inner signed-wire hash must remain distinct from the external entrypoint hash"
+        );
         let exact_receipt =
             exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 30_001);
         let exact_snapshot =

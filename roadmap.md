@@ -42,8 +42,9 @@ The remaining work is evidence-driven and must stay in order:
   `MergeSidecarLifecycleSnapshotV2` must remain the only durable schema, with
   V1 rejected and the checked generation increment plus empty responder state
   persisted atomically. Generation rollover is permitted only for necessary
-  unified server-table compaction after every old stream, gate, transfer, and
-  flush is terminal. Historical test receipts and inventory seals predate this
+  unified server-table compaction—either a full table or certified roster
+  geometry replacement—after every old stream, gate, transfer, and flush is
+  terminal. Historical test receipts and inventory seals predate this
   final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
@@ -179,10 +180,13 @@ signer, authenticated Governance DAG publication/readback and current-head
 inclusion adapters, PoR/token callback-owner wiring, pending integrated Rust
 validation, and reviewed four-peer deployment evidence remain open. Latest,
 provider, weights, and event reads are gated on the fresh committed projection;
-the snapshot-id route remains latest-only.
+snapshot-id reads resolve the exact authenticated snapshot from a durable
+immutable suffix capped at 1,024 entries and the publication-checkpoint byte
+ceiling. Unknown or evicted ids return `404` without substituting latest.
 
 All four ledger-authority domains enumerated by V1-C04 now use native committed
-state as their local source of truth.
+state as their sole authority; process-local state is only a rebuildable,
+finalized-chain projection.
 The process-local reserve runtime, checkpoint, scheduler, mutation API, and
 obsolete routes are deleted; reserve mutations now forward exact caller-signed
 native transactions and reserve reads use authenticated finalized projections.
@@ -6564,10 +6568,10 @@ excluded from the first release.
   deposit before admitting a case. Torii also builds ordered native
   `DrawdownAssetLock`/`CancelAssetLock` settlement instructions for confirmed
   appeal deposit locks, and it can reconcile the current runtime asset-lock
-  ledger state after those client-submitted settlement transactions with
-  deterministic audit digests for peer/operator comparison, and a
-  configured-signer submitter can queue the next pending native settlement step
-  when the required authority key is configured and publish a typed
+  ledger state after settlement transactions with deterministic audit digests
+  for peer/operator comparison. The configured-signer submitter durably queues
+  and reconciles the next pending native settlement step when the required
+  governed authority key is active, and publishes a typed
   `SoraFsAppealFinanceSettlementReceiptV1` to the local Governance DAG when a
   publisher is configured, with the signing/queueing/reconciliation/receipt
   publication path now factored into a reusable internal helper. Torii now also

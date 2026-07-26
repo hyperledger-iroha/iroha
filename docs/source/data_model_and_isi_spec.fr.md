@@ -107,7 +107,7 @@ Types : `Register<T: Registered>` et `Unregister<T: Identifiable>`, avec des ty
 Types : `Mint<O, D: Identifiable>` et `Burn<O, D: Identifiable>`, en boîte `MintBox`/`BurnBox`.
 
 - Actif (numérique) mint/burn : ajuste les soldes et la définition `total_quantity`.
-  - Conditions préalables : la valeur `Numeric` doit satisfaire à `AssetDefinition.spec()` ; menthe autorisée par `mintable` :
+  - Conditions préalables : la valeur `Quantity` doit satisfaire à `AssetDefinition.spec()` ; menthe autorisée par `mintable` :
     - `Infinitely` : toujours autorisé.
     - `Once` : autorisé une seule fois ; la première menthe transforme `mintable` en `Not` et émet `AssetDefinitionEvent::MintabilityChanged`, plus un `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` détaillé pour l'auditabilité.
     - `Limited(n)` : permet des opérations de menthe supplémentaires `n`. Chaque frappe réussie décrémente le compteur ; lorsqu'elle atteint zéro, la définition passe à `Not` et émet les mêmes événements `MintabilityChanged` que ci-dessus.

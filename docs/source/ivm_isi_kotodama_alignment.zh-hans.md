@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T19:17:13.238594+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ translator: machine-google-reviewed
 
 ### B. 为键入的值定义确定性 VM/主机 ABI
 - 在 VM 端使用 Norito 来获取结构化参数：
-  - 将指针（以 x10..x13 等形式）传递到包含 Norito 编码值（例如 `AccountId`、`AssetDefinitionId`、`Numeric`、`Metadata` 等类型）的 VM 内存区域。
+  - 将指针（以 x10..x13 等形式）传递到包含 Norito 编码值（例如 `AccountId`、`AssetDefinitionId`、`Quantity`、`Metadata` 等类型）的 VM 内存区域。
   - 主机通过 `IVM` 内存助手读取字节并使用 Norito 进行解码（`iroha_data_model` 已派生 `Encode/Decode`）。
 - 在 Kotodama codegen 中添加最少的帮助程序，以将文字 ID 序列化到代码/常量池中或在内存中准备调用帧。
-- 金额为 `Numeric` 并作为 NoritoBytes 指针传递；其他复杂类型也通过指针传递。
+- 资产数量使用专用的 `QuantityValueV1` pointer-ABI TLV（`PointerType::Quantity = 0x0010`），而不是通用 `NoritoBytes` 指针；其他复杂值使用各自分配的指针类型。
 - 将其记录在 `crates/ivm/docs/calling_convention.md` 中并添加示例。### C. 使系统调用命名和覆盖范围与 ISI/数据模型保持一致
 - 为了清晰起见，重命名 NFT 相关的系统调用：规范名称现在遵循 `SYSCALL_NFT_*` 模式（`SYSCALL_NFT_MINT_ASSET`、`SYSCALL_NFT_SET_METADATA` 等）。
 - 发布从每个系统调用到核心 ISI 语义的映射表（文档 + 代码注释），包括：

@@ -23,6 +23,7 @@ fn read_fixture(path: &str) -> Vec<u8> {
 
 fn regenerate_fixtures(root: &Path) {
     for directory in [
+        "appeal_finance",
         "orderbook",
         "pdp",
         "provider_admission",
@@ -264,7 +265,15 @@ fn governance_sdk_fixture_regeneration_is_byte_identical() {
 
 #[test]
 fn release_wide_reference_sdk_fixture_regeneration_is_byte_identical() {
-    const INVENTORIED_FILES: [&str; 17] = [
+    const INVENTORIED_FILES: [&str; 25] = [
+        "appeal_finance/cancel_asset_lock_v1.json",
+        "appeal_finance/cancel_asset_lock_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_noncanonical_quantity_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_trailing_bytes_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
         "moderation/governance_node_v1.json",
         "moderation/governance_node_v1.to",
         "moderation/governance_node_validation_outcome_v1.json",

@@ -1826,8 +1826,8 @@ mod tests {
         PopCredentialAttributeV1, PopCredentialV1, PopEligibilityClassV1, PopSignatureAlgorithmV1,
         PopSignatureV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
         SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1,
-        SignatureAlgorithm, SignedReplicationOrderV1, TradeEventV1, XorQuantity,
-        build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
+        SignatureAlgorithm, SignedReplicationOrderV1, XorQuantity, build_billing_line_item_v1,
+        build_billing_statement_v1, derive_reference_price_decision_v1,
         sign_pop_credential_ed25519_v1, sign_settlement_receipt_ed25519_v1,
     };
 

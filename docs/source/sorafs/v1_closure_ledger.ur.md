@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/sorafs/v1_closure_ledger.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 293a1a1f84a8071c543d86d499bfbc8b4690e03adea3e7c954f72a1936cfcf7e
-source_last_modified: "2026-07-26T00:52:19.069536+00:00"
+source_hash: ec227395dbaea89000e832993586ff4a21f4227eea8348b8d7bbe68fd055c21b
+source_last_modified: "2026-07-26T10:52:13.624544+00:00"
 translation_last_reviewed: null
 ---
 

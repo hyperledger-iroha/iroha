@@ -1,6 +1,6 @@
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::nexus::DataSpaceId;
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use ivm::{CoreHost, IVM, Memory, PointerType, encoding, instruction::wide, syscalls};
 use norito::to_bytes;
 
@@ -60,9 +60,8 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn make_quantity_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
-    let quantity = Quantity::try_from_numeric(amount.into()).expect("canonical quantity");
-    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
+fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
+    ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
 
 fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {

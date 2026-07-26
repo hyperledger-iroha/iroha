@@ -16015,6 +16015,8 @@ mod tests {
             case_id: "case-42".to_string(),
             round_id: Some("round-1".to_string()),
             generated_at_unix_ms: 1_800_000_032_000,
+            finalized_block_height: 42,
+            finalized_block_hash: [0x43; 32],
             appeal_finance_config_version: "baseline-v1".to_string(),
             appeal_finance_policy_digest: [0x44; 32],
             outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
@@ -16027,9 +16029,9 @@ mod tests {
             amount_xor: xor("420"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
-            reconciliation_status: "pending_forwarder_submission".to_string(),
-            observed_lifecycle_status: "locked".to_string(),
-            observed_remaining_xor: xor("420"),
+            reconciliation_status: "settled".to_string(),
+            observed_lifecycle_status: "drawn_down".to_string(),
+            observed_remaining_xor: xor("0"),
             deposit_xor: xor("420"),
             refund_xor: xor("0"),
             treasury_xor: xor("210"),
@@ -20225,6 +20227,7 @@ mod tests {
             &handle,
         );
         let manifest_id = hex::encode(digest);
+        ensure_test_capacity_provider(&handle);
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let committed = fs::read(&checkpoint_path).expect("read committed auxiliary checkpoint");
         fs::remove_file(&checkpoint_path).expect("remove auxiliary checkpoint");

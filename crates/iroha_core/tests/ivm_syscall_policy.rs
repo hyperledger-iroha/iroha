@@ -129,7 +129,7 @@ fn unknown_syscall_is_rejected_at_admission() {
     .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
     .sign(kp.private_key());
 
-    // Validate the transaction in a block; admission should surface UnknownSyscall.
+    // Validate the transaction in a block; ABI policy admission rejects it before execution.
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut ivm_cache = IvmCache::new();
@@ -137,14 +137,13 @@ fn unknown_syscall_is_rejected_at_admission() {
     let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
     let unknown_syscall = unlisted_syscall_number();
     match result {
-        Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-            iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(msg),
-        ))) => {
-            assert!(
-                msg.contains(&format!("unknown syscall number {unknown_syscall}")),
-                "expected strict unknown-syscall decode failure, got {msg}"
+        Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))) => {
+            assert_eq!(
+                message,
+                format!("unknown syscall number 0x{unknown_syscall:02x} for abi_version 1"),
+                "unknown syscalls must fail at the ABI policy boundary"
             );
         }
-        other => panic!("expected BytecodeDecodingFailed(UnknownSyscall), got {other:?}"),
+        other => panic!("expected strict ABI policy rejection for unknown syscall, got {other:?}"),
     }
 }

@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T10:20:35.513444+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ translator: machine-google-reviewed
 
 ### ب. تحديد VM/host ABI الحتمي للقيم المكتوبة
 - استخدم Norito على جانب VM للوسائط المنظمة:
-  - قم بتمرير المؤشرات (في x10..x13، وما إلى ذلك) إلى مناطق ذاكرة VM التي تحتوي على قيم مشفرة Norito لأنواع مثل `AccountId`، و`AssetDefinitionId`، و`Numeric`، و`Metadata`.
+  - قم بتمرير المؤشرات (في x10..x13، وما إلى ذلك) إلى مناطق ذاكرة VM التي تحتوي على قيم مشفرة Norito لأنواع مثل `AccountId`، و`AssetDefinitionId`، و`Quantity`، و`Metadata`.
   - يقرأ المضيف وحدات البايت عبر مساعدات الذاكرة `IVM` ويفك تشفيرها باستخدام Norito (`iroha_data_model` يشتق بالفعل `Encode/Decode`).
 - أضف الحد الأدنى من المساعدين في برنامج الترميز Kotodama لتسلسل المعرفات الحرفية في مجموعات التعليمات البرمجية/الثابتة أو لإعداد إطارات الاتصال في الذاكرة.
-- المبالغ هي `Numeric` ويتم تمريرها كمؤشرات NoritoBytes؛ تمر الأنواع المعقدة الأخرى أيضًا بالمؤشر.
+- تستخدم كميات الأصول TLV المخصص لـ `QuantityValueV1` في pointer-ABI (`PointerType::Quantity = 0x0010`)، وليس مؤشر `NoritoBytes` عامًا؛ وتستخدم القيم المعقدة الأخرى أنواع المؤشرات المعيّنة لها.
 - قم بتوثيق ذلك في `crates/ivm/docs/calling_convention.md` وأضف أمثلة.### ج. محاذاة تسمية النظام والتغطية مع ISI/Data Model
 - إعادة تسمية مكالمات النظام المتعلقة بـ NFT من أجل الوضوح: الأسماء الأساسية تتبع الآن النمط `SYSCALL_NFT_*` (`SYSCALL_NFT_MINT_ASSET`، `SYSCALL_NFT_SET_METADATA`، وما إلى ذلك).
 - نشر جدول التعيين (مستند + تعليقات التعليمات البرمجية) من كل استدعاء النظام إلى دلالات ISI الأساسية، بما في ذلك:

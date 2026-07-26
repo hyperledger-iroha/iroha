@@ -38,7 +38,7 @@ data class AssetEscrowResolution(
     @JvmField val resolvedAtMs: Long,
 )
 
-/** Ledger-managed numeric asset escrow record as exposed by native escrow queries. */
+/** Ledger-managed Quantity asset escrow record as exposed by native escrow queries. */
 data class AssetEscrowRecord(
     @JvmField val id: EscrowId,
     @JvmField val seller: String,

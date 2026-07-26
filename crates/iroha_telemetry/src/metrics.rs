@@ -26,13 +26,13 @@ use iroha_config::{
 use iroha_data_model::{
     block::consensus_v2::PERMISSIONED_TAG,
     da::types::DaRentQuote,
+    offline::OfflineStatus,
     prelude::Quantity,
     soranet::privacy_metrics::{
         SoranetPrivacyBucketMetricsV1, SoranetPrivacyModeV1, SoranetPrivacySuppressionReasonV1,
     },
 };
 use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
-use iroha_torii_shared::offline_api::OfflineStatus;
 use norito::{
     core::DecodeFromSlice,
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -7690,7 +7690,7 @@ pub struct Metrics {
     pub nexus_public_lane_validator_activation_total: IntCounterVec,
     /// Nexus public-lane validator registration rejects grouped by reason.
     pub nexus_public_lane_validator_reject_total: IntCounterVec,
-    /// Nexus public-lane bonded stake per lane (Numeric rendered as float).
+    /// Nexus public-lane bonded stake per lane (Quantity rendered as float).
     pub nexus_public_lane_stake_bonded: GaugeVec,
     /// Nexus public-lane pending-unbond amount per lane.
     pub nexus_public_lane_unbond_pending: GaugeVec,
@@ -12003,7 +12003,7 @@ impl Default for Metrics {
         let nexus_public_lane_stake_bonded = GaugeVec::new(
             Opts::new(
                 "nexus_public_lane_stake_bonded",
-                "Total bonded stake per public lane (Numeric rendered as float)",
+                "Total bonded stake per public lane (Quantity rendered as float)",
             ),
             &["lane"],
         )
@@ -16554,6 +16554,27 @@ pub struct LaneSettlementSnapshot<'a> {
     pub buffer: Option<LaneSettlementBuffer>,
 }
 
+/// Complete metrics projection derived from one finalized `SoraFS` reserve view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SorafsReserveFinalizedProjection {
+    /// Height of the finalized ledger view used to derive every projected value.
+    pub finalized_height: u64,
+    /// Provider counts ordered as active, warning, grace, delinquent, and default.
+    pub lifecycle_stage_counts: [u64; 5],
+    /// Outstanding credit principal per lifecycle stage, in micro-XOR.
+    pub credit_principal_micro_xor: [u128; 5],
+    /// Credit shortfall per lifecycle stage, in micro-XOR.
+    pub credit_shortfall_micro_xor: [u128; 5],
+    /// Accrued interest per lifecycle stage, in micro-XOR.
+    pub accrued_interest_micro_xor: [u128; 5],
+    /// Number of reserve appeals that remain open.
+    pub open_appeals: u64,
+    /// Custody movement counts ordered as pending, approved, and rejected.
+    pub custody_counts: [u64; 3],
+    /// Chain-reconciled movement counts ordered as approved and rejected.
+    pub chain_reconciled_counts: [u64; 2],
+}
+
 impl Metrics {
     fn lock_sorafs_orderbook_projection_exposition(&self) -> std::sync::MutexGuard<'_, ()> {
         match self.sorafs_orderbook_projection_exposition_lock.lock() {
@@ -17927,21 +17948,14 @@ impl Metrics {
     /// Publish one complete, reconciled SoraFS reserve projection from a single finalized view.
     pub fn record_sorafs_reserve_finalized_projection(
         &self,
-        finalized_height: u64,
-        lifecycle_stage_counts: [u64; 5],
-        credit_principal_micro_xor: [u128; 5],
-        credit_shortfall_micro_xor: [u128; 5],
-        accrued_interest_micro_xor: [u128; 5],
-        open_appeals: u64,
-        custody_counts: [u64; 3],
-        chain_reconciled_counts: [u64; 2],
+        projection: &SorafsReserveFinalizedProjection,
     ) {
         const STAGES: [&str; 5] = ["active", "warning", "grace", "delinquent", "default"];
         const CUSTODY_STATUSES: [&str; 3] = ["pending", "approved", "rejected"];
         const RECONCILED_STATUSES: [&str; 2] = ["approved", "rejected"];
 
         self.torii_sorafs_reserve_lifecycle_stage_providers.reset();
-        for (stage, count) in STAGES.into_iter().zip(lifecycle_stage_counts) {
+        for (stage, count) in STAGES.into_iter().zip(projection.lifecycle_stage_counts) {
             self.torii_sorafs_reserve_lifecycle_stage_providers
                 .with_label_values(&[stage])
                 .set(count);
@@ -17953,34 +17967,38 @@ impl Metrics {
         for (index, stage) in STAGES.into_iter().enumerate() {
             self.torii_sorafs_reserve_credit_draw_micro_xor
                 .with_label_values(&[stage])
-                .set(u128_to_f64(credit_principal_micro_xor[index]));
+                .set(u128_to_f64(projection.credit_principal_micro_xor[index]));
             self.torii_sorafs_reserve_credit_shortfall_micro_xor
                 .with_label_values(&[stage])
-                .set(u128_to_f64(credit_shortfall_micro_xor[index]));
+                .set(u128_to_f64(projection.credit_shortfall_micro_xor[index]));
             self.torii_sorafs_reserve_accrued_interest_micro_xor
                 .with_label_values(&[stage])
-                .set(u128_to_f64(accrued_interest_micro_xor[index]));
+                .set(u128_to_f64(projection.accrued_interest_micro_xor[index]));
         }
 
         self.torii_sorafs_reserve_defaulted_providers
-            .set(lifecycle_stage_counts[4]);
-        self.torii_sorafs_reserve_appeal_backlog.set(open_appeals);
+            .set(projection.lifecycle_stage_counts[4]);
+        self.torii_sorafs_reserve_appeal_backlog
+            .set(projection.open_appeals);
 
         self.torii_sorafs_reserve_custody_movements.reset();
-        for (status, count) in CUSTODY_STATUSES.into_iter().zip(custody_counts) {
+        for (status, count) in CUSTODY_STATUSES.into_iter().zip(projection.custody_counts) {
             self.torii_sorafs_reserve_custody_movements
                 .with_label_values(&[status])
                 .set(count);
         }
 
         self.torii_sorafs_reserve_chain_reconciled_movements.reset();
-        for (status, count) in RECONCILED_STATUSES.into_iter().zip(chain_reconciled_counts) {
+        for (status, count) in RECONCILED_STATUSES
+            .into_iter()
+            .zip(projection.chain_reconciled_counts)
+        {
             self.torii_sorafs_reserve_chain_reconciled_movements
                 .with_label_values(&[status])
                 .set(count);
         }
         self.torii_sorafs_reserve_finalized_projection_height
-            .set(finalized_height);
+            .set(projection.finalized_height);
         self.torii_sorafs_reserve_finalized_projection_ready.set(1);
     }
 
@@ -21039,16 +21057,16 @@ mod test {
     fn records_sorafs_reserve_finalized_projection_metrics_with_bounded_labels() {
         let metrics = Metrics::default();
 
-        metrics.record_sorafs_reserve_finalized_projection(
-            42,
-            [2, 0, 0, 0, 1],
-            [120_000_000, 0, 0, 0, 7_000_000],
-            [5_000_000, 0, 0, 0, 1_000_000],
-            [45_000, 0, 0, 0, 9_000],
-            3,
-            [1, 2, 1],
-            [2, 1],
-        );
+        metrics.record_sorafs_reserve_finalized_projection(&SorafsReserveFinalizedProjection {
+            finalized_height: 42,
+            lifecycle_stage_counts: [2, 0, 0, 0, 1],
+            credit_principal_micro_xor: [120_000_000, 0, 0, 0, 7_000_000],
+            credit_shortfall_micro_xor: [5_000_000, 0, 0, 0, 1_000_000],
+            accrued_interest_micro_xor: [45_000, 0, 0, 0, 9_000],
+            open_appeals: 3,
+            custody_counts: [1, 2, 1],
+            chain_reconciled_counts: [2, 1],
+        });
         metrics.record_sorafs_reserve_service_request("top_up", "accepted");
         metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
 

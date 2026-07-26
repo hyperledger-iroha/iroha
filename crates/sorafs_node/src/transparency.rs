@@ -423,6 +423,14 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         "configured_signer_count".to_string(),
         receipt.configured_signer_count.to_string(),
     );
+    metadata.insert(
+        "finalized_block_hash_hex".to_string(),
+        hex::encode(receipt.finalized_block_hash),
+    );
+    metadata.insert(
+        "finalized_block_height".to_string(),
+        receipt.finalized_block_height.to_string(),
+    );
     metadata.insert("held_xor".to_string(), receipt.held_xor.to_string());
     metadata.insert("outcome".to_string(), receipt.outcome.as_str().to_string());
     metadata.insert("refund_xor".to_string(), receipt.refund_xor.to_string());
@@ -441,8 +449,10 @@ pub fn appeal_finance_settlement_receipt_source_entry(
     let metadata = metadata_vec(metadata);
     let entry = TransparencyLedgerSourceEntry {
         event_id: format!(
-            "appeal-finance-settlement:{}",
-            hex::encode(receipt.receipt_id)
+            "appeal-finance-settlement:{}:{}:{}",
+            hex::encode(receipt.receipt_id),
+            receipt.finalized_block_height,
+            hex::encode(receipt.finalized_block_hash)
         ),
         occurred_at_unix: unix_ms_to_secs(receipt.generated_at_unix_ms).map_err(|message| {
             TransparencySourceEntryAdapterError::InvalidAppealFinanceSettlementReceipt { message }
@@ -632,8 +642,9 @@ pub fn reserve_finalized_event_source_entry(
     let occurred_at_unix = unix_ms_to_secs(*record.event.occurred_at_unix_ms())
         .map_err(reserve_finalized_event_source_error)?;
 
+    let event_kind = *record.event.kind();
     let operation_required = matches!(
-        *record.event.kind(),
+        event_kind,
         SorafsReserveLedgerEventKind::MovementRequested
             | SorafsReserveLedgerEventKind::MovementApproved
             | SorafsReserveLedgerEventKind::MovementRejected
@@ -641,7 +652,7 @@ pub fn reserve_finalized_event_source_entry(
             | SorafsReserveLedgerEventKind::AppealAccepted
             | SorafsReserveLedgerEventKind::AppealRejected
     );
-    match *record.event.kind() {
+    match event_kind {
         SorafsReserveLedgerEventKind::PolicyActivated => {
             if record.event.provider_id().is_some()
                 || record.event.operation_id().is_some()
@@ -687,7 +698,7 @@ pub fn reserve_finalized_event_source_entry(
         }
     }
 
-    let event_kind = reserve_ledger_event_kind_label(*record.event.kind());
+    let event_kind_label = reserve_ledger_event_kind_label(event_kind);
     let block_hash_hex = hex::encode(record.block_hash);
     let policy_digest_hex = hex::encode(record.event.policy_digest());
     let provider_id_hex = record
@@ -711,7 +722,7 @@ pub fn reserve_finalized_event_source_entry(
         "reserve_finalized_ledger".to_string(),
     );
     metadata.insert("event_index".to_string(), record.event_index.to_string());
-    metadata.insert("event_kind".to_string(), event_kind.to_string());
+    metadata.insert("event_kind".to_string(), event_kind_label.to_string());
     metadata.insert(
         "occurred_at_unix_ms".to_string(),
         record.event.occurred_at_unix_ms().to_string(),
@@ -753,12 +764,12 @@ pub fn reserve_finalized_event_source_entry(
             record.sequence, record.block_height, block_hash_hex, record.event_index
         ),
         occurred_at_unix,
-        kind: match *record.event.kind() {
+        kind: match event_kind {
             SorafsReserveLedgerEventKind::AppealAccepted
             | SorafsReserveLedgerEventKind::AppealRejected => {
                 ModerationLedgerEntryKindV1::AppealOutcome
             }
-            _ => ModerationLedgerEntryKindV1::Custom(format!("sorafs_reserve_{event_kind}")),
+            _ => ModerationLedgerEntryKindV1::Custom(format!("sorafs_reserve_{event_kind_label}")),
         },
         subject,
         subject_digest: source_subject_digest(
@@ -3974,9 +3985,21 @@ mod tests {
         .expect("account id")
     }
 
-    fn reserve_finalized_event_fixture(
+    #[derive(Clone, norito::derive::Encode)]
+    struct ReserveLedgerEventWireFixture {
         kind: SorafsReserveLedgerEventKind,
-    ) -> ReserveFinalizedEventV1 {
+        provider_id: Option<iroha_data_model::sorafs::capacity::ProviderId>,
+        operation_id: Option<[u8; 32]>,
+        policy_digest: [u8; 32],
+        provider_revision: u64,
+        resulting_lifecycle_stage: Option<ReserveLifecycleStage>,
+        authority: iroha_data_model::account::AccountId,
+        occurred_at_unix_ms: u64,
+    }
+
+    fn reserve_ledger_event_wire_fixture(
+        kind: SorafsReserveLedgerEventKind,
+    ) -> ReserveLedgerEventWireFixture {
         let policy_activation = kind == SorafsReserveLedgerEventKind::PolicyActivated;
         let operation = matches!(
             kind,
@@ -3987,24 +4010,52 @@ mod tests {
                 | SorafsReserveLedgerEventKind::AppealAccepted
                 | SorafsReserveLedgerEventKind::AppealRejected
         );
+        ReserveLedgerEventWireFixture {
+            kind,
+            provider_id: (!policy_activation)
+                .then(|| iroha_data_model::sorafs::capacity::ProviderId::new([0xB2; 32])),
+            operation_id: operation.then_some([0xC3; 32]),
+            policy_digest: [0xD4; 32],
+            provider_revision: if policy_activation { 0 } else { 9 },
+            resulting_lifecycle_stage: (!policy_activation).then_some(ReserveLifecycleStage::Grace),
+            authority: gar_operator_account(),
+            occurred_at_unix_ms: 1_800_000_123_000,
+        }
+    }
+
+    fn decode_reserve_ledger_event_fixture(
+        fixture: &ReserveLedgerEventWireFixture,
+    ) -> iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent {
+        let encoded = fixture.encode();
+        let mut input = encoded.as_slice();
+        let event = <iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent as norito::codec::Decode>::decode(
+            &mut input,
+        )
+        .expect("reserve-ledger wire fixture decodes");
+        assert_eq!(
+            event.encode(),
+            encoded,
+            "reserve-ledger mirror must remain byte-identical to canonical event encoding"
+        );
+        event
+    }
+
+    fn reserve_finalized_event_from_wire_fixture(
+        fixture: &ReserveLedgerEventWireFixture,
+    ) -> ReserveFinalizedEventV1 {
         ReserveFinalizedEventV1 {
             sequence: 17,
             block_height: 43,
             block_hash: [0xA1; 32],
             event_index: 2,
-            event: iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent {
-                kind,
-                provider_id: (!policy_activation)
-                    .then(|| iroha_data_model::sorafs::capacity::ProviderId::new([0xB2; 32])),
-                operation_id: operation.then_some([0xC3; 32]),
-                policy_digest: [0xD4; 32],
-                provider_revision: if policy_activation { 0 } else { 9 },
-                resulting_lifecycle_stage: (!policy_activation)
-                    .then_some(ReserveLifecycleStage::Grace),
-                authority: gar_operator_account(),
-                occurred_at_unix_ms: 1_800_000_123_000,
-            },
+            event: decode_reserve_ledger_event_fixture(fixture),
         }
+    }
+
+    fn reserve_finalized_event_fixture(
+        kind: SorafsReserveLedgerEventKind,
+    ) -> ReserveFinalizedEventV1 {
+        reserve_finalized_event_from_wire_fixture(&reserve_ledger_event_wire_fixture(kind))
     }
 
     fn gar_receipt_fixture(action: GarEnforcementActionV1) -> GarEnforcementReceiptV1 {
@@ -4123,6 +4174,8 @@ mod tests {
             case_id: "case-42".to_string(),
             round_id: Some("round-1".to_string()),
             generated_at_unix_ms: 1_800_000_032_000,
+            finalized_block_height: 42,
+            finalized_block_hash: [0x43; 32],
             appeal_finance_config_version: "baseline-v1".to_string(),
             appeal_finance_policy_digest: [0x44; 32],
             outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
@@ -4130,14 +4183,14 @@ mod tests {
             payer_account: "payer-account".to_string(),
             destination_account: "escrow-account".to_string(),
             release_authority_account: Some("release-authority".to_string()),
-            submitted_step: "treasury-release".to_string(),
+            submitted_step: "drawdown_non_refund".to_string(),
             required_authority: "release-authority".to_string(),
-            amount_xor: xor("25"),
+            amount_xor: xor("420"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
-            reconciliation_status: "pending".to_string(),
-            observed_lifecycle_status: "funded".to_string(),
-            observed_remaining_xor: xor("420"),
+            reconciliation_status: "settled".to_string(),
+            observed_lifecycle_status: "drawn_down".to_string(),
+            observed_remaining_xor: xor("0"),
             deposit_xor: xor("420"),
             refund_xor: xor("0"),
             treasury_xor: xor("25"),
@@ -5205,10 +5258,27 @@ mod tests {
             ModerationLedgerEntryKindV1::AppealOutcome
         );
         assert_eq!(receipt_entry.policy_digest, Some([0x44; 32]));
-        assert_eq!(receipt_entry.subject, "case-42:treasury-release");
+        assert_eq!(receipt_entry.subject, "case-42:drawdown_non_refund");
+        assert_eq!(
+            receipt_entry.event_id,
+            format!(
+                "appeal-finance-settlement:{}:{}:{}",
+                hex::encode(receipt.receipt_id),
+                receipt.finalized_block_height,
+                hex::encode(receipt.finalized_block_hash)
+            )
+        );
         assert!(receipt_entry.metadata.iter().any(|item| {
             item.key == "appeal_finance_policy_digest_hex"
                 && item.value == hex::encode(receipt.appeal_finance_policy_digest)
+        }));
+        assert!(receipt_entry.metadata.iter().any(|item| {
+            item.key == "finalized_block_height"
+                && item.value == receipt.finalized_block_height.to_string()
+        }));
+        assert!(receipt_entry.metadata.iter().any(|item| {
+            item.key == "finalized_block_hash_hex"
+                && item.value == hex::encode(receipt.finalized_block_hash)
         }));
         receipt_entry
             .validate()
@@ -5221,6 +5291,36 @@ mod tests {
         assert_ne!(tampered_entry.policy_digest, receipt_entry.policy_digest);
         assert_ne!(tampered_entry.payload_digest, receipt_entry.payload_digest);
         assert_ne!(tampered_entry.summary_digest, receipt_entry.summary_digest);
+
+        let mut changed_height_receipt = receipt.clone();
+        changed_height_receipt.finalized_block_height += 1;
+        let changed_height_entry =
+            appeal_finance_settlement_receipt_source_entry(&changed_height_receipt)
+                .expect("changed finalized height remains structurally valid");
+        assert_ne!(changed_height_entry.event_id, receipt_entry.event_id);
+        assert_ne!(
+            changed_height_entry.payload_digest,
+            receipt_entry.payload_digest
+        );
+        assert_ne!(
+            changed_height_entry.summary_digest,
+            receipt_entry.summary_digest
+        );
+
+        let mut changed_hash_receipt = receipt;
+        changed_hash_receipt.finalized_block_hash[0] ^= 0x01;
+        let changed_hash_entry =
+            appeal_finance_settlement_receipt_source_entry(&changed_hash_receipt)
+                .expect("changed finalized hash remains structurally valid");
+        assert_ne!(changed_hash_entry.event_id, receipt_entry.event_id);
+        assert_ne!(
+            changed_hash_entry.payload_digest,
+            receipt_entry.payload_digest
+        );
+        assert_ne!(
+            changed_hash_entry.summary_digest,
+            receipt_entry.summary_digest
+        );
     }
 
     #[test]
@@ -5359,43 +5459,65 @@ mod tests {
         let mut zero_hash = base.clone();
         zero_hash.block_hash = [0; 32];
         malformed.push(zero_hash);
-        let mut zero_policy = base.clone();
-        zero_policy.event.policy_digest = [0; 32];
-        malformed.push(zero_policy);
-        let mut sub_second_timestamp = base.clone();
-        sub_second_timestamp.event.occurred_at_unix_ms = 999;
-        malformed.push(sub_second_timestamp);
-        let mut missing_provider = base.clone();
-        missing_provider.event.provider_id = None;
-        malformed.push(missing_provider);
-        let mut zero_provider = base.clone();
-        zero_provider.event.provider_id =
+
+        let mut zero_policy =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        zero_policy.policy_digest = [0; 32];
+        malformed.push(reserve_finalized_event_from_wire_fixture(&zero_policy));
+
+        let mut sub_second_timestamp =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        sub_second_timestamp.occurred_at_unix_ms = 999;
+        malformed.push(reserve_finalized_event_from_wire_fixture(
+            &sub_second_timestamp,
+        ));
+
+        let mut missing_provider =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        missing_provider.provider_id = None;
+        malformed.push(reserve_finalized_event_from_wire_fixture(&missing_provider));
+
+        let mut zero_provider =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        zero_provider.provider_id =
             Some(iroha_data_model::sorafs::capacity::ProviderId::new([0; 32]));
-        malformed.push(zero_provider);
-        let mut zero_revision = base.clone();
-        zero_revision.event.provider_revision = 0;
-        malformed.push(zero_revision);
-        let mut missing_stage = base.clone();
-        missing_stage.event.resulting_lifecycle_stage = None;
-        malformed.push(missing_stage);
-        let mut missing_operation = base.clone();
-        missing_operation.event.operation_id = None;
-        malformed.push(missing_operation);
-        let mut zero_operation = base.clone();
-        zero_operation.event.operation_id = Some([0; 32]);
-        malformed.push(zero_operation);
+        malformed.push(reserve_finalized_event_from_wire_fixture(&zero_provider));
+
+        let mut zero_revision =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        zero_revision.provider_revision = 0;
+        malformed.push(reserve_finalized_event_from_wire_fixture(&zero_revision));
+
+        let mut missing_stage =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        missing_stage.resulting_lifecycle_stage = None;
+        malformed.push(reserve_finalized_event_from_wire_fixture(&missing_stage));
+
+        let mut missing_operation =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        missing_operation.operation_id = None;
+        malformed.push(reserve_finalized_event_from_wire_fixture(
+            &missing_operation,
+        ));
+
+        let mut zero_operation =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        zero_operation.operation_id = Some([0; 32]);
+        malformed.push(reserve_finalized_event_from_wire_fixture(&zero_operation));
 
         let mut unexpected_operation =
-            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::RentCharged);
-        unexpected_operation.event.operation_id = Some([0xE5; 32]);
-        malformed.push(unexpected_operation);
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::RentCharged);
+        unexpected_operation.operation_id = Some([0xE5; 32]);
+        malformed.push(reserve_finalized_event_from_wire_fixture(
+            &unexpected_operation,
+        ));
 
         let mut malformed_policy =
-            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
-        malformed_policy.event.provider_id = Some(
-            iroha_data_model::sorafs::capacity::ProviderId::new([0xF6; 32]),
-        );
-        malformed.push(malformed_policy);
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
+        malformed_policy.provider_id = Some(iroha_data_model::sorafs::capacity::ProviderId::new(
+            [0xF6; 32],
+        ));
+        malformed.push(reserve_finalized_event_from_wire_fixture(&malformed_policy));
 
         for event in malformed {
             assert!(
@@ -5436,6 +5558,19 @@ mod tests {
             err,
             TransparencySourceEntryAdapterError::InvalidAppealFinanceReport { .. }
         ));
+
+        let mut zero_height = appeal_finance_settlement_receipt_fixture();
+        zero_height.finalized_block_height = 0;
+        let mut zero_hash = appeal_finance_settlement_receipt_fixture();
+        zero_hash.finalized_block_hash = [0; 32];
+        for receipt in [zero_height, zero_hash] {
+            let err = appeal_finance_settlement_receipt_source_entry(&receipt)
+                .expect_err("invalid finalized cursor rejected");
+            assert!(matches!(
+                err,
+                TransparencySourceEntryAdapterError::InvalidAppealFinanceSettlementReceipt { .. }
+            ));
+        }
     }
 
     #[test]

@@ -24,7 +24,6 @@ SPEC.loader.exec_module(goldens)
 
 
 ABI_HASH = bytes(range(32))
-FINAL_V1_ABI_DIGEST = "DCBB03608ED9D87B4A8D942C0D7045D3044DE8D4D8413347C87143386F56AEC1"
 
 
 def artifact(mode: int = 0, suffix: bytes = b"", abi_hash: bytes = ABI_HASH) -> bytes:
@@ -155,7 +154,6 @@ def test_artifact_validation_binds_v1_budget_mode_and_debug_policy(
 
 
 def test_manifest_abi_hash_requires_canonical_hash_text(tmp_path: Path) -> None:
-    assert goldens.literal_checksum("hash", FINAL_V1_ABI_DIGEST) == "AABE"
     manifest = tmp_path / "demo.manifest.json"
     digest = ABI_HASH.hex().upper()
     manifest.write_text(
@@ -176,6 +174,26 @@ def test_manifest_abi_hash_requires_canonical_hash_text(tmp_path: Path) -> None:
         manifest.write_text(json.dumps({"abi_hash": value}), encoding="utf-8")
         with pytest.raises(goldens.GoldenError, match="ABI hash"):
             goldens.manifest_abi_hash(manifest)
+
+
+def test_repository_compiler_manifests_derive_one_current_abi_hash() -> None:
+    root = goldens.repository_root()
+    manifest_paths = [
+        root / destination for destination in goldens.COMPILER_MANIFESTS.values()
+    ]
+    current_hashes = {
+        goldens.manifest_abi_hash(manifest_path) for manifest_path in manifest_paths
+    }
+
+    assert len(current_hashes) == 1
+    current_hash = current_hashes.pop()
+    current_digest = current_hash.hex().upper()
+    current_checksum = goldens.literal_checksum("hash", current_digest)
+    for manifest_path in manifest_paths:
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert document["abi_hash"] == (
+            f"hash:{current_digest}#{current_checksum}"
+        )
 
 
 def test_atomic_publish_does_not_rewrite_equal_output(tmp_path: Path) -> None:

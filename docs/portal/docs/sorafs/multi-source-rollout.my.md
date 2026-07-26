@@ -4,8 +4,8 @@ direction: ltr
 source: docs/portal/docs/sorafs/multi-source-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ee784b5b073019d219d0dfb76d44f6d02a8dbb46c847bfb226f1f72b41ffb1d7
-source_last_modified: "2026-01-05T09:28:11.891621+00:00"
+source_hash: 6a510a005b4b14df18915a1166620f78e8a99fe9042de80bb916d7c3f38d32d9
+source_last_modified: "2026-07-26T10:32:32.940432+00:00"
 translation_last_reviewed: 2026-02-07
 id: multi-source-rollout
 title: Multi-Source Client Rollout & Blacklisting Runbook
@@ -34,20 +34,14 @@ SF-6 အောက်တွင် ပေးပို့ထားသော orchest
    - ကိုယ်စားလှယ်လောင်းဝန်ဆောင်မှုပေးသူအားလုံးသည် `ProviderAdvertV1` အကွာအဝေးပေးချေနိုင်စွမ်းနှင့် ထုတ်လွှင့်မှုဘတ်ဂျက်များပါရှိသော စာအိတ်များကို ထုတ်ဝေရပါမည်။ `/v1/sorafs/providers` မှတစ်ဆင့် မှန်ကန်ကြောင်း အတည်ပြုပြီး မျှော်လင့်ထားသည့် စွမ်းရည်နယ်ပယ်များနှင့် နှိုင်းယှဉ်ပါ။
    - ချိန်ညှိမှု/ပျက်ကွက်မှုနှုန်းများကို ထောက်ပံ့ပေးသည့် တယ်လီမီတာ လျှပ်တစ်ပြက်ရိုက်ချက်များသည် ကိန္နရီမပြေးမီ 15 မိနစ် သက်တမ်းရှိသင့်သည်။
 2. ** အဆင့်သတ်မှတ်ချက်။**
-   - အလွှာလိုက် `iroha_config` သစ်ပင်တွင် သံစုံတီးဝိုင်းဆရာ JSON config ကို ဆက်ထားပါ။
-
-     ```toml
-     [torii.sorafs.orchestrator]
-     config_path = "/etc/iroha/sorafs/orchestrator.json"
-     ```
-
-     ထုတ်ပေးခြင်းဆိုင်ရာ သီးခြားကန့်သတ်ချက်များဖြင့် JSON ကို အပ်ဒိတ်လုပ်ပါ (`max_providers`၊ ထပ်စမ်းကြည့်ပါ ဘတ်ဂျက်များ)။ တူညီသောဖိုင်ကို အဆင့်သတ်မှတ်ခြင်း/ထုတ်လုပ်ခြင်းသို့ ကျွေးမွေးခြင်းဖြင့် ကွဲပြားမှုများ သေးငယ်နေမည်ဖြစ်သည်။
+   - Store the canonical client-side orchestrator JSON at `/etc/iroha/sorafs/orchestrator.json`. This file is consumed explicitly by client/orchestrator workloads; it is not an `iroha_config` or Torii namespace. Update it with rollout-specific limits (`max_providers`, retry budgets), deploy the same reviewed file to staging/production, and pass it to every CLI fetch as `--orchestrator-config=/etc/iroha/sorafs/orchestrator.json`.
 3. ** လေ့ကျင့်ခန်းလုပ်ထုံးလုပ်နည်းများ။**
    - မန်နီးဖက်စ်/တိုကင်ပတ်ဝန်းကျင် ကိန်းရှင်များကို ဖြည့်သွင်းပြီး အဆုံးအဖြတ်ရယူမှုကို လုပ်ဆောင်ပါ-
 
      ```bash
      sorafs_cli fetch \
        --plan fixtures/sorafs_manifest/ci_sample/payload.plan.json \
+       --orchestrator-config=/etc/iroha/sorafs/orchestrator.json \
        --manifest-id "$CANARY_MANIFEST_ID" \
        --provider name=alpha,provider-id="$PROVIDER_ALPHA_ID",gateway-key="$PROVIDER_ALPHA_GATEWAY_KEY",base-url=https://gw-alpha.example,stream-token="$PROVIDER_ALPHA_TOKEN" \
        --provider name=beta,provider-id="$PROVIDER_BETA_ID",gateway-key="$PROVIDER_BETA_GATEWAY_KEY",base-url=https://gw-beta.example,stream-token="$PROVIDER_BETA_TOKEN" \

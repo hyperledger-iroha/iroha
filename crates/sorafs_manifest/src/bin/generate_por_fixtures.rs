@@ -1351,6 +1351,62 @@ fn write_reference_sdk_bundle_outcomes(fixtures_root: &Path) -> Result<(), Box<d
 fn write_reference_sdk_fixture_inventory(fixtures_root: &Path) -> Result<(), Box<dyn Error>> {
     const PAYLOAD_SPECS: &[(&str, &str, &str, &str, &str)] = &[
         (
+            "appeal_finance/cancel_asset_lock_v1.json",
+            "appeal_finance",
+            "cancel_asset_lock",
+            "json",
+            "valid",
+        ),
+        (
+            "appeal_finance/cancel_asset_lock_v1.to",
+            "appeal_finance",
+            "cancel_asset_lock",
+            "norito",
+            "valid",
+        ),
+        (
+            "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.json",
+            "appeal_finance",
+            "cancel_asset_lock",
+            "json",
+            "invalid_missing_expected_remaining_amount",
+        ),
+        (
+            "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+            "appeal_finance",
+            "cancel_asset_lock",
+            "norito",
+            "invalid_missing_expected_remaining_amount",
+        ),
+        (
+            "appeal_finance/negative/cancel_asset_lock_noncanonical_quantity_v1.json",
+            "appeal_finance",
+            "cancel_asset_lock",
+            "json",
+            "invalid_noncanonical_quantity",
+        ),
+        (
+            "appeal_finance/negative/cancel_asset_lock_trailing_bytes_v1.to",
+            "appeal_finance",
+            "cancel_asset_lock",
+            "norito",
+            "noncanonical_trailing_bytes",
+        ),
+        (
+            "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.json",
+            "appeal_finance",
+            "cancel_asset_lock",
+            "json",
+            "invalid_zero_expected_remaining_amount",
+        ),
+        (
+            "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
+            "appeal_finance",
+            "cancel_asset_lock",
+            "norito",
+            "invalid_zero_expected_remaining_amount",
+        ),
+        (
             "governance/dag_block_0_v1.json",
             "governance_dag",
             "governance_dag_block",

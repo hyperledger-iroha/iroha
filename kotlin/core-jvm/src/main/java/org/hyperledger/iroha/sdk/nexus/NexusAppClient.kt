@@ -75,7 +75,7 @@ data class NexusApprovedAccount @JvmOverloads constructor(
     @JvmField val session: NexusConnectSession? = null,
 )
 
-/** Input for the V1 numeric asset transfer flow. */
+/** Input for the V1 Quantity asset transfer flow. */
 data class NexusTransferInput @JvmOverloads constructor(
     @JvmField val sourceAssetId: String,
     @JvmField val quantity: String,

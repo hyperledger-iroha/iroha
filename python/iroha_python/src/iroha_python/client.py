@@ -1767,6 +1767,11 @@ def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[
         normalized.get("duration_blocks"),
         context=context,
     )
+    if normalized.get("amount") is not None:
+        normalized["amount"] = _canonical_quantity_text(
+            normalized["amount"],
+            f"{context}.amount",
+        )
     _ensure_governance_owner_canonical(normalized.get("owner"), context=context)
     return normalized
 
@@ -1847,6 +1852,11 @@ def _normalize_governance_zk_ballot_v1_payload(
         record.get("duration_blocks"),
         context=context,
     )
+    if record.get("amount") is not None:
+        record["amount"] = _canonical_quantity_text(
+            record["amount"],
+            f"{context}.amount",
+        )
     _ensure_governance_owner_canonical(record.get("owner"), context=context)
     return record
 
@@ -1910,6 +1920,11 @@ def _normalize_governance_zk_ballot_proof_payload(
         ballot_record.get("duration_blocks"),
         context=ballot_context,
     )
+    if ballot_record.get("amount") is not None:
+        ballot_record["amount"] = _canonical_quantity_text(
+            ballot_record["amount"],
+            f"{ballot_context}.amount",
+        )
     _ensure_governance_owner_canonical(ballot_record.get("owner"), context=ballot_context)
     record["ballot"] = ballot_record
     return record
@@ -1984,7 +1999,23 @@ class ResolvedToriiClientConfig:
     sorafs_alias_policy: SorafsAliasPolicy
 
 
-_DEFAULT_RESOLVED_CONFIG = ResolvedToriiClientConfig(
+@dataclass(frozen=True)
+class _ToriiClientConfigDefaults:
+    """Non-SoraFS defaults that are safe to materialize without native policy code."""
+
+    timeout: float
+    max_retries: int
+    backoff_initial: float
+    backoff_multiplier: float
+    max_backoff: float
+    retry_statuses: frozenset[int]
+    retry_methods: frozenset[str]
+    default_headers: Dict[str, str]
+    auth_token: Optional[str]
+    api_token: Optional[str]
+
+
+_DEFAULT_RESOLVED_CONFIG = _ToriiClientConfigDefaults(
     timeout=30.0,
     max_retries=3,
     backoff_initial=0.5,
@@ -1995,7 +2026,6 @@ _DEFAULT_RESOLVED_CONFIG = ResolvedToriiClientConfig(
     default_headers={"Accept": "application/json"},
     auth_token=None,
     api_token=None,
-    sorafs_alias_policy=SorafsAliasPolicy.defaults(),
 )
 
 
@@ -3141,7 +3171,8 @@ class GovernanceLockRecord:
     """Governance lock record stored for a referendum."""
 
     owner: str
-    amount: int
+    amount: str
+    slashed: str
     expiry_height: int
     direction: int
     duration_blocks: int
@@ -3155,11 +3186,15 @@ class GovernanceLockRecord:
             raise TypeError("governance lock record missing string `owner` field")
         amount_raw = payload.get("amount")
         if amount_raw is None:
-            raise TypeError("governance lock record missing numeric `amount` field")
-        try:
-            amount = int(amount_raw)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("governance lock record `amount` must be numeric") from exc
+            raise TypeError("governance lock record missing Quantity `amount` field")
+        amount = _canonical_quantity_text(
+            amount_raw,
+            "governance lock record `amount`",
+        )
+        slashed = _canonical_quantity_text(
+            payload.get("slashed"),
+            "governance lock record `slashed`",
+        )
         expiry_raw = payload.get("expiry_height")
         if expiry_raw is None:
             raise TypeError("governance lock record missing numeric `expiry_height` field")
@@ -3184,6 +3219,7 @@ class GovernanceLockRecord:
         return cls(
             owner=owner,
             amount=amount,
+            slashed=slashed,
             expiry_height=expiry_height,
             direction=direction,
             duration_blocks=duration_blocks,
@@ -6548,16 +6584,6 @@ def _strict_tagged_unit_enum(
     return variant
 
 
-def _strict_numeric_string(payload: Mapping[str, Any], field_name: str, context: str) -> str:
-    value = _required_field(payload, field_name, context)
-    if (
-        not isinstance(value, str)
-        or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", value) is None
-    ):
-        raise TypeError(f"{context} `{field_name}` must be a non-negative Numeric string")
-    return value
-
-
 def _strict_quantity_string(
     payload: Mapping[str, Any], field_name: str, context: str
 ) -> str:
@@ -7548,12 +7574,12 @@ class SumeragiNexusFeeScheduleInputs:
             tx_bytes_len=_strict_uint(payload, "tx_bytes_len", 64, context),
             instruction_count=_strict_uint(payload, "instruction_count", 64, context),
             gas_used=_strict_uint(payload, "gas_used", 64, context),
-            base_fee=_strict_numeric_string(payload, "base_fee", context),
-            per_byte_fee=_strict_numeric_string(payload, "per_byte_fee", context),
-            per_instruction_fee=_strict_numeric_string(
+            base_fee=_strict_quantity_string(payload, "base_fee", context),
+            per_byte_fee=_strict_quantity_string(payload, "per_byte_fee", context),
+            per_instruction_fee=_strict_quantity_string(
                 payload, "per_instruction_fee", context
             ),
-            per_gas_unit_fee=_strict_numeric_string(
+            per_gas_unit_fee=_strict_quantity_string(
                 payload, "per_gas_unit_fee", context
             ),
         )
@@ -7609,7 +7635,7 @@ class SumeragiNexusFeeReceipt:
                 payload, "payer_account_id", context
             ),
             fee_asset_id=_strict_nonempty_string(payload, "fee_asset_id", context),
-            fee_amount=_strict_numeric_string(payload, "fee_amount", context),
+            fee_amount=_strict_quantity_string(payload, "fee_amount", context),
             schedule=SumeragiNexusFeeScheduleInputs.from_payload(schedule_payload),
         )
 
@@ -10028,7 +10054,7 @@ def resolve_torii_client_config(
         "default_headers": dict(_DEFAULT_RESOLVED_CONFIG.default_headers),
         "auth_token": _DEFAULT_RESOLVED_CONFIG.auth_token,
         "api_token": _DEFAULT_RESOLVED_CONFIG.api_token,
-        "sorafs_alias_policy": _DEFAULT_RESOLVED_CONFIG.sorafs_alias_policy,
+        "sorafs_alias_policy": None,
     }
 
     def apply_source(source: Optional[Mapping[str, Any]]) -> None:
@@ -10157,7 +10183,9 @@ def resolve_torii_client_config(
         default_headers=headers,
         auth_token=state["auth_token"],
         api_token=state["api_token"],
-        sorafs_alias_policy=state["sorafs_alias_policy"],
+        sorafs_alias_policy=_normalize_sorafs_policy_config(
+            state["sorafs_alias_policy"]
+        ),
     )
 
 
@@ -14782,12 +14810,13 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
+        expected_remaining_amount: QuantityLike,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Cancel a native asset lock and optionally wait for commit."""
+        """Compare-and-cancel a native asset lock and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
@@ -14795,7 +14824,7 @@ class ToriiClient(_BaseToriiClient):
             fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
-        draft.cancel_asset_lock(escrow_id)
+        draft.cancel_asset_lock(escrow_id, expected_remaining_amount)
         return self._submit_transaction_draft_result(
             draft,
             private_key=private_key,
@@ -17555,10 +17584,15 @@ class ToriiClient(_BaseToriiClient):
     def governance_submit_plain_ballot(self, payload: Mapping[str, Any]) -> Optional[Any]:
         """POST `/v1/gov/ballots/plain`."""
 
+        normalized = dict(payload)
+        normalized["amount"] = _canonical_quantity_text(
+            normalized.get("amount"),
+            "governance plain ballot amount",
+        )
         return self.request_json(
             "POST",
             "/v1/gov/ballots/plain",
-            json_body=dict(payload),
+            json_body=normalized,
         )
 
     def governance_submit_zk_ballot(self, payload: Mapping[str, Any]) -> Optional[Any]:

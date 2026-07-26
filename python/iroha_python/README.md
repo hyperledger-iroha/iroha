@@ -996,6 +996,7 @@ client.cancel_asset_lock_and_wait(
     authority="<source-account-id>",
     private_key_hex="<source-private-key-hex>",
     escrow_id="merchant-lock-001",
+    expected_remaining_amount="1500",
 )
 ```
 
@@ -1004,10 +1005,13 @@ client.cancel_asset_lock_and_wait(
 remaining amount still equals `expected_remaining_amount`; this prevents two
 independently submitted stale drawdowns from both debiting custody. It is
 signed either by the destination account for two-party locks or by
-`release_authority` when one is configured. `CancelAssetLock` refunds the opener while the lock is still active;
+`release_authority` when one is configured. `CancelAssetLock` refunds the
+opener while the lock is still active only when the committed remaining amount
+equals `expected_remaining_amount`, preventing a stale cancel from racing a
+drawdown;
 `ExpireAssetLock` refunds remaining custody after the optional expiry deadline.
-Zero, negative, NaN, and infinite amounts are rejected by the SDK before
-transaction construction.
+Zero, negative, NaN, and infinite amounts and expected-remaining preconditions
+are rejected by the SDK before transaction construction.
 
 ### Repo settlement helpers
 

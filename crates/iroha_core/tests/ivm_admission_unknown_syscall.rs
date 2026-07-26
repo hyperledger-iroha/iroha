@@ -98,14 +98,13 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
     match result {
-        Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-            iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(msg),
-        ))) => {
-            assert!(
-                msg.contains(&format!("unknown syscall number {unknown_syscall}")),
-                "unexpected rejection message: {msg}"
+        Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))) => {
+            assert_eq!(
+                message,
+                format!("unknown syscall number 0x{unknown_syscall:02x} for abi_version 1"),
+                "unknown syscalls must fail at the ABI policy boundary"
             );
         }
-        other => panic!("expected strict decode failure for unknown syscall, got {other:?}"),
+        other => panic!("expected strict ABI policy rejection for unknown syscall, got {other:?}"),
     }
 }

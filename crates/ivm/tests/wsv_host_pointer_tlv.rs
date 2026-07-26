@@ -3,10 +3,7 @@ use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::isi::transfer::{TransferAssetBatch, TransferAssetBatchEntry};
 use iroha_data_model::nexus::DataSpaceId;
-use iroha_primitives::{
-    numeric::{Numeric, Quantity},
-    numeric_abi::QuantityValueV1,
-};
+use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
     mock_wsv::{
@@ -40,9 +37,8 @@ fn make_asset_tlv(asset: &AssetDefinitionId) -> Vec<u8> {
     make_tlv(PointerType::AssetDefinitionId as u16, &buf)
 }
 
-fn make_quantity_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
-    let quantity = Quantity::try_from_numeric(amount.into()).expect("canonical quantity");
-    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
+fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
+    ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
 
 fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
@@ -51,17 +47,12 @@ fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
 }
 
 fn make_transfer_batch_tlv(
-    entries: &[(AccountId, AccountId, AssetDefinitionId, Numeric)],
+    entries: &[(AccountId, AccountId, AssetDefinitionId, Quantity)],
 ) -> Vec<u8> {
     let batch_entries = entries
         .iter()
         .map(|(from, to, asset, amount)| {
-            TransferAssetBatchEntry::new(
-                from.clone(),
-                to.clone(),
-                asset.clone(),
-                Quantity::try_from_numeric(amount.clone()).expect("non-negative batch quantity"),
-            )
+            TransferAssetBatchEntry::new(from.clone(), to.clone(), asset.clone(), amount.clone())
         })
         .collect();
     let batch = TransferAssetBatch::new(batch_entries);
@@ -69,8 +60,8 @@ fn make_transfer_batch_tlv(
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
 
-fn num(value: u64) -> Numeric {
-    Numeric::from(value)
+fn num(value: u64) -> Quantity {
+    Quantity::from(value)
 }
 
 fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
@@ -125,7 +116,7 @@ fn balance_syscall_with_tlv_pointers() {
     let value = QuantityValueV1::decode_frame(tlv.payload)
         .expect("decode canonical balance")
         .into_quantity();
-    assert_eq!(value.as_numeric(), &Numeric::from(50_u64));
+    assert_eq!(value, Quantity::from(50_u64));
 }
 
 #[test]

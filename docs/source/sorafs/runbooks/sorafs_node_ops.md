@@ -9,10 +9,10 @@ pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
 
 ## 1. Prerequisites
 
-- Enable the storage worker in `torii.sorafs.storage`:
+- Enable the storage worker in `sorafs.storage`:
 
   ```toml
-  [torii.sorafs.storage]
+  [sorafs.storage]
   enabled = true
   data_dir = "./storage/sorafs"
   max_capacity_bytes = 21474836480    # 20 GiB
@@ -20,7 +20,7 @@ pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
   max_pins = 1000
   por_sample_interval_secs = 600
 
-  [torii.sorafs.storage.metering_smoothing]
+  [sorafs.storage.metering_smoothing]
   gib_hours_enabled = true
   gib_hours_alpha = 0.25
   por_success_enabled = true
@@ -143,7 +143,7 @@ gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【cr
 
 ## 4. Capacity Rejection Test
 
-1. Temporarily lower `torii.sorafs.storage.max_capacity_bytes` to a small value
+1. Temporarily lower `sorafs.storage.max_capacity_bytes` to a small value
    (for example the size of a single manifest).
 2. Let one finalized replication assignment complete through the provider
    outbox.

@@ -13,7 +13,11 @@ import {
 } from "./ivmArtifact.js";
 import { ToriiClient } from "./toriiClient.js";
 import { noritoDecodeInstruction } from "./norito.js";
-import { NumericV1, NumericV1Error } from "./numericV1.js";
+import {
+  KotodamaQuantity,
+  NumericV1,
+  NumericV1Error,
+} from "./numericV1.js";
 import {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
@@ -4069,17 +4073,24 @@ function normalizeWholeNumberLiteral(value, context) {
   return normalized;
 }
 
-function normalizeCanonicalNonNegativeNumericLiteral(value, context) {
-  const literal = String(value ?? "");
-  if (literal.trim() !== literal) {
-    throw new TypeError(`${context} must not contain surrounding whitespace`);
-  }
+function normalizeCanonicalQuantityInput(value, context) {
   try {
-    return NumericV1.decodeQuantityJson(literal).toString();
+    if (value instanceof KotodamaQuantity) {
+      return NumericV1.encodeQuantityJson(value);
+    }
+    if (typeof value === "string") {
+      return NumericV1.decodeQuantityJson(value).toString();
+    }
+    if (typeof value === "bigint") {
+      return new KotodamaQuantity(value, 0).toString();
+    }
+    throw new TypeError(
+      `${context} must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are rejected`,
+    );
   } catch (error) {
     if (!(error instanceof NumericV1Error)) throw error;
     throw new TypeError(
-      `${context} must be a canonical non-negative Numeric string (${error.code})`,
+      `${context} must be a canonical non-negative Kotodama V1 Quantity (${error.code})`,
     );
   }
 }
@@ -4155,7 +4166,7 @@ export function buildPrivateKaigiFeeSpend({
     ),
     toBuffer(actionHash),
     normalizeFixed32HexInput(anchorRootHex, "privateKaigiFeeSpend.anchorRootHex"),
-    normalizeCanonicalNonNegativeNumericLiteral(
+    normalizeCanonicalQuantityInput(
       feeAmount,
       "privateKaigiFeeSpend.feeAmount",
     ),

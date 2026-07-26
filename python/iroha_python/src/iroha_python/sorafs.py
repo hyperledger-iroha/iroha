@@ -32,8 +32,8 @@ try:
 except RuntimeError as err:  # pragma: no cover - optional dependency
     _CRYPTO_IMPORT_ERROR = err
 
-    class _MissingCrypto:
-        """Proxy that raises a stable error when native bindings are unavailable."""
+    class _UnavailableCrypto:
+        """Fail-closed proxy for an unavailable native release dependency."""
 
         def __getattr__(self, name: str) -> Any:
             raise RuntimeError(
@@ -41,7 +41,7 @@ except RuntimeError as err:  # pragma: no cover - optional dependency
                 "Run `maturin develop --release` inside `python/iroha_python` (or install the wheel)."
             ) from _CRYPTO_IMPORT_ERROR
 
-    _crypto = _MissingCrypto()
+    _crypto = _UnavailableCrypto()
 
 if TYPE_CHECKING:
     from .client import (
@@ -109,33 +109,22 @@ _LOGGER = logging.getLogger("iroha_python.sorafs")
 _HEADER_SORA_NAME = "Sora-Name"
 _HEADER_SORA_PROOF = "Sora-Proof"
 _HEADER_SORA_PROOF_STATUS = "Sora-Proof-Status"
-_FALLBACK_ALIAS_POLICY_DEFAULTS: Mapping[str, int] = {
-    "positive_ttl_secs": 10 * 60,
-    "refresh_window_secs": 2 * 60,
-    "hard_expiry_secs": 15 * 60,
-    "negative_ttl_secs": 60,
-    "revocation_ttl_secs": 5 * 60,
-    "rotation_max_age_secs": 6 * 60 * 60,
-    "successor_grace_secs": 5 * 60,
-    "governance_grace_secs": 0,
-}
+_ALIAS_POLICY_DEFAULT_FIELDS = frozenset(
+    {
+        "positive_ttl_secs",
+        "refresh_window_secs",
+        "hard_expiry_secs",
+        "negative_ttl_secs",
+        "revocation_ttl_secs",
+        "rotation_max_age_secs",
+        "successor_grace_secs",
+        "governance_grace_secs",
+    }
+)
 
-if TYPE_CHECKING:
-    class SorafsMultiFetchError(RuntimeError):
-        """Raised when multi-source fetch fails in the native extension."""
 
-        pass
-else:
-    try:
-        class SorafsMultiFetchError(_crypto.SorafsMultiFetchError):
-            """Raised when multi-source fetch fails in the native extension."""
-
-            pass
-    except (AttributeError, RuntimeError):  # pragma: no cover - optional dependency
-        class SorafsMultiFetchError(RuntimeError):
-            """Stub used when the native extension is unavailable in dev environments."""
-
-            pass
+class SorafsMultiFetchError(RuntimeError):
+    """Stable SDK error raised when the native multi-source fetch fails."""
 
 
 def _coerce_positive_int(value: Any, field: str) -> int:
@@ -166,17 +155,19 @@ def _first_present(mapping: Mapping[str, Any], *keys: str) -> Optional[Any]:
 
 
 def _default_policy_payload() -> Mapping[str, Any]:
-    if _CRYPTO_IMPORT_ERROR is not None:
-        return dict(_FALLBACK_ALIAS_POLICY_DEFAULTS)
     payload = _crypto.sorafs_alias_policy_defaults()
     if not isinstance(payload, Mapping):
         raise TypeError("alias policy defaults returned an unexpected payload")
-    # Older `_crypto` wheels (pre successor/governance grace) omit the newer fields.
-    if "successor_grace_secs" not in payload or "governance_grace_secs" not in payload:
-        merged = dict(payload)
-        merged.setdefault("successor_grace_secs", 0)
-        merged.setdefault("governance_grace_secs", 0)
-        return merged
+    if not all(isinstance(field, str) for field in payload):
+        raise TypeError("alias policy defaults returned non-string field names")
+    fields = frozenset(payload)
+    if fields != _ALIAS_POLICY_DEFAULT_FIELDS:
+        missing = sorted(_ALIAS_POLICY_DEFAULT_FIELDS - fields)
+        unexpected = sorted(fields - _ALIAS_POLICY_DEFAULT_FIELDS)
+        raise RuntimeError(
+            "native SoraFS alias policy surface is incompatible with this SDK "
+            f"(missing={missing}, unexpected={unexpected})"
+        )
     return payload
 
 
@@ -1835,7 +1826,19 @@ def multi_fetch_local(
         else:
             raise TypeError("providers must be SorafsLocalProviderSpec or mapping entries")
     options_payload = options.to_mapping() if options else None
-    result = _crypto.sorafs_multi_fetch_local(plan_json, provider_payloads, options=options_payload)
+    try:
+        result = _crypto.sorafs_multi_fetch_local(
+            plan_json,
+            provider_payloads,
+            options=options_payload,
+        )
+    except Exception as exc:
+        if _CRYPTO_IMPORT_ERROR is None and isinstance(
+            exc,
+            _crypto.SorafsMultiFetchError,
+        ):
+            raise SorafsMultiFetchError(str(exc)) from exc
+        raise
     if not isinstance(result, Mapping):
         raise TypeError("multi-fetch returned an unexpected payload")
     return SorafsMultiFetchResult.from_mapping(result)

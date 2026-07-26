@@ -51,10 +51,10 @@ pub fn gen_definition(fn_descriptor: &FnDescriptor, trait_name: Option<&Ident>) 
                 iroha_ffi::FfiReturn::Ok
             };
 
-            match std::panic::catch_unwind(fn_) {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(fn_)) {
                 Ok(res) => res,
                 Err(panic_payload) => {
-                    iroha_ffi::panic_notifier::log_panic(&panic_payload);
+                    iroha_ffi::panic_notifier::handle_panic(panic_payload);
                     iroha_ffi::FfiReturn::UnrecoverableError
                 },
             }

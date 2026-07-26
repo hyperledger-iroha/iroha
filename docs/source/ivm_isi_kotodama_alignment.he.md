@@ -4,7 +4,9 @@
 lang: he
 direction: rtl
 source: docs/source/ivm_isi_kotodama_alignment.md
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 status: complete
+translation_last_reviewed: 2026-07-26
 translator: manual
 ---
 
@@ -86,7 +88,7 @@ translator: manual
 - להוסיף בדיקות “shadow mode” שמשוות בזמן הריצה בין ה-ISI שה-VM הוסיף לתור לבין ביצוע נייטיבי ומדגישות פערים.
 
 ### B. הגדרת ABI ומפרט syscall
-- כמויות נכס הן `Numeric` ולכן מועברות כמצביעי NoritoBytes; גם טיפוסים מורכבים אחרים מועברים כמצביע.
+- כמויות נכס משתמשות ב-TLV הייעודי `QuantityValueV1` של pointer-ABI (`PointerType::Quantity = 0x0010`), ולא במצביע `NoritoBytes` כללי; ערכים מורכבים אחרים משתמשים בסוגי המצביע שהוקצו להם.
 - ליצור רפרנס שממפה כל `SYSCALL_*` ל-`InstructionBox` תואם.
 - לקבע רשמית את מוסכמת ההחזרה (הצלחה: `x10=1`; כשל: `x10=0` ו/או `VMError::HostRejected { code }` לשגיאות חמורות).
 - להטמיע את ה-ABI בקוד הגנרטור של Kotodama ובמבחני IVM ולהפסיק להשתמש במפות השלמים→ID.
@@ -124,8 +126,8 @@ translator: manual
 - `SYSCALL_REGISTER_DOMAIN(id: ptr DomainId)` → ISI ‏`Register<Domain>`
 - `SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId)` → ISI ‏`Register<Account>`
 - `SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8)` → ISI ‏`Register<AssetDefinition>`
-- `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI ‏`Mint<Numeric, Asset>`
-- `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI ‏`Burn<Numeric, Asset>`
+- `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI ‏`Mint<Quantity, Asset>`
+- `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI ‏`Burn<Quantity, Asset>`
 - `SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI ‏`Transfer<Asset>`
 - `SYSCALL_TRANSFER_V1_BATCH_BEGIN()` / `SYSCALL_TRANSFER_V1_BATCH_END()` → ISI ‏`TransferAssetBatch` ‎(פתיחת/סגירת תחום באצ׳; כל רשומה מפורקת לקריאת `transfer_asset`)
 - `SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes<TransferAssetBatch>)` → מאפשר להגיש אצווה מקודדת מראש בקריאה אחת

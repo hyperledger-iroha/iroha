@@ -32,7 +32,7 @@ use iroha::{
         nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
         peer::PeerId,
         permission::Permission,
-        prelude::Numeric,
+        prelude::Quantity,
         proof::{
             ProofAttachment, ProofId, ProofRecord, ProofStatus, VerifyingKeyBox, VerifyingKeyId,
             VerifyingKeyRecord,
@@ -484,7 +484,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                     validator_id.clone(),
                     peer.clone(),
                     validator_id.clone(),
-                    Numeric::from(VALIDATOR_STAKE_PER_LANE),
+                    Quantity::from(VALIDATOR_STAKE_PER_LANE),
                     Metadata::default(),
                 )
                 .into(),

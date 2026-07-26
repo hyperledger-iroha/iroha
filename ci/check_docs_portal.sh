@@ -17,7 +17,7 @@ trap cleanup EXIT
 run_xtask() {
   CARGO_TARGET_DIR="${XTASK_TARGET_DIR}" \
     NORITO_SKIP_BINDINGS_SYNC=1 \
-    cargo run -p xtask --bin xtask -- "$@"
+    cargo run --locked -p xtask --bin xtask -- "$@"
 }
 
 HOST_SUMMARY_TMP="$(mktemp -t soradns-host-summary.XXXXXX.json)"

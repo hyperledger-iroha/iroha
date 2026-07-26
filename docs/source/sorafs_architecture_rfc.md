@@ -193,8 +193,8 @@ flowchart LR
     source["Input bytes / directory"] --> chunker["sorafs_chunker::ChunkProfile::DEFAULT"]
     chunker --> plan["sorafs_car::CarBuildPlan"]
     plan --> builder["sorafs_manifest_builder CLI\n(ManifestBuilder + CarStreamingWriter)"]
-    stub --> car["CARv2 archive\n(sorafs_car::CarStreamingWriter)"]
-    stub --> manifest["Norito manifest\n(sorafs_manifest::ManifestV1 + envelope)"]
+    builder --> car["CARv2 archive\n(sorafs_car::CarStreamingWriter)"]
+    builder --> manifest["Norito manifest\n(sorafs_manifest::ManifestV1 + envelope)"]
     manifest --> registry["Pin Registry\n(governance signatures)"]
     car --> registry
     car --> chunk_store["sorafs_manifest_chunk_store CLI\n(ChunkStore + PoR)"]

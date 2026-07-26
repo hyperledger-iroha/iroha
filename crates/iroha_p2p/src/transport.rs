@@ -968,6 +968,21 @@ pub mod ws {
     /// WebSocket allocation before the inner frame cap can run.
     pub const WEBSOCKET_CHUNK_BYTES: usize = 64 * 1024;
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum ReadState {
+        Open,
+        FlushingCloseReply,
+        Eof,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum ShutdownState {
+        Open,
+        FlushingForClose,
+        Closing,
+        Closed,
+    }
+
     fn websocket_config() -> WebSocketConfig {
         WebSocketConfig::default()
             .read_buffer_size(WEBSOCKET_CHUNK_BYTES)
@@ -984,6 +999,8 @@ pub mod ws {
         inner: tokio_tungstenite::WebSocketStream<S>,
         read_buf: bytes::Bytes, // remaining unread bytes from last Binary frame
         write_buf: Vec<u8>,
+        read_state: ReadState,
+        shutdown_state: ShutdownState,
     }
 
     impl<S> WsDuplex<S>
@@ -995,6 +1012,8 @@ pub mod ws {
                 inner,
                 read_buf: bytes::Bytes::new(),
                 write_buf: Vec::new(),
+                read_state: ReadState::Open,
+                shutdown_state: ShutdownState::Open,
             }
         }
 
@@ -1006,20 +1025,80 @@ pub mod ws {
                 return std::task::Poll::Ready(Ok(()));
             }
             let mut sink = std::pin::Pin::new(&mut self.inner);
-            futures::ready!(sink.as_mut().poll_ready(cx).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("ws poll_ready error: {e}"),
-                )
-            }))?;
+            futures::ready!(
+                sink.as_mut()
+                    .poll_ready(cx)
+                    .map_err(|e| std::io::Error::other(format!("ws poll_ready error: {e}")))
+            )?;
             let data = std::mem::take(&mut self.write_buf);
             debug_assert!(data.len() <= WEBSOCKET_CHUNK_BYTES);
             sink.as_mut()
                 .start_send(Message::Binary(data.into()))
-                .map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws send error: {e}"))
-                })?;
+                .map_err(|e| std::io::Error::other(format!("ws send error: {e}")))?;
             std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_flush_buffered(
+            &mut self,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            futures::ready!(self.poll_send_buffered(cx))?;
+            let mut sink = std::pin::Pin::new(&mut self.inner);
+            futures::ready!(
+                sink.as_mut()
+                    .poll_flush(cx)
+                    .map_err(|e| std::io::Error::other(format!("ws flush error: {e}")))
+            )?;
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn mark_closed(&mut self) {
+            self.read_buf = bytes::Bytes::new();
+            self.write_buf.clear();
+            self.read_state = ReadState::Eof;
+            self.shutdown_state = ShutdownState::Closed;
+        }
+
+        fn begin_peer_close(&mut self) {
+            // Tungstenite has queued the protocol-mandated close reply. No
+            // buffered application payload may be emitted after that reply.
+            self.write_buf.clear();
+            self.read_state = ReadState::FlushingCloseReply;
+            self.shutdown_state = ShutdownState::Closing;
+        }
+
+        fn poll_flush_close_reply(
+            &mut self,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            debug_assert_eq!(self.read_state, ReadState::FlushingCloseReply);
+            let result = std::pin::Pin::new(&mut self.inner).poll_flush(cx);
+            match result {
+                std::task::Poll::Pending => std::task::Poll::Pending,
+                std::task::Poll::Ready(
+                    Ok(())
+                    | Err(
+                        tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                        | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
+                    ),
+                ) => {
+                    self.mark_closed();
+                    std::task::Poll::Ready(Ok(()))
+                }
+                std::task::Poll::Ready(Err(error)) => {
+                    self.mark_closed();
+                    std::task::Poll::Ready(Err(std::io::Error::other(format!(
+                        "ws close reply flush error: {error}"
+                    ))))
+                }
+            }
+        }
+
+        fn reject_late_write() -> std::io::Error {
+            std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "WebSocket transport is closing or closed",
+            )
         }
     }
 
@@ -1044,9 +1123,7 @@ pub mod ws {
         let (ws_stream, _resp) =
             client_async_tls_with_config(request, stream, Some(websocket_config()), None)
                 .await
-                .map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
-                })?;
+                .map_err(|e| std::io::Error::other(format!("ws connect: {e}")))?;
         Ok(WsDuplex::new(ws_stream))
     }
 
@@ -1059,6 +1136,19 @@ pub mod ws {
             cx: &mut std::task::Context<'_>,
             buf: &mut tokio::io::ReadBuf<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
+            // `AsyncRead` requires an empty destination to complete without
+            // touching the transport. In particular, it must not consume a
+            // complete WebSocket frame into the adaptor's private buffer.
+            if buf.remaining() == 0 {
+                return std::task::Poll::Ready(Ok(()));
+            }
+            match self.read_state {
+                ReadState::Eof => return std::task::Poll::Ready(Ok(())),
+                ReadState::FlushingCloseReply => {
+                    return self.poll_flush_close_reply(cx);
+                }
+                ReadState::Open => {}
+            }
             if !self.read_buf.is_empty() {
                 let n = std::cmp::min(self.read_buf.len(), buf.remaining());
                 buf.put_slice(&self.read_buf.split_to(n));
@@ -1087,11 +1177,24 @@ pub mod ws {
                     cx.waker().wake_by_ref();
                     std::task::Poll::Pending
                 }
-                Some(Ok(Message::Close(_))) | None => std::task::Poll::Ready(Ok(())),
-                Some(Err(e)) => std::task::Poll::Ready(Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("ws read error: {e}"),
-                ))),
+                Some(Ok(Message::Close(_))) => {
+                    self.begin_peer_close();
+                    self.poll_flush_close_reply(cx)
+                }
+                None
+                | Some(Err(
+                    tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                    | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
+                )) => {
+                    self.mark_closed();
+                    std::task::Poll::Ready(Ok(()))
+                }
+                Some(Err(error)) => {
+                    self.mark_closed();
+                    std::task::Poll::Ready(Err(std::io::Error::other(format!(
+                        "ws read error: {error}"
+                    ))))
+                }
             }
         }
     }
@@ -1105,6 +1208,12 @@ pub mod ws {
             cx: &mut std::task::Context<'_>,
             data: &[u8],
         ) -> std::task::Poll<std::io::Result<usize>> {
+            if self.shutdown_state != ShutdownState::Open {
+                return std::task::Poll::Ready(Err(Self::reject_late_write()));
+            }
+            if data.is_empty() {
+                return std::task::Poll::Ready(Ok(0));
+            }
             if self.write_buf.len() == WEBSOCKET_CHUNK_BYTES {
                 futures::ready!(self.poll_send_buffered(cx))?;
             }
@@ -1119,27 +1228,72 @@ pub mod ws {
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
-            futures::ready!(self.poll_send_buffered(cx))?;
-            let mut sink = std::pin::Pin::new(&mut self.inner);
-            futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("ws flush error: {e}"))
-            }))?;
-            std::task::Poll::Ready(Ok(()))
+            match self.shutdown_state {
+                ShutdownState::Open | ShutdownState::FlushingForClose => {
+                    self.poll_flush_buffered(cx)
+                }
+                ShutdownState::Closing => {
+                    let result = std::pin::Pin::new(&mut self.inner).poll_flush(cx);
+                    match result {
+                        std::task::Poll::Pending => std::task::Poll::Pending,
+                        std::task::Poll::Ready(
+                            Ok(())
+                            | Err(
+                                tokio_tungstenite::tungstenite::Error::ConnectionClosed
+                                | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
+                            ),
+                        ) => std::task::Poll::Ready(Ok(())),
+                        std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Err(
+                            std::io::Error::other(format!("ws close flush error: {error}")),
+                        )),
+                    }
+                }
+                ShutdownState::Closed => std::task::Poll::Ready(Ok(())),
+            }
         }
 
         fn poll_shutdown(
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
-            if !self.write_buf.is_empty() {
-                // Flush any buffered payload first.
-                futures::ready!(self.as_mut().poll_flush(cx))?;
+            loop {
+                match self.shutdown_state {
+                    ShutdownState::Open => {
+                        // Record shutdown before the first operation that can
+                        // return `Pending`; dropping that future must never
+                        // reopen the write side.
+                        self.shutdown_state = ShutdownState::FlushingForClose;
+                    }
+                    ShutdownState::FlushingForClose => match self.poll_flush_buffered(cx) {
+                        std::task::Poll::Pending => return std::task::Poll::Pending,
+                        std::task::Poll::Ready(Ok(())) => {
+                            self.shutdown_state = ShutdownState::Closing;
+                        }
+                        std::task::Poll::Ready(Err(error)) => {
+                            self.mark_closed();
+                            return std::task::Poll::Ready(Err(error));
+                        }
+                    },
+                    ShutdownState::Closing => {
+                        let result = std::pin::Pin::new(&mut self.inner).poll_close(cx);
+                        return match result {
+                            std::task::Poll::Pending => std::task::Poll::Pending,
+                            std::task::Poll::Ready(Ok(())) => {
+                                self.write_buf.clear();
+                                self.shutdown_state = ShutdownState::Closed;
+                                std::task::Poll::Ready(Ok(()))
+                            }
+                            std::task::Poll::Ready(Err(error)) => {
+                                self.mark_closed();
+                                std::task::Poll::Ready(Err(std::io::Error::other(format!(
+                                    "ws close error: {error}"
+                                ))))
+                            }
+                        };
+                    }
+                    ShutdownState::Closed => return std::task::Poll::Ready(Ok(())),
+                }
             }
-            let mut sink = std::pin::Pin::new(&mut self.inner);
-            futures::ready!(sink.as_mut().poll_close(cx).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("ws close error: {e}"))
-            }))?;
-            std::task::Poll::Ready(Ok(()))
         }
     }
 
@@ -1159,9 +1313,7 @@ pub mod ws {
         let (ws_stream, _resp) =
             tokio_tungstenite::connect_async_with_config(req, Some(websocket_config()), false)
                 .await
-                .map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, format!("wss connect: {e}"))
-                })?;
+                .map_err(|e| std::io::Error::other(format!("wss connect: {e}")))?;
         Ok(WsDuplex::new(ws_stream))
     }
 
@@ -1181,9 +1333,7 @@ pub mod ws {
         let (ws_stream, _resp) =
             tokio_tungstenite::connect_async_with_config(req, Some(websocket_config()), false)
                 .await
-                .map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
-                })?;
+                .map_err(|e| std::io::Error::other(format!("ws connect: {e}")))?;
         Ok(WsDuplex::new(ws_stream))
     }
 
@@ -1275,6 +1425,94 @@ pub mod ws {
             );
         }
 
+        struct ReadPollGuard<S> {
+            inner: S,
+            reject_reads: Arc<AtomicBool>,
+        }
+
+        impl<S> ReadPollGuard<S> {
+            fn new(inner: S, reject_reads: Arc<AtomicBool>) -> Self {
+                Self {
+                    inner,
+                    reject_reads,
+                }
+            }
+        }
+
+        impl<S: AsyncRead + Unpin> AsyncRead for ReadPollGuard<S> {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                assert!(
+                    !self.reject_reads.load(Ordering::SeqCst),
+                    "WebSocket adaptor polled its transport after reads were forbidden"
+                );
+                std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+            }
+        }
+
+        impl<S: AsyncWrite + Unpin> AsyncWrite for ReadPollGuard<S> {
+            fn poll_write(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                data: &[u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                std::pin::Pin::new(&mut self.inner).poll_write(cx, data)
+            }
+
+            fn poll_flush(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+            }
+
+            fn poll_shutdown(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn websocket_duplex_zero_capacity_read_does_not_poll_or_consume_frame() {
+            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
+            let reject_reads = Arc::new(AtomicBool::new(false));
+            let client_io = ReadPollGuard::new(client_io, Arc::clone(&reject_reads));
+            let (client_ws, mut server_ws) = tokio::join!(
+                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
+                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
+            );
+            let mut client = WsDuplex::new(client_ws);
+            let expected = [0xC3, 0x7E, 0x41, 0x19];
+
+            server_ws
+                .send(Message::Binary(expected.to_vec().into()))
+                .await
+                .expect("send frame before zero-capacity read");
+
+            reject_reads.store(true, Ordering::SeqCst);
+            let mut empty = [];
+            let mut empty_buf = tokio::io::ReadBuf::new(&mut empty);
+            futures::future::poll_fn(|cx| {
+                std::pin::Pin::new(&mut client).poll_read(cx, &mut empty_buf)
+            })
+            .await
+            .expect("zero-capacity read succeeds immediately");
+            assert!(empty_buf.filled().is_empty());
+
+            reject_reads.store(false, Ordering::SeqCst);
+            let mut received = [0_u8; 4];
+            client
+                .read_exact(&mut received)
+                .await
+                .expect("frame remains available after zero-capacity read");
+            assert_eq!(received, expected);
+        }
+
         #[tokio::test(flavor = "current_thread")]
         async fn websocket_duplex_ignores_empty_binary_without_reporting_stream_eof() {
             let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
@@ -1300,6 +1538,57 @@ pub mod ws {
                 .await
                 .expect("empty Binary message must not terminate the byte stream");
             assert_eq!(received, expected);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn websocket_duplex_flushes_close_reply_before_sticky_eof() {
+            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
+            let reject_reads = Arc::new(AtomicBool::new(false));
+            let client_io = ReadPollGuard::new(client_io, Arc::clone(&reject_reads));
+            let (client_ws, mut server_ws) = tokio::join!(
+                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
+                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
+            );
+            let mut client = WsDuplex::new(client_ws);
+
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let consume_close = async {
+                    let mut byte = [0_u8; 1];
+                    assert_eq!(
+                        client.read(&mut byte).await.expect("read peer close"),
+                        0,
+                        "peer Close must become byte-stream EOF"
+                    );
+                    reject_reads.store(true, Ordering::SeqCst);
+                    assert_eq!(
+                        client.read(&mut byte).await.expect("read sticky EOF"),
+                        0,
+                        "EOF must remain stable without polling the transport"
+                    );
+                };
+                let exchange_close = async {
+                    server_ws
+                        .send(Message::Close(None))
+                        .await
+                        .expect("send peer Close");
+                    match server_ws
+                        .next()
+                        .await
+                        .expect("client close acknowledgement")
+                    {
+                        Ok(Message::Close(_)) => {}
+                        Ok(other) => {
+                            panic!("expected WebSocket Close acknowledgement, got {other:?}")
+                        }
+                        Err(error) => {
+                            panic!("failed to observe WebSocket Close acknowledgement: {error}")
+                        }
+                    }
+                };
+                tokio::join!(consume_close, exchange_close);
+            })
+            .await
+            .expect("close acknowledgement and sticky EOF must not stall");
         }
 
         struct PendingFlushOnce<S> {
@@ -1359,7 +1648,7 @@ pub mod ws {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn websocket_duplex_shutdown_is_stateful_across_pending_close_flush() {
+        async fn websocket_duplex_cancelled_shutdown_rejects_late_writes_and_resumes() {
             let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
             let pending_observed = Arc::new(AtomicBool::new(false));
             let client_io = PendingFlushOnce::new(client_io, Arc::clone(&pending_observed));
@@ -1368,6 +1657,28 @@ pub mod ws {
                 WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
             );
             let mut client = WsDuplex::new(client_ws);
+
+            let mut shutdown = Box::pin(client.shutdown());
+            futures::future::poll_fn(
+                |cx| match std::future::Future::poll(shutdown.as_mut(), cx) {
+                    std::task::Poll::Pending => std::task::Poll::Ready(()),
+                    std::task::Poll::Ready(result) => {
+                        panic!("fixture must suspend the first shutdown poll, got {result:?}")
+                    }
+                },
+            )
+            .await;
+            drop(shutdown);
+            assert!(
+                pending_observed.load(Ordering::SeqCst),
+                "fixture must suspend shutdown while flushing before Close"
+            );
+
+            let error = client
+                .write_all(b"must not escape after shutdown cancellation")
+                .await
+                .expect_err("a cancelled shutdown must leave the write side closed");
+            assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
 
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 let shutdown = client.shutdown();
@@ -1385,10 +1696,6 @@ pub mod ws {
             })
             .await
             .expect("WebSocket shutdown must not stall");
-            assert!(
-                pending_observed.load(Ordering::SeqCst),
-                "fixture must force the close flush through Pending"
-            );
         }
     }
 }

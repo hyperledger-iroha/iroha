@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chacha20orig } from "@noble/ciphers/chacha";
-import { bls12_381 } from "@noble/curves/bls12-381";
 
 import {
   resolveToriiClientConfig,
@@ -53,7 +52,11 @@ import {
   requireCanonicalAuthAccount,
 } from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
-import { NumericV1, NumericV1Error } from "./numericV1.js";
+import {
+  KotodamaQuantity,
+  NumericV1,
+  NumericV1Error,
+} from "./numericV1.js";
 import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto.js";
 import {
   getCurveEntryByPublicKeyMulticodec,
@@ -95,6 +98,7 @@ import {
   normalizeValidationFeeLedgerBindingV1,
   verifyValidationFeeCurrentPolicyProofV1,
 } from "./validationFeeConsensus.js";
+import { assertCanonicalBls12381G1Compressed } from "./bls12381G1.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 const APPLICATION_JSON = "application/json";
@@ -271,11 +275,6 @@ const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
 const MAX_SIGNED_INT32 = 0x7fffffff;
 const MAX_SIGNED_INT32_BIGINT = BigInt(MAX_SIGNED_INT32);
-const MAX_NUMERIC_SCALE = 28;
-const MAX_NUMERIC_BITS = 512;
-const MAX_NUMERIC_TEXT_LENGTH = 185;
-const MIN_NUMERIC_MANTISSA = -(1n << BigInt(MAX_NUMERIC_BITS - 1));
-const MAX_NUMERIC_MANTISSA = (1n << BigInt(MAX_NUMERIC_BITS - 1)) - 1n;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
@@ -14416,13 +14415,13 @@ function parseSumeragiNexusFeeSchedule(value, context) {
       `${context}.instruction_count`,
     ),
     gas_used: parseSumeragiUnsigned(record.gas_used, `${context}.gas_used`),
-    base_fee: parseSumeragiNumeric(record.base_fee, `${context}.base_fee`),
-    per_byte_fee: parseSumeragiNumeric(record.per_byte_fee, `${context}.per_byte_fee`),
-    per_instruction_fee: parseSumeragiNumeric(
+    base_fee: parseSumeragiQuantity(record.base_fee, `${context}.base_fee`),
+    per_byte_fee: parseSumeragiQuantity(record.per_byte_fee, `${context}.per_byte_fee`),
+    per_instruction_fee: parseSumeragiQuantity(
       record.per_instruction_fee,
       `${context}.per_instruction_fee`,
     ),
-    per_gas_unit_fee: parseSumeragiNumeric(
+    per_gas_unit_fee: parseSumeragiQuantity(
       record.per_gas_unit_fee,
       `${context}.per_gas_unit_fee`,
     ),
@@ -14462,7 +14461,7 @@ function parseSumeragiNexusFeeReceipt(value, context) {
       `${context}.payer_account_id`,
     ),
     fee_asset_id: requireExactNonEmptyString(record.fee_asset_id, `${context}.fee_asset_id`),
-    fee_amount: parseSumeragiNumeric(record.fee_amount, `${context}.fee_amount`),
+    fee_amount: parseSumeragiQuantity(record.fee_amount, `${context}.fee_amount`),
     schedule: parseSumeragiNexusFeeSchedule(record.schedule, `${context}.schedule`),
   });
 }
@@ -14676,6 +14675,8 @@ function countSumeragiBitmapSigners(bitmap) {
 
 const SUMERAGI_BLS_NORMAL_PEER_ID_PATTERN =
   /^(?:bls_normal:)?(ea0130[0-9A-F]{96})$/;
+const SUMERAGI_BLS_NORMAL_VALIDATION_CACHE_MAX = 256;
+const validatedSumeragiBlsNormalPublicKeys = new Set();
 const SUMERAGI_NATIVE_DESCRIPTOR_PREIMAGE_TYPE =
   "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage";
 const SUMERAGI_NATIVE_PROPOSAL_PREIMAGE_TYPE =
@@ -14694,12 +14695,20 @@ function parseSumeragiBlsNormalPeerId(value, context) {
   if (matched === null) {
     throw new TypeError(`${context} must be a canonical BLS-Normal PeerId`);
   }
-  const compressed = Buffer.from(matched[1].slice(6), "hex");
+  const publicKeyHex = matched[1].slice(6);
+  const compressed = Buffer.from(publicKeyHex, "hex");
   try {
-    const point = bls12_381.G1.Point.fromHex(compressed);
-    point.assertValidity();
-    if (point.is0()) {
-      throw new Error("identity public keys are forbidden");
+    if (!validatedSumeragiBlsNormalPublicKeys.has(publicKeyHex)) {
+      assertCanonicalBls12381G1Compressed(compressed);
+      if (
+        validatedSumeragiBlsNormalPublicKeys.size
+        >= SUMERAGI_BLS_NORMAL_VALIDATION_CACHE_MAX
+      ) {
+        validatedSumeragiBlsNormalPublicKeys.delete(
+          validatedSumeragiBlsNormalPublicKeys.values().next().value,
+        );
+      }
+      validatedSumeragiBlsNormalPublicKeys.add(publicKeyHex);
     }
   } catch (error) {
     throw new TypeError(`${context} contains an invalid BLS-Normal public key`, {
@@ -17435,11 +17444,8 @@ function parseSumeragiUnsignedDecimal(value, context) {
   return value;
 }
 
-function parseSumeragiNumeric(value, context) {
-  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u.test(value)) {
-    throw new TypeError(`${context} must be a canonical non-negative Numeric string`);
-  }
-  return value;
+function parseSumeragiQuantity(value, context) {
+  return requireCanonicalQuantity(value, context);
 }
 
 function parseSumeragiBoolean(value, context) {
@@ -18857,7 +18863,8 @@ function parseGovernanceLocksResult(payload) {
 
 function parseGovernanceLockRecord(payload, context) {
   const owner = requireNonEmptyString(payload.owner, `${context}.owner`);
-  const amount = coerceInteger(payload.amount, `${context}.amount`);
+  const amount = requireCanonicalQuantity(payload.amount, `${context}.amount`);
+  const slashed = requireCanonicalQuantity(payload.slashed, `${context}.slashed`);
   const expiryHeight = coerceInteger(payload.expiry_height, `${context}.expiry_height`);
   const direction = coerceInteger(payload.direction, `${context}.direction`);
   if (direction < 0 || direction > 255) {
@@ -18867,6 +18874,7 @@ function parseGovernanceLockRecord(payload, context) {
   return {
     owner,
     amount,
+    slashed,
     expiry_height: expiryHeight,
     direction,
     duration_blocks: durationBlocks,
@@ -22263,6 +22271,32 @@ function requireCanonicalQuantity(value, name) {
   }
 }
 
+function normalizeQuantityInput(value, name) {
+  try {
+    if (value instanceof KotodamaQuantity) {
+      return NumericV1.encodeQuantityJson(value);
+    }
+    if (typeof value === "string") {
+      return NumericV1.decodeQuantityJson(value).toString();
+    }
+    if (typeof value === "bigint") {
+      return new KotodamaQuantity(value, 0).toString();
+    }
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are rejected`,
+      name,
+    );
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
+      name,
+    );
+  }
+}
+
 function requireExactBoolean(value, name) {
   if (typeof value !== "boolean") {
     throw createValidationError(
@@ -23889,93 +23923,6 @@ function computeHashLiteralCrc(tag, body) {
   return (crc & 0xffff).toString(16).toUpperCase().padStart(4, "0");
 }
 
-function normalizeNumericLiteral(value, name, { allowNegative = false } = {}) {
-  let raw;
-  if (typeof value === "string") {
-    raw = value.trim();
-  } else if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new TypeError(`${name} must be a finite number`);
-    }
-    raw = value.toString();
-  } else if (typeof value === "bigint") {
-    raw = value.toString();
-  } else {
-    throw new TypeError(`${name} must be a string, number, or bigint`);
-  }
-
-  if (!raw) {
-    throw new TypeError(`${name} must be a valid Numeric literal`);
-  }
-  if (raw.length > MAX_NUMERIC_TEXT_LENGTH) {
-    throw new TypeError(`${name} exceeds the bounded Numeric text length`);
-  }
-
-  let digits = raw;
-  const sign = digits[0];
-  if (sign === "-" || sign === "+") {
-    if (sign === "-" && !allowNegative) {
-      throw new TypeError(`${name} must be non-negative`);
-    }
-    digits = digits.slice(1);
-  }
-  if (!digits) {
-    throw new TypeError(`${name} must be a valid Numeric literal`);
-  }
-
-  let seenDot = false;
-  let scale = 0;
-  let mantissa = "";
-  for (const ch of digits) {
-    if (ch === ".") {
-      if (seenDot) {
-        throw new TypeError(`${name} must be a valid Numeric literal`);
-      }
-      seenDot = true;
-      continue;
-    }
-    if (ch < "0" || ch > "9") {
-      throw new TypeError(`${name} must be a valid Numeric literal`);
-    }
-    mantissa += ch;
-    if (seenDot) {
-      scale += 1;
-    }
-  }
-  if (!mantissa) {
-    throw new TypeError(`${name} must be a valid Numeric literal`);
-  }
-  if (scale > MAX_NUMERIC_SCALE) {
-    throw new TypeError(`${name} scale exceeds ${MAX_NUMERIC_SCALE} decimal places`);
-  }
-
-  let mantissaValue = BigInt(mantissa);
-  if (sign === "-") {
-    mantissaValue = -mantissaValue;
-  }
-  if (
-    mantissaValue < MIN_NUMERIC_MANTISSA ||
-    mantissaValue > MAX_NUMERIC_MANTISSA
-  ) {
-    throw new TypeError(
-      `${name} mantissa exceeds the signed ${MAX_NUMERIC_BITS}-bit range`,
-    );
-  }
-
-  return raw;
-}
-
-function normalizeNumericString(value, name) {
-  return normalizeNumericLiteral(value, name, { allowNegative: false });
-}
-
-function normalizeAmountLike(value, name) {
-  if (value === undefined || value === null) {
-    throw new TypeError(`${name} is required`);
-  }
-  return normalizeNumericLiteral(value, name, { allowNegative: false });
-}
-
 function normalizeOptionalHexString(value, name) {
   if (value === undefined || value === null) {
     return null;
@@ -24725,7 +24672,10 @@ function normalizeGovernancePlainBallotPayload(input) {
       record.owner,
       "governanceSubmitPlainBallot.owner",
     ),
-    amount: normalizeNumericString(record.amount, "governanceSubmitPlainBallot.amount"),
+    amount: normalizeQuantityInput(
+      record.amount,
+      "governanceSubmitPlainBallot.amount",
+    ),
     duration_blocks: ToriiClient._normalizeUnsignedInteger(
       record.duration_blocks ?? record.durationBlocks,
       "governanceSubmitPlainBallot.durationBlocks",
@@ -24777,6 +24727,15 @@ function normalizeGovernancePublicInputs(value, name) {
   normalizeGovernancePublicInputHex(normalized, "root_hint", name);
   normalizeGovernancePublicInputHex(normalized, "nullifier", name);
   ensureGovernanceLockHintsComplete(normalized, name);
+  if (
+    Object.prototype.hasOwnProperty.call(normalized, "amount") &&
+    normalized.amount !== null
+  ) {
+    normalized.amount = requireCanonicalQuantity(
+      normalized.amount,
+      `${name}.amount`,
+    );
+  }
   if (
     Object.prototype.hasOwnProperty.call(normalized, "owner") &&
     normalized.owner !== null
@@ -24945,7 +24904,7 @@ function normalizeGovernanceZkBallotV1Payload(input) {
     );
   }
   if (record.amount !== undefined && record.amount !== null) {
-    payload.amount = normalizeNumericString(
+    payload.amount = normalizeQuantityInput(
       record.amount,
       "governanceSubmitZkBallotV1.amount",
     );
@@ -25041,6 +25000,15 @@ function normalizeGovernanceZkBallotProofPayload(input) {
     }
   }
   ensureGovernanceLockHintsComplete(normalizedBallot, ballotContext);
+  if (
+    Object.prototype.hasOwnProperty.call(normalizedBallot, "amount") &&
+    normalizedBallot.amount !== null
+  ) {
+    normalizedBallot.amount = normalizeQuantityInput(
+      normalizedBallot.amount,
+      `${ballotContext}.amount`,
+    );
+  }
   if (
     Object.prototype.hasOwnProperty.call(normalizedBallot, "owner") &&
     normalizedBallot.owner !== null
@@ -34651,7 +34619,7 @@ function normalizeSubscriptionUsageRequest(input, context) {
   const payload = {
     ...credentials,
     unit_key: requireNonEmptyString(unitKey, `${context}.unitKey`),
-    delta: normalizeNumericLiteral(delta, `${context}.delta`),
+    delta: normalizeQuantityInput(delta, `${context}.delta`),
   };
   const usageTriggerId = pickOverride(record, "usage_trigger_id", "usageTriggerId");
   if (usageTriggerId !== undefined && usageTriggerId !== null) {

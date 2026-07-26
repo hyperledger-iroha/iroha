@@ -6,7 +6,7 @@ direction: ltr
 source: docs/source/sorafs_governance_dag_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 8402b1855afb512eaebe2cb5717717da322da539324e20bf54f505c1a44d5726
+source_hash: 84e49abffcd67f3eadebfae2401cd0cd38b555d4aa36a4f06f95b56def048ee7
 source_last_modified: "2026-07-26T00:00:53.074145+00:00"
 translation_last_reviewed: null
 ---

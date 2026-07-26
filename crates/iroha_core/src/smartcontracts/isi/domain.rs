@@ -3706,7 +3706,7 @@ mod tests {
     };
     use iroha_primitives::{
         json::Json,
-        numeric::{Numeric, NumericSpec, Quantity},
+        numeric::{NumericSpec, Quantity},
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
@@ -8401,13 +8401,11 @@ mod tests {
                     domain_id.clone(),
                     "usd".parse().unwrap(),
                 ),
-                quantity: Quantity::try_from_numeric(Numeric::new(10, 0))
-                    .expect("repo cash-leg fixture must be a non-negative quantity"),
+                quantity: Quantity::from(10_u32),
             },
             iroha_data_model::repo::RepoCollateralLeg::new(
                 AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap()),
-                Quantity::try_from_numeric(Numeric::new(12, 0))
-                    .expect("repo collateral-leg fixture must be a non-negative quantity"),
+                Quantity::from(12_u32),
             ),
             250,
             1000,
@@ -8465,8 +8463,7 @@ mod tests {
                 role: iroha_data_model::isi::SettlementLegRole::Delivery,
                 leg: iroha_data_model::isi::SettlementLeg::new(
                     AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap()),
-                    Quantity::try_from_numeric(Numeric::new(1, 0))
-                        .expect("settlement-leg fixture must be a non-negative quantity"),
+                    Quantity::one(),
                     account_id.clone(),
                     authority.clone(),
                 ),
@@ -10132,20 +10129,14 @@ mod tests {
                 .assets
                 .get(&alice_scoped)
                 .map(|value| value.clone().into_inner()),
-            Some(
-                Quantity::try_from(Numeric::new(10, 0))
-                    .expect("test asset quantity must be non-negative"),
-            )
+            Some(Quantity::from(10_u32))
         );
         assert_eq!(
             tx.world
                 .assets
                 .get(&bob_scoped)
                 .map(|value| value.clone().into_inner()),
-            Some(
-                Quantity::try_from(Numeric::new(5, 0))
-                    .expect("test asset quantity must be non-negative"),
-            )
+            Some(Quantity::from(5_u32))
         );
         assert!(
             tx.world
@@ -11026,13 +11017,11 @@ mod tests {
                 counterparty,
                 iroha_data_model::repo::RepoCashLeg {
                     asset_definition_id: asset_definition_id.clone(),
-                    quantity: Quantity::try_from_numeric(Numeric::new(10, 0))
-                        .expect("repo cash-leg fixture must be a non-negative quantity"),
+                    quantity: Quantity::from(10_u32),
                 },
                 iroha_data_model::repo::RepoCollateralLeg::new(
                     AssetDefinitionId::new(asset_domain, "bond".parse().unwrap()),
-                    Quantity::try_from_numeric(Numeric::new(12, 0))
-                        .expect("repo collateral-leg fixture must be a non-negative quantity"),
+                    Quantity::from(12_u32),
                 ),
                 250,
                 1_000,
@@ -11559,8 +11548,7 @@ mod tests {
                 role: iroha_data_model::isi::SettlementLegRole::Delivery,
                 leg: iroha_data_model::isi::SettlementLeg::new(
                     asset_definition_id.clone(),
-                    Quantity::try_from_numeric(Numeric::new(1, 0))
-                        .expect("settlement-leg fixture must be a non-negative quantity"),
+                    Quantity::one(),
                     from,
                     to,
                 ),

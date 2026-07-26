@@ -1,5 +1,6 @@
 import { Buffer } from "buffer";
 
+import { blake2b256 } from "./blake2b.js";
 import { NumericV1, NumericV1Error } from "./numericV1.js";
 import { browserSignedTransactionHashHex } from "./transactionCodec.js";
 import { buildCanonicalJsonRequest } from "./canonicalRequest.js";
@@ -326,6 +327,14 @@ function requireMatchingReceiptHashHeader(response, name, expectedHash) {
   if (match[1].toLowerCase() !== expectedHash) {
     throw new Error(`${name} does not match the locally signed transaction`);
   }
+}
+
+function innerSignedTransactionHashHex(versionedSignedTransaction) {
+  // Torii's signed-transaction field hashes the unversioned inner wire body.
+  // The public pipeline identity instead hashes its External entrypoint wrapper.
+  const digest = Buffer.from(blake2b256(versionedSignedTransaction.subarray(1)));
+  digest[digest.length - 1] |= 1;
+  return digest.toString("hex");
 }
 
 function requireTransactionBytes(value, context) {
@@ -1266,7 +1275,8 @@ export class ToriiBrowserClient {
       signedTransaction,
       "submitTransaction signedTransaction",
     );
-    const expectedHash = browserSignedTransactionHashHex(body);
+    const expectedEntrypointHash = browserSignedTransactionHashHex(body);
+    const expectedSignedTransactionHash = innerSignedTransactionHashHex(body);
     return this._json("POST", "/v1/pipeline/transactions", {
       rawBody: body,
       contentType: "application/x-norito",
@@ -1280,10 +1290,18 @@ export class ToriiBrowserClient {
         for (const name of [
           "x-iroha-entrypoint-hash",
           "x-iroha-transaction-hash",
-          "x-iroha-signed-transaction-hash",
         ]) {
-          requireMatchingReceiptHashHeader(response, name, expectedHash);
+          requireMatchingReceiptHashHeader(
+            response,
+            name,
+            expectedEntrypointHash,
+          );
         }
+        requireMatchingReceiptHashHeader(
+          response,
+          "x-iroha-signed-transaction-hash",
+          expectedSignedTransactionHash,
+        );
       },
     });
   }

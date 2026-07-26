@@ -65,6 +65,7 @@ HEDGING_FIXTURE_GENERATOR_RS = (
 )
 POP_CREDENTIALS_RS = REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "pop_credentials.rs"
 SORAFS_NODE_LIB_RS = REPO_ROOT / "crates" / "sorafs_node" / "src" / "lib.rs"
+IROHAD_MAIN_RS = REPO_ROOT / "crates" / "irohad" / "src" / "main.rs"
 SORAFS_NODE_MODERATION_RS = (
     REPO_ROOT / "crates" / "sorafs_node" / "src" / "moderation.rs"
 )
@@ -201,6 +202,7 @@ FINGERPRINT_FIELD_TYPED_SUFFIXES = (
     "_at_unix",
     "_count",
     "_counts",
+    "_sequence",
 )
 FINGERPRINT_FIELD_ALLOWED_NAMES = frozenset(
     {
@@ -4617,6 +4619,7 @@ def test_rollout_evidence_gates_export_dry_run_field_contracts() -> None:
 def test_rollout_checker_fingerprint_fields_are_typed_or_reviewed() -> None:
     assert fingerprint_field_name_is_typed("manifest_body_blake3_hex")
     assert fingerprint_field_name_is_typed("scheduled_lifecycle_canary_last_tick_at_unix")
+    assert fingerprint_field_name_is_typed("catalog_sequence")
     assert not fingerprint_field_name_is_typed("manifest_body_blake3")
     assert not fingerprint_field_name_is_typed("scheduled_lifecycle_canary_last_tick_unix")
 
@@ -15353,7 +15356,7 @@ def test_pop_credentials_runtime_services_stay_open_in_docs() -> None:
         "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, and local proof APIs are shipped; a deployable KMS/witness adapter and operator client remain open.",
         "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the external runtime adapter and reviewed deployment evidence remain open.",
         "`V1-BLOCK-POP-RUNTIME-01` blocks local completion and promotion.",
-        "Until those checks pass, operators must leave `torii.sorafs.storage.pop_credentials.enabled = false`; the intentional enabled-without-runtime startup failure must not be bypassed.",
+        "Until those checks pass, operators must leave `sorafs.storage.pop_credentials.enabled = false`; the intentional enabled-without-runtime startup failure must not be bypassed.",
         "Resolve `V1-BLOCK-POP-RUNTIME-01` with the shared deployable external-runtime adapter described above; do not add a software-key, file-key, environment, or process-clock fallback.",
         "Publish operator and juror command documentation only after the still-open CLI and shared external-runtime adapter exist.",
     )
@@ -17965,12 +17968,12 @@ def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -
     required_open = (
         "SFM-3 has two local foundations: the deterministic reputation V1 snapshot/proof core and a native committed input journal.",
         "This is source implementation, not a readiness claim.",
-        "Torii's local-authoritative snapshot POST and the matching CLI publication command are removed. Latest, provider, weights, and event reads now consume only the fresh committed-derived projection after signed snapshot validation and authenticated Governance DAG readback. The snapshot-id route remains latest-only rather than an historical archive.",
+        "Torii's local-authoritative snapshot POST and the matching CLI publication command are removed. Latest, provider, weights, and event reads now consume only the fresh committed-derived projection after signed snapshot validation and authenticated Governance DAG readback. Snapshot-id reads resolve the exact authenticated snapshot from the durable immutable suffix capped at 1,024 entries and the publication-checkpoint byte ceiling; unknown or evicted ids return `404`.",
         "Capacity-dispute registration appends `Opened` atomically with the canonical dispute record, and `ResolveSorafsCapacityDispute` atomically updates that record and appends the exact revision-two `Resolved` event.",
         "Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration, the queue-backed journal submitter, exact historical-query injection boundary, and supervised scheduling/reconciliation are wired; the production historical adapter, integrated validation, and reviewed deployment evidence remain open.",
         "Scoring engine (`reputation_engine`) | Aggregates metrics, runs scoring algorithm (EigenTrust-style), applies policy penalties, generates snapshots. | Runs hourly; writes outputs to database + object storage.",
         "Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open.",
-        "API gateway (`sorafs_reputation_api`) | Exposes read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Latest/provider/weights/event reads use the ready committed projection; the snapshot-id route still retains only the latest snapshot and the runtime cannot start in production until all required injected adapters exist.",
+        "API gateway (`sorafs_reputation_api`) | Exposes read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist.",
         "Strict non-secret `iroha_config` policy construction and the supervised finalized-query/threshold-signing/publication worker are implemented.",
         "`IrohaRuntimeDeps` accepts an identity-pinned immutable historical `ReputationFinalizedQueryV1`; the unsound current-head state adapter and fallback were removed.",
         "`QueuedReputationJournalTransactionSubmitterV1` signs and submits typed PoR/token append transactions through the normal queue.",
@@ -17979,7 +17982,7 @@ def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -
         "Production rollout:",
         "Supply and exercise the immutable historical finalized-query adapter plus the queue-backed governed PoR/regional counted stream-token transaction submitter; wire the actual PoR and token owners to the durable callbacks.",
         "Supply external threshold signer and authenticated Governance DAG publication/readback/head-inclusion adapters to the already-supervised runtime.",
-        "Resolve the latest-only snapshot-id route, integrate the regional publisher/API and SDK reads against the committed projection, and run four-peer end-to-end tests with orchestrator/indexer consumers.",
+        "Integrate the regional publisher/API and SDK reads against the committed projection, exercise exact retained snapshot-id lookup and bounded eviction, and run four-peer end-to-end tests with orchestrator/indexer consumers.",
         "Capture live run evidence for snapshot freshness, ingest lag, low-score handling, SSE/WebSocket event delivery, and routing/incentive consumption",
         "Publish governance-approved weights with the governed `weights_digest_hex` carried by publish/latest rollout evidence, then archive the first production snapshot `.to`/JSON artifacts and proof replay evidence.",
         "Exercise rollback/stale-snapshot procedures before routing or incentives rely",
@@ -17992,6 +17995,9 @@ def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -
         "deploy genuine finalized-query, threshold-signing",
         "remaining GET family still reads the old retained snapshot model",
         "standard-daemon committed read wiring remains open",
+        "snapshot-id route remains latest-only",
+        "snapshot-id route still retains only the latest snapshot",
+        "Resolve the latest-only snapshot-id route",
         "`StateReputationFinalizedQueryV1`",
     )
 
@@ -17999,6 +18005,20 @@ def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -
     assert [
         phrase for phrase in stale_missing_adapter_claims if phrase in normalized
     ] == []
+
+
+def test_reputation_ready_reader_forwards_exact_snapshot_id_lookup() -> None:
+    source = read(IROHAD_MAIN_RS)
+    start = source.index(
+        "impl sorafs_node::reputation::runtime::ReputationCommittedReadApiV1\n"
+        "    for ReadyReputationCommittedReaderV1"
+    )
+    end = source.index("/// [Orchestrator]", start)
+    ready_reader = source[start:end]
+
+    assert "fn committed_snapshot_by_id(" in ready_reader
+    assert "self.ensure_ready()?;" in ready_reader
+    assert "self.runtime.committed_snapshot_by_id(snapshot_id)" in ready_reader
 
 
 def test_capacity_marketplace_docs_keep_authoritative_dispute_boundary() -> None:
@@ -18773,7 +18793,7 @@ def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
 
     required_scheduler_open = (
         "Torii now constructs a verified randomness provider from pinned chain public-key/genesis/period metadata, at least three canonical HTTPS endpoints, a strict-majority quorum, bounded DNS/body/timeouts, freshness limits, and a durable high-water state file.",
-        "`torii.sorafs_por.enabled = true` fails startup when this configuration is missing or internally inconsistent; `randomness_seed_hex` is never accepted as authenticated drand.",
+        "`sorafs.por.enabled = true` fails startup when this configuration is missing or internally inconsistent; `randomness_seed_hex` is never accepted as authenticated drand.",
         "The local SF-9 state/report integration and verified drand/provider-VRF feeds are implemented. Release promotion remains blocked on reviewed live deployment evidence and any production governance archive handoff required by the operator.",
         "Operators should keep SF-9 promotion fail-closed until the payload-free deployment evidence passes the checked-in gate:",
         "The checker recognizes `sorafs.por.*` SF-9 rollout schemas for randomness, scheduler runtime, validator replay, reporting/archive handoff, observability, and governance approval.",
@@ -23457,7 +23477,7 @@ def test_evidence_viewer_runtime_services_are_documented_as_shipped_code() -> No
         "Challenge values, grants, WebAuthn assertions, credential identifiers, signing keys, KMS credentials, and evidence bytes never enter the checkpoint or logs.",
         "The service persists a public Ed25519-signed checkpoint anchor containing the canonical checkpoint digest, retained receipt count, and exact receipt-chain head.",
         "A missing installation must durably create this signed genesis anchor before the service becomes available.",
-        "`torii.sorafs.storage.evidence_viewer`",
+        "`sorafs.storage.evidence_viewer`",
         "There is no file key, environment secret, `KeyPair`, or in-process production fallback.",
         "`POST` | `/v1/evidence/session/challenge`",
         "`POST` | `/v1/evidence/session`",

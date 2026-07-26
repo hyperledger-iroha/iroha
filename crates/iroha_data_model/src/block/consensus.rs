@@ -6055,6 +6055,39 @@ mod tests {
         }
     }
 
+    fn remove_grouped_native_amx_fixture_path(
+        document: &mut norito::json::Value,
+        path: &str,
+        control_id: &str,
+    ) {
+        let (parent_path, token) = path
+            .rsplit_once('/')
+            .unwrap_or_else(|| panic!("control `{control_id}` remove path has a parent"));
+        let token = token.replace("~1", "/").replace("~0", "~");
+        match document
+            .pointer_mut(parent_path)
+            .unwrap_or_else(|| panic!("control `{control_id}` remove parent resolves"))
+        {
+            norito::json::Value::Object(object) => {
+                assert!(
+                    object.remove(&token).is_some(),
+                    "control `{control_id}` removes an existing field"
+                );
+            }
+            norito::json::Value::Array(array) => {
+                let index = token
+                    .parse::<usize>()
+                    .unwrap_or_else(|_| panic!("control `{control_id}` remove index is canonical"));
+                assert!(
+                    index < array.len(),
+                    "control `{control_id}` removes an existing member"
+                );
+                array.remove(index);
+            }
+            _ => panic!("control `{control_id}` remove parent is a container"),
+        }
+    }
+
     fn apply_grouped_native_amx_fixture_mutation(
         document: &mut norito::json::Value,
         mutation: &norito::json::Value,
@@ -6079,34 +6112,7 @@ mod tests {
                     .unwrap_or_else(|| panic!("control `{control_id}` replace path resolves")) =
                     replacement;
             }
-            "remove" => {
-                let (parent_path, token) = path
-                    .rsplit_once('/')
-                    .unwrap_or_else(|| panic!("control `{control_id}` remove path has a parent"));
-                let token = token.replace("~1", "/").replace("~0", "~");
-                match document
-                    .pointer_mut(parent_path)
-                    .unwrap_or_else(|| panic!("control `{control_id}` remove parent resolves"))
-                {
-                    norito::json::Value::Object(object) => {
-                        assert!(
-                            object.remove(&token).is_some(),
-                            "control `{control_id}` removes an existing field"
-                        );
-                    }
-                    norito::json::Value::Array(array) => {
-                        let index = token.parse::<usize>().unwrap_or_else(|_| {
-                            panic!("control `{control_id}` remove index is canonical")
-                        });
-                        assert!(
-                            index < array.len(),
-                            "control `{control_id}` removes an existing member"
-                        );
-                        array.remove(index);
-                    }
-                    _ => panic!("control `{control_id}` remove parent is a container"),
-                }
-            }
+            "remove" => remove_grouped_native_amx_fixture_path(document, path, control_id),
             "swap" => {
                 let value = mutation
                     .get("value")

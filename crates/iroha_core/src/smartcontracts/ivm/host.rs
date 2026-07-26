@@ -4061,9 +4061,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             if !Self::verifying_key_record_metadata_is_portable(&rec) {
                 return Err(ivm::VMError::NoritoInvalid);
             }
-            if rec.backend.is_pending_production_backend() {
-                return Err(ivm::VMError::NoritoInvalid);
-            }
             if rec.circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
                 || !iroha_data_model::zk::open_verify_circuit_id_is_portable(&rec.circuit_id)
             {
@@ -4193,18 +4190,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         match rec.backend {
             BackendTag::Halo2IpaPasta => "halo2/ipa",
-            BackendTag::Halo2Bn254 => "halo2/bn254",
-            BackendTag::Groth16 => "groth16",
             BackendTag::Stark => "stark",
-            BackendTag::Unsupported => "unsupported",
-            BackendTag::Halo2IpaOrchard
-            | BackendTag::Groth16Bls12377
-            | BackendTag::FcmpPlusPlusCurveTree
-            | BackendTag::LatticePcsSis
-            | BackendTag::MidenStark
-            | BackendTag::AztecPlonkishPrivateKernel
-            | BackendTag::PqMaspStarkFri => rec.backend.canonical_label(),
-            _ => rec.backend.canonical_label(),
         }
         .to_string()
     }
@@ -5717,11 +5703,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         QuantityValueV1::decode_frame(tlv.payload)
             .map(QuantityValueV1::into_quantity)
             .map_err(|_| ivm::VMError::DecodeError)
-    }
-
-    #[cfg(test)]
-    fn decode_amount(vm: &IVM, ptr: u64) -> Result<Numeric, ivm::VMError> {
-        Self::decode_quantity(vm, ptr).map(Quantity::into_numeric)
     }
 
     fn decode_optional_amount(vm: &IVM, ptr: u64) -> Result<Option<Quantity>, ivm::VMError> {
@@ -7287,11 +7268,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    const QUERY_GAS_BASE_SINGULAR: u64 = 1_000;
-    const QUERY_GAS_BASE_ITERABLE: u64 = 2_500;
-    const QUERY_GAS_PER_ITEM: u64 = 250;
-    const QUERY_GAS_SORT_MULTIPLIER: u64 = 4;
-    const QUERY_GAS_PER_BYTE: u64 = 2;
+    const QUERY_GAS_BASE_SINGULAR: u64 = ivm::gas::LEDGER_QUERY_GAS_BASE_SINGULAR;
+    const QUERY_GAS_BASE_ITERABLE: u64 = ivm::gas::LEDGER_QUERY_GAS_BASE_ITERABLE;
+    const QUERY_GAS_PER_ITEM: u64 = ivm::gas::LEDGER_QUERY_GAS_PER_ITEM;
+    const QUERY_GAS_SORT_MULTIPLIER: u64 = ivm::gas::LEDGER_QUERY_GAS_SORT_MULTIPLIER;
+    const QUERY_GAS_PER_BYTE: u64 = ivm::gas::LEDGER_QUERY_GAS_PER_BYTE;
     const ACCOUNT_VIEW_WORDS: u64 = 2;
     const ASSET_VIEW_WORDS: u64 = 2;
     const ASSET_DEFINITION_VIEW_WORDS: u64 = 6;
@@ -7313,10 +7294,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn query_gas_cost(ctx: &QueryGasContext, processed_items: u64, processed_bytes: u64) -> u64 {
-        ctx.base
-            .saturating_add(ctx.per_item.saturating_mul(processed_items))
-            .saturating_add(ctx.per_item.saturating_mul(ctx.offset_items))
-            .saturating_add(Self::QUERY_GAS_PER_BYTE.saturating_mul(processed_bytes))
+        ivm::gas::ledger_query_gas_v1(
+            ctx.base,
+            ctx.per_item,
+            ctx.offset_items,
+            processed_items,
+            processed_bytes,
+        )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -14968,9 +14952,9 @@ seiyaku PrivilegedBinding {
             PointerType::AssetDefinitionId,
             &norito_blob(&asset_definition),
         );
-        let amount_ptr = store_quantity(&mut vm, amount.as_numeric());
-        let buyer_amount_ptr = store_quantity(&mut vm, buyer_amount.as_numeric());
-        let seller_amount_ptr = store_quantity(&mut vm, seller_amount.as_numeric());
+        let amount_ptr = store_quantity(&mut vm, &amount);
+        let buyer_amount_ptr = store_quantity(&mut vm, &buyer_amount);
+        let seller_amount_ptr = store_quantity(&mut vm, &seller_amount);
         let evidence_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
@@ -15820,10 +15804,10 @@ seiyaku PrivilegedBinding {
     #[test]
     fn quantity_decoder_requires_nominal_canonical_payloads() {
         let mut vm = IVM::new(10_000);
-        let canonical = Numeric::new(125_u32, 2);
+        let canonical: Quantity = "1.25".parse().expect("canonical quantity");
         let canonical_ptr = store_quantity(&mut vm, &canonical);
         assert_eq!(
-            CoreHost::decode_amount(&vm, canonical_ptr).expect("decode canonical amount"),
+            CoreHost::decode_quantity(&vm, canonical_ptr).expect("decode canonical amount"),
             canonical
         );
 
@@ -15833,14 +15817,36 @@ seiyaku PrivilegedBinding {
             &norito_blob(&Numeric::new(125_u32, 2)),
         );
         assert!(matches!(
-            CoreHost::decode_amount(&vm, wrong_type_ptr),
+            CoreHost::decode_quantity(&vm, wrong_type_ptr),
             Err(ivm::VMError::NoritoInvalid)
         ));
 
-        for invalid in [Numeric::new(10_u32, 1), Numeric::new(-1_i32, 0)] {
-            let ptr = store_tlv(&mut vm, PointerType::Quantity, &norito_blob(&invalid));
+        for (mantissa, scale, expected) in [
+            (
+                &[10_u8][..],
+                1_u8,
+                iroha_primitives::numeric_abi::NumericAbiError::NonCanonicalDecimal,
+            ),
+            (
+                &[0xff_u8][..],
+                0_u8,
+                iroha_primitives::numeric_abi::NumericAbiError::NegativeQuantity,
+            ),
+        ] {
+            let mut body = Vec::with_capacity(4 + mantissa.len() + 1);
+            body.extend_from_slice(
+                &u32::try_from(mantissa.len())
+                    .expect("malformed fixture mantissa length fits u32")
+                    .to_le_bytes(),
+            );
+            body.extend_from_slice(mantissa);
+            body.push(scale);
+            let frame = norito::core::frame_bare_with_header_flags::<QuantityValueV1>(&body, 0)
+                .expect("schema-correct malformed quantity frame");
+            assert_eq!(QuantityValueV1::decode_frame(&frame), Err(expected));
+            let ptr = store_tlv(&mut vm, PointerType::Quantity, &frame);
             assert!(matches!(
-                CoreHost::decode_amount(&vm, ptr),
+                CoreHost::decode_quantity(&vm, ptr),
                 Err(ivm::VMError::DecodeError)
             ));
         }
@@ -15863,7 +15869,7 @@ seiyaku PrivilegedBinding {
         );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
-        let amount = Numeric::from(5u64);
+        let amount = Quantity::from(5u64);
         let amount_tlv = make_tlv(PointerType::Quantity as u16, &quantity_frame(&amount));
 
         vm.memory
@@ -15908,7 +15914,7 @@ seiyaku PrivilegedBinding {
             PointerType::AssetDefinitionId,
             &norito::to_bytes(&asset_def).expect("encode asset definition"),
         );
-        let amount = Numeric::from(5_u64);
+        let amount = Quantity::from(5_u64);
         let amount_tlv = make_tlv(PointerType::Quantity as u16, &quantity_frame(&amount));
         let amount_ptr = vm
             .alloc_heap(u64::try_from(amount_tlv.len()).expect("amount TLV length fits u64"))
@@ -15923,10 +15929,7 @@ seiyaku PrivilegedBinding {
             .expect("mint with heap-backed quantity");
 
         let asset_id = AssetId::of(asset_def, authority);
-        let expected = InstructionBox::from(MintBox::from(Mint::asset_quantity(
-            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
-            asset_id,
-        )));
+        let expected = InstructionBox::from(MintBox::from(Mint::asset_quantity(amount, asset_id)));
         assert_eq!(host.queued, vec![expected]);
     }
 
@@ -16216,15 +16219,13 @@ mod tests {
         vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
     }
 
-    pub(super) fn quantity_frame(value: &Numeric) -> Vec<u8> {
-        let quantity = Quantity::from_canonical_numeric(value.clone())
-            .expect("canonical non-negative quantity");
-        QuantityValueV1::new(quantity)
+    pub(super) fn quantity_frame(value: &Quantity) -> Vec<u8> {
+        QuantityValueV1::new(value.clone())
             .encode_frame()
             .expect("encode quantity frame")
     }
 
-    pub(super) fn store_quantity(vm: &mut IVM, value: &Numeric) -> u64 {
+    pub(super) fn store_quantity(vm: &mut IVM, value: &Quantity) -> u64 {
         store_tlv(vm, PointerType::Quantity, &quantity_frame(value))
     }
 
@@ -17360,8 +17361,8 @@ seiyaku AliasPayout {{
         caller_contract: &ContractAddress,
         callee_contract: &ContractAddress,
         entrypoint: &str,
-        amount_in: &Numeric,
-        min_out: &Numeric,
+        amount_in: &Quantity,
+        min_out: &Quantity,
     ) -> (
         Result<u64, ivm::VMError>,
         IVM,
@@ -17770,7 +17771,7 @@ seiyaku OuterCaller {
         vm.set_register(10, account_ptr);
         vm.set_register(11, asset_def_ptr);
 
-        let balance_payload = quantity_frame(&Numeric::new(42_u32, 0));
+        let balance_payload = quantity_frame(&Quantity::from(42_u32));
         let gas = host
             .syscall(ivm_sys::SYSCALL_GET_ACCOUNT_BALANCE, &mut vm)
             .expect("get balance");
@@ -17792,7 +17793,7 @@ seiyaku OuterCaller {
         let value = QuantityValueV1::decode_frame(tlv.payload)
             .expect("decode quantity balance")
             .into_quantity();
-        assert_eq!(value.as_numeric(), &Numeric::new(42_u32, 0));
+        assert_eq!(value, Quantity::from(42_u32));
     }
 
     #[test]
@@ -17891,7 +17892,7 @@ seiyaku DedicatedQueryContract {
         let asset_out: AssetId = decode_typed_leaf(&vm, asset_words[0], PointerType::AssetId);
         assert_eq!(asset_out, asset_id);
         let asset_amount = decode_quantity_leaf(&vm, asset_words[1]);
-        assert_eq!(asset_amount.as_numeric(), &Numeric::new(7_u32, 0));
+        assert_eq!(asset_amount, Quantity::from(7_u32));
 
         let asset_def_ptr = store_tlv(
             &mut vm,
@@ -20504,7 +20505,7 @@ seiyaku OpaqueInstructionSubmission {
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
         let amount_tlv = make_tlv(
             PointerType::Quantity as u16,
-            &quantity_frame(&Numeric::from(amount)),
+            &quantity_frame(&Quantity::from(amount)),
         );
         let amount_offset = 768u64;
         vm.memory.preload_input(0, &from_tlv).expect("preload from");
@@ -20569,7 +20570,7 @@ seiyaku OpaqueInstructionSubmission {
         from: &AccountId,
         to: &AccountId,
         asset_def: &AssetDefinitionId,
-        amount: &Numeric,
+        amount: &Quantity,
         dataspace: DataSpaceId,
     ) {
         let from_ptr = store_tlv(vm, PointerType::AccountId, &norito_blob(from));
@@ -20603,7 +20604,7 @@ seiyaku OpaqueInstructionSubmission {
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000);
-        let amount = Numeric::new(5_u32, 0);
+        let amount = Quantity::from(5_u32);
 
         prepare_scoped_transfer_syscall(
             &mut vm,
@@ -20618,7 +20619,7 @@ seiyaku OpaqueInstructionSubmission {
 
         let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::of(asset_def, authority),
-            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
+            amount,
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -20639,7 +20640,7 @@ seiyaku OpaqueInstructionSubmission {
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000);
-        let amount = Numeric::new(5_u32, 0);
+        let amount = Quantity::from(5_u32);
 
         prepare_scoped_transfer_syscall(
             &mut vm,
@@ -20654,7 +20655,7 @@ seiyaku OpaqueInstructionSubmission {
 
         let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::of(asset_def, authority),
-            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
+            amount,
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -20680,7 +20681,7 @@ seiyaku OpaqueInstructionSubmission {
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000);
-        let amount = Numeric::new(5_u32, 0);
+        let amount = Quantity::from(5_u32);
 
         prepare_scoped_transfer_syscall(
             &mut vm,
@@ -20695,7 +20696,7 @@ seiyaku OpaqueInstructionSubmission {
 
         let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::with_scope(asset_def, authority, AssetBalanceScope::Dataspace(paynet)),
-            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
+            amount,
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -20717,7 +20718,7 @@ seiyaku OpaqueInstructionSubmission {
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000);
-        let amount = Numeric::new(5_u32, 0);
+        let amount = Quantity::from(5_u32);
 
         prepare_scoped_transfer_syscall(
             &mut vm,
@@ -20736,7 +20737,7 @@ seiyaku OpaqueInstructionSubmission {
                 authority,
                 AssetBalanceScope::Dataspace(dataspace),
             ),
-            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
+            amount,
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -20757,7 +20758,7 @@ seiyaku OpaqueInstructionSubmission {
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000);
-        let amount = Numeric::new(5_u32, 0);
+        let amount = Quantity::from(5_u32);
 
         prepare_scoped_transfer_syscall(
             &mut vm,
@@ -21756,8 +21757,8 @@ seiyaku Callee {
             1,
         );
 
-        let amount_in = Numeric::new(10_u32, 0);
-        let min_out = Numeric::new(7_u32, 0);
+        let amount_in = Quantity::from(10_u32);
+        let min_out = Quantity::from(7_u32);
         let (result, vm, durable_state_overlay, target_ptr) = call_contract_quantity2_syscall(
             &state,
             &authority,
@@ -21779,10 +21780,7 @@ seiyaku Callee {
             .validate_tlv(vm.register(10))
             .expect("returned Quantity TLV");
         assert_eq!(tlv.type_id, PointerType::Quantity);
-        assert_eq!(
-            decode_quantity_leaf(&vm, vm.register(10)),
-            Quantity::from_canonical_numeric(amount_in).expect("fixture quantity"),
-        );
+        assert_eq!(decode_quantity_leaf(&vm, vm.register(10)), amount_in,);
     }
 
     #[test]
@@ -21819,8 +21817,8 @@ seiyaku Callee {
             &caller_contract,
             &callee_contract,
             "quote",
-            &Numeric::new(10_u32, 0),
-            &Numeric::new(7_u32, 0),
+            &Quantity::from(10_u32),
+            &Quantity::from(7_u32),
         );
         assert!(
             result.is_err(),
@@ -21876,8 +21874,8 @@ seiyaku Callee {
             &caller_contract,
             &callee_contract,
             "quote",
-            &Numeric::new(10_u32, 0),
-            &Numeric::new(7_u32, 0),
+            &Quantity::from(10_u32),
+            &Quantity::from(7_u32),
         );
         let error = result.expect_err("non-Quantity return schema must fail closed");
         assert!(matches!(error.as_unmetered(), ivm::VMError::DecodeError));
@@ -23697,7 +23695,7 @@ seiyaku Callee {
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("load metadata-only program");
 
-        let amount = Numeric::new(3_u32, 0);
+        let amount = Quantity::from(3_u32);
         let from_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
         let to_ptr = store_tlv(
             &mut vm,
@@ -26776,7 +26774,7 @@ seiyaku DurableOwner {
     }
 
     #[test]
-    fn set_verifying_keys_rejects_pending_production_backend_labels() {
+    fn set_verifying_keys_rejects_protocol_names_as_backend_labels() {
         crate::test_alias::ensure();
         for backend in [
             "halo2/ipa/orchard",
@@ -26841,49 +26839,6 @@ seiyaku DurableOwner {
             assert!(
                 host.set_verifying_keys(map).is_err(),
                 "case {backend} must be rejected before reaching IVM verification"
-            );
-        }
-    }
-
-    #[test]
-    fn set_verifying_keys_rejects_pending_production_record_tags() {
-        crate::test_alias::ensure();
-        for backend_tag in [
-            BackendTag::Halo2IpaOrchard,
-            BackendTag::Groth16Bls12377,
-            BackendTag::FcmpPlusPlusCurveTree,
-            BackendTag::LatticePcsSis,
-            BackendTag::MidenStark,
-            BackendTag::AztecPlonkishPrivateKernel,
-            BackendTag::PqMaspStarkFri,
-            BackendTag::AnonymousPgc,
-            BackendTag::VeRange,
-            BackendTag::ZkAt,
-            BackendTag::RecursiveAnonymousAdmission,
-            BackendTag::VegaExistingCredentialZk,
-            BackendTag::SilentThresholdAnoncred,
-            BackendTag::ZkX509,
-            BackendTag::SisWithHints,
-        ] {
-            let mut host = CoreHost::new(fixture_account("alice"));
-            let backend = "halo2/ipa";
-            let vk_bytes = vec![1, 2, 3, 4];
-            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-            let mut rec = active_vk_record(
-                commitment,
-                [0x42; 32],
-                backend,
-                "halo2/ipa:test-circuit",
-                "core",
-                vk_bytes,
-            );
-            rec.backend = backend_tag;
-            let mut map = BTreeMap::new();
-            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-            assert!(
-                host.set_verifying_keys(map).is_err(),
-                "case {} must be rejected",
-                backend_tag.canonical_label()
             );
         }
     }
@@ -27685,7 +27640,10 @@ seiyaku DurableOwner {
         let quantity = QuantityValueV1::decode_frame(tlv.payload)
             .expect("decode quantity")
             .into_quantity();
-        assert_eq!(quantity.as_numeric(), &Numeric::new(125_u32, 2));
+        assert_eq!(
+            quantity,
+            "1.25".parse::<Quantity>().expect("canonical quantity")
+        );
 
         for invalid in [
             r#"{"amount":"1.2500"}"#,
@@ -30922,11 +30880,8 @@ seiyaku PreparedBoundaryArguments {
             let layout = ivm::sum::SumLayoutV1::option(1).expect("quantity option layout");
             let cap_ptr = match &expected {
                 Some(amount) => {
-                    let amount_ptr = store_tlv(
-                        &mut vm,
-                        PointerType::Quantity,
-                        &quantity_frame(amount.as_numeric()),
-                    );
+                    let amount_ptr =
+                        store_tlv(&mut vm, PointerType::Quantity, &quantity_frame(amount));
                     ivm::sum::allocate_words(&mut vm, layout, 1, &[amount_ptr])
                         .expect("Option::some quantity")
                 }
@@ -31012,7 +30967,7 @@ seiyaku PreparedBoundaryArguments {
             pointer_abi_tests::make_tlv(ivm::PointerType::DataSpaceId as u16, &dataspace_bytes);
         let amount_tlv = pointer_abi_tests::make_tlv(
             ivm::PointerType::Quantity as u16,
-            &quantity_frame(amount.as_numeric()),
+            &quantity_frame(&amount),
         );
 
         // Offsets in INPUT region
@@ -31070,7 +31025,7 @@ seiyaku PreparedBoundaryArguments {
                     assert_eq!(inner.destination, to);
                     assert_eq!(inner.source.account, from);
                     assert_eq!(inner.source.definition, asset_def);
-                    assert_eq!(inner.object.as_numeric(), amount.as_numeric());
+                    assert_eq!(inner.object, amount);
                 }
                 _ => panic!("expected asset transfer"),
             }

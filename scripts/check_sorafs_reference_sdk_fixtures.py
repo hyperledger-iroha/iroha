@@ -128,6 +128,41 @@ def _pair(
 EXPECTED_PAYLOADS: dict[str, tuple[str, str, str, str]] = {}
 _pair(
     EXPECTED_PAYLOADS,
+    "appeal_finance/cancel_asset_lock_v1",
+    "appeal_finance",
+    "cancel_asset_lock",
+)
+_pair(
+    EXPECTED_PAYLOADS,
+    "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1",
+    "appeal_finance",
+    "cancel_asset_lock",
+    "invalid_missing_expected_remaining_amount",
+)
+EXPECTED_PAYLOADS[
+    "appeal_finance/negative/cancel_asset_lock_noncanonical_quantity_v1.json"
+] = (
+    "appeal_finance",
+    "cancel_asset_lock",
+    "json",
+    "invalid_noncanonical_quantity",
+)
+EXPECTED_PAYLOADS[
+    "appeal_finance/negative/cancel_asset_lock_trailing_bytes_v1.to"
+] = _payload(
+    "appeal_finance",
+    "cancel_asset_lock",
+    "noncanonical_trailing_bytes",
+)
+_pair(
+    EXPECTED_PAYLOADS,
+    "appeal_finance/negative/cancel_asset_lock_zero_expected_v1",
+    "appeal_finance",
+    "cancel_asset_lock",
+    "invalid_zero_expected_remaining_amount",
+)
+_pair(
+    EXPECTED_PAYLOADS,
     "governance/dag_block_0_v1",
     "governance_dag",
     "governance_dag_block",
@@ -609,6 +644,7 @@ EXPECTED_BUNDLE_PAYLOAD_CODES = {
     ),
 }
 REQUIRED_DOMAINS = {
+    "appeal_finance",
     "governance_dag",
     "moderation",
     "orderbook",
@@ -618,6 +654,24 @@ REQUIRED_DOMAINS = {
     "reference_sdk",
     "repair",
     "routing",
+}
+EXPECTED_CANCEL_ASSET_LOCK_JSON: dict[str, tuple[set[str], str | None]] = {
+    "appeal_finance/cancel_asset_lock_v1.json": (
+        {"escrow_id", "expected_remaining_amount"},
+        "20",
+    ),
+    "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.json": (
+        {"escrow_id"},
+        None,
+    ),
+    "appeal_finance/negative/cancel_asset_lock_noncanonical_quantity_v1.json": (
+        {"escrow_id", "expected_remaining_amount"},
+        "20.0",
+    ),
+    "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.json": (
+        {"escrow_id", "expected_remaining_amount"},
+        "0",
+    ),
 }
 REQUIRED_OUTCOME_DOMAINS = {
     "governance_dag",
@@ -1021,6 +1075,31 @@ def _validate_payloads(
                     decoded = _decode_json(data, label=f"{label} JSON sidecar")
                     if type(decoded) is not dict:
                         errors.append(f"{label} JSON sidecar must be an object")
+                    elif path in EXPECTED_CANCEL_ASSET_LOCK_JSON:
+                        expected_fields, expected_remaining = (
+                            EXPECTED_CANCEL_ASSET_LOCK_JSON[path]
+                        )
+                        if set(decoded) != expected_fields:
+                            errors.append(
+                                f"{label} CancelAssetLock JSON fields must match "
+                                "the closed V1 shape"
+                            )
+                        if (
+                            decoded.get("expected_remaining_amount")
+                            != expected_remaining
+                        ):
+                            errors.append(
+                                f"{label} CancelAssetLock expected_remaining_amount "
+                                "does not match its closed V1 vector"
+                            )
+                        if (
+                            type(decoded.get("escrow_id")) is not str
+                            or not decoded["escrow_id"]
+                        ):
+                            errors.append(
+                                f"{label} CancelAssetLock escrow_id must be a "
+                                "non-empty string"
+                            )
                 except ValueError as error:
                     errors.append(str(error))
     expected_paths = sorted(EXPECTED_PAYLOADS)
@@ -1031,8 +1110,8 @@ def _validate_payloads(
         )
     if domains != REQUIRED_DOMAINS - {"reference_sdk"}:
         errors.append(
-            "inventory.payloads must cover the exact routing/orderbook/PDP/PoR/"
-            "PoTR/repair/Governance DAG/moderation domain set"
+            "inventory.payloads must cover the exact appeal-finance/routing/"
+            "orderbook/PDP/PoR/PoTR/repair/Governance DAG/moderation domain set"
         )
 
 
@@ -1138,6 +1217,17 @@ def _validate_outcomes(
 
 def _validate_owned_directories(root_fd: int, errors: list[str]) -> None:
     expected_by_directory = {
+        "appeal_finance": sorted(
+            PurePosixPath(path).name
+            for path in EXPECTED_PAYLOADS
+            if path.startswith("appeal_finance/")
+            and not path.startswith("appeal_finance/negative/")
+        ),
+        "appeal_finance/negative": sorted(
+            PurePosixPath(path).name
+            for path in EXPECTED_PAYLOADS
+            if path.startswith("appeal_finance/negative/")
+        ),
         "moderation": sorted(
             PurePosixPath(path).name
             for path in set(EXPECTED_PAYLOADS) | set(EXPECTED_OUTCOMES)

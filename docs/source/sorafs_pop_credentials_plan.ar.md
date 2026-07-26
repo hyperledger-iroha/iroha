@@ -6,7 +6,7 @@ direction: rtl
 source: docs/source/sorafs_pop_credentials_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 72a16cf39b2c88a25e2ac954b40a940968f6786a40f3af2c1763d358c73f5e35
+source_hash: 40ec2ed49279f426562816ba09d1f1b9a8bbfbd7e511166f354e174f9238e65e
 source_last_modified: "2026-07-25T22:08:01.394374+00:00"
 translation_last_reviewed: null
 ---

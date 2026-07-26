@@ -107,7 +107,7 @@ translator: machine-google-reviewed
 አይነቶች፡ `Mint<O, D: Identifiable>` እና `Burn<O, D: Identifiable>`፣በቦክስ `MintBox`/`BurnBox`።
 
 ንብረት (ቁጥር) ሚንት/ማቃጠል፡ ሚዛኖችን እና የፍቺን `total_quantity` ያስተካክላል።
-  - ቅድመ ሁኔታዎች: `Numeric` እሴት `AssetDefinition.spec()` ማሟላት አለበት; ሚንት በ`mintable` የተፈቀደ፡
+  - ቅድመ ሁኔታዎች: `Quantity` እሴት `AssetDefinition.spec()` ማሟላት አለበት; ሚንት በ`mintable` የተፈቀደ፡
     - `Infinitely`: ሁልጊዜ ይፈቀዳል.
     - `Once`: በትክክል አንድ ጊዜ ተፈቅዶለታል; የመጀመሪያው mint `mintable` ወደ `Not` ገልብጦ `AssetDefinitionEvent::MintabilityChanged` ያወጣል፣ በተጨማሪም ለኦዲትነት ዝርዝር `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }`።
     - `Limited(n)`: `n` ተጨማሪ ከአዝሙድና ክወናዎችን ይፈቅዳል. እያንዳንዱ የተሳካ ሚንት ቆጣሪውን ይቀንሳል; ዜሮ ሲደርስ ትርጉሙ ወደ `Not` ይገለበጣል እና ከላይ እንደተገለፀው ተመሳሳይ `MintabilityChanged` ክስተቶችን ያወጣል።

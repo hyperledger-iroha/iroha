@@ -2449,7 +2449,7 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
             evidence_hashes=["11" * 32],
         ),
         Instruction.drawdown_asset_lock("lock-sdk-1", "2.5", "12.5"),
-        Instruction.cancel_asset_lock("lock-sdk-1"),
+        Instruction.cancel_asset_lock("lock-sdk-1", "10"),
         Instruction.expire_asset_lock("lock-sdk-1"),
     ]
     encoded = [instruction.to_json() for instruction in instructions]
@@ -2472,12 +2472,72 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
         evidence_hashes=("22" * 32,),
     )
     draft.drawdown_asset_lock("lock-sdk-2", Decimal("2.500"), Decimal("12.500"))
-    draft.cancel_asset_lock("lock-sdk-2")
+    draft.cancel_asset_lock("lock-sdk-2", Decimal("10.000"))
     draft.expire_asset_lock("lock-sdk-2")
 
     draft_encoded = [instruction.to_json() for instruction in draft.instructions]
     assert len(draft_encoded) == 4
     assert [Instruction.from_json(payload).to_json() for payload in draft_encoded] == draft_encoded
+
+
+def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    captured: dict[str, object] = {}
+
+    def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
+        captured["draft"] = draft
+        captured["kwargs"] = kwargs
+        return {"hash": "cancel-lock"}
+
+    client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
+
+    result = client.cancel_asset_lock_and_wait(
+        chain_id="chain",
+        authority=account_address(0x72),
+        fee_payment=FEE_PAYMENT,
+        private_key_hex="11" * 32,
+        escrow_id="lock-sdk-client-cancel",
+        expected_remaining_amount=Decimal("10.000"),
+        transaction_metadata={"purpose": "stale-cancel-guard"},
+        wait=False,
+    )
+
+    draft = captured["draft"]
+    instruction_json = draft.instructions[0].to_json().replace(" ", "")
+    assert result == {"hash": "cancel-lock"}
+    assert len(draft) == 1
+    assert draft.config.metadata == {"purpose": "stale-cancel-guard"}
+    assert '"expected_remaining_amount":"10"' in instruction_json
+    assert captured["kwargs"]["wait"] is False
+
+
+def test_cancel_asset_lock_and_wait_requires_expected_remaining_amount() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    with pytest.raises(TypeError, match="expected_remaining_amount"):
+        client.cancel_asset_lock_and_wait(  # type: ignore[call-arg]
+            chain_id="chain",
+            authority=account_address(0x72),
+            fee_payment=FEE_PAYMENT,
+            private_key_hex="11" * 32,
+            escrow_id="lock-sdk-client-cancel",
+            wait=False,
+        )
+
+
+def test_cancel_asset_lock_and_wait_rejects_non_positive_remaining_amount() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    with pytest.raises(ValueError, match="expected_remaining_amount must be positive"):
+        client.cancel_asset_lock_and_wait(
+            chain_id="chain",
+            authority=account_address(0x72),
+            fee_payment=FEE_PAYMENT,
+            private_key_hex="11" * 32,
+            escrow_id="lock-sdk-client-cancel",
+            expected_remaining_amount=0,
+            wait=False,
+        )
 
 
 @pytest.mark.parametrize(
@@ -2520,6 +2580,21 @@ def test_native_asset_lock_rejects_out_of_domain_quantities(amount: str) -> None
 
 
 @pytest.mark.parametrize(
+    "expected_remaining_amount",
+    ["0", "-1", "01", "1.0"],
+    ids=["zero", "negative", "leading-zero", "noncanonical-scale"],
+)
+def test_cancel_asset_lock_instruction_rejects_non_positive_or_noncanonical_remaining_amount(
+    expected_remaining_amount: str,
+) -> None:
+    with pytest.raises(ValueError):
+        Instruction.cancel_asset_lock(
+            "lock-sdk-invalid-cancel-remaining",
+            expected_remaining_amount,
+        )
+
+
+@pytest.mark.parametrize(
     ("method_name", "args"),
     [
         (
@@ -2558,6 +2633,38 @@ def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
             method(*args, amount)
 
 
+@pytest.mark.parametrize("method_name", ["drawdown_asset_lock", "cancel_asset_lock"])
+@pytest.mark.parametrize(
+    "expected_remaining_amount",
+    [0, "0", "-1", Decimal("-0.1"), "NaN", "Infinity"],
+)
+def test_asset_lock_transaction_draft_rejects_non_positive_expected_remaining_amount(
+    method_name: str,
+    expected_remaining_amount: object,
+) -> None:
+    account = account_address(0x75)
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
+    method = getattr(draft, method_name)
+
+    with pytest.raises(
+        (TypeError, ValueError),
+        match=(
+            "expected_remaining_amount must be positive|"
+            "expected_remaining_amount must be positive and use a finite canonical quantity"
+        ),
+    ):
+        if method_name == "drawdown_asset_lock":
+            method("lock-sdk-bad-remaining", 1, expected_remaining_amount)
+        else:
+            method("lock-sdk-bad-remaining", expected_remaining_amount)
+
+
 def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
     account = account_address(0x75)
     draft = TransactionDraft(
@@ -2569,7 +2676,7 @@ def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
     )
 
     with pytest.raises(ValueError, match="escrow_id"):
-        draft.cancel_asset_lock("")
+        draft.cancel_asset_lock("", 1)
     with pytest.raises(ValueError, match="release_authority"):
         draft.open_asset_lock(
             "lock-sdk-empty-authority",

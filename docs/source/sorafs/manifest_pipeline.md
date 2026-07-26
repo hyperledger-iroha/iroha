@@ -155,7 +155,7 @@ manifest-builder report also embeds the ordered array under
 `chunk_fetch_specs`; that field is not a standalone interchange format.
 Both the `chunking` section and `manifest` object expose `profile_aliases`
 
-When re-running the stub (for example in CI or a release pipeline) you can pass
+When re-running the builder (for example in CI or a release pipeline) you can pass
 `--plan=chunk_fetch_plan.json` or `--plan=-` to import the previously generated
 envelope. The CLI verifies its whole-payload binding and each chunk’s index,
 offset, length, and BLAKE3 digest against the freshly derived CAR plan before

@@ -4692,7 +4692,6 @@ fn is_production_verify_backend_label(backend: &str) -> bool {
     if backend.is_empty()
         || backend.trim() != backend
         || !is_portable_verify_backend_label(backend)
-        || iroha_data_model::zk::BackendTag::is_pending_production_backend_label(backend)
         || is_production_claim_backend_label(backend)
         || is_trusted_setup_backend_label(backend)
         || is_developer_only_backend_label(backend)

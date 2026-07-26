@@ -35,7 +35,11 @@ use iroha_data_model::{
 };
 #[cfg(test)]
 use iroha_primitives::numeric_abi::QuantityValueV1;
-use iroha_primitives::{json::Json, numeric::Numeric, numeric_abi::DecimalValueV1};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+    numeric_abi::DecimalValueV1,
+};
 use ivm_abi::entrypoint::EntrypointArgumentSchemaV1;
 use ivm_abi::state_value::{
     StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
@@ -1150,7 +1154,7 @@ fn apply_fixture_action(
             expect_arg_count(action, 3)?;
             let account = eval_account_expr(&action.args[0])?;
             let asset = eval_asset_definition_expr(&action.args[1])?;
-            let amount = eval_numeric_expr(&action.args[2])?;
+            let amount = eval_quantity_expr(&action.args[2])?;
             let caller = host.caller_subject();
             let inner = host.inner_mut();
             inner.wsv.add_account_unchecked(account.clone());
@@ -1839,6 +1843,12 @@ fn eval_numeric_expr(expr: &Expr) -> Result<Numeric, String> {
         Expr::IntLiteral(value) => Err(format!("negative balances are not allowed: {value}")),
         other => Err(format!("expected numeric expression, got {other:?}")),
     }
+}
+
+fn eval_quantity_expr(expr: &Expr) -> Result<Quantity, String> {
+    let numeric = eval_numeric_expr(expr)?;
+    Quantity::try_from_numeric(numeric)
+        .map_err(|error| format!("balance must be a non-negative quantity: {error}"))
 }
 
 fn eval_u64_expr(expr: &Expr) -> Result<u64, String> {
@@ -4269,10 +4279,8 @@ mod tests {
         let asset_pointer = limit_vm
             .alloc_input_tlv(&make_tlv(PointerType::AssetDefinitionId, &asset_bytes))
             .expect("allocate limit asset");
-        let cap = Numeric::from(500_u64);
-        let cap_quantity = iroha_primitives::numeric::Quantity::try_from_numeric(cap.clone())
-            .expect("canonical cap quantity");
-        let cap_payload = QuantityValueV1::new(cap_quantity)
+        let cap = Quantity::from(500_u64);
+        let cap_payload = QuantityValueV1::new(cap.clone())
             .encode_frame()
             .expect("encode cap quantity frame");
         let cap_pointer = limit_vm
@@ -4395,6 +4403,10 @@ mod tests {
         let err = eval_numeric_expr(&Expr::IntLiteral((-1_i64).into()))
             .expect_err("negative quantity should fail");
         assert!(err.contains("negative balances are not allowed"));
+
+        let err = eval_quantity_expr(&Expr::String("-1".to_owned()))
+            .expect_err("negative decimal quantity should fail at the nominal boundary");
+        assert!(err.contains("balance must be a non-negative quantity"));
 
         let err = eval_mintable_expr(&Expr::String("sometimes".to_string()))
             .expect_err("invalid mintability should fail");

@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   - يجب أن تقوم الاختبارات والتركيبات بتثبيت `AccountId` العالمي أولاً، ثم إضافة عقود إيجار الاسم المستعار وأذونات الاسم المستعار وأي حالة مملوكة للنطاق بشكل منفصل بدلاً من تشفير افتراضات المجال في هوية الحساب نفسها.
   - يركز البحث العام عن الحساب المفرد الآن على الأسماء المستعارة (`FindAliasesByAccountId`)؛ تظل هوية الحساب نفسها بلا مجال.### تعريفات الأصول والأصول
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` معروض نصيًا كعنوان Base58 غير مسبوق مع الإصدار والمجموع الاختباري.
--`AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+-`AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`.
   - `name` مطلوب نص عرض ذو واجهة بشرية ويجب ألا يحتوي على `#`/`@`.
   - `alias` اختياري ويجب أن يكون واحدًا مما يلي:
     -`<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - الإنشاءات: `AssetDefinition::new(id, spec)` أو `numeric(id)` الملائم؛ مطلوب `name` ويجب تعيينه عبر `.with_name(...)`.
 -`AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }` مع `AssetEntry`/`AssetValue` سهل التخزين.- `AssetBalanceScope`: `Global` للأرصدة غير المقيدة و`Dataspace(DataSpaceId)` للأرصدة المقيدة بمساحة البيانات.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` مكشوف لواجهات برمجة التطبيقات الموجزة.
+- `Asset { id, value: Quantity }` مع `AssetEntry`/`AssetValue` سهل التخزين.- `AssetBalanceScope`: `Global` للأرصدة غير المقيدة و`Dataspace(DataSpaceId)` للأرصدة المقيدة بمساحة البيانات.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` مكشوف لواجهات برمجة التطبيقات الموجزة.
 
 ### إن إف تي
 -`NftId { domain: DomainId, name: Name }`.
@@ -182,7 +182,7 @@ translator: machine-google-reviewed
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

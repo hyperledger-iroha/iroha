@@ -55,7 +55,7 @@ Bu sənəd `iroha_data_model` qutusunda həyata keçirilən və iş sahəsində 
   - Testlər və qurğular əvvəlcə universal `AccountId`-ni səpməlidir, sonra hesab identifikasiyasının özünə domen fərziyyələrini kodlaşdırmaq əvəzinə ləqəb icarələri, ləqəb icazələri və domenə məxsus hər hansı dövləti ayrıca əlavə etməlidir.
   - İctimai tək hesab axtarışı indi ləqəblərə diqqət yetirir (`FindAliasesByAccountId`); hesab şəxsiyyətinin özü domensiz qalır.### Aktiv anlayışları və aktivlər
 - `AssetDefinitionId { aid_bytes: [u8; 16] }`, versiya və yoxlama məbləği ilə prefikssiz Base58 ünvanı kimi mətndə ifşa olunur.
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`.
   - `name` insana baxan ekran mətni tələb olunur və tərkibində `#`/`@` olmamalıdır.
   - `alias` isteğe bağlıdır və aşağıdakılardan biri olmalıdır:
     - `<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ Bu sənəd `iroha_data_model` qutusunda həyata keçirilən və iş sahəsində 
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - İnşaatçılar: `AssetDefinition::new(id, spec)` və ya rahatlıq `numeric(id)`; `name` tələb olunur və `.with_name(...)` vasitəsilə quraşdırılmalıdır.
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- Saxlama üçün əlverişli `AssetEntry`/`AssetValue` ilə `Asset { id, value: Numeric }`.- `AssetBalanceScope`: məhdudiyyətsiz balanslar üçün `Global` və məlumat məkanı ilə məhdudlaşdırılmış qalıqlar üçün `Dataspace(DataSpaceId)`.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` xülasə API-ləri üçün açıqdır.
+- Saxlama üçün əlverişli `AssetEntry`/`AssetValue` ilə `Asset { id, value: Quantity }`.- `AssetBalanceScope`: məhdudiyyətsiz balanslar üçün `Global` və məlumat məkanı ilə məhdudlaşdırılmış qalıqlar üçün `Dataspace(DataSpaceId)`.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` xülasə API-ləri üçün açıqdır.
 
 ### NFTs
 - `NftId { domain: DomainId, name: Name }`.
@@ -182,7 +182,7 @@ Domen və hesab yaradın, aktivi müəyyənləşdirin və təlimatlarla əməliy
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

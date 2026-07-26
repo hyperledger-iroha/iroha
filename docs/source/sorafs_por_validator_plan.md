@@ -145,7 +145,7 @@ byte-identical Norito reports on every host.
 | `GET` | `/v1/sorafs/por/report/{iso_week}` | Return a Norito `PorWeeklyReportV1` generated from coordinator history. |
 | `GET` | `/v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N` | Return `limit`-bounded provider backlog and last verdict timestamps from `sorafs_node`, with total provider counts retained. |
 | `POST` | `/v1/sorafs/capacity/por-proof` | Record a provider `PorProofV1`; requires a fresh operator request signature whose Ed25519 key matches both the proof signer and the provider's current admitted advert key. |
-| `POST` | `/v1/sorafs/capacity/por-verdict` | Record an auditor `AuditVerdictV1`; every unique signature must belong to the configured operator trust set, the authenticated request signer must be one of them, and `torii.sorafs_por.auditor_signature_threshold` must be met. |
+| `POST` | `/v1/sorafs/capacity/por-verdict` | Record an auditor `AuditVerdictV1`; every unique signature must belong to the configured operator trust set, the authenticated request signer must be one of them, and `sorafs.por.auditor_signature_threshold` must be met. |
 
 The proof and verdict mutation routes use the canonical `x-iroha-operator-*` request-signature
 envelope. Method, path, canonical query, exact body digest, timestamp, and nonce
@@ -163,7 +163,7 @@ metadata except the signatures themselves.
 Torii derives the trusted verdict-auditor set from the configured operator
 signature allow-list plus the node key when `allow_node_key` is enabled, filters
 it to Ed25519, and requires the non-zero
-`torii.sorafs_por.auditor_signature_threshold`. The manifest, coordinator, and
+`sorafs.por.auditor_signature_threshold`. The manifest, coordinator, and
 node layers independently re-check that policy before committing state, so a
 self-signed key embedded by an attacker is never a trust root.
 
@@ -175,7 +175,7 @@ challenges; the verified scheduler is the only permitted production authority
 for the `PorChallengeV1` contract.
 Production startup wires the authenticated `DrandHttpRandomnessProvider` and
 admission-bound, durable `VerifiedVrfProvider`. Enabling
-`torii.sorafs_por.enabled` therefore requires a complete governed drand
+`sorafs.por.enabled` therefore requires a complete governed drand
 configuration, council-verified provider admission, and durable VRF replay
 state; deterministic seed material is explicitly not a substitute for those
 verified inputs.

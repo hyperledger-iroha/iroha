@@ -2021,13 +2021,23 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesBeginPrepareReady ==
     ExactLeaderSchedulerReadinessFrame
       => (BeginPrepareReady(node, proposal)'
             <=> BeginPrepareReady(node, proposal))
-BY ExactLeaderSchedulerReadinessFramePreservesProposalWireValidity,
-   IsaT(120)
-   DEF ExactLeaderSchedulerReadinessFrame,
-       BeginPrepareReady, PrepareSignerAvailability,
-       BodyHeldBy, BodyValidatedBy,
-       NodeIdle, PendingNodes, SigningNodes, NodeTimedOut,
-       CurrentVoters, CurrentEpoch, vars
+PROOF
+  <1>1. ASSUME NEW node, NEW proposal,
+                ExactLeaderSchedulerReadinessFrame
+         PROVE BeginPrepareReady(node, proposal)'
+                 <=> BeginPrepareReady(node, proposal)
+    <2>1. ProposalWireValidFor(node, proposal)'
+             <=> ProposalWireValidFor(node, proposal)
+      BY <1>1,
+         ExactLeaderSchedulerReadinessFramePreservesProposalWireValidity
+    <2> QED BY <1>1, <2>1, IsaT(120)
+         DEF ExactLeaderSchedulerReadinessFrame,
+             BeginPrepareReady, PrepareSignerAvailability,
+             BodyHeldBy, BodyValidatedBy,
+             NodeIdle, PendingNodes, SigningNodes, NodeTimedOut,
+             PrepareRequestFor, PrepareVoteFor, PrepareWal, Vote,
+             CurrentVoters, CurrentEpoch, vars
+  <1> QED BY <1>1
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginPrepareReady ==
   \A candidate:
@@ -2115,24 +2125,60 @@ BY ExactLeaderSchedulerReadinessFramePreservesRegularBeginPrepareReady,
    ExactLeaderSchedulerReadinessFramePreservesRegularPersistObservePrepareReady,
    Isa
 
+THEOREM ExactLeaderSchedulerReadinessFramePreservesBeginLockCommitReady ==
+  \A node, qc:
+    ExactLeaderSchedulerReadinessFrame
+      => (BeginLockCommitReady(node, qc)'
+            <=> BeginLockCommitReady(node, qc))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       BeginLockCommitReady, CurrentOpenPrepareForCommit,
+       NodeTimedOut, BodyHeldBy, BodyValidatedBy,
+       NodeIdle, PendingNodes, SigningNodes,
+       CurrentVoters, CurrentEpoch, Vote, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesBeginLockEvidence ==
+  \A command, qc:
+    ExactLeaderSchedulerReadinessFrame
+      => (BeginLockCommandEvidenceMatches(command, qc)'
+            <=> BeginLockCommandEvidenceMatches(command, qc))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems,
+   ExactLeaderSchedulerReadinessFramePreservesCertifiedCapability,
+   IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       BeginLockCommandEvidenceMatches,
+       MatchingSentCertifiedRequests,
+       FrozenCertifiedResponseBinding,
+       FrozenCertifiedRequestRegistration,
+       CertifiedResponseAuthenticatedOccurrence, vars
+
 THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginLockCommitReady ==
   \A candidate:
     (/\ ExactLeaderSchedulerReadinessFrame
      /\ candidate.kind = "BeginLockCommit")
       => (RegularCoreCommandReady(candidate)'
             <=> RegularCoreCommandReady(candidate))
-BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(180)
-   DEF ExactLeaderSchedulerReadinessFrame,
-       RegularCoreCommandReady, CommandMatches,
-       LockCommitQcValues, ReceivedQcValues,
-       BeginLockCommandEvidenceMatches, BeginLockCommitReady,
-       PersistLockCommitReady, FormCommitQCReady,
-       BeginDecisionReady, CurrentOpenPrepareForCommit,
-       NodeTimedOut, BodyHeldBy, BodyValidatedBy,
-       RetainedLockedBodyRecord, VoteSignersAt,
-       CommitRoundAdmissible, LockedPrepareRound,
-       QcWireValid, NodeIdle, PendingNodes, SigningNodes,
-       CurrentVoters, CurrentEpoch, vars
+PROOF
+  <1>1. ASSUME NEW candidate,
+                ExactLeaderSchedulerReadinessFrame,
+                candidate.kind = "BeginLockCommit"
+         PROVE RegularCoreCommandReady(candidate)'
+                 <=> RegularCoreCommandReady(candidate)
+    <2>1. \A qc:
+             BeginLockCommitReady(candidate.node, qc)'
+               <=> BeginLockCommitReady(candidate.node, qc)
+      BY <1>1,
+         ExactLeaderSchedulerReadinessFramePreservesBeginLockCommitReady
+    <2>2. \A qc:
+             BeginLockCommandEvidenceMatches(candidate, qc)'
+               <=> BeginLockCommandEvidenceMatches(candidate, qc)
+      BY <1>1,
+         ExactLeaderSchedulerReadinessFramePreservesBeginLockEvidence
+    <2> QED BY <1>1, <2>1, <2>2, IsaT(120)
+         DEF ExactLeaderSchedulerReadinessFrame,
+             RegularCoreCommandReady, CommandMatches,
+             LockCommitQcValues, ReceivedQcValues, vars
+  <1> QED BY <1>1
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularPersistLockCommitReady ==
   \A candidate:

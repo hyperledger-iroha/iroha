@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/ops/soranet_transport_rollback.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6b81a066ce40132baa04826165730cffa79f329bd32c7406a2acde1e2a0f98b3
-source_last_modified: "2026-01-04T08:19:26.518691+00:00"
+source_hash: dbbbf6230a0a2ceaf78eed191f0a163cdcba638c10992f8c9695d1a7b9971d1d
+source_last_modified: "2026-07-26T10:38:17.814970+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraNet Transport Default Rollback Plan
 summary: Playbook for reversing the SNNet-5/SF-6 multi-source default and returning clients to the regulated direct-fetch profile.
@@ -25,7 +25,7 @@ Integration Map”). It assumes the multi-source orchestrator described in
 - **Owner / DRI:** Networking TL (SoraNet) + Developer Experience TL (SF-6) with SRE duty officer covering Alertmanager.
 - **Change window:** Align with the SNNet-10 stage-gate window for “Public Beta → Mainnet Default” (`docs/source/soranet/snnet10_stage_gate_template.md`).
 - **Rollback window:** First 60 minutes after the default-on flip or a governance-mandated downgrade; extend only with Networking TL approval.
-- **Critical dependencies:** `sorafs_orchestrator` release ≥ the commit referenced in `status.md`, Torii build that embeds `torii.sorafs.orchestrator` config, guard directory snapshot signed via `soranet-directory`, puzzle service health (SNNet-6a), and governance approval minutes.
+- **Critical dependencies:** `sorafs_orchestrator` release ≥ the commit referenced in `status.md`, the reviewed client-side `/etc/iroha/sorafs/orchestrator.json` deployed to every affected workload, guard directory snapshot signed via `soranet-directory`, puzzle service health (SNNet-6a), and governance approval minutes. The JSON file is passed explicitly to the client and is not an `iroha_config` or Torii namespace.
 - **Related tickets / RFCs:** SF-6c adoption checklist, SNNet-5 rollouts, SNNet-5a direct-mode fallback pack (`docs/source/sorafs/direct_mode_pack.md`), PQ ratchet drill log (`docs/source/soranet/pq_ratchet_runbook.md`), CI helper `ci/check_sorafs_orchestrator_adoption.sh`.
 
 ## 2. Trigger Conditions
@@ -54,17 +54,17 @@ Rollback is authorised when any of the following hold and the duty officer and N
 - **Telemetry baselines:** Bookmark `dashboards/grafana/sorafs_fetch_observability.json` and `dashboards/grafana/soranet_pq_ratchet.json`; download JSON exports so Alertmanager silences reference the same panels.
 - **Adoption artefacts:** Run `ci/check_sorafs_orchestrator_adoption.sh` (or `cargo xtask sorafs-adoption-check --scoreboard path --summary path --allow-single-source --require-direct-only --require-telemetry`) and persist `adoption_report.json` plus the `scoreboard.json`/`summary.json` used for GA.
 - **Communication drafts:** Pre-fill the operator + governance templates stored in `docs/source/sorafs/direct_mode_pack.md` (`Announce Direct Mode` section) and keep the status-page copy staged.
-- **Override shakedown:** Verify the downgrade knobs by running `sorafs_cli fetch --transport-policy-override direct-only` against the canonical manifest (`fixtures/sorafs_manifest/ci_sample/payload.plan.json`) so the on-call knows the override still works.
+- **Override shakedown:** Verify the downgrade knobs by running `sorafs_cli fetch --orchestrator-config=/etc/iroha/sorafs/orchestrator.json --transport-policy-override=direct-only` against the canonical manifest (`fixtures/sorafs_manifest/ci_sample/payload.plan.json`) so the on-call knows the supported override still works.
 
 ## 4. Step-by-Step Rollback
 
 | Step | Command / Action | Owner | Notes |
 |------|------------------|-------|-------|
 | 1 | Freeze orchestrator rollouts (`kubectl scale deploy/sorafs-orchestrator --replicas=0` in canary) and notify Networking in `#soranet-ops`. | SRE duty | Prevents new pods from starting with stale configs mid-rollback. |
-| 2 | Force direct-mode transport by editing `torii.sorafs.orchestrator.transport_policy` to `"direct-only"` and pushing the config to all Torii nodes (`helm upgrade ... --set torii.sorafs.orchestrator.transport_policy=direct-only`). | Networking TL | Matches the override semantics in `crates/sorafs_orchestrator/src/policy.rs`. |
-| 3 | Flush guard caches / disable circuit manager to avoid stale SoraNet circuits: `sorafs_cli guard-cache prune --config torii.sorafs.orchestrator --keep-classical-only` followed by `sorafs_cli config set --config torii.sorafs.orchestrator circuit_manager.enabled false`. | Storage / SDK owner | Ensures future fetches will not attempt PQ relays until re-enabled. |
+| 2 | Edit the client-side `/etc/iroha/sorafs/orchestrator.json` so its top-level fields are `"transport_policy": "direct-only"` and `"circuit_manager": {"enabled": false}`. | Networking TL | This canonical JSON is not embedded in Torii and is not part of `iroha_config`. |
+| 3 | Deploy the reviewed JSON file to every affected client/orchestrator workload and restart those workloads. | Storage / SDK owner | The disabled circuit manager and direct-only policy take effect when each workload reloads the explicit file. |
 | 4 | Redeploy SDK/CLI defaults (JS/Swift/Python) with `transportPolicy: "direct-only"` or `policyOverride.transportPolicy = "direct-only"` while attaching the incident ticket to release notes. | SDK owners | Refer to `docs/source/sorafs/direct_mode_pack.md` guidance for each SDK. |
-| 5 | Capture evidence: run `sorafs_cli fetch` against the canonical plan with `--transport-policy direct-only --scoreboard-out artifacts/rollback/direct_only.scoreboard.json --json-out artifacts/rollback/direct_only.summary.json`, then `cargo xtask sorafs-adoption-check --scoreboard artifacts/rollback/direct_only.scoreboard.json --summary artifacts/rollback/direct_only.summary.json --allow-single-source --require-direct-only --require-telemetry`. | Release Engineering | The adoption report must show `provider_mix="direct-only"` and record the ticket ID via `--telemetry-source-label`. |
+| 5 | Capture evidence with the supported command: `sorafs_cli fetch --orchestrator-config=/etc/iroha/sorafs/orchestrator.json --transport-policy-override=direct-only --scoreboard-out=artifacts/rollback/direct_only.scoreboard.json --json-out=artifacts/rollback/direct_only.summary.json`, then run `cargo xtask sorafs-adoption-check --scoreboard artifacts/rollback/direct_only.scoreboard.json --summary artifacts/rollback/direct_only.summary.json --allow-single-source --require-direct-only --require-telemetry`. | Release Engineering | The adoption report must show `provider_mix="direct-only"` and record the ticket ID via `--telemetry-source-label`. |
 | 6 | Resume traffic by scaling the orchestrator deployments back up once the adoption report passes and Alertmanager is green. | SRE duty | Keep Alert silences scoped to the rollback window only. |
 
 ## 5. Verification Checklist

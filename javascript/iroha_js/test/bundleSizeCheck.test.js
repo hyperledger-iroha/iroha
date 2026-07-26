@@ -286,7 +286,7 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 58);
-  assert.equal(result.outputFiles[0].contents.byteLength, 459_991);
+  assert.equal(result.outputFiles[0].contents.byteLength, 459_902);
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(458_081 * 1.05),
     "public browser aggregate regressed more than 5% from the protected pre-reset tree",
@@ -335,9 +335,9 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 97_869],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 964_610, modules: 59 }],
-    ["transactionCodec.js (browser)", { bytes: 290_979, modules: 46 }],
-    ["nexusApp.js (browser)", { bytes: 373_714, modules: 55 }],
+    ["toriiClient.js", { bytes: 966_623, modules: 60 }],
+    ["transactionCodec.js (browser)", { bytes: 290_169, modules: 46 }],
+    ["nexusApp.js (browser)", { bytes: 373_383, modules: 55 }],
     ["canonicalRequest.js (browser)", { bytes: 98_123, modules: 34 }],
   ]);
   const { build } = await import("esbuild");
@@ -358,6 +358,16 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
       bytes: result.outputFiles[0].contents.byteLength,
       modules: Object.keys(result.metafile.inputs).length,
     };
+    if (target.label === "toriiClient.js") {
+      assert.equal(
+        Object.keys(result.metafile.inputs).some(
+          (input) =>
+            input.includes("@noble/curves") && input.includes("bls12-381"),
+        ),
+        false,
+        "Torii must use the local synchronous BLS validator, not bundle noble's full curve implementation",
+      );
+    }
     assert.deepEqual(actual, expected.get(target.label), target.label);
     assert.ok(
       actual.bytes <= Math.floor(predecessor.get(target.label) * 1.05),

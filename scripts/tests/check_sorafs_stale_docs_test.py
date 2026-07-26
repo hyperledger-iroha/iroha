@@ -50,9 +50,9 @@ def test_reference_sdk_plan_does_not_reopen_native_orderbook_work() -> None:
         "atomic custody mutation",
         "authority/signature enforcement",
         "The canonical cross-domain fixture inventory is complete.",
-        "74 payload artifacts",
+        "82 payload artifacts",
         "30 `ValidationOutcomeV1` outcomes",
-        "32 negative payload vectors",
+        "38 negative payload vectors",
         "ten exact parity profiles",
         "JavaScript/TypeScript, Python, Swift, Kotlin/JVM, mirrored Java "
         "Android, and C#",

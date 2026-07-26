@@ -299,13 +299,12 @@ kotlin-reflection-guard:
 	@bash scripts/check_kotlin_no_reflection.sh
 
 android-codegen-docs:
-	@cargo run -p norito_codegen_exporter -- --out target-codex/android_codegen
+	@cargo run --locked -p norito_codegen_exporter -- --out target-codex/android_codegen
 	@python3 scripts/android_codegen_docs.py \
 		--manifest target-codex/android_codegen/instruction_manifest.json \
 		--builders target-codex/android_codegen/builder_index.json \
 		--out docs/source/sdk/android/generated \
-		--locale ja \
-		--locale he
+		--all-locales
 	@python3 scripts/android_codegen_replay_sorafs_fixture.py
 	@bash scripts/docs/hash_tree.sh \
 		docs/source/sdk/android/generated \

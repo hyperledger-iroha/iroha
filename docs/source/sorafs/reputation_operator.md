@@ -78,7 +78,9 @@ The SoraFS-scoped Torii reputation family is read-only:
   entry and a `ReputationMerkleProofV1` for the latest snapshot.
 - `GET /v1/sorafs/reputation/snapshots/{snapshot_id_hex}?limit=N`: return a
   previously accepted snapshot summary by 16-byte snapshot id with the same
-  bounded provider-score readback.
+  bounded provider-score readback. The committed publication checkpoint keeps
+  an immutable suffix of at most 1,024 authenticated snapshots; unknown or
+  evicted ids return `404` and are never substituted with the latest snapshot.
 - `GET /v1/sorafs/reputation/weights`: return the weights and smoothing
   parameters used by the latest snapshot.
 - `GET /v1/sorafs/reputation/events?since=N&limit=N`: return sequenced

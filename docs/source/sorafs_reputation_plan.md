@@ -28,8 +28,9 @@ retry/dead-letter/acknowledgement outbox without signing keys. Torii's
 local-authoritative snapshot POST and the matching CLI publication command are
 removed. Latest, provider, weights, and event reads now consume only the fresh
 committed-derived projection after signed snapshot validation and authenticated
-Governance DAG readback. The snapshot-id route remains latest-only rather than
-an historical archive.
+Governance DAG readback. Snapshot-id reads resolve the exact authenticated
+snapshot from the durable immutable suffix capped at 1,024 entries and the
+publication-checkpoint byte ceiling; unknown or evicted ids return `404`.
 
 Strict non-secret `iroha_config` policy construction and the supervised
 finalized-query/threshold-signing/publication worker are implemented. The
@@ -77,7 +78,7 @@ Checked-in response-file examples cover provider and metrics canaries.
 | Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration, the queue-backed journal submitter, exact historical-query injection boundary, and supervised scheduling/reconciliation are wired; the production historical adapter, integrated validation, and reviewed deployment evidence remain open. |
 | Scoring engine (`reputation_engine`) | Aggregates metrics, runs scoring algorithm (EigenTrust-style), applies policy penalties, generates snapshots. | Runs hourly; writes outputs to database + object storage. |
 | Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open. |
-| API gateway (`sorafs_reputation_api`) | Exposes read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Latest/provider/weights/event reads use the ready committed projection; the snapshot-id route still retains only the latest snapshot and the runtime cannot start in production until all required injected adapters exist. |
+| API gateway (`sorafs_reputation_api`) | Exposes read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist. |
 | CLI/SDK modules | `sorafs reputation` commands; SDK helper functions for verification and weighting. | Integrates with orchestrator, indexer, orderbook, incentives. |
 
 ### Data Flow
@@ -419,9 +420,11 @@ They are not an independent authoritative event journal.
   - Implemented locally: `GET /v1/sorafs/reputation/providers/{provider_id}`
     returns the provider entry with Merkle proof.
   - Implemented locally: `GET /v1/sorafs/reputation/snapshots/{snapshot_id_hex}`
-    validates the requested 16-byte id against the latest committed snapshot
-    and returns that snapshot with the same `limit`-bounded provider-score
-    readback. Historical snapshot retention is not implemented.
+    resolves the requested 16-byte id against the durable immutable suffix of
+    authenticated committed snapshots and returns that exact snapshot with the
+    same `limit`-bounded provider-score readback. The suffix is capped at 1,024
+    entries and by the publication checkpoint byte ceiling; unknown or evicted
+    ids return `404` rather than falling back to the latest snapshot.
   - Implemented locally: `GET /v1/sorafs/reputation/weights` returns the
     weights and smoothing parameters from the latest snapshot.
   - Implemented locally: `GET /v1/sorafs/reputation/events` returns sequenced
@@ -534,9 +537,9 @@ They are not an independent authoritative event journal.
    publication/readback/head-inclusion adapters to the already-supervised
    runtime. Reconcile canonical publication acknowledgements without
    introducing a local signing-key fallback.
-4. Resolve the latest-only snapshot-id route, integrate the regional
-   publisher/API and SDK reads against the committed projection, and run
-   four-peer end-to-end tests with orchestrator/indexer consumers.
+4. Integrate the regional publisher/API and SDK reads against the committed
+   projection, exercise exact retained snapshot-id lookup and bounded eviction,
+   and run four-peer end-to-end tests with orchestrator/indexer consumers.
 5. Staging bake: run for 2 weeks, comparing manual calculations to engine outputs.
 6. Governance approval for initial weights (`ReputationConfigV1`) and publication schedule.
 7. Production rollout:
@@ -561,8 +564,9 @@ Completed local foundations:
 - Governance DAG payload validation and the keyless finalized multi-feed
   projector/outbox contract.
 - Read-only Torii latest, provider, snapshot, weights, events, SSE, and
-  WebSocket handlers consume the fresh committed projection; the snapshot-id
-  route remains latest-only.
+  WebSocket handlers consume the fresh committed projection; snapshot-id reads
+  return the exact retained authenticated snapshot and reject unknown or
+  evicted ids.
 - CLI `reputation verify`, `snapshot`, `fetch`, and `watch`; the obsolete local
   publication command is retired.
 - The rollout evidence gate now emits aggregate-compatible required-kind

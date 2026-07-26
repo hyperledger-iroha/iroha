@@ -2543,11 +2543,11 @@ impl NativeAmxVoteV2 {
         if !native_amx_body_shape_valid(&self.body) {
             return Err(NativeAmxVoteIngressError::InvalidBody);
         }
-        if !peer_uses_bls_normal(&self.signer) {
-            return Err(NativeAmxVoteIngressError::SignerNotBlsNormal);
-        }
         if self.bls_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES {
             return Err(NativeAmxVoteIngressError::InvalidSignature);
+        }
+        if !peer_uses_bls_normal(&self.signer) {
+            return Err(NativeAmxVoteIngressError::SignerNotBlsNormal);
         }
         Ok(())
     }
@@ -3843,7 +3843,7 @@ mod tests {
         drop(next_guard);
 
         assert!(matches!(
-            open_signing_guard(root.path(), &next, signer.clone(), 8),
+            open_signing_guard(root.path(), &next, signer.clone(), 16),
             Err(NativeAmxSigningGuardError::ContextMismatch)
         ));
 

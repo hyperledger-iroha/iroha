@@ -28,7 +28,7 @@ drand signatures, rejects rollback and equivocation, and only returns a round
 after the configured endpoint quorum agrees. Provider VRF submissions are
 signature-checked, bound to provider/manifest/epoch/drand inputs, persisted
 with replay state, and supplied to the coordinator through the verified feed.
-`torii.sorafs_por.enabled = true` fails startup when this configuration is
+`sorafs.por.enabled = true` fails startup when this configuration is
 missing or internally inconsistent; `randomness_seed_hex` is never accepted as
 authenticated drand. Remaining SF-9a work is live multi-provider drand/VRF/
 auditor evidence and any production governance archive handoff required by the
@@ -233,7 +233,7 @@ publisher are ready. Coordinator status surfaces are under
   outcomes with PoR scheduler and ingestion health.
 
 ## Persistence
-`torii.sorafs_por.state_dir` is the single private PoR state root. The coordinator
+`sorafs.por.state_dir` is the single private PoR state root. The coordinator
 snapshot (`por-coordinator.to`), verified drand high-water
 (`drand-high-water.to`), and authenticated provider-VRF replay state
 (`provider-vrf-state.to`) are derived beneath it. The obsolete
@@ -284,7 +284,7 @@ CREATE TABLE sorafs_vrf_history (
 - **Coordinator runtime wiring:** `PorCoordinatorRuntime` (see
   `crates/iroha_torii/src/sorafs/por.rs`) exposes `run_once_at`, `run_once`, and
   `spawn`, and Torii constructs it only from the verified drand and durable
-  provider-VRF adapters. `torii.sorafs_por.enabled = true` is rejected at
+  provider-VRF adapters. `sorafs.por.enabled = true` is rejected at
   startup unless pinned drand chain/endpoints/quorum/state and provider-VRF
   state are configured consistently and the embedded node has a fully bound
   runtime Ed25519 Governance DAG signer/publisher. The legacy optional

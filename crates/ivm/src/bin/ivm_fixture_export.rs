@@ -10,9 +10,25 @@ use std::{
     process,
 };
 
+use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::{
+    events::{
+        EventFilterBox,
+        time::{ExecutionTime, TimeEventFilter},
+    },
+    metadata::Metadata,
+    smart_contract::manifest::{
+        ContractManifest, EntryPointKind, EntrypointDescriptor, TriggerCallback, TriggerDescriptor,
+    },
+    trigger::action::Repeats,
+};
 use ivm::prebuilt_fixtures::{
     SYNTHETIC_EXECUTOR_FIXTURES, build_default_executor_program, build_synthetic_executor_program,
 };
+use norito::json::{FastJsonWrite, JsonSerialize};
+
+// Public deterministic fixture material; this key must never authorize a real account.
+const CONTRACT_MANIFEST_FIXTURE_SIGNER_SEED: [u8; 32] = [0x33; 32];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -39,6 +55,193 @@ fn repository_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("IVM crate belongs to the workspace")
         .to_path_buf()
+}
+
+struct ContractManifestFixtureDocument<'a> {
+    event_filter_frame_hex: String,
+    manifest: &'a ContractManifest,
+    manifest_compact_hex: String,
+    signed_manifest: &'a ContractManifest,
+    signed_manifest_compact_hex: String,
+}
+
+impl FastJsonWrite for ContractManifestFixtureDocument<'_> {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        norito::json::write_json_string("fixture_version", out);
+        out.push(':');
+        1_u64.json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("generator", out);
+        out.push(':');
+        "iroha_data_model::Encode on the current Rust V1 types".json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("event_filter_box", out);
+        out.push(':');
+        out.push('{');
+        norito::json::write_json_string("description", out);
+        out.push(':');
+        "EventFilterBox::Time(TimeEventFilter::new(ExecutionTime::PreCommit))".json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("norito_frame_hex", out);
+        out.push(':');
+        self.event_filter_frame_hex.json_serialize(out);
+        out.push('}');
+        out.push(',');
+        norito::json::write_json_string("manifest", out);
+        out.push(':');
+        self.manifest.json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("manifest_compact_hex", out);
+        out.push(':');
+        self.manifest_compact_hex.json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("signed_provenance", out);
+        out.push(':');
+        self.signed_manifest
+            .provenance
+            .as_ref()
+            .expect("fixture manifest provenance")
+            .json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("signed_manifest_compact_hex", out);
+        out.push(':');
+        self.signed_manifest_compact_hex.json_serialize(out);
+        out.push('}');
+    }
+}
+
+fn contract_manifest_fixture_types()
+-> Result<(EventFilterBox, ContractManifest, ContractManifest), String> {
+    let event_filter = EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit));
+    let trigger = TriggerDescriptor {
+        id: "wake"
+            .parse()
+            .map_err(|error| format!("build contract-manifest trigger ID: {error}"))?,
+        repeats: Repeats::Indefinitely,
+        filter: event_filter.clone(),
+        authority: None,
+        metadata: Metadata::default(),
+        callback: TriggerCallback {
+            namespace: None,
+            entrypoint: "run".to_owned(),
+        },
+    };
+    let manifest = ContractManifest {
+        seiyaku_name: Some("Test".to_owned()),
+        code_hash: None,
+        abi_hash: None,
+        compiler_fingerprint: None,
+        features_bitmap: None,
+        access_set_hints: None,
+        entrypoints: Some(vec![EntrypointDescriptor {
+            name: "run".to_owned(),
+            kind: EntryPointKind::Kotoage,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: Some("Execute".to_owned()),
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: vec![trigger],
+        }]),
+        states: None,
+        error_codes: None,
+        kotoba: None,
+        provenance: None,
+    };
+    let key_pair = KeyPair::try_from_seed(
+        CONTRACT_MANIFEST_FIXTURE_SIGNER_SEED.to_vec(),
+        Algorithm::Ed25519,
+    )
+    .map_err(|error| format!("derive contract-manifest fixture signer: {error}"))?;
+    let signed_manifest = manifest
+        .clone()
+        .try_signed(&key_pair)
+        .map_err(|error| format!("sign contract-manifest fixture: {error}"))?;
+    Ok((event_filter, manifest, signed_manifest))
+}
+
+fn render_contract_manifest_v1_fixture() -> Result<String, String> {
+    let (event_filter, manifest, signed_manifest) = contract_manifest_fixture_types()?;
+    let event_filter_frame = norito::to_bytes(&event_filter)
+        .map_err(|error| format!("encode event-filter fixture frame: {error}"))?;
+    let document = ContractManifestFixtureDocument {
+        event_filter_frame_hex: hex::encode(event_filter_frame),
+        manifest: &manifest,
+        manifest_compact_hex: hex::encode(norito::codec::Encode::encode(&manifest)),
+        signed_manifest: &signed_manifest,
+        signed_manifest_compact_hex: hex::encode(norito::codec::Encode::encode(&signed_manifest)),
+    };
+    let mut rendered = norito::json::to_json_pretty(&document)
+        .map_err(|error| format!("render contract-manifest fixture JSON: {error}"))?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+struct SmartContractCodeExecutorHashesFixtureDocument {
+    artifact_length: u64,
+    code_hash_hex: String,
+    abi_hash_hex: String,
+    abi_version: u8,
+}
+
+impl FastJsonWrite for SmartContractCodeExecutorHashesFixtureDocument {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        norito::json::write_json_string("fixture_version", out);
+        out.push(':');
+        1_u64.json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("generator", out);
+        out.push(':');
+        "ivm_fixture_export from the metadata-validated defaults/executor.to artifact"
+            .json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("artifact", out);
+        out.push(':');
+        "defaults/executor.to".json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("artifact_length", out);
+        out.push(':');
+        self.artifact_length.json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("code_hash_hex", out);
+        out.push(':');
+        self.code_hash_hex.json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("abi_hash_hex", out);
+        out.push(':');
+        self.abi_hash_hex.json_serialize(out);
+        out.push(',');
+        norito::json::write_json_string("abi_version", out);
+        out.push(':');
+        self.abi_version.json_serialize(out);
+        out.push('}');
+    }
+}
+
+fn render_smart_contract_code_executor_hashes_fixture(artifact: &[u8]) -> Result<String, String> {
+    let parsed = ivm::ProgramMetadata::parse(artifact)
+        .map_err(|error| format!("parse defaults/executor.to fixture: {error}"))?;
+    let abi_hash_start = ivm::HEADER_SIZE - iroha_crypto::Hash::LENGTH;
+    let abi_hash = artifact
+        .get(abi_hash_start..ivm::HEADER_SIZE)
+        .ok_or_else(|| "defaults/executor.to fixture is missing its ABI hash".to_owned())?;
+    let document = SmartContractCodeExecutorHashesFixtureDocument {
+        artifact_length: u64::try_from(artifact.len())
+            .map_err(|_| "defaults/executor.to fixture length does not fit u64".to_owned())?,
+        code_hash_hex: hex::encode(ivm::contract_code_hash(artifact).as_ref()),
+        abi_hash_hex: hex::encode(abi_hash),
+        abi_version: parsed.metadata.abi_version,
+    };
+    let mut rendered = norito::json::to_json_pretty(&document)
+        .map_err(|error| format!("render smart-contract code hash fixture JSON: {error}"))?;
+    rendered.push('\n');
+    Ok(rendered)
 }
 
 fn publish(path: &Path, expected: &[u8], mode: Mode) -> Result<(), String> {
@@ -80,9 +283,21 @@ fn main() -> Result<(), String> {
     let mode = parse_mode()?;
     let root = repository_root();
 
+    let contract_manifest_fixture = render_contract_manifest_v1_fixture()?;
+    let default_executor = build_default_executor_program();
+    let smart_contract_code_hashes_fixture =
+        render_smart_contract_code_executor_hashes_fixture(&default_executor)?;
     publish(
-        &root.join("defaults/executor.to"),
-        &build_default_executor_program(),
+        &root.join("javascript/iroha_js/test/fixtures/contract_manifest_v1.json"),
+        contract_manifest_fixture.as_bytes(),
+        mode,
+    )?;
+    publish(&root.join("defaults/executor.to"), &default_executor, mode)?;
+    publish(
+        &root.join(
+            "docs/source/sdk/android/generated/fixtures/smart_contract_code_executor_hashes.json",
+        ),
+        smart_contract_code_hashes_fixture.as_bytes(),
         mode,
     )?;
     for (tag, name) in SYNTHETIC_EXECUTOR_FIXTURES.iter().enumerate() {
@@ -133,6 +348,65 @@ mod tests {
         assert_eq!(parse_mode_from(&["--write".to_owned()]), Ok(Mode::Write));
         assert!(parse_mode_from(&[]).is_err());
         assert!(parse_mode_from(&["--write".to_owned(), "extra".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn contract_manifest_fixture_is_type_derived_signed_and_deterministic() {
+        let (_, manifest, signed_manifest) =
+            contract_manifest_fixture_types().expect("build typed contract-manifest fixture");
+        assert_eq!(
+            manifest.signature_payload(),
+            signed_manifest.signature_payload(),
+            "provenance must not change the signed payload"
+        );
+        let provenance = signed_manifest
+            .provenance
+            .as_ref()
+            .expect("fixture manifest provenance");
+        provenance
+            .signature
+            .verify(
+                &provenance.signer,
+                &signed_manifest.signature_payload_bytes(),
+            )
+            .expect("fixture manifest signature");
+
+        let rendered =
+            render_contract_manifest_v1_fixture().expect("render contract-manifest fixture");
+        assert_eq!(
+            render_contract_manifest_v1_fixture().expect("render fixture again"),
+            rendered
+        );
+        assert!(rendered.ends_with('\n'));
+        assert!(rendered.contains(&hex::encode(norito::codec::Encode::encode(&manifest))));
+        assert!(
+            rendered.contains(&hex::encode(norito::codec::Encode::encode(
+                &signed_manifest
+            )))
+        );
+    }
+
+    #[test]
+    fn smart_contract_code_hash_fixture_is_metadata_validated_and_deterministic() {
+        let artifact = build_default_executor_program();
+        let parsed =
+            ivm::ProgramMetadata::parse(&artifact).expect("parse default executor fixture");
+        let abi_hash_start = ivm::HEADER_SIZE - iroha_crypto::Hash::LENGTH;
+        let abi_hash_hex = hex::encode(&artifact[abi_hash_start..ivm::HEADER_SIZE]);
+        let rendered = render_smart_contract_code_executor_hashes_fixture(&artifact)
+            .expect("render smart-contract code hash fixture");
+
+        assert_eq!(
+            render_smart_contract_code_executor_hashes_fixture(&artifact)
+                .expect("render smart-contract code hash fixture again"),
+            rendered
+        );
+        assert!(rendered.ends_with('\n'));
+        assert!(rendered.contains("\"artifact\": \"defaults/executor.to\""));
+        assert!(rendered.contains(&hex::encode(ivm::contract_code_hash(&artifact).as_ref())));
+        assert!(rendered.contains(&abi_hash_hex));
+        assert!(rendered.contains(&format!("\"artifact_length\": {}", artifact.len())));
+        assert!(rendered.contains(&format!("\"abi_version\": {}", parsed.metadata.abi_version)));
     }
 
     #[test]

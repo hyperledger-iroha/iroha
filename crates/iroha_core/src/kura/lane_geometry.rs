@@ -4820,7 +4820,15 @@ impl Kura {
                     &entry,
                     &frontier_read.frontier.artifact,
                     None,
-                )?;
+                )
+                .map_err(|error| match error {
+                    Error::IO(source, _) if source.kind() == ErrorKind::WouldBlock => self
+                        .geometry_error(
+                            ErrorKind::WouldBlock,
+                            "lane retirement certified lane block durability attestation failed",
+                        ),
+                    error => error,
+                })?;
                 self.confirm_latest_certified_lane_block_frontier_read_locked(
                     &entry,
                     &frontier_read.snapshot,

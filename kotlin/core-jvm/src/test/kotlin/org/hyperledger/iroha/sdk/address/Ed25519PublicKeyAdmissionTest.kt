@@ -98,10 +98,24 @@ class Ed25519PublicKeyAdmissionTest {
                 assertInvalidPublicKey(vector.name) {
                     AccountAddress.fromCanonicalBytes(vector.canonical)
                 }
-                assertInvalidPublicKey(vector.name) {
+                assertAddressError(
+                    vector.name,
+                    if (vector.i105Malformed) {
+                        AccountAddressErrorCode.CHECKSUM_MISMATCH
+                    } else {
+                        AccountAddressErrorCode.INVALID_PUBLIC_KEY
+                    },
+                ) {
                     AccountAddress.fromI105(vector.i105, AccountAddress.DEFAULT_I105_DISCRIMINANT)
                 }
-                assertInvalidPublicKey(vector.name) {
+                assertAddressError(
+                    vector.name,
+                    if (vector.i105Malformed) {
+                        AccountAddressErrorCode.CHECKSUM_MISMATCH
+                    } else {
+                        AccountAddressErrorCode.INVALID_PUBLIC_KEY
+                    },
+                ) {
                     AccountAddress.parseEncodedIgnoringCurveSupport(
                         vector.i105,
                         AccountAddress.DEFAULT_I105_DISCRIMINANT,
@@ -187,8 +201,16 @@ class Ed25519PublicKeyAdmissionTest {
     }
 
     private fun assertInvalidPublicKey(name: String, action: () -> Unit) {
+        assertAddressError(name, AccountAddressErrorCode.INVALID_PUBLIC_KEY, action)
+    }
+
+    private fun assertAddressError(
+        name: String,
+        expected: AccountAddressErrorCode,
+        action: () -> Unit,
+    ) {
         val error = assertFailsWith<AccountAddressException>(name, action)
-        assertEquals(AccountAddressErrorCode.INVALID_PUBLIC_KEY, error.code, name)
+        assertEquals(expected, error.code, name)
     }
 
     private fun multisigPolicy(publicKey: ByteArray): MultisigPolicyPayload =
@@ -284,12 +306,24 @@ class Ed25519PublicKeyAdmissionTest {
         assertEquals(1, root.getValue("schema_version").jsonPrimitive.content.toInt())
         return root.getValue("vectors").jsonArray.map { element ->
             val vector = element.jsonObject
+            val valid = vector.getValue("valid").jsonPrimitive.boolean
+            val canonicalI105 = vector["single_i105"]
+            val malformedI105 = vector["malformed_i105"]
+            assertTrue(
+                (canonicalI105 == null) xor (malformedI105 == null),
+                "${vector.getValue("name").jsonPrimitive.content}: exactly one I105 fixture field is required",
+            )
+            assertTrue(
+                malformedI105 == null || !valid,
+                "${vector.getValue("name").jsonPrimitive.content}: malformed I105 is negative-test-only",
+            )
             AdmissionVector(
                 name = vector.getValue("name").jsonPrimitive.content,
-                valid = vector.getValue("valid").jsonPrimitive.boolean,
+                valid = valid,
                 key = hexToBytes(vector.getValue("key_hex").jsonPrimitive.content),
                 canonical = hexToBytes(vector.getValue("single_canonical_hex").jsonPrimitive.content),
-                i105 = vector.getValue("single_i105").jsonPrimitive.content,
+                i105 = (canonicalI105 ?: malformedI105!!).jsonPrimitive.content,
+                i105Malformed = malformedI105 != null,
             )
         }
     }
@@ -322,6 +356,7 @@ class Ed25519PublicKeyAdmissionTest {
         val key: ByteArray,
         val canonical: ByteArray,
         val i105: String,
+        val i105Malformed: Boolean,
     )
 
     private companion object {

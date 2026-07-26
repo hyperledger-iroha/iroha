@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`: Norito | 18НИ00000149Х | 18НИ00000150Х | I18НИ00000151Х.
   - Төҙөүселәр: `AssetDefinition::new(id, spec)` йәки уңайлыҡ `numeric(id)`; `name` кәрәк һәм `.with_name(...)` аша ҡуйылырға тейеш.
 - I18НИ00000156Х.
-- `Asset { id, value: Numeric }` с хранением дружелюбным `AssetEntry`/`AssetValue`.- `AssetBalanceScope`: `Global` сикләнмәгән баланстар өсөн һәм `Dataspace(DataSpaceId)` мәғлүмәттәр киңлеге сикләнгән баланстар өсөн.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` йыйнаҡ API-лар өсөн асыҡланған.
+- `Asset { id, value: Quantity }` с хранением дружелюбным `AssetEntry`/`AssetValue`.- `AssetBalanceScope`: `Global` сикләнмәгән баланстар өсөн һәм `Dataspace(DataSpaceId)` мәғлүмәттәр киңлеге сикләнгән баланстар өсөн.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` йыйнаҡ API-лар өсөн асыҡланған.
 
 ### НФТ
 - I18НИ00000164Х.

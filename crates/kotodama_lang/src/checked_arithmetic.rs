@@ -351,10 +351,7 @@ mod tests {
     #[test]
     fn quantity_underflow_is_not_generic_overflow() {
         let one = ConstantNumeric::Quantity(Quantity::one()).into_typed_expr();
-        let two = ConstantNumeric::Quantity(
-            Quantity::try_from_numeric(Numeric::new(2, 0)).expect("quantity"),
-        )
-        .into_typed_expr();
+        let two = ConstantNumeric::Quantity(Quantity::from(2_u32)).into_typed_expr();
         assert_eq!(
             evaluate(&binary(BinaryOp::Sub, one, two, Type::Quantity)),
             Err(ConstantNumericError::Numeric(

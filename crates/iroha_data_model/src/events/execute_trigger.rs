@@ -74,7 +74,7 @@ impl ExecuteTriggerEventFilter {
         self
     }
 
-    /// Returns the trigger constraint configured for this filter, if any.
+    /// Returns the trigger identifier constraint configured for this filter, if any.
     #[must_use]
     #[inline]
     pub fn trigger_id(&self) -> Option<&TriggerId> {

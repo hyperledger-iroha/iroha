@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ToriiClient } from "../src/toriiClient.js";
 import { AccountAddress } from "../src/address.js";
+import { KotodamaQuantity, NumericV1 } from "../src/numericV1.js";
 
 const BASE_URL = "https://localhost:8080";
 const SAMPLE_ACCOUNT_ID = AccountAddress.fromAccount({ publicKey: Buffer.from(
@@ -238,6 +239,77 @@ test("subscription action endpoints send normalized payloads", async () => {
   assert.equal(usageBody.unit_key, "compute_ms");
   assert.equal(usageBody.delta, "12.5");
   assert.equal(usageBody.usage_trigger_id, "sub-usage");
+});
+
+test("subscription usage delta uses the canonical Quantity boundary", async () => {
+  const submittedDeltas = [];
+  const fetchImpl = async (_url, init = {}) => {
+    submittedDeltas.push(JSON.parse(init.body).delta);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        ok: true,
+        subscription_id: "sub-1$subscriptions",
+        tx_hash_hex: "tx-usage",
+      },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const request = {
+    authority: SAMPLE_ACCOUNT_ID,
+    privateKey: "ed25519:deadbeef",
+    unitKey: "compute_ms",
+  };
+  const scale28 = `0.${"0".repeat(27)}1`;
+  const canonical = [
+    ["0", "0"],
+    ["12.5", "12.5"],
+    [NumericV1.INT_MAX.toString(), NumericV1.INT_MAX.toString()],
+    [scale28, scale28],
+    [42n, "42"],
+    [new KotodamaQuantity("7.25"), "7.25"],
+  ];
+
+  for (const [delta, expected] of canonical) {
+    await client.recordSubscriptionUsage("sub-1$subscriptions", {
+      ...request,
+      delta,
+    });
+    assert.equal(submittedDeltas.at(-1), expected);
+  }
+  assert.equal(submittedDeltas.length, canonical.length);
+
+  const invalid = [
+    0,
+    1,
+    1.25,
+    "+1",
+    "01",
+    "00",
+    "00.1",
+    "1.0",
+    "1.20",
+    "0.0",
+    "-0",
+    "-1",
+    (NumericV1.INT_MAX + 1n).toString(),
+    `0.${"0".repeat(28)}1`,
+  ];
+  for (const delta of invalid) {
+    await assert.rejects(
+      client.recordSubscriptionUsage("sub-1$subscriptions", {
+        ...request,
+        delta,
+      }),
+      undefined,
+      `subscription usage accepted noncanonical Quantity input ${String(delta)}`,
+    );
+  }
+  assert.equal(
+    submittedDeltas.length,
+    canonical.length,
+    "invalid Quantity inputs must fail before the request is sent",
+  );
 });
 
 test("getSubscription returns null on 404", async () => {

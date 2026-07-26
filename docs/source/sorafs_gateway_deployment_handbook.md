@@ -16,7 +16,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 
 | Requirement | Notes |
 |-------------|-------|
-| Torii build ≥ `2026-02-18` | Must include stream-token enforcement and `torii.sorafs_gateway` config surface. |
+| Torii build ≥ `2026-02-18` | Must include stream-token enforcement and the `sorafs.gateway` config surface. |
 | GAR admission artefacts | Gateway admission envelope + manifest signed via governance tooling. |
 | Stream token runtime signer | Non-exportable Ed25519 key in the approved HSM/KMS, a runtime-injected signer adapter, and a reviewed non-secret handle/public-key binding. Distribute the public key through authenticated provider inventory and rotate as described in §5.4. |
 | Observability stack | Prometheus + Grafana dashboards (`grafana_sorafs_gateway_*`) shipped in `docs/source/`. |
@@ -24,13 +24,12 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 
 ## 3. Configuration Checklist
 
-1. Populate `torii.sorafs_gateway` in the node config:
+1. Populate `sorafs.gateway` in the node config:
    ```toml
-   [torii.sorafs_gateway]
-   enable = true
+   [sorafs.gateway]
    require_manifest_envelope = true
    enforce_admission = true
-   direct_mode.default_mapping = "vanity"
+   enforce_capabilities = true
 
    [sorafs.storage]
    enabled = true
@@ -137,7 +136,7 @@ range of at most 8 MiB and receive `206` plus `Content-Range`.
 | Step | Description | Acceptance criteria |
 |------|-------------|---------------------|
 | 1 | Deploy new gateway instances (green) alongside existing blue pool. | healthz + `/v1/sorafs/storage/status` pass. |
-| 2 | Register green hosts via admission registry update; publish governance envelope. | `torii.sorafs_gateway.direct_mode.plan` dry-run shows expected vanity mapping. |
+| 2 | Register green hosts via admission registry update; publish governance envelope. | `iroha app sorafs gateway direct-mode plan` dry-run shows the expected vanity mapping. |
 | 3 | Shift a small traffic slice (5%) using orchestration tokens targeted at `stage-gw`. | Dashboard `grafana_sorafs_gateway_load_tests.json` shows ≤1% refusal. |
 | 4 | Expand to 50% once telemetry remains within SLOs for 30 minutes. | `torii_sorafs_stream_token_denials_total` slope near zero; `scripts/sorafs_direct_mode_smoke.sh` passes against staging gateway endpoints. |
 | 5 | Drain blue instances, revoke their stream tokens, and remove from admission registry. | `sorafs_gateway_token_revocations_total` increments and old hosts stop serving traffic. |

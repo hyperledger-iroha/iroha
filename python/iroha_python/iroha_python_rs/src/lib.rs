@@ -15264,8 +15264,24 @@ impl Instruction {
     }
 
     #[classmethod]
-    fn cancel_asset_lock(_cls: &Bound<'_, PyType>, escrow_id: &str) -> PyResult<Self> {
-        let instruction = CancelAssetLock::new(parse_escrow_id(escrow_id, "escrow_id")?);
+    fn cancel_asset_lock(
+        _cls: &Bound<'_, PyType>,
+        escrow_id: &str,
+        expected_remaining_amount: &str,
+    ) -> PyResult<Self> {
+        let expected_remaining_amount = parse_typed_quantity(
+            expected_remaining_amount,
+            "asset lock expected remaining amount",
+        )?;
+        if expected_remaining_amount.is_zero() {
+            return Err(PyValueError::new_err(
+                "asset lock expected remaining amount must be positive",
+            ));
+        }
+        let instruction = CancelAssetLock::new(
+            parse_escrow_id(escrow_id, "escrow_id")?,
+            expected_remaining_amount,
+        );
         Ok(Instruction::new(instruction.into()))
     }
 

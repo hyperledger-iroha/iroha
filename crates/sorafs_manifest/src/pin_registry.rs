@@ -560,8 +560,8 @@ pub enum ManifestPolicyValidationError {
 mod tests {
     use std::convert::TryInto;
 
-    use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
 
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

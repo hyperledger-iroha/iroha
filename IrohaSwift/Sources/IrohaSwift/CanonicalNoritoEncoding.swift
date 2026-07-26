@@ -641,13 +641,22 @@ public enum CanonicalNorito {
         return writer.data
     }
 
-    /// Encode a canonical decimal as the bare compact-Norito `Numeric` payload.
-    ///
-    /// This is the payload embedded by typed `Numeric` and `Quantity` fields
-    /// when the enclosing Norito header advertises `COMPACT_LEN`.
-    public static func encodeCompactNumeric(
+    /// Encode a canonical signed decimal as the bare compact-Norito `Decimal`
+    /// payload used when the enclosing header advertises `COMPACT_LEN`.
+    public static func encodeCompactDecimal(_ value: String) throws -> Data {
+        try encodeCompactNumericPayload(value, requireNonNegative: false)
+    }
+
+    /// Encode a canonical non-negative decimal as the bare compact-Norito
+    /// `Quantity` payload used when the enclosing header advertises
+    /// `COMPACT_LEN`.
+    public static func encodeCompactQuantity(_ value: String) throws -> Data {
+        try encodeCompactNumericPayload(value, requireNonNegative: true)
+    }
+
+    private static func encodeCompactNumericPayload(
         _ value: String,
-        requireNonNegative: Bool = false
+        requireNonNegative: Bool
     ) throws -> Data {
         do {
             if requireNonNegative {

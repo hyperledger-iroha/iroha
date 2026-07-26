@@ -494,6 +494,14 @@ impl ReputationRuntimeHandleV1 {
         self.runtime.committed_read_projection()
     }
 
+    /// Return one exact retained authoritative snapshot by its identifier.
+    pub fn committed_snapshot_by_id(
+        &self,
+        snapshot_id: [u8; 16],
+    ) -> Result<Option<sorafs_manifest::ReputationSnapshotV1>, ReputationRuntimeError> {
+        self.runtime.committed_snapshot_by_id(snapshot_id)
+    }
+
     /// Return only the retained committed-event suffix after `sequence`.
     pub fn committed_events_after(
         &self,
@@ -546,6 +554,13 @@ impl ReputationCommittedReadApiV1 for ReputationRuntimeHandleV1 {
         &self,
     ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError> {
         self.runtime.committed_read_projection()
+    }
+
+    fn committed_snapshot_by_id(
+        &self,
+        snapshot_id: [u8; 16],
+    ) -> Result<Option<sorafs_manifest::ReputationSnapshotV1>, ReputationRuntimeError> {
+        self.runtime.committed_snapshot_by_id(snapshot_id)
     }
 
     fn committed_events_after(

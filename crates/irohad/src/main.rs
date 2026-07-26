@@ -1241,6 +1241,17 @@ impl sorafs_node::reputation::runtime::ReputationCommittedReadApiV1
         self.runtime.committed_read_projection()
     }
 
+    fn committed_snapshot_by_id(
+        &self,
+        snapshot_id: [u8; 16],
+    ) -> Result<
+        Option<sorafs_manifest::ReputationSnapshotV1>,
+        sorafs_node::reputation::runtime::ReputationRuntimeError,
+    > {
+        self.ensure_ready()?;
+        self.runtime.committed_snapshot_by_id(snapshot_id)
+    }
+
     fn committed_events_after(
         &self,
         sequence: u64,

@@ -404,7 +404,11 @@ impl LaneLifecycleParameterV1 {
 #[repr(transparent)]
 #[norito(transparent, decode_from_slice)]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(unsafe {robust})
 )]
 pub struct LaneId(u32);
@@ -419,7 +423,11 @@ pub struct LaneId(u32);
 #[repr(transparent)]
 #[norito(transparent, decode_from_slice)]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(unsafe {robust})
 )]
 pub struct ShardId(u32);
@@ -593,7 +601,11 @@ impl norito::json::JsonDeserialize for ShardId {
 #[repr(transparent)]
 #[norito(transparent, decode_from_slice)]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(unsafe {robust})
 )]
 pub struct DataSpaceId(u64);

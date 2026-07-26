@@ -52,7 +52,7 @@ use iroha::{
         nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
         peer::PeerId,
         permission::Permission,
-        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Numeric, Quantity},
+        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Quantity},
         query::block::prelude::FindBlocks,
         transaction::{SignedTransaction, TransactionEntrypoint},
     },
@@ -883,17 +883,17 @@ fn wait_for_lane_peers_commit_qc_at_least(
     ))
 }
 
-fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
+fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
-        Ok(asset) => Ok(asset.value().as_numeric().clone()),
+        Ok(asset) => Ok(asset.value().clone()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-        ))) => Ok(Numeric::zero()),
+        ))) => Ok(Quantity::zero()),
         Err(err) => Err(eyre!(err)),
     }
 }
 
-fn asset_balance_variants(client: &Client, asset_id: &AssetId) -> Result<Vec<Numeric>> {
+fn asset_balance_variants(client: &Client, asset_id: &AssetId) -> Result<Vec<Quantity>> {
     Ok(vec![asset_balance(client, asset_id)?])
 }
 
@@ -2329,13 +2329,13 @@ fn wait_for_expected_balances(
 struct BalanceExpectation<'a> {
     client: &'a Client,
     asset_id: &'a AssetId,
-    expected: Numeric,
+    expected: Quantity,
 }
 
 struct BalanceExpectationAcrossClients<'a> {
     clients: &'a [Client],
     asset_id: &'a AssetId,
-    expected: Numeric,
+    expected: Quantity,
 }
 
 fn total_balance_observer_request_slots(client_counts: impl IntoIterator<Item = usize>) -> usize {
@@ -5430,7 +5430,7 @@ fn prove_g12p_autoscale_lifecycle(
     Ok(())
 }
 
-fn expected_post_swap_balances(completed_work_units: usize) -> Result<[Numeric; 4]> {
+fn expected_post_swap_balances(completed_work_units: usize) -> Result<[Quantity; 4]> {
     let completed = u64::try_from(completed_work_units)
         .map_err(|_| eyre!("autonomous work-unit count does not fit u64"))?;
     ensure!(
@@ -5439,14 +5439,14 @@ fn expected_post_swap_balances(completed_work_units: usize) -> Result<[Numeric; 
         "autonomous fault soak exhausted seeded workload balances after {completed} work units"
     );
     Ok([
-        Numeric::from(
+        Quantity::from(
             DS1_WORKLOAD_SEED_AMOUNT
                 .saturating_sub(30)
                 .saturating_sub(completed),
         ),
-        Numeric::from(30_u64.saturating_add(completed)),
-        Numeric::from(45_u64.saturating_add(completed)),
-        Numeric::from(
+        Quantity::from(30_u64.saturating_add(completed)),
+        Quantity::from(45_u64.saturating_add(completed)),
+        Quantity::from(
             DS2_WORKLOAD_SEED_AMOUNT
                 .saturating_sub(45)
                 .saturating_sub(completed),
@@ -6050,12 +6050,12 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         let _phase = phase_timings.phase("route probes: wrong-dataspace query/assert");
         ensure!(
             asset_balance(&nexus_alice_submitter, &alice_ds1_asset)?
-                == Numeric::from(DS1_WORKLOAD_SEED_AMOUNT),
+                == Quantity::from(DS1_WORKLOAD_SEED_AMOUNT),
             "Alice ds1 balance query through Nexus ingress did not route to ds1"
         );
         ensure!(
             asset_balance(&nexus_bob_submitter, &bob_ds2_asset)?
-                == Numeric::from(DS2_WORKLOAD_SEED_AMOUNT),
+                == Quantity::from(DS2_WORKLOAD_SEED_AMOUNT),
             "Bob ds2 balance query through Nexus ingress did not route to ds2"
         );
     }
@@ -6464,22 +6464,22 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         BalanceExpectation {
             client: &alice_on_ds1,
             asset_id: &alice_ds1_asset,
-            expected: Numeric::from(DS1_WORKLOAD_SEED_AMOUNT),
+            expected: Quantity::from(DS1_WORKLOAD_SEED_AMOUNT),
         },
         BalanceExpectation {
             client: &bob_on_ds1,
             asset_id: &bob_ds1_asset,
-            expected: Numeric::from(0_u32),
+            expected: Quantity::from(0_u32),
         },
         BalanceExpectation {
             client: &alice_on_ds2,
             asset_id: &alice_ds2_asset,
-            expected: Numeric::from(0_u32),
+            expected: Quantity::from(0_u32),
         },
         BalanceExpectation {
             client: &bob_on_ds2,
             asset_id: &bob_ds2_asset,
-            expected: Numeric::from(DS2_WORKLOAD_SEED_AMOUNT),
+            expected: Quantity::from(DS2_WORKLOAD_SEED_AMOUNT),
         },
     ];
     let setup_register_mint_retries_used = 0usize;

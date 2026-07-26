@@ -2233,23 +2233,29 @@ mod tests {
     }
 
     #[test]
-    fn vk_submission_backend_parser_preserves_pending_protocol_tags() {
+    fn vk_submission_backend_parser_accepts_only_supported_open_verify_engines() {
         use iroha::data_model::zk::BackendTag;
 
         for (label, expected) in [
-            ("halo2/ipa/orchard", BackendTag::Halo2IpaOrchard),
-            ("groth16/bls12-377", BackendTag::Groth16Bls12377),
-            ("penumbra-masp", BackendTag::Groth16Bls12377),
-            ("monero-fcmp++", BackendTag::FcmpPlusPlusCurveTree),
-            ("fcmp++", BackendTag::FcmpPlusPlusCurveTree),
-            ("sis-with-hints", BackendTag::SisWithHints),
-            ("post-quantum-masp", BackendTag::PqMaspStarkFri),
+            ("halo2/ipa", BackendTag::Halo2IpaPasta),
+            ("stark/fri", BackendTag::Stark),
+            ("stark/fri/sha256-goldilocks", BackendTag::Stark),
         ] {
             assert_eq!(
-                vk_backend_tag_from_label(label),
+                vk_backend_tag_from_label(label).expect("supported engine"),
                 expected,
-                "{label} must not collapse into a generic supported backend",
+                "{label} must map to its exact generic engine",
             );
+        }
+
+        for label in [
+            "halo2/ipa/orchard",
+            "groth16/bls12-377",
+            "sis-with-hints",
+            "unknown/privacy/backend",
+        ] {
+            vk_backend_tag_from_label(label)
+                .expect_err("protocol names and unknown labels must not map to generic engines");
         }
     }
 
@@ -2654,8 +2660,9 @@ fn parse_commitment_hex(value: &str) -> Result<[u8; 32]> {
     parse_hex32_str(value, "commitment_hex")
 }
 
-fn vk_backend_tag_from_label(label: &str) -> iroha::data_model::zk::BackendTag {
-    iroha::data_model::zk::BackendTag::from_catalog_label(label)
+fn vk_backend_tag_from_label(label: &str) -> Result<iroha::data_model::zk::BackendTag> {
+    iroha_core::zk::production_verify_backend_tag(label)
+        .ok_or_else(|| eyre!("unsupported generic OpenVerify backend `{label}`"))
 }
 
 const DEFAULT_VK_NAMESPACE: &str = "core";
@@ -2728,7 +2735,7 @@ fn build_vk_record(
         eyre::bail!("provide either vk_bytes or commitment_hex");
     }
 
-    let backend_tag = vk_backend_tag_from_label(backend);
+    let backend_tag = vk_backend_tag_from_label(backend)?;
     let schema_hash = parse_hex32_str(
         &payload.public_inputs_schema_hash_hex,
         "public_inputs_schema_hash_hex",

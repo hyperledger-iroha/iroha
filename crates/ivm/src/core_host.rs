@@ -2755,9 +2755,8 @@ mod tests {
         make_pointer_tlv(PointerType::NoritoBytes, &payload)
     }
 
-    fn make_amount_tlv(value: Numeric) -> Vec<u8> {
-        let quantity = Quantity::try_from_numeric(value).expect("canonical quantity");
-        crate::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
+    fn make_amount_tlv(value: Quantity) -> Vec<u8> {
+        crate::numeric_tlv::encode_quantity(&value).expect("encode quantity pointer envelope")
     }
 
     #[test]
@@ -2783,7 +2782,7 @@ mod tests {
     #[test]
     fn core_host_amount_arguments_require_canonical_quantity_pointer() {
         let mut vm = IVM::new(u64::MAX);
-        let canonical = Numeric::new(125_u32, 2);
+        let canonical = "1.25".parse::<Quantity>().expect("canonical quantity");
         let canonical_ptr = vm
             .alloc_input_tlv(&make_amount_tlv(canonical.clone()))
             .expect("allocate canonical quantity");
@@ -2791,7 +2790,7 @@ mod tests {
         assert_eq!(CoreHost::expect_amount(&vm, 13), Ok(()));
 
         let legacy_ptr = vm
-            .alloc_input_tlv(&make_numeric_tlv(canonical))
+            .alloc_input_tlv(&make_numeric_tlv(canonical.into_numeric()))
             .expect("allocate legacy Numeric pointer");
         vm.set_register(13, legacy_ptr);
         assert_eq!(
@@ -4941,7 +4940,7 @@ mod tests {
             .preload_input(from.len() as u64 + to.len() as u64 + 16, &asset)
             .expect("preload asset");
         let amount_offset = from.len() as u64 + to.len() as u64 + asset.len() as u64 + 24;
-        let amount = make_amount_tlv(Numeric::from(10_u64));
+        let amount = make_amount_tlv(Quantity::from(10_u64));
         vm.memory
             .preload_input(amount_offset, &amount)
             .expect("preload amount");

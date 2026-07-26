@@ -25,6 +25,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     ContractOperationReceipt,
     ExplorerAccountQr,
     GovernanceContractResponse,
+    GovernanceLockRecord,
     KagemushaRedeemRequestV4,
     KagemushaTopUpRequestV4,
     MultisigResponse,
@@ -62,6 +63,7 @@ from iroha_torii_client.native_amx import (  # noqa: E402
 )
 
 CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+CANONICAL_LARGE_FRACTION = "18446744073709551616.25"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
 CHECKSUM_INVALID_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF2"
@@ -396,7 +398,7 @@ def _nexus_fee_receipt_payload() -> Dict[str, Any]:
         "block_height": 9,
         "payer_account_id": CANONICAL_OWNER,
         "fee_asset_id": "xor#universal",
-        "fee_amount": "7.5",
+        "fee_amount": CANONICAL_LARGE_FRACTION,
         "schedule": {
             "tx_bytes_len": 128,
             "instruction_count": 2,
@@ -3077,6 +3079,69 @@ def test_get_governance_contract_parses_response() -> None:
     )
 
 
+def _governance_locks_payload(amount: Any) -> Dict[str, Any]:
+    return {
+        "found": True,
+        "referendum_id": "ref-1",
+        "locks": {
+            CANONICAL_OWNER: {
+                "owner": CANONICAL_OWNER,
+                "amount": amount,
+                "slashed": "0.25",
+                "expiry_height": 10,
+                "direction": 1,
+                "duration_blocks": 5,
+            }
+        },
+    }
+
+
+def test_get_governance_locks_returns_typed_lossless_quantity() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(payload=_governance_locks_payload(CANONICAL_LARGE_FRACTION))
+    )
+    result = ToriiClient(
+        "http://node.test",
+        session=session,
+    ).get_governance_locks("ref-1")
+
+    record = result.locks[CANONICAL_OWNER] if result.locks is not None else None
+    assert isinstance(record, GovernanceLockRecord)
+    assert record.amount == CANONICAL_LARGE_FRACTION
+    assert record.slashed == "0.25"
+
+
+@pytest.mark.parametrize(
+    "amount",
+    [1, 1.5, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", "9" * 155],
+)
+def test_get_governance_locks_rejects_noncanonical_quantity(amount: Any) -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_governance_locks_payload(amount)))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="quantity|Quantity"):
+        client.get_governance_locks("ref-1")
+
+
+@pytest.mark.parametrize(
+    "slashed",
+    [1, 1.5, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", "9" * 155],
+)
+def test_get_governance_locks_rejects_noncanonical_slashed_quantity(
+    slashed: Any,
+) -> None:
+    payload = _governance_locks_payload("1")
+    payload["locks"][CANONICAL_OWNER]["slashed"] = slashed
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="quantity"):
+        client.get_governance_locks("ref-1")
+
+
 @pytest.mark.parametrize(
     "alias",
     ["", "zk", "plain", "ZK", "PLAIN", " Zk", "Plain ", "quadratic"],
@@ -3939,6 +4004,10 @@ def test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipt
 
     parsed = _get_sumeragi_diagnostics(payload).lane_settlement_commitments[0]
 
+    assert (
+        parsed["nexus_fee_receipts"][0]["fee_amount"]
+        == CANONICAL_LARGE_FRACTION
+    )
     assert parsed["nexus_fee_receipts"][0]["schedule"]["per_byte_fee"] == "0.5"
     native = parsed["native_amx_receipts"][0]
     assert native["version"] == 2
@@ -4559,6 +4628,37 @@ def test_get_sumeragi_diagnostics_rejects_noncanonical_fixed_hex_and_nested_unkn
     unknown_fee["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match="schedule contains unknown field legacy_rate"):
         _get_sumeragi_diagnostics(unknown_fee)
+
+    overflowing = "9" * 155
+    for invalid in [
+        1,
+        1.5,
+        "+1",
+        "01",
+        "1.0",
+        "1.2300",
+        " 1",
+        "1 ",
+        "-1",
+        overflowing,
+    ]:
+        invalid_fee = _sumeragi_diagnostics_payload()
+        settlement = _lane_settlement_payload()
+        fee = _nexus_fee_receipt_payload()
+        fee["fee_amount"] = invalid
+        settlement["nexus_fee_receipts"] = [fee]
+        invalid_fee["lane_settlement_commitments"] = [settlement]
+        with pytest.raises(RuntimeError, match="fee_amount.*(?:quantity|512-bit)"):
+            _get_sumeragi_diagnostics(invalid_fee)
+
+    invalid_schedule = _sumeragi_diagnostics_payload()
+    settlement = _lane_settlement_payload()
+    fee = _nexus_fee_receipt_payload()
+    fee["schedule"]["base_fee"] = "2.0"
+    settlement["nexus_fee_receipts"] = [fee]
+    invalid_schedule["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="base_fee.*quantity"):
+        _get_sumeragi_diagnostics(invalid_schedule)
 
     unknown_amx = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
@@ -8060,6 +8160,57 @@ def test_decode_pdp_commitment_header_returns_none_when_missing() -> None:
     assert decode_pdp_commitment_header(None) is None
 
 
+def test_submit_plain_ballot_requires_canonical_lossless_quantity() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "accepted": True,
+                "reason": None,
+                "tx_instructions": [],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    client.submit_plain_ballot(
+        authority=CANONICAL_OWNER,
+        chain_id="chain",
+        referendum_id="ref-1",
+        owner=CANONICAL_OWNER,
+        amount=CANONICAL_LARGE_FRACTION,
+        duration_blocks=5,
+        direction="Aye",
+    )
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload["amount"] == CANONICAL_LARGE_FRACTION
+
+    overflowing = "9" * 155
+    for invalid in [
+        1,
+        1.5,
+        "+1",
+        "01",
+        "1.0",
+        "1.2300",
+        " 1",
+        "1 ",
+        "-1",
+        overflowing,
+    ]:
+        with pytest.raises(RuntimeError, match="quantity|512-bit"):
+            client.submit_plain_ballot(
+                authority=CANONICAL_OWNER,
+                chain_id="chain",
+                referendum_id="ref-1",
+                owner=CANONICAL_OWNER,
+                amount=invalid,  # type: ignore[arg-type]
+                duration_blocks=5,
+                direction="Aye",
+            )
+
+
 def test_submit_zk_ballot_rejects_unsupported_public_inputs() -> None:
     session = RecordingSession()
     session.queue(
@@ -8109,7 +8260,7 @@ def test_submit_zk_ballot_normalizes_public_inputs() -> None:
         proof_b64="AAAA",
         public={
             "owner": CANONICAL_OWNER,
-            "amount": "100",
+            "amount": CANONICAL_LARGE_FRACTION,
             "duration_blocks": 5,
             "root_hint": f"0x{'Cc' * 32}",
             "nullifier": bytes.fromhex("DD" * 32),
@@ -8118,8 +8269,44 @@ def test_submit_zk_ballot_normalizes_public_inputs() -> None:
 
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     public = payload["public"]
+    assert public["amount"] == CANONICAL_LARGE_FRACTION
     assert public["root_hint"] == "cc" * 32
     assert public["nullifier"] == "dd" * 32
+
+
+@pytest.mark.parametrize(
+    "amount",
+    [1, 1.5, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", "9" * 155],
+)
+def test_submit_zk_ballot_lock_hints_reject_noncanonical_quantity(
+    amount: Any,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="quantity"):
+        client.submit_zk_ballot(
+            authority=CANONICAL_OWNER,
+            chain_id="chain",
+            election_id="election-1",
+            proof_b64="AAAA",
+            public={
+                "owner": CANONICAL_OWNER,
+                "amount": amount,
+                "duration_blocks": 5,
+            },
+        )
+    with pytest.raises(RuntimeError, match="quantity"):
+        client.submit_zk_ballot_v1(
+            authority=CANONICAL_OWNER,
+            chain_id="chain",
+            election_id="election-1",
+            backend="halo2/ipa",
+            envelope_b64="AAAA",
+            owner=CANONICAL_OWNER,
+            amount=amount,  # type: ignore[arg-type]
+            duration_blocks=5,
+        )
 
 
 def test_submit_zk_ballot_rejects_invalid_hex_hints() -> None:
@@ -8222,11 +8409,15 @@ def test_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
         backend="halo2/ipa",
         envelope_b64="AAAA",
         root_hint=f"0x{'Aa' * 32}",
+        owner=CANONICAL_OWNER,
+        amount=CANONICAL_LARGE_FRACTION,
+        duration_blocks=5,
         nullifier=f"blake2b32:{'BB' * 32}",
     )
 
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert payload["root_hint"] == "aa" * 32
+    assert payload["amount"] == CANONICAL_LARGE_FRACTION
     assert payload["nullifier"] == "bb" * 32
 
 
@@ -8448,22 +8639,59 @@ def test_subscription_actions_post_payloads() -> None:
     assert charge_body["charge_at_ms"] == 1_704_067_200_000
 
 
-def test_record_subscription_usage_posts_payload() -> None:
+def test_record_subscription_usage_uses_canonical_quantity_boundary() -> None:
     session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "e"}))
     client = ToriiClient("http://node.test", session=session)
+    canonical_values = [
+        "0",
+        "12.5",
+        str((1 << 511) - 1),
+        f"0.{'0' * 27}1",
+    ]
+    for canonical in canonical_values:
+        session.queue(
+            StubResponse(
+                payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "e"}
+            )
+        )
+        result = client.record_subscription_usage(
+            "sub-1",
+            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+            private_key="ed25519:priv",
+            unit_key="compute_ms",
+            delta=canonical,
+            usage_trigger_id="sub-usage",
+        )
+        assert result.ok is True
+        payload = json.loads(session.calls[-1]["data"].decode("utf-8"))
+        assert payload["unit_key"] == "compute_ms"
+        assert payload["delta"] == canonical
+        assert payload["usage_trigger_id"] == "sub-usage"
 
-    result = client.record_subscription_usage(
-        "sub-1",
-        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        private_key="ed25519:priv",
-        unit_key="compute_ms",
-        delta=3600,
-        usage_trigger_id="sub-usage",
-    )
-
-    assert result.ok is True
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["unit_key"] == "compute_ms"
-    assert payload["delta"] == "3600"
-    assert payload["usage_trigger_id"] == "sub-usage"
+    invalid_values: List[Any] = [
+        0,
+        1,
+        1.25,
+        "+1",
+        "01",
+        "00",
+        "00.1",
+        "1.0",
+        "1.20",
+        "0.0",
+        "-0",
+        "-1",
+        str(1 << 511),
+        f"0.{'0' * 28}1",
+    ]
+    submitted = len(session.calls)
+    for invalid in invalid_values:
+        with pytest.raises(RuntimeError, match="quantity"):
+            client.record_subscription_usage(
+                "sub-1",
+                authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+                private_key="ed25519:priv",
+                unit_key="compute_ms",
+                delta=invalid,  # type: ignore[arg-type]
+            )
+    assert len(session.calls) == submitted

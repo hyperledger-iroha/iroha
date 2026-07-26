@@ -449,23 +449,23 @@ mod compliance_tests {
     }
 
     #[derive(Clone)]
-    struct StubEngine {
+    struct TestEngine {
         responses: HashMap<String, HttpResponse>,
     }
 
-    impl StubEngine {
+    impl TestEngine {
         fn new(responses: HashMap<String, HttpResponse>) -> Self {
             Self { responses }
         }
     }
 
-    impl HttpEngine for StubEngine {
+    impl HttpEngine for TestEngine {
         fn get(&self, request: HttpRequest) -> HttpFuture {
             let path = request.url.path().to_string();
             let maybe = self.responses.get(&path).cloned();
             Box::pin(async move {
                 maybe.ok_or_else(|| {
-                    HttpError::Stub(format!("no stubbed response registered for {path}"))
+                    HttpError::TestEngine(format!("no test response registered for {path}"))
                 })
             })
         }
@@ -500,7 +500,7 @@ mod compliance_tests {
                 .into_bytes(),
             },
         );
-        let engine = Arc::new(StubEngine::new(responses));
+        let engine = Arc::new(TestEngine::new(responses));
 
         let config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),

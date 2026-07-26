@@ -1001,9 +1001,13 @@ fn validation_fee_ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
 // the matching `ProposalKind` wire tags. Governance-enabled parity tests below
 // verify the complete encoded bytes.
 #[derive(Encode)]
-enum ValidationFeeProposalFingerprintEnvelopeV1 {
+enum ValidationFeePolicyProposalFingerprintEnvelopeV1 {
     #[codec(index = 3)]
     ValidationFeePolicy(ValidationFeePolicyFingerprintPayloadV1),
+}
+
+#[derive(Encode)]
+enum ValidationFeePayoutLifecycleProposalFingerprintEnvelopeV1 {
     #[codec(index = 4)]
     ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleFingerprintPayloadV1),
 }
@@ -1019,9 +1023,7 @@ struct ValidationFeePayoutLifecycleFingerprintPayloadV1 {
     payout_binding: ValidationFeeTreasuryPayoutBindingV1,
 }
 
-fn validation_fee_proposal_fingerprint(
-    proposal: ValidationFeeProposalFingerprintEnvelopeV1,
-) -> [u8; 32] {
+fn validation_fee_proposal_fingerprint(proposal: &impl Encode) -> [u8; 32] {
     let encoded = proposal.encode();
     let mut hasher = Blake2bVar::new(32).expect("Blake2bVar length is fixed and valid");
     hasher.update(GOVERNANCE_PROPOSAL_FINGERPRINT_DOMAIN_V1);
@@ -1038,7 +1040,7 @@ fn validation_fee_policy_proposal_fingerprint(
     payout_lifecycle_proposal_id: Option<[u8; 32]>,
 ) -> [u8; 32] {
     validation_fee_proposal_fingerprint(
-        ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePolicy(
+        &ValidationFeePolicyProposalFingerprintEnvelopeV1::ValidationFeePolicy(
             ValidationFeePolicyFingerprintPayloadV1 {
                 policy: policy.clone(),
                 payout_lifecycle_proposal_id,
@@ -1051,7 +1053,7 @@ fn validation_fee_payout_lifecycle_proposal_fingerprint(
     payout_binding: &ValidationFeeTreasuryPayoutBindingV1,
 ) -> [u8; 32] {
     validation_fee_proposal_fingerprint(
-        ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePayoutLifecycle(
+        &ValidationFeePayoutLifecycleProposalFingerprintEnvelopeV1::ValidationFeePayoutLifecycle(
             ValidationFeePayoutLifecycleFingerprintPayloadV1 {
                 payout_binding: payout_binding.clone(),
             },
@@ -1575,7 +1577,7 @@ mod parliament_tests {
                 payout_binding: payout_binding.clone(),
             });
         let lifecycle_lightweight =
-            ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePayoutLifecycle(
+            ValidationFeePayoutLifecycleProposalFingerprintEnvelopeV1::ValidationFeePayoutLifecycle(
                 ValidationFeePayoutLifecycleFingerprintPayloadV1 {
                     payout_binding: payout_binding.clone(),
                 },
@@ -1599,7 +1601,7 @@ mod parliament_tests {
                     payout_lifecycle_proposal_id,
                 });
             let policy_lightweight =
-                ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePolicy(
+                ValidationFeePolicyProposalFingerprintEnvelopeV1::ValidationFeePolicy(
                     ValidationFeePolicyFingerprintPayloadV1 {
                         policy: governed_policy.clone(),
                         payout_lifecycle_proposal_id,
@@ -1618,17 +1620,18 @@ mod parliament_tests {
 
     #[test]
     fn lightweight_validation_fee_preimages_use_frozen_v1_tags() {
-        let policy = ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePolicy(
+        let policy = ValidationFeePolicyProposalFingerprintEnvelopeV1::ValidationFeePolicy(
             ValidationFeePolicyFingerprintPayloadV1 {
                 policy: policy(1, None),
                 payout_lifecycle_proposal_id: None,
             },
         );
-        let lifecycle = ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePayoutLifecycle(
-            ValidationFeePayoutLifecycleFingerprintPayloadV1 {
-                payout_binding: payout_binding(),
-            },
-        );
+        let lifecycle =
+            ValidationFeePayoutLifecycleProposalFingerprintEnvelopeV1::ValidationFeePayoutLifecycle(
+                ValidationFeePayoutLifecycleFingerprintPayloadV1 {
+                    payout_binding: payout_binding(),
+                },
+            );
         assert_eq!(
             policy.encode().get(..4),
             Some(3_u32.to_le_bytes().as_slice())
@@ -1790,10 +1793,6 @@ mod parliament_tests {
     }
 
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one fail-closed lifecycle matrix checks missing, mismatched, and correctly enacted payout references together"
-    )]
     fn payout_policy_requires_matching_enacted_lifecycle_reference() {
         let binding = payout_binding();
         let seal = binding.lifecycle_seal().expect("lifecycle seal");

@@ -552,11 +552,11 @@ iroha ledger account register \
 To add assets to the account, you must first register an Asset Definition. Specify the `asset` entity and then use the `register` and `mint` commands respectively. Here is an example of adding Assets of the type `Quantity` to the account:
 
 ```bash
-iroha ledger asset register --id "6UoZbEC1BVBbDo99CSvY7qud73yh" --type Numeric
+iroha ledger asset register --id "6UoZbEC1BVBbDo99CSvY7qud73yh" --type Quantity
 iroha ledger asset mint --id "<ASSET_ID>" --quantity 1010
 ```
 
-With this, you created an asset of type `Numeric` under the canonical asset-definition identifier `6UoZbEC1BVBbDo99CSvY7qud73yh`, and then gave `1010` units of that asset to a target account.
+With this, you created an asset of type `Quantity` under the canonical asset-definition identifier `6UoZbEC1BVBbDo99CSvY7qud73yh`, and then gave `1010` units of that asset to a target account.
 
 ### Query Account Assets Quantity
 

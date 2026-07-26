@@ -182,6 +182,9 @@ export {
   computeAxtBinding,
 } from "./axt.js";
 export {
+  encodeAccountIdNoritoValue,
+  encodeAssetDefinitionIdNoritoValue,
+  encodeQuantityNoritoValue,
   noritoDecodeBlockProofs,
   noritoEncodeInstruction,
   noritoDecodeInstruction,
@@ -335,6 +338,7 @@ export {
 } from "./ivmArtifactAdmissionWasm.js";
 export {
   buildBurnAssetInstruction,
+  buildCancelAssetLockInstruction,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
   buildBurnTriggerRepetitionsInstruction,

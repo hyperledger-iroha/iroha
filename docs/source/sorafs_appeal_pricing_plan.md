@@ -15,9 +15,10 @@ settlement POSTs persist bounded semantic work before signing, bind it to one
 finalized cursor and exact pre-operation `AssetEscrowRecord`, and reconcile
 `OpenAssetLock`, `DrawdownAssetLock`, and `CancelAssetLock` effects from
 committed state. Torii starts the supervised worker with its normal lifecycle.
-Every drawdown carries the exact committed `expected_remaining_amount`; native
-execution rejects a stale independently submitted drawdown before custody
-moves, so two peers cannot both apply the same observed partition. Completed
+Every drawdown and cancellation carries the exact committed
+`expected_remaining_amount`; native execution rejects a stale independently
+submitted drawdown or cancel before custody moves, so two peers cannot both
+apply the same observed partition or race a refund against a drawdown. Completed
 operation tombstones are never evicted merely to satisfy a local bound:
 capacity exhaustion fails closed until a committed idempotency record makes
 compaction safe.
@@ -109,13 +110,17 @@ implemented helpers and the remaining service gates.
 
 - `AppealPricingConfig::baseline_v1()` implements the congestion-aware deposit
   formula for `content`, `access`, `fraud`, and `other` appeal classes.
-- `AppealPricingConfig::from_manifest_value` loads governance-managed JSON
-  manifests such as
-  `docs/examples/ministry/appeal_pricing_config_baseline.json`.
+- `AppealPricingConfig::from_manifest_value` loads JSON fixtures such as
+  `docs/examples/ministry/appeal_pricing_config_baseline.json` for offline
+  calculator, fixture-regeneration, and evidence workflows only. It is not a
+  production policy loader.
 - `AppealSettlementConfig::baseline_v1()` and
   `AppealSettlementConfig::from_manifest_value` calculate refund, treasury,
-  escrow holdback, panel reward, and no-show forfeiture amounts from
-  `docs/examples/ministry/appeal_settlement_config_baseline.json`.
+  escrow holdback, panel reward, and no-show forfeiture amounts from the offline
+  fixture `docs/examples/ministry/appeal_settlement_config_baseline.json`.
+  Production pricing, settlement rules, asset identity, and signer bindings
+  come exclusively from `[sorafs.appeal_finance_settlement]` in
+  `iroha_config`; JSON and CLI `--config` inputs cannot override them.
 - `AppealSettlementConfig::disburse` emits account-aware payout plans with
   refund, treasury, escrow, and per-juror reward lines.
 - `sorafs_cli appeal quote`, `sorafs_cli appeal settle`, and
@@ -243,8 +248,11 @@ deposit = clamp(deposit, min_deposit[class], max_deposit[class])
 
 Default baseline parameters are content 150 XOR, access 200 XOR, fraud 500 XOR,
 and other 120 XOR, with class-specific backlog targets, size divisors, and
-deposit caps encoded in `AppealPricingConfig::baseline_v1()`. Governance
-manifests may override those parameters without changing the CLI or library.
+deposit caps encoded in `AppealPricingConfig::baseline_v1()`. Offline
+calculator and evidence runs may load an explicit JSON fixture without changing
+the CLI or library. Production Torii does not load that JSON: the active policy
+is the validated `[sorafs.appeal_finance_settlement]` value supplied by
+`iroha_config`.
 Dimensionless ratios are evaluated with 28 decimal digits, but the aggregate
 monetary result is rounded exactly once, using nearest-even, to XOR's governed
 nano-unit precision of at most nine fractional digits before clamping. Every
@@ -306,10 +314,10 @@ The app API publishes the deterministic baseline through JSON endpoints:
 - `POST /v1/sorafs/appeals/finance/deposits/settle` accepts a
   `deposit_confirmation`, `outcome`, and optional `panel_size`, confirms the
   visible runtime deposit lock, and returns an ordered non-mutating settlement
-  plan. Non-refunded custody maps to a `DrawdownAssetLock` bound to the exact
-  current remaining amount; refundable custody maps to `CancelAssetLock`. Each
-  step identifies the required authority and amount, but no wire payload is
-  exposed.
+  plan. Non-refunded custody maps to a `DrawdownAssetLock` and refundable
+  custody maps to `CancelAssetLock`; both are bound to the exact current
+  remaining amount. Each step identifies the required authority and amount, but
+  no wire payload is exposed.
 - `POST /v1/sorafs/appeals/finance/deposits/submit-settlement` accepts the same
   `deposit_confirmation`, `outcome`, and optional `panel_size`, then durably
   enqueues exactly one next pending settlement step when the finalized-height
@@ -379,7 +387,8 @@ cargo run --locked -p sorafs_orchestrator --bin sorafs_cli -- \
   --format=json
 ```
 
-Quote using a governance manifest:
+Quote using an offline calculator/evidence fixture (never a production policy
+override):
 
 ```sh
 cargo run --locked -p sorafs_orchestrator --bin sorafs_cli -- \

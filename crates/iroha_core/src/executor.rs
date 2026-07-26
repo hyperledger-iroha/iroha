@@ -501,7 +501,7 @@ pub(crate) fn execute_instruction_detached(
         match tb {
             TransferBox::Asset(t) => {
                 let src = t.source.clone();
-                let qty = t.object.clone().into_numeric();
+                let qty = t.object.clone();
                 delta.transfer_asset(src, t.destination.clone(), qty);
             }
             TransferBox::Domain(t) => {
@@ -3325,40 +3325,20 @@ pub(crate) fn compute_nexus_fee_amount(
     let instr_u64 = u64::try_from(instruction_count).map_err(|_| {
         ValidationFail::InternalError("instruction count too large for fee accounting".to_owned())
     })?;
-    let mut fee = cfg.base_fee.as_numeric().clone();
-    fee = Executor::checked_numeric_add(
-        fee,
-        Executor::checked_numeric_mul_u64(
-            cfg.per_byte_fee.as_numeric(),
-            tx_bytes_u64,
-            "fee amount",
-        )?,
-        "fee amount",
-    )?;
-    fee = Executor::checked_numeric_add(
-        fee,
-        Executor::checked_numeric_mul_u64(
-            cfg.per_instruction_fee.as_numeric(),
-            instr_u64,
-            "fee amount",
-        )?,
-        "fee amount",
-    )?;
-    let fee = Executor::checked_numeric_add(
-        fee,
-        Executor::checked_numeric_mul_u64(
-            cfg.per_gas_unit_fee.as_numeric(),
-            gas_used,
-            "fee amount",
-        )?,
-        "fee amount",
-    )?
-    .trim_trailing_zeros();
-    Quantity::from_canonical_numeric(fee).map_err(|error| {
-        ValidationFail::InternalError(format!(
-            "computed nexus fee left the quantity domain: {error}"
-        ))
-    })
+    let mut fee = cfg.base_fee.clone();
+    for (unit, count) in [
+        (&cfg.per_byte_fee, tx_bytes_u64),
+        (&cfg.per_instruction_fee, instr_u64),
+        (&cfg.per_gas_unit_fee, gas_used),
+    ] {
+        let delta = unit.try_mul_decimal(&Numeric::from(count)).map_err(|_| {
+            ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".to_owned())
+        })?;
+        fee = fee.checked_add(&delta).map_err(|_| {
+            ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".to_owned())
+        })?;
+    }
+    Ok(fee)
 }
 
 fn fee_bound_for_admission_payload(
@@ -3670,14 +3650,10 @@ fn evaluate_nexus_fee_admission_payload(
             }
             let mut authority_balances = BTreeMap::new();
             for (payer_asset, required) in required_by_asset {
-                let available =
-                    world
-                        .assets()
-                        .get(&payer_asset)
-                        .map_or_else(Quantity::zero, |balance| {
-                            Quantity::try_from_numeric(balance.as_ref().as_numeric().clone())
-                                .unwrap_or_else(|_| Quantity::zero())
-                        });
+                let available = world
+                    .assets()
+                    .get(&payer_asset)
+                    .map_or_else(Quantity::zero, |balance| balance.as_ref().clone());
                 if available < required {
                     return Err(NexusFeeAdmissionError::rejected(
                         FeeRejectionCode::AuthorityPayerInsufficient,
@@ -4755,7 +4731,7 @@ impl Executor {
         #[cfg(feature = "telemetry")]
         {
             let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
-            state_transaction.stage_block_fee_amount(Numeric::from(delta));
+            state_transaction.stage_block_fee_amount(Quantity::from(delta));
         }
 
         Self::record_pipeline_gas_settlement_receipt(
@@ -4768,28 +4744,6 @@ impl Executor {
             liquidity_profile,
             volatility_bucket,
         )
-    }
-
-    fn checked_numeric_add(
-        lhs: Numeric,
-        rhs: Numeric,
-        context: &'static str,
-    ) -> Result<Numeric, ValidationFail> {
-        lhs.checked_add(rhs).ok_or_else(|| {
-            ValidationFail::NotPermitted(format!("{context} exceeds supported numeric bounds"))
-        })
-    }
-
-    fn checked_numeric_mul_u64(
-        value: &Numeric,
-        multiplier: u64,
-        context: &'static str,
-    ) -> Result<Numeric, ValidationFail> {
-        value
-            .try_decimal_mul(&Numeric::from(multiplier))
-            .map_err(|_| {
-                ValidationFail::NotPermitted(format!("{context} exceeds supported numeric bounds"))
-            })
     }
 
     #[allow(clippy::too_many_lines)]
@@ -5962,13 +5916,6 @@ impl Executor {
                             "verifying key backend mismatch".to_owned(),
                         ));
                     }
-                    if iroha_data_model::zk::BackendTag::is_pending_production_backend_label(
-                        backend.as_str(),
-                    ) {
-                        return Err(ValidationFail::NotPermitted(
-                            "pending-production proof backends are not supported".to_owned(),
-                        ));
-                    }
                     if crate::zk::is_production_claim_backend_label(backend.as_str()) {
                         return Err(ValidationFail::NotPermitted(
                             "production-claim proof backends are not supported".to_owned(),
@@ -6010,12 +5957,6 @@ impl Executor {
                     let block_height = state_transaction.block_height();
                     let (expected_commitment, vk_active) =
                         if let Some(rec) = state_transaction.world.verifying_keys.get(&vk_ref) {
-                            if rec.backend.is_pending_production_backend() {
-                                return Err(ValidationFail::NotPermitted(
-                                    "pending-production verifying key backends are not supported"
-                                        .to_owned(),
-                                ));
-                            }
                             if let Some(ns_hint) = namespace_hint.as_deref() {
                                 if !rec.namespace.is_empty() && rec.namespace != ns_hint {
                                     return Err(ValidationFail::NotPermitted(
@@ -7332,7 +7273,6 @@ impl Executor {
                 authority,
                 contract_runtime_context,
                 &transfer_asset,
-                state_transaction.block_unix_timestamp_ms(),
             )?
         {
             return Err(ValidationFail::NotPermitted(
@@ -8007,7 +7947,7 @@ struct FixtureMintAssetForAllAccounts {
 #[derive(Debug, Clone)]
 enum FixtureRuntimeValue {
     Bool(bool),
-    Numeric(Numeric),
+    Quantity(Quantity),
     Instruction(InstructionBox),
 }
 
@@ -8266,14 +8206,14 @@ fn evaluate_fixture_bool_expression_value(
     }
 }
 
-fn evaluate_fixture_numeric_expression_value(
+fn evaluate_fixture_quantity_expression_value(
     state_transaction: &StateTransaction<'_, '_>,
     value: &json::Value,
-) -> Result<Numeric, ValidationFail> {
-    let expression = fixture_unwrap_evaluates_to_expression(value, "numeric expression")?;
+) -> Result<Quantity, ValidationFail> {
+    let expression = fixture_unwrap_evaluates_to_expression(value, "quantity expression")?;
     match evaluate_fixture_expression_value(state_transaction, expression)? {
-        FixtureRuntimeValue::Numeric(value) => Ok(value),
-        _ => Err(fixture_conversion_error("numeric value")),
+        FixtureRuntimeValue::Quantity(value) => Ok(value),
+        _ => Err(fixture_conversion_error("quantity value")),
     }
 }
 
@@ -8315,13 +8255,14 @@ fn evaluate_fixture_expression_value(
                     })?;
                     Ok(FixtureRuntimeValue::Bool(parsed))
                 }
-                "Numeric" => {
-                    let parsed: Numeric = json::from_value(raw_payload.clone()).map_err(|err| {
-                        ValidationFail::InternalError(format!(
-                            "failed to decode fixture numeric literal: {err}"
-                        ))
-                    })?;
-                    Ok(FixtureRuntimeValue::Numeric(parsed))
+                "Quantity" => {
+                    let parsed: Quantity =
+                        json::from_value(raw_payload.clone()).map_err(|err| {
+                            ValidationFail::InternalError(format!(
+                                "failed to decode fixture quantity literal: {err}"
+                            ))
+                        })?;
+                    Ok(FixtureRuntimeValue::Quantity(parsed))
                 }
                 "InstructionBox" => {
                     let parsed: InstructionBox =
@@ -8340,13 +8281,13 @@ fn evaluate_fixture_expression_value(
         "Greater" => {
             let left = fixture_object_field(payload, "left", "greater expression")?;
             let right = fixture_object_field(payload, "right", "greater expression")?;
-            let left = evaluate_fixture_numeric_expression_value(state_transaction, left)?;
-            let right = evaluate_fixture_numeric_expression_value(state_transaction, right)?;
+            let left = evaluate_fixture_quantity_expression_value(state_transaction, left)?;
+            let right = evaluate_fixture_quantity_expression_value(state_transaction, right)?;
             Ok(FixtureRuntimeValue::Bool(left > right))
         }
         "Query" => {
-            let value = evaluate_fixture_numeric_query_value(state_transaction, payload)?;
-            Ok(FixtureRuntimeValue::Numeric(value))
+            let value = evaluate_fixture_quantity_query_value(state_transaction, payload)?;
+            Ok(FixtureRuntimeValue::Quantity(value))
         }
         _ => Err(ValidationFail::InternalError(format!(
             "unsupported fixture expression variant `{variant}`"
@@ -8354,11 +8295,11 @@ fn evaluate_fixture_expression_value(
     }
 }
 
-fn evaluate_fixture_numeric_query_value(
+fn evaluate_fixture_quantity_query_value(
     state_transaction: &StateTransaction<'_, '_>,
     value: &json::Value,
-) -> Result<Numeric, ValidationFail> {
-    let (variant, payload) = fixture_single_field(value, "numeric query")?;
+) -> Result<Quantity, ValidationFail> {
+    let (variant, payload) = fixture_single_field(value, "quantity query")?;
     match variant {
         "FindAssetQuantityById" => {
             let asset_id: AssetId = json::from_value(payload.clone()).map_err(|err| {
@@ -8370,8 +8311,8 @@ fn evaluate_fixture_numeric_query_value(
                 .world
                 .assets
                 .get(&asset_id)
-                .map(|value| value.as_ref().as_numeric().clone())
-                .unwrap_or_else(Numeric::zero))
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero))
         }
         "FindTotalAssetQuantityByAssetDefinitionId" => {
             let asset_definition_id: AssetDefinitionId = json::from_value(payload.clone())
@@ -8383,11 +8324,10 @@ fn evaluate_fixture_numeric_query_value(
             state_transaction
                 .world
                 .asset_total_amount(&asset_definition_id)
-                .map(Quantity::into_numeric)
                 .map_err(ValidationFail::from)
         }
         _ => Err(ValidationFail::InternalError(format!(
-            "unsupported fixture numeric query variant `{variant}`"
+            "unsupported fixture quantity query variant `{variant}`"
         ))),
     }
 }
@@ -10535,25 +10475,18 @@ fn can_transfer_asset(
     authority: &AccountId,
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     transfer: &Transfer<Asset, Quantity, Account>,
-    now_ms: u64,
 ) -> Result<bool, ValidationFail> {
+    if let Some(context) = contract_runtime_context {
+        let live_subject = code::bound_contract_subject_from_world(world, &context.contract_address);
+        if context.contract_subject != *authority
+            || context.contract_address.subject_id() != context.contract_subject
+            || live_subject.as_ref() != Some(authority)
+        {
+            return Ok(false);
+        }
+    }
+
     if transfer.source().account() == authority {
-        return Ok(true);
-    }
-
-    if contract_runtime_context
-        .is_some_and(|context| transfer.source().account() == &context.contract_subject)
-    {
-        return Ok(true);
-    }
-
-    if let Some(domain_id) = transfer.source().definition().try_domain()
-        && authority_owns_domain(world, authority, domain_id)?
-    {
-        return Ok(true);
-    }
-
-    if authority_owns_any_alias_domain(world, authority, transfer.source().account(), now_ms)? {
         return Ok(true);
     }
 
@@ -16690,7 +16623,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_executor_allows_transfer_asset_by_source_domain_owner() {
+    fn initial_executor_denies_transfer_asset_by_asset_definition_domain_owner() {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
@@ -16701,10 +16634,19 @@ mod tests {
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let user1_account = Account::new(user1.clone()).build(&user1);
         let user2_account = Account::new(user2.clone()).build(&user2);
+        let asset_definition_id =
+            AssetDefinitionId::new(users_domain_id.clone(), "coin".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("coin".to_owned())
+            .build(&user1);
+        let transfer_asset_id = AssetId::new(asset_definition_id, user1.clone());
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u64));
 
-        let world = World::with(
+        let world = World::with_assets(
             [users_domain],
             [alice_account, user1_account, user2_account],
+            [asset_definition],
+            [source_balance],
             [],
         );
         let kura = Kura::blank_kura_for_testing();
@@ -16718,13 +16660,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
-        let transfer_asset_id = AssetId::new(
-            iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("users", "universal").unwrap(),
-                "coin".parse().unwrap(),
-            ),
-            user1.clone(),
-        );
         let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
@@ -16734,11 +16669,140 @@ mod tests {
             .expect("expected to extract asset transfer from instruction");
 
         let stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer, 0)
+        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
         assert!(
-            allowed,
-            "source domain owner should be allowed to transfer account assets"
+            !allowed,
+            "asset-definition domain ownership must not authorize transfers from another account"
+        );
+        let result = super::Executor::Initial.execute_instruction(
+            &mut block.transaction(),
+            &alice_id,
+            instruction,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("source asset owner must sign")
+            ),
+            "asset-definition domain owner bypass must fail before applying the transfer: {result:?}"
+        );
+    }
+
+    #[test]
+    fn initial_executor_denies_transfer_asset_by_active_alias_domain_owner_for_all_shapes() {
+        use iroha_data_model::{
+            account::{
+                AccountAddress,
+                rekey::{AccountAlias, AccountAliasDomain},
+            },
+            nexus::DataSpaceCatalog,
+            sns::{NameControllerV1, NameRecordV1},
+        };
+
+        let alias_domain_owner = ALICE_ID.clone();
+        let source = checked_account_id();
+        let destination = checked_account_id();
+        let alias_domain_id =
+            DomainId::try_new("fi", "universal").expect("alias domain id");
+        let asset_domain_id =
+            DomainId::try_new("assets", "universal").expect("asset domain id");
+        let asset_definition_id =
+            AssetDefinitionId::new(asset_domain_id.clone(), "coin".parse().unwrap());
+        let source_asset_id = AssetId::new(asset_definition_id.clone(), source.clone());
+        let mut world = World::with_assets(
+            [
+                Domain::new(alias_domain_id).build(&alias_domain_owner),
+                Domain::new(asset_domain_id).build(&source),
+            ],
+            [
+                Account::new(alias_domain_owner.clone()).build(&alias_domain_owner),
+                Account::new(source.clone()).build(&source),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [AssetDefinition::numeric(asset_definition_id)
+                .with_name("coin".to_owned())
+                .build(&source)],
+            [Asset::new(
+                source_asset_id.clone(),
+                Quantity::from(10_u64),
+            )],
+            [],
+        );
+        let alias = AccountAlias::new(
+            "customer".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "fi".parse().expect("alias domain"),
+            )),
+            DataSpaceId::UNIVERSAL,
+        );
+        let selector = crate::sns::selector_for_account_alias(&alias, &DataSpaceCatalog::default())
+            .expect("account alias selector");
+        let address = AccountAddress::from_account_id(&source).expect("source address");
+        let lease = NameRecordV1::new(
+            selector.clone(),
+            source.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            100,
+            200,
+            300,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(crate::sns::record_storage_key(&selector), lease.encode());
+        world.account_aliases.insert(alias, source.clone());
+
+        assert!(
+            authority_owns_any_alias_domain(&world, &alias_domain_owner, &source, 50)
+                .expect("active alias-domain ownership check"),
+            "fixture must prove that the attacker owns an active alias domain for the source"
+        );
+
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
+        let mut transaction = block.transaction();
+        let transfer =
+            Transfer::asset_quantity(source_asset_id, 1_u32, destination.clone());
+        let boxed = InstructionBox::from(transfer.clone());
+        let concrete =
+            concrete_instruction_box!(Transfer<Asset, Quantity, Account>, transfer);
+
+        let boxed_result = super::Executor::Initial.execute_instruction(
+            &mut transaction,
+            &alias_domain_owner,
+            boxed,
+        );
+        assert!(
+            matches!(
+                boxed_result,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("source asset owner must sign")
+            ),
+            "active alias-domain ownership must not authorize TransferBox::Asset: {boxed_result:?}"
+        );
+
+        let concrete_result =
+            super::Executor::Initial.execute_borrowed_overlay_instruction(
+                &mut transaction,
+                &alias_domain_owner,
+                &concrete,
+                None,
+            );
+        assert!(
+            matches!(
+                concrete_result,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("source asset owner must sign")
+            ),
+            "active alias-domain ownership must not authorize a borrowed concrete transfer: {concrete_result:?}"
         );
     }
 
@@ -16788,7 +16852,7 @@ mod tests {
             .expect("expected to extract asset transfer from instruction");
 
         let mut stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer, 0)
+        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
         assert!(
             !allowed,

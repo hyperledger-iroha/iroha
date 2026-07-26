@@ -17,7 +17,14 @@ use crate::{
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct DaStripeLayout {
     /// Total row stripes (data + column parity).
     pub total_stripes: u32,
@@ -31,7 +38,14 @@ pub struct DaStripeLayout {
 /// Norito payload accepted by the Torii `/v1/da/ingest` endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct DaIngestRequest {
     /// Caller-supplied blob identifier (BLAKE3 digest or equivalent).
     pub client_blob_id: BlobDigest,
@@ -76,7 +90,14 @@ pub struct DaIngestRequest {
 /// Ingest receipt returned once Torii accepts the blob.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct DaIngestReceipt {
     /// Caller-supplied blob identifier echoed back to the submitter.
     pub client_blob_id: BlobDigest,

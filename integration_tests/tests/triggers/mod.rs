@@ -6,7 +6,7 @@ use iroha::{
     client::Client,
     data_model::{
         asset::AssetId,
-        prelude::{FindAssets, Identifiable, Numeric, QueryBuilderExt},
+        prelude::{FindAssets, Identifiable, Quantity, QueryBuilderExt},
     },
 };
 
@@ -17,7 +17,7 @@ mod orphans;
 mod time_trigger;
 mod trigger_rollback;
 
-fn get_asset_value(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
+fn get_asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
     let assets = client
         .query(FindAssets::new())
         .execute_all()
@@ -27,5 +27,5 @@ fn get_asset_value(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
         .find(|asset| asset.id() == asset_id)
         .ok_or_else(|| eyre!("asset {asset_id} not found"))?;
 
-    Ok(asset.value().clone().into_numeric())
+    Ok(asset.value().clone())
 }
