@@ -420,10 +420,15 @@ actor-to-flush trace, later custody transitions, and decreasing service rank
 remain unassigned production-refinement propositions, so the abstract packet
 action cannot by itself discharge starvation freedom. The Sumeragi-side queue
 is bounded by the frozen height roster crossed with all three reliable output
-classes plus separate shared capacity. A deterministic matching gives each
-retained fanout at most one unique frozen reservation and is recomputed after
-partial progress. Non-roster replies and repeated target/class output
-therefore cannot spend unopened validator reservations. Concretely, a reliable
+classes, one `SidecarTopologyProgress` Lane reservation, and one
+`SidecarReplyControl` Lane reservation per frozen target, plus separate shared
+capacity. A deterministic matching gives each retained fanout at most one
+unique frozen target/class/kind reservation and is recomputed after partial
+progress. Parked ordinary same-target output and saturated shared capacity
+cannot consume the topology-progress or reply-control opportunity. Alternate
+authenticated Hint routes coalesce without multiplying reservations.
+Non-roster replies and repeated target/class/kind output therefore cannot spend
+unopened validator reservations. Concretely, a reliable
 broadcast snapshots the actor-accepted relay-aware topology and acquires each
 target's ordinary `(target, class)` lane independently. An existing target
 child coalesces only a retry with the identical canonical request digest and
@@ -621,15 +626,19 @@ theorems; a fresh strict run against the current proof source remains pending.
 `SumeragiV2TypedRolloverHandoff.tla` isolates one changed- or same-roster
 handoff with two initial exact-output workers, a move-only service/transport
 owner pair, an empty-corridor seal, an exact predecessor receipt, an immediate
-successor, retry preservation, and late-callback isolation. This applied-height
-model is orthogonal to the production responder lifecycle and does not
-authorize advancing service generation. Production permits that transition
-only for a certified changed-roster geometry after terminal responder state,
-then commits the checked successor generation and empty server state as one
-marker-selected `MergeSidecarLifecycleSnapshotV3` postimage in the inactive
-alternating slot. Active predecessor state or counter overflow returns
-`Capacity` without mutation. No Rust-to-TLA refinement for that production
-relation is claimed.
+successor, retry preservation, and late-callback isolation. Production has
+three changed-roster authorities. The ordinary path requires authenticated
+predecessor terminality. A move-only handoff issued after the exact-output
+corridor is durably sealed, or a private fence issued after complete semantic
+V3 restoration, may supersede active predecessor responder state. Both forced
+paths require the lifecycle journal, commit the checked successor generation
+and empty responder projection before clearing memory, retire responder/output
+debt, and do not manufacture requester-authenticated close prefixes.
+Same-roster rehydration preserves responder generation and ownership, including
+the retained current chunk; a new requester against a full same-roster table
+receives fail-atomic `Capacity`. Counter overflow and unauthorized active-state
+replacement likewise fail without mutation. No Rust-to-TLA refinement for
+that production relation is claimed.
 
 The model records an inductive control partition over the reachable healthy
 handoff stages and keeps `NoRolloverFailure` explicit. That structure is a
@@ -641,8 +650,11 @@ The conditional local handoff result is not a proof of the final compaction
 relation. It begins after finality validation and does not cover network
 delivery, reply-writer flush, recovery after a fail-stop rejection, repeated
 rollover, or a Rust-to-TLA semantic refinement. Historical bounded and strict
-receipts predate the V3 two-slot persistence relation; both typed-handoff ledger
-entries remain `specified_unproved` until fresh strict TLAPS succeeds.
+receipts predate the authority-gated force fence, V3 two-slot persistence,
+bootstrap adoption, validation-before-cleanup ordering, and the root trust
+boundary; both typed-handoff ledger entries remain `specified_unproved` until
+fresh strict TLAPS succeeds. No filesystem refinement claim follows from the
+abstract model.
 
 ## Mechanization ledger
 
@@ -1050,7 +1062,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 722 tests across thirty-eight Rust
+The current pre-network release inventory names 727 tests across thirty-eight Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1121,7 +1133,13 @@ changes, yielding the 704-test checkpoint. The runner close-prefix
 failed-suffix handoff regression adds one exact name, yielding the current
 705-test checkpoint. The routed-Hint and crash-safe V3 lifecycle closure adds
 26 exact regressions and retires eight obsolete route-free/V2 selectors,
-yielding the current 723-test, 38-module inventory. The complete source-sealed
+yielding the 723-test checkpoint. Rejecting replay of a proposal superseded by
+a same-round lock adds one exact reducer regression, yielding the 724-test
+checkpoint. Preserving that replayed proposal's tag, round, and subject through
+runner startup adds one exact regression. Two cross-platform lifecycle V3
+crash regressions cover state replacement before directory sync and root
+replacement before predecessor cleanup, yielding the current
+727-test, 38-module inventory. The complete source-sealed
 pre-network corridor
 contains 81 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
@@ -1132,7 +1150,12 @@ and both peers, excluding only cumulative `closed_through`; a monotonic floor
 advance on the same occurrence does not rematerialize output. `GenerationHint`
 names the observed/current generations and exact triggering Request or Close
 hash while retaining that delivery's authenticated reply route. Alternate
-sources remain independent attempts.
+sources remain independent attempts. Each frozen target owns a
+`SidecarTopologyProgress` Lane reservation for topology-routed Request/Close
+and a separate `SidecarReplyControl` Lane reservation for exact-reply
+CloseAck/GenerationHint. Same-target ordinary output and saturated shared
+capacity cannot consume either reservation; alternate Hint routes coalesce
+without multiplying it.
 The canonical progress-mutation runner executes the dedicated
 `GenerationEpochFixed` trace as well as the cursor, source-isolation, and close
 traces. It persists and installs responder generation two, observes an old
@@ -1161,17 +1184,33 @@ delivery, rotating-leader progress, or another liveness result.
 
 The sole `MergeSidecarLifecycleSnapshotV3` persists geometry,
 `next_stream_epoch`, responder generation, requester streams, unified
-server streams, and request gates. The unified server-stream table and gate
-table are bounded independently of P2P reply-source capacity, and restore
-validates the whole marker-selected candidate before assignment. V1/V2 are
-unsupported. Successive snapshots alternate between two state slots: the
-inactive slot is fsynced before the independent root marker commits it. Thus a
-pre-marker crash restores the predecessor and a post-marker crash restores the
-successor. Generation advances only for a certified changed-roster geometry
-after every old stream, gate, transfer, and flush is terminal. A full
-same-roster table rejects without mutation.
+server streams, request gates, and its root generation. The unified
+server-stream table and gate table are bounded independently of P2P reply-source
+capacity. The root is durably published before the state directory as a
+generation-zero bootstrap sentinel with no snapshot hash; a surviving
+generation-one candidate is semantically validated and rechecked before the
+root adopts it. Later snapshots alternate between two state slots: the inactive
+slot is fsynced before the independent root marker commits it. A later
+pre-marker crash therefore restores the predecessor and a post-marker crash
+restores the successor. Restore validates the marker-selected candidate,
+rechecks the live pair, and validates known temp artifact types before deleting
+a temp or unselected slot; unknown or non-regular artifacts fail closed.
+Committed recovery re-syncs the selected state and root-marker directories
+before cleanup, and filesystem aliases, including Windows reparse-point files
+or directories, fail closed. Native atomic replacement is required on Unix and
+Windows, and unsupported directory-sync platforms fail closed. The root marker
+is the local trust anchor, so marker replacement/rollback—including restoration
+of the bootstrap sentinel—and whole-store rollback are outside the guarantee.
+V1/V2 are unsupported.
+
+Ordinary generation advance requires a certified changed roster and
+authenticated terminality. A sealed durable handoff or semantically validated
+restart may force-fence active predecessor responder state after committing the
+empty successor projection, without forging close prefixes. Same-roster
+rehydration preserves generation and responder ownership; a new requester
+against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`66a130b892347a296ed3b447d3cf388e00a5c83fdfcd193b228b8eab67059f1a`.
+`b11a25ffc9608350a5350a1e2e0ffa92371f1d5dbd5b2b1c00154313fba8d005`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1213,7 +1252,7 @@ geometry modules, the daemon genesis module, and source-sealed command-success
 legs. Its finality, offline compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the thirty-nine-module, eighty-two-leg corridor. It
+tests are not claimed by the thirty-eight-module, eighty-one-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the

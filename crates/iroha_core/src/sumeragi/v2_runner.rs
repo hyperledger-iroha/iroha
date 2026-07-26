@@ -196,6 +196,13 @@ struct CandidateWorkWait {
     next_retry: Instant,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReplayedProposalSign {
+    tag: EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+}
+
 /// Fallible construction ownership of an applied predecessor's successor.
 ///
 /// Starting construction changes the predecessor's durable diagnostic witness
@@ -341,12 +348,26 @@ struct LocalProposalState {
 }
 
 impl LocalProposalState {
-    fn from_replayed_tag(replayed_tag: Option<EventTag>, current: LocalProposalDirective) -> Self {
+    fn from_replayed_proposal(
+        replayed: Option<ReplayedProposalSign>,
+        current: LocalProposalDirective,
+    ) -> Self {
         let owner = LocalProposalOwner::from(current);
+        let replayed_owns_current = replayed.is_some_and(|replayed| {
+            replayed.tag == owner.tag
+                && replayed.round.height == replayed.tag.height()
+                && replayed.round.view == replayed.tag.view()
+                && owner.decided_subject.is_none()
+                && owner
+                    .locked_body
+                    .is_none_or(|(locked_round, locked_subject)| {
+                        replayed.round.context_id == locked_round.context_id
+                            && replayed.round.height == locked_round.height
+                            && replayed.subject == locked_subject
+                    })
+        });
         Self {
-            attempted: replayed_tag
-                .is_some_and(|tag| tag == owner.tag)
-                .then_some(owner),
+            attempted: replayed_owns_current.then_some(owner),
             ..Self::default()
         }
     }
@@ -930,10 +951,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         if let Some(authenticated_genesis) = first_height_genesis.as_ref() {
             executor.install_authenticated_genesis_body(authenticated_genesis)?;
         }
-        // A replayed ProposalIntent already owns this reducer incarnation.  Its
+        // A replayed ProposalIntent owns candidate work only when its exact
+        // tag, round, and subject still match the current lock snapshot. Its
         // asynchronous signature completion must restore and broadcast the
         // exact durable payload before any fresh candidate work is admitted.
-        let replayed_proposal_tag = replayed_proposal_sign_tag(&startup_effects);
+        let replayed_proposal = replayed_proposal_sign(&startup_effects);
         let recovering_interrupted_tip = pending_kura_apply.is_some();
         let pending_recovery_identity = pending_kura_apply;
         let initially_recovered_applied_height = pending_kura_apply.filter(|pending| {
@@ -1123,7 +1145,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval);
         let initial_directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
         let mut local_proposal_state =
-            LocalProposalState::from_replayed_tag(replayed_proposal_tag, initial_directive);
+            LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive);
         debug_assert!(!recovering_interrupted_tip || pending_successor_activation.is_none());
         let activation = pending_successor_activation
             .take()
@@ -1607,12 +1629,16 @@ impl CommittedLaneStatusPublisher {
     }
 }
 
-fn replayed_proposal_sign_tag(effects: &[AdapterEffect]) -> Option<EventTag> {
+fn replayed_proposal_sign(effects: &[AdapterEffect]) -> Option<ReplayedProposalSign> {
     effects.iter().find_map(|effect| match effect {
         AdapterEffect::Sign {
             tag,
-            request: SignRequest::Proposal(_),
-        } => Some(*tag),
+            request: SignRequest::Proposal(proposal),
+        } => Some(ReplayedProposalSign {
+            tag: *tag,
+            round: proposal.round,
+            subject: proposal.subject,
+        }),
         AdapterEffect::Sign { .. }
         | AdapterEffect::Broadcast(_)
         | AdapterEffect::FetchBody { .. }
@@ -5657,7 +5683,7 @@ mod tests {
     }
 
     #[test]
-    fn replayed_proposal_sign_reserves_its_reducer_incarnation() {
+    fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         let (context, _) = context();
         let tag = EventTag::new(context.height, 3, Generation::new(9));
         let round = wire::ConsensusRound {
@@ -5693,9 +5719,68 @@ mod tests {
             },
         ];
 
-        assert_eq!(replayed_proposal_sign_tag(&effects), Some(tag));
-        assert_eq!(replayed_proposal_sign_tag(&effects[..1]), None);
-        assert_eq!(replayed_proposal_sign_tag(&[]), None);
+        let replayed = replayed_proposal_sign(&effects).expect("extract exact replay owner");
+        assert_eq!(
+            replayed,
+            ReplayedProposalSign {
+                tag,
+                round,
+                subject,
+            }
+        );
+        assert_eq!(replayed_proposal_sign(&effects[..1]), None);
+        assert_eq!(replayed_proposal_sign(&[]), None);
+
+        let directive = |locked_subject, decided_subject| LocalProposalDirective {
+            tag,
+            leader: context.leader(tag.view()),
+            locked_round: locked_subject.map(|_| wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 1,
+            }),
+            locked_subject,
+            decided_subject,
+        };
+        let unlocked = directive(None, None);
+        assert_eq!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), unlocked).attempted,
+            Some(LocalProposalOwner::from(unlocked))
+        );
+
+        let exact_lock = directive(Some(subject), None);
+        assert_eq!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), exact_lock).attempted,
+            Some(LocalProposalOwner::from(exact_lock)),
+            "the exact replayed subject owns current locked-body work"
+        );
+
+        let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
+        assert!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
+                .attempted
+                .is_none(),
+            "an equal-tag proposal for another subject cannot reserve the current lock owner"
+        );
+
+        let mismatched_round = ReplayedProposalSign {
+            round: wire::ConsensusRound { view: 2, ..round },
+            ..replayed
+        };
+        assert!(
+            LocalProposalState::from_replayed_proposal(Some(mismatched_round), unlocked)
+                .attempted
+                .is_none(),
+            "the replayed proposal round must match its reducer tag"
+        );
+
+        let decided = directive(Some(subject), Some(subject));
+        assert!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), decided)
+                .attempted
+                .is_none(),
+            "a decision retires every replayed proposal reservation"
+        );
     }
 
     #[test]

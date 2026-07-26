@@ -3490,6 +3490,78 @@ fn higher_same_subject_prepare_fences_historical_commit_reconstruction() {
 }
 
 #[test]
+fn replay_does_not_resign_proposal_superseded_by_same_round_lock() {
+    let context = context();
+    let round = Round::new(context.height(), 0);
+    let local = context.leader(round.view());
+    let stale_subject = Subject::repeat(0x95);
+    let locked_subject = Subject::repeat(0x96);
+    let stale_proposal = Proposal::new(
+        context.id(),
+        round,
+        local,
+        PayloadManifest::new(
+            stale_subject,
+            Digest::repeat(0x61),
+            Digest::repeat(0x62),
+            128,
+            2,
+        ),
+        ProposalJustification::ParentCommit(context.parent_commit()),
+    );
+    let locked_prepare = qc(
+        &context,
+        round.view(),
+        Phase::Prepare,
+        locked_subject,
+        &[1, 2, 3],
+    );
+    let locked_commit = Vote::new(context.id(), round, Phase::Commit, locked_subject, local);
+    let mut reducer = Reducer::recover(
+        context,
+        Some(local),
+        Generation::new(47),
+        [
+            WalEntry::new(
+                PersistenceId::new(1),
+                WalRecord::ProposalIntent(stale_proposal.clone()),
+            ),
+            WalEntry::new(
+                PersistenceId::new(2),
+                WalRecord::LockAndCommit {
+                    prepare: locked_prepare.clone(),
+                    vote: locked_commit,
+                },
+            ),
+        ],
+    )
+    .expect("recover a proposal intent superseded by the exact same-round lock");
+    assert_eq!(
+        reducer.durable_state().locked(),
+        Some(&locked_prepare),
+        "the PrepareQC, not the earlier proposal intent, owns replay progress"
+    );
+
+    let resumed = resume_after_replay(&mut reducer);
+    assert!(resumed.effects().iter().all(|effect| {
+        !matches!(
+            effect,
+            Effect::Sign {
+                message: SignableMessage::Proposal(proposal),
+                ..
+            } if proposal == &stale_proposal
+        )
+    }));
+    assert!(matches!(
+        resumed.effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if *vote == locked_commit
+    ));
+}
+
+#[test]
 fn replay_does_not_resign_commit_superseded_by_higher_tc_lock() {
     let context = context();
     let old_subject = Subject::repeat(0x93);

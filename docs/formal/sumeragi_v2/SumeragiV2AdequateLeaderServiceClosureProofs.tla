@@ -59,6 +59,51 @@ MatchingVoteSignRequest(candidate, phase) ==
     /\ request.vote.subject = candidate.subject
     /\ request.vote.phase = phase
 
+(***************************************************************************
+Replay-safe Proposal ownership.
+
+Production rechecks every durable ProposalIntent against the current durable
+lock before re-signing it.  In particular, a same-round lock for subject B
+supersedes an earlier ProposalIntent for subject A; replay resumes B's durable
+Commit owner and must not turn A into semantic Proposal progress.
+
+The protected asynchronous model deliberately retains the larger durable WAL
+projection in `RestartProposalIntents`.  Keep that abstraction conservative by
+excluding an unsafe replayed SignProposal from the adequate-leader rank.  The
+predicate below is the exact formal analogue of production's shared
+`proposal_is_safe_for_lock`: the same locked subject remains safe, while a
+different subject requires a strictly higher PrepareQC for that subject.
+***************************************************************************)
+
+DurableProposalSafeForLock(node, proposal) ==
+  \/ lockRank[node] = NoRank
+  \/ /\ proposal.view >= lockRank[node]
+     /\ proposal.subject = lockSubject[node]
+  \/ /\ proposal.view >= lockRank[node]
+     /\ proposal.timeoutCertificate # NoTimeoutCertificate
+     /\ proposal.highestPrepareQc # NoPrepareQC
+     /\ proposal.timeoutCertificate.highestPrepareQc =
+          proposal.highestPrepareQc
+     /\ proposal.highestPrepareQc.phase = "Prepare"
+     /\ proposal.highestPrepareQc.context = proposal.context
+     /\ proposal.highestPrepareQc.height = proposal.height
+     /\ proposal.highestPrepareQc.view > lockRank[node]
+     /\ proposal.highestPrepareQc.subject = proposal.subject
+
+ProposalSignIntentsAt(candidate) ==
+  {proposal \in proposalIntents:
+    /\ proposal.proposer = candidate.node
+    /\ proposal.context = candidate.consumerContext
+    /\ proposal.height = candidate.height
+    /\ proposal.view = candidate.view
+    /\ proposal.subject = candidate.subject}
+
+SafeProposalSignIntentAt(candidate) ==
+  LET matching == ProposalSignIntentsAt(candidate)
+  IN /\ matching # {}
+     /\ \A proposal \in matching:
+          DurableProposalSafeForLock(candidate.node, proposal)
+
 ExactLeaderViewChangeRank(candidate, rank) ==
   \/ /\ candidate.kind = "PersistTimeout"
         /\ rank = ViewChangeSemanticRank(7)
@@ -87,6 +132,7 @@ ExactLeaderProposalRank(candidate, rank) ==
   \/ /\ candidate.kind = "PersistProposal"
         /\ rank = ProposalSemanticRank(7)
   \/ /\ candidate.kind = "SignProposal"
+        /\ SafeProposalSignIntentAt(candidate)
         /\ rank = ProposalSemanticRank(6)
   \/ /\ candidate.kind \in {"DeliverProposal", "DeliverChunk"}
         /\ rank = ProposalSemanticRank(5)
@@ -169,6 +215,34 @@ ExactLeaderCandidateRank(candidate, rank) ==
 ExactLeaderServiceCandidate(candidate) ==
   \E rank \in (1..5) \X Nat:
     ExactLeaderCandidateRank(candidate, rank)
+
+THEOREM SameRoundDifferentSubjectProposalWithoutHighIsUnsafeForLock ==
+  \A node, proposal:
+    /\ lockRank[node] # NoRank
+    /\ proposal.view = lockRank[node]
+    /\ proposal.subject # lockSubject[node]
+    /\ proposal.highestPrepareQc = NoPrepareQC
+    => ~DurableProposalSafeForLock(node, proposal)
+BY Isa DEF DurableProposalSafeForLock
+
+THEOREM UnsafeProposalSignIsNotAnExactLeaderProposalRank ==
+  \A candidate, rank:
+    /\ candidate.kind = "SignProposal"
+    /\ ~SafeProposalSignIntentAt(candidate)
+    => ~ExactLeaderProposalRank(candidate, rank)
+BY Isa DEF ExactLeaderProposalRank
+
+THEOREM UnsafeProposalSignIsNotAnExactLeaderCandidateRank ==
+  \A candidate, rank:
+    /\ candidate.kind = "SignProposal"
+    /\ ~SafeProposalSignIntentAt(candidate)
+    => ~ExactLeaderCandidateRank(candidate, rank)
+BY UnsafeProposalSignIsNotAnExactLeaderProposalRank, Isa
+   DEF ExactLeaderCandidateRank, ExactLeaderPhaseRank,
+       ExactLeaderViewChangeRank, ExactLeaderPrepareRank,
+       ExactLeaderPrepareStaticRank, ExactLeaderPrepareSignRank,
+       ExactLeaderCommitRank, ExactLeaderCommitStaticRank,
+       ExactLeaderCommitSignRank, ExactLeaderDecisionRank
 
 THEOREM ExactLeaderCandidateRankIsSemanticRank ==
   \A candidate, rank:
@@ -1510,12 +1584,24 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesViewChangeRank ==
             <=> ExactLeaderViewChangeRank(candidate, rank))
 OBVIOUS
 
+THEOREM ExactLeaderSchedulerReadinessFramePreservesSafeProposalSignIntent ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (SafeProposalSignIntentAt(candidate)'
+            <=> SafeProposalSignIntentAt(candidate))
+BY IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       SafeProposalSignIntentAt, ProposalSignIntentsAt,
+       DurableProposalSafeForLock, vars
+
 THEOREM ExactLeaderSchedulerReadinessFramePreservesProposalRank ==
   \A candidate, rank:
     ExactLeaderSchedulerReadinessFrame
       => (ExactLeaderProposalRank(candidate, rank)'
             <=> ExactLeaderProposalRank(candidate, rank))
-OBVIOUS
+BY ExactLeaderSchedulerReadinessFramePreservesSafeProposalSignIntent,
+   Isa
+   DEF ExactLeaderProposalRank
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesPrepareStaticRank ==
   \A candidate, rank:
@@ -3797,6 +3883,10 @@ AdequateLeaderModeActive(mode) ==
 
 ExactLeaderSemanticRankCarrier == (1..5) \X (0..9)
 
+\* This operator freezes only the record shape of a rank witness.  Every
+\* actual mode frontier below also requires `ExactLeaderCandidateRank`, whose
+\* SignProposal arm applies `SafeProposalSignIntentAt`; the static carrier
+\* therefore cannot make a superseded replayed ProposalIntent productive.
 ExactLeaderStaticSemanticRank(candidate, rank) ==
   /\ rank \in ExactLeaderSemanticRankCarrier
   /\ \/ /\ candidate.kind = "PersistTimeout"

@@ -56,6 +56,7 @@ bash scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh
 bash scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh
 bash scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh
 bash scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh
+bash scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh
 bash scripts/formal/run_sumeragi_v2_tlc.sh ci
 bash scripts/formal/check_sumeragi_v2_replay_trace.sh
 bash scripts/verify_sumeragi_v2.sh

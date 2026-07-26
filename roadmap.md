@@ -39,13 +39,22 @@ The remaining work is evidence-driven and must stay in order:
   generation, requester epoch, and per-stream semantic sequence coordinates
   while excluding only monotonic `closed_through` from request identity.
   `GenerationHint` must retain the triggering authenticated reply route, with
-  alternate sources coalesced as independent attempts.
+  alternate sources coalesced as independent attempts. Every frozen target must
+  retain separate `SidecarTopologyProgress` and `SidecarReplyControl` Lane
+  reservations so parked ordinary output and saturated shared capacity cannot
+  starve Request/Close or CloseAck/GenerationHint progress.
   `MergeSidecarLifecycleSnapshotV3` must remain the only durable schema, with
-  V1/V2 rejected and the checked generation increment plus empty responder
-  state committed through an fsynced inactive slot and marker-selected root.
-  Generation rollover is permitted only for a certified changed-roster
-  geometry after every old stream, gate, transfer, and flush is terminal; a
-  full same-roster table rejects without mutation. The focused
+  V1/V2 rejected, a durable generation-zero bootstrap marker, semantic
+  validation before bootstrap adoption or cleanup, selected-state/root
+  directory re-sync before destructive recovery cleanup, fail-closed alias and
+  reparse-point rejection, and the checked generation increment plus empty
+  responder state committed through an fsynced inactive slot and
+  marker-selected root. Ordinary changed-roster rollover requires
+  authenticated predecessor terminality; a sealed move-only handoff or
+  semantically validated restart may durably force-fence active predecessor
+  responder state without synthesizing close prefixes. Same-roster rehydration
+  preserves generation and state, and a new requester against a full
+  same-roster table rejects without mutation. The focused
   route and pipeline generation/epoch TLC traces are
   wired and fresh at 7/7/depth 7 and 11/10/depth 10 respectively; the
   fail-atomic capacity-overflow route/pipeline traces are fresh at 5/5/depth 5
@@ -53,7 +62,7 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 723-test,
+  mutations before promotion, then finish the remaining 727-test,
   38-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -25309,8 +25318,9 @@ tests; the lane-relay saturation test is a rename in place, not a fifth module
 test. A subsequent adversarial sidecar regression proves a same-tenure route
 redelivery cannot re-emit an in-flight chunk before its writer flush. Three worker
 regressions additionally retain pending and flushed-but-unapplied ownership,
-preserve a terminal zero-reservation route beside live siblings, and reactivate
-an unflushed current item on reconnect only after capacity becomes available.
+preserve a terminal zero-reservation route beside live siblings, and retry an
+unflushed current item on reconnect without resetting its cursor or charging a
+second same-source reservation.
 The subsequent source-authority, immutable-sidecar, runner-race,
 daemon-corridor, shared-byte-budget, cached-Arc admission, and executable-refinement closure adds 22
 exact regressions and moves two peer tests to their actual owning module.
@@ -25785,7 +25795,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
-723-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+727-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -25831,7 +25841,7 @@ transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
 (305/305), its strong caller and bracket (63/63), the exact type obligation
 (16/16), and the named always-strong wrapper (10/10).
 
-The 64-entry ledger contains 35 `tlaps_proved`, 22 `specified_unproved`, 6
+The 70-entry ledger contains 35 `tlaps_proved`, 28 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
 remains false. In particular,
 `AdequateLeaderExactClosureResidualObligation` and
@@ -26085,7 +26095,7 @@ runtime premise on the final signed source.
   module or leg. Three worker regressions then produce the historical
   443-test checkpoint by pinning pending/unapplied writer-flush deduplication,
   mixed-source terminal-route history, and capacity-checked reconnect
-  reactivation. The subsequent 22-test source-authority and shared-payload
+  cursor preservation. The subsequent 22-test source-authority and shared-payload
   closure plus cached-Arc admission yields the 465-test, 30-module, 53-leg
   checkpoint. The authenticated-non-validator source-cap and
   alternate-route-before-lane-cap regressions yield the 467-test checkpoint.
@@ -26103,7 +26113,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  722-test target above supersedes that checkpoint. The 38-module pre-network
+  727-test target above supersedes that checkpoint. The 38-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

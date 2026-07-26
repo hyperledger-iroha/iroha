@@ -2,41 +2,89 @@
 EXTENDS Naturals, TLC
 
 (***************************************************************************
-Executable safety model for the move-only exact-output handoff and the sole
-first-release merge-sidecar lifecycle schema.
+Executable safety model for the move-only exact-output handoff and the
+root-anchored merge-sidecar lifecycle V3 journal.
 
-The handoff receipt never grants permission to bypass lifecycle terminality.
-A responder generation may advance only for a full unified server-stream
-table or a certified roster-geometry replacement, and only after every old
-server stream, request gate, transfer, and flush is terminal.  Active-state
-exhaustion and checked-counter overflow return Capacity without mutating the
-generation, the two responder tables, or the durable snapshot.
+There are three, and only three, authorities for a changed-roster responder
+generation:
 
-There is one durable object: LifecycleSnapshotV2.  It contains the responder
-generation, next requester epoch, unified server-stream table, and request-gate
-table.  Generation rollover atomically persists the successor generation and
-both empty responder tables before memory publication.  A crash may therefore
-leave the sole V2 snapshot ahead of memory; restart restores that complete
-snapshot.  There is no separate generation marker or high-water artifact.
+* ordinary rehydration, which requires every predecessor responder stream,
+  request gate, transfer, and flush to be terminal;
+* the move-only durable exact-output handoff, which may supersede active
+  requester-owned responder state because no predecessor writer or queued
+  output can survive the sealed handoff; and
+* restart recovery, which may supersede active state only after the V3 root
+  marker and its exact selected snapshot have been validated.
 
-Requester epochs are persisted by advancing nextStreamEpoch before an epoch is
-published for use.  A crash after that persistence discards the unpublished
-epoch and restores the advanced counter, so the epoch is skipped, never reused.
+An identical roster never advances the responder generation.  It either
+preserves all retryable transport state or, when its bounded table is full,
+returns Capacity without changing memory, the durable root, or either slot.
 
-The temporal predicates at the end of this module remain specification targets.
-No liveness theorem is claimed by this model family.
+V3 publishes a checked successor into the inactive state slot, synchronizes
+that slot, commits an exact root marker selecting it, and only then publishes
+the successor projection to memory.  A crash before the root commit restores
+the predecessor selected by the old root.  A crash after the root commit
+restores the complete successor selected by the new root.  The root marker is
+the model's local trust anchor; rollback or replacement of that marker
+together with its matching slot is outside this model, just as it is outside
+the journal's local rollback guarantee.
+
+Forced fencing clears predecessor responder tables but never manufactures an
+authenticated Close prefix.  Only AuthenticateServerClosePrefix can advance
+the authentication history; every recorded retired prefix remains bounded by
+that history.
+
+Requester epochs remain durable-before-use.  Their V3 state-slot/root update
+is abstracted as one atomic root commit because this model expands only the
+rollover crash corridor.  The counter is the last-issued high-water used by
+Rust, and the persisted snapshot carries the exact replacement incarnation.
+A restart restores that incarnation; it does not skip the committed epoch.
+
+The temporal predicate at the end remains a specification target.  This model
+family does not claim an unbounded liveness or Rust-to-TLA refinement proof.
 ***************************************************************************)
 
 NoIdentity == "NoIdentity"
 
-RosterRelations == {"SameRoster", "ChangedRoster"}
+Rosters == {"RosterA", "RosterB"}
 CompactionCauses ==
   {"NoCompaction", "FullServerTable", "RosterGeometryReplacement"}
 LifecycleEntryStates == {"Active", "Terminal", "Empty"}
-ReceiptStages == {"Absent", "Minted", "Retained", "Consumed"}
-TransitionAuthorities == {"None", "SameRoster", "LifecycleV2"}
-LifecycleSnapshotPhases == {"Current", "Persisted", "Restored", "Published"}
-RequesterEpochPhases == {"Idle", "Persisted", "InUse", "Completed"}
+ReceiptStages == {"Absent", "Minted", "Retained", "Lost", "Consumed"}
+ChangedRosterAuthorities ==
+  {"AuthenticatedTerminal", "DurableExactOutput", "RestartRestore"}
+TransitionAuthorities ==
+  {"None", "SameRosterPreserved"} \cup ChangedRosterAuthorities
+PendingRolloverAuthorities == {"None"} \cup ChangedRosterAuthorities
+LifecycleCommitPhases ==
+  {"Bootstrap",
+   "BootstrapStateReplaced",
+   "BootstrapStatePublished",
+   "BootstrapRootReplaced",
+   "Current",
+   "StateSlotReplaced",
+   "StateSlotPublished",
+   "RootReplaced",
+   "RootCommitted",
+   "Restarting",
+   "Restored",
+   "Published"}
+RequesterEpochPhases ==
+  {"Idle", "Persisted", "Restarting", "InUse", "Completed"}
+StateSlots == {0, 1}
+LifecycleRootShapes == {"Bootstrap", "Committed"}
+StartupModes ==
+  {"BootstrapStart",
+   "LiveProcess",
+   "UnvalidatedRestart",
+   "ServiceGenerationLimitStart"}
+
+LifecycleValidationFaults ==
+  {"None",
+   "LifecycleRootShapeMismatch",
+   "LifecycleSelectedStateMissing",
+   "LifecycleGenerationHashMismatch",
+   "LifecycleSemanticValidationFailure"}
 
 FailureReasons ==
   {"None",
@@ -45,19 +93,35 @@ FailureReasons ==
    "PredecessorContextMismatch",
    "PredecessorArtifactMismatch",
    "ImmediateSuccessorMismatch",
-   "LifecycleSnapshotV2PersistenceFailure",
-   "CrashBeforeLifecycleSnapshotV2Persistence",
-   "CrashAfterLifecycleSnapshotV2Persistence",
-   "CrashAfterRequesterEpochPersistence"}
+   "LifecycleStateSlotV3PersistenceFailure",
+   "LifecycleRootV3PersistenceFailure",
+   "LifecycleRootGenerationOverflow",
+   "CrashAfterBootstrapStateReplacement",
+   "CrashAfterBootstrapStatePublication",
+   "CrashAfterBootstrapRootReplacement",
+   "CrashBeforeLifecycleStateSlotV3Publication",
+   "CrashAfterLifecycleStateReplacement",
+   "CrashAfterLifecycleStateSlotV3Publication",
+   "CrashAfterLifecycleRootReplacement",
+   "CrashAfterLifecycleRootV3Commit",
+   "CrashAfterRequesterEpochPersistence",
+   "LifecycleRootShapeMismatch",
+   "LifecycleSelectedStateMissing",
+   "LifecycleGenerationHashMismatch",
+   "LifecycleSemanticValidationFailure"}
 
 OwnerNonces == {"OwnerNonce", "ForeignNonce"}
+HandoffCandidateKinds ==
+  {"None",
+   "ForeignOwner",
+   "PredecessorContextMismatch",
+   "PredecessorArtifactMismatch",
+   "ImmediateSuccessorMismatch"}
 Contexts == {"ContextA", "ContextB"}
 Artifacts == {"ArtifactA", "ArtifactB"}
 Parents == {"ParentA", "ParentB"}
 Successors == {"SuccessorA", "SuccessorB"}
 
-ServiceOwnerNonce == "OwnerNonce"
-TransportOwnerNonce == "OwnerNonce"
 ForeignOwnerNonce == "ForeignNonce"
 ExpectedContext == "ContextA"
 ExpectedArtifact == "ArtifactA"
@@ -66,44 +130,223 @@ ExpectedSuccessor == "SuccessorA"
 ForeignSuccessor == "SuccessorB"
 
 InitialWorkerOutstanding == 2
-InitialGeneration == 1
-GenerationLimit == 2
-InitialNextStreamEpoch == 1
+InitialServiceGeneration == 1
+ServiceGenerationLimit == 2
+InitialRootGeneration == 1
+RootGenerationLimit == 6
+InitialNextStreamEpoch == 0
 StreamEpochLimit == 3
+HighestSemanticSequence == 1
+NoLifecycleSnapshot ==
+  [version |-> 0,
+   rootGeneration |-> 0,
+   roster |-> NoIdentity,
+   serviceGeneration |-> 0,
+   nextStreamEpoch |-> 0,
+   requesterStreamEpoch |-> 0,
+   serverStreams |-> NoIdentity,
+   requestGates |-> NoIdentity,
+   serverClosePrefix |-> 0]
 
-LifecycleSnapshotV2(generation, nextStreamEpoch, serverStreams, requestGates) ==
-  [version |-> 2,
-   generation |-> generation,
+LifecycleSnapshotV3(
+    rootGeneration,
+    roster,
+    serviceGeneration,
+    nextStreamEpoch,
+    requesterStreamEpoch,
+    serverStreams,
+    requestGates,
+    serverClosePrefix) ==
+  [version |-> 3,
+   rootGeneration |-> rootGeneration,
+   roster |-> roster,
+   serviceGeneration |-> serviceGeneration,
    nextStreamEpoch |-> nextStreamEpoch,
+   requesterStreamEpoch |-> requesterStreamEpoch,
    serverStreams |-> serverStreams,
-   requestGates |-> requestGates]
+   requestGates |-> requestGates,
+   serverClosePrefix |-> serverClosePrefix]
 
-LifecycleSnapshotV2Set ==
-  [version: {2},
-   generation: InitialGeneration..GenerationLimit,
+LifecycleSnapshotV3Set ==
+  [version: {3},
+   rootGeneration: InitialRootGeneration..RootGenerationLimit,
+   roster: Rosters,
+   serviceGeneration: InitialServiceGeneration..ServiceGenerationLimit,
    nextStreamEpoch: InitialNextStreamEpoch..StreamEpochLimit,
+   requesterStreamEpoch: InitialNextStreamEpoch..StreamEpochLimit,
    serverStreams: LifecycleEntryStates,
-   requestGates: LifecycleEntryStates]
+   requestGates: LifecycleEntryStates,
+   serverClosePrefix: 0..HighestSemanticSequence]
+
+LifecycleSnapshotDigest(snapshot) == snapshot
+
+LifecycleStateSlot(rootGeneration) ==
+  IF rootGeneration % 2 = 0 THEN 0 ELSE 1
+
+BootstrapLifecycleRootV3 ==
+  [version |-> 3,
+   shape |-> "Bootstrap",
+   rootGeneration |-> 0,
+   snapshotDigest |-> NoLifecycleSnapshot]
+
+LifecycleRootV3(snapshot) ==
+  [version |-> 3,
+   shape |-> "Committed",
+   rootGeneration |-> snapshot.rootGeneration,
+   snapshotDigest |-> LifecycleSnapshotDigest(snapshot)]
+
+LifecycleRootV3Set ==
+  [version: {3},
+   shape: LifecycleRootShapes,
+   rootGeneration: 0..RootGenerationLimit,
+   snapshotDigest: LifecycleSnapshotV3Set \cup {NoLifecycleSnapshot}]
+
+LifecycleStateSlotsV3Set ==
+  [StateSlots -> LifecycleSnapshotV3Set \cup {NoLifecycleSnapshot}]
+
+InitialLifecycleSnapshotV3(roster) ==
+  LifecycleSnapshotV3(
+    InitialRootGeneration,
+    roster,
+    InitialServiceGeneration,
+    InitialNextStreamEpoch,
+    InitialNextStreamEpoch,
+    "Empty",
+    "Empty",
+    0)
+
+LiveLifecycleSnapshotV3(roster, serviceGeneration) ==
+  LifecycleSnapshotV3(
+    InitialRootGeneration,
+    roster,
+    serviceGeneration,
+    InitialNextStreamEpoch,
+    InitialNextStreamEpoch,
+    "Active",
+    "Active",
+    0)
+
+InitialLifecycleStateSlotsV3(snapshot) ==
+  [slot \in StateSlots |->
+    IF slot = LifecycleStateSlot(snapshot.rootGeneration)
+      THEN snapshot
+      ELSE NoLifecycleSnapshot]
 
 VARIABLE state
 
 typedRolloverVars == <<state>>
 
 LifecycleMemory(s) ==
-  <<s.serviceGeneration,
+  <<s.currentRoster,
+    s.serviceGeneration,
     s.nextStreamEpoch,
     s.serverStreamState,
     s.requestGateState,
+    s.serverClosePrefix,
     s.transferState,
     s.flushState>>
 
-DurableLifecycle(s) == s.durableLifecycleSnapshotV2
+DurableLifecycle(s) ==
+  <<s.durableLifecycleRootV3,
+    s.durableLifecycleStateSlotsV3,
+    s.syncedLifecycleRootV3,
+    s.syncedLifecycleStateSlotsV3>>
+
+CandidateLifecycle(s) ==
+  <<s.candidatePresent,
+    s.candidateStateSlot,
+    s.candidateLifecycleSnapshotV3,
+    s.candidateSemanticallyValidated,
+    s.crashArtifactsPresent,
+    s.cleanupPerformed,
+    s.restartStateDirectoryResynced,
+    s.restartRootDirectoryResynced>>
+
+SelectedLifecycleStateSlot(s) ==
+  LifecycleStateSlot(s.durableLifecycleRootV3.rootGeneration)
+
+SelectedLifecycleSnapshotV3(s) ==
+  s.durableLifecycleStateSlotsV3[SelectedLifecycleStateSlot(s)]
+
+SyncedSelectedLifecycleStateSlot(s) ==
+  LifecycleStateSlot(s.syncedLifecycleRootV3.rootGeneration)
+
+SyncedSelectedLifecycleSnapshotV3(s) ==
+  s.syncedLifecycleStateSlotsV3[
+    SyncedSelectedLifecycleStateSlot(s)]
+
+InactiveLifecycleStateSlot(s) ==
+  1 - SelectedLifecycleStateSlot(s)
+
+InactiveLifecycleArtifactPresent(s) ==
+  /\ s.durableLifecycleRootV3.shape = "Committed"
+  /\ s.durableLifecycleStateSlotsV3[
+       InactiveLifecycleStateSlot(s)] # NoLifecycleSnapshot
+
+LifecycleStateDirectoryIsSynced(s) ==
+  s.durableLifecycleStateSlotsV3 =
+    s.syncedLifecycleStateSlotsV3
+
+LifecycleRootDirectoryIsSynced(s) ==
+  s.durableLifecycleRootV3 = s.syncedLifecycleRootV3
+
+LifecycleRootShapeIsValid(root) ==
+  /\ (root.shape = "Bootstrap" =>
+        /\ root.rootGeneration = 0
+        /\ root.snapshotDigest = NoLifecycleSnapshot)
+  /\ (root.shape = "Committed" =>
+        /\ root.rootGeneration \in
+             InitialRootGeneration..RootGenerationLimit
+        /\ root.snapshotDigest # NoLifecycleSnapshot)
+
+RootSelectedLifecyclePairIsPresent(s) ==
+  /\ s.durableLifecycleRootV3.shape = "Committed"
+  /\ SelectedLifecycleSnapshotV3(s) # NoLifecycleSnapshot
+
+RootSelectedLifecyclePairMatches(s) ==
+  /\ RootSelectedLifecyclePairIsPresent(s)
+  /\ SelectedLifecycleSnapshotV3(s).rootGeneration =
+       s.durableLifecycleRootV3.rootGeneration
+  /\ s.durableLifecycleRootV3.snapshotDigest =
+       LifecycleSnapshotDigest(SelectedLifecycleSnapshotV3(s))
+
+SyncedRootSelectedLifecyclePairMatches(s) ==
+  /\ s.syncedLifecycleRootV3.shape = "Committed"
+  /\ SyncedSelectedLifecycleSnapshotV3(s) # NoLifecycleSnapshot
+  /\ SyncedSelectedLifecycleSnapshotV3(s).rootGeneration =
+       s.syncedLifecycleRootV3.rootGeneration
+  /\ s.syncedLifecycleRootV3.snapshotDigest =
+       LifecycleSnapshotDigest(
+         SyncedSelectedLifecycleSnapshotV3(s))
+
+LifecycleSnapshotSemanticallyValid(snapshot) ==
+  /\ snapshot \in LifecycleSnapshotV3Set
+  /\ snapshot.version = 3
+  /\ snapshot.rootGeneration # 0
+  /\ snapshot.serverClosePrefix <= HighestSemanticSequence
+  /\ snapshot.requesterStreamEpoch <= snapshot.nextStreamEpoch
+
+DurableSnapshot(s) ==
+  SelectedLifecycleSnapshotV3(s)
+
+SyncedLifecycleSnapshot(s) ==
+  SyncedSelectedLifecycleSnapshotV3(s)
+
+LifecycleJournalReady(s) ==
+  /\ s.durableJournalValidated
+  /\ RootSelectedLifecyclePairMatches(s)
+  /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(s))
+  /\ LifecycleStateDirectoryIsSynced(s)
+  /\ LifecycleRootDirectoryIsSynced(s)
+  /\ ~s.crashArtifactsPresent
 
 ExactServiceTransportOwnerPair ==
-  ServiceOwnerNonce = TransportOwnerNonce
+  /\ state.serviceOwnerNonce # NoIdentity
+  /\ state.serviceOwnerNonce = state.transportOwnerNonce
 
 ExactPredecessorReceipt ==
-  /\ state.receiptOwnerNonce = ServiceOwnerNonce
+  /\ ExactServiceTransportOwnerPair
+  /\ state.receiptOwnerNonce = state.serviceOwnerNonce
   /\ state.receiptContext = ExpectedContext
   /\ state.receiptArtifact = ExpectedArtifact
 
@@ -123,17 +366,21 @@ FinalExactOutputSeal ==
   /\ state.workerOutstanding = 0
   /\ state.ownerSealed
 
-CompactionNeeded ==
-  state.compactionCause \in
-    {"FullServerTable", "RosterGeometryReplacement"}
-
 CompactionCauseMatchesGeometry ==
-  /\ (state.targetRoster = "ChangedRoster" =>
+  /\ (state.targetRoster # state.currentRoster =>
         state.compactionCause = "RosterGeometryReplacement")
   /\ (state.compactionCause = "RosterGeometryReplacement" =>
-        state.targetRoster = "ChangedRoster")
+        state.targetRoster # state.currentRoster)
   /\ (state.compactionCause = "FullServerTable" =>
-        state.targetRoster = "SameRoster")
+        state.targetRoster = state.currentRoster)
+
+ChangedRosterReplacementNeeded ==
+  /\ state.targetRoster # state.currentRoster
+  /\ state.compactionCause = "RosterGeometryReplacement"
+
+SameRosterTableFull ==
+  /\ state.targetRoster = state.currentRoster
+  /\ state.compactionCause = "FullServerTable"
 
 AllOldLifecycleTerminal ==
   /\ state.serverStreamState = "Terminal"
@@ -141,72 +388,235 @@ AllOldLifecycleTerminal ==
   /\ state.transferState = "Terminal"
   /\ state.flushState = "Terminal"
 
-LifecycleMemoryMatchesDurableSnapshotV2 ==
-  /\ state.serviceGeneration =
-       state.durableLifecycleSnapshotV2.generation
-  /\ state.nextStreamEpoch =
-       state.durableLifecycleSnapshotV2.nextStreamEpoch
-  /\ state.serverStreamState =
-       state.durableLifecycleSnapshotV2.serverStreams
-  /\ state.requestGateState =
-       state.durableLifecycleSnapshotV2.requestGates
+PersistentLifecycleMemoryMatchesSnapshot(snapshot) ==
+  /\ state.currentRoster = snapshot.roster
+  /\ state.serviceGeneration = snapshot.serviceGeneration
+  /\ state.nextStreamEpoch = snapshot.nextStreamEpoch
+  /\ state.serverStreamState = snapshot.serverStreams
+  /\ state.requestGateState = snapshot.requestGates
+  /\ state.serverClosePrefix = snapshot.serverClosePrefix
 
-LifecycleSnapshotV2AheadOfMemory ==
-  /\ state.lifecycleSnapshotPhase = "Persisted"
-  /\ state.durableLifecycleSnapshotV2.generation =
+LifecycleMemoryMatchesDurableSnapshotV3 ==
+  PersistentLifecycleMemoryMatchesSnapshot(DurableSnapshot(state))
+
+LifecycleTablesMatchDurableSnapshotV3 ==
+  /\ state.currentRoster = DurableSnapshot(state).roster
+  /\ state.serviceGeneration = DurableSnapshot(state).serviceGeneration
+  /\ state.serverStreamState = DurableSnapshot(state).serverStreams
+  /\ state.requestGateState = DurableSnapshot(state).requestGates
+  /\ state.serverClosePrefix = DurableSnapshot(state).serverClosePrefix
+
+DurableCandidateStateSlotAheadOfRoot ==
+  /\ state.candidatePresent
+  /\ state.lifecycleCommitPhase \in
+       {"StateSlotReplaced", "StateSlotPublished"}
+  /\ state.candidateStateSlot =
+       LifecycleStateSlot(
+         state.durableLifecycleRootV3.rootGeneration + 1)
+  /\ state.candidateStateSlot #
+       SelectedLifecycleStateSlot(state)
+  /\ state.durableLifecycleStateSlotsV3[
+       state.candidateStateSlot] =
+       state.candidateLifecycleSnapshotV3
+  /\ LifecycleSnapshotSemanticallyValid(
+       state.candidateLifecycleSnapshotV3)
+  /\ state.candidateLifecycleSnapshotV3.rootGeneration =
+       state.durableLifecycleRootV3.rootGeneration + 1
+  /\ state.candidateLifecycleSnapshotV3.roster = state.targetRoster
+  /\ state.candidateLifecycleSnapshotV3.serviceGeneration =
        state.serviceGeneration + 1
-  /\ state.durableLifecycleSnapshotV2.serverStreams = "Empty"
-  /\ state.durableLifecycleSnapshotV2.requestGates = "Empty"
+  /\ state.candidateLifecycleSnapshotV3.nextStreamEpoch =
+       state.nextStreamEpoch
+  /\ state.candidateLifecycleSnapshotV3.requesterStreamEpoch =
+       DurableSnapshot(state).requesterStreamEpoch
+  /\ state.candidateLifecycleSnapshotV3.serverStreams = "Empty"
+  /\ state.candidateLifecycleSnapshotV3.requestGates = "Empty"
+  /\ state.candidateLifecycleSnapshotV3.serverClosePrefix = 0
+
+ValidatedCandidateSuccessorStateSlotAheadOfRoot ==
+  /\ DurableCandidateStateSlotAheadOfRoot
+  /\ state.candidateSemanticallyValidated
+
+RootCommittedSuccessorAheadOfMemory ==
+  /\ state.lifecycleCommitPhase = "RootCommitted"
+  /\ state.candidatePresent
+  /\ LifecycleRootDirectoryIsSynced(state)
+  /\ LifecycleStateDirectoryIsSynced(state)
+  /\ DurableSnapshot(state) = state.candidateLifecycleSnapshotV3
+  /\ SelectedLifecycleStateSlot(state) = state.candidateStateSlot
+  /\ RootSelectedLifecyclePairMatches(state)
+  /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))
+  /\ DurableSnapshot(state).serviceGeneration =
+       state.serviceGeneration + 1
+  /\ DurableSnapshot(state).serverStreams = "Empty"
+  /\ DurableSnapshot(state).requestGates = "Empty"
+  /\ DurableSnapshot(state).serverClosePrefix = 0
+
+RootSelectedSuccessorAheadOfMemory ==
+  /\ state.durableLifecycleRootV3.shape = "Committed"
+  /\ RootSelectedLifecyclePairMatches(state)
+  /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))
+  /\ DurableSnapshot(state).serviceGeneration =
+       state.serviceGeneration + 1
+  /\ DurableSnapshot(state).serverStreams = "Empty"
+  /\ DurableSnapshot(state).requestGates = "Empty"
+  /\ DurableSnapshot(state).serverClosePrefix = 0
 
 RequesterEpochPersistenceAheadOfMemory ==
   /\ state.requesterEpochPhase = "Persisted"
-  /\ state.pendingStreamEpoch = state.nextStreamEpoch
-  /\ state.durableLifecycleSnapshotV2.nextStreamEpoch =
-       state.nextStreamEpoch + 1
+  /\ state.pendingStreamEpoch = state.nextStreamEpoch + 1
+  /\ DurableSnapshot(state).nextStreamEpoch =
+       state.pendingStreamEpoch
+  /\ DurableSnapshot(state).requesterStreamEpoch =
+       state.pendingStreamEpoch
+
+CrashClearedProcessLocalRolloverState(s) ==
+  [s EXCEPT
+     !.finalityValidated = FALSE,
+     !.workerIngressClosed = FALSE,
+     !.workerOutstanding = InitialWorkerOutstanding,
+     !.ownerSealed = FALSE,
+     !.serviceOwnerNonce = NoIdentity,
+     !.transportOwnerNonce = NoIdentity,
+     !.constructionParent = NoIdentity,
+     !.constructionSuccessor = NoIdentity,
+     !.presentedHandoffCandidate = "None",
+     !.receiptStage =
+       IF s.receiptStage = "Absent" THEN "Absent" ELSE "Lost",
+     !.receiptOwnerNonce = NoIdentity,
+     !.receiptContext = NoIdentity,
+     !.receiptArtifact = NoIdentity,
+     !.retainedSuccessor = NoIdentity,
+     !.receiptConsumeCount = 0,
+     !.candidatePresent = FALSE,
+     !.candidateSemanticallyValidated = FALSE,
+     !.pendingRolloverAuthority = "None",
+     !.successorActive = FALSE,
+     !.transitionAuthority = "None",
+     !.restartFenceAuthorized = FALSE]
+
+ChangedRosterAuthorityAvailable(authority) ==
+  CASE authority = "AuthenticatedTerminal" ->
+         /\ ExactRetainedMergeSidecars
+         /\ AllOldLifecycleTerminal
+    [] authority = "DurableExactOutput" ->
+         /\ ExactRetainedMergeSidecars
+         /\ state.durableJournalValidated
+    [] authority = "RestartRestore" ->
+         /\ state.durableJournalValidated
+         /\ state.validatedRestartObserved
+         /\ state.restartFenceAuthorized
 
 Init ==
-  \E roster \in RosterRelations,
-     cause \in CompactionCauses:
-    /\ (roster = "ChangedRoster" =>
+  \E current \in Rosters,
+     target \in Rosters,
+     cause \in CompactionCauses,
+     startup \in StartupModes,
+     fault \in LifecycleValidationFaults:
+    /\ (target # current =>
           cause = "RosterGeometryReplacement")
     /\ (cause = "RosterGeometryReplacement" =>
-          roster = "ChangedRoster")
+          target # current)
     /\ (cause = "FullServerTable" =>
-          roster = "SameRoster")
-    /\ state =
-         [targetRoster |-> roster,
+          target = current)
+    /\ (cause = "NoCompaction" =>
+          target = current)
+    /\ (startup = "BootstrapStart" =>
+          /\ target = current
+          /\ cause = "NoCompaction"
+          /\ fault = "None")
+    /\ (startup = "ServiceGenerationLimitStart" =>
+          /\ target # current
+          /\ cause = "RosterGeometryReplacement"
+          /\ fault = "None")
+    /\ (startup # "UnvalidatedRestart" => fault = "None")
+    /\ LET initialServiceGeneration ==
+             IF startup = "ServiceGenerationLimitStart"
+               THEN ServiceGenerationLimit
+               ELSE InitialServiceGeneration
+           initialSnapshot ==
+             IF startup = "BootstrapStart"
+               THEN InitialLifecycleSnapshotV3(target)
+               ELSE LiveLifecycleSnapshotV3(
+                      current, initialServiceGeneration)
+       IN state =
+         [startupMode |-> startup,
+          startupValidationFault |-> fault,
+          startupValidationRejected |-> FALSE,
+          validationFailureObserved |-> FALSE,
+          targetRoster |-> target,
           compactionCause |-> cause,
+          currentRoster |-> initialSnapshot.roster,
+          baselineRoster |-> initialSnapshot.roster,
+          baselineServiceGeneration |->
+            initialSnapshot.serviceGeneration,
           finalityValidated |-> FALSE,
           workerIngressClosed |-> FALSE,
           workerOutstanding |-> InitialWorkerOutstanding,
           ownerSealed |-> FALSE,
+          serviceOwnerNonce |-> NoIdentity,
+          transportOwnerNonce |-> NoIdentity,
           constructionParent |-> NoIdentity,
           constructionSuccessor |-> NoIdentity,
+          presentedHandoffCandidate |-> "None",
           receiptStage |-> "Absent",
           receiptOwnerNonce |-> NoIdentity,
           receiptContext |-> NoIdentity,
           receiptArtifact |-> NoIdentity,
           retainedSuccessor |-> NoIdentity,
           receiptConsumeCount |-> 0,
-          serviceGeneration |-> InitialGeneration,
-          nextStreamEpoch |-> InitialNextStreamEpoch,
+          serviceGeneration |-> initialSnapshot.serviceGeneration,
+          nextStreamEpoch |-> initialSnapshot.nextStreamEpoch,
           requesterEpochPhase |-> "Idle",
           pendingStreamEpoch |-> 0,
           activeStreamEpoch |-> 0,
           lastCompletedStreamEpoch |-> 0,
-          skippedStreamEpoch |-> 0,
-          serverStreamState |-> "Active",
-          requestGateState |-> "Active",
-          transferState |-> "Active",
-          flushState |-> "Active",
-          durableLifecycleSnapshotV2 |->
-            LifecycleSnapshotV2(
-              InitialGeneration,
-              InitialNextStreamEpoch,
-              "Active",
-              "Active"),
-          lifecycleSnapshotPhase |-> "Current",
-          retryableChunk |-> 1,
+          requesterEpochReplacementRestored |-> FALSE,
+          serverStreamState |-> initialSnapshot.serverStreams,
+          requestGateState |-> initialSnapshot.requestGates,
+          serverClosePrefix |-> initialSnapshot.serverClosePrefix,
+          authenticatedCloseHistory |-> 0,
+          recordedRetiredClosePrefix |-> 0,
+          transferState |->
+            IF startup = "BootstrapStart" THEN "Empty" ELSE "Active",
+          flushState |->
+            IF startup = "BootstrapStart" THEN "Empty" ELSE "Active",
+          durableLifecycleRootV3 |->
+            IF startup = "BootstrapStart"
+              THEN BootstrapLifecycleRootV3
+              ELSE LifecycleRootV3(initialSnapshot),
+          durableLifecycleStateSlotsV3 |->
+            IF startup = "BootstrapStart"
+              THEN [slot \in StateSlots |-> NoLifecycleSnapshot]
+              ELSE InitialLifecycleStateSlotsV3(initialSnapshot),
+          syncedLifecycleRootV3 |->
+            IF startup = "BootstrapStart"
+              THEN BootstrapLifecycleRootV3
+              ELSE LifecycleRootV3(initialSnapshot),
+          syncedLifecycleStateSlotsV3 |->
+            IF startup = "BootstrapStart"
+              THEN [slot \in StateSlots |-> NoLifecycleSnapshot]
+              ELSE InitialLifecycleStateSlotsV3(initialSnapshot),
+          candidateLifecycleSnapshotV3 |-> initialSnapshot,
+          candidatePresent |-> FALSE,
+          candidateStateSlot |-> 0,
+          candidateSemanticallyValidated |-> FALSE,
+          lifecycleCommitPhase |->
+            IF startup = "BootstrapStart"
+              THEN "Bootstrap"
+              ELSE "Current",
+          pendingRolloverAuthority |-> "None",
+          durableJournalValidated |->
+            startup # "UnvalidatedRestart",
+          validatedRestartObserved |-> FALSE,
+          restartFenceAuthorized |-> FALSE,
+          crashArtifactsPresent |->
+            startup = "UnvalidatedRestart",
+          cleanupPerformed |-> FALSE,
+          restartStateDirectoryResynced |-> FALSE,
+          restartRootDirectoryResynced |-> FALSE,
+          retryableChunk |->
+            IF startup = "BootstrapStart" THEN 0 ELSE 1,
           successorActive |-> FALSE,
           transitionAuthority |-> "None",
           capacityRejected |-> FALSE,
@@ -217,21 +627,39 @@ Init ==
           predecessorMismatchRejected |-> FALSE,
           wrongSuccessorRejected |-> FALSE,
           lateOldCallbackObserved |-> FALSE,
-          snapshotCrashObserved |-> FALSE,
-          epochCrashObserved |-> FALSE]
+          bootstrapCrashObserved |-> FALSE,
+          stateSlotCrashObserved |-> FALSE,
+          rootCrashObserved |-> FALSE,
+          epochCrashObserved |-> FALSE,
+          secondCrashObserved |-> FALSE]
+
+CreateServiceTransportOwnerPair ==
+  /\ state.serviceOwnerNonce = NoIdentity
+  /\ state.transportOwnerNonce = NoIdentity
+  /\ state.receiptStage \in {"Absent", "Lost"}
+  /\ ~state.restartRequired
+  /\ ~state.successorActive
+  /\ state' =
+       [state EXCEPT
+          !.serviceOwnerNonce = "OwnerNonce",
+          !.transportOwnerNonce = "OwnerNonce",
+          !.receiptStage = "Absent"]
 
 ValidateFinality ==
   /\ ~state.finalityValidated
+  /\ ~state.successorActive
   /\ state' = [state EXCEPT !.finalityValidated = TRUE]
 
 CloseWorkerIngress ==
   /\ state.finalityValidated
   /\ ~state.workerIngressClosed
+  /\ ~state.successorActive
   /\ state' = [state EXCEPT !.workerIngressClosed = TRUE]
 
 ClearOneWorkerExactOutput ==
   /\ state.workerIngressClosed
   /\ state.workerOutstanding > 0
+  /\ ~state.successorActive
   /\ state' =
        [state EXCEPT !.workerOutstanding = @ - 1]
 
@@ -239,6 +667,7 @@ BuildImmediateSuccessor ==
   /\ state.finalityValidated
   /\ state.constructionParent = NoIdentity
   /\ state.constructionSuccessor = NoIdentity
+  /\ ~state.successorActive
   /\ state' =
        [state EXCEPT
           !.constructionParent = ExpectedParent,
@@ -250,18 +679,21 @@ SealAppliedHeightOutputHandoff ==
   /\ state.workerOutstanding = 0
   /\ ~state.ownerSealed
   /\ state.receiptStage = "Absent"
+  /\ ExactServiceTransportOwnerPair
+  /\ ~state.successorActive
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
           !.ownerSealed = TRUE,
           !.receiptStage = "Minted",
-          !.receiptOwnerNonce = ServiceOwnerNonce,
+          !.receiptOwnerNonce = state.serviceOwnerNonce,
           !.receiptContext = ExpectedContext,
           !.receiptArtifact = ExpectedArtifact]
 
 RejectLateExactOutputEnqueue ==
   /\ state.ownerSealed
   /\ state.receiptStage = "Minted"
+  /\ ~state.successorActive
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
@@ -269,10 +701,51 @@ RejectLateExactOutputEnqueue ==
           !.restartRequired = TRUE,
           !.failureReason = "LateExactOutputEnqueue"]
 
+PresentForeignOwnerReceiptCandidate ==
+  /\ state.receiptStage = "Minted"
+  /\ ExactSuccessorConstruction
+  /\ state.presentedHandoffCandidate = "None"
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.presentedHandoffCandidate = "ForeignOwner"]
+
+PresentPredecessorContextMismatchCandidate ==
+  /\ state.receiptStage = "Minted"
+  /\ ExactSuccessorConstruction
+  /\ state.presentedHandoffCandidate = "None"
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.presentedHandoffCandidate =
+            "PredecessorContextMismatch"]
+
+PresentPredecessorArtifactMismatchCandidate ==
+  /\ state.receiptStage = "Minted"
+  /\ ExactSuccessorConstruction
+  /\ state.presentedHandoffCandidate = "None"
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.presentedHandoffCandidate =
+            "PredecessorArtifactMismatch"]
+
+PresentWrongImmediateSuccessorCandidate ==
+  /\ state.receiptStage = "Minted"
+  /\ ExactSuccessorConstruction
+  /\ state.presentedHandoffCandidate = "None"
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.presentedHandoffCandidate =
+            "ImmediateSuccessorMismatch"]
+
 RejectForeignOwnerReceipt ==
   /\ state.receiptStage = "Minted"
   /\ ExactSuccessorConstruction
+  /\ state.presentedHandoffCandidate = "ForeignOwner"
   /\ ~state.foreignReceiptRejected
+  /\ ~state.successorActive
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
@@ -283,7 +756,10 @@ RejectForeignOwnerReceipt ==
 RejectPredecessorContextMismatch ==
   /\ state.receiptStage = "Minted"
   /\ ExactSuccessorConstruction
+  /\ state.presentedHandoffCandidate =
+       "PredecessorContextMismatch"
   /\ ~state.predecessorMismatchRejected
+  /\ ~state.successorActive
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
@@ -294,7 +770,10 @@ RejectPredecessorContextMismatch ==
 RejectPredecessorArtifactMismatch ==
   /\ state.receiptStage = "Minted"
   /\ ExactSuccessorConstruction
+  /\ state.presentedHandoffCandidate =
+       "PredecessorArtifactMismatch"
   /\ ~state.predecessorMismatchRejected
+  /\ ~state.successorActive
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
@@ -304,7 +783,11 @@ RejectPredecessorArtifactMismatch ==
 
 RejectWrongImmediateSuccessor ==
   /\ state.receiptStage = "Minted"
+  /\ ExactSuccessorConstruction
+  /\ state.presentedHandoffCandidate =
+       "ImmediateSuccessorMismatch"
   /\ ~state.wrongSuccessorRejected
+  /\ ~state.successorActive
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
@@ -316,7 +799,9 @@ RetainExactHandoffReceipt ==
   /\ state.receiptStage = "Minted"
   /\ ExactPredecessorReceipt
   /\ ExactSuccessorConstruction
+  /\ state.presentedHandoffCandidate = "None"
   /\ state.retainedSuccessor = NoIdentity
+  /\ ~state.successorActive
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
@@ -324,26 +809,115 @@ RetainExactHandoffReceipt ==
           !.retainedSuccessor = ExpectedSuccessor]
 
 (***************************************************************************
-Requester epoch allocation.  The durable V2 counter advances first.  Only the
+Bootstrap and restart validation.  The generation-zero sentinel is the only
+root shape without a selected state.  Generation one is written to its parity
+slot, semantically validated, and only then selected by the committed root.
+Known crash artifacts may be retired only after the root-selected pair and its
+transport semantics have both been validated.
+***************************************************************************)
+PublishInitialLifecycleStateSlotV3 ==
+  /\ state.lifecycleCommitPhase = "Bootstrap"
+  /\ state.durableLifecycleRootV3 = BootstrapLifecycleRootV3
+  /\ ~state.candidatePresent
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.durableLifecycleStateSlotsV3[
+            LifecycleStateSlot(InitialRootGeneration)] =
+              InitialLifecycleSnapshotV3,
+          !.candidateLifecycleSnapshotV3 =
+            InitialLifecycleSnapshotV3,
+          !.candidatePresent = TRUE,
+          !.candidateStateSlot =
+            LifecycleStateSlot(InitialRootGeneration),
+          !.candidateSemanticallyValidated = FALSE,
+          !.lifecycleCommitPhase = "BootstrapStatePublished",
+          !.crashArtifactsPresent = TRUE,
+          !.cleanupPerformed = FALSE]
+
+ValidateBootstrapLifecycleCandidateV3 ==
+  /\ state.lifecycleCommitPhase = "BootstrapStatePublished"
+  /\ state.durableLifecycleRootV3 = BootstrapLifecycleRootV3
+  /\ state.candidatePresent
+  /\ state.durableLifecycleStateSlotsV3[state.candidateStateSlot] =
+       state.candidateLifecycleSnapshotV3
+  /\ LifecycleSnapshotSemanticallyValid(
+       state.candidateLifecycleSnapshotV3)
+  /\ ~state.candidateSemanticallyValidated
+  /\ state' =
+       [state EXCEPT !.candidateSemanticallyValidated = TRUE]
+
+CommitInitialLifecycleRootV3 ==
+  /\ state.lifecycleCommitPhase = "BootstrapStatePublished"
+  /\ state.durableLifecycleRootV3 = BootstrapLifecycleRootV3
+  /\ state.candidatePresent
+  /\ state.candidateSemanticallyValidated
+  /\ state.candidateLifecycleSnapshotV3.rootGeneration =
+       InitialRootGeneration
+  /\ state' =
+       [state EXCEPT
+          !.durableLifecycleRootV3 =
+            LifecycleRootV3(state.candidateLifecycleSnapshotV3),
+          !.candidatePresent = FALSE,
+          !.candidateSemanticallyValidated = FALSE,
+          !.lifecycleCommitPhase = "Current",
+          !.durableJournalValidated = TRUE]
+
+ValidateRootSelectedLifecycleV3 ==
+  /\ ~state.durableJournalValidated
+  /\ LifecycleRootShapeIsValid(state.durableLifecycleRootV3)
+  /\ RootSelectedLifecyclePairMatches(state)
+  /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))
+  /\ state' =
+       [state EXCEPT
+          !.durableJournalValidated = TRUE,
+          !.validatedRestartObserved = TRUE,
+          !.restartFenceAuthorized =
+            state.targetRoster = "ChangedRoster"]
+
+CleanupValidatedLifecycleArtifactsV3 ==
+  /\ state.durableJournalValidated
+  /\ RootSelectedLifecyclePairMatches(state)
+  /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))
+  /\ state.crashArtifactsPresent
+  /\ ~state.cleanupPerformed
+  /\ state' =
+       [state EXCEPT
+          !.crashArtifactsPresent = FALSE,
+          !.cleanupPerformed = TRUE]
+
+(***************************************************************************
+Requester epoch allocation.  The V3 root-selected counter advances before the
 following publication action may expose the allocated epoch for use.
 ***************************************************************************)
 PersistFreshRequesterEpoch ==
   /\ state.requesterEpochPhase = "Idle"
   /\ state.nextStreamEpoch < StreamEpochLimit
-  /\ state.lifecycleSnapshotPhase = "Current"
-  /\ LifecycleMemoryMatchesDurableSnapshotV2
+  /\ state.durableLifecycleRootV3.rootGeneration < RootGenerationLimit
+  /\ state.lifecycleCommitPhase = "Current"
+  /\ ~state.candidatePresent
+  /\ LifecycleJournalReady(state)
+  /\ LifecycleMemoryMatchesDurableSnapshotV3
   /\ ~state.restartRequired
-  /\ state' =
-       [state EXCEPT
-          !.durableLifecycleSnapshotV2 =
-            LifecycleSnapshotV2(
-              state.serviceGeneration,
-              state.nextStreamEpoch + 1,
-              state.serverStreamState,
-              state.requestGateState),
-          !.requesterEpochPhase = "Persisted",
-          !.pendingStreamEpoch = state.nextStreamEpoch,
-          !.capacityRejected = FALSE]
+  /\ LET snapshot ==
+           LifecycleSnapshotV3(
+             state.durableLifecycleRootV3.rootGeneration + 1,
+             state.currentRoster,
+             state.serviceGeneration,
+             state.nextStreamEpoch + 1,
+             state.serverStreamState,
+             state.requestGateState,
+             state.serverClosePrefix)
+     IN state' =
+          [state EXCEPT
+             !.durableLifecycleStateSlotsV3[
+               LifecycleStateSlot(snapshot.rootGeneration)] =
+                 snapshot,
+             !.durableLifecycleRootV3 =
+               LifecycleRootV3(snapshot),
+             !.requesterEpochPhase = "Persisted",
+             !.pendingStreamEpoch = state.nextStreamEpoch,
+             !.capacityRejected = FALSE]
 
 PublishFreshRequesterEpoch ==
   /\ RequesterEpochPersistenceAheadOfMemory
@@ -352,8 +926,7 @@ PublishFreshRequesterEpoch ==
   /\ state.pendingStreamEpoch # state.skippedStreamEpoch
   /\ state' =
        [state EXCEPT
-          !.nextStreamEpoch =
-            state.durableLifecycleSnapshotV2.nextStreamEpoch,
+          !.nextStreamEpoch = DurableSnapshot(state).nextStreamEpoch,
           !.requesterEpochPhase = "InUse",
           !.activeStreamEpoch = state.pendingStreamEpoch,
           !.pendingStreamEpoch = 0]
@@ -378,6 +951,11 @@ CrashAfterRequesterEpochPersistence ==
   /\ state' =
        [state EXCEPT
           !.successorActive = FALSE,
+          !.durableJournalValidated = FALSE,
+          !.validatedRestartObserved = FALSE,
+          !.restartFenceAuthorized = FALSE,
+          !.crashArtifactsPresent = TRUE,
+          !.cleanupPerformed = FALSE,
           !.restartRequired = TRUE,
           !.failureReason = "CrashAfterRequesterEpochPersistence",
           !.skippedStreamEpoch = state.pendingStreamEpoch,
@@ -388,13 +966,18 @@ RestoreRequesterEpochCounterAfterCrash ==
   /\ state.failureReason = "CrashAfterRequesterEpochPersistence"
   /\ RequesterEpochPersistenceAheadOfMemory
   /\ state.epochCrashObserved
+  /\ state.durableJournalValidated
+  /\ RootSelectedLifecyclePairMatches(state)
+  /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))
   /\ state' =
        [state EXCEPT
-          !.nextStreamEpoch =
-            state.durableLifecycleSnapshotV2.nextStreamEpoch,
+          !.nextStreamEpoch = DurableSnapshot(state).nextStreamEpoch,
           !.requesterEpochPhase = "Idle",
           !.pendingStreamEpoch = 0,
           !.activeStreamEpoch = 0,
+          !.validatedRestartObserved = TRUE,
+          !.crashArtifactsPresent = FALSE,
+          !.cleanupPerformed = TRUE,
           !.restartRequired = FALSE,
           !.failureReason = "None"]
 
@@ -406,59 +989,92 @@ RejectRequesterEpochOverflow ==
        [state EXCEPT !.capacityRejected = TRUE]
 
 (***************************************************************************
-Lifecycle terminalization.  Stream and gate terminality is persisted in the
-same sole V2 object.  Transfer and flush ownership is process-local but must
-also be terminal before compaction.
+Ordinary terminalization.  Only an authenticated Close advances the semantic
+prefix.  Transfer and flush ownership is process-local, but both must also be
+terminal before the ordinary changed-roster API can advance a generation.
 ***************************************************************************)
-RejectActiveLifecycleCompaction ==
+RejectActiveOrdinaryRollover ==
   /\ ExactRetainedMergeSidecars
-  /\ CompactionNeeded
+  /\ ChangedRosterReplacementNeeded
   /\ ~AllOldLifecycleTerminal
   /\ ~state.capacityRejected
-  /\ state.lifecycleSnapshotPhase = "Current"
+  /\ state.lifecycleCommitPhase = "Current"
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT !.capacityRejected = TRUE]
 
-TerminalizeServerStream ==
+RejectSameRosterFullTable ==
   /\ ExactRetainedMergeSidecars
-  /\ CompactionNeeded
-  /\ state.serverStreamState = "Active"
-  /\ state.lifecycleSnapshotPhase = "Current"
-  /\ state.requesterEpochPhase # "Persisted"
+  /\ SameRosterTableFull
+  /\ ~state.capacityRejected
+  /\ state.lifecycleCommitPhase = "Current"
   /\ ~state.restartRequired
   /\ state' =
-       [state EXCEPT
-          !.serverStreamState = "Terminal",
-          !.durableLifecycleSnapshotV2 =
-            LifecycleSnapshotV2(
-              state.serviceGeneration,
-              state.nextStreamEpoch,
-              "Terminal",
-              state.requestGateState),
-          !.capacityRejected = FALSE]
+       [state EXCEPT !.capacityRejected = TRUE]
+
+AuthenticateServerClosePrefix ==
+  /\ ExactRetainedMergeSidecars
+  /\ ChangedRosterReplacementNeeded
+  /\ state.serverStreamState = "Active"
+  /\ state.durableLifecycleRootV3.rootGeneration < RootGenerationLimit
+  /\ state.lifecycleCommitPhase = "Current"
+  /\ state.requesterEpochPhase # "Persisted"
+  /\ LifecycleJournalReady(state)
+  /\ LifecycleMemoryMatchesDurableSnapshotV3
+  /\ ~state.restartRequired
+  /\ LET snapshot ==
+           LifecycleSnapshotV3(
+             state.durableLifecycleRootV3.rootGeneration + 1,
+             state.currentRoster,
+             state.serviceGeneration,
+             state.nextStreamEpoch,
+             "Terminal",
+             state.requestGateState,
+             HighestSemanticSequence)
+     IN state' =
+          [state EXCEPT
+             !.serverStreamState = "Terminal",
+             !.serverClosePrefix = HighestSemanticSequence,
+             !.authenticatedCloseHistory = HighestSemanticSequence,
+             !.durableLifecycleStateSlotsV3[
+               LifecycleStateSlot(snapshot.rootGeneration)] =
+                 snapshot,
+             !.durableLifecycleRootV3 =
+               LifecycleRootV3(snapshot),
+             !.capacityRejected = FALSE]
 
 TerminalizeRequestGate ==
   /\ ExactRetainedMergeSidecars
-  /\ CompactionNeeded
+  /\ ChangedRosterReplacementNeeded
   /\ state.requestGateState = "Active"
-  /\ state.lifecycleSnapshotPhase = "Current"
+  /\ state.durableLifecycleRootV3.rootGeneration < RootGenerationLimit
+  /\ state.lifecycleCommitPhase = "Current"
   /\ state.requesterEpochPhase # "Persisted"
+  /\ LifecycleJournalReady(state)
+  /\ LifecycleMemoryMatchesDurableSnapshotV3
   /\ ~state.restartRequired
-  /\ state' =
-       [state EXCEPT
-          !.requestGateState = "Terminal",
-          !.durableLifecycleSnapshotV2 =
-            LifecycleSnapshotV2(
-              state.serviceGeneration,
-              state.nextStreamEpoch,
-              state.serverStreamState,
-              "Terminal"),
-          !.capacityRejected = FALSE]
+  /\ LET snapshot ==
+           LifecycleSnapshotV3(
+             state.durableLifecycleRootV3.rootGeneration + 1,
+             state.currentRoster,
+             state.serviceGeneration,
+             state.nextStreamEpoch,
+             state.serverStreamState,
+             "Terminal",
+             state.serverClosePrefix)
+     IN state' =
+          [state EXCEPT
+             !.requestGateState = "Terminal",
+             !.durableLifecycleStateSlotsV3[
+               LifecycleStateSlot(snapshot.rootGeneration)] =
+                 snapshot,
+             !.durableLifecycleRootV3 =
+               LifecycleRootV3(snapshot),
+             !.capacityRejected = FALSE]
 
 TerminalizeTransfer ==
   /\ ExactRetainedMergeSidecars
-  /\ CompactionNeeded
+  /\ ChangedRosterReplacementNeeded
   /\ state.transferState = "Active"
   /\ ~state.restartRequired
   /\ state' =
@@ -468,7 +1084,7 @@ TerminalizeTransfer ==
 
 TerminalizeFlush ==
   /\ ExactRetainedMergeSidecars
-  /\ CompactionNeeded
+  /\ ChangedRosterReplacementNeeded
   /\ state.flushState = "Active"
   /\ ~state.restartRequired
   /\ state' =
@@ -476,150 +1092,299 @@ TerminalizeFlush ==
           !.flushState = "Terminal",
           !.capacityRejected = FALSE]
 
-PersistSuccessorLifecycleSnapshotV2 ==
-  /\ ExactRetainedMergeSidecars
-  /\ CompactionNeeded
-  /\ AllOldLifecycleTerminal
-  /\ state.serviceGeneration < GenerationLimit
-  /\ state.lifecycleSnapshotPhase = "Current"
-  /\ state.requesterEpochPhase # "Persisted"
-  /\ LifecycleMemoryMatchesDurableSnapshotV2
-  /\ ~state.restartRequired
-  /\ state' =
-       [state EXCEPT
-          !.durableLifecycleSnapshotV2 =
-            LifecycleSnapshotV2(
-              state.serviceGeneration + 1,
-              state.nextStreamEpoch,
-              "Empty",
-              "Empty"),
-          !.lifecycleSnapshotPhase = "Persisted",
-          !.capacityRejected = FALSE]
+(***************************************************************************
+Changed-roster V3 commit corridor.  The state-slot publication is not a
+commit.  The root marker binds the exact snapshot and slot.  Memory changes
+only after the root-selected successor is durable.
+***************************************************************************)
+PublishSuccessorLifecycleStateSlotV3 ==
+  \E authority \in ChangedRosterAuthorities:
+    /\ ChangedRosterReplacementNeeded
+    /\ ChangedRosterAuthorityAvailable(authority)
+    /\ state.serviceGeneration < ServiceGenerationLimit
+    /\ state.durableLifecycleRootV3.rootGeneration < RootGenerationLimit
+    /\ state.lifecycleCommitPhase = "Current"
+    /\ ~state.candidatePresent
+    /\ state.requesterEpochPhase # "Persisted"
+    /\ LifecycleJournalReady(state)
+    /\ LifecycleMemoryMatchesDurableSnapshotV3
+    /\ ~state.restartRequired
+    /\ LET snapshot ==
+             LifecycleSnapshotV3(
+               state.durableLifecycleRootV3.rootGeneration + 1,
+               "ChangedRoster",
+               state.serviceGeneration + 1,
+               state.nextStreamEpoch,
+               "Empty",
+               "Empty",
+               0)
+       IN state' =
+         [state EXCEPT
+            !.durableLifecycleStateSlotsV3[
+              LifecycleStateSlot(snapshot.rootGeneration)] =
+                snapshot,
+            !.candidateLifecycleSnapshotV3 = snapshot,
+            !.candidatePresent = TRUE,
+            !.candidateStateSlot =
+              LifecycleStateSlot(snapshot.rootGeneration),
+            !.candidateSemanticallyValidated = TRUE,
+            !.lifecycleCommitPhase = "StateSlotPublished",
+            !.pendingRolloverAuthority = authority,
+            !.restartFenceAuthorized = FALSE,
+            !.capacityRejected = FALSE]
 
-FailSuccessorLifecycleSnapshotV2Persistence ==
+FailSuccessorLifecycleStateSlotV3Persistence ==
+  /\ ChangedRosterReplacementNeeded
   /\ ExactRetainedMergeSidecars
-  /\ CompactionNeeded
-  /\ AllOldLifecycleTerminal
-  /\ state.serviceGeneration < GenerationLimit
-  /\ state.lifecycleSnapshotPhase = "Current"
-  /\ state.requesterEpochPhase # "Persisted"
-  /\ LifecycleMemoryMatchesDurableSnapshotV2
+  /\ state.serviceGeneration < ServiceGenerationLimit
+  /\ state.durableLifecycleRootV3.rootGeneration < RootGenerationLimit
+  /\ state.lifecycleCommitPhase = "Current"
+  /\ ~state.candidatePresent
+  /\ LifecycleJournalReady(state)
+  /\ LifecycleMemoryMatchesDurableSnapshotV3
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
+          !.receiptStage = "Lost",
+          !.pendingRolloverAuthority = "None",
+          !.durableJournalValidated = FALSE,
+          !.validatedRestartObserved = FALSE,
+          !.restartFenceAuthorized = FALSE,
+          !.crashArtifactsPresent = TRUE,
+          !.cleanupPerformed = FALSE,
           !.restartRequired = TRUE,
-          !.failureReason = "LifecycleSnapshotV2PersistenceFailure"]
+          !.failureReason = "LifecycleStateSlotV3PersistenceFailure"]
 
-CrashBeforeLifecycleSnapshotV2Persistence ==
+CrashBeforeLifecycleStateSlotV3Publication ==
+  /\ ChangedRosterReplacementNeeded
   /\ ExactRetainedMergeSidecars
-  /\ CompactionNeeded
-  /\ AllOldLifecycleTerminal
-  /\ state.serviceGeneration < GenerationLimit
-  /\ state.lifecycleSnapshotPhase = "Current"
-  /\ LifecycleMemoryMatchesDurableSnapshotV2
+  /\ state.lifecycleCommitPhase = "Current"
+  /\ ~state.candidatePresent
+  /\ LifecycleMemoryMatchesDurableSnapshotV3
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
+          !.receiptStage = "Lost",
+          !.pendingRolloverAuthority = "None",
+          !.durableJournalValidated = FALSE,
+          !.validatedRestartObserved = FALSE,
+          !.restartFenceAuthorized = FALSE,
+          !.crashArtifactsPresent = TRUE,
+          !.cleanupPerformed = FALSE,
           !.restartRequired = TRUE,
-          !.failureReason =
-            "CrashBeforeLifecycleSnapshotV2Persistence"]
+          !.failureReason = "CrashBeforeLifecycleStateSlotV3Publication"]
 
-RecoverPredecessorLifecycleSnapshotV2 ==
+CrashAfterLifecycleStateSlotV3Publication ==
+  /\ ValidatedCandidateSuccessorStateSlotAheadOfRoot
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.receiptStage =
+            IF state.receiptStage = "Retained" THEN "Lost"
+            ELSE state.receiptStage,
+          !.pendingRolloverAuthority = "None",
+          !.candidateSemanticallyValidated = FALSE,
+          !.durableJournalValidated = FALSE,
+          !.validatedRestartObserved = FALSE,
+          !.restartFenceAuthorized = FALSE,
+          !.crashArtifactsPresent = TRUE,
+          !.cleanupPerformed = FALSE,
+          !.restartRequired = TRUE,
+          !.failureReason = "CrashAfterLifecycleStateSlotV3Publication",
+          !.stateSlotCrashObserved = TRUE]
+
+FailSuccessorLifecycleRootV3Persistence ==
+  /\ ValidatedCandidateSuccessorStateSlotAheadOfRoot
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.receiptStage =
+            IF state.receiptStage = "Retained" THEN "Lost"
+            ELSE state.receiptStage,
+          !.pendingRolloverAuthority = "None",
+          !.candidateSemanticallyValidated = FALSE,
+          !.durableJournalValidated = FALSE,
+          !.validatedRestartObserved = FALSE,
+          !.restartFenceAuthorized = FALSE,
+          !.crashArtifactsPresent = TRUE,
+          !.cleanupPerformed = FALSE,
+          !.restartRequired = TRUE,
+          !.failureReason = "LifecycleRootV3PersistenceFailure"]
+
+RecoverPredecessorLifecycleV3 ==
   /\ state.restartRequired
   /\ state.failureReason \in
-       {"LifecycleSnapshotV2PersistenceFailure",
-        "CrashBeforeLifecycleSnapshotV2Persistence"}
-  /\ state.lifecycleSnapshotPhase = "Current"
-  /\ LifecycleMemoryMatchesDurableSnapshotV2
+       {"LifecycleStateSlotV3PersistenceFailure",
+        "LifecycleRootV3PersistenceFailure",
+        "CrashBeforeLifecycleStateSlotV3Publication",
+        "CrashAfterLifecycleStateSlotV3Publication"}
+  /\ state.lifecycleCommitPhase \in {"Current", "StateSlotPublished"}
+  /\ state.durableJournalValidated
+  /\ RootSelectedLifecyclePairMatches(state)
+  /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))
+  /\ LifecycleMemoryMatchesDurableSnapshotV3
   /\ state' =
        [state EXCEPT
+          !.candidatePresent = FALSE,
+          !.candidateSemanticallyValidated = FALSE,
+          !.lifecycleCommitPhase = "Current",
+          !.pendingRolloverAuthority = "None",
+          !.validatedRestartObserved = TRUE,
+          !.restartFenceAuthorized =
+            state.targetRoster = "ChangedRoster",
+          !.crashArtifactsPresent = FALSE,
+          !.cleanupPerformed = TRUE,
           !.restartRequired = FALSE,
           !.failureReason = "None"]
 
-CrashAfterLifecycleSnapshotV2Persistence ==
-  /\ LifecycleSnapshotV2AheadOfMemory
+CommitSuccessorLifecycleRootV3 ==
+  /\ ValidatedCandidateSuccessorStateSlotAheadOfRoot
+  /\ state.pendingRolloverAuthority \in ChangedRosterAuthorities
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
+          !.durableLifecycleRootV3 =
+            LifecycleRootV3(state.candidateLifecycleSnapshotV3),
+          !.lifecycleCommitPhase = "RootCommitted"]
+
+CrashAfterLifecycleRootV3Commit ==
+  /\ RootCommittedSuccessorAheadOfMemory
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.receiptStage =
+            IF state.receiptStage = "Retained" THEN "Lost"
+            ELSE state.receiptStage,
+          !.pendingRolloverAuthority = "None",
+          !.candidateSemanticallyValidated = FALSE,
+          !.durableJournalValidated = FALSE,
+          !.validatedRestartObserved = FALSE,
+          !.restartFenceAuthorized = FALSE,
+          !.crashArtifactsPresent = TRUE,
+          !.cleanupPerformed = FALSE,
           !.restartRequired = TRUE,
-          !.failureReason =
-            "CrashAfterLifecycleSnapshotV2Persistence",
-          !.snapshotCrashObserved = TRUE]
+          !.failureReason = "CrashAfterLifecycleRootV3Commit",
+          !.rootCrashObserved = TRUE]
 
-RestoreSuccessorLifecycleSnapshotV2AfterCrash ==
-  /\ LifecycleSnapshotV2AheadOfMemory
+RestoreSuccessorLifecycleV3AfterCrash ==
+  /\ RootCommittedSuccessorAheadOfMemory
   /\ state.restartRequired
-  /\ state.failureReason =
-       "CrashAfterLifecycleSnapshotV2Persistence"
-  /\ state.snapshotCrashObserved
+  /\ state.failureReason = "CrashAfterLifecycleRootV3Commit"
+  /\ state.rootCrashObserved
+  /\ state.durableJournalValidated
+  /\ RootSelectedLifecyclePairMatches(state)
+  /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))
   /\ state' =
        [state EXCEPT
+          !.currentRoster = DurableSnapshot(state).roster,
           !.serviceGeneration =
-            state.durableLifecycleSnapshotV2.generation,
+            DurableSnapshot(state).serviceGeneration,
           !.nextStreamEpoch =
-            state.durableLifecycleSnapshotV2.nextStreamEpoch,
+            DurableSnapshot(state).nextStreamEpoch,
           !.serverStreamState =
-            state.durableLifecycleSnapshotV2.serverStreams,
+            DurableSnapshot(state).serverStreams,
           !.requestGateState =
-            state.durableLifecycleSnapshotV2.requestGates,
+            DurableSnapshot(state).requestGates,
+          !.serverClosePrefix =
+            DurableSnapshot(state).serverClosePrefix,
           !.transferState = "Empty",
           !.flushState = "Empty",
           !.retryableChunk = 0,
-          !.lifecycleSnapshotPhase = "Restored",
+          !.candidatePresent = FALSE,
+          !.candidateSemanticallyValidated = FALSE,
+          !.lifecycleCommitPhase = "Restored",
+          !.pendingRolloverAuthority = "RestartRestore",
+          !.validatedRestartObserved = TRUE,
+          !.restartFenceAuthorized = FALSE,
+          !.crashArtifactsPresent = FALSE,
+          !.cleanupPerformed = TRUE,
+          !.transitionAuthority = "RestartRestore",
           !.restartRequired = FALSE,
           !.failureReason = "None"]
 
-PublishPersistedLifecycleSnapshotV2 ==
-  /\ ExactRetainedMergeSidecars
-  /\ CompactionNeeded
+PublishCommittedLifecycleV3ToMemory ==
+  /\ RootCommittedSuccessorAheadOfMemory
+  /\ state.pendingRolloverAuthority \in ChangedRosterAuthorities
   /\ ~state.restartRequired
-  /\ state.lifecycleSnapshotPhase \in {"Persisted", "Restored"}
-  /\ IF state.lifecycleSnapshotPhase = "Persisted"
-        THEN LifecycleSnapshotV2AheadOfMemory
-        ELSE LifecycleMemoryMatchesDurableSnapshotV2
-  /\ state.durableLifecycleSnapshotV2.serverStreams = "Empty"
-  /\ state.durableLifecycleSnapshotV2.requestGates = "Empty"
   /\ state' =
        [state EXCEPT
+          !.currentRoster = DurableSnapshot(state).roster,
           !.serviceGeneration =
-            state.durableLifecycleSnapshotV2.generation,
+            DurableSnapshot(state).serviceGeneration,
           !.nextStreamEpoch =
-            state.durableLifecycleSnapshotV2.nextStreamEpoch,
-          !.serverStreamState = "Empty",
-          !.requestGateState = "Empty",
+            DurableSnapshot(state).nextStreamEpoch,
+          !.serverStreamState =
+            DurableSnapshot(state).serverStreams,
+          !.requestGateState =
+            DurableSnapshot(state).requestGates,
+          !.serverClosePrefix =
+            DurableSnapshot(state).serverClosePrefix,
+          !.recordedRetiredClosePrefix =
+            IF state.pendingRolloverAuthority = "AuthenticatedTerminal"
+              THEN state.serverClosePrefix
+              ELSE state.recordedRetiredClosePrefix,
           !.transferState = "Empty",
           !.flushState = "Empty",
           !.retryableChunk = 0,
-          !.lifecycleSnapshotPhase = "Published",
-          !.receiptStage = "Consumed",
-          !.receiptConsumeCount = 1,
+          !.candidatePresent = FALSE,
+          !.candidateSemanticallyValidated = FALSE,
+          !.lifecycleCommitPhase = "Published",
+          !.receiptStage =
+            IF state.receiptStage = "Retained" THEN "Consumed"
+            ELSE state.receiptStage,
+          !.receiptConsumeCount =
+            IF state.receiptStage = "Retained" THEN 1
+            ELSE state.receiptConsumeCount,
           !.successorActive = TRUE,
-          !.transitionAuthority = "LifecycleV2"]
+          !.transitionAuthority = state.pendingRolloverAuthority,
+          !.pendingRolloverAuthority = "None",
+          !.restartFenceAuthorized = FALSE]
+
+ActivateRestoredLifecycleV3Successor ==
+  /\ state.lifecycleCommitPhase = "Restored"
+  /\ LifecycleMemoryMatchesDurableSnapshotV3
+  /\ state.transitionAuthority = "RestartRestore"
+  /\ ~state.successorActive
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.lifecycleCommitPhase = "Published",
+          !.pendingRolloverAuthority = "None",
+          !.successorActive = TRUE]
 
 ActivateSameRosterSuccessor ==
   /\ state.targetRoster = "SameRoster"
   /\ state.compactionCause = "NoCompaction"
   /\ ExactRetainedMergeSidecars
-  /\ state.lifecycleSnapshotPhase = "Current"
-  /\ LifecycleMemoryMatchesDurableSnapshotV2
+  /\ state.lifecycleCommitPhase = "Current"
+  /\ ~state.candidatePresent
+  /\ LifecycleJournalReady(state)
+  /\ LifecycleMemoryMatchesDurableSnapshotV3
   /\ ~state.restartRequired
   /\ state' =
        [state EXCEPT
           !.receiptStage = "Consumed",
           !.receiptConsumeCount = 1,
           !.successorActive = TRUE,
-          !.transitionAuthority = "SameRoster"]
+          !.transitionAuthority = "SameRosterPreserved"]
 
-RejectGenerationOverflow ==
-  /\ state.successorActive
-  /\ state.serviceGeneration = GenerationLimit
+RejectServiceGenerationOverflow ==
+  /\ ChangedRosterReplacementNeeded
+  /\ (ExactRetainedMergeSidecars \/ state.restartFenceAuthorized)
+  /\ state.serviceGeneration = ServiceGenerationLimit
+  /\ ~state.capacityRejected
+  /\ state' =
+       [state EXCEPT !.capacityRejected = TRUE]
+
+RejectLifecycleRootGenerationOverflow ==
+  /\ state.durableLifecycleRootV3.rootGeneration = RootGenerationLimit
   /\ ~state.capacityRejected
   /\ state' =
        [state EXCEPT !.capacityRejected = TRUE]
 
 ObserveLateOldWriterCallback ==
   /\ state.successorActive
-  /\ state.transitionAuthority = "LifecycleV2"
+  /\ state.transitionAuthority \in ChangedRosterAuthorities
   /\ ~state.lateOldCallbackObserved
   /\ state' =
        [state EXCEPT !.lateOldCallbackObserved = TRUE]
@@ -636,6 +1401,11 @@ Next ==
   \/ RejectPredecessorArtifactMismatch
   \/ RejectWrongImmediateSuccessor
   \/ RetainExactHandoffReceipt
+  \/ PublishInitialLifecycleStateSlotV3
+  \/ ValidateBootstrapLifecycleCandidateV3
+  \/ CommitInitialLifecycleRootV3
+  \/ ValidateRootSelectedLifecycleV3
+  \/ CleanupValidatedLifecycleArtifactsV3
   \/ PersistFreshRequesterEpoch
   \/ PublishFreshRequesterEpoch
   \/ CompleteRequesterEpoch
@@ -643,45 +1413,82 @@ Next ==
   \/ CrashAfterRequesterEpochPersistence
   \/ RestoreRequesterEpochCounterAfterCrash
   \/ RejectRequesterEpochOverflow
-  \/ RejectActiveLifecycleCompaction
-  \/ TerminalizeServerStream
+  \/ RejectActiveOrdinaryRollover
+  \/ RejectSameRosterFullTable
+  \/ AuthenticateServerClosePrefix
   \/ TerminalizeRequestGate
   \/ TerminalizeTransfer
   \/ TerminalizeFlush
-  \/ PersistSuccessorLifecycleSnapshotV2
-  \/ FailSuccessorLifecycleSnapshotV2Persistence
-  \/ CrashBeforeLifecycleSnapshotV2Persistence
-  \/ RecoverPredecessorLifecycleSnapshotV2
-  \/ CrashAfterLifecycleSnapshotV2Persistence
-  \/ RestoreSuccessorLifecycleSnapshotV2AfterCrash
-  \/ PublishPersistedLifecycleSnapshotV2
+  \/ PublishSuccessorLifecycleStateSlotV3
+  \/ FailSuccessorLifecycleStateSlotV3Persistence
+  \/ CrashBeforeLifecycleStateSlotV3Publication
+  \/ CrashAfterLifecycleStateSlotV3Publication
+  \/ FailSuccessorLifecycleRootV3Persistence
+  \/ RecoverPredecessorLifecycleV3
+  \/ CommitSuccessorLifecycleRootV3
+  \/ CrashAfterLifecycleRootV3Commit
+  \/ RestoreSuccessorLifecycleV3AfterCrash
+  \/ PublishCommittedLifecycleV3ToMemory
+  \/ ActivateRestoredLifecycleV3Successor
   \/ ActivateSameRosterSuccessor
-  \/ RejectGenerationOverflow
+  \/ RejectServiceGenerationOverflow
+  \/ RejectLifecycleRootGenerationOverflow
   \/ ObserveLateOldWriterCallback
 
 TypedRolloverSpec ==
   /\ Init
   /\ [][Next]_typedRolloverVars
 
-ResponsiveTypedRolloverSpec ==
-  /\ TypedRolloverSpec
+(***************************************************************************
+The responsive sub-specification is deliberately narrower than Next.  It is
+the no-failure durable-exact-output corridor: it excludes crash, persistence
+failure, rejection, requester-epoch, and ordinary-terminalization actions.
+Consequently the two checked generation budgets cannot be consumed by an
+unrelated action, and retaining the sealed exact-output receipt continuously
+enables DurableExactOutput authority.  Crash-recovery and ordinary
+terminalization liveness remain separate proof obligations.
+***************************************************************************)
+ResponsiveNoFailureNext ==
+  \/ ValidateFinality
+  \/ CloseWorkerIngress
+  \/ ClearOneWorkerExactOutput
+  \/ BuildImmediateSuccessor
+  \/ SealAppliedHeightOutputHandoff
+  \/ RetainExactHandoffReceipt
+  \/ PublishInitialLifecycleStateSlotV3
+  \/ ValidateBootstrapLifecycleCandidateV3
+  \/ CommitInitialLifecycleRootV3
+  \/ ValidateRootSelectedLifecycleV3
+  \/ CleanupValidatedLifecycleArtifactsV3
+  \/ PublishSuccessorLifecycleStateSlotV3
+  \/ CommitSuccessorLifecycleRootV3
+  \/ PublishCommittedLifecycleV3ToMemory
+
+ResponsiveNoFailureTypedRolloverSpec ==
+  /\ Init
+  /\ [][ResponsiveNoFailureNext]_typedRolloverVars
   /\ WF_typedRolloverVars(CloseWorkerIngress)
   /\ WF_typedRolloverVars(ClearOneWorkerExactOutput)
   /\ WF_typedRolloverVars(BuildImmediateSuccessor)
   /\ WF_typedRolloverVars(SealAppliedHeightOutputHandoff)
   /\ WF_typedRolloverVars(RetainExactHandoffReceipt)
-  /\ WF_typedRolloverVars(TerminalizeServerStream)
-  /\ WF_typedRolloverVars(TerminalizeRequestGate)
-  /\ WF_typedRolloverVars(TerminalizeTransfer)
-  /\ WF_typedRolloverVars(TerminalizeFlush)
-  /\ WF_typedRolloverVars(PersistSuccessorLifecycleSnapshotV2)
-  /\ WF_typedRolloverVars(PublishPersistedLifecycleSnapshotV2)
-  /\ WF_typedRolloverVars(ActivateSameRosterSuccessor)
+  /\ WF_typedRolloverVars(PublishInitialLifecycleStateSlotV3)
+  /\ WF_typedRolloverVars(ValidateBootstrapLifecycleCandidateV3)
+  /\ WF_typedRolloverVars(CommitInitialLifecycleRootV3)
+  /\ WF_typedRolloverVars(ValidateRootSelectedLifecycleV3)
+  /\ WF_typedRolloverVars(CleanupValidatedLifecycleArtifactsV3)
+  /\ WF_typedRolloverVars(PublishSuccessorLifecycleStateSlotV3)
+  /\ WF_typedRolloverVars(CommitSuccessorLifecycleRootV3)
+  /\ WF_typedRolloverVars(PublishCommittedLifecycleV3ToMemory)
+
+ResponsiveTypedRolloverSpec ==
+  ResponsiveNoFailureTypedRolloverSpec
 
 TypedRolloverTypeInvariant ==
   state \in
     [targetRoster: RosterRelations,
      compactionCause: CompactionCauses,
+     currentRoster: RosterRelations,
      finalityValidated: BOOLEAN,
      workerIngressClosed: BOOLEAN,
      workerOutstanding: 0..InitialWorkerOutstanding,
@@ -694,7 +1501,7 @@ TypedRolloverTypeInvariant ==
      receiptArtifact: Artifacts \cup {NoIdentity},
      retainedSuccessor: Successors \cup {NoIdentity},
      receiptConsumeCount: 0..1,
-     serviceGeneration: InitialGeneration..GenerationLimit,
+     serviceGeneration: InitialServiceGeneration..ServiceGenerationLimit,
      nextStreamEpoch: InitialNextStreamEpoch..StreamEpochLimit,
      requesterEpochPhase: RequesterEpochPhases,
      pendingStreamEpoch: 0..StreamEpochLimit,
@@ -703,10 +1510,24 @@ TypedRolloverTypeInvariant ==
      skippedStreamEpoch: 0..StreamEpochLimit,
      serverStreamState: LifecycleEntryStates,
      requestGateState: LifecycleEntryStates,
+     serverClosePrefix: 0..HighestSemanticSequence,
+     authenticatedCloseHistory: 0..HighestSemanticSequence,
+     recordedRetiredClosePrefix: 0..HighestSemanticSequence,
      transferState: LifecycleEntryStates,
      flushState: LifecycleEntryStates,
-     durableLifecycleSnapshotV2: LifecycleSnapshotV2Set,
-     lifecycleSnapshotPhase: LifecycleSnapshotPhases,
+     durableLifecycleRootV3: LifecycleRootV3Set,
+     durableLifecycleStateSlotsV3: LifecycleStateSlotsV3Set,
+     candidateLifecycleSnapshotV3: LifecycleSnapshotV3Set,
+     candidatePresent: BOOLEAN,
+     candidateStateSlot: StateSlots,
+     candidateSemanticallyValidated: BOOLEAN,
+     lifecycleCommitPhase: LifecycleCommitPhases,
+     pendingRolloverAuthority: PendingRolloverAuthorities,
+     durableJournalValidated: BOOLEAN,
+     validatedRestartObserved: BOOLEAN,
+     restartFenceAuthorized: BOOLEAN,
+     crashArtifactsPresent: BOOLEAN,
+     cleanupPerformed: BOOLEAN,
      retryableChunk: 0..1,
      successorActive: BOOLEAN,
      transitionAuthority: TransitionAuthorities,
@@ -718,7 +1539,8 @@ TypedRolloverTypeInvariant ==
      predecessorMismatchRejected: BOOLEAN,
      wrongSuccessorRejected: BOOLEAN,
      lateOldCallbackObserved: BOOLEAN,
-     snapshotCrashObserved: BOOLEAN,
+     stateSlotCrashObserved: BOOLEAN,
+     rootCrashObserved: BOOLEAN,
      epochCrashObserved: BOOLEAN]
 
 CompactionGeometryInvariant ==
@@ -732,11 +1554,13 @@ ReceiptLifecycleInvariant ==
   /\ (state.receiptStage # "Absent" =>
         /\ state.ownerSealed
         /\ ExactPredecessorReceipt)
-  /\ (state.receiptStage \in {"Retained", "Consumed"} =>
+  /\ (state.receiptStage \in {"Retained", "Lost", "Consumed"} =>
         /\ ExactSuccessorConstruction
         /\ state.retainedSuccessor = ExpectedSuccessor)
   /\ (state.receiptStage = "Consumed" =>
         state.receiptConsumeCount = 1)
+  /\ (state.receiptStage = "Lost" =>
+        state.receiptConsumeCount = 0)
 
 FinalSealRejectsLateEnqueueInvariant ==
   /\ (state.ownerSealed => FinalExactOutputSeal)
@@ -762,68 +1586,141 @@ FailureLatchInvariant ==
   /\ (state.restartRequired => ~state.successorActive)
   /\ (~state.restartRequired => state.failureReason = "None")
 
-SoleLifecycleSnapshotV2Invariant ==
-  /\ state.durableLifecycleSnapshotV2 \in LifecycleSnapshotV2Set
-  /\ state.durableLifecycleSnapshotV2.version = 2
-  /\ state.serviceGeneration <=
-       state.durableLifecycleSnapshotV2.generation
-  /\ state.nextStreamEpoch <=
-       state.durableLifecycleSnapshotV2.nextStreamEpoch
+RootAnchoredLifecycleV3Invariant ==
+  /\ state.durableLifecycleRootV3 \in LifecycleRootV3Set
+  /\ state.durableLifecycleRootV3.version = 3
+  /\ LifecycleRootShapeIsValid(state.durableLifecycleRootV3)
+  /\ state.durableLifecycleStateSlotsV3 \in
+       LifecycleStateSlotsV3Set
+  /\ (state.durableLifecycleRootV3.shape = "Committed" =>
+        /\ RootSelectedLifecyclePairMatches(state)
+        /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))
+        /\ state.durableLifecycleRootV3.rootGeneration =
+             DurableSnapshot(state).rootGeneration
+        /\ state.serviceGeneration <=
+             DurableSnapshot(state).serviceGeneration
+        /\ state.nextStreamEpoch <=
+             DurableSnapshot(state).nextStreamEpoch)
+  /\ (state.durableLifecycleRootV3.shape = "Bootstrap" =>
+        state.lifecycleCommitPhase \in
+          {"Bootstrap", "BootstrapStatePublished"})
+  /\ (state.candidatePresent =>
+        /\ state.candidateLifecycleSnapshotV3.version = 3
+        /\ state.candidateStateSlot \in StateSlots
+        /\ state.durableLifecycleStateSlotsV3[
+             state.candidateStateSlot] =
+             state.candidateLifecycleSnapshotV3)
 
-LifecycleSnapshotPhaseInvariant ==
-  CASE state.lifecycleSnapshotPhase = "Current" ->
-         /\ state.serviceGeneration =
-              state.durableLifecycleSnapshotV2.generation
-         /\ state.serverStreamState =
-              state.durableLifecycleSnapshotV2.serverStreams
-         /\ state.requestGateState =
-              state.durableLifecycleSnapshotV2.requestGates
+SemanticValidationBeforeCleanupInvariant ==
+  /\ (state.cleanupPerformed => state.durableJournalValidated)
+  /\ (~state.crashArtifactsPresent /\ state.cleanupPerformed =>
+        /\ state.durableLifecycleRootV3.shape = "Committed"
+        /\ RootSelectedLifecyclePairMatches(state)
+        /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state)))
+  /\ (~state.durableJournalValidated =>
+        ~state.cleanupPerformed)
+
+LifecycleCommitPhaseInvariant ==
+  CASE state.lifecycleCommitPhase = "Bootstrap" ->
+         /\ state.durableLifecycleRootV3 =
+              BootstrapLifecycleRootV3
+         /\ ~state.candidatePresent
+    [] state.lifecycleCommitPhase = "BootstrapStatePublished" ->
+         /\ state.durableLifecycleRootV3 =
+              BootstrapLifecycleRootV3
+         /\ state.candidatePresent
+         /\ state.candidateStateSlot =
+              LifecycleStateSlot(InitialRootGeneration)
+         /\ state.candidateLifecycleSnapshotV3 =
+              InitialLifecycleSnapshotV3
+    [] state.lifecycleCommitPhase = "Current" ->
+         /\ ~state.candidatePresent
+         /\ LifecycleTablesMatchDurableSnapshotV3
          /\ (state.nextStreamEpoch =
-               state.durableLifecycleSnapshotV2.nextStreamEpoch
+               DurableSnapshot(state).nextStreamEpoch
              \/ RequesterEpochPersistenceAheadOfMemory)
-    [] state.lifecycleSnapshotPhase = "Persisted" ->
-         /\ LifecycleSnapshotV2AheadOfMemory
-         /\ AllOldLifecycleTerminal
-    [] state.lifecycleSnapshotPhase = "Restored" ->
-         /\ LifecycleMemoryMatchesDurableSnapshotV2
+    [] state.lifecycleCommitPhase = "StateSlotPublished" ->
+         /\ DurableCandidateStateSlotAheadOfRoot
+         /\ LifecycleMemoryMatchesDurableSnapshotV3
+         /\ (state.restartRequired
+               \/ /\ state.candidateSemanticallyValidated
+                  /\ state.pendingRolloverAuthority \in
+                       ChangedRosterAuthorities)
+    [] state.lifecycleCommitPhase = "RootCommitted" ->
+         /\ RootCommittedSuccessorAheadOfMemory
+         /\ (state.restartRequired
+               \/ state.pendingRolloverAuthority \in
+                    ChangedRosterAuthorities)
+    [] state.lifecycleCommitPhase = "Restored" ->
+         /\ ~state.candidatePresent
+         /\ LifecycleMemoryMatchesDurableSnapshotV3
          /\ state.serverStreamState = "Empty"
          /\ state.requestGateState = "Empty"
          /\ state.transferState = "Empty"
          /\ state.flushState = "Empty"
-    [] state.lifecycleSnapshotPhase = "Published" ->
-         /\ LifecycleMemoryMatchesDurableSnapshotV2
+    [] state.lifecycleCommitPhase = "Published" ->
+         /\ ~state.candidatePresent
+         /\ LifecycleMemoryMatchesDurableSnapshotV3
          /\ state.serverStreamState = "Empty"
          /\ state.requestGateState = "Empty"
          /\ state.transferState = "Empty"
          /\ state.flushState = "Empty"
 
-TerminalOnlyGenerationAdvanceInvariant ==
-  /\ (state.durableLifecycleSnapshotV2.generation >
+AuthorityGatedGenerationAdvanceInvariant ==
+  /\ (state.pendingRolloverAuthority = "AuthenticatedTerminal" =>
+        AllOldLifecycleTerminal)
+  /\ (state.pendingRolloverAuthority = "DurableExactOutput" =>
+        /\ state.durableJournalValidated
+        /\ ExactRetainedMergeSidecars)
+  /\ (state.pendingRolloverAuthority = "RestartRestore" =>
+        /\ state.durableJournalValidated
+        /\ state.validatedRestartObserved)
+  /\ (state.restartFenceAuthorized =>
+        /\ state.durableJournalValidated
+        /\ state.validatedRestartObserved
+        /\ state.targetRoster = "ChangedRoster")
+  /\ (DurableSnapshot(state).serviceGeneration >
         state.serviceGeneration =>
-        /\ AllOldLifecycleTerminal
-        /\ state.durableLifecycleSnapshotV2.serverStreams = "Empty"
-        /\ state.durableLifecycleSnapshotV2.requestGates = "Empty")
-  /\ (state.serviceGeneration > InitialGeneration =>
+        /\ ChangedRosterReplacementNeeded
+        /\ DurableSnapshot(state).roster = "ChangedRoster"
+        /\ DurableSnapshot(state).serverStreams = "Empty"
+        /\ DurableSnapshot(state).requestGates = "Empty"
+        /\ DurableSnapshot(state).serverClosePrefix = 0)
+  /\ (state.serviceGeneration > InitialServiceGeneration =>
+        /\ state.currentRoster = "ChangedRoster"
         /\ state.serverStreamState = "Empty"
         /\ state.requestGateState = "Empty"
         /\ state.transferState = "Empty"
-        /\ state.flushState = "Empty")
-  /\ (state.transitionAuthority = "LifecycleV2" =>
-        /\ state.lifecycleSnapshotPhase = "Published"
-        /\ state.serviceGeneration =
-             state.durableLifecycleSnapshotV2.generation
+        /\ state.flushState = "Empty"
+        /\ state.transitionAuthority \in ChangedRosterAuthorities)
+  /\ (state.transitionAuthority = "AuthenticatedTerminal" =>
+        /\ state.authenticatedCloseHistory =
+             HighestSemanticSequence
+        /\ state.recordedRetiredClosePrefix =
+             HighestSemanticSequence)
+  /\ (state.transitionAuthority = "DurableExactOutput" =>
+        /\ state.durableJournalValidated
         /\ state.receiptStage = "Consumed")
+  /\ (state.transitionAuthority = "RestartRestore" =>
+        /\ state.durableJournalValidated
+        /\ state.validatedRestartObserved)
 
 SameRosterTransportPreservationInvariant ==
-  state.transitionAuthority = "SameRoster" =>
-    /\ state.targetRoster = "SameRoster"
-    /\ state.compactionCause = "NoCompaction"
-    /\ state.serviceGeneration = InitialGeneration
+  (/\ state.targetRoster = "SameRoster"
+   /\ state.durableLifecycleRootV3.shape = "Committed") =>
+    /\ state.currentRoster = "SameRoster"
+    /\ state.serviceGeneration = InitialServiceGeneration
+    /\ DurableSnapshot(state).serviceGeneration =
+         InitialServiceGeneration
     /\ state.serverStreamState = "Active"
     /\ state.requestGateState = "Active"
     /\ state.transferState = "Active"
     /\ state.flushState = "Active"
     /\ state.retryableChunk = 1
+    /\ ~state.candidatePresent
+    /\ state.lifecycleCommitPhase = "Current"
+    /\ state.transitionAuthority \in
+         {"None", "SameRosterPreserved"}
 
 RequesterEpochInvariant ==
   /\ state.lastCompletedStreamEpoch < state.nextStreamEpoch
@@ -837,28 +1734,48 @@ RequesterEpochInvariant ==
         /\ state.activeStreamEpoch # state.skippedStreamEpoch)
   /\ (state.skippedStreamEpoch # 0 =>
         state.skippedStreamEpoch <
-          state.durableLifecycleSnapshotV2.nextStreamEpoch)
+          DurableSnapshot(state).nextStreamEpoch)
 
 CrashRecoveryInvariant ==
-  /\ (state.snapshotCrashObserved =>
-        state.durableLifecycleSnapshotV2.generation =
-          GenerationLimit)
+  /\ (state.stateSlotCrashObserved =>
+        state.validatedRestartObserved
+          \/ state.restartRequired)
+  /\ (state.rootCrashObserved =>
+        state.validatedRestartObserved
+          \/ state.restartRequired)
   /\ (state.epochCrashObserved =>
         state.skippedStreamEpoch # 0)
   /\ (state.failureReason =
-        "CrashAfterLifecycleSnapshotV2Persistence" =>
-        /\ state.snapshotCrashObserved
-        /\ LifecycleSnapshotV2AheadOfMemory)
+        "CrashAfterLifecycleStateSlotV3Publication" =>
+        /\ state.stateSlotCrashObserved
+        /\ DurableCandidateStateSlotAheadOfRoot
+        /\ ~state.candidateSemanticallyValidated)
+  /\ (state.failureReason = "CrashAfterLifecycleRootV3Commit" =>
+        /\ state.rootCrashObserved
+        /\ RootCommittedSuccessorAheadOfMemory
+        /\ ~state.candidateSemanticallyValidated)
   /\ (state.failureReason =
         "CrashAfterRequesterEpochPersistence" =>
         /\ state.epochCrashObserved
         /\ RequesterEpochPersistenceAheadOfMemory)
 
+NoForgedAuthenticatedClosePrefixInvariant ==
+  /\ state.serverClosePrefix <= state.authenticatedCloseHistory
+  /\ state.recordedRetiredClosePrefix <=
+       state.authenticatedCloseHistory
+  /\ (state.serverStreamState = "Terminal" =>
+        state.serverClosePrefix = HighestSemanticSequence)
+  /\ (state.candidatePresent =>
+        state.candidateLifecycleSnapshotV3.serverClosePrefix = 0)
+  /\ (DurableSnapshot(state).serviceGeneration >
+        state.serviceGeneration =>
+        DurableSnapshot(state).serverClosePrefix = 0)
+
 LateOldCallbackIsolationInvariant ==
   state.lateOldCallbackObserved =>
     /\ state.successorActive
-    /\ state.transitionAuthority = "LifecycleV2"
-    /\ state.lifecycleSnapshotPhase = "Published"
+    /\ state.transitionAuthority \in ChangedRosterAuthorities
+    /\ state.lifecycleCommitPhase = "Published"
     /\ state.serverStreamState = "Empty"
     /\ state.requestGateState = "Empty"
 
@@ -869,12 +1786,14 @@ TypedRolloverSafetyInvariant ==
   /\ FinalSealRejectsLateEnqueueInvariant
   /\ MismatchRejectionInvariant
   /\ FailureLatchInvariant
-  /\ SoleLifecycleSnapshotV2Invariant
-  /\ LifecycleSnapshotPhaseInvariant
-  /\ TerminalOnlyGenerationAdvanceInvariant
+  /\ RootAnchoredLifecycleV3Invariant
+  /\ SemanticValidationBeforeCleanupInvariant
+  /\ LifecycleCommitPhaseInvariant
+  /\ AuthorityGatedGenerationAdvanceInvariant
   /\ SameRosterTransportPreservationInvariant
   /\ RequesterEpochInvariant
   /\ CrashRecoveryInvariant
+  /\ NoForgedAuthenticatedClosePrefixInvariant
   /\ LateOldCallbackIsolationInvariant
 
 CapacityRejectionStepSafety ==
@@ -883,51 +1802,121 @@ CapacityRejectionStepSafety ==
     =>
       /\ LifecycleMemory(state') = LifecycleMemory(state)
       /\ DurableLifecycle(state') = DurableLifecycle(state)
+      /\ CandidateLifecycle(state') = CandidateLifecycle(state)
 
-AtomicLifecycleSnapshotV2PersistenceStepSafety ==
-  state'.durableLifecycleSnapshotV2.generation >
-    state.durableLifecycleSnapshotV2.generation
+StateSlotBeforeRootCommitStepSafety ==
+  (/\ ~state.candidatePresent
+   /\ state'.candidatePresent)
     =>
-      /\ AllOldLifecycleTerminal
-      /\ state'.durableLifecycleSnapshotV2 =
-           LifecycleSnapshotV2(
-             state.serviceGeneration + 1,
-             state.nextStreamEpoch,
-             "Empty",
-             "Empty")
+      /\ state'.candidateLifecycleSnapshotV3.rootGeneration =
+           state.durableLifecycleRootV3.rootGeneration + 1
+      /\ state'.candidateStateSlot =
+           LifecycleStateSlot(
+             state'.candidateLifecycleSnapshotV3.rootGeneration)
+      /\ state'.candidateStateSlot #
+           SelectedLifecycleStateSlot(state)
+      /\ state'.candidateStateSlot =
+           1 - SelectedLifecycleStateSlot(state)
+      /\ state'.durableLifecycleRootV3 =
+           state.durableLifecycleRootV3
+      /\ state'.durableLifecycleStateSlotsV3[
+           state'.candidateStateSlot] =
+           state'.candidateLifecycleSnapshotV3
+      /\ \A slot \in StateSlots \ {state'.candidateStateSlot}:
+           state'.durableLifecycleStateSlotsV3[slot] =
+             state.durableLifecycleStateSlotsV3[slot]
+      /\ SelectedLifecycleSnapshotV3(state') =
+           SelectedLifecycleSnapshotV3(state)
       /\ LifecycleMemory(state') = LifecycleMemory(state)
 
-LifecycleSnapshotV2PublicationStepSafety ==
+RootCommitBeforeMemoryPublicationStepSafety ==
+  DurableSnapshot(state').serviceGeneration >
+    DurableSnapshot(state).serviceGeneration
+    =>
+      /\ state.lifecycleCommitPhase = "StateSlotPublished"
+      /\ state.candidatePresent
+      /\ state'.durableLifecycleRootV3 =
+           LifecycleRootV3(state.candidateLifecycleSnapshotV3)
+      /\ SelectedLifecycleStateSlot(state') =
+           state.candidateStateSlot
+      /\ state'.durableLifecycleStateSlotsV3 =
+           state.durableLifecycleStateSlotsV3
+      /\ LifecycleMemory(state') = LifecycleMemory(state)
+
+RootGenerationMonotonicStepSafety ==
+  /\ state'.durableLifecycleRootV3.rootGeneration >=
+       state.durableLifecycleRootV3.rootGeneration
+  /\ (state'.durableLifecycleRootV3.rootGeneration =
+        state.durableLifecycleRootV3.rootGeneration =>
+        /\ state'.durableLifecycleRootV3 =
+             state.durableLifecycleRootV3
+        /\ SelectedLifecycleSnapshotV3(state') =
+             SelectedLifecycleSnapshotV3(state))
+  /\ (state'.durableLifecycleRootV3.rootGeneration >
+        state.durableLifecycleRootV3.rootGeneration =>
+        /\ state'.durableLifecycleRootV3.rootGeneration =
+             state.durableLifecycleRootV3.rootGeneration + 1
+        /\ state'.durableLifecycleRootV3.shape = "Committed"
+        /\ SelectedLifecycleStateSlot(state') =
+             LifecycleStateSlot(
+               state'.durableLifecycleRootV3.rootGeneration)
+        /\ SelectedLifecycleStateSlot(state') #
+             SelectedLifecycleStateSlot(state)
+        /\ SelectedLifecycleStateSlot(state') =
+             1 - SelectedLifecycleStateSlot(state)
+        /\ state'.durableLifecycleRootV3.snapshotDigest =
+             LifecycleSnapshotDigest(
+               SelectedLifecycleSnapshotV3(state')))
+
+LifecycleV3PublicationStepSafety ==
   state'.serviceGeneration > state.serviceGeneration
     =>
-      /\ state.durableLifecycleSnapshotV2.generation =
+      /\ DurableSnapshot(state).serviceGeneration =
            state'.serviceGeneration
-      /\ state.durableLifecycleSnapshotV2.serverStreams = "Empty"
-      /\ state.durableLifecycleSnapshotV2.requestGates = "Empty"
+      /\ DurableSnapshot(state).serverStreams = "Empty"
+      /\ DurableSnapshot(state).requestGates = "Empty"
+      /\ DurableSnapshot(state).serverClosePrefix = 0
       /\ state'.serverStreamState = "Empty"
       /\ state'.requestGateState = "Empty"
       /\ state'.transferState = "Empty"
       /\ state'.flushState = "Empty"
+
+ForcedFenceDoesNotForgeCloseStepSafety ==
+  (/\ state'.serviceGeneration > state.serviceGeneration
+   /\ state'.transitionAuthority \in
+        {"DurableExactOutput", "RestartRestore"})
+    =>
+      state'.recordedRetiredClosePrefix =
+        state.recordedRetiredClosePrefix
 
 RequesterEpochUseStepSafety ==
   (/\ state.activeStreamEpoch = 0
    /\ state'.activeStreamEpoch # 0)
     =>
       /\ state.requesterEpochPhase = "Persisted"
-      /\ state.durableLifecycleSnapshotV2.nextStreamEpoch >
+      /\ DurableSnapshot(state).nextStreamEpoch >
            state'.activeStreamEpoch
       /\ state'.nextStreamEpoch =
-           state.durableLifecycleSnapshotV2.nextStreamEpoch
+           DurableSnapshot(state).nextStreamEpoch
       /\ state'.activeStreamEpoch # state.skippedStreamEpoch
 
 CapacityRejectionActionProperty ==
   [][CapacityRejectionStepSafety]_typedRolloverVars
 
-AtomicLifecycleSnapshotV2PersistenceActionProperty ==
-  [][AtomicLifecycleSnapshotV2PersistenceStepSafety]_typedRolloverVars
+StateSlotBeforeRootCommitActionProperty ==
+  [][StateSlotBeforeRootCommitStepSafety]_typedRolloverVars
 
-LifecycleSnapshotV2PublicationActionProperty ==
-  [][LifecycleSnapshotV2PublicationStepSafety]_typedRolloverVars
+RootCommitBeforeMemoryPublicationActionProperty ==
+  [][RootCommitBeforeMemoryPublicationStepSafety]_typedRolloverVars
+
+RootGenerationMonotonicActionProperty ==
+  [][RootGenerationMonotonicStepSafety]_typedRolloverVars
+
+LifecycleV3PublicationActionProperty ==
+  [][LifecycleV3PublicationStepSafety]_typedRolloverVars
+
+ForcedFenceDoesNotForgeCloseActionProperty ==
+  [][ForcedFenceDoesNotForgeCloseStepSafety]_typedRolloverVars
 
 RequesterEpochUseActionProperty ==
   [][RequesterEpochUseStepSafety]_typedRolloverVars
@@ -940,12 +1929,15 @@ ChangedRosterSuccessorActiveWithoutRestart ==
   /\ state.targetRoster = "ChangedRoster"
   /\ state.successorActive
   /\ ~state.restartRequired
-  /\ state.transitionAuthority = "LifecycleV2"
+  /\ state.transitionAuthority \in ChangedRosterAuthorities
 
 ResponsiveChangedRosterRolloverLiveness ==
-  ResponsiveTypedRolloverSpec =>
+  ResponsiveNoFailureTypedRolloverSpec =>
     ((/\ state.targetRoster = "ChangedRoster"
-      /\ state.finalityValidated)
+      /\ state.finalityValidated
+      /\ state.serviceGeneration < ServiceGenerationLimit
+      /\ state.durableLifecycleRootV3.rootGeneration <
+           RootGenerationLimit)
       ~> ChangedRosterSuccessorActiveWithoutRestart)
 
 =============================================================================
