@@ -39290,6 +39290,18 @@ pub(crate) fn committed_transactions_snapshot(
         .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
 
+#[cfg(feature = "app_api")]
+fn committed_transactions_indexed_snapshot(
+    state: &CoreState,
+    filter: iroha_data_model::query::dsl::CompoundPredicate<
+        iroha_data_model::query::CommittedTransaction,
+    >,
+) -> Result<Vec<iroha_data_model::query::CommittedTransaction>> {
+    let view = state.view();
+    iroha_core::smartcontracts::isi::tx::committed_transactions_indexed_snapshot(&view, filter)
+        .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
+}
+
 /// POST /v1/accounts/{account_id}/transactions/query
 ///
 /// Body: JSON `QueryEnvelope` with optional `filter`, `select`, and `pagination`.
@@ -39366,7 +39378,6 @@ pub async fn handle_v1_account_transactions_with_policy(
     record_account_literal_selection(&telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY);
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
-    let committed_txs = committed_transactions_snapshot(state.as_ref())?;
     let allowed_asset_selector = allowed_asset_definition_id
         .clone()
         .map(TxHistoryAssetSelector::DefinitionId);
@@ -39397,6 +39408,11 @@ pub async fn handle_v1_account_transactions_with_policy(
         let _fetch_size = limits
             .clamp_fetch_size(envelope.fetch_size)
             .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+        let predicate = envelope
+            .filter
+            .as_ref()
+            .map_or(CompoundPredicate::PASS, tx_predicate_from_filter);
+        let committed_txs = committed_transactions_indexed_snapshot(state.as_ref(), predicate)?;
         let rows = committed_txs
             .iter()
             .filter(|tx| tx_matches_account_history_subject(tx, &account_id))
@@ -39415,6 +39431,7 @@ pub async fn handle_v1_account_transactions_with_policy(
         );
     }
 
+    let committed_txs = committed_transactions_snapshot(state.as_ref())?;
     let count_mode = app_count_mode(
         envelope.count_mode.as_deref(),
         ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
@@ -39789,7 +39806,6 @@ async fn handle_v1_transactions_query_scoped_with_policy(
 
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
-    let committed_txs = committed_transactions_snapshot(state.as_ref())?;
     let allowed_asset_selector = allowed_asset_definition_id
         .clone()
         .map(TxHistoryAssetSelector::DefinitionId);
@@ -39819,6 +39835,11 @@ async fn handle_v1_transactions_query_scoped_with_policy(
         let _fetch_size = limits
             .clamp_fetch_size(envelope.fetch_size)
             .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+        let predicate = envelope
+            .filter
+            .as_ref()
+            .map_or(CompoundPredicate::PASS, tx_predicate_from_filter);
+        let committed_txs = committed_transactions_indexed_snapshot(state.as_ref(), predicate)?;
         let rows = committed_txs
             .iter()
             .filter(|tx| {
@@ -39841,6 +39862,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
         );
     }
 
+    let committed_txs = committed_transactions_snapshot(state.as_ref())?;
     let count_mode = app_count_mode(envelope.count_mode.as_deref(), endpoint);
     let page = {
         let predicate = if let Some(ref expr_wrap) = envelope.filter {
@@ -43353,6 +43375,61 @@ mod tx_query_integration_smoke {
         let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
         assert_eq!(v["items"].as_array().unwrap().len(), 0);
         assert_eq!(v["total"].as_u64(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn transactions_query_aggregate_uses_sparse_index_for_an_exact_miss() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = iroha_core::state::State::new_for_testing(World::default(), kura, query);
+        let missing_entrypoint = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            Hash::new(b"missing-aggregate-entrypoint"),
+        )
+        .to_string();
+        let env = crate::filter::QueryEnvelope {
+            query: Some("transaction-aggregate-sparse-miss".to_owned()),
+            filter: Some(crate::filter::FilterExpr::Eq(
+                crate::filter::FieldPath("entrypoint_hash".into()),
+                norito::json::Value::String(missing_entrypoint),
+            )),
+            select: None,
+            aggregate: Some(crate::filter::AggregateSpec {
+                group_by: vec![crate::filter::FieldPath("metadata.readiness_probe".into())],
+                metrics: vec![crate::filter::AggregateMetric {
+                    alias: "occurrences".to_owned(),
+                    r#fn: crate::filter::AggregateFn::Count,
+                    field: None,
+                }],
+                having: None,
+            }),
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(1),
+                offset: 0,
+            },
+            fetch_size: None,
+            count_mode: Some("exact".to_owned()),
+        };
+
+        let response = handle_v1_transactions_query(
+            Arc::new(state),
+            crate::utils::extractors::NoritoJson(env),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("aggregate sparse miss")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let value: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        assert!(value["items"].as_array().unwrap().is_empty());
+        assert_eq!(value["total"].as_u64(), Some(0));
+        assert_eq!(value["has_more"].as_bool(), Some(false));
+        assert_eq!(value["count_mode"].as_str(), Some("exact"));
+        assert_eq!(value["indexed_height"].as_u64(), Some(0));
+        assert!(value["indexed_block_hash"].is_null());
+        assert_eq!(value["query_source"].as_str(), Some("live"));
     }
 
     #[tokio::test]

@@ -3,7 +3,7 @@
 use thiserror::Error;
 
 use super::{
-    VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, VegaTranscriptError,
+    VegaCurveError, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, VegaTranscriptError,
     VegaTranscriptV1,
     algebra::{AlgebraError, eq_evals, inner_product, log2_exact},
     commitment::{Commitment, CommitmentError, CommitmentKey, msm},
@@ -24,6 +24,8 @@ pub(super) enum HyraxError {
     Algebra(#[from] AlgebraError),
     #[error(transparent)]
     Commitment(#[from] CommitmentError),
+    #[error(transparent)]
+    Curve(#[from] VegaCurveError),
     #[error(transparent)]
     Transcript(#[from] VegaTranscriptError),
 }
@@ -93,10 +95,7 @@ pub(super) fn prove_inner_product(
         randomness.d_vec,
         &key.generators()[..randomness.d_vec.len()],
     )?
-    .add(
-        key.hiding_generator()
-            .mul_scalar(randomness.r_delta),
-    );
+    .add(key.hiding_generator().mul_scalar(randomness.r_delta));
     let beta = evaluation_key.generators()[0]
         .mul_scalar(inner_product(b_vec, randomness.d_vec)?)
         .add(
@@ -157,11 +156,8 @@ pub(super) fn verify_inner_product(
     let challenge = transcript.squeeze(b"r")?;
 
     let first_left = comm_a.mul_scalar(challenge).add(argument.delta);
-    let first_right = msm(
-        &argument.z_vec,
-        &key.generators()[..argument.z_vec.len()],
-    )?
-    .add(key.hiding_generator().mul_scalar(argument.z_delta));
+    let first_right = msm(&argument.z_vec, &key.generators()[..argument.z_vec.len()])?
+        .add(key.hiding_generator().mul_scalar(argument.z_delta));
     if first_left != first_right {
         return Err(HyraxError::InvalidInnerProductProof);
     }
@@ -249,10 +245,7 @@ pub(super) fn verify_evaluation(
     } else {
         let left_weights = eq_evals(&point[..row_variables])?;
         let right_weights = eq_evals(&point[row_variables..])?;
-        (
-            msm(&left_weights, commitment.points())?,
-            right_weights,
-        )
+        (msm(&left_weights, commitment.points())?, right_weights)
     };
     verify_inner_product(
         key,
@@ -275,10 +268,7 @@ pub(super) fn prove_direct(
     let padded_len = 1_usize
         .checked_shl(u32::try_from(point.len()).map_err(|_| HyraxError::InvalidDimension)?)
         .ok_or(HyraxError::InvalidDimension)?;
-    if polynomial.is_empty()
-        || polynomial.len() > padded_len
-        || !key.columns().is_power_of_two()
-    {
+    if polynomial.is_empty() || polynomial.len() > padded_len || !key.columns().is_power_of_two() {
         return Err(HyraxError::InvalidDimension);
     }
     let row_count = padded_len.div_ceil(key.columns());
@@ -332,13 +322,10 @@ pub(super) fn verify_direct(
         commitment.points()[0]
     } else {
         let left_weights = eq_evals(&point[..row_variables])?;
-        msm(
-            &left_weights[..commitment.len()],
-            commitment.points(),
-        )?
+        msm(&left_weights[..commitment.len()], commitment.points())?
     };
-    let expected = msm(values, key.generators())?
-        .add(key.hiding_generator().mul_scalar(combined_blinding));
+    let expected =
+        msm(values, key.generators())?.add(key.hiding_generator().mul_scalar(combined_blinding));
     if comm_lz != expected {
         return Err(HyraxError::InvalidDirectOpening);
     }
@@ -394,12 +381,7 @@ fn bind_rows(
     }
     let bound_blinding = inner_product(&left_weights, blindings)?;
     let comm_lz = msm(&left_weights, commitment.points())?;
-    Ok((
-        comm_lz,
-        right_weights,
-        bound_vector,
-        bound_blinding,
-    ))
+    Ok((comm_lz, right_weights, bound_vector, bound_blinding))
 }
 
 #[cfg(test)]
@@ -471,17 +453,19 @@ mod tests {
                 3 => bad.z_delta += Scalar::one(),
                 _ => bad.z_beta += Scalar::one(),
             }
-            assert!(verify_inner_product(
-                &key,
-                &evaluation_key,
-                comm_a,
-                &b,
-                comm_c,
-                4,
-                &bad,
-                &mut VegaTranscriptV1::new_neutron_nova(),
-            )
-            .is_err());
+            assert!(
+                verify_inner_product(
+                    &key,
+                    &evaluation_key,
+                    comm_a,
+                    &b,
+                    comm_c,
+                    4,
+                    &bad,
+                    &mut VegaTranscriptV1::new_neutron_nova(),
+                )
+                .is_err()
+            );
         }
     }
 
@@ -552,40 +536,44 @@ mod tests {
         let eval_commitment = evaluation_key
             .commit(&[s(1), s(0), s(0), s(0)], &[s(7)])
             .expect("one row");
-        assert!(prove_evaluation(
-            &key,
-            &evaluation_key,
-            &mut VegaTranscriptV1::new_neutron_nova(),
-            &commitment,
-            &polynomial,
-            &[s(5)],
-            &[s(9), s(11)],
-            &eval_commitment,
-            s(7),
-            InnerProductRandomness {
-                d_vec: &[s(1)],
-                r_delta: s(2),
-                r_beta: s(3),
-            },
-        )
-        .is_err());
-        assert!(verify_evaluation(
-            &key,
-            &evaluation_key,
-            &mut VegaTranscriptV1::new_neutron_nova(),
-            &commitment,
-            &[s(9), s(11), s(13)],
-            &eval_commitment,
-            &EvaluationArgument {
-                inner_product: InnerProductArgument {
-                    delta: key.generators()[0],
-                    beta: key.generators()[1],
-                    z_vec: vec![s(1); 4],
-                    z_delta: s(1),
-                    z_beta: s(1),
-                }
-            },
-        )
-        .is_err());
+        assert!(
+            prove_evaluation(
+                &key,
+                &evaluation_key,
+                &mut VegaTranscriptV1::new_neutron_nova(),
+                &commitment,
+                &polynomial,
+                &[s(5)],
+                &[s(9), s(11)],
+                &eval_commitment,
+                s(7),
+                InnerProductRandomness {
+                    d_vec: &[s(1)],
+                    r_delta: s(2),
+                    r_beta: s(3),
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            verify_evaluation(
+                &key,
+                &evaluation_key,
+                &mut VegaTranscriptV1::new_neutron_nova(),
+                &commitment,
+                &[s(9), s(11), s(13)],
+                &eval_commitment,
+                &EvaluationArgument {
+                    inner_product: InnerProductArgument {
+                        delta: key.generators()[0],
+                        beta: key.generators()[1],
+                        z_vec: vec![s(1); 4],
+                        z_delta: s(1),
+                        z_beta: s(1),
+                    }
+                },
+            )
+            .is_err()
+        );
     }
 }
