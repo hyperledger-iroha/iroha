@@ -1,7 +1,0 @@
-error[E0451]: field `cursor` of struct `QueryCursor` is private
-  --> tests/ui/fail/query_cursor_private.rs:11:9
-   |
-10 |     let _cursor = QueryCursor {
-   |                   ----------- in this type
-11 |         cursor: host_cursor(),
-   |         ^^^^^^ private field

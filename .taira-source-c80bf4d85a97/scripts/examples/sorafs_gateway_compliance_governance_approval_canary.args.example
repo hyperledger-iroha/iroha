@@ -1,9 +1,0 @@
-# Exercise governance-approval canonicalization with a non-production fixture.
---kind governance_approval
---probe-artifact scripts/examples/fixtures/gateway_compliance/governance_approval.json
---out artifacts/sorafs_gateway/governance-approval-canary.json
---deployment-id sorafs-gateway-release-42
---environment production
---generated-at-unix 1800699940
---now-unix 1800700000
---non-production-fixture

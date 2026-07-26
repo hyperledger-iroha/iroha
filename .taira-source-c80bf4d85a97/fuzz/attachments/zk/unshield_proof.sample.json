@@ -1,5 +1,0 @@
-{
-  "backend": "halo2/ipa",
-  "proof_b64": "BASE64_PROOF_BYTES",
-  "vk_ref": { "backend": "halo2/ipa", "name": "vk_unshield" }
-}

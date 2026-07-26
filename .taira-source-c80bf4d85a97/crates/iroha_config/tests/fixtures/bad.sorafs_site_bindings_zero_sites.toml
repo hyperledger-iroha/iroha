@@ -1,4 +1,0 @@
-extends = ["base.toml"]
-
-[sorafs.gateway.site_bindings]
-max_sites = 0

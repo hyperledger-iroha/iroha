@@ -1,4 +1,0 @@
-extends = "minimal_with_trusted_peers.toml"
-
-[network.soranet_handshake]
-kem_suite = "mlkem999"

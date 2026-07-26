@@ -1,6 +1,0 @@
-// Simple modulo example demonstrating `%` operator support.
-seiyaku ModuloDemo {
-    kotoage fn remainder(int a, int b) -> int authorize("Entry") {
-        return a % b;
-    }
-}

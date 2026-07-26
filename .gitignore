@@ -124,6 +124,12 @@ local.properties
 gradle-app.setting
 java/iroha_android/.gradle-home/
 
+# Root-level Taira source-certification scratch trees.
+/.taira-certified-parent/
+/.taira-index.*/
+/.taira-source-*/
+/.taira-verify-index.*/
+
 # Taira operator-local runtime inputs; keep populated copies out of public repos.
 configs/soranexus/taira/validator_roster.local.toml
 configs/soranexus/taira/validator_secrets.local.toml

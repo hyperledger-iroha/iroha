@@ -1,2 +1,0 @@
-# Vendored npm dependencies preserve exact registry bytes, including upstream whitespace.
-node_modules/** -whitespace

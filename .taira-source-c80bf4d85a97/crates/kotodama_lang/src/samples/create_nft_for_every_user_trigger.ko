@@ -1,6 +1,0 @@
-// Create one NFT per known account (snapshot-based convenience).
-seiyaku CreateNftForEveryUser {
-    kotoage fn run() authorize("Entry") {
-        ledger::nft::create_for_all_users();
-    }
-}

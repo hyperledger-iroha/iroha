@@ -1,9 +1,0 @@
-# Exercise observability canonicalization with a non-production fixture.
---kind observability
---probe-artifact scripts/examples/fixtures/gateway_compliance/observability.json
---out artifacts/sorafs_gateway/observability-canary.json
---deployment-id sorafs-gateway-release-42
---environment production
---generated-at-unix 1800699940
---now-unix 1800700000
---non-production-fixture

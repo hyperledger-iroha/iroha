@@ -1,1 +1,0 @@
-extends = ["base.toml", "base_trusted_peers.toml"]

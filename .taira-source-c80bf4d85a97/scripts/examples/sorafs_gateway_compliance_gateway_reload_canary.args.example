@@ -1,9 +1,0 @@
-# Exercise gateway activation/readback canonicalization with a non-production fixture.
---kind gateway_reload
---probe-artifact scripts/examples/fixtures/gateway_compliance/gateway_reload.json
---out artifacts/sorafs_gateway/gateway-reload-canary.json
---deployment-id sorafs-gateway-release-42
---environment production
---generated-at-unix 1800699940
---now-unix 1800700000
---non-production-fixture
