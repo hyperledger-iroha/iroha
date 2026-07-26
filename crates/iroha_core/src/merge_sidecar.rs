@@ -2012,8 +2012,6 @@ fn verify_open_lifecycle_regular(
         || !opened.is_file()
         || !lifecycle_artifact_identity_available(path_identity)
         || !lifecycle_artifact_identity_available(opened_identity)
-        || !lifecycle_artifact_is_single_link(&path_metadata)
-        || !lifecycle_artifact_is_single_link(&opened)
     {
         return Err(MergeSidecarError::LifecycleJournal(format!(
             "unsafe lifecycle {artifact} artifact {}",
@@ -2023,6 +2021,14 @@ fn verify_open_lifecycle_regular(
     if path_identity != opened_identity {
         return Err(MergeSidecarError::LifecycleJournal(format!(
             "lifecycle {artifact} changed identity while its handle was open"
+        )));
+    }
+    if !lifecycle_artifact_is_single_link(&path_metadata)
+        || !lifecycle_artifact_is_single_link(&opened)
+    {
+        return Err(MergeSidecarError::LifecycleJournal(format!(
+            "unsafe lifecycle {artifact} artifact {}",
+            path.display()
         )));
     }
     Ok((path_metadata, opened))

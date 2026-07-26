@@ -2515,9 +2515,9 @@ if ! grep -Fqx -- \
   exit 1
 fi
 
-readonly expected_typed_rollover_formal_mutation_count=42
+readonly expected_typed_rollover_formal_mutation_count=43
 observed_typed_rollover_formal_mutation_count="$(
-  grep -Ec '^  "[a-z0-9-]+\|typed_rollover_handoff_[a-z0-9_]+_bug[.]cfg\|12\|\$\{INVARIANT_MARKER\}"$' \
+  grep -Ec '^  "[a-z0-9-]+\|typed_rollover_handoff_[a-z0-9_]+_bug[.]cfg\|12\|\$\{INVARIANT_MARKER\}"$|^run_case repeated-handoff-after-restart-restore \\$' \
     scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh
 )"
 if ((observed_typed_rollover_formal_mutation_count
@@ -2526,9 +2526,9 @@ if ((observed_typed_rollover_formal_mutation_count
   exit 1
 fi
 if ! grep -Fqx -- \
-  'echo "[tlc] typed rollover-handoff fixed model and 42-mutant root-anchored V3 matrix passed"' \
+  'echo "[tlc] typed rollover-handoff fixed model and 43-mutant root-anchored V3 matrix passed"' \
   scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh; then
-  echo "typed rollover mutation runner lacks the exact 42-mutation completion contract" >&2
+  echo "typed rollover mutation runner lacks the exact 43-mutation completion contract" >&2
   exit 1
 fi
 

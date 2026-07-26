@@ -19,6 +19,8 @@ readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly FIXED_MODEL="SumeragiV2TypedRolloverHandoff.tla"
 readonly MUTATION_MODEL="SumeragiV2TypedRolloverHandoffMutation.tla"
+readonly REPEATED_HANDOFF_MUTATION_MODEL="SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla"
+readonly REPEATED_HANDOFF_MUTATION_CONFIG="typed_rollover_handoff_repeated_handoff_after_restart_restore_bug.cfg"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
 
 usage() {
@@ -26,7 +28,7 @@ usage() {
 usage: $0 [--help]
 
 Parse the typed rollover-handoff base, mutation, and proof modules with SANY,
-then run the fixed TLC model and all 42 deterministic mutation configurations.
+then run the fixed TLC model and all 43 deterministic mutation configurations.
 
 Environment overrides:
   JAVA_BIN       Java 21.0.12 executable or containing directory
@@ -135,6 +137,7 @@ run_sany() {
 for module in \
   SumeragiV2TypedRolloverHandoff \
   SumeragiV2TypedRolloverHandoffMutation \
+  SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation \
   SumeragiV2TypedRolloverHandoffProofs; do
   run_sany "$module"
 done
@@ -183,7 +186,8 @@ run_case typed-rollover-fixed \
   "Model checking completed. No error has been found."
 
 readonly INVARIANT_MARKER="Error: Invariant TypedRolloverSafetyInvariant is violated."
-readonly EXPECTED_MUTATION_COUNT=42
+readonly EXPECTED_MATRIX_MUTATION_COUNT=42
+readonly EXPECTED_MUTATION_COUNT=43
 
 mutation_cases=(
   "accept-semantic-invalid-lifecycle-state|typed_rollover_handoff_accept_semantic_invalid_lifecycle_state_bug.cfg|12|${INVARIANT_MARKER}"
@@ -231,8 +235,8 @@ mutation_cases=(
 )
 
 actual_configs=("${FORMAL_DIR}"/typed_rollover_handoff_*_bug.cfg)
-if [[ "${#mutation_cases[@]}" -ne "$EXPECTED_MUTATION_COUNT" ]]; then
-  echo "typed rollover mutation contract must contain exactly ${EXPECTED_MUTATION_COUNT} cases; found ${#mutation_cases[@]}" >&2
+if [[ "${#mutation_cases[@]}" -ne "$EXPECTED_MATRIX_MUTATION_COUNT" ]]; then
+  echo "typed rollover shared mutation matrix must contain exactly ${EXPECTED_MATRIX_MUTATION_COUNT} cases; found ${#mutation_cases[@]}" >&2
   exit 1
 fi
 if [[ "${#actual_configs[@]}" -ne "$EXPECTED_MUTATION_COUNT" ]]; then
@@ -243,6 +247,9 @@ fi
 for actual_path in "${actual_configs[@]}"; do
   actual_config="${actual_path##*/}"
   config_is_expected=false
+  if [[ "$actual_config" == "$REPEATED_HANDOFF_MUTATION_CONFIG" ]]; then
+    config_is_expected=true
+  fi
   for case_spec in "${mutation_cases[@]}"; do
     case_tail="${case_spec#*|}"
     expected_config="${case_tail%%|*}"
@@ -262,4 +269,9 @@ for case_spec in "${mutation_cases[@]}"; do
   run_case "$label" "$MUTATION_MODEL" "$config" "$expected_status" "$expected_marker"
 done
 
-echo "[tlc] typed rollover-handoff fixed model and 42-mutant root-anchored V3 matrix passed"
+run_case repeated-handoff-after-restart-restore \
+  "$REPEATED_HANDOFF_MUTATION_MODEL" \
+  "$REPEATED_HANDOFF_MUTATION_CONFIG" 12 \
+  "$INVARIANT_MARKER"
+
+echo "[tlc] typed rollover-handoff fixed model and 43-mutant root-anchored V3 matrix passed"

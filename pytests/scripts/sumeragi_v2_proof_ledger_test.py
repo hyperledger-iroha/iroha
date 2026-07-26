@@ -7117,6 +7117,63 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         )
         assert any(error_fragment in error for error in errors), errors
 
+    repo_root, formal_dir = copy_fixture("directive_fields_exposed")
+    directive_path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+    directive_source = directive_path.read_text(encoding="utf-8")
+    private_struct = """pub(crate) struct LocalProposalDirective {
+    tag: reducer::EventTag,
+    leader: wire::ValidatorIndex,
+    locked_round: Option<wire::ConsensusRound>,
+    locked_subject: Option<wire::BlockSubject>,
+    decided_subject: Option<wire::BlockSubject>,
+}"""
+    exposed_struct = private_struct.replace(
+        "    tag: reducer::EventTag,",
+        "    pub(crate) tag: reducer::EventTag,",
+        1,
+    )
+    assert directive_source.count(private_struct) == 1
+    directive_path.write_text(
+        directive_source.replace(
+            private_struct,
+            exposed_struct,
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._locked_body_reproposal_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        "LocalProposalDirective production fields must remain private" in error
+        for error in errors
+    ), errors
+
+    repo_root, formal_dir = copy_fixture("directive_test_constructor_exposed")
+    directive_path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+    directive_source = directive_path.read_text(encoding="utf-8")
+    test_only_constructor = (
+        "    #[cfg(test)]\n"
+        "    pub(crate) const fn for_test("
+    )
+    assert directive_source.count(test_only_constructor) == 1
+    directive_path.write_text(
+        directive_source.replace(
+            test_only_constructor,
+            "    pub(crate) const fn for_test(",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._locked_body_reproposal_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        "test-only exact local-proposal directive constructor must have "
+        "exact reviewed attributes" in error
+        for error in errors
+    ), errors
+
 
 def test_canonical_sidecar_request_identity_binds_generation_and_occurrence() -> None:
     module = load_checker()
@@ -7958,10 +8015,19 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
     artifact_names = tuple(
         module._TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256
     )
-    assert len(artifact_names) == 39
-    assert sum(name.endswith(".cfg") for name in artifact_names) == 36
-    assert sum(name.endswith("_bug.cfg") for name in artifact_names) == 35
-    assert len(module._TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) == 27
+    assert len(artifact_names) == 48
+    assert sum(name.endswith(".tla") for name in artifact_names) == 4
+    assert sum(name.endswith(".cfg") for name in artifact_names) == 44
+    assert sum(name.endswith("_bug.cfg") for name in artifact_names) == 43
+    assert len(module._TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS) == 26
+    assert len(module._TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) == 10
+    assert len(module._TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS) == 2
+    assert (
+        len(module._TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS)
+        + len(module._TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS)
+        + len(module._TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS)
+        == 38
+    )
 
     for index, name in enumerate(artifact_names):
         case_root = tmp_path / f"formal-{index}"
@@ -8020,6 +8086,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "    roster,\n"
             "    serviceGeneration,\n"
             "    nextStreamEpoch,\n"
+            "    requesterStreamEpoch,\n"
             "    serverStreams,\n"
             "    requestGates,\n"
             "    serverClosePrefix) ==",
@@ -8028,6 +8095,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "    roster,\n"
             "    serviceGeneration,\n"
             "    nextStreamEpoch,\n"
+            "    requesterStreamEpoch,\n"
             "    serverStreams,\n"
             "    requestGates) ==",
             "LifecycleSnapshotV3 parameters must equal exact root-anchored V3",
@@ -8069,7 +8137,52 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
-            '          !.lifecycleCommitPhase = "BootstrapStatePublished",',
+            "PredecessorTransportOwnershipOpen ==\n"
+            "  /\\ state.currentRoster = state.baselineRoster\n"
+            '  /\\ state.transitionAuthority = "None"',
+            "PredecessorTransportOwnershipOpen ==\n"
+            "  /\\ state.currentRoster = state.baselineRoster\n"
+            '  /\\ state.transitionAuthority = "RestartRestore"',
+            "PredecessorTransportOwnershipOpen must retain root-anchored V3",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "CreateServiceTransportOwnerPair ==\n"
+            "  /\\ PredecessorTransportOwnershipOpen",
+            "CreateServiceTransportOwnerPair ==\n"
+            "  /\\ TRUE",
+            "CreateServiceTransportOwnerPair must retain root-anchored V3",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "SealAppliedHeightOutputHandoff ==\n"
+            "  /\\ PredecessorTransportOwnershipOpen",
+            "SealAppliedHeightOutputHandoff ==\n"
+            "  /\\ TRUE",
+            "SealAppliedHeightOutputHandoff must retain root-anchored V3",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "ActivateSameRosterSuccessor ==\n"
+            "  /\\ PredecessorTransportOwnershipOpen",
+            "ActivateSameRosterSuccessor ==\n"
+            "  /\\ TRUE",
+            "ActivateSameRosterSuccessor must retain root-anchored V3",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "UnconsumedPredecessorTransportOwnershipInvariant ==\n"
+            '  state.receiptStage \\in {"Minted", "Retained"} =>\n'
+            "    PredecessorTransportOwnershipOpen",
+            "UnconsumedPredecessorTransportOwnershipInvariant ==\n"
+            '  state.receiptStage \\in {"Minted", "Retained"} =>\n'
+            "    TRUE",
+            "UnconsumedPredecessorTransportOwnershipInvariant must retain "
+            "root-anchored V3",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            '          !.lifecycleCommitPhase = "BootstrapStateReplaced",',
             '          !.lifecycleCommitPhase = "Current",',
             "PublishInitialLifecycleStateSlotV3 must retain root-anchored V3",
         ),
@@ -8110,21 +8223,28 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "THEOREM ResponsiveChangedRosterRolloverLivenessObligation ==\n"
-            "  ResponsiveChangedRosterRolloverLiveness\n",
-            "THEOREM ResponsiveChangedRosterRolloverLivenessObligation ==\n"
-            "  ResponsiveChangedRosterRolloverLiveness\n"
+            "THEOREM ResponsiveDurableExactOutputRolloverLivenessObligation ==\n"
+            "  ResponsiveDurableExactOutputRolloverLiveness\n",
+            "THEOREM ResponsiveDurableExactOutputRolloverLivenessObligation ==\n"
+            "  ResponsiveDurableExactOutputRolloverLiveness\n"
             "BY PTL\n",
             "specified_unproved typed rollover obligations must remain "
             "proofless",
         ),
         (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "PROOF\n"
+            "  BY Isa DEF Init, BootstrapLifecycleRootV3\n\n"
+            "THEOREM FreshBootstrapUsesTargetGeometryEpochZeroObligation ==",
+            "THEOREM FreshBootstrapUsesTargetGeometryEpochZeroObligation ==",
+            "proved internal typed rollover theorem "
+            "BootstrapRootHasExactGenerationZeroShapeObligation must retain "
+            "a proof directive",
+        ),
+        (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
-            '  /\\ (snapshot.roster = "ChangedRoster" =>\n'
-            "        /\\ snapshot.serviceGeneration > InitialServiceGeneration\n"
-            '        /\\ snapshot.serverStreams = "Empty"',
-            '  /\\ (snapshot.roster = "ChangedRoster" =>\n'
-            '        /\\ snapshot.serverStreams = "Empty"',
+            "  /\\ snapshot.requesterStreamEpoch <= snapshot.nextStreamEpoch",
+            "  /\\ snapshot.requesterStreamEpoch > snapshot.nextStreamEpoch",
             "LifecycleSnapshotSemanticallyValid must retain root-anchored V3",
         ),
         (
@@ -8152,11 +8272,13 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "LifecycleJournalReady(s) ==\n"
+            "  /\\ s.durableJournalValidated\n"
             "  /\\ RootSelectedLifecyclePairMatches(s)\n"
-            "  /\\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(s))\n"
-            "  /\\ ~s.crashArtifactsPresent",
-            "  /\\ RootSelectedLifecyclePairMatches(s)\n"
-            "  /\\ ~s.crashArtifactsPresent",
+            "  /\\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(s))",
+            "LifecycleJournalReady(s) ==\n"
+            "  /\\ s.durableJournalValidated\n"
+            "  /\\ RootSelectedLifecyclePairMatches(s)",
             "LifecycleJournalReady must retain root-anchored V3",
         ),
         (
@@ -8170,10 +8292,12 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "CleanupValidatedLifecycleArtifactsV3 ==\n"
+            "  /\\ state.restartRequired\n"
             "  /\\ state.durableJournalValidated\n"
             "  /\\ RootSelectedLifecyclePairMatches(state)\n"
             "  /\\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
             "CleanupValidatedLifecycleArtifactsV3 ==\n"
+            "  /\\ state.restartRequired\n"
             "  /\\ state.durableJournalValidated\n"
             "  /\\ RootSelectedLifecyclePairMatches(state)",
             "CleanupValidatedLifecycleArtifactsV3 must retain root-anchored V3",
@@ -8219,16 +8343,20 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "  /\\ RootAnchoredLifecycleV3Invariant\n"
             "  /\\ SemanticValidationBeforeCleanupInvariant\n"
-            "  /\\ LifecycleCommitPhaseInvariant",
+            "  /\\ ValidatedCleanupRemovesInactiveSlotInvariant",
             "  /\\ RootAnchoredLifecycleV3Invariant\n"
-            "  /\\ LifecycleCommitPhaseInvariant",
+            "  /\\ ValidatedCleanupRemovesInactiveSlotInvariant",
             "TypedRolloverSafetyInvariant must retain root-anchored V3",
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "      /\\ state'.durableLifecycleRootV3 =\n"
             "           state.durableLifecycleRootV3\n"
+            "      /\\ state'.syncedLifecycleRootV3 =\n"
+            "           state.syncedLifecycleRootV3\n"
             "      /\\ state'.durableLifecycleStateSlotsV3[",
+            "      /\\ state'.syncedLifecycleRootV3 =\n"
+            "           state.syncedLifecycleRootV3\n"
             "      /\\ state'.durableLifecycleStateSlotsV3[",
             "StateSlotBeforeRootCommitStepSafety must retain root-anchored V3",
         ),
@@ -8236,7 +8364,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
             "THEOREM MissingRootSelectedStateCannotValidateOrCleanupObligation ==",
             "THEOREM MissingRootSelectedStateMayValidateOrCleanupObligation ==",
-            "proofless root-anchored V3 theorem inventory must equal",
+            "reviewed root-anchored V3 theorem inventory must equal",
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
@@ -8250,10 +8378,10 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
-            '   "CleanupBeforeSemanticValidation",\n'
-            '   "ChangedRosterWithoutGenerationAdvance"}',
-            '   "CleanupBeforeSemanticValidation"}',
-            "MutationModes must equal exact reviewed 35-mode",
+            '   "CleanupBeforeRootParentResync",\n'
+            '   "AcceptSemanticInvalidLifecycleState"}',
+            '   "CleanupBeforeRootParentResync"}',
+            "MutationModes must equal exact reviewed 42-mode",
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
@@ -8265,12 +8393,11 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
-            "          !.durableLifecycleStateSlotsV3[\n"
-            "            SelectedLifecycleStateSlot(state)] =\n"
-            "              NoLifecycleSnapshot]",
-            "          !.durableLifecycleStateSlotsV3[\n"
-            "            SelectedLifecycleStateSlot(state)] =\n"
-            "              DurableSnapshot(state)]",
+            "RemoveRootSelectedLifecycleState ==\n"
+            '  AcceptInvalidLifecycleStartup("LifecycleSelectedStateMissing")',
+            "RemoveRootSelectedLifecycleState ==\n"
+            "  AcceptInvalidLifecycleStartup(\n"
+            '    "LifecycleSemanticValidationFailure")',
             "RemoveRootSelectedLifecycleState must retain root-anchored V3",
         ),
         (
@@ -8293,10 +8420,61 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "ChangedRosterWithoutGenerationAdvance",
         ),
         (
+            "docs/formal/sumeragi_v2/"
+            "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla",
+            "ReopenPredecessorTransportAfterRestartRestore ==\n"
+            '  /\\ state.lifecycleCommitPhase = "Restored"\n'
+            '  /\\ state.transitionAuthority = "RestartRestore"',
+            "ReopenPredecessorTransportAfterRestartRestore ==\n"
+            '  /\\ state.lifecycleCommitPhase = "Restored"\n'
+            '  /\\ state.transitionAuthority = "RestartRestore"\n'
+            "  /\\ PredecessorTransportOwnershipOpen",
+            "ReopenPredecessorTransportAfterRestartRestore may not contain "
+            "forbidden reviewed mutation fragment",
+        ),
+        (
+            "docs/formal/sumeragi_v2/"
+            "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla",
+            "ResealPredecessorTransportAfterRestartRestore ==\n"
+            '  /\\ state.lifecycleCommitPhase = "Restored"\n'
+            '  /\\ state.transitionAuthority = "RestartRestore"',
+            "ResealPredecessorTransportAfterRestartRestore ==\n"
+            '  /\\ state.lifecycleCommitPhase = "Restored"\n'
+            '  /\\ state.transitionAuthority = "RestartRestore"\n'
+            "  /\\ PredecessorTransportOwnershipOpen",
+            "ResealPredecessorTransportAfterRestartRestore may not contain "
+            "forbidden reviewed mutation fragment",
+        ),
+        (
+            "docs/formal/sumeragi_v2/"
+            "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla",
+            "  /\\ state.lifecycleCommitPhase = \"Restored\"\n"
+            "  /\\ state.transitionAuthority = \"RestartRestore\"\n"
+            "  /\\ state.serviceOwnerNonce = NoIdentity",
+            "  /\\ state.lifecycleCommitPhase = \"Restored\"\n"
+            "  /\\ state.transitionAuthority = \"None\"\n"
+            "  /\\ state.serviceOwnerNonce = NoIdentity",
+            "ReopenPredecessorTransportAfterRestartRestore must retain "
+            "root-anchored V3",
+        ),
+        (
+            "docs/formal/sumeragi_v2/"
+            "typed_rollover_handoff_repeated_handoff_after_restart_restore_bug.cfg",
+            "SPECIFICATION RepeatedHandoffMutationSpec\n\n"
+            "CHECK_DEADLOCK FALSE\n\n"
+            "INVARIANT TypedRolloverSafetyInvariant",
+            "SPECIFICATION TypedRolloverSpec\n\n"
+            "CHECK_DEADLOCK FALSE\n\n"
+            "INVARIANT TypedRolloverSafetyInvariant",
+            "dedicated repeated-handoff mutation config must select exactly",
+        ),
+        (
             "docs/formal/sumeragi_v2/typed_rollover_handoff_fixed.cfg",
-            "INVARIANT RootAnchoredLifecycleV3Invariant\n"
-            "INVARIANT SemanticValidationBeforeCleanupInvariant",
-            "INVARIANT RootAnchoredLifecycleV3Invariant",
+            "INVARIANT ExactServiceTransportOwnerPairInvariant\n"
+            "INVARIANT UnconsumedPredecessorTransportOwnershipInvariant\n"
+            "INVARIANT ReceiptLifecycleInvariant",
+            "INVARIANT ExactServiceTransportOwnerPairInvariant\n"
+            "INVARIANT ReceiptLifecycleInvariant",
             "fixed typed rollover configuration must contain exactly",
         ),
         (
@@ -8311,9 +8489,22 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
         (
             "scripts/formal/"
             "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
-            "readonly EXPECTED_MUTATION_COUNT=35",
-            "readonly EXPECTED_MUTATION_COUNT=34",
-            "runner must retain exact 35-case root-anchored V3 fragment",
+            "readonly EXPECTED_MUTATION_COUNT=43",
+            "readonly EXPECTED_MUTATION_COUNT=42",
+            "runner must retain exact 43-case root-anchored V3 fragment",
+        ),
+        (
+            "scripts/formal/"
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            "run_case repeated-handoff-after-restart-restore \\\n"
+            '  "$REPEATED_HANDOFF_MUTATION_MODEL" \\\n'
+            '  "$REPEATED_HANDOFF_MUTATION_CONFIG" 12 \\\n'
+            '  "$INVARIANT_MARKER"',
+            "run_case repeated-handoff-after-restart-restore \\\n"
+            '  "$MUTATION_MODEL" \\\n'
+            '  "$REPEATED_HANDOFF_MUTATION_CONFIG" 12 \\\n'
+            '  "$INVARIANT_MARKER"',
+            "runner must retain exact 43-case root-anchored V3 fragment",
         ),
     ),
 )
@@ -23119,7 +23310,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 727 tests",
+            "must contain exactly 732 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -23127,9 +23318,9 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=727",
-            "readonly expected_production_liveness_test_count=726",
-            "production liveness source count must be sealed as 727",
+            "readonly expected_production_liveness_test_count=732",
+            "readonly expected_production_liveness_test_count=731",
+            "production liveness source count must be sealed as 732",
         ),
         (
             "readonly expected_multilane_focus_test_count=277",
@@ -23447,27 +23638,27 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("docs/formal/sumeragi_v2/README.md"),
-            "current inventory therefore contains 727 tests across 38 modules.\n"
+            "current inventory therefore contains 732 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 81 legs.",
-            "current inventory therefore contains 727 tests across 38 modules.\n"
+            "current inventory therefore contains 732 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 80 legs.",
         ),
         (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
-            "the current\n727-test, 38-module inventory. The complete source-sealed\n"
+            "the current\n732-test, 38-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 81 legs",
-            "the current\n727-test, 38-module inventory. The complete source-sealed\n"
+            "the current\n732-test, 38-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 80 legs",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "current source-bound inventory therefore contains 727 exact tests "
+            "current source-bound inventory therefore contains 732 exact tests "
             "across\n38 modules and 81 pre-network legs.",
-            "current source-bound inventory therefore contains 727 exact tests "
+            "current source-bound inventory therefore contains 732 exact tests "
             "across\n38 modules and 80 pre-network legs.",
         ),
     ),
@@ -23517,9 +23708,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 727",
-            "_PRODUCTION_TEST_COUNT = 726",
-            "production test count must equal the exact shell inventory count 727",
+            "_PRODUCTION_TEST_COUNT = 732",
+            "_PRODUCTION_TEST_COUNT = 731",
+            "production test count must equal the exact shell inventory count 732",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -23539,14 +23730,14 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),',
             '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 52),',
-            '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 51),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 79),',
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 78),',
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 83),',
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 82),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
@@ -24981,19 +25172,19 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 727
-    assert len(set(production_inventory)) == 727
-    assert "readonly expected_production_liveness_test_count=727" in release_source
+    assert len(production_inventory) == 732
+    assert len(set(production_inventory)) == 732
+    assert "readonly expected_production_liveness_test_count=732" in release_source
     assert (
-        "readonly expected_typed_rollover_formal_mutation_count=35"
+        "readonly expected_typed_rollover_formal_mutation_count=43"
         in release_source
     )
     assert (
-        'echo "[tlc] typed rollover-handoff fixed model and 35-mutant '
+        'echo "[tlc] typed rollover-handoff fixed model and 43-mutant '
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 727" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 732" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -25003,7 +25194,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 727
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 732
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS

@@ -192,6 +192,25 @@ pub(crate) struct LocalProposalDirective {
 }
 
 impl LocalProposalDirective {
+    /// Build an exact directive fixture without exposing reducer-owned fields
+    /// in production builds.
+    #[cfg(test)]
+    pub(crate) const fn for_test(
+        tag: reducer::EventTag,
+        leader: wire::ValidatorIndex,
+        locked_round: Option<wire::ConsensusRound>,
+        locked_subject: Option<wire::BlockSubject>,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> Self {
+        Self {
+            tag,
+            leader,
+            locked_round,
+            locked_subject,
+            decided_subject,
+        }
+    }
+
     /// Exact height/view/generation which owns candidate work.
     pub(crate) const fn tag(self) -> reducer::EventTag {
         self.tag

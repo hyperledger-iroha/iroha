@@ -20,6 +20,13 @@ An identical roster never advances the responder generation.  It either
 preserves all retryable transport state or, when its bounded table is full,
 returns Capacity without changing memory, the durable root, or either slot.
 
+The service/transport owner pair is one-shot.  Its atomic seal belongs to the
+baseline predecessor generation: a new pair cannot be created or sealed after
+a successor authority has been restored or published.  A crash may clear the
+process-local pair and reopen it only while recovery still selects that same
+baseline predecessor.  This is the model boundary for the production
+`sealed.compare_exchange(false, true)` ownership transition.
+
 V3 publishes a checked successor into the inactive state slot, synchronizes
 that slot, commits an exact root marker selecting it, and only then publishes
 the successor projection to memory.  A crash before the root commit restores
@@ -344,6 +351,10 @@ ExactServiceTransportOwnerPair ==
   /\ state.serviceOwnerNonce # NoIdentity
   /\ state.serviceOwnerNonce = state.transportOwnerNonce
 
+PredecessorTransportOwnershipOpen ==
+  /\ state.currentRoster = state.baselineRoster
+  /\ state.transitionAuthority = "None"
+
 ExactPredecessorReceipt ==
   /\ ExactServiceTransportOwnerPair
   /\ state.receiptOwnerNonce = state.serviceOwnerNonce
@@ -638,6 +649,7 @@ Init ==
           secondCrashObserved |-> FALSE]
 
 CreateServiceTransportOwnerPair ==
+  /\ PredecessorTransportOwnershipOpen
   /\ state.serviceOwnerNonce = NoIdentity
   /\ state.transportOwnerNonce = NoIdentity
   /\ state.receiptStage \in {"Absent", "Lost"}
@@ -683,6 +695,7 @@ BuildImmediateSuccessor ==
           !.constructionSuccessor = ExpectedSuccessor]
 
 SealAppliedHeightOutputHandoff ==
+  /\ PredecessorTransportOwnershipOpen
   /\ state.finalityValidated
   /\ state.workerIngressClosed
   /\ state.workerOutstanding = 0
@@ -1766,6 +1779,7 @@ ActivateRestoredLifecycleV3Successor ==
           !.successorActive = TRUE]
 
 ActivateSameRosterSuccessor ==
+  /\ PredecessorTransportOwnershipOpen
   /\ state.targetRoster = state.currentRoster
   /\ state.compactionCause = "NoCompaction"
   /\ state.startupMode # "BootstrapStart"
@@ -2082,6 +2096,10 @@ ExactServiceTransportOwnerPairInvariant ==
   \/ /\ state.serviceOwnerNonce = NoIdentity
      /\ state.transportOwnerNonce = NoIdentity
   \/ ExactServiceTransportOwnerPair
+
+UnconsumedPredecessorTransportOwnershipInvariant ==
+  state.receiptStage \in {"Minted", "Retained"} =>
+    PredecessorTransportOwnershipOpen
 
 FinalSealRejectsLateEnqueueInvariant ==
   /\ (state.ownerSealed => FinalExactOutputSeal)
@@ -2455,6 +2473,7 @@ TypedRolloverSafetyInvariant ==
   /\ TypedRolloverTypeInvariant
   /\ CompactionGeometryInvariant
   /\ ExactServiceTransportOwnerPairInvariant
+  /\ UnconsumedPredecessorTransportOwnershipInvariant
   /\ ReceiptLifecycleInvariant
   /\ FinalSealRejectsLateEnqueueInvariant
   /\ MismatchRejectionInvariant

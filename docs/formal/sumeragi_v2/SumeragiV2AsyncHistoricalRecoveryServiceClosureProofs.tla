@@ -48,15 +48,6 @@ HistoricalDiscoveryTerminal(node) ==
   \/ NodeHasDecision(node)
   \/ ~HistoricalRecoveryTarget(node)
 
-HistoricalDiscoveryRequestOrClockReady(node) ==
-  /\ HistoricalRecoveryTarget(node)
-  /\ \/ ActiveCommitCertificateRequests(node) # {}
-     \/ asyncNow >= AsyncRoundTimeout
-
-HistoricalDiscoveryGoalWithRemoval(node) ==
-  \/ HistoricalDiscoveryTerminal(node)
-  \/ HistoricalDiscoveryRequestOrClockReady(node)
-
 HistoricalDiscoveryFixedClockExit(node, clockValue) ==
   \/ NodeHasDecision(node)
   \/ ~HistoricalRecoveryTarget(node)
@@ -80,8 +71,8 @@ Exact finite owner cohorts.
 the frozen clock, not only packets which are already classified as responsive
 clock blockers.  If a responsive validator enters the timed-service set, a
 pre-existing due packet can become overdue, but it was already charged here.
-Fresh packet publication has a strictly future deadline and therefore cannot
-refill this set while `asyncNow = clockValue`.
+The temporal closure must separately prove from each publication action that
+a fresh packet cannot refill this set while `asyncNow = clockValue`.
 ***************************************************************************)
 
 HistoricalDiscoveryPotentialServiceCohort == Responsive
@@ -94,6 +85,10 @@ HistoricalDiscoveryRunnerOwners ==
 HistoricalDiscoveryIoOwners ==
   AsyncArchiveIoServiceNodes
     \cup asyncHistoricalRecoveryTargets
+
+HistoricalDiscoveryNonVoterTargets ==
+  asyncHistoricalRecoveryTargets
+    \ AsyncCurrentResponsiveVoters
 
 HistoricalDiscoveryLatentTimedOwners ==
   HistoricalDiscoveryPotentialServiceCohort
@@ -141,14 +136,24 @@ THEOREM HistoricalDiscoveryOwnersIncludeNonVoterService ==
            \cup asyncHistoricalRecoveryTargets
   /\ HistoricalDiscoveryRunnerOwners = AsyncTimedServiceNodes
   /\ HistoricalDiscoveryIoOwners = AsyncTimedServiceNodes
-BY DEF HistoricalDiscoveryRunnerOwners,
+  /\ HistoricalDiscoveryNonVoterTargets
+       \subseteq HistoricalDiscoveryRunnerOwners
+  /\ HistoricalDiscoveryNonVoterTargets
+       \subseteq HistoricalDiscoveryIoOwners
+BY Isa
+   DEF HistoricalDiscoveryRunnerOwners,
        HistoricalDiscoveryIoOwners,
-       AsyncTimedServiceNodes
+       HistoricalDiscoveryNonVoterTargets,
+       AsyncTimedServiceNodes,
+       AsyncArchiveIoServiceNodes
 
 THEOREM StrongTypeHasFiniteHistoricalDiscoveryCohorts ==
   \A clockValue \in Nat:
     AsyncStrongTypeInvariant
       => /\ IsFiniteSet(HistoricalDiscoveryPotentialServiceCohort)
+         /\ IsFiniteSet(HistoricalDiscoveryRunnerOwners)
+         /\ IsFiniteSet(HistoricalDiscoveryIoOwners)
+         /\ IsFiniteSet(HistoricalDiscoveryNonVoterTargets)
          /\ IsFiniteSet(HistoricalDiscoveryLatentTimedOwners)
          /\ IsFiniteSet(HistoricalDiscoveryDuePacketsAt(clockValue))
          /\ IsFiniteSet(HistoricalDiscoveryNodeBlockersAt(clockValue))
@@ -161,14 +166,18 @@ THEOREM StrongTypeHasFiniteHistoricalDiscoveryCohorts ==
          /\ HistoricalDiscoveryDormantIoDebt(clockValue) \in Nat
          /\ HistoricalDiscoveryNodeBlockerDebt(clockValue) \in Nat
          /\ HistoricalDiscoveryActiveIoBlockerDebt(clockValue) \in Nat
-BY AsyncCurrentResponsiveVotersAreValidators,
-   AsyncResponsiveAppliedArchiveServersAreValidators,
-   HistoricalRecoveryTargetsAreValidators,
+BY AsyncStrongTypeProjectsAsyncType,
+   ResponsiveAreValidators,
+   AsyncTimedServiceNodesAreValidators,
+   HistoricalDiscoveryOwnersIncludeNonVoterService,
    FS_Subset, FS_CardinalityType, Isa
    DEF AsyncStrongTypeInvariant,
        StrongInductiveInvariant, Safety, TypeInvariant,
        ModelConfiguration, ValidatorIds,
        HistoricalDiscoveryPotentialServiceCohort,
+       HistoricalDiscoveryRunnerOwners,
+       HistoricalDiscoveryIoOwners,
+       HistoricalDiscoveryNonVoterTargets,
        HistoricalDiscoveryLatentTimedOwners,
        HistoricalDiscoveryDuePacketsAt,
        HistoricalDiscoveryNodeBlockersAt,
@@ -179,7 +188,6 @@ BY AsyncCurrentResponsiveVotersAreValidators,
        HistoricalDiscoveryDormantIoDebt,
        HistoricalDiscoveryNodeBlockerDebt,
        HistoricalDiscoveryActiveIoBlockerDebt,
-       AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
        AsyncTransportTypeInvariant,
        AsyncPacketContentTypeInvariant
 
@@ -192,7 +200,8 @@ The three non-tick branches are precisely the three conjuncts which disable
 voters.
 ***************************************************************************)
 
-HistoricalDiscoveryFixedClockServiceCase(clockValue) ==
+HistoricalDiscoveryFixedClockServiceCase(node, clockValue) ==
+  \/ HistoricalDiscoveryTerminal(node)
   \/ OverdueResponsivePackets # {}
   \/ HistoricalDiscoveryNodeBlockersAt(clockValue) # {}
   \/ HistoricalDiscoveryActiveIoBlockersAt(clockValue) # {}
@@ -218,10 +227,11 @@ BY AsyncStrongTypeProjectsAsyncType, Isa
 THEOREM HistoricalDiscoveryFixedClockPendingHasServiceCase ==
   \A node \in Responsive, clockValue \in Nat:
     HistoricalDiscoveryFixedClockPending(node, clockValue)
-      => HistoricalDiscoveryFixedClockServiceCase(clockValue)
+      => HistoricalDiscoveryFixedClockServiceCase(node, clockValue)
 BY HistoricalDiscoveryFixedClockBlockerCharacterization
    DEF HistoricalDiscoveryFixedClockPending,
-       HistoricalDiscoveryFixedClockServiceCase
+       HistoricalDiscoveryFixedClockServiceCase,
+       HistoricalDiscoveryTerminal
 
 (***************************************************************************
 Canonical lower components.
@@ -317,7 +327,8 @@ The prefix order is:
 
 Class 3 is an overdue packet, class 2 a due runner, class 1 a due active I/O
 worker, and class 0 the tick.  A higher class is earlier work, so the ordinary
-natural less-than relation gives the desired descent when a class retires.
+natural less-than relation places a retired class below an earlier class when
+the preceding components are equal.
 ***************************************************************************)
 
 HistoricalDiscoveryBlockerStageCarrier == 0..3
@@ -361,7 +372,7 @@ HistoricalDiscoveryFixedClockRank(
   <<HistoricalDiscoveryLatentOwnerDebt,
     <<HistoricalDiscoveryDuePacketDebt(clockValue),
       <<HistoricalDiscoveryDormantIoDebt(clockValue),
-        <<stage, dependencyRank>>>>>>
+        <<stage, dependencyRank>>>>>>>>
 
 THEOREM HistoricalDiscoveryFixedClockBlockerOrderingIsWellFounded ==
   IsWellFoundedOn(
@@ -402,7 +413,7 @@ candidate/Serve tails.  When an exact historical candidate or Serve owner is
 present, the choice set also contains its live service rank.  Selection is
 restricted to the proved ingress carrier; the canonical base makes that
 intersection nonempty for every overdue packet in a strong-typed state.
-***************************************************************************) 
+***************************************************************************)
 
 HistoricalDiscoveryServeJobOwned(node, job) ==
   /\ node \in HistoricalDiscoveryIoOwners
@@ -504,14 +515,20 @@ THEOREM HistoricalDiscoveryCandidatePacketDependencyRankInCarrier ==
     /\ AsyncStrongTypeInvariant
     /\ candidate.node = packet.item.envelope.recipient
     /\ HistoricalProtectedCandidateOwned(candidate)
-    => CandidateIngressDependencyRank(packet, candidate)
-         \in IngressBoundaryDependencyCarrier
+    => /\ CandidateIngressDependencyRank(packet, candidate)
+             \in IngressBoundaryDependencyCarrier
+       /\ CandidateIngressDependencyRank(packet, candidate)
+             \in HistoricalDiscoveryPacketDependencyRanks(packet)
+       /\ CandidateIngressDependencyRank(packet, candidate)
+             \in HistoricalDiscoveryPacketCarrierRanks(packet)
 BY AsyncStrongTypeProjectsAsyncType,
    ScheduledCandidateServiceRankInCarrier,
    IngressBoundaryDependencyRankInCarrier, Isa
    DEF HistoricalProtectedCandidateOwned,
        ProtectedCandidateOwned,
        CandidateIngressDependencyRank,
+       HistoricalDiscoveryPacketDependencyRanks,
+       HistoricalDiscoveryPacketCarrierRanks,
        OverdueResponsivePackets,
        OwnedServiceRankCarrier
 
@@ -521,19 +538,22 @@ THEOREM HistoricalDiscoveryServePacketDependencyRankInCarrier ==
     LET recipient == packet.item.envelope.recipient
     IN /\ AsyncStrongTypeInvariant
        /\ HistoricalDiscoveryServeJobOwned(recipient, job)
-       => ServeIngressDependencyRank(packet, recipient, job)
-            \in IngressBoundaryDependencyCarrier
+       => /\ ServeIngressDependencyRank(packet, recipient, job)
+                \in IngressBoundaryDependencyCarrier
+          /\ ServeIngressDependencyRank(packet, recipient, job)
+                \in HistoricalDiscoveryPacketDependencyRanks(packet)
+          /\ ServeIngressDependencyRank(packet, recipient, job)
+                \in HistoricalDiscoveryPacketCarrierRanks(packet)
 BY ServeOccurrenceIndexCharacterization,
    ServeJobIndexMatchesOccurrenceIndex,
+   AsyncStrongTypeProjectsAsyncType,
+   AsyncArchiveIoServiceNodesAreValidators,
+   HistoricalRecoveryTargetsAreValidators,
    IngressBoundaryDependencyRankInCarrier, Isa
    DEF HistoricalDiscoveryServeJobOwned,
        HistoricalDiscoveryIoOwners,
-       AsyncArchiveIoServiceNodes,
-       AsyncCurrentResponsiveVoters,
-       AsyncResponsiveAppliedArchiveServers,
-       AsyncResponsiveOnlineArchiveServers,
-       AsyncResponsiveArchiveServers,
-       HistoricalRecoveryTarget,
+       HistoricalDiscoveryPacketDependencyRanks,
+       HistoricalDiscoveryPacketCarrierRanks,
        OverdueResponsivePackets,
        ServeIngressDependencyRank, ServeJobRank,
        AsyncStrongTypeInvariant,

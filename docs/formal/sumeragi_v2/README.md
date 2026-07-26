@@ -94,10 +94,16 @@ certificate round.
   run remains pending and all current-source theorem obligations remain
   `specified_unproved`.
 - `SumeragiV2TypedRolloverHandoff.tla`,
-  `SumeragiV2TypedRolloverHandoffProofs.tla`, and the paired mutation module
-  isolate the move-only service/transport owner pair, final empty-corridor
-  seal, exact predecessor and immediate-successor receipt, retry preservation,
-  and late-callback isolation. Production ordinary rollover requires a changed
+  `SumeragiV2TypedRolloverHandoffProofs.tla`, the shared mutation module, and
+  `SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla` isolate the
+  move-only service/transport owner pair, final empty-corridor seal, exact
+  predecessor and immediate-successor receipt, retry preservation, and
+  late-callback isolation. The source seal covers these four modules, one fixed
+  config, and 43 mutation configs (48 artifacts total). The shared matrix owns
+  42 mutations; the dedicated repeated-handoff mutant bypasses the one-shot
+  predecessor-transport gate after restart restore. The proof module contains
+  38 theorem declarations: 26 retain proof bodies and 12 remain proofless
+  (10 safety and 2 liveness). Production ordinary rollover requires a changed
   certified roster and authenticated predecessor terminality. A sealed,
   move-only durable handoff or a semantically validated restart may instead
   fence active predecessor responder state, but only through the durable
@@ -106,8 +112,9 @@ certificate round.
   authenticated close prefix. Same-roster rehydration preserves generation and
   responder ownership. The earlier strict and bounded receipts predate this
   authority-gated relation, V3 bootstrap adoption, cleanup ordering, and root
-  trust boundary, so fresh validation remains pending and both typed-handoff
-  ledger entries remain `specified_unproved`.
+  trust boundary, so fresh validation remains pending. The proofless typed
+  support stays transitively bound to its reviewed `specified_unproved`
+  top-level consumer; no support row is promoted into the ledger.
   Neither the model nor historical bounded evidence proves eventual finality
   validation, network delivery, writer flush, recovery after failure, repeated
   rollover, or Rust-to-TLA refinement.
@@ -1089,7 +1096,7 @@ only cumulative `closed_through`, which may advance monotonically on the same
 occurrence without rematerializing output. `GenerationHint` carries the
 observed/current generations and exact triggering Request or Close hash on the
 triggering authenticated reply route. Alternate sources retain independent
-attempts, and a later delivery refreshes only its own source route. Every
+attempts, and a later delivery replaces only its own source attempt. Every
 frozen target has a dedicated `SidecarTopologyProgress` Lane reservation for
 topology-routed Request/Close and an independent `SidecarReplyControl` Lane
 reservation for exact-reply CloseAck/GenerationHint. Parked ordinary output and

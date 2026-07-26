@@ -108,6 +108,18 @@ AsyncTemporalClosureTimeoutViewProgressObligation ==
   \A initialContext:
     TimeoutViewProgressProperty(AsyncLiveSpecAt(initialContext))
 
+DirectTimeoutViewClosureResidualObligation ==
+  \A initialContext:
+    DirectTimeoutViewClosureResidualProperty(
+      AsyncLiveSpecAt(initialContext))
+
+THEOREM AsyncTemporalClosureTimeoutViewProgressReduction ==
+  DirectTimeoutViewClosureResidualObligation
+    => AsyncTemporalClosureTimeoutViewProgressObligation
+BY DirectTimeoutViewDecompositionClosesTimeoutViewProgress
+   DEF DirectTimeoutViewClosureResidualObligation,
+       AsyncTemporalClosureTimeoutViewProgressObligation
+
 LockedBodyDirectClosureResidualProperty(specification) ==
   /\ TimeoutViewProgressProperty(specification)
   /\ RetainedLockTimeoutFedSourceExposureLeaderTurnProperty(specification)

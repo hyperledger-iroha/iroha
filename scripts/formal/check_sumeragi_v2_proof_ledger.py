@@ -3959,10 +3959,7 @@ SUPPORT_PROOF_OBLIGATION_INVENTORY = {
     ),
     "typed-rollover-handoff-conditional-local-liveness": (
         "SumeragiV2TypedRolloverHandoffProofs",
-        "ResponsiveDurableExactOutputRolloverLivenessObligation",
-    ),
-    "typed-rollover-handoff-restart-restore-local-liveness": (
-        "SumeragiV2TypedRolloverHandoffProofs",
+        "ResponsiveDurableExactOutputRolloverLivenessObligation / "
         "ResponsiveRestartRestoreRolloverLivenessObligation",
     ),
 }
@@ -3995,9 +3992,6 @@ SUPPORT_PROOF_CONSUMER_BY_ID = {
         "successor-activation-exact-recovery-production-refinement"
     ),
     "typed-rollover-handoff-conditional-local-liveness": (
-        "successor-activation-exact-recovery-production-refinement"
-    ),
-    "typed-rollover-handoff-restart-restore-local-liveness": (
         "successor-activation-exact-recovery-production-refinement"
     ),
 }
@@ -4483,16 +4477,19 @@ _REPLY_WRITER_DEADLINE_MUTATION_RUNNER_SHA256 = (
 
 _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "SumeragiV2TypedRolloverHandoff.tla": (
-        "7dbc6d2432ed776187706d6d0d5924f3bbbe33abbf9d442855ca29dd9cc996ac"
+        "2c5d1dabd0387568e364fb4260be51d68a308bc6dc53718d9e72a999f8f0b840"
     ),
     "SumeragiV2TypedRolloverHandoffProofs.tla": (
-        "221d6c486d2a6ceb3078be15ae8d0eca5f66525273b5e57042a5266713685f68"
+        "d9e78eb1e44c22bb0d5c8c861ef20ad922fbefc35a18d545a3f92d12c13a4872"
     ),
     "SumeragiV2TypedRolloverHandoffMutation.tla": (
         "84a96abc4e8e36044a3601836a51f9dae293ca2c606dbc559da868663b9ba592"
     ),
+    "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla": (
+        "8995252082e80cbab0649f98aded2c98b59b7ab74839e02457ca73f5bb4a3d23"
+    ),
     "typed_rollover_handoff_fixed.cfg": (
-        "809a86192ec03d163236806d03514615c43cd48d18fb701ed050a2988ff7fdc6"
+        "7e0f8d0f8b27a3266725a00350e49a5f24b0f6433f0467203a4d2dc578f162b9"
     ),
     "typed_rollover_handoff_accept_semantic_invalid_lifecycle_state_bug.cfg": (
         "c3659f678de35e046075a4b917c0ff946b3945d6da818c5d62ba712ab424bad3"
@@ -4611,6 +4608,9 @@ _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "typed_rollover_handoff_recover_uncommitted_state_slot_bug.cfg": (
         "24ed862807885af3f8f398a76cd5699ffac6a4d41a682a891d0ec76d358595f3"
     ),
+    "typed_rollover_handoff_repeated_handoff_after_restart_restore_bug.cfg": (
+        "2f826575880769249c8b9a72482d1dfc41a91feab31f41ca770d0b77771ea2ba"
+    ),
     "typed_rollover_handoff_split_generation_hash_bug.cfg": (
         "f2e349bc658353a272add46cf9e3c246150c9e10c6182eecce27caec56c11a3d"
     ),
@@ -4623,28 +4623,33 @@ _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
 }
 
 _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256 = (
-    "a2f057051176a706823cbfc848812824527e830d820d1ff1b626551a6c08bcda"
+    "f9f4d9706486c8692ecf3b2bc36e577de557b6520ff89fca31662efdbb3b1652"
 )
 
 _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS = (
     "TypedRolloverInitEstablishesSafetyObligation",
+    "BootstrapCrashRecoveryObligation",
+    "BootstrapFirstCommitSelectsExactInitialPairObligation",
+    "EveryCrashDropsProcessLocalAuthorityObligation",
+    "OnlyValidatedRestartMayFenceAfterCrashObligation",
+    "ValidationFailurePreservesArtifactsObligation",
+    "RootGenerationAdvancesExactlyOnceAndAlternatesSlotObligation",
+    "ForcedFenceCannotForgeAuthenticatedClosePrefixObligation",
+    "TypedRolloverNextPreservesSafetyObligation",
+    "TypedRolloverSpecAlwaysSafeObligation",
+)
+_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS = (
     "BootstrapRootHasExactGenerationZeroShapeObligation",
     "FreshBootstrapUsesTargetGeometryEpochZeroObligation",
     "BootstrapStateReplacementRequiresDirectorySyncObligation",
-    "BootstrapCrashRecoveryObligation",
-    "BootstrapFirstCommitSelectsExactInitialPairObligation",
     "ExactOwnerPairRequiredForRetainedHandoffObligation",
-    "EveryCrashDropsProcessLocalAuthorityObligation",
-    "OnlyValidatedRestartMayFenceAfterCrashObligation",
     "StateReplacementRequiresDirectorySyncBeforeRootReplacementObligation",
     "RootReplacementRequiresStoreSyncBeforeMemoryPublicationObligation",
     "RootSelectedPairBindsGenerationAndDigestObligation",
     "MissingRootSelectedStateCannotValidateOrCleanupObligation",
-    "ValidationFailurePreservesArtifactsObligation",
     "SemanticValidationPrecedesArtifactCleanupObligation",
     "ValidatedCleanupRemovesInactiveSlotObligation",
     "SecondCrashBeforeRootResyncPreservesPredecessorObligation",
-    "RootGenerationAdvancesExactlyOnceAndAlternatesSlotObligation",
     "MemoryPublicationRequiresCommittedV3RootObligation",
     "OrdinaryRolloverRequiresAuthenticatedTerminalityObligation",
     "DurableExactOutputAuthorityMayFenceActiveStateObligation",
@@ -4659,10 +4664,7 @@ _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS = (
     "FreshEpochPersistencePrecedesExactUseObligation",
     "CrashRestoresExactRequesterIncarnationObligation",
     "SameRosterPreservesTransportWithoutGenerationRollObligation",
-    "ForcedFenceCannotForgeAuthenticatedClosePrefixObligation",
     "LateOldCallbackCannotMutateSuccessorObligation",
-    "TypedRolloverNextPreservesSafetyObligation",
-    "TypedRolloverSpecAlwaysSafeObligation",
 )
 _TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS = (
     "ResponsiveDurableExactOutputRolloverLivenessObligation",
@@ -4677,14 +4679,10 @@ _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM = {
 }
 _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.update(
     {
-        (
-            "SumeragiV2TypedRolloverHandoffProofs",
-            "ResponsiveDurableExactOutputRolloverLivenessObligation",
-        ): "typed-rollover-handoff-conditional-local-liveness",
-        (
-            "SumeragiV2TypedRolloverHandoffProofs",
-            "ResponsiveRestartRestoreRolloverLivenessObligation",
-        ): "typed-rollover-handoff-restart-restore-local-liveness",
+        ("SumeragiV2TypedRolloverHandoffProofs", symbol): (
+            "typed-rollover-handoff-conditional-local-liveness"
+        )
+        for symbol in _TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS
     }
 )
 _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.update(
@@ -4950,6 +4948,70 @@ EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
 # theorem declaration and silently turn a real release obligation into a
 # tautology.
 EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureTimeoutViewProgressObligation",
+    ): (
+        "\\A initialContext: "
+        "TimeoutViewProgressProperty(AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "DirectTimeoutViewClosureResidualObligation",
+    ): (
+        "\\A initialContext: "
+        "DirectTimeoutViewClosureResidualProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "LockedBodyDirectClosureResidualProperty",
+    ): (
+        "/\\ TimeoutViewProgressProperty(specification) "
+        "/\\ RetainedLockTimeoutFedSourceExposureLeaderTurnProperty(specification) "
+        "/\\ RetainedLockLeaderTurnProducerOriginProperty(specification) "
+        "/\\ RetainedLockRankHandoffProperty(specification)"
+    ),
+    (
+        "SumeragiV2LockedBodyReproposalProgressProofs",
+        "RetainedLockTimeoutFedSourceExposureLeaderTurnProperty",
+    ): (
+        "TimeoutViewProgressProperty(specification) "
+        "=> (specification => \\A node \\in ValidatorIds, "
+        "lockedRound \\in Views, subject \\in Subjects: "
+        "RetainedLockModeSource(node, lockedRound, subject) "
+        "~> (RetainedLockModeGoal( node, lockedRound, subject) "
+        "\\/ RetainedLockSourceExposureFrontier("
+        " node, lockedRound, subject)))"
+    ),
+    (
+        "SumeragiV2LockedBodyReproposalProgressProofs",
+        "RetainedLockLeaderTurnProducerOriginProperty",
+    ): (
+        "specification => \\A node \\in ValidatorIds, "
+        "lockedRound \\in Views, subject \\in Subjects, originView \\in Views: "
+        "(RetainedLockExactLeaderTurn( node, lockedRound, subject, originView) "
+        "\\/ RetainedLockCertifiedPrepareTransfer("
+        " node, lockedRound, subject, originView)) "
+        "~> (RetainedLockModeGoal(node, lockedRound, subject) "
+        "\\/ RetainedLockRankedOriginFrontier("
+        " node, lockedRound, subject, originView))"
+    ),
+    (
+        "SumeragiV2LockedBodyReproposalProgressProofs",
+        "RetainedLockRankHandoffProperty",
+    ): (
+        "specification => \\A node \\in ValidatorIds, "
+        "lockedRound \\in Views, subject \\in Subjects, originView \\in Views, "
+        "rank \\in ExactLeaderSemanticRankCarrier: "
+        "RetainedLockCandidateRankFrontier("
+        " node, lockedRound, subject, originView, rank) "
+        "~> (RetainedLockModeGoal(node, lockedRound, subject) "
+        "\\/ \\E lowerRank \\in SetLessThan("
+        " rank, ExactLeaderSemanticRankOrdering, ExactLeaderSemanticRankCarrier): "
+        "RetainedLockCandidateRankFrontier("
+        " node, lockedRound, subject, originView, lowerRank))"
+    ),
     (
         "SumeragiV2DecisionWitnessPreservationProofs",
         "DecisionExactSourceOwner",
@@ -5728,6 +5790,38 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
 # DecisionAgreement, not from the write-once chain projection.
 EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureTimeoutViewProgressReduction",
+    ): (
+        "DirectTimeoutViewClosureResidualObligation "
+        "=> AsyncTemporalClosureTimeoutViewProgressObligation"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureLockedBodyReproposalProgressReduction",
+    ): (
+        "\\A initialContext: "
+        "LockedBodyDirectClosureResidualProperty("
+        " AsyncLiveSpecAt(initialContext)) "
+        "=> LockedBodyReproposalProgressProperty("
+        " AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2LockedBodyReproposalProgressProofs",
+        "DirectRetainedLockDecompositionClosesLockedBodyReproposal",
+    ): (
+        "\\A initialContext: "
+        "/\\ TimeoutViewProgressProperty( AsyncLiveSpecAt(initialContext)) "
+        "/\\ RetainedLockTimeoutFedSourceExposureLeaderTurnProperty("
+        " AsyncLiveSpecAt(initialContext)) "
+        "/\\ RetainedLockLeaderTurnProducerOriginProperty("
+        " AsyncLiveSpecAt(initialContext)) "
+        "/\\ RetainedLockRankHandoffProperty("
+        " AsyncLiveSpecAt(initialContext)) "
+        "=> LockedBodyReproposalProgressProperty("
+        " AsyncLiveSpecAt(initialContext))"
+    ),
+    (
         "SumeragiV2ProgressWitnessFinalClosureProofs",
         "OpenHistoricalRecoveryPreservesDecisionExactSource",
     ): (
@@ -5806,6 +5900,31 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
 }
 
 FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureTimeoutViewProgressReduction",
+    ): (
+        "DirectTimeoutViewDecompositionClosesTimeoutViewProgress",
+        "DirectTimeoutViewClosureResidualObligation",
+        "AsyncTemporalClosureTimeoutViewProgressObligation",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureLockedBodyReproposalProgressReduction",
+    ): (
+        "DirectRetainedLockDecompositionClosesLockedBodyReproposal",
+        "LockedBodyDirectClosureResidualProperty",
+    ),
+    (
+        "SumeragiV2LockedBodyReproposalProgressProofs",
+        "DirectRetainedLockDecompositionClosesLockedBodyReproposal",
+    ): (
+        "RetainedLockRankHandoffClosesRankedFrontier",
+        "RetainedLockTimeoutFedSourceExposureLeaderTurnProperty",
+        "RetainedLockLeaderTurnProducerOriginProperty",
+        "RetainedLockRankedFrontier",
+        "LockedBodyReproposalProgressProperty",
+    ),
     (
         "SumeragiV2DecisionWitnessPreservationProofs",
         "DecisionExactRetentionFramePreservesSource",
@@ -7132,7 +7251,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "46a5fc46be8b95eb70516a03c7fc52537238a7fe26545540a1a85413e3465475"
     ),
     "advance_after_attempt": (
-        "99937b997bdc98d6b2aad3c74ce13a66991b3b2a35651ac06e2c10319bbfb273"
+        "e678eb75bf1e124b8c3ac7b196bc9abee8d5429a6f064a1aaf64851291bc0e07"
     ),
     "drive_with_budget_ack": (
         "a4453951bf9775ad83b603cfe9b5f5849cc6251904602cbf76438c6140703bfa"
@@ -7547,7 +7666,7 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "5ed556d54c561a57c50d7636f84fdefaf29e14d1179de7edc245447ca861f1be"
     ),
     "PendingExactFanout::outstanding_reservation_counts": (
-        "c5fa7a719f4095a4f11313c0f87e56742227fbd541f32f1bceb3ea4a23b56d83"
+        "02972f0bfa1e31b0dca617382be3254a8da07177396c69101e068cb02075b3fc"
     ),
     "PendingExactFanout::target_reservation": (
         "94273ddf470c326dea9ab618150c7611ebf353a5f2358339bd52b3e382335bcb"
@@ -7556,7 +7675,7 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "fcb909658b3a0e546a8e6e5379ca4437ce4e55c2262f88e7ebb59ab7d8ff428b"
     ),
     "PendingExactFanout::admission_reservation_counts": (
-        "4d4ee3e68dcf3b2a88d78f85960bfb227c33eda8c19742e09a91c6f23ac174c1"
+        "3b5e7800f133b7673650fee75acefd31e56316c2d33ea5405c2b898fd11a8659"
     ),
     "PendingExactFanout::reply_target_merge_plan": (
         "d4470015919d5a1d7838b0c33a8a8c2c545808eac2e73e7ed8e5d37db2be0653"
@@ -7565,7 +7684,7 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "570dd53c526360494d3ac589a2b6f4dbb7c4da81610ab7e57cac4dadb4d20766"
     ),
     "PendingExactFanout::coalesce_reservation_additions_for_plan": (
-        "2b8f0eed68a64b53a506b032f02bad6dc037f5404987dc6616740012f3af6a0f"
+        "081e95192953390b7b1b17794f956c9e089d7986bda1c55ce49ddd83ad4f0979"
     ),
     "PendingExactFanout::preview_coalesce_plan": "f911b55bc95a4ea4ad07902c651cc090ebe5fb2d488a4adabbd86e22e7b720b2",
     "PendingExactFanout::commit_coalesce_plan": "a311d1d98cea528b88438f90a8f1d6e87b5adbd1d1b158730765b4e66239cade",
@@ -7621,10 +7740,10 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "1680843d65a96ef27f9c5d68c968dbbea10998b7641194647adede693c3fb4c7"
     ),
     "PendingExactOutput::responder_control_replacement_plan": (
-        "322b766ebaf692aec18c63262d3caec621511aa2c05139610b2e2ba5269aabd7"
+        "1a914ee0f02c0e45e7297282a6a9d415761d610ef303665bd98951ef6136fb79"
     ),
     "PendingExactOutput::replace_stranded_responder_control": (
-        "a8a4eb616bf16cd28624cf27c3ebe872cc700aa53dd336063750ab09563781a8"
+        "5b87149fac9b75e1690787b5167ed04681676a186f0bd2bfb834ecc5a3c748ff"
     ),
     "PendingExactOutput::enqueue": (
         "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6"
@@ -8969,10 +9088,13 @@ def _require_rust_item_context(
         for attribute in item.attributes
         if re.search(r"(?s)^#\s*\[\s*cfg(?:_attr)?\b", attribute)
     ]
-    if gated:
+    unexpected_gated = [
+        attribute for attribute in gated if attribute not in expected_attributes
+    ]
+    if unexpected_gated:
         errors.append(
             f"{path}:{item.line}: {description} may not be disabled or replaced "
-            f"through cfg/cfg_attr attributes: {gated!r}"
+            f"through unreviewed cfg/cfg_attr attributes: {unexpected_gated!r}"
         )
     elif item.attributes != expected_attributes:
         errors.append(
@@ -19309,7 +19431,7 @@ def _reply_writer_deadline_formal_source_fidelity_errors(
 def _typed_rollover_handoff_formal_source_fidelity_errors(
     formal_dir: Path, repo_root: Path = ROOT_DIR
 ) -> list[str]:
-    """Pin the proofless root-anchored V3 rollover model and 42 TLC controls."""
+    """Pin the proved/debt V3 rollover split and its 43 TLC controls."""
 
     errors: list[str] = []
     sources: dict[str, str] = {}
@@ -19318,19 +19440,30 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256
     )
     if (
-        len(reviewed_artifacts) != 46
-        or sum(name.endswith(".cfg") for name in reviewed_artifacts) != 43
-        or sum(name.endswith("_bug.cfg") for name in reviewed_artifacts) != 42
+        len(reviewed_artifacts) != 48
+        or sum(name.endswith(".cfg") for name in reviewed_artifacts) != 44
+        or sum(name.endswith("_bug.cfg") for name in reviewed_artifacts) != 43
     ):
         errors.append(
             "internal typed rollover source seal must contain exactly "
-            "46 artifacts: three TLA modules, one fixed config, and "
-            "42 mutation configs"
+            "48 artifacts: four TLA modules, one fixed config, and "
+            "43 mutation configs"
         )
-    if len(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) != 36:
+    if (
+        len(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) != 10
+        or len(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS) != 26
+        or len(_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS) != 2
+        or len(
+            set(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS)
+            | set(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS)
+            | set(_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS)
+        )
+        != 38
+    ):
         errors.append(
-            "internal typed rollover proof debt must contain exactly "
-            "36 safety theorem declarations"
+            "internal typed rollover proof inventory must contain exactly "
+            "26 proved and 12 proofless theorem declarations "
+            "(10 safety and 2 liveness proofless)"
         )
     for name, expected_sha256 in (
         _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256.items()
@@ -19403,8 +19536,8 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             rejected = " ".join(fragment.split())
             if rejected in normalized:
                 errors.append(
-                    f"{path}:{line}: {symbol} may not retain V3 shortcut "
-                    f"{fragment!r}"
+                    f"{path}:{line}: {symbol} may not contain forbidden "
+                    f"reviewed mutation fragment {fragment!r}"
                 )
 
     def require_operator_parameters(
@@ -19502,6 +19635,9 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "SumeragiV2TypedRolloverHandoff, TLAPS"
         ),
         "SumeragiV2TypedRolloverHandoffMutation.tla": (
+            "SumeragiV2TypedRolloverHandoff"
+        ),
+        "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla": (
             "SumeragiV2TypedRolloverHandoff"
         ),
     }
@@ -19652,6 +19788,41 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "LifecycleRootDirectoryIsSynced(s)",
             "~s.crashArtifactsPresent",
         ),
+        "PredecessorTransportOwnershipOpen": (
+            "state.currentRoster = state.baselineRoster",
+            'state.transitionAuthority = "None"',
+        ),
+        "CreateServiceTransportOwnerPair": (
+            "PredecessorTransportOwnershipOpen",
+            "state.serviceOwnerNonce = NoIdentity",
+            "state.transportOwnerNonce = NoIdentity",
+            'state.receiptStage \\in {"Absent", "Lost"}',
+            "~state.restartRequired",
+            "~state.successorActive",
+        ),
+        "SealAppliedHeightOutputHandoff": (
+            "PredecessorTransportOwnershipOpen",
+            "state.finalityValidated",
+            "state.workerIngressClosed",
+            "state.workerOutstanding = 0",
+            'state.receiptStage = "Absent"',
+            "ExactServiceTransportOwnerPair",
+            "~state.restartRequired",
+            "~state.successorActive",
+        ),
+        "ActivateSameRosterSuccessor": (
+            "PredecessorTransportOwnershipOpen",
+            "state.targetRoster = state.currentRoster",
+            'state.compactionCause = "NoCompaction"',
+            "ExactRetainedMergeSidecars",
+            'state.lifecycleCommitPhase = "Current"',
+            "LifecycleJournalReady(state)",
+            "~state.restartRequired",
+        ),
+        "UnconsumedPredecessorTransportOwnershipInvariant": (
+            'state.receiptStage \\in {"Minted", "Retained"}',
+            "PredecessorTransportOwnershipOpen",
+        ),
         "DurableCandidateStateSlotAheadOfRoot": (
             "state.candidateStateSlot = LifecycleStateSlot( "
             "state.durableLifecycleRootV3.rootGeneration + 1)",
@@ -19721,6 +19892,10 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "!.candidateSemanticallyValidated = TRUE",
             '!.lifecycleCommitPhase = "StateSlotReplaced"',
         ),
+        "PublishSuccessorLifecycleStateSlotV3": (
+            "\\E authority \\in ChangedRosterAuthorities:",
+            "PublishSuccessorLifecycleStateSlotV3WithAuthority(authority)",
+        ),
         "CrashAfterLifecycleStateSlotV3Publication": (
             "ValidatedCandidateSuccessorStateSlotAheadOfRoot",
             "!.durableJournalValidated = FALSE",
@@ -19785,6 +19960,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         ),
         "TypedRolloverSafetyInvariant": (
             "ExactServiceTransportOwnerPairInvariant",
+            "UnconsumedPredecessorTransportOwnershipInvariant",
             "RootAnchoredLifecycleV3Invariant",
             "SemanticValidationBeforeCleanupInvariant",
             "ValidatedCleanupRemovesInactiveSlotInvariant",
@@ -19950,10 +20126,11 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
 
     proofs_name = "SumeragiV2TypedRolloverHandoffProofs.tla"
     proofs_source = sources.get(proofs_name)
-    expected_theorems = set(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) | {
-        "ResponsiveDurableExactOutputRolloverLivenessObligation",
-        "ResponsiveRestartRestoreRolloverLivenessObligation",
-    }
+    proofless_theorems = set(
+        _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS
+    ) | set(_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS)
+    proved_theorems = set(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS)
+    expected_theorems = proofless_theorems | proved_theorems
     if proofs_source is not None:
         path = formal_dir / proofs_name
         stripped = strip_tla_comments(
@@ -19967,7 +20144,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         )
         if observed_theorems != expected_theorems:
             errors.append(
-                f"{path}: proofless root-anchored V3 theorem inventory must "
+                f"{path}: reviewed root-anchored V3 theorem inventory must "
                 f"equal {sorted(expected_theorems)!r}; found "
                 f"{sorted(observed_theorems)!r}"
             )
@@ -19978,11 +20155,22 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             if extracted is None:
                 continue
             body, line = extracted
-            if re.search(r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS|QED)\b", body):
+            has_proof = bool(
+                re.search(
+                    r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS|QED)\b",
+                    body,
+                )
+            )
+            if theorem in proofless_theorems and has_proof:
                 errors.append(
                     f"{path}:{line}: specified_unproved typed rollover "
                     f"obligations must remain proofless; {theorem} contains "
                     "a proof directive"
+                )
+            if theorem in proved_theorems and not has_proof:
+                errors.append(
+                    f"{path}:{line}: proved internal typed rollover theorem "
+                    f"{theorem} must retain a proof directive"
                 )
 
     theorem_contracts = {
@@ -20249,6 +20437,79 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         ),
     )
 
+    repeated_handoff_mutation_name = (
+        "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla"
+    )
+    require_operator_fragments(
+        repeated_handoff_mutation_name,
+        "RepeatedHandoffMutationInit",
+        (
+            "Init",
+            'state.startupMode = "LiveProcess"',
+            "ChangedRosterReplacementNeeded",
+            "state.serviceGeneration < ServiceGenerationLimit",
+            "state.durableLifecycleRootV3.rootGeneration < "
+            "RootGenerationLimit",
+        ),
+    )
+    require_operator_fragments(
+        repeated_handoff_mutation_name,
+        "ReopenPredecessorTransportAfterRestartRestore",
+        (
+            'state.lifecycleCommitPhase = "Restored"',
+            'state.transitionAuthority = "RestartRestore"',
+            "state.serviceOwnerNonce = NoIdentity",
+            "state.transportOwnerNonce = NoIdentity",
+            'state.receiptStage \\in {"Absent", "Lost"}',
+            "~state.restartRequired",
+            "~state.successorActive",
+            '!.serviceOwnerNonce = "OwnerNonce"',
+            '!.transportOwnerNonce = "OwnerNonce"',
+        ),
+        forbidden=("PredecessorTransportOwnershipOpen",),
+    )
+    require_operator_fragments(
+        repeated_handoff_mutation_name,
+        "ResealPredecessorTransportAfterRestartRestore",
+        (
+            'state.lifecycleCommitPhase = "Restored"',
+            'state.transitionAuthority = "RestartRestore"',
+            "state.finalityValidated",
+            "state.workerIngressClosed",
+            "state.workerOutstanding = 0",
+            'state.receiptStage = "Absent"',
+            "ExactServiceTransportOwnerPair",
+            "~state.restartRequired",
+            "~state.successorActive",
+            '!.receiptStage = "Minted"',
+            "!.receiptOwnerNonce = state.serviceOwnerNonce",
+        ),
+        forbidden=("PredecessorTransportOwnershipOpen",),
+    )
+    require_operator_fragments(
+        repeated_handoff_mutation_name,
+        "RepeatedHandoffMutationNext",
+        (
+            "CreateServiceTransportOwnerPair",
+            "SealAppliedHeightOutputHandoff",
+            "RetainExactHandoffReceipt",
+            "CrashAfterLifecycleRootV3Commit",
+            "ValidateRootSelectedLifecycleV3",
+            "CleanupValidatedLifecycleArtifactsV3",
+            "RestoreSuccessorLifecycleV3AfterCrash",
+            "ReopenPredecessorTransportAfterRestartRestore",
+            "ResealPredecessorTransportAfterRestartRestore",
+        ),
+    )
+    require_operator_fragments(
+        repeated_handoff_mutation_name,
+        "RepeatedHandoffMutationSpec",
+        (
+            "RepeatedHandoffMutationInit",
+            "[][RepeatedHandoffMutationNext]_typedRolloverVars",
+        ),
+    )
+
     action_properties = (
         "PROPERTY CapacityRejectionActionProperty",
         "PROPERTY StateSlotBeforeRootCommitActionProperty",
@@ -20268,6 +20529,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         "INVARIANT TypedRolloverTypeInvariant",
         "INVARIANT CompactionGeometryInvariant",
         "INVARIANT ExactServiceTransportOwnerPairInvariant",
+        "INVARIANT UnconsumedPredecessorTransportOwnershipInvariant",
         "INVARIANT ReceiptLifecycleInvariant",
         "INVARIANT FinalSealRejectsLateEnqueueInvariant",
         "INVARIANT MismatchRejectionInvariant",
@@ -20470,10 +20732,16 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             ),
         )
     }
-    if set(mutation_config_modes) != expected_config_names - {fixed_name}:
+    repeated_handoff_config_name = (
+        "typed_rollover_handoff_repeated_handoff_after_restart_restore_bug.cfg"
+    )
+    if set(mutation_config_modes) | {
+        repeated_handoff_config_name
+    } != expected_config_names - {fixed_name}:
         errors.append(
-            f"{formal_dir}: internal typed rollover 42-config contract does "
-            "not match the SHA-sealed inventory"
+            f"{formal_dir}: internal typed rollover contract of 42 shared "
+            "configs plus one dedicated repeated-handoff config does not "
+            "match the SHA-sealed inventory"
         )
     for config_name, mode in mutation_config_modes.items():
         config = configs.get(config_name)
@@ -20494,6 +20762,26 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 f"{formal_dir / config_name}: mutation config must select "
                 f"exact mode {mode} and the eleven root-anchored V3 action "
                 "properties"
+            )
+
+    repeated_handoff_config = configs.get(repeated_handoff_config_name)
+    if repeated_handoff_config is not None:
+        expected_lines = (
+            "SPECIFICATION RepeatedHandoffMutationSpec",
+            "CHECK_DEADLOCK FALSE",
+            "INVARIANT TypedRolloverSafetyInvariant",
+        )
+        observed_lines = tuple(
+            line.strip()
+            for line in repeated_handoff_config.splitlines()
+            if line.strip()
+        )
+        if observed_lines != expected_lines:
+            errors.append(
+                f"{formal_dir / repeated_handoff_config_name}: dedicated "
+                "repeated-handoff mutation config must select exactly "
+                "RepeatedHandoffMutationSpec and "
+                "TypedRolloverSafetyInvariant"
             )
 
     runner_path = (
@@ -20520,30 +20808,42 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         runner = payload.decode("utf-8")
         collapsed_runner = " ".join(runner.split())
         runner_fragments = (
-            "then run the fixed TLC model and all 42 deterministic mutation "
+            "then run the fixed TLC model and all 43 deterministic mutation "
             "configurations.",
+            'readonly REPEATED_HANDOFF_MUTATION_MODEL="'
+            'SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla"',
+            'readonly REPEATED_HANDOFF_MUTATION_CONFIG="'
+            "typed_rollover_handoff_repeated_handoff_after_restart_restore_"
+            'bug.cfg"',
             "for module in \\ SumeragiV2TypedRolloverHandoff \\ "
             "SumeragiV2TypedRolloverHandoffMutation \\ "
+            "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation \\ "
             "SumeragiV2TypedRolloverHandoffProofs; do",
             'run_case typed-rollover-fixed \\ "$FIXED_MODEL" '
             'typed_rollover_handoff_fixed.cfg 0 \\ '
             '"Model checking completed. No error has been found."',
-            "readonly EXPECTED_MUTATION_COUNT=42",
+            "readonly EXPECTED_MATRIX_MUTATION_COUNT=42",
+            "readonly EXPECTED_MUTATION_COUNT=43",
             'readonly INVARIANT_MARKER="Error: Invariant '
             'TypedRolloverSafetyInvariant is violated."',
             'actual_configs=("${FORMAL_DIR}"/'
             "typed_rollover_handoff_*_bug.cfg)",
+            'if [[ "$actual_config" == "$REPEATED_HANDOFF_MUTATION_CONFIG" '
+            "]]; then config_is_expected=true",
             "for case_spec in \"${mutation_cases[@]}\"; do",
             'run_case "$label" "$MUTATION_MODEL" "$config" '
             '"$expected_status" "$expected_marker"',
-            'echo "[tlc] typed rollover-handoff fixed model and 42-mutant '
+            "run_case repeated-handoff-after-restart-restore \\ "
+            '"$REPEATED_HANDOFF_MUTATION_MODEL" \\ '
+            '"$REPEATED_HANDOFF_MUTATION_CONFIG" 12 \\ "$INVARIANT_MARKER"',
+            'echo "[tlc] typed rollover-handoff fixed model and 43-mutant '
             'root-anchored V3 matrix passed"',
         )
         for fragment in runner_fragments:
             if " ".join(fragment.split()) not in collapsed_runner:
                 errors.append(
                     f"{runner_path}: typed rollover-handoff runner must retain "
-                    f"exact 42-case root-anchored V3 fragment {fragment!r}"
+                    f"exact 43-case root-anchored V3 fragment {fragment!r}"
                 )
 
         runner_cases = (
@@ -31262,6 +31562,9 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "local_proposal_directive": (
         "ae8489fea82bd72963f4343745cd838bdc30be67e8f95e0a5e4c1b76a003796e"
     ),
+    "local_proposal_directive_for_test": (
+        "9bb8bae3eeab780523915b4a196526ae4c45cba8f27336c093bbaa5420ae1709"
+    ),
     "from_replayed_proposal": (
         "68339551f22d493c78d862be663e3e753181353fc321c05b57c1105bad77f8d3"
     ),
@@ -31272,7 +31575,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
         "1c60f755614a3bfc42831b16e77643ed648d8607e588f4725ac072920c737c91"
     ),
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
-        "2beb5ebd67ee1d6032efe2f2b98d731ac6c4c259d3e8fa6d854d646fa8fc2b92"
+        "3245d9f8affaf523e99a6049a0aeab2d140cda6c099097390d0d85cafa5d3b5a"
     ),
     "schedule_local_proposal": (
         "bdc7e1b315f8cdb6a7c4c17b1b998ced6b70c267de62299c444d3542b438ad8e"
@@ -31469,6 +31772,57 @@ def _locked_body_reproposal_source_fidelity_errors(
                     f"{inductive_path}:{line}: {theorem_symbol} must retain its "
                     "exact action-to-justification proof dependency"
                 )
+
+    directive_path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+    directive_source = read_regular(
+        directive_path, "local-proposal directive production source"
+    )
+    if directive_source is not None:
+        directive_structural = mask_rust_comments_and_literals(directive_source)
+        directive_declarations = re.findall(
+            r"(?m)^[ \t]*pub[ \t]*\([ \t]*crate[ \t]*\)[ \t]+"
+            r"struct[ \t]+LocalProposalDirective\b",
+            directive_structural,
+        )
+        if len(directive_declarations) != 1:
+            errors.append(
+                f"{directive_path}: require exactly one crate-visible "
+                "LocalProposalDirective declaration; found "
+                f"{len(directive_declarations)}"
+            )
+        _require_rust_source_token_sequence(
+            directive_path,
+            directive_source,
+            """
+pub(crate) struct LocalProposalDirective {
+    tag: reducer::EventTag,
+    leader: wire::ValidatorIndex,
+    locked_round: Option<wire::ConsensusRound>,
+    locked_subject: Option<wire::BlockSubject>,
+    decided_subject: Option<wire::BlockSubject>,
+}
+""",
+            "LocalProposalDirective production fields must remain private",
+            errors,
+        )
+        directive_for_test = _require_qualified_rust_item(
+            directive_path,
+            directive_source,
+            "LocalProposalDirective",
+            "for_test",
+            errors,
+            "test-only exact local-proposal directive constructor",
+            expected_attributes=("#[cfg(test)]",),
+        )
+        _require_rust_item_token_sha256(
+            directive_path,
+            directive_for_test,
+            _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[
+                "local_proposal_directive_for_test"
+            ],
+            "test-only exact local-proposal directive constructor",
+            errors,
+        )
 
     production_specs = (
         (
@@ -36849,7 +37203,7 @@ _REPLY_WRITER_DEADLINE_WORKER_ITEM_SHA256 = {
         "c6e502433ef5249540446d75e0f88f665a7ffc456bf4014216f808fd123f072c"
     ),
     "PendingExactOutput::advance_after_attempt": (
-        "99937b997bdc98d6b2aad3c74ce13a66991b3b2a35651ac06e2c10319bbfb273"
+        "e678eb75bf1e124b8c3ac7b196bc9abee8d5429a6f064a1aaf64851291bc0e07"
     ),
 }
 
@@ -46152,9 +46506,13 @@ for (target_index, target) in self.targets.iter().enumerate() {
         })?;
     for class in exact_output_classes(*classes) {
         let reservation = self.target_reservation(semantic_target, class);
+        if reservation.kind == ExactTargetReservationKind::SidecarReplyControl {
+            reservations.entry(reservation).or_insert(1);
+            continue;
+        }
         let count = reservations.entry(reservation).or_default();
 """,
-        "each independent source attempt charges every outstanding semantic target/class unit after its own cursor, with topology progress isolated by reservation kind",
+        "each independent source attempt charges every outstanding semantic target/class unit after its own cursor, with responder-control progress shared per semantic target and topology progress isolated by reservation kind",
         errors,
     )
     _require_exact_rust_tokens(
@@ -55690,12 +56048,12 @@ def _production_liveness_release_inventory_errors(
         )
 
     typed_rollover_release_fragments = (
-        "readonly expected_typed_rollover_formal_mutation_count=42",
+        "readonly expected_typed_rollover_formal_mutation_count=43",
         "observed_typed_rollover_formal_mutation_count=\"$(",
         "    scripts/formal/"
         "run_sumeragi_v2_typed_rollover_handoff_mutations.sh\n)",
         "!= expected_typed_rollover_formal_mutation_count)); then",
-        'echo "[tlc] typed rollover-handoff fixed model and 42-mutant '
+        'echo "[tlc] typed rollover-handoff fixed model and 43-mutant '
         'root-anchored V3 matrix passed"',
         "  scripts/formal/"
         "run_sumeragi_v2_typed_rollover_handoff_mutations.sh; then",
@@ -55704,7 +56062,7 @@ def _production_liveness_release_inventory_errors(
         if source.count(fragment) != 1:
             errors.append(
                 f"{release_path}: release corridor must retain the exact "
-                f"42-mutation typed rollover contract fragment {fragment!r}"
+                f"43-mutation typed rollover contract fragment {fragment!r}"
             )
 
     multilane_focus_rows: list[tuple[str, str, str]] = []
