@@ -8397,36 +8397,40 @@ impl Iroha {
         }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
-        let kagemusha_release_catalog = match (
-            config
-                .settlement
-                .offline
-                .kagemusha_release_policy_path
-                .as_deref(),
-            config.settlement.offline.kagemusha_artifact_dir.as_deref(),
-        ) {
-            (None, None) => {
-                return Err(Report::new(StartError::InitKura).attach(
-                    "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
-                ));
+        let kagemusha_release_catalog = if config.settlement.offline.enabled {
+            match (
+                config
+                    .settlement
+                    .offline
+                    .kagemusha_release_policy_path
+                    .as_deref(),
+                config.settlement.offline.kagemusha_artifact_dir.as_deref(),
+            ) {
+                (None, None) => {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
+                    ));
+                }
+                (Some(policy_path), Some(artifact_dir)) => {
+                    iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
+                        policy_path,
+                        artifact_dir,
+                        config.settlement.offline.kagemusha_max_decoded_bytes,
+                    )
+                    .map_err(|error| {
+                        Report::new(StartError::InitKura).attach(format!(
+                            "failed to authenticate Kagemusha V4 release catalog: {error}"
+                        ))
+                    })?
+                }
+                _ => {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "Kagemusha V4 release policy and artifact directory must be configured together",
+                    ));
+                }
             }
-            (Some(policy_path), Some(artifact_dir)) => {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
-                    policy_path,
-                    artifact_dir,
-                    config.settlement.offline.kagemusha_max_decoded_bytes,
-                )
-                .map_err(|error| {
-                    Report::new(StartError::InitKura).attach(format!(
-                        "failed to authenticate Kagemusha V4 release catalog: {error}"
-                    ))
-                })?
-            }
-            _ => {
-                return Err(Report::new(StartError::InitKura).attach(
-                    "Kagemusha V4 release policy and artifact directory must be configured together",
-                ));
-            }
+        } else {
+            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
         };
         state.set_kagemusha_release_catalog(kagemusha_release_catalog);
         if !loaded_state_from_snapshot {

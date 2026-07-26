@@ -51,9 +51,11 @@ use iroha_data_model::{
         VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
         ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
         ValidationFeeGovernanceWindowV1, ValidationFeeParliamentAuthorizationV1,
-        ValidationFeePayoutLifecycleReferenceV1, ValidationFeePolicyRegistryEntryV1,
-        ValidationFeePolicyRegistryV1, ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
-        ValidationFeeTreasuryPayoutRecipientV1,
+        ValidationFeePayoutLifecycleReferenceV1,
+        ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateRulesV1,
+        ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+        ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
+        VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
     },
 };
 use iroha_primitives::{json::Json, numeric::NumericSpec};
@@ -72,6 +74,25 @@ fn quantity(value: &str) -> Quantity {
     value
         .parse()
         .expect("canonical validation-fee fixture quantity")
+}
+
+fn plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
+    ValidationFeePlainElectorateRulesV1 {
+        voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
+            .parse()
+            .expect("voting asset id"),
+        ballot_amount: 150_u64.into(),
+        ballot_duration_blocks: 3_600,
+        citizenship_amount: 10_000_u64.into(),
+        max_members: VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
+        conviction_step_blocks: 100,
+        max_conviction: 6,
+        min_turnout: 1,
+        approval_threshold_numerator: 1,
+        approval_threshold_denominator: 2,
+        eligibility_rule:
+            ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
+    }
 }
 
 fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
@@ -475,6 +496,7 @@ fn payout_lifecycle_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
             .treasury_payout_binding
             .clone()
             .expect("enabled policy must carry its exact payout binding"),
+        plain_electorate_rules: plain_electorate_rules(),
     })
 }
 
@@ -486,6 +508,7 @@ fn policy_proposal(policy: &ValidationFeePolicyV1) -> ProposalKind {
     ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         policy: policy.clone(),
         payout_lifecycle_proposal_id: Some(payout_lifecycle_proposal_id(policy)),
+        plain_electorate_rules: plain_electorate_rules(),
     })
 }
 
@@ -501,10 +524,12 @@ fn policy_registry(policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistr
     let proposal_id = proposal.fingerprint();
     let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
         policy.clone(),
+        plain_electorate_rules(),
         test_parliament_authorization(proposal_id),
         Some(ValidationFeePayoutLifecycleReferenceV1 {
             lifecycle_seal,
             parliament_authorization: test_parliament_authorization(lifecycle_id),
+            plain_electorate_rules: plain_electorate_rules(),
         }),
     )
     .expect("registry entry");

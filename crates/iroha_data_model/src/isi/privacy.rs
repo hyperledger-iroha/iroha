@@ -9,6 +9,7 @@ use crate::privacy::{
     PrivacyConsensusLimitsV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcBootstrapProofBytesV1,
     PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
     PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1,
+    PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
     PrivacyZkAmsRegistryBootstrapV1,
 };
 
@@ -218,6 +219,97 @@ impl BootstrapPrivacyZkAmsRegistryV1 {
 }
 
 isi! {
+    /// Register one canonical authoritative ZK-ACE policy lineage.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RegisterPrivacyZkAcePolicyV1 {
+        /// Complete active origin record, including its canonical self-digest.
+        pub policy: PrivacyZkAcePolicyRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RegisterPrivacyZkAcePolicyV1 {}
+
+impl RegisterPrivacyZkAcePolicyV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.register_zk_ace_policy.v1";
+
+    /// Construct an authoritative policy registration.
+    #[must_use]
+    pub fn new(policy: PrivacyZkAcePolicyRecordV1) -> Self {
+        Self { policy }
+    }
+}
+
+isi! {
+    /// Rotate one active authoritative ZK-ACE policy by exactly one epoch.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RotatePrivacyZkAcePolicyV1 {
+        /// Exact self-digest of the active record being replaced.
+        pub expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
+        /// Complete active successor record.
+        pub successor: PrivacyZkAcePolicyRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RotatePrivacyZkAcePolicyV1 {}
+
+impl RotatePrivacyZkAcePolicyV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.rotate_zk_ace_policy.v1";
+
+    /// Construct an exact policy rotation.
+    #[must_use]
+    pub fn new(
+        expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
+        successor: PrivacyZkAcePolicyRecordV1,
+    ) -> Self {
+        Self {
+            expected_current_record_digest,
+            successor,
+        }
+    }
+}
+
+isi! {
+    /// Irreversibly revoke one active authoritative ZK-ACE policy.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RevokePrivacyZkAcePolicyV1 {
+        /// Exact self-digest of the active record being revoked.
+        pub expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
+        /// Complete revoked successor record at the next epoch.
+        pub successor: PrivacyZkAcePolicyRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RevokePrivacyZkAcePolicyV1 {}
+
+impl RevokePrivacyZkAcePolicyV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.revoke_zk_ace_policy.v1";
+
+    /// Construct an exact irreversible policy revocation.
+    #[must_use]
+    pub fn new(
+        expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
+        successor: PrivacyZkAcePolicyRecordV1,
+    ) -> Self {
+        Self {
+            expected_current_record_digest,
+            successor,
+        }
+    }
+}
+
+isi! {
     /// Verify and atomically apply one protocol-typed privacy proof action.
     #[cfg_attr(
         feature = "json",
@@ -297,6 +389,17 @@ impl_privacy_decode_from_slice!(BootstrapPrivacyPgcAccountsV1 {
 });
 impl_privacy_decode_from_slice!(BootstrapPrivacyZkAmsRegistryV1 {
     bootstrap: PrivacyZkAmsRegistryBootstrapV1,
+});
+impl_privacy_decode_from_slice!(RegisterPrivacyZkAcePolicyV1 {
+    policy: PrivacyZkAcePolicyRecordV1,
+});
+impl_privacy_decode_from_slice!(RotatePrivacyZkAcePolicyV1 {
+    expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
+    successor: PrivacyZkAcePolicyRecordV1,
+});
+impl_privacy_decode_from_slice!(RevokePrivacyZkAcePolicyV1 {
+    expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
+    successor: PrivacyZkAcePolicyRecordV1,
 });
 impl_privacy_decode_from_slice!(SubmitPrivacyProofV1 {
     envelope: PrivacyProofEnvelopeV1,

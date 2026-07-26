@@ -11,19 +11,22 @@ use iroha_data_model::{
         error::{InstructionExecutionError as Error, InvalidParameterError},
         privacy::{
             BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
-            RegisterPrivacyProtocolActivationV1, SchedulePrivacyConsensusPolicyTighteningV1,
-            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
+            RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
+            RevokePrivacyZkAcePolicyV1, RotatePrivacyZkAcePolicyV1,
+            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
+            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
         },
     },
     permission::Permission,
-    prelude::{Account, AccountId, Register},
+    prelude::{Account, AccountId, AssetId, Quantity, Register, Transfer},
     privacy::{
         PrivacyConsensusPolicyTighteningV1, PrivacyNamespaceV1, PrivacyProtocolIdV1,
         PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1,
-        PrivacyRootRoleV1, PrivacyStatementV1, PrivacyZkAmsActionV1,
-        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
-        zk_ams_issuer_policy_record_digest_v1, zk_ams_registry_record_digest_v1,
+        PrivacyRootRoleV1, PrivacyStatementV1, PrivacyZkAcePolicyLifecycleV1,
+        PrivacyZkAmsActionV1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
+        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1, zk_ams_issuer_policy_record_digest_v1,
+        zk_ams_registry_record_digest_v1, validate_zk_ace_policy_revocation_v1,
+        validate_zk_ace_policy_rotation_v1,
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
@@ -51,7 +54,8 @@ use crate::{
         PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
         PrivacyRootRetentionAnchorV1, PrivacyStateItemRecordV1,
         compute_privacy_pgc_account_state_root_v1, load_privacy_pgc_pool_snapshot_v1,
-        load_privacy_zk_ams_registry_snapshot_v1, plan_privacy_root_history_update_v1,
+        load_privacy_zk_ace_policy_v1, load_privacy_zk_ams_registry_snapshot_v1,
+        plan_privacy_root_history_update_v1, privacy_zk_ace_policy_count_v1,
         validate_non_pgc_privacy_root_retention_v1,
     },
     privacy_verifier::{
@@ -126,6 +130,7 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         | PrivacyVerificationErrorV1::NativeVeRange(_)
         | PrivacyVerificationErrorV1::NativeVega(_)
         | PrivacyVerificationErrorV1::NativeJindo(_)
+        | PrivacyVerificationErrorV1::NativeZkAce(_)
         | PrivacyVerificationErrorV1::NativeZkAms(_)
         | PrivacyVerificationErrorV1::NativeAnonymousPgc(_) => false,
     };
@@ -508,7 +513,9 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
             .privacy_activations
             .get(&activation_key)
             .copied()
-            .ok_or_else(|| invalid_privacy_parameter("ZK-AMS privacy protocol is not registered"))?;
+            .ok_or_else(|| {
+                invalid_privacy_parameter("ZK-AMS privacy protocol is not registered")
+            })?;
         validate_compiled_privacy_activation_v1(&activation).map_err(|error| {
             Error::InvariantViolation(
                 format!("registered ZK-AMS activation is not executable: {error}").into(),
@@ -529,9 +536,8 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
             )));
         }
 
-        let head_key =
-            PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::AccountRegistry)
-                .map_err(invalid_privacy_parameter)?;
+        let head_key = PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::AccountRegistry)
+            .map_err(invalid_privacy_parameter)?;
         if state_transaction
             .world
             .privacy_root_heads
@@ -559,7 +565,9 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
         if state_transaction
             .world
             .privacy_commitments
-            .range(PrivacyCommitmentKeyV1::zk_ams_issuer_policy_record_range(namespace))
+            .range(PrivacyCommitmentKeyV1::zk_ams_issuer_policy_record_range(
+                namespace,
+            ))
             .next()
             .is_some()
             || state_transaction
@@ -577,9 +585,9 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
             || state_transaction
                 .world
                 .privacy_nullifiers
-                .range(crate::privacy_state::PrivacyNullifierKeyV1::zk_ams_key_image_range(
-                    namespace,
-                ))
+                .range(
+                    crate::privacy_state::PrivacyNullifierKeyV1::zk_ams_key_image_range(namespace),
+                )
                 .next()
                 .is_some()
         {
@@ -594,11 +602,9 @@ impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
             self.bootstrap.issuer_policy_record_digest(),
         )
         .map_err(invalid_privacy_parameter)?;
-        let issuer_record = PrivacyStateItemRecordV1::zk_ams_governance(
-            bootstrap_digest,
-            current_height,
-        )
-        .map_err(invalid_privacy_parameter)?;
+        let issuer_record =
+            PrivacyStateItemRecordV1::zk_ams_governance(bootstrap_digest, current_height)
+                .map_err(invalid_privacy_parameter)?;
         let root_key = PrivacyRootKeyV1::new(
             namespace,
             PrivacyRootRoleV1::AccountRegistry,
@@ -965,10 +971,227 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
     }
 }
 
+fn validate_zk_ace_policy_references(
+    policy: &iroha_data_model::privacy::PrivacyZkAcePolicyRecordV1,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    state_transaction
+        .world
+        .asset_definition(&policy.asset_definition_id)
+        .map_err(Error::from)?;
+    for account_id in &policy.source_allowlist {
+        if state_transaction.world.accounts.get(account_id).is_none() {
+            return Err(invalid_privacy_parameter(format!(
+                "ZK-ACE source account `{account_id}` does not exist"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn require_registered_zk_ace_protocol(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    let activation_key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
+    let activation = state_transaction
+        .world
+        .privacy_activations
+        .get(&activation_key)
+        .ok_or_else(|| invalid_privacy_parameter("ZK-ACE privacy protocol is not registered"))?;
+    activation.validate().map_err(|error| {
+        Error::InvariantViolation(
+            format!("registered ZK-ACE activation is invalid: {error}").into(),
+        )
+    })
+}
+
+impl Execute for RegisterPrivacyZkAcePolicyV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let encoded_action_bytes = norito::to_bytes(&self)
+            .ok()
+            .and_then(|bytes| u64::try_from(bytes.len()).ok())
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "ZK-ACE policy registration canonical encoding failed".into(),
+                )
+            })?;
+        let expected_action_index = state_transaction.next_privacy_action_index();
+        state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
+        require_registered_zk_ace_protocol(state_transaction)?;
+        self.policy.validate_initial().map_err(|error| {
+            invalid_privacy_parameter(format!("ZK-ACE policy registration rejected: {error}"))
+        })?;
+        validate_zk_ace_policy_references(&self.policy, state_transaction)?;
+        let policy_count =
+            privacy_zk_ace_policy_count_v1(&state_transaction.world.privacy_commitments).map_err(
+                |error| {
+                    Error::InvariantViolation(
+                        format!("persisted ZK-ACE policy registry is invalid: {error}").into(),
+                    )
+                },
+            )?;
+        if policy_count >= PRIVACY_ZK_ACE_MAX_POLICIES_V1 {
+            return Err(invalid_privacy_parameter(format!(
+                "ZK-ACE policy registry is full at {} policies",
+                PRIVACY_ZK_ACE_MAX_POLICIES_V1
+            )));
+        }
+        let key = PrivacyCommitmentKeyV1::zk_ace_policy(self.policy.policy_id)
+            .map_err(invalid_privacy_parameter)?;
+        if state_transaction
+            .world
+            .privacy_commitments
+            .get(&key)
+            .is_some()
+        {
+            return Err(invalid_privacy_parameter(
+                "ZK-ACE policy id is already registered",
+            ));
+        }
+        let record = PrivacyStateItemRecordV1::zk_ace_policy_governance(
+            self.policy,
+            state_transaction.block_height(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(key, record);
+        Ok(())
+    }
+}
+
+impl Execute for RotatePrivacyZkAcePolicyV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let encoded_action_bytes = norito::to_bytes(&self)
+            .ok()
+            .and_then(|bytes| u64::try_from(bytes.len()).ok())
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "ZK-ACE policy rotation canonical encoding failed".into(),
+                )
+            })?;
+        let expected_action_index = state_transaction.next_privacy_action_index();
+        state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
+        require_registered_zk_ace_protocol(state_transaction)?;
+        if self.expected_current_record_digest.is_zero() {
+            return Err(invalid_privacy_parameter(
+                "ZK-ACE expected current policy digest must be non-zero",
+            ));
+        }
+        let current = load_privacy_zk_ace_policy_v1(
+            self.successor.policy_id,
+            &state_transaction.world.privacy_commitments,
+        )
+        .map_err(|error| {
+            Error::InvariantViolation(
+                format!("trusted ZK-ACE policy state failed validation: {error}").into(),
+            )
+        })?;
+        if current.record_digest != self.expected_current_record_digest {
+            return Err(invalid_privacy_parameter(
+                "ZK-ACE policy rotation expected a stale or substituted current record",
+            ));
+        }
+        validate_zk_ace_policy_rotation_v1(&current, &self.successor).map_err(|error| {
+            invalid_privacy_parameter(format!("ZK-ACE policy rotation rejected: {error}"))
+        })?;
+        validate_zk_ace_policy_references(&self.successor, state_transaction)?;
+        let key = PrivacyCommitmentKeyV1::zk_ace_policy(current.policy_id)
+            .map_err(invalid_privacy_parameter)?;
+        let record = PrivacyStateItemRecordV1::zk_ace_policy_governance(
+            self.successor,
+            state_transaction.block_height(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(key, record);
+        Ok(())
+    }
+}
+
+impl Execute for RevokePrivacyZkAcePolicyV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let encoded_action_bytes = norito::to_bytes(&self)
+            .ok()
+            .and_then(|bytes| u64::try_from(bytes.len()).ok())
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "ZK-ACE policy revocation canonical encoding failed".into(),
+                )
+            })?;
+        let expected_action_index = state_transaction.next_privacy_action_index();
+        state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
+        require_registered_zk_ace_protocol(state_transaction)?;
+        if self.expected_current_record_digest.is_zero() {
+            return Err(invalid_privacy_parameter(
+                "ZK-ACE expected current policy digest must be non-zero",
+            ));
+        }
+        let current = load_privacy_zk_ace_policy_v1(
+            self.successor.policy_id,
+            &state_transaction.world.privacy_commitments,
+        )
+        .map_err(|error| {
+            Error::InvariantViolation(
+                format!("trusted ZK-ACE policy state failed validation: {error}").into(),
+            )
+        })?;
+        if current.record_digest != self.expected_current_record_digest {
+            return Err(invalid_privacy_parameter(
+                "ZK-ACE policy revocation expected a stale or substituted current record",
+            ));
+        }
+        validate_zk_ace_policy_revocation_v1(&current, &self.successor).map_err(|error| {
+            invalid_privacy_parameter(format!("ZK-ACE policy revocation rejected: {error}"))
+        })?;
+        if self.successor.lifecycle != PrivacyZkAcePolicyLifecycleV1::Revoked {
+            return Err(invalid_privacy_parameter(
+                "ZK-ACE policy revocation successor must be revoked",
+            ));
+        }
+        let key = PrivacyCommitmentKeyV1::zk_ace_policy(current.policy_id)
+            .map_err(invalid_privacy_parameter)?;
+        let record = PrivacyStateItemRecordV1::zk_ace_policy_governance(
+            self.successor,
+            state_transaction.block_height(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(key, record);
+        Ok(())
+    }
+}
+
 impl Execute for SubmitPrivacyProofV1 {
     fn execute(
         self,
-        _authority: &AccountId,
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let transaction_intent_digest = self.envelope.statement.context().transaction_intent_digest;
@@ -1044,6 +1267,358 @@ impl Execute for SubmitPrivacyProofV1 {
             } else {
                 None
             };
+        let zk_ams_snapshot = if self.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkAmsV1 {
+            let PrivacyStatementV1::IrohaZkAmsV1(statement) = &self.envelope.statement else {
+                return Err(invalid_privacy_parameter(
+                    "ZK-AMS protocol envelope carries a different statement type",
+                ));
+            };
+            let namespace = PrivacyNamespaceV1::from_statement(&self.envelope.statement);
+            let snapshot = load_privacy_zk_ams_registry_snapshot_v1(
+                namespace,
+                state_transaction
+                    .world
+                    .privacy_consensus_policy
+                    .get()
+                    .admission_retained_root_count(),
+                &state_transaction.world.privacy_commitments,
+                &state_transaction.world.privacy_roots,
+                &state_transaction.world.privacy_root_heads,
+            )
+            .map_err(|error| {
+                Error::InvariantViolation(
+                    format!("trusted ZK-AMS registry state failed validation: {error}").into(),
+                )
+            })?;
+            if snapshot.retained_current_root()
+                != Some((snapshot.current_epoch(), snapshot.current_root()))
+            {
+                return Err(Error::InvariantViolation(
+                    "trusted ZK-AMS current root is not retained".into(),
+                ));
+            }
+            let expected_issuer_record = zk_ams_issuer_policy_record_digest_v1(
+                statement.issuer_id,
+                statement.policy_id,
+                statement.issuer_public_key,
+                statement.policy_digest,
+            );
+            if statement.issuer_policy_record_digest != expected_issuer_record
+                || expected_issuer_record != snapshot.issuer_policy_record_digest()
+            {
+                return Err(invalid_privacy_parameter(
+                    "ZK-AMS statement issuer key/policy does not match governed state",
+                ));
+            }
+            let expected_registry_record = zk_ams_registry_record_digest_v1(
+                statement.issuer_id,
+                statement.registry_id,
+                statement.policy_id,
+                expected_issuer_record,
+                statement.policy_digest,
+                snapshot.current_root(),
+                snapshot.current_epoch(),
+            );
+            if statement.registry_record_digest != expected_registry_record {
+                return Err(invalid_privacy_parameter(
+                    "ZK-AMS statement registry record does not match the authoritative head",
+                ));
+            }
+
+            match &statement.action {
+                PrivacyZkAmsActionV1::BatchAdmission(batch) => {
+                    if batch.account_registry_root != snapshot.current_root()
+                        || batch.account_registry_root_epoch != snapshot.current_epoch()
+                    {
+                        return Err(invalid_privacy_parameter(
+                            "ZK-AMS batch admission references a stale or future registry head",
+                        ));
+                    }
+                    let expected_next_epoch =
+                        snapshot.current_epoch().checked_add(1).ok_or_else(|| {
+                            Error::InvariantViolation("ZK-AMS registry epoch overflow".into())
+                        })?;
+                    if batch.next_account_registry_root_epoch != expected_next_epoch {
+                        return Err(invalid_privacy_parameter(
+                            "ZK-AMS batch admission does not advance exactly one epoch",
+                        ));
+                    }
+                    let batch_size = u32::try_from(batch.anchors.len()).map_err(|_| {
+                        invalid_privacy_parameter("ZK-AMS batch anchor count cannot be represented")
+                    })?;
+                    let mut computed_root = snapshot.current_root();
+                    for (index, anchor) in batch.anchors.iter().copied().enumerate() {
+                        let anchor_index = u32::try_from(index).map_err(|_| {
+                            invalid_privacy_parameter(
+                                "ZK-AMS batch anchor index cannot be represented",
+                            )
+                        })?;
+                        computed_root = zk_ams_registry_transition_root_v1(
+                            statement.registry_id,
+                            computed_root,
+                            snapshot.current_epoch(),
+                            expected_next_epoch,
+                            batch_size,
+                            anchor_index,
+                            anchor,
+                        );
+                        let phc_key =
+                            PrivacyCommitmentKeyV1::zk_ams_phc(namespace, anchor.phc_hash)
+                                .map_err(invalid_privacy_parameter)?;
+                        if let Some(record) =
+                            state_transaction.world.privacy_commitments.get(&phc_key)
+                        {
+                            record.validate().map_err(|error| {
+                                Error::InvariantViolation(
+                                    format!("persisted ZK-AMS PHC provenance is invalid: {error}")
+                                        .into(),
+                                )
+                            })?;
+                            if !matches!(
+                                record,
+                                PrivacyStateItemRecordV1::ZkAmsVerifiedProof {
+                                    bootstrap_digest,
+                                    ..
+                                } if *bootstrap_digest == snapshot.bootstrap_digest()
+                            ) {
+                                return Err(Error::InvariantViolation(
+                                    "persisted ZK-AMS PHC has cross-bootstrap provenance".into(),
+                                ));
+                            }
+                            return Err(invalid_privacy_parameter(
+                                "ZK-AMS PHC hash was already admitted",
+                            ));
+                        }
+                        let seed_key = PrivacyCommitmentKeyV1::zk_ams_seed_key(
+                            namespace,
+                            anchor.seed_public_key,
+                        )
+                        .map_err(invalid_privacy_parameter)?;
+                        if let Some(record) =
+                            state_transaction.world.privacy_commitments.get(&seed_key)
+                        {
+                            record.validate().map_err(|error| {
+                                Error::InvariantViolation(
+                                    format!(
+                                        "persisted ZK-AMS seed-key provenance is invalid: {error}"
+                                    )
+                                    .into(),
+                                )
+                            })?;
+                            if !matches!(
+                                record,
+                                PrivacyStateItemRecordV1::ZkAmsVerifiedProof {
+                                    bootstrap_digest,
+                                    ..
+                                } if *bootstrap_digest == snapshot.bootstrap_digest()
+                            ) {
+                                return Err(Error::InvariantViolation(
+                                    "persisted ZK-AMS seed key has cross-bootstrap provenance"
+                                        .into(),
+                                ));
+                            }
+                            return Err(invalid_privacy_parameter(
+                                "ZK-AMS seed key was already admitted",
+                            ));
+                        }
+                    }
+                    if computed_root != batch.next_account_registry_root {
+                        return Err(invalid_privacy_parameter(
+                            "ZK-AMS batch successor root is not the canonical ordered transition",
+                        ));
+                    }
+                }
+                PrivacyZkAmsActionV1::ProvisionAccount(provision) => {
+                    if provision.account_registry_root != snapshot.current_root()
+                        || provision.account_registry_root_epoch != snapshot.current_epoch()
+                    {
+                        return Err(invalid_privacy_parameter(
+                            "ZK-AMS provisioning references a stale or future registry head",
+                        ));
+                    }
+                    for seed_public_key in &provision.admitted_seed_key_ring {
+                        let seed_key =
+                            PrivacyCommitmentKeyV1::zk_ams_seed_key(namespace, *seed_public_key)
+                                .map_err(invalid_privacy_parameter)?;
+                        let record = state_transaction
+                            .world
+                            .privacy_commitments
+                            .get(&seed_key)
+                            .ok_or_else(|| {
+                                invalid_privacy_parameter(
+                                    "ZK-AMS provisioning ring contains an unadmitted seed key",
+                                )
+                            })?;
+                        record.validate().map_err(|error| {
+                            Error::InvariantViolation(
+                                format!("persisted ZK-AMS seed-key provenance is invalid: {error}")
+                                    .into(),
+                            )
+                        })?;
+                        if !matches!(
+                            record,
+                            PrivacyStateItemRecordV1::ZkAmsVerifiedProof {
+                                bootstrap_digest,
+                                ..
+                            } if *bootstrap_digest == snapshot.bootstrap_digest()
+                        ) {
+                            return Err(Error::InvariantViolation(
+                                "persisted ZK-AMS seed key has cross-bootstrap provenance".into(),
+                            ));
+                        }
+                    }
+                    let image_key =
+                        PrivacyNullifierKeyV1::zk_ams_key_image(namespace, provision.key_image)
+                            .map_err(invalid_privacy_parameter)?;
+                    if let Some(record) = state_transaction.world.privacy_nullifiers.get(&image_key)
+                    {
+                        record.validate().map_err(|error| {
+                            Error::InvariantViolation(
+                                format!(
+                                    "persisted ZK-AMS key-image provenance is invalid: {error}"
+                                )
+                                .into(),
+                            )
+                        })?;
+                        if !matches!(
+                            record,
+                            PrivacyStateItemRecordV1::ZkAmsVerifiedProof {
+                                bootstrap_digest,
+                                ..
+                            } if *bootstrap_digest == snapshot.bootstrap_digest()
+                        ) {
+                            return Err(Error::InvariantViolation(
+                                "persisted ZK-AMS key image has cross-bootstrap provenance".into(),
+                            ));
+                        }
+                        return Err(invalid_privacy_parameter(
+                            "ZK-AMS provisioning key image was already consumed",
+                        ));
+                    }
+                    if state_transaction
+                        .world
+                        .accounts
+                        .get(&provision.account_id)
+                        .is_some()
+                    {
+                        return Err(invalid_privacy_parameter(
+                            "ZK-AMS provisioning target account already exists",
+                        ));
+                    }
+                }
+            }
+            Some(snapshot)
+        } else {
+            None
+        };
+        let (zk_ace_policy, zk_ace_replay_key) =
+            if self.envelope.protocol_id == PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 {
+                let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+                    &self.envelope.statement
+                else {
+                    return Err(invalid_privacy_parameter(
+                        "ZK-ACE protocol envelope carries a different statement type",
+                    ));
+                };
+                let policy_key = PrivacyCommitmentKeyV1::zk_ace_policy(statement.policy_id)
+                    .map_err(invalid_privacy_parameter)?;
+                if state_transaction
+                    .world
+                    .privacy_commitments
+                    .get(&policy_key)
+                    .is_none()
+                {
+                    return Err(invalid_privacy_parameter(
+                        "ZK-ACE authoritative policy is not registered",
+                    ));
+                }
+                let policy = load_privacy_zk_ace_policy_v1(
+                    statement.policy_id,
+                    &state_transaction.world.privacy_commitments,
+                )
+                .map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("trusted ZK-ACE policy state failed validation: {error}").into(),
+                    )
+                })?;
+                if policy.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
+                    return Err(invalid_privacy_parameter(
+                        "ZK-ACE authoritative policy is revoked",
+                    ));
+                }
+                if policy.policy_id != statement.policy_id
+                    || policy.policy_digest != statement.policy_digest
+                    || policy.identity_commitment != statement.identity_commitment
+                    || policy.authorization_epoch != statement.authorization_epoch
+                    || policy.asset_definition_id != statement.asset_definition_id
+                {
+                    return Err(invalid_privacy_parameter(
+                        "ZK-ACE statement does not exactly match authoritative policy state",
+                    ));
+                }
+                if policy
+                    .source_allowlist
+                    .binary_search(&statement.source)
+                    .is_err()
+                {
+                    return Err(invalid_privacy_parameter(
+                        "ZK-ACE source account is not authorized by policy",
+                    ));
+                }
+                if state_transaction
+                    .world
+                    .accounts
+                    .get(&statement.source)
+                    .is_none()
+                {
+                    return Err(invalid_privacy_parameter(
+                        "ZK-ACE source account does not exist",
+                    ));
+                }
+                if state_transaction
+                    .world
+                    .accounts
+                    .get(&statement.destination)
+                    .is_none()
+                {
+                    return Err(invalid_privacy_parameter(
+                        "ZK-ACE destination account does not exist",
+                    ));
+                }
+                state_transaction
+                    .world
+                    .asset_definition(&statement.asset_definition_id)
+                    .map_err(Error::from)?;
+                let replay_key = PrivacyNullifierKeyV1::zk_ace_replay(
+                    statement.policy_id,
+                    statement.replay_nullifier,
+                )
+                .map_err(invalid_privacy_parameter)?;
+                if let Some(record) = state_transaction.world.privacy_nullifiers.get(&replay_key) {
+                    record.validate().map_err(|error| {
+                        Error::InvariantViolation(
+                            format!("persisted ZK-ACE replay provenance is invalid: {error}").into(),
+                        )
+                    })?;
+                    if !matches!(
+                        record,
+                        PrivacyStateItemRecordV1::ZkAceVerifiedAuthorization {
+                            policy_id,
+                            ..
+                        } if *policy_id == statement.policy_id
+                    ) {
+                        return Err(Error::InvariantViolation(
+                            "persisted ZK-ACE replay marker has wrong-policy provenance".into(),
+                        ));
+                    }
+                    return Err(invalid_privacy_parameter(
+                        "ZK-ACE replay nullifier was already consumed",
+                    ));
+                }
+                (Some(policy), Some(replay_key))
+            } else {
+                (None, None)
+            };
         let pgc_verification_state =
             pgc_snapshot
                 .as_ref()
@@ -1089,6 +1664,430 @@ impl Execute for SubmitPrivacyProofV1 {
         match effects.into_ledger() {
             VerifiedPrivacyLedgerEffectsV1::None => state_transaction
                 .reserve_privacy_action(expected_action_index, encoded_action_bytes),
+            VerifiedPrivacyLedgerEffectsV1::ZkAceAuthorization(effect) => {
+                let policy = zk_ace_policy.as_ref().ok_or_else(|| {
+                    Error::InvariantViolation(
+                        "native ZK-ACE effect has no trusted policy state".into(),
+                    )
+                })?;
+                let replay_key = zk_ace_replay_key.ok_or_else(|| {
+                    Error::InvariantViolation(
+                        "native ZK-ACE effect has no trusted replay key".into(),
+                    )
+                })?;
+                let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+                    &self.envelope.statement
+                else {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-ACE effect has a different statement type".into(),
+                    ));
+                };
+                if effect.policy_id != statement.policy_id
+                    || effect.policy_digest != statement.policy_digest
+                    || effect.identity_commitment != statement.identity_commitment
+                    || effect.authorization_epoch != statement.authorization_epoch
+                    || effect.source != statement.source
+                    || effect.destination != statement.destination
+                    || effect.asset_definition_id != statement.asset_definition_id
+                    || effect.amount != statement.amount
+                    || effect.replay_nullifier != statement.replay_nullifier
+                    || effect.policy_id != policy.policy_id
+                    || effect.policy_digest != policy.policy_digest
+                    || effect.identity_commitment != policy.identity_commitment
+                    || effect.authorization_epoch != policy.authorization_epoch
+                    || effect.asset_definition_id != policy.asset_definition_id
+                    || policy.source_allowlist.binary_search(&effect.source).is_err()
+                {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-ACE effect is inconsistent with trusted state or its statement"
+                            .into(),
+                    ));
+                }
+                let expected_replay_key = PrivacyNullifierKeyV1::zk_ace_replay(
+                    effect.policy_id,
+                    effect.replay_nullifier,
+                )
+                .map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("verified ZK-ACE replay key is invalid: {error}").into(),
+                    )
+                })?;
+                if replay_key != expected_replay_key {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-ACE effect changed its replay key".into(),
+                    ));
+                }
+                if state_transaction
+                    .world
+                    .privacy_nullifiers
+                    .get(&replay_key)
+                    .is_some()
+                {
+                    return Err(invalid_privacy_parameter(
+                        "verified ZK-ACE replay nullifier was already consumed",
+                    ));
+                }
+                let replay_record =
+                    PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+                        policy.policy_id,
+                        policy.record_digest,
+                        self.envelope.statement_digest,
+                        state_transaction.block_height(),
+                        expected_action_index,
+                    )
+                    .map_err(invalid_privacy_parameter)?;
+                let source_asset_id = super::world::privacy_public_asset_id(
+                    state_transaction,
+                    &effect.asset_definition_id,
+                    &effect.source,
+                )?;
+                let amount = Quantity::from(effect.amount);
+
+                // `fee` is already committed by the transaction intent and
+                // proof statement. This handler has no independent fee sink,
+                // so it is deliberately neither added to `amount` nor charged
+                // a second time here.
+                let _bound_fee_without_second_charge = statement.fee;
+                state_transaction
+                    .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+                state_transaction
+                    .world
+                    .privacy_nullifiers
+                    .insert(replay_key, replay_record);
+                Transfer::asset_quantity(source_asset_id, amount, effect.destination)
+                    .execute(&effect.source, state_transaction)
+            }
+            VerifiedPrivacyLedgerEffectsV1::ZkAmsBatchAdmission(effect) => {
+                let snapshot = zk_ams_snapshot.as_ref().ok_or_else(|| {
+                    Error::InvariantViolation(
+                        "native ZK-AMS batch effect has no trusted registry snapshot".into(),
+                    )
+                })?;
+                let PrivacyStatementV1::IrohaZkAmsV1(statement) = &self.envelope.statement else {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-AMS batch effect has a different statement type".into(),
+                    ));
+                };
+                let PrivacyZkAmsActionV1::BatchAdmission(batch) = &statement.action else {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-AMS batch effect has a provisioning statement".into(),
+                    ));
+                };
+                let expected_next_epoch =
+                    snapshot.current_epoch().checked_add(1).ok_or_else(|| {
+                        Error::InvariantViolation("ZK-AMS registry epoch overflow".into())
+                    })?;
+                if effect.issuer_id != statement.issuer_id
+                    || effect.policy_id != statement.policy_id
+                    || effect.policy_digest != statement.policy_digest
+                    || effect.issuer_policy_record_digest != snapshot.issuer_policy_record_digest()
+                    || effect.registry_id != statement.registry_id
+                    || effect.registry_record_digest != statement.registry_record_digest
+                    || effect.current_root != snapshot.current_root()
+                    || effect.current_epoch != snapshot.current_epoch()
+                    || effect.next_root != batch.next_account_registry_root
+                    || effect.next_epoch != expected_next_epoch
+                    || effect.anchors != batch.anchors
+                {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-AMS batch effect is inconsistent with trusted state or its statement"
+                            .into(),
+                    ));
+                }
+                let expected_registry_record = zk_ams_registry_record_digest_v1(
+                    effect.issuer_id,
+                    effect.registry_id,
+                    effect.policy_id,
+                    effect.issuer_policy_record_digest,
+                    effect.policy_digest,
+                    snapshot.current_root(),
+                    snapshot.current_epoch(),
+                );
+                if expected_registry_record != effect.registry_record_digest {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-AMS batch effect carries a non-authoritative registry record"
+                            .into(),
+                    ));
+                }
+                let batch_size = u32::try_from(effect.anchors.len()).map_err(|_| {
+                    Error::InvariantViolation(
+                        "verified ZK-AMS anchor count cannot be represented".into(),
+                    )
+                })?;
+                let mut computed_next_root = snapshot.current_root();
+                let mut item_keys = Vec::with_capacity(effect.anchors.len().saturating_mul(2));
+                let mut seen_item_keys = BTreeSet::new();
+                for (index, anchor) in effect.anchors.iter().copied().enumerate() {
+                    let anchor_index = u32::try_from(index).map_err(|_| {
+                        Error::InvariantViolation(
+                            "verified ZK-AMS anchor index cannot be represented".into(),
+                        )
+                    })?;
+                    computed_next_root = zk_ams_registry_transition_root_v1(
+                        effect.registry_id,
+                        computed_next_root,
+                        snapshot.current_epoch(),
+                        expected_next_epoch,
+                        batch_size,
+                        anchor_index,
+                        anchor,
+                    );
+                    let phc_key =
+                        PrivacyCommitmentKeyV1::zk_ams_phc(snapshot.namespace(), anchor.phc_hash)
+                            .map_err(|error| {
+                            Error::InvariantViolation(
+                                format!("verified ZK-AMS PHC key is invalid: {error}").into(),
+                            )
+                        })?;
+                    let seed_key = PrivacyCommitmentKeyV1::zk_ams_seed_key(
+                        snapshot.namespace(),
+                        anchor.seed_public_key,
+                    )
+                    .map_err(|error| {
+                        Error::InvariantViolation(
+                            format!("verified ZK-AMS seed key is invalid: {error}").into(),
+                        )
+                    })?;
+                    if !seen_item_keys.insert(phc_key) || !seen_item_keys.insert(seed_key) {
+                        return Err(Error::InvariantViolation(
+                            "verified ZK-AMS batch contains duplicate typed state keys".into(),
+                        ));
+                    }
+                    if state_transaction
+                        .world
+                        .privacy_commitments
+                        .get(&phc_key)
+                        .is_some()
+                        || state_transaction
+                            .world
+                            .privacy_commitments
+                            .get(&seed_key)
+                            .is_some()
+                    {
+                        return Err(invalid_privacy_parameter(
+                            "verified ZK-AMS batch attempts to re-admit existing state",
+                        ));
+                    }
+                    item_keys.push(phc_key);
+                    item_keys.push(seed_key);
+                }
+                if computed_next_root != effect.next_root {
+                    return Err(Error::InvariantViolation(
+                        "verified ZK-AMS successor root is inconsistent".into(),
+                    ));
+                }
+
+                let item_provenance = PrivacyStateItemRecordV1::zk_ams_verified_proof(
+                    snapshot.bootstrap_digest(),
+                    self.envelope.statement_digest,
+                    state_transaction.block_height(),
+                    expected_action_index,
+                )
+                .map_err(invalid_privacy_parameter)?;
+                let root_provenance = PrivacyRootProvenanceV1::zk_ams_registry_successor(
+                    snapshot.bootstrap_digest(),
+                    self.envelope.statement_digest,
+                    state_transaction.block_height(),
+                    expected_action_index,
+                    snapshot.current_epoch(),
+                    snapshot.current_root(),
+                )
+                .map_err(invalid_privacy_parameter)?;
+                let root_key = PrivacyRootKeyV1::new(
+                    snapshot.namespace(),
+                    PrivacyRootRoleV1::AccountRegistry,
+                    expected_next_epoch,
+                    computed_next_root,
+                )
+                .map_err(invalid_privacy_parameter)?;
+                let head_key = PrivacyRootHeadKeyV1::new(
+                    snapshot.namespace(),
+                    PrivacyRootRoleV1::AccountRegistry,
+                )
+                .map_err(invalid_privacy_parameter)?;
+                let removals = plan_privacy_root_history_update_v1(
+                    &state_transaction.world.privacy_roots,
+                    &[root_key],
+                    state_transaction
+                        .world
+                        .privacy_consensus_policy
+                        .get()
+                        .admission_retained_root_count(),
+                )
+                .map_err(|error| {
+                    invalid_privacy_parameter(format!(
+                        "ZK-AMS AccountRegistry successor rejected: {error}"
+                    ))
+                })?;
+                let retention_anchor = removals
+                    .last()
+                    .map(|key| PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root()))
+                    .transpose()
+                    .map_err(invalid_privacy_parameter)?
+                    .or(snapshot.retention_anchor());
+                let root_head = PrivacyRootHeadRecordV1::new(
+                    expected_next_epoch,
+                    computed_next_root,
+                    root_provenance,
+                    retention_anchor,
+                )
+                .map_err(invalid_privacy_parameter)?;
+
+                state_transaction
+                    .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+                for key in removals {
+                    state_transaction.world.privacy_roots.remove(key);
+                }
+                for key in item_keys {
+                    state_transaction
+                        .world
+                        .privacy_commitments
+                        .insert(key, item_provenance);
+                }
+                state_transaction
+                    .world
+                    .privacy_roots
+                    .insert(root_key, root_provenance);
+                state_transaction
+                    .world
+                    .privacy_root_heads
+                    .insert(head_key, root_head);
+                Ok(())
+            }
+            VerifiedPrivacyLedgerEffectsV1::ZkAmsProvisionAccount(effect) => {
+                let snapshot = zk_ams_snapshot.as_ref().ok_or_else(|| {
+                    Error::InvariantViolation(
+                        "native ZK-AMS provisioning effect has no trusted registry snapshot".into(),
+                    )
+                })?;
+                let PrivacyStatementV1::IrohaZkAmsV1(statement) = &self.envelope.statement else {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-AMS provisioning effect has a different statement type".into(),
+                    ));
+                };
+                let PrivacyZkAmsActionV1::ProvisionAccount(provision) = &statement.action else {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-AMS provisioning effect has a batch statement".into(),
+                    ));
+                };
+                if effect.issuer_id != statement.issuer_id
+                    || effect.policy_id != statement.policy_id
+                    || effect.policy_digest != statement.policy_digest
+                    || effect.issuer_policy_record_digest != snapshot.issuer_policy_record_digest()
+                    || effect.registry_id != statement.registry_id
+                    || effect.registry_record_digest != statement.registry_record_digest
+                    || effect.current_root != snapshot.current_root()
+                    || effect.current_epoch != snapshot.current_epoch()
+                    || effect.ring != provision.admitted_seed_key_ring
+                    || effect.account_id != provision.account_id
+                    || effect.key_image != provision.key_image
+                {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-AMS provisioning effect is inconsistent with trusted state or its statement"
+                            .into(),
+                    ));
+                }
+                let expected_registry_record = zk_ams_registry_record_digest_v1(
+                    effect.issuer_id,
+                    effect.registry_id,
+                    effect.policy_id,
+                    effect.issuer_policy_record_digest,
+                    effect.policy_digest,
+                    snapshot.current_root(),
+                    snapshot.current_epoch(),
+                );
+                if expected_registry_record != effect.registry_record_digest {
+                    return Err(Error::InvariantViolation(
+                        "native ZK-AMS provisioning effect carries a non-authoritative registry record"
+                            .into(),
+                    ));
+                }
+                for seed_public_key in &effect.ring {
+                    let seed_key = PrivacyCommitmentKeyV1::zk_ams_seed_key(
+                        snapshot.namespace(),
+                        *seed_public_key,
+                    )
+                    .map_err(|error| {
+                        Error::InvariantViolation(
+                            format!("verified ZK-AMS ring key is invalid: {error}").into(),
+                        )
+                    })?;
+                    let record = state_transaction
+                        .world
+                        .privacy_commitments
+                        .get(&seed_key)
+                        .ok_or_else(|| {
+                            invalid_privacy_parameter(
+                                "verified ZK-AMS ring contains an unadmitted seed key",
+                            )
+                        })?;
+                    record.validate().map_err(|error| {
+                        Error::InvariantViolation(
+                            format!("persisted ZK-AMS ring provenance is invalid: {error}").into(),
+                        )
+                    })?;
+                    if !matches!(
+                        record,
+                        PrivacyStateItemRecordV1::ZkAmsVerifiedProof {
+                            bootstrap_digest,
+                            ..
+                        } if *bootstrap_digest == snapshot.bootstrap_digest()
+                    ) {
+                        return Err(Error::InvariantViolation(
+                            "verified ZK-AMS ring contains cross-bootstrap state".into(),
+                        ));
+                    }
+                }
+                let image_key =
+                    PrivacyNullifierKeyV1::zk_ams_key_image(snapshot.namespace(), effect.key_image)
+                        .map_err(|error| {
+                            Error::InvariantViolation(
+                                format!("verified ZK-AMS key image is invalid: {error}").into(),
+                            )
+                        })?;
+                if state_transaction
+                    .world
+                    .privacy_nullifiers
+                    .get(&image_key)
+                    .is_some()
+                {
+                    return Err(invalid_privacy_parameter(
+                        "verified ZK-AMS provisioning key image was already consumed",
+                    ));
+                }
+                if state_transaction
+                    .world
+                    .accounts
+                    .get(&effect.account_id)
+                    .is_some()
+                {
+                    return Err(invalid_privacy_parameter(
+                        "verified ZK-AMS provisioning target account already exists",
+                    ));
+                }
+                super::domain::isi::ensure_controller_capabilities(
+                    effect.account_id.controller(),
+                    &state_transaction.crypto.allowed_signing,
+                    &state_transaction.crypto.allowed_curve_ids,
+                )?;
+                let item_provenance = PrivacyStateItemRecordV1::zk_ams_verified_proof(
+                    snapshot.bootstrap_digest(),
+                    self.envelope.statement_digest,
+                    state_transaction.block_height(),
+                    expected_action_index,
+                )
+                .map_err(invalid_privacy_parameter)?;
+
+                state_transaction
+                    .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+                Register::account(Account::new(effect.account_id.clone()))
+                    .execute(authority, state_transaction)?;
+                state_transaction
+                    .world
+                    .privacy_nullifiers
+                    .insert(image_key, item_provenance);
+                Ok(())
+            }
             VerifiedPrivacyLedgerEffectsV1::AnonymousPgcPayment(effect) => {
                 let snapshot = pgc_snapshot.as_ref().ok_or_else(|| {
                     Error::InvariantViolation(

@@ -42,7 +42,10 @@ use crate::{
     metadata::Metadata,
     name::Name,
     nexus::FeeSponsorProgramId,
-    privacy::{PrivacyStatementDigestV1, PrivacyTransactionIntentDigestV1},
+    privacy::{
+        PrivacyNullifierV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyTransactionIntentDigestV1,
+    },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
 use iroha_primitives::numeric::Quantity;
@@ -1016,6 +1019,11 @@ fn normalize_privacy_submission_for_intent_v1(submission: &SubmitPrivacyProofV1)
         .statement
         .context_mut()
         .transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
+    if let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+        &mut normalized.envelope.statement
+    {
+        statement.replay_nullifier = PrivacyNullifierV1::new([0; 32]);
+    }
     normalized.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
     normalized.into()
 }
@@ -1081,13 +1089,16 @@ impl TransactionPayload {
     /// V1 accepts exactly one direct typed [`SubmitPrivacyProofV1`] in either
     /// [`Executable::Instructions`] or the native-instruction members of
     /// [`Executable::Batch`]. The canonical projection clones the complete
-    /// unsigned payload and changes exactly three derived values:
+    /// unsigned payload and changes exactly three universally derived values:
     ///
     /// - the typed proof byte vector becomes empty;
     /// - `statement.context.transaction_intent_digest` becomes 32 zero bytes;
     /// - `envelope.statement_digest` becomes 32 zero bytes.
     ///
-    /// Zeroing the two derived digests removes their otherwise unavoidable
+    /// For ZK-ACE, the replay nullifier also becomes 32 zero bytes because it
+    /// is derived from the resulting intent-bound authorization projection.
+    ///
+    /// Zeroing these derived fields removes their otherwise unavoidable
     /// self-reference. Every independent payload field, statement field,
     /// instruction tag, and instruction ordinal remains in the Norito preimage.
     ///
@@ -2336,11 +2347,13 @@ mod tests {
         privacy::{
             IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1,
             IrohaJindoPolynomialCommitmentStatementV1, PrivacyEngineManifestDigestV1,
-            PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyParameterDigestV1,
-            PrivacyParameterIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
+            PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyNullifierV1,
+            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyDigestV1,
+            PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1,
+            PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
             PrivacyStatementDigestV1, PrivacyStatementSchemaDigestV1, PrivacyStatementV1,
             PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+            ZkAcePqAuthorizationStatementV1,
         },
         transaction::{
             ExecutableBatchItem,
@@ -2460,6 +2473,38 @@ mod tests {
         privacy_payload_with_executable(
             vec![InstructionBox::from(draft_privacy_submission())].into(),
         )
+    }
+
+    fn draft_zk_ace_privacy_payload() -> TransactionPayload {
+        let mut payload = draft_privacy_payload();
+        mutate_direct_privacy_submission(&mut payload, |submission| {
+            let context = submission.envelope.statement.context().clone();
+            let authority = privacy_test_authority();
+            submission.envelope.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+            submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
+            submission.envelope.engine_id =
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0.expected_engine();
+            submission.envelope.statement =
+                PrivacyStatementV1::ZkAcePqAuthorizationV0(ZkAcePqAuthorizationStatementV1 {
+                    context,
+                    identity_commitment: crate::privacy::PrivacyCommitmentV1::new(
+                        privacy_test_bytes(0x71),
+                    ),
+                    policy_id: PrivacyPolicyIdV1::new(privacy_test_bytes(0x72)),
+                    policy_digest: PrivacyPolicyDigestV1::new(privacy_test_bytes(0x73)),
+                    source: authority.clone(),
+                    destination: authority,
+                    asset_definition_id: sample_fee_asset(),
+                    amount: 7,
+                    fee: 2,
+                    authorization_epoch: 1,
+                    replay_nullifier: PrivacyNullifierV1::new(privacy_test_bytes(0x74)),
+                });
+            submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
+            submission.envelope.proof =
+                PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(vec![0xA5, 0x5A]));
+        });
+        payload
     }
 
     fn mutate_direct_privacy_submission(
@@ -2916,6 +2961,66 @@ mod tests {
             inserted
                 .privacy_transaction_intent_digest_v1()
                 .expect("canonical projection removes both derived fields"),
+            expected
+        );
+    }
+
+    #[test]
+    fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields() {
+        let payload = draft_zk_ace_privacy_payload();
+        let expected = payload
+            .privacy_transaction_intent_digest_v1()
+            .expect("derive ZK-ACE draft intent");
+
+        let mut changed_nullifier = payload.clone();
+        mutate_direct_privacy_submission(&mut changed_nullifier, |submission| {
+            let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+                &mut submission.envelope.statement
+            else {
+                panic!("ZK-ACE fixture statement");
+            };
+            statement.replay_nullifier = PrivacyNullifierV1::new(privacy_test_bytes(0x75));
+        });
+        assert_eq!(
+            changed_nullifier
+                .privacy_transaction_intent_digest_v1()
+                .expect("derived replay nullifier is projected out"),
+            expected
+        );
+
+        let mut changed_amount = payload.clone();
+        mutate_direct_privacy_submission(&mut changed_amount, |submission| {
+            let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
+                &mut submission.envelope.statement
+            else {
+                panic!("ZK-ACE fixture statement");
+            };
+            statement.amount += 1;
+        });
+        assert_ne!(
+            changed_amount
+                .privacy_transaction_intent_digest_v1()
+                .expect("independent action amount remains bound"),
+            expected
+        );
+
+        let mut finalized = payload;
+        mutate_direct_privacy_submission(&mut finalized, |submission| {
+            submission
+                .envelope
+                .statement
+                .context_mut()
+                .transaction_intent_digest = expected;
+            submission.envelope.statement_digest = submission
+                .envelope
+                .statement
+                .digest()
+                .expect("final ZK-ACE statement digest");
+        });
+        assert_eq!(
+            finalized
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect("final ZK-ACE intent binding"),
             expected
         );
     }

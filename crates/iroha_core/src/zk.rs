@@ -1598,6 +1598,7 @@ mod zk_ace_stark_prover_tests {
         let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
             identity_commitment,
             tx_digest,
+            tx_digest,
             chain_id,
             replay_nullifier,
             policy_hash,
@@ -14828,6 +14829,7 @@ mod preverified_key_tests {
         );
         ZkAcePublicInputsV1::transparent_transfer(
             identity_commitment,
+            tx_digest,
             tx_digest,
             chain_id,
             replay_nullifier,

@@ -13,8 +13,9 @@ use iroha_data_model::{
     isi::governance::VotingMode,
     validation_fee::{
         ValidationFeeChargingMode, ValidationFeeGovernanceVotingModeV1,
-        ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
-        ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotStatusV1, ValidationFeePolicyV1,
+        ValidationFeeParliamentAuthorizationV1, ValidationFeePlainElectorateRulesV1,
+        ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
+        ValidationFeePolicySnapshotStatusV1, ValidationFeePolicyV1,
         ValidationFeePolicyWitnessProofV1, ValidationFeeTreasuryPayoutBindingV1,
     },
 };
@@ -958,7 +959,10 @@ pub enum ValidationFeeProposalDraftPayloadV1 {
 impl ValidationFeeProposalDraftPayloadV1 {
     /// Convert the public payload into the exact native proposal kind.
     #[must_use]
-    pub fn proposal_kind(&self) -> ProposalKind {
+    pub fn proposal_kind(
+        &self,
+        plain_electorate_rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> ProposalKind {
         match self {
             Self::Policy {
                 policy,
@@ -966,10 +970,12 @@ impl ValidationFeeProposalDraftPayloadV1 {
             } => ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
                 policy: policy.clone(),
                 payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
+                plain_electorate_rules: plain_electorate_rules.clone(),
             }),
             Self::PayoutLifecycle { payout_binding } => {
                 ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
                     payout_binding: payout_binding.clone(),
+                    plain_electorate_rules: plain_electorate_rules.clone(),
                 })
             }
         }
@@ -990,6 +996,8 @@ pub struct ValidationFeeProposalDraftRequestV1 {
     pub referendum_window: Option<AtWindow>,
     /// Optional voting mode. `None` means `Plain`; `Zk` is rejected.
     pub mode: Option<VotingMode>,
+    /// Exact PLAIN electorate contract bound into the native proposal and instruction.
+    pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
 
 /// Canonical framed native instruction returned for local signing and submission.
@@ -1017,6 +1025,77 @@ pub struct ValidationFeeProposalDraftResponseV1 {
     /// Exact native proposal kind produced by this draft.
     pub proposal_kind: ProposalKind,
     /// Exactly one canonical native proposal instruction.
+    pub tx_instructions: Vec<ValidationFeeProposalInstructionDraftV1>,
+}
+
+/// Closed direction accepted by the typed validation-fee PLAIN ballot draft.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ValidationFeePlainBallotDirectionV1 {
+    /// Vote in favor of the proposal.
+    Aye,
+    /// Vote against the proposal.
+    Nay,
+    /// Participate without voting in favor or against.
+    Abstain,
+}
+
+impl ValidationFeePlainBallotDirectionV1 {
+    /// Return the exact native [`CastPlainBallot`](iroha_data_model::isi::governance::CastPlainBallot)
+    /// direction code.
+    #[must_use]
+    pub const fn native_code(self) -> u8 {
+        match self {
+            Self::Aye => 0,
+            Self::Nay => 1,
+            Self::Abstain => 2,
+        }
+    }
+}
+
+/// Strict request for one locally signable validation-fee PLAIN ballot.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeePlainBallotDraftRequestV1 {
+    /// Request layout version.
+    pub version: u16,
+    /// Citizen account that must authenticate the locally signed transaction.
+    pub owner: AccountId,
+    /// Closed first-release ballot direction.
+    pub direction: ValidationFeePlainBallotDirectionV1,
+}
+
+/// Strict response containing one exact native validation-fee PLAIN ballot.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeePlainBallotDraftResponseV1 {
+    /// Response layout version.
+    pub version: u16,
+    /// Lowercase proposal fingerprint, also used as the referendum id.
+    pub proposal_id: String,
+    /// Citizen account bound as the native ballot owner.
+    pub owner: AccountId,
+    /// Immutable proposal-bound ballot amount.
+    pub amount: String,
+    /// Immutable proposal-bound ballot duration in blocks.
+    pub duration_blocks: String,
+    /// Exact closed ballot direction.
+    pub direction: ValidationFeePlainBallotDirectionV1,
+    /// Exactly one canonical native `CastPlainBallot` instruction.
     pub tx_instructions: Vec<ValidationFeeProposalInstructionDraftV1>,
 }
 

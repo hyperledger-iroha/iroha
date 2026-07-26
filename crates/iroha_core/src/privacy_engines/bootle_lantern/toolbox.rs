@@ -148,15 +148,6 @@ impl QuadraticVariablesV1 {
         }
     }
 
-    /// Scale component-wise by a proof-ring polynomial.
-    #[must_use]
-    pub(crate) fn scale_polynomial(&self, scalar: ProofPolynomialV1) -> Self {
-        Self {
-            short: self.short.map(|polynomial| scalar.multiply(polynomial)),
-            message: self.message.map(|polynomial| scalar.multiply(polynomial)),
-        }
-    }
-
     /// All-zero variable vector.
     #[must_use]
     pub(crate) const fn zero() -> Self {
@@ -705,7 +696,7 @@ fn mul_mod(lhs: u64, rhs: u64) -> u64 {
 }
 
 /// Fixed-profile constraint-toolbox failure.
-#[derive(Debug, Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ToolboxErrorV1 {
     /// The application witness failed its exact relation or bound.
     #[error("Bootle/Lantern application witness is invalid")]

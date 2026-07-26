@@ -48,6 +48,7 @@ default = [
     "zk-halo2",
     "zk-halo2-ipa",
     "zk-ipa-native",
+    "zk-stark",
     "circuit-params",
 ]
 # Enable QUIC transport helpers for Norito Streaming.

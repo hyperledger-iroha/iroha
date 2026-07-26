@@ -1101,6 +1101,13 @@ impl Root {
         let settlement = self.settlement.parse(&mut emitter);
         let hijiri = self.hijiri.parse(&mut emitter);
 
+        if !settlement.offline.enabled && torii.kagemusha_commands.is_some() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSettlementConfig)
+                    .attach("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
+            );
+        }
+
         if let Err(err) = concurrency.validate() {
             emitter.emit(err);
         }
@@ -7926,6 +7933,9 @@ pub struct Repo {
 /// User-level Kagemusha escrow and execution configuration.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
+    /// Enable the mandatory Kagemusha offline-cash service for this node profile.
+    #[config(default = "true")]
+    pub enabled: bool,
     /// Require Kagemusha cash to be escrow-backed.
     #[config(default = "true")]
     pub escrow_required: bool,
@@ -7944,6 +7954,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
+            enabled: true,
             escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
@@ -8169,12 +8180,22 @@ impl Offline {
     /// Convert Kagemusha escrow policy into runtime parameters.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Offline {
         let Offline {
+            enabled,
             escrow_required,
             escrow_accounts,
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
             mut kagemusha_max_decoded_bytes,
         } = self;
+        if !enabled
+            && (!escrow_accounts.is_empty()
+                || kagemusha_release_policy_path.is_some()
+                || kagemusha_artifact_dir.is_some())
+        {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline.enabled=false requires empty escrow and release configuration",
+            ));
+        }
         if !escrow_required {
             emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
                 "settlement.offline.escrow_required cannot be false; offline cash is mandatory",
@@ -8247,6 +8268,7 @@ impl Offline {
             }
         }
         actual::Offline {
+            enabled,
             escrow_required,
             escrow_accounts: escrow_bindings,
             kagemusha_release_policy_path,
@@ -25954,7 +25976,7 @@ mod duration_clamp_tests {
             ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
         },
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use toml::{Table, Value};
 
     use crate::parameters::{actual, defaults, user::SoracloudRuntime};
@@ -25995,6 +26017,59 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<super::Root>()
             .expect("load minimal user config")
+    }
+
+    #[test]
+    fn disabled_offline_profile_rejects_kagemusha_commands_during_root_parse() {
+        let mut table = base_table();
+        let settlement = table
+            .entry("settlement")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("settlement table");
+        settlement.insert(
+            "offline".into(),
+            Value::Table(Table::from_iter([(
+                "enabled".into(),
+                Value::Boolean(false),
+            )])),
+        );
+
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        torii.insert(
+            "kagemusha_commands".into(),
+            Value::Table(Table::from_iter([
+                ("enabled".into(), Value::Boolean(true)),
+                (
+                    "private_key".into(),
+                    Value::String(
+                        "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+                            .into(),
+                    ),
+                ),
+                ("minimum_xor_balance".into(), Value::String("1".into())),
+                ("max_tx_value".into(), Value::String("1".into())),
+                (
+                    "operation_registry_max_entries".into(),
+                    Value::Integer(4_096),
+                ),
+                (
+                    "operation_registry_max_bytes".into(),
+                    Value::Integer(512 * 1_024),
+                ),
+            ])),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("disabled offline profile must reject Kagemusha commands");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
+            "{report}"
+        );
     }
 
     fn sorafs_table_mut(table: &mut Table) -> &mut Table {
@@ -29010,11 +29085,12 @@ mod settlement_offline_tests {
     use super::*;
 
     #[test]
-    fn offline_parse_defaults_to_mandatory_escrow() {
+    fn offline_parse_defaults_to_enabled_mandatory_escrow() {
         let mut emitter = Emitter::new();
         let actual = Offline::default().parse(&mut emitter);
 
         assert!(emitter.into_result().is_ok());
+        assert!(actual.enabled);
         assert!(actual.escrow_required);
         assert!(actual.kagemusha_release_policy_path.is_none());
         assert!(actual.kagemusha_artifact_dir.is_none());
@@ -29022,6 +29098,37 @@ mod settlement_offline_tests {
             actual.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
         );
+    }
+
+    #[test]
+    fn offline_parse_accepts_explicit_disabled_empty_profile() {
+        let mut emitter = Emitter::new();
+        let actual = Offline {
+            enabled: false,
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_ok());
+        assert!(!actual.enabled);
+        assert!(actual.escrow_required);
+        assert!(actual.escrow_accounts.is_empty());
+        assert!(actual.kagemusha_release_policy_path.is_none());
+        assert!(actual.kagemusha_artifact_dir.is_none());
+    }
+
+    #[test]
+    fn offline_parse_rejects_disabled_profile_with_dormant_release_configuration() {
+        let mut emitter = Emitter::new();
+        let _ = Offline {
+            enabled: false,
+            kagemusha_release_policy_path: Some("release-policy.norito".into()),
+            kagemusha_artifact_dir: Some("artifacts".into()),
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
     }
 
     #[test]

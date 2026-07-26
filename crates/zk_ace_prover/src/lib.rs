@@ -155,6 +155,11 @@ pub fn validate_zk_ace_witness_v1(
     if public_inputs.replay_nullifier == [0u8; 32] {
         return Err(ZkAceProverError::new("replay nullifier must be nonzero"));
     }
+    if public_inputs.authorization_digest == [0u8; 32] {
+        return Err(ZkAceProverError::new(
+            "authorization digest must be nonzero",
+        ));
+    }
     if public_inputs.policy_hash == [0u8; 32] {
         return Err(ZkAceProverError::new("policy hash must be nonzero"));
     }
@@ -175,7 +180,7 @@ pub fn validate_zk_ace_witness_v1(
     }
     let replay_nullifier = derive_zk_ace_replay_nullifier(
         &witness.replay_secret,
-        &public_inputs.tx_digest,
+        &public_inputs.authorization_digest,
         &public_inputs.chain_id,
         &public_inputs.action_class,
         &public_inputs.domain_tag,
@@ -284,6 +289,7 @@ pub fn build_zk_ace_transfer_authorization_v1(
     );
     let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
         identity_commitment,
+        tx_digest,
         tx_digest,
         chain_id,
         replay_nullifier,
@@ -405,6 +411,7 @@ mod tests {
         );
         ZkAcePublicInputsV1::transparent_transfer(
             identity_commitment,
+            tx_digest,
             tx_digest,
             chain_id,
             replay_nullifier,
@@ -886,6 +893,9 @@ mod tests {
         assert_public_input_mutation_rejected("tx digest", &proof, |public_inputs| {
             public_inputs.tx_digest[0] ^= 1;
         });
+        assert_public_input_mutation_rejected("authorization digest", &proof, |public_inputs| {
+            public_inputs.authorization_digest[0] ^= 1;
+        });
         assert_public_input_mutation_rejected("chain id", &proof, |public_inputs| {
             public_inputs.chain_id = ChainId::from_str("minamoto").expect("chain id");
         });
@@ -955,7 +965,7 @@ mod tests {
         let mut public_inputs = public_inputs_for(&witness);
         public_inputs.replay_nullifier = derive_zk_ace_replay_nullifier(
             &[0x99; 32],
-            &public_inputs.tx_digest,
+            &public_inputs.authorization_digest,
             &public_inputs.chain_id,
             &public_inputs.action_class,
             &public_inputs.domain_tag,

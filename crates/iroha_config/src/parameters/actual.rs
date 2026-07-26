@@ -10928,6 +10928,8 @@ impl Default for Repo {
 /// Kagemusha escrow and execution policy parameters.
 #[derive(Debug, Clone)]
 pub struct Offline {
+    /// Whether this node profile enables the mandatory offline-cash service.
+    pub enabled: bool,
     /// Whether Kagemusha cash must be escrow-backed.
     pub escrow_required: bool,
     /// Escrow accounts keyed by Kagemusha asset definition.
@@ -10943,6 +10945,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
+            enabled: true,
             escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
@@ -12410,8 +12413,9 @@ mod tests {
     }
 
     #[test]
-    fn offline_defaults_require_escrow_even_before_release_configuration() {
+    fn offline_defaults_enable_mandatory_escrow_before_release_configuration() {
         let offline = Offline::default();
+        assert!(offline.enabled);
         assert!(offline.escrow_required);
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());

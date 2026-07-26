@@ -5,10 +5,29 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { AccountAddress } from "../src/address.js";
 import { noritoDecodeInstruction, noritoEncodeInstruction } from "../src/norito.js";
 import { buildTransactionPayload } from "../src/transaction.js";
-import { computeValidationFeePolicyProposalFingerprintV1 } from "../src/validationFeeProposal.js";
+import {
+  computeValidationFeePayoutLifecycleProposalFingerprintV1,
+  computeValidationFeePolicyProposalFingerprintV1,
+} from "../src/validationFeeProposal.js";
 import { makeNativeTest } from "./helpers/native.js";
 
 const nativeTest = makeNativeTest(test);
+const plainElectorateRules = Object.freeze({
+  voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
+  ballot_amount: "150",
+  ballot_duration_blocks: "3600",
+  citizenship_amount: "10000",
+  max_members: "256",
+  conviction_step_blocks: "100",
+  max_conviction: "6",
+  min_turnout: "1",
+  approval_threshold_numerator: "1",
+  approval_threshold_denominator: "2",
+  eligibility_rule: Object.freeze({
+    rule: "proposal_operator_at_or_before_gate_others_after_gate",
+    value: null,
+  }),
+});
 
 function withNativeBinding(native, body) {
   const previous = globalThis.__IROHA_NATIVE_BINDING__;
@@ -32,14 +51,26 @@ test("validation-fee proposal fingerprint delegates exact native policy and life
   const lifecycleId = "56".repeat(32);
   const fingerprint = withNativeBinding(
     {
-      validationFeePolicyProposalFingerprintV1(policyJson, lifecycleBytes) {
+      validationFeePolicyProposalFingerprintV1(
+        policyJson,
+        lifecycleBytes,
+        plainElectorateRulesJson,
+      ) {
         assert.deepEqual(JSON.parse(policyJson), policy);
         assert.deepEqual(lifecycleBytes, Buffer.from(lifecycleId, "hex"));
+        assert.deepEqual(
+          JSON.parse(plainElectorateRulesJson),
+          plainElectorateRules,
+        );
         return Buffer.from("12".repeat(32), "hex");
       },
     },
     () =>
-      computeValidationFeePolicyProposalFingerprintV1(policy, lifecycleId),
+      computeValidationFeePolicyProposalFingerprintV1(
+        policy,
+        lifecycleId,
+        plainElectorateRules,
+      ),
   );
   assert.equal(fingerprint, "12".repeat(32));
 });
@@ -47,14 +78,54 @@ test("validation-fee proposal fingerprint delegates exact native policy and life
 test("validation-fee proposal fingerprint accepts no-payout and even-ending output", () => {
   const fingerprint = withNativeBinding(
     {
-      validationFeePolicyProposalFingerprintV1(_policyJson, lifecycleBytes) {
+      validationFeePolicyProposalFingerprintV1(
+        _policyJson,
+        lifecycleBytes,
+        plainElectorateRulesJson,
+      ) {
         assert.equal(lifecycleBytes, null);
+        assert.deepEqual(
+          JSON.parse(plainElectorateRulesJson),
+          plainElectorateRules,
+        );
         return Buffer.from("34".repeat(32), "hex");
       },
     },
-    () => computeValidationFeePolicyProposalFingerprintV1({ schema_version: 1 }),
+    () =>
+      computeValidationFeePolicyProposalFingerprintV1(
+        { schema_version: 1 },
+        null,
+        plainElectorateRules,
+      ),
   );
   assert.equal(fingerprint, "34".repeat(32));
+});
+
+test("validation-fee payout lifecycle fingerprint delegates exact native objects", () => {
+  const payoutBinding = Object.freeze({
+    entrypoint: "autonomous_validation_fee_tick",
+  });
+  const fingerprint = withNativeBinding(
+    {
+      validationFeePayoutLifecycleProposalFingerprintV1(
+        payoutBindingJson,
+        plainElectorateRulesJson,
+      ) {
+        assert.deepEqual(JSON.parse(payoutBindingJson), payoutBinding);
+        assert.deepEqual(
+          JSON.parse(plainElectorateRulesJson),
+          plainElectorateRules,
+        );
+        return Buffer.from("56".repeat(32), "hex");
+      },
+    },
+    () =>
+      computeValidationFeePayoutLifecycleProposalFingerprintV1(
+        payoutBinding,
+        plainElectorateRules,
+      ),
+  );
+  assert.equal(fingerprint, "56".repeat(32));
 });
 
 test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", () => {
@@ -69,6 +140,7 @@ test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", (
         computeValidationFeePolicyProposalFingerprintV1(
           { schema_version: 1 },
           `0x${"56".repeat(32)}`,
+          plainElectorateRules,
         ),
       /64 lowercase hexadecimal/u,
     );
@@ -77,8 +149,39 @@ test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", (
         computeValidationFeePolicyProposalFingerprintV1(
           { schema_version: 1 },
           "00".repeat(32),
+          plainElectorateRules,
         ),
       /must be non-zero/u,
+    );
+  });
+});
+
+test("validation-fee proposal fingerprints require exact object inputs", () => {
+  const unexpectedNative = {
+    validationFeePolicyProposalFingerprintV1() {
+      assert.fail("invalid policy input must not reach native code");
+    },
+    validationFeePayoutLifecycleProposalFingerprintV1() {
+      assert.fail("invalid payout input must not reach native code");
+    },
+  };
+  withNativeBinding(unexpectedNative, () => {
+    assert.throws(
+      () =>
+        computeValidationFeePolicyProposalFingerprintV1(
+          { schema_version: 1 },
+          null,
+          undefined,
+        ),
+      /plainElectorateRules must be an exact native object/u,
+    );
+    assert.throws(
+      () =>
+        computeValidationFeePayoutLifecycleProposalFingerprintV1(
+          [],
+          plainElectorateRules,
+        ),
+      /payoutBinding must be an exact native object/u,
     );
   });
 });
@@ -107,10 +210,18 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
     treasury_payout_binding: null,
   };
   const proposalId =
-    computeValidationFeePolicyProposalFingerprintV1(policy);
+    computeValidationFeePolicyProposalFingerprintV1(
+      policy,
+      null,
+      plainElectorateRules,
+    );
   assert.match(proposalId, /^[0-9a-f]{64}$/u);
   assert.equal(
-    computeValidationFeePolicyProposalFingerprintV1(policy),
+    computeValidationFeePolicyProposalFingerprintV1(
+      policy,
+      null,
+      plainElectorateRules,
+    ),
     proposalId,
   );
 

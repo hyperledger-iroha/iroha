@@ -39,7 +39,12 @@ pub const ZK_ACE_STARK_FRI_V1_N_LOG2: u8 = 10;
 /// Canonical ZK-ACE v0 FRI blowup factor (`2^blowup_log2`).
 pub const ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2: u8 = 3;
 /// Canonical ZK-ACE v0 verifier query count.
-pub const ZK_ACE_STARK_FRI_V1_QUERIES: u16 = 24;
+///
+/// With the fixed 8x blowup, 48 independent queries provide a conservative
+/// 144-bit proximity-sampling floor before accounting for the remaining FRI
+/// terms. The earlier 24-query development profile provided only a 72-bit
+/// floor and is not part of the first release.
+pub const ZK_ACE_STARK_FRI_V1_QUERIES: u16 = 48;
 /// Canonical max proof size for hardened ZK-ACE v0 STARK/FRI proofs.
 pub const ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES: u32 = 1024 * 1024;
 /// Minimum ZK-ACE STARK domain size accepted by ledger-grade admission.
@@ -4180,6 +4185,7 @@ mod tests {
         let public_inputs = iroha_data_model::zk::ZkAcePublicInputsV1::transparent_transfer(
             identity_commitment,
             tx_digest,
+            tx_digest,
             chain_id,
             replay_nullifier,
             policy_hash,
@@ -5703,7 +5709,7 @@ fn zk_ace_air_row_residue(
 
     let replay_nullifier = iroha_data_model::zk::derive_zk_ace_replay_nullifier(
         &replay_secret,
-        &public_inputs.tx_digest,
+        &public_inputs.authorization_digest,
         &public_inputs.chain_id,
         &public_inputs.action_class,
         &public_inputs.domain_tag,
@@ -5741,6 +5747,7 @@ fn zk_ace_air_row_residue(
     if public_inputs.identity_commitment == [0u8; 32]
         || public_inputs.replay_nullifier == [0u8; 32]
         || public_inputs.policy_hash == [0u8; 32]
+        || public_inputs.authorization_digest == [0u8; 32]
         || public_inputs.domain_tag.trim().is_empty()
         || public_inputs.action_class.trim().is_empty()
     {
