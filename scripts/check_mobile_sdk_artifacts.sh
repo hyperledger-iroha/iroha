@@ -15,7 +15,10 @@ integration:
   - The manifest records per-slice SHA-256 hashes and the privacy-production
     feature state, which must match the XCFramework marker.
   - Every manifest hash matches the actual slice, all headers are identical,
-    and the manifest ABI/source fingerprint matches the checked-out bridge.
+    the Swift loader fallback pins match every manifest slice, and the manifest
+    ABI/source fingerprint matches the checked-out bridge. A manifest may name
+    the exact parent only when HEAD is a mechanically verified, non-merge hash-
+    pin commit with no other source changes.
   - Apple archives contain their declared architectures and the complete
     Kagemusha recursive-spend symbol surface.
   - Kotlin/Android SDK modules are included and publishable; when Android
@@ -33,6 +36,9 @@ MOBILE_SDK_ALLOW_DIRTY_SOURCE=1) permits a local integration artifact only when
 its manifest dirty bit and exact dependency-closure fingerprint match.
 MOBILE_SDK_APPLE_ARTIFACT_DIR may point Apple validation at a staged artifact
 directory; it defaults to <root>/dist.
+The builder alone may set MOBILE_SDK_STAGED_BUILD_VALIDATION=1 together with a
+private prospective-loader path. Final certification always checks the tracked
+Swift loader.
 USAGE
 }
 
@@ -1458,6 +1464,8 @@ check_xcframework() {
   local info="$xcframework/Info.plist"
   local manifest="$APPLE_ARTIFACT_DIR/NoritoBridge.artifacts.json"
   local embedded_manifest="$xcframework/NoritoBridge.artifacts.json"
+  local checked_in_swift_loader="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+  local swift_loader="$checked_in_swift_loader"
   local privacy_marker="$xcframework/.privacy-production-enabled"
   local slices=(ios-arm64 ios-arm64_x86_64-simulator macos-arm64)
   local slice
@@ -1485,6 +1493,7 @@ check_xcframework() {
   done
 
   require_file "$embedded_manifest" "embedded NoritoBridge artifact manifest"
+  require_file "$checked_in_swift_loader" "IrohaSwift native bridge loader"
   if [[ ! -L "$manifest" ]]; then
     fail "public NoritoBridge artifact manifest must be a relative symlink"
   elif [[ "$(readlink "$manifest")" != "NoritoBridge.xcframework/NoritoBridge.artifacts.json" ]]; then
@@ -1492,6 +1501,32 @@ check_xcframework() {
   fi
   require_file "$manifest" "NoritoBridge artifact manifest"
   if [[ -f "$manifest" ]]; then
+    local prospective_validation="${MOBILE_SDK_STAGED_BUILD_VALIDATION:-0}"
+    local prospective_loader="${MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH:-}"
+    if [[ "$prospective_validation" != "0" || -n "$prospective_loader" ]]; then
+      if [[ "$prospective_validation" != "1" || -z "$prospective_loader" ]]; then
+        fail "prospective Swift loader validation requires both internal builder inputs"
+      else
+        local prospective_result prospective_manifest_commit
+        prospective_manifest_commit="$(
+          manifest_json_value "$manifest" source_commit 2>/dev/null || true
+        )"
+        prospective_result="$(
+          run_isolated_checker_python \
+            "$ROOT_DIR/scripts/check_mobile_sdk_artifact_pin_commit.py" \
+            --root "$ROOT_DIR" \
+            --manifest-commit "$prospective_manifest_commit" \
+            --artifact-root "$APPLE_ARTIFACT_DIR" \
+            --prospective-loader "$prospective_loader" \
+            2>/dev/null
+        )" || true
+        if [[ "$prospective_result" != "prospective" ]]; then
+          fail "builder-private prospective Swift loader is not a three-digest-only projection"
+        else
+          swift_loader="$prospective_loader"
+        fi
+      fi
+    fi
     if ! run_isolated_checker_python - "$manifest" "$ROOT_DIR/scripts/run_mobile_hermetic_command.py" <<'PY'
 from pathlib import Path
 import hashlib
@@ -1690,6 +1725,12 @@ PY
         if [[ "$expected_hash" != "$actual_hash" ]]; then
           fail "NoritoBridge artifact hash mismatch for $slice"
         fi
+        if [[ -f "$swift_loader" ]]; then
+          require_literal \
+            "$swift_loader" \
+            "\"$slice\": \"$expected_hash\"" \
+            "IrohaSwift manifestless fallback hash for $slice"
+        fi
       fi
     done
 
@@ -1735,16 +1776,22 @@ PY
 
     local bridge_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
     if [[ -f "$bridge_source" && -d "$ROOT_DIR/.git" ]]; then
-      local source_abi manifest_abi source_commit manifest_commit source_dirty source_fingerprint manifest_fingerprint
+      local source_abi manifest_abi manifest_commit source_relationship source_dirty source_fingerprint manifest_fingerprint
       source_abi="$(sed -nE 's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$bridge_source" | head -n1)"
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
       if [[ "$source_abi" != "21" || "$manifest_abi" != "21" ]]; then
         fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 21"
       fi
-      source_commit="$(run_bridge_source_git -C "$ROOT_DIR" rev-parse --verify HEAD)"
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"
-      if [[ "$manifest_commit" != "$source_commit" ]]; then
-        fail "NoritoBridge artifact source commit does not match checkout"
+      source_relationship="$(
+        run_isolated_checker_python \
+          "$ROOT_DIR/scripts/check_mobile_sdk_artifact_pin_commit.py" \
+          --root "$ROOT_DIR" \
+          --manifest-commit "$manifest_commit" \
+          2>/dev/null
+      )" || true
+      if [[ "$source_relationship" != "direct" && "$source_relationship" != "pin-parent" ]]; then
+        fail "NoritoBridge artifact source commit is neither HEAD nor its authenticated pin-only parent"
       fi
       source_dirty=false
       if [[ -n "$(run_bridge_source_seal status --root "$ROOT_DIR")" ]]; then
@@ -1755,6 +1802,9 @@ PY
       fi
       if [[ "$source_dirty" != "false" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
         fail "NoritoBridge release artifact cannot be certified against a dirty checkout"
+      fi
+      if [[ "$source_relationship" == "pin-parent" && "$source_dirty" != "false" ]]; then
+        fail "NoritoBridge pin-only child commit requires a clean authenticated source closure"
       fi
       source_fingerprint="$(bridge_source_fingerprint)"
       manifest_fingerprint="$(manifest_json_value "$manifest" source_fingerprint_sha256 2>/dev/null || true)"

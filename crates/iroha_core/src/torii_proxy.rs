@@ -30,6 +30,7 @@ const QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V2: &[u8] =
     b"iroha:torii:queue-plan-admission-binding:v2\0";
 const QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2: &[u8] =
     b"iroha:torii:queue-plan-admission-attestation:v2\0";
+const QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5: &str = "torii:proxy:queue-plan-synced:v5";
 
 /// Return the chain identity carried by every QueuePlan admission binding.
 #[must_use]
@@ -38,6 +39,42 @@ pub fn queue_plan_admission_chain_id_digest(chain_id: &ChainId) -> Hash {
         QUEUE_PLAN_ADMISSION_CHAIN_DOMAIN_V2,
         chain_id.as_str().as_bytes(),
     ])
+}
+
+/// Derive the deterministic QueuePlanSynced request identity shared by every ingress.
+///
+/// This pure kernel deliberately excludes connection/session identity. Every responsive ingress
+/// therefore presents the same semantic request identity for one chain and entrypoint while
+/// retaining its own process-local reply route.
+#[must_use]
+pub fn queue_plan_synced_request_id(
+    chain_id: &ChainId,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Hash {
+    queue_plan_synced_request_id_from_chain_digest(
+        queue_plan_admission_chain_id_digest(chain_id),
+        entrypoint_hash,
+    )
+}
+
+/// Derive the deterministic QueuePlanSynced request identity from its durable projection.
+///
+/// Binding the request to the persisted chain digest lets journal replay and certificate
+/// validation recompute the same semantic identity without recovering or trusting a raw chain
+/// string. Delivery ordinals and connection tenures remain deliberately excluded.
+#[must_use]
+pub fn queue_plan_synced_request_id_from_chain_digest(
+    chain_id_digest: Hash,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Hash {
+    Hash::new(
+        norito::to_bytes(&(
+            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,
+            chain_id_digest,
+            entrypoint_hash,
+        ))
+        .expect("deterministic QueuePlanSynced request identity must encode"),
+    )
 }
 
 /// Globally unique registry key for one transaction-entrypoint admission.
@@ -100,17 +137,20 @@ impl QueuePlanAdmissionBindingV2 {
     /// exact version-4 journal record cannot be encoded.
     pub fn new(
         chain_id: &ChainId,
-        request_id: Hash,
         transaction: &TransactionEntrypoint,
         routing_plan: &crate::queue::RoutingPlan,
         admission_context: crate::queue::QueuePlanAdmissionContextV2,
         enqueue_timestamp_ms: u64,
     ) -> Result<Self, String> {
         admission_context.validate_for_routing_plan(routing_plan)?;
+        let chain_id_digest = queue_plan_admission_chain_id_digest(chain_id);
         let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
             version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
-            chain_id_digest: queue_plan_admission_chain_id_digest(chain_id),
-            request_id,
+            chain_id_digest,
+            request_id: queue_plan_synced_request_id_from_chain_digest(
+                chain_id_digest,
+                transaction.hash(),
+            ),
         };
         let journal_record_digest = crate::queue::queue_plan_journal_record_claim_digest(
             transaction.clone(),
@@ -209,6 +249,17 @@ impl QueuePlanAdmissionBindingV2 {
         {
             return Err("QueuePlan admission binding contains a zero identity hash".to_owned());
         }
+        if self.request_id
+            != queue_plan_synced_request_id_from_chain_digest(
+                self.chain_id_digest,
+                self.entrypoint_hash.clone(),
+            )
+        {
+            return Err(
+                "QueuePlan admission binding has a noncanonical semantic request identity"
+                    .to_owned(),
+            );
+        }
         if self.admission_context.version != crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2 {
             return Err("QueuePlan admission-context version is unsupported".to_owned());
         }
@@ -235,7 +286,60 @@ impl QueuePlanAdmissionBindingV2 {
         if self.chain_id_digest != queue_plan_admission_chain_id_digest(chain_id) {
             return Err("QueuePlan admission binding belongs to another chain".to_owned());
         }
+        if self.request_id != queue_plan_synced_request_id(chain_id, transaction.hash()) {
+            return Err(
+                "QueuePlan admission binding has a noncanonical semantic request identity"
+                    .to_owned(),
+            );
+        }
         self.validate_for_transaction_and_plan(transaction, routing_plan)
+    }
+
+    /// Validate the complete durable identity that authorizes a lane reservation Commit.
+    ///
+    /// The compatibility queue hash is derived from the canonical entrypoint rather than trusted
+    /// from the reservation key. The exact coordinator and its admitting incarnation are then
+    /// recovered from this binding's immutable routing context, including the proposal height that
+    /// validated that incarnation.
+    ///
+    /// # Errors
+    /// Returns an error for a malformed reservation key or any entrypoint, queue hash, plan,
+    /// proposal height, coordinator, incarnation, or canonical binding-hash mismatch.
+    pub(crate) fn validate_for_lane_reservation_commit(
+        &self,
+        key: &crate::queue::LaneQueueReservationKeyV2,
+    ) -> Result<(), String> {
+        key.validate().map_err(str::to_owned)?;
+        self.validate_structure()?;
+        let compatibility_queue_hash =
+            HashOf::from_untyped_unchecked(Hash::from(self.entrypoint_hash.clone()));
+        if self.entrypoint_hash != key.entrypoint_hash
+            || compatibility_queue_hash != key.signed_transaction_hash
+            || self.routing_plan_digest != key.routing_plan_digest
+            || self.admission_context.proposal_height != key.proposal_height
+            || self.canonical_hash() != key.queue_plan_admission_binding_hash
+        {
+            return Err(
+                "QueuePlan binding does not match the lane reservation transaction, plan, proposal height, or binding identity"
+                    .to_owned(),
+            );
+        }
+        let routing_plan = self.routing_plan()?;
+        let coordinator = self
+            .admission_context
+            .route_incarnations
+            .first()
+            .ok_or_else(|| "QueuePlan admission context has no coordinator".to_owned())?;
+        if routing_plan.coordinator_leg() != key.coordinator_leg
+            || coordinator.leg != key.coordinator_leg
+            || coordinator.lane_incarnation != key.lane_incarnation
+        {
+            return Err(
+                "QueuePlan binding does not match the lane reservation coordinator generation"
+                    .to_owned(),
+            );
+        }
+        Ok(())
     }
 
     /// Validate the exact transaction, routing plan, and journal record when the trusted caller
@@ -1423,6 +1527,47 @@ mod tests {
     }
 
     #[test]
+    fn queue_plan_synced_request_identity_is_semantic_and_source_bound() {
+        let chain_a: ChainId = "queue-plan-request-chain-a".parse().expect("parse chain A");
+        let chain_b: ChainId = "queue-plan-request-chain-b".parse().expect("parse chain B");
+        let entrypoint_a = HashOf::from_untyped_unchecked(Hash::new(b"queue-plan-entrypoint-a"));
+        let entrypoint_b = HashOf::from_untyped_unchecked(Hash::new(b"queue-plan-entrypoint-b"));
+        let chain_a_digest = queue_plan_admission_chain_id_digest(&chain_a);
+
+        let request = queue_plan_synced_request_id(&chain_a, entrypoint_a.clone());
+        assert_eq!(
+            request,
+            Hash::new(
+                norito::to_bytes(&(
+                    "torii:proxy:queue-plan-synced:v5",
+                    chain_a_digest,
+                    entrypoint_a.clone(),
+                ))
+                .expect("encode frozen request projection")
+            ),
+            "the shared kernel must retain the exact production domain and field projection"
+        );
+        assert_eq!(
+            request,
+            queue_plan_synced_request_id_from_chain_digest(chain_a_digest, entrypoint_a.clone(),),
+            "the raw-chain wrapper and durable replay kernel must be identical"
+        );
+        assert_eq!(
+            request,
+            queue_plan_synced_request_id(&chain_a, entrypoint_a),
+            "connection tenure and delivery ordinal are intentionally absent"
+        );
+        assert_ne!(
+            request,
+            queue_plan_synced_request_id(&chain_b, entrypoint_b.clone())
+        );
+        assert_ne!(
+            request,
+            queue_plan_synced_request_id(&chain_a, entrypoint_b)
+        );
+    }
+
+    #[test]
     fn torii_transaction_admission_wire_indexes_are_stable() {
         assert_eq!(
             torii_transaction_admission_wire_index(
@@ -1444,6 +1589,135 @@ mod tests {
                 "retired admission tag {obsolete:?} must not decode under the V2 contract"
             );
         }
+    }
+
+    fn single_route_admission_fixture() -> (
+        ChainId,
+        TransactionEntrypoint,
+        RoutingPlan,
+        QueuePlanAdmissionBindingV2,
+        iroha_crypto::KeyPair,
+    ) {
+        let chain_id: ChainId = "queue-plan-semantic-certificate"
+            .parse()
+            .expect("fixture chain id");
+        let transaction_signer =
+            iroha_crypto::KeyPair::from_seed(vec![0x71; 32], iroha_crypto::Algorithm::Ed25519);
+        let validator =
+            iroha_crypto::KeyPair::from_seed(vec![0x72; 32], iroha_crypto::Algorithm::Ed25519);
+        let transaction = TransactionEntrypoint::External(
+            iroha_data_model::transaction::TransactionBuilder::new(
+                chain_id.clone(),
+                iroha_data_model::account::AccountId::new(transaction_signer.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(transaction_signer.private_key()),
+        );
+        let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(5));
+        let routing_plan = RoutingPlan::single(route);
+        let validator_set = vec![PeerId::new(validator.public_key().clone())];
+        let context = crate::queue::QueuePlanAdmissionContextV2 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+            authority_height: 0,
+            proposal_height: 1,
+            predecessor_block_hash: None,
+            routing_plan_digest: routing_plan.digest(),
+            route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV2 {
+                leg: RouteLeg::new(route, RouteLegRole::Coordinator),
+                lane_incarnation: Hash::new(b"semantic certificate incarnation"),
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                validator_count: 1,
+                durability_threshold: 1,
+            }],
+        };
+        let binding =
+            QueuePlanAdmissionBindingV2::new(&chain_id, &transaction, &routing_plan, context, 73)
+                .expect("construct canonical admission binding");
+        (chain_id, transaction, routing_plan, binding, validator)
+    }
+
+    #[test]
+    fn lane_reservation_commit_binds_proposal_height() {
+        let (_, _, _, binding, _) = single_route_admission_fixture();
+        let coordinator = binding
+            .admission_context
+            .route_incarnations
+            .first()
+            .expect("single-route fixture has a coordinator");
+        let key = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(
+                binding.entrypoint_hash.clone(),
+            )),
+            entrypoint_hash: binding.entrypoint_hash.clone(),
+            queue_plan_admission_binding_hash: binding.canonical_hash(),
+            routing_plan_digest: binding.routing_plan_digest,
+            coordinator_leg: coordinator.leg,
+            lane_id: coordinator.leg.route.lane_id,
+            dataspace_id: coordinator.leg.route.dataspace_id,
+            lane_incarnation: coordinator.lane_incarnation,
+            proposal_height: binding.admission_context.proposal_height,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            reservation_owner_hash: Hash::new(b"lane-reservation-owner"),
+            proposal_identity_hash: Hash::new(b"lane-reservation-proposal"),
+        };
+
+        binding
+            .validate_for_lane_reservation_commit(&key)
+            .expect("matching proposal height must validate");
+
+        let mut tampered = key;
+        tampered.proposal_height += 1;
+        let error = binding
+            .validate_for_lane_reservation_commit(&tampered)
+            .expect_err("tampered proposal height must be rejected");
+        assert!(
+            error.contains("proposal height"),
+            "unexpected rejection: {error}"
+        );
+    }
+
+    #[test]
+    fn queue_plan_certificate_rejects_noncanonical_semantic_request_identity() {
+        let (chain_id, transaction, routing_plan, mut forged, validator) =
+            single_route_admission_fixture();
+        forged.request_id = Hash::new(b"forged self-consistent certificate request identity");
+        forged.journal_record_digest = crate::queue::queue_plan_journal_record_claim_digest(
+            transaction,
+            routing_plan,
+            forged.admission_context.clone(),
+            forged.enqueue_timestamp_ms,
+            Some(forged.global_admission_identity()),
+        )
+        .expect("rebind forged semantic identity into its journal digest");
+        let signing_bytes =
+            queue_plan_admission_attestation_signing_bytes_v2(forged.canonical_hash(), 0)
+                .expect("encode forged certificate preimage");
+        let certificate = QueuePlanAdmissionCertificateV2 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+            binding: forged,
+            attestations: vec![QueuePlanAdmissionAttestationV2 {
+                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+                validator_index: 0,
+                signature: Signature::try_new(validator.private_key(), &signing_bytes)
+                    .expect("sign internally consistent forged certificate"),
+            }],
+        };
+
+        let error = validate_queue_plan_admission_certificate_v2(
+            &chain_id,
+            certificate,
+            QueuePlanAdmissionCertificateStrengthV2::Quorum,
+        )
+        .expect_err("digest-valid signatures cannot authorize a noncanonical request identity");
+        assert!(
+            error.contains("noncanonical semantic request identity"),
+            "unexpected rejection: {error}"
+        );
     }
 
     #[test]
@@ -1513,15 +1787,9 @@ mod tests {
                 },
             ],
         };
-        let binding = QueuePlanAdmissionBindingV2::new(
-            &chain_id,
-            Hash::new(b"native-admission-request"),
-            &transaction,
-            &routing_plan,
-            context,
-            42,
-        )
-        .expect("build Native admission binding");
+        let binding =
+            QueuePlanAdmissionBindingV2::new(&chain_id, &transaction, &routing_plan, context, 42)
+                .expect("build Native admission binding");
         assert_eq!(
             binding.routing_plan().expect("bound Native routing plan"),
             routing_plan,

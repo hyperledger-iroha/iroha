@@ -1,13 +1,5 @@
 //! Crash-safe local Norito journal for pending queue routing plans.
 
-use std::{
-    collections::BTreeMap,
-    error::Error as StdError,
-    fmt,
-    fs::{self, File, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-};
 #[cfg(test)]
 use std::{
     collections::VecDeque,
@@ -16,12 +8,25 @@ use std::{
         atomic::{AtomicUsize, Ordering as AtomicOrdering},
     },
 };
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error as StdError,
+    fmt,
+    fs::{self, File, OpenOptions},
+    io::{self, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::transaction::{SignedTransaction, TransactionEntrypoint};
 use norito::codec::{Decode, Encode};
 
-use super::{QueuePlanAdmissionContextV2, QueuePlanGlobalAdmissionIdentityV2, RoutingPlan};
+use crate::torii_proxy::QueuePlanAdmissionBindingV2;
+
+use super::{
+    LaneQueueReservationKeyV2, QueuePlanAdmissionContextV2, QueuePlanGlobalAdmissionIdentityV2,
+    RoutingPlan,
+};
 
 const QUEUE_PLAN_JOURNAL_FRAME_DOMAIN: &[u8] = b"iroha:queue-plan-journal-frame:v4";
 const QUEUE_PLAN_JOURNAL_RECORD_CLAIM_DOMAIN: &[u8] = b"iroha:queue-plan-journal-record-claim:v4";
@@ -57,6 +62,56 @@ struct QueuePlanJournalLivePosition {
     claim_digest: Hash,
     ownership_position: u64,
     record: QueuePlanJournalRecordV4,
+}
+
+impl QueuePlanJournalLivePosition {
+    fn global_admission_binding(&self) -> io::Result<QueuePlanAdmissionBindingV2> {
+        let durable_admission = super::QueuePlanDurableAdmissionV2 {
+            version: super::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+            context: self.record.admission_context.clone(),
+            global_admission_identity: self.record.global_admission_identity.clone(),
+            routing_plan: self.record.routing_plan.clone(),
+            entrypoint_hash: self.record.entrypoint_hash.clone(),
+            signed_transaction_hash: self.record.signed_transaction_hash.clone(),
+            enqueue_timestamp_ms: self.record.enqueue_timestamp_ms,
+            journal_record_digest: self.claim_digest,
+        };
+        let binding = QueuePlanAdmissionBindingV2::try_from_durable_admission(&durable_admission)
+            .map_err(invalid_data)?;
+        binding
+            .validate_for_transaction_and_plan(&self.record.entrypoint, &self.record.routing_plan)
+            .map_err(invalid_data)?;
+        Ok(binding)
+    }
+
+    fn validate_global_admission_for_reservation_commit(
+        &self,
+        key: &LaneQueueReservationKeyV2,
+    ) -> io::Result<()> {
+        if self.record.entrypoint_hash != key.entrypoint_hash
+            || self.plan_digest != key.routing_plan_digest
+            || self.record.admission_context.proposal_height != key.proposal_height
+        {
+            return Err(invalid_data(
+                "queue plan journal global-admission tombstone does not match the live entrypoint, routing plan, or admitting height",
+            ));
+        }
+        self.global_admission_binding()?
+            .validate_for_lane_reservation_commit(key)
+            .map_err(invalid_data)
+    }
+}
+
+/// One exact removal carried by an atomic queue-plan journal batch tombstone.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct QueuePlanJournalRemovalV4 {
+    /// Typed canonical queue identity.
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    /// Full routing-plan digest that was removed.
+    plan_digest: Hash,
+    /// Digest of the exact live Put claim being tombstoned.
+    claim_digest: Hash,
 }
 
 /// Explicit resource limits for queue plan journal append and replay.
@@ -251,6 +306,11 @@ enum QueuePlanJournalFrameV4 {
         /// Digest of the exact live Put claim being tombstoned.
         claim_digest: Hash,
     },
+    /// Atomically tombstone a validated set of pending queue records.
+    ///
+    /// Replay applies this frame only when every removal matches the live state at the same
+    /// prefix. One absent, duplicate, or mismatched removal invalidates the complete frame.
+    RemoveBatch(Vec<QueuePlanJournalRemovalV4>),
 }
 
 /// Typed failure from a strict, synchronously durable journal replacement.
@@ -366,9 +426,9 @@ pub struct QueuePlanJournal {
     tombstones: u64,
     poisoned: bool,
     #[cfg(test)]
-    injected_faults: StdMutex<VecDeque<QueuePlanJournalTestFault>>,
+    replay_scans: AtomicUsize,
     #[cfg(test)]
-    replay_scan_count: AtomicUsize,
+    injected_faults: StdMutex<VecDeque<QueuePlanJournalTestFault>>,
     #[cfg(test)]
     exact_remove_failure_after: Option<usize>,
 }
@@ -438,6 +498,7 @@ pub struct QueuePlanJournalReplay {
     snapshot_len: u64,
     snapshot_digest: Hash,
     live_positions: BTreeMap<QueuePlanJournalKey, QueuePlanJournalLivePosition>,
+    removed_positions: BTreeMap<QueuePlanJournalKey, QueuePlanJournalLivePosition>,
 }
 
 struct PendingCompactionTemp {
@@ -684,9 +745,9 @@ impl QueuePlanJournal {
             tombstones: 0,
             poisoned: false,
             #[cfg(test)]
-            injected_faults: StdMutex::new(VecDeque::new()),
+            replay_scans: AtomicUsize::new(0),
             #[cfg(test)]
-            replay_scan_count: AtomicUsize::new(0),
+            injected_faults: StdMutex::new(VecDeque::new()),
             #[cfg(test)]
             exact_remove_failure_after: None,
         })
@@ -699,10 +760,17 @@ impl QueuePlanJournal {
         self.poisoned
     }
 
-    /// Return the number of authenticated live-snapshot scans performed by this handle.
+    /// Return the number of full content-bound replay scans performed by this open journal.
     #[cfg(test)]
-    pub(super) fn replay_scan_count(&self) -> usize {
-        self.replay_scan_count.load(AtomicOrdering::Relaxed)
+    #[must_use]
+    pub fn replay_scan_count(&self) -> usize {
+        self.replay_scans.load(AtomicOrdering::Relaxed)
+    }
+
+    /// Reset the test-only full replay-scan counter.
+    #[cfg(test)]
+    pub fn reset_replay_scan_count(&self) {
+        self.replay_scans.store(0, AtomicOrdering::Relaxed);
     }
 
     /// Durably replace the live record for one canonical queue identity.
@@ -919,6 +987,152 @@ impl QueuePlanJournal {
         Ok(results)
     }
 
+    /// Durably tombstone one live global admission using its externally committed binding hash.
+    ///
+    /// This restart-safe form does not trust the caller to retain the process-local journal claim
+    /// digest. It reconstructs and validates the complete global admission binding from the live
+    /// V4 record in a content-bound replay snapshot, checks the exact entrypoint, routing-plan
+    /// digest, and canonical binding hash supplied by the caller, then delegates to the ordinary
+    /// exact tombstone with the live record's claim digest. An absent entrypoint is an idempotent
+    /// success; every mismatch against a live record fails closed without appending.
+    ///
+    /// # Errors
+    /// Returns malformed-snapshot, non-global-record, binding-validation, identity, binding-hash,
+    /// capacity, compaction, append, or durability errors. Any ambiguous append or
+    /// synchronization boundary poisons this open journal.
+    pub fn remove_exact_global_admission_binding_strict_durable(
+        &mut self,
+        key: &LaneQueueReservationKeyV2,
+    ) -> io::Result<QueuePlanJournalExactRemoveResult> {
+        self.ensure_healthy()?;
+        key.validate().map_err(invalid_data)?;
+        let entrypoint_hash = key.entrypoint_hash.clone();
+        let (live_plan_digest, live_claim_digest) = {
+            let mut replay = self.prepare_replay()?;
+            replay.verify_snapshot_content()?;
+            let Some(live) = replay.live_positions.get(&entrypoint_hash) else {
+                return Ok(QueuePlanJournalExactRemoveResult::AlreadyAbsent);
+            };
+            live.validate_global_admission_for_reservation_commit(key)?;
+            (live.plan_digest, live.claim_digest)
+        };
+
+        self.remove_exact_strict_durable(entrypoint_hash, live_plan_digest, live_claim_digest)
+    }
+
+    /// Atomically and durably tombstone a validated batch of global queue-plan admissions.
+    ///
+    /// The complete input is validated against one content-bound replay snapshot before any
+    /// append. Each entrypoint may appear only once. Live entries must match the full externally
+    /// committed reservation key; an absent entry is accepted only when this journal still
+    /// carries the exact prior tombstone for the same global admission, which makes a crash
+    /// between this batch and reservation-journal `ForgetCommit` safe to retry. One absent,
+    /// mismatched, duplicate, or ABA-replaced entry rejects the entire batch without appending.
+    /// Every newly removed claim is encoded in one staged `RemoveBatch` frame and synchronously
+    /// persisted before success is returned.
+    ///
+    /// # Errors
+    /// Returns malformed-key, duplicate, absent, mismatched, ABA, snapshot, capacity, compaction,
+    /// append, or synchronization errors. Any ambiguous append or synchronization boundary
+    /// poisons this open journal.
+    pub fn remove_exact_global_admission_bindings_strict_durable(
+        &mut self,
+        keys: &[LaneQueueReservationKeyV2],
+    ) -> io::Result<Vec<QueuePlanJournalExactRemoveResult>> {
+        self.ensure_healthy()?;
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        if keys.len() > self.limits.max_live_records {
+            return Err(invalid_input(
+                "queue plan journal atomic removal batch exceeds the live-record limit",
+            ));
+        }
+
+        let mut entrypoints = BTreeSet::new();
+        for key in keys {
+            key.validate().map_err(invalid_data)?;
+            if !entrypoints.insert(key.entrypoint_hash.clone()) {
+                return Err(invalid_data(
+                    "queue plan journal atomic removal batch contains a duplicate entrypoint",
+                ));
+            }
+        }
+
+        let mut outcomes = Vec::with_capacity(keys.len());
+        let mut live_candidates = Vec::with_capacity(keys.len());
+        {
+            let mut replay = self.prepare_replay_with_removed_entrypoints(Some(&entrypoints))?;
+            replay.verify_snapshot_content()?;
+            for key in keys {
+                if let Some(live) = replay.live_positions.get(&key.entrypoint_hash) {
+                    live.validate_global_admission_for_reservation_commit(key)?;
+                    let removal = QueuePlanJournalRemovalV4 {
+                        entrypoint_hash: key.entrypoint_hash.clone(),
+                        plan_digest: live.plan_digest,
+                        claim_digest: live.claim_digest,
+                    };
+                    outcomes.push(QueuePlanJournalExactRemoveResult::Removed);
+                    live_candidates.push((*key, removal));
+                    continue;
+                }
+                let Some(removed) = replay.removed_positions.get(&key.entrypoint_hash) else {
+                    return Err(invalid_data(
+                        "queue plan journal atomic removal target is neither live nor exactly tombstoned",
+                    ));
+                };
+                removed.validate_global_admission_for_reservation_commit(key)?;
+                outcomes.push(QueuePlanJournalExactRemoveResult::AlreadyAbsent);
+            }
+        }
+
+        if live_candidates.is_empty() {
+            return Ok(outcomes);
+        }
+        let removals = live_candidates
+            .iter()
+            .map(|(_key, removal)| removal.clone())
+            .collect::<Vec<_>>();
+        let encoded = encode_frame(&QueuePlanJournalFrameV4::RemoveBatch(removals), self.limits)?;
+        if let Err(initial_capacity_error) = self.ensure_append_capacity(encoded.len()) {
+            if self.poisoned {
+                return Err(initial_capacity_error);
+            }
+            if outcomes.contains(&QueuePlanJournalExactRemoveResult::AlreadyAbsent) {
+                // Compaction intentionally drops tombstone history. Keep exact retry evidence
+                // intact when this batch contains barriers left over from a previously durable
+                // batch; the operator can enlarge the bounded journal corridor and retry.
+                return Err(initial_capacity_error);
+            }
+            self.compact(true)?;
+            let mut replay = self.prepare_replay()?;
+            replay.verify_snapshot_content()?;
+            for (key, expected) in &live_candidates {
+                let Some(live) = replay.live_positions.get(&key.entrypoint_hash) else {
+                    return Err(invalid_data(
+                        "queue plan journal atomic removal target disappeared during preflight compaction",
+                    ));
+                };
+                live.validate_global_admission_for_reservation_commit(key)?;
+                if live.plan_digest != expected.plan_digest
+                    || live.claim_digest != expected.claim_digest
+                {
+                    return Err(invalid_data(
+                        "queue plan journal atomic removal target changed during preflight compaction",
+                    ));
+                }
+            }
+            self.ensure_append_capacity(encoded.len())?;
+        }
+        self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)
+            .map_err(|failure| failure.source)?;
+        self.tombstones = self
+            .tombstones
+            .saturating_add(u64::try_from(live_candidates.len()).unwrap_or(u64::MAX));
+        self.sync_all_raw(SyncPhase::General)?;
+        Ok(outcomes)
+    }
+
     /// Append a Put frame and return deferred durability work for the caller.
     ///
     /// # Errors
@@ -1105,7 +1319,16 @@ impl QueuePlanJournal {
     /// # Errors
     /// Returns I/O, bound, consistency, or malformed-frame errors.
     pub fn prepare_replay(&self) -> io::Result<QueuePlanJournalReplay> {
+        self.prepare_replay_with_removed_entrypoints(None)
+    }
+
+    fn prepare_replay_with_removed_entrypoints(
+        &self,
+        removed_entrypoints: Option<&BTreeSet<QueuePlanJournalKey>>,
+    ) -> io::Result<QueuePlanJournalReplay> {
         self.ensure_healthy()?;
+        #[cfg(test)]
+        self.replay_scans.fetch_add(1, AtomicOrdering::Relaxed);
         self.verify_cached_storage()?;
         let mut file = open_regular_read(&self.path)?;
         if verify_open_regular_path(&self.path, &file)? != self.file_identity {
@@ -1126,8 +1349,8 @@ impl QueuePlanJournal {
         self.verify_cached_storage()?;
         let mut live_positions =
             BTreeMap::<QueuePlanJournalKey, QueuePlanJournalLivePosition>::new();
-        #[cfg(test)]
-        self.replay_scan_count.fetch_add(1, AtomicOrdering::Relaxed);
+        let mut removed_positions =
+            BTreeMap::<QueuePlanJournalKey, QueuePlanJournalLivePosition>::new();
         scan_file(
             &mut file,
             snapshot_len,
@@ -1152,6 +1375,10 @@ impl QueuePlanJournal {
                                 "queue plan journal live frame claim cannot be encoded: {error}"
                             ))
                         })?;
+                        if removed_entrypoints.is_some_and(|entrypoints| entrypoints.contains(&key))
+                        {
+                            removed_positions.remove(&key);
+                        }
                         match live_positions.entry(key) {
                             std::collections::btree_map::Entry::Occupied(mut entry) => {
                                 let live = entry.get_mut();
@@ -1176,8 +1403,41 @@ impl QueuePlanJournal {
                     } => {
                         if live_positions.get(&entrypoint_hash).is_some_and(|live| {
                             live.plan_digest == plan_digest && live.claim_digest == claim_digest
+                        }) && let Some(removed) = live_positions.remove(&entrypoint_hash)
+                        {
+                            if removed_entrypoints
+                                .is_some_and(|entrypoints| entrypoints.contains(&entrypoint_hash))
+                            {
+                                removed_positions.insert(entrypoint_hash, removed);
+                            }
+                        }
+                    }
+                    QueuePlanJournalFrameV4::RemoveBatch(removals) => {
+                        if removals.iter().any(|removal| {
+                            !live_positions
+                                .get(&removal.entrypoint_hash)
+                                .is_some_and(|live| {
+                                    live.plan_digest == removal.plan_digest
+                                        && live.claim_digest == removal.claim_digest
+                                })
                         }) {
-                            live_positions.remove(&entrypoint_hash);
+                            return Err(invalid_data(
+                                "queue plan journal atomic RemoveBatch does not match its complete live prefix",
+                            ));
+                        }
+                        for removal in removals {
+                            let removed = live_positions.remove(&removal.entrypoint_hash).ok_or_else(
+                                || {
+                                    invalid_data(
+                                        "queue plan journal atomic RemoveBatch target disappeared while applying",
+                                    )
+                                },
+                            )?;
+                            if removed_entrypoints.is_some_and(|entrypoints| {
+                                entrypoints.contains(&removal.entrypoint_hash)
+                            }) {
+                                removed_positions.insert(removal.entrypoint_hash, removed);
+                            }
                         }
                     }
                 }
@@ -1215,6 +1475,7 @@ impl QueuePlanJournal {
             snapshot_len,
             snapshot_digest,
             live_positions,
+            removed_positions,
         })
     }
 
@@ -2036,6 +2297,33 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
                 return Err(invalid_data(
                     "queue plan journal Remove contains a zero identity",
                 ));
+            }
+        }
+        QueuePlanJournalFrameV4::RemoveBatch(removals) => {
+            if removals.is_empty() {
+                return Err(invalid_data(
+                    "queue plan journal RemoveBatch must not be empty",
+                ));
+            }
+            let mut entrypoints = BTreeSet::new();
+            for removal in removals {
+                if removal
+                    .entrypoint_hash
+                    .as_ref()
+                    .iter()
+                    .all(|byte| *byte == 0)
+                    || removal.plan_digest == Hash::prehashed([0; Hash::LENGTH])
+                    || removal.claim_digest == Hash::prehashed([0; Hash::LENGTH])
+                {
+                    return Err(invalid_data(
+                        "queue plan journal RemoveBatch contains a zero identity",
+                    ));
+                }
+                if !entrypoints.insert(removal.entrypoint_hash.clone()) {
+                    return Err(invalid_data(
+                        "queue plan journal RemoveBatch contains a duplicate entrypoint",
+                    ));
+                }
             }
         }
     }
@@ -3023,6 +3311,23 @@ fn reconcile_pending_compaction_temp(
                         live_positions.remove(&entrypoint_hash);
                     }
                 }
+                QueuePlanJournalFrameV4::RemoveBatch(removals) => {
+                    if removals.iter().any(|removal| {
+                        !live_positions
+                            .get(&removal.entrypoint_hash)
+                            .is_some_and(|live| {
+                                live.plan_digest == removal.plan_digest
+                                    && live.claim_digest == removal.claim_digest
+                            })
+                    }) {
+                        return Err(invalid_data(
+                            "queue plan journal compaction recovery RemoveBatch does not match its complete live prefix",
+                        ));
+                    }
+                    for removal in removals {
+                        live_positions.remove(&removal.entrypoint_hash);
+                    }
+                }
             }
             Ok(())
         },
@@ -3671,6 +3976,73 @@ mod tests {
         record
     }
 
+    fn admission_binding_for_record(
+        record: &QueuePlanJournalRecordV4,
+    ) -> QueuePlanAdmissionBindingV2 {
+        let durable_admission = super::super::QueuePlanDurableAdmissionV2 {
+            version: super::super::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+            context: record.admission_context.clone(),
+            global_admission_identity: record.global_admission_identity.clone(),
+            routing_plan: record.routing_plan.clone(),
+            entrypoint_hash: record.entrypoint_hash.clone(),
+            signed_transaction_hash: record.signed_transaction_hash.clone(),
+            enqueue_timestamp_ms: record.enqueue_timestamp_ms,
+            journal_record_digest: record.claim_digest().expect("hash global journal claim"),
+        };
+        let binding = QueuePlanAdmissionBindingV2::try_from_durable_admission(&durable_admission)
+            .expect("reconstruct global admission binding");
+        binding
+            .validate_for_transaction_and_plan(&record.entrypoint, &record.routing_plan)
+            .expect("validate binding against its exact V4 record");
+        binding
+    }
+
+    fn globally_bound_record(
+        label: &str,
+    ) -> (QueuePlanJournalRecordV4, QueuePlanAdmissionBindingV2) {
+        let mut record = record(label);
+        let chain_id_digest = Hash::new_from_chunks(&[b"journal-test-chain", label.as_bytes()]);
+        record.global_admission_identity = Some(QueuePlanGlobalAdmissionIdentityV2 {
+            version: super::super::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+            chain_id_digest,
+            request_id: crate::torii_proxy::queue_plan_synced_request_id_from_chain_digest(
+                chain_id_digest,
+                record.entrypoint_hash.clone(),
+            ),
+        });
+        let binding = admission_binding_for_record(&record);
+        (record, binding)
+    }
+
+    fn reservation_key_for_record(
+        record: &QueuePlanJournalRecordV4,
+        binding_hash: Hash,
+    ) -> LaneQueueReservationKeyV2 {
+        let coordinator = record
+            .admission_context
+            .route_incarnations
+            .first()
+            .expect("global journal fixture has a coordinator");
+        LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(
+                record.entrypoint_hash.clone(),
+            )),
+            entrypoint_hash: record.entrypoint_hash.clone(),
+            queue_plan_admission_binding_hash: binding_hash,
+            routing_plan_digest: record.plan_digest(),
+            coordinator_leg: coordinator.leg,
+            lane_id: coordinator.leg.route.lane_id,
+            dataspace_id: coordinator.leg.route.dataspace_id,
+            lane_incarnation: coordinator.lane_incarnation,
+            proposal_height: record.admission_context.proposal_height,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            reservation_owner_hash: Hash::new(b"journal reservation owner"),
+            proposal_identity_hash: Hash::new(b"journal reservation proposal"),
+        }
+    }
+
     #[test]
     fn queue_plan_journal_claim_digest_binds_exact_v4_record_bytes_and_context() {
         let exact = record("claim-digest-exact");
@@ -4214,6 +4586,428 @@ mod tests {
         assert_eq!(
             journal.replay().expect("replay retained replacement"),
             vec![replacement]
+        );
+    }
+
+    #[test]
+    fn exact_global_binding_tombstone_reconstructs_live_claim_after_restart_and_is_idempotent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("exact-global-binding-remove.norito");
+        let (record, binding) = globally_bound_record("exact-global-binding-remove");
+        let entrypoint_hash = record.entrypoint_hash.clone();
+        let plan_digest = record.plan_digest();
+        let binding_hash = binding.canonical_hash();
+        let key = reservation_key_for_record(&record, binding_hash);
+        let live_claim_digest = record.claim_digest().expect("hash live global claim");
+        {
+            let mut journal = open(&path).expect("open");
+            journal
+                .replace_strict_durable(record)
+                .expect("install global claim");
+        }
+
+        let mut journal = open(&path).expect("restart without caller claim digest");
+        assert_eq!(
+            journal
+                .remove_exact_global_admission_binding_strict_durable(&key)
+                .expect("remove reconstructed global claim"),
+            QueuePlanJournalExactRemoveResult::Removed
+        );
+        assert!(
+            journal
+                .replay()
+                .expect("replay global binding removal")
+                .is_empty()
+        );
+        let frames = read_frames(&path, limits(64)).expect("read exact removal frames");
+        assert!(matches!(
+            frames.last(),
+            Some(QueuePlanJournalFrameV4::Remove {
+                entrypoint_hash: removed_entrypoint_hash,
+                plan_digest: removed_plan_digest,
+                claim_digest: removed_claim_digest,
+            }) if *removed_entrypoint_hash == entrypoint_hash
+                && *removed_plan_digest == plan_digest
+                && *removed_claim_digest == live_claim_digest
+        ));
+        let removed_len = path.metadata().expect("removed metadata").len();
+        assert_eq!(
+            journal
+                .remove_exact_global_admission_binding_strict_durable(&key)
+                .expect("repeat reconstructed global removal"),
+            QueuePlanJournalExactRemoveResult::AlreadyAbsent
+        );
+        assert_eq!(
+            path.metadata().expect("idempotent metadata").len(),
+            removed_len,
+            "AlreadyAbsent must append no second tombstone"
+        );
+    }
+
+    #[test]
+    fn exact_global_binding_batch_tombstone_is_atomic_and_constant_scan() {
+        const RECORDS: usize = 128;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("exact-global-binding-batch.norito");
+        let batch_limits = limits(RECORDS);
+        let mut records = Vec::with_capacity(RECORDS);
+        let mut keys = Vec::with_capacity(RECORDS);
+        let mut journal =
+            QueuePlanJournal::open_with_limits(&path, batch_limits, true).expect("open");
+        let mut flush = QueuePlanJournalFlush::default();
+        for index in 0..RECORDS {
+            let (record, binding) =
+                globally_bound_record(&format!("exact-global-binding-batch-{index}"));
+            keys.push(reservation_key_for_record(
+                &record,
+                binding.canonical_hash(),
+            ));
+            flush = flush.combine(
+                journal
+                    .put_deferred_flush(record.clone())
+                    .expect("append global batch claim"),
+            );
+            records.push(record);
+        }
+        journal
+            .flush_deferred(flush)
+            .expect("flush global batch claims");
+        journal.reset_replay_scan_count();
+
+        let outcomes = journal
+            .remove_exact_global_admission_bindings_strict_durable(&keys)
+            .expect("remove exact global batch");
+
+        assert_eq!(
+            outcomes,
+            vec![QueuePlanJournalExactRemoveResult::Removed; RECORDS]
+        );
+        assert_eq!(
+            journal.replay_scan_count(),
+            1,
+            "batch validation must reconstruct the journal exactly once"
+        );
+        let frames = read_frames(&path, batch_limits).expect("read atomic batch frames");
+        let Some(QueuePlanJournalFrameV4::RemoveBatch(removals)) = frames.last() else {
+            panic!("the complete removal set must be one atomic RemoveBatch frame");
+        };
+        assert_eq!(removals.len(), RECORDS);
+        assert_eq!(
+            removals
+                .iter()
+                .map(|removal| removal.entrypoint_hash.clone())
+                .collect::<Vec<_>>(),
+            keys.iter()
+                .map(|key| key.entrypoint_hash.clone())
+                .collect::<Vec<_>>()
+        );
+        let removed_len = path.metadata().expect("removed metadata").len();
+        drop(journal);
+
+        let mut journal =
+            QueuePlanJournal::open_with_limits(&path, batch_limits, true).expect("restart");
+        journal.reset_replay_scan_count();
+        assert_eq!(
+            journal
+                .remove_exact_global_admission_bindings_strict_durable(&keys)
+                .expect("retry exact durable batch"),
+            vec![QueuePlanJournalExactRemoveResult::AlreadyAbsent; RECORDS]
+        );
+        assert_eq!(
+            journal.replay_scan_count(),
+            1,
+            "exact tombstone retry must remain one bounded replay scan"
+        );
+        assert_eq!(
+            path.metadata().expect("retry metadata").len(),
+            removed_len,
+            "an exactly tombstoned retry must append no second batch"
+        );
+        assert!(journal.replay().expect("replay removed batch").is_empty());
+    }
+
+    #[test]
+    fn exact_global_binding_batch_rejects_duplicate_absent_and_aba_without_append() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir
+            .path()
+            .join("exact-global-binding-batch-rejections.norito");
+        let (first, first_binding) = globally_bound_record("batch-rejection-first");
+        let first_key = reservation_key_for_record(&first, first_binding.canonical_hash());
+        let (second, second_binding) = globally_bound_record("batch-rejection-second");
+        let second_key = reservation_key_for_record(&second, second_binding.canonical_hash());
+        let (absent, absent_binding) = globally_bound_record("batch-rejection-absent");
+        let absent_key = reservation_key_for_record(&absent, absent_binding.canonical_hash());
+        let mut journal = open(&path).expect("open");
+        journal
+            .replace_strict_durable(first.clone())
+            .expect("install first global claim");
+        journal
+            .replace_strict_durable(second.clone())
+            .expect("install second global claim");
+
+        let before_duplicate = fs::read(&path).expect("read duplicate baseline");
+        let duplicate_error = journal
+            .remove_exact_global_admission_bindings_strict_durable(&[first_key, first_key])
+            .expect_err("duplicate batch key must fail closed");
+        assert_eq!(duplicate_error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&path).expect("read duplicate rejection"),
+            before_duplicate
+        );
+
+        let absent_error = journal
+            .remove_exact_global_admission_bindings_strict_durable(&[first_key, absent_key])
+            .expect_err("unproven absent batch key must reject the complete batch");
+        assert_eq!(absent_error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&path).expect("read absent rejection"),
+            before_duplicate,
+            "a valid key preceding an absent key must not be partially tombstoned"
+        );
+
+        let mut replacement = first.clone();
+        replacement.enqueue_timestamp_ms = replacement.enqueue_timestamp_ms.saturating_add(1);
+        let replacement_binding = admission_binding_for_record(&replacement);
+        assert_ne!(
+            replacement_binding.canonical_hash(),
+            first_binding.canonical_hash()
+        );
+        journal
+            .replace_strict_durable(replacement.clone())
+            .expect("install same-entrypoint ABA replacement");
+        let before_aba = fs::read(&path).expect("read ABA baseline");
+        let aba_error = journal
+            .remove_exact_global_admission_bindings_strict_durable(&[second_key, first_key])
+            .expect_err("stale ABA key must reject the complete batch");
+        assert_eq!(aba_error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&path).expect("read ABA rejection"),
+            before_aba,
+            "a valid key preceding an ABA key must not be partially tombstoned"
+        );
+        let replayed = journal.replay().expect("replay rejected batch claims");
+        assert_eq!(replayed.len(), 2);
+        assert!(replayed.contains(&replacement));
+        assert!(replayed.contains(&second));
+
+        let (retry_original, retry_binding) = globally_bound_record("batch-retry-then-put");
+        let retry_key = reservation_key_for_record(&retry_original, retry_binding.canonical_hash());
+        journal
+            .replace_strict_durable(retry_original.clone())
+            .expect("install retry original");
+        assert_eq!(
+            journal
+                .remove_exact_global_admission_bindings_strict_durable(&[retry_key])
+                .expect("tombstone retry original"),
+            vec![QueuePlanJournalExactRemoveResult::Removed]
+        );
+        let mut retry_replacement = retry_original;
+        retry_replacement.enqueue_timestamp_ms =
+            retry_replacement.enqueue_timestamp_ms.saturating_add(1);
+        journal
+            .replace_strict_durable(retry_replacement)
+            .expect("install later ABA owner");
+        let before_later_put = fs::read(&path).expect("read later-Put baseline");
+        let retry_error = journal
+            .remove_exact_global_admission_bindings_strict_durable(&[retry_key])
+            .expect_err("a later Put must invalidate exact tombstone retry provenance");
+        assert_eq!(retry_error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&path).expect("read rejected old retry"),
+            before_later_put
+        );
+    }
+
+    #[test]
+    fn torn_global_binding_remove_batch_replays_all_live_claims() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("torn-global-binding-batch.norito");
+        let (first, _) = globally_bound_record("torn-batch-first");
+        let (second, _) = globally_bound_record("torn-batch-second");
+        {
+            let mut journal = open(&path).expect("open");
+            journal
+                .replace_strict_durable(first.clone())
+                .expect("install first claim");
+            journal
+                .replace_strict_durable(second.clone())
+                .expect("install second claim");
+        }
+        let canonical = fs::read(&path).expect("read canonical claims");
+        let torn_batch = raw_frame(&QueuePlanJournalFrameV4::RemoveBatch(vec![
+            QueuePlanJournalRemovalV4 {
+                entrypoint_hash: first.entrypoint_hash.clone(),
+                plan_digest: first.plan_digest(),
+                claim_digest: first.claim_digest().expect("hash first claim"),
+            },
+            QueuePlanJournalRemovalV4 {
+                entrypoint_hash: second.entrypoint_hash.clone(),
+                plan_digest: second.plan_digest(),
+                claim_digest: second.claim_digest().expect("hash second claim"),
+            },
+        ]));
+        let mut append = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open torn append");
+        append
+            .write_all(&torn_batch[..torn_batch.len() - 3])
+            .expect("append torn batch");
+        append.sync_all().expect("sync torn batch");
+        drop(append);
+
+        let journal = open(&path).expect("repair torn batch");
+        assert_eq!(
+            fs::read(&path).expect("read repaired journal"),
+            canonical,
+            "a batch without its complete commit marker must be truncated as one unit"
+        );
+        assert_eq!(
+            journal.replay().expect("replay repaired batch"),
+            vec![first, second]
+        );
+    }
+
+    #[test]
+    fn exact_global_binding_tombstone_rejects_wrong_hash_without_append() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("exact-global-binding-wrong-hash.norito");
+        let (record, binding) = globally_bound_record("exact-global-binding-wrong-hash");
+        let mut journal = open(&path).expect("open");
+        journal
+            .replace_strict_durable(record.clone())
+            .expect("install global claim");
+        let before = fs::read(&path).expect("read live global claim");
+        let wrong_binding_hash =
+            Hash::new_from_chunks(&[binding.canonical_hash().as_ref(), b"forged-binding-hash"]);
+        let key = reservation_key_for_record(&record, wrong_binding_hash);
+
+        let error = journal
+            .remove_exact_global_admission_binding_strict_durable(&key)
+            .expect_err("wrong canonical binding hash must fail closed");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&path).expect("read rejected binding removal"),
+            before,
+            "binding-hash mismatch must append no tombstone"
+        );
+        assert_eq!(
+            journal.replay().expect("replay retained global claim"),
+            vec![record]
+        );
+    }
+
+    #[test]
+    fn exact_global_binding_tombstone_rejects_route_mismatch_and_ordinary_claim() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let global_path = dir.path().join("exact-global-binding-wrong-route.norito");
+        let (global_record, binding) = globally_bound_record("exact-global-binding-wrong-route");
+        let mut global_journal = open(&global_path).expect("open global journal");
+        global_journal
+            .replace_strict_durable(global_record.clone())
+            .expect("install global claim");
+        let global_before = fs::read(&global_path).expect("read global claim");
+        let mut wrong_route_key =
+            reservation_key_for_record(&global_record, binding.canonical_hash());
+        wrong_route_key.routing_plan_digest = Hash::new(b"forged-routing-plan-digest");
+
+        let route_error = global_journal
+            .remove_exact_global_admission_binding_strict_durable(&wrong_route_key)
+            .expect_err("wrong routing-plan digest must fail closed");
+        assert_eq!(route_error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&global_path).expect("read rejected route removal"),
+            global_before,
+            "route mismatch must append no tombstone"
+        );
+        assert_eq!(
+            global_journal
+                .replay()
+                .expect("replay retained route owner"),
+            vec![global_record]
+        );
+
+        let ordinary_path = dir.path().join("exact-global-binding-ordinary.norito");
+        let ordinary_record = record("exact-global-binding-ordinary");
+        let mut ordinary_journal = open(&ordinary_path).expect("open ordinary journal");
+        ordinary_journal
+            .replace_strict_durable(ordinary_record.clone())
+            .expect("install ordinary claim");
+        let ordinary_before = fs::read(&ordinary_path).expect("read ordinary claim");
+        let ordinary_key = reservation_key_for_record(&ordinary_record, binding.canonical_hash());
+        let ordinary_error = ordinary_journal
+            .remove_exact_global_admission_binding_strict_durable(&ordinary_key)
+            .expect_err("ordinary claim must not reconstruct as a global binding");
+        assert_eq!(ordinary_error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&ordinary_path).expect("read rejected ordinary removal"),
+            ordinary_before,
+            "non-global claim must append no tombstone"
+        );
+        assert_eq!(
+            ordinary_journal
+                .replay()
+                .expect("replay retained ordinary owner"),
+            vec![ordinary_record]
+        );
+    }
+
+    #[test]
+    fn exact_global_binding_tombstone_rejects_same_plan_aba_after_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("exact-global-binding-same-plan-aba.norito");
+        let (original, original_binding) =
+            globally_bound_record("exact-global-binding-same-plan-aba");
+        let mut replacement = original.clone();
+        replacement.enqueue_timestamp_ms = replacement.enqueue_timestamp_ms.saturating_add(1);
+        replacement.global_admission_identity = Some(QueuePlanGlobalAdmissionIdentityV2 {
+            version: super::super::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+            chain_id_digest: original_binding.chain_id_digest,
+            request_id: original_binding.request_id,
+        });
+        let replacement_binding = admission_binding_for_record(&replacement);
+        assert_eq!(replacement.plan_digest(), original.plan_digest());
+        assert_ne!(
+            replacement_binding.canonical_hash(),
+            original_binding.canonical_hash()
+        );
+        {
+            let mut journal = open(&path).expect("open");
+            journal
+                .replace_strict_durable(original.clone())
+                .expect("install original global claim");
+            journal
+                .replace_strict_durable(replacement.clone())
+                .expect("install same-plan replacement");
+            journal.compact(true).expect("compact replacement claim");
+        }
+
+        let mut journal = open(&path).expect("restart compacted journal");
+        let before = fs::read(&path).expect("read replacement claim");
+        let original_key = reservation_key_for_record(&original, original_binding.canonical_hash());
+        let error = journal
+            .remove_exact_global_admission_binding_strict_durable(&original_key)
+            .expect_err("stale same-plan global binding must not delete replacement");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&path).expect("read rejected stale global removal"),
+            before,
+            "same-plan ABA mismatch must append no tombstone"
+        );
+        assert_eq!(
+            journal.replay().expect("replay retained replacement"),
+            vec![replacement.clone()]
+        );
+        let replacement_key =
+            reservation_key_for_record(&replacement, replacement_binding.canonical_hash());
+        assert_eq!(
+            journal
+                .remove_exact_global_admission_binding_strict_durable(&replacement_key)
+                .expect("remove exact replacement binding"),
+            QueuePlanJournalExactRemoveResult::Removed
         );
     }
 
@@ -6126,6 +6920,83 @@ mod tests {
             !path.with_extension("tmp").exists(),
             "reconciled unpromoted temp must be durably removed"
         );
+    }
+
+    #[test]
+    fn compaction_recovery_validates_atomic_remove_batch_prefix() {
+        let first = record("compact-remove-batch-first");
+        let second = record("compact-remove-batch-second");
+        let exact_removals = vec![
+            QueuePlanJournalRemovalV4 {
+                entrypoint_hash: first.entrypoint_hash.clone(),
+                plan_digest: first.plan_digest(),
+                claim_digest: first.claim_digest().expect("hash first claim"),
+            },
+            QueuePlanJournalRemovalV4 {
+                entrypoint_hash: second.entrypoint_hash.clone(),
+                plan_digest: second.plan_digest(),
+                claim_digest: second.claim_digest().expect("hash second claim"),
+            },
+        ];
+        let mut canonical = raw_bootstrap_frame();
+        canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(first.clone())));
+        canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(second.clone())));
+        canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::RemoveBatch(
+            exact_removals.clone(),
+        )));
+
+        let valid_dir = tempfile::tempdir().expect("valid tempdir");
+        let valid_path = valid_dir.path().join("compact-remove-batch-valid.norito");
+        fs::write(&valid_path, &canonical).expect("write valid canonical");
+        fs::write(valid_path.with_extension("tmp"), raw_bootstrap_frame())
+            .expect("write valid compaction prefix");
+        let journal = QueuePlanJournal::open_with_limits(&valid_path, limits(2), true)
+            .expect("valid atomic batch must reconcile compaction recovery");
+        assert!(
+            journal
+                .replay()
+                .expect("replay valid atomic batch")
+                .is_empty()
+        );
+        assert!(!valid_path.with_extension("tmp").exists());
+
+        let absent = record("compact-remove-batch-absent");
+        let mut invalid_removals = exact_removals;
+        invalid_removals[1] = QueuePlanJournalRemovalV4 {
+            entrypoint_hash: absent.entrypoint_hash.clone(),
+            plan_digest: absent.plan_digest(),
+            claim_digest: absent.claim_digest().expect("hash absent claim"),
+        };
+        let mut invalid_canonical = raw_bootstrap_frame();
+        invalid_canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(first)));
+        invalid_canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(second)));
+        invalid_canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::RemoveBatch(
+            invalid_removals,
+        )));
+        let invalid_dir = tempfile::tempdir().expect("invalid tempdir");
+        let invalid_path = invalid_dir
+            .path()
+            .join("compact-remove-batch-invalid.norito");
+        fs::write(&invalid_path, &invalid_canonical).expect("write invalid canonical");
+        fs::write(invalid_path.with_extension("tmp"), raw_bootstrap_frame())
+            .expect("write invalid compaction prefix");
+
+        let error = QueuePlanJournal::open_with_limits(&invalid_path, limits(2), true)
+            .err()
+            .expect("compaction recovery must reject a partially matching atomic batch");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("compaction recovery RemoveBatch does not match"),
+            "unexpected recovery error: {error}"
+        );
+        assert_eq!(
+            fs::read(&invalid_path).expect("retain invalid canonical"),
+            invalid_canonical
+        );
+        assert!(invalid_path.with_extension("tmp").is_file());
     }
 
     #[test]

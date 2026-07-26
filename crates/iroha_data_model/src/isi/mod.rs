@@ -1245,6 +1245,16 @@ impl From<crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias> for Instruc
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::account_alias_lease::AcquireAccountAliasLease> for InstructionBox {
+    fn from(i: crate::isi::account_alias_lease::AcquireAccountAliasLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::domain_link::SetAccountAliasBinding> for InstructionBox {
+    fn from(i: crate::isi::domain_link::SetAccountAliasBinding) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::account_recovery::ReplaceAccountController> for InstructionBox {
     fn from(i: crate::isi::account_recovery::ReplaceAccountController) -> Self {
         InstructionBox(Box::new(i))
@@ -1332,6 +1342,24 @@ impl From<crate::isi::offline::RegisterOfflineDeviceAttestation> for Instruction
 
 impl From<crate::isi::offline::SetOfflineDeviceAttestationPolicy> for InstructionBox {
     fn from(i: crate::isi::offline::SetOfflineDeviceAttestationPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::IssueOfflineNote> for InstructionBox {
+    fn from(i: crate::isi::offline::IssueOfflineNote) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::RedeemOfflineNote> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemOfflineNote) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::AuditOfflineNote> for InstructionBox {
+    fn from(i: crate::isi::offline::AuditOfflineNote) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -3137,6 +3165,8 @@ macro_rules! enum_type {
     };
 }
 
+/// Legacy paid account-alias acquisition compatibility.
+pub mod account_alias_lease;
 /// Native account controller replacement and social recovery instructions.
 pub mod account_recovery;
 /// Declarative alias setup and explicit alias lifecycle instructions.
@@ -3156,6 +3186,8 @@ pub mod content;
 pub mod contract_alias;
 /// DeFi-native instructions.
 pub mod defi;
+/// Legacy account-alias binding compatibility.
+pub mod domain_link;
 /// Ledger-managed asset escrow instructions.
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.

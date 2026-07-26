@@ -31,7 +31,95 @@ def _sumeragi_snapshot_checker_source() -> str:
 def _status_snapshot_checker_source() -> str:
     return _embedded_checker_source(
         "check_status_snapshot",
-        'python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" <<\'PY\'',
+        'python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" <<\'PY\'',
+    )
+
+
+def _validator_fleet_checker_source() -> str:
+    source = SCRIPT.read_text(encoding="utf-8")
+    match = re.search(
+        r"capture_validator_fleet_sample\(\) \{.*?"
+        r"python3 - \"\$records_file\" <<'PY'\n(?P<body>.*?)\nPY\n"
+        r"  local rc=\$\?",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None
+    return match.group("body")
+
+
+def _validator_progress_checker_source() -> str:
+    source = SCRIPT.read_text(encoding="utf-8")
+    match = re.search(
+        r"python3 - \"\$previous_summary\" \"\$summary\" <<'PY'\n"
+        r"(?P<body>.*?)\nPY",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None
+    return match.group("body")
+
+
+def _fleet_record(label: str, node: str) -> dict[str, object]:
+    return {
+        "label": label,
+        "node": node,
+        "build": "build",
+        "config": "config",
+        "context": "context",
+        "height": 708,
+        "view": 0,
+        "epoch": 1,
+        "mode": "permissioned",
+        "validator_count": 4,
+        "quorum": "3/4",
+        "committed_height": 707,
+        "committed_subject": "block-707",
+        "commit_qc": "qc-707",
+        "offline_block_height": 707,
+        "offline_block_hash": "ab" * 32,
+        "offline_release": json.dumps(
+            {
+                "artifact_set": {"generation": "release-v4"},
+                "verifiers": {
+                    f"role-{index}": {"commitment": f"{index:02x}" * 32}
+                    for index in range(5)
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    }
+
+
+def _run_fleet_checker(
+    tmp_path: Path,
+    records: list[dict[str, object]],
+) -> subprocess.CompletedProcess[str]:
+    records_path = tmp_path / "fleet-records.jsonl"
+    records_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        ["python3", "-", str(records_path)],
+        input=_validator_fleet_checker_source(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _run_progress_checker(
+    previous: dict[str, object],
+    current: dict[str, object],
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["python3", "-", json.dumps(previous), json.dumps(current)],
+        input=_validator_progress_checker_source(),
+        text=True,
+        capture_output=True,
+        check=False,
     )
 
 
@@ -64,11 +152,21 @@ def _run_status_checker(
     payload: dict[str, object],
     *,
     expected_git_sha: str = "",
+    require_exact: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     payload_path = tmp_path / "status.json"
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
     return subprocess.run(
-        ["python3", "-", "public", str(payload_path), "4", "0", expected_git_sha],
+        [
+            "python3",
+            "-",
+            "public",
+            str(payload_path),
+            "4",
+            "0",
+            expected_git_sha,
+            "1" if require_exact else "0",
+        ],
         input=_status_snapshot_checker_source(),
         text=True,
         capture_output=True,
@@ -152,6 +250,78 @@ def test_sumeragi_checker_accepts_authoritative_v2(tmp_path: Path) -> None:
     result = _run_checker(tmp_path, _healthy_base_payload())
     assert result.returncode == 0, result.stderr
     assert '"commit_qc_signers": 3' in result.stdout
+
+
+def test_validator_fleet_gate_retains_exact_offline_identity(tmp_path: Path) -> None:
+    records = [_fleet_record("v1", "node-1"), _fleet_record("v2", "node-2")]
+    result = _run_fleet_checker(tmp_path, records)
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout)
+    assert summary["offline_block_height"] == 707
+    assert summary["offline_block_hash"] == "ab" * 32
+    release = json.loads(summary["offline_release"])
+    assert len(release["verifiers"]) == 5
+
+
+def test_validator_fleet_gate_rejects_offline_block_and_verifier_mismatches(
+    tmp_path: Path,
+) -> None:
+    baseline = _fleet_record("v1", "node-1")
+
+    wrong_block = _fleet_record("v2", "node-2")
+    wrong_block["offline_block_hash"] = "cd" * 32
+    result = _run_fleet_checker(tmp_path, [baseline, wrong_block])
+    assert result.returncode == 1
+    assert "offline_block_hash" in result.stderr
+
+    wrong_release = _fleet_record("v2", "node-2")
+    release = json.loads(str(wrong_release["offline_release"]))
+    release["verifiers"]["role-4"]["commitment"] = "ff" * 32
+    wrong_release["offline_release"] = json.dumps(
+        release,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    result = _run_fleet_checker(tmp_path, [baseline, wrong_release])
+    assert result.returncode == 1
+    assert "offline_release" in result.stderr
+
+
+def test_validator_progress_gate_requires_stable_release_and_advancing_offline_block() -> None:
+    previous = {
+        "build": "build",
+        "config": "config",
+        "nodes": ["node-1", "node-2"],
+        "offline_release": "sealed-release",
+        "committed_height": 707,
+        "committed_subject": "block-707",
+        "offline_block_height": 707,
+        "offline_block_hash": "ab" * 32,
+    }
+    current = {
+        **previous,
+        "committed_height": 708,
+        "committed_subject": "block-708",
+        "offline_block_height": 708,
+        "offline_block_hash": "cd" * 32,
+    }
+    accepted = _run_progress_checker(previous, current)
+    assert accepted.returncode == 0, accepted.stderr
+
+    changed_release = {**current, "offline_release": "unreviewed-release"}
+    rejected = _run_progress_checker(previous, changed_release)
+    assert rejected.returncode == 1
+    assert "changed offline_release between progress samples" in rejected.stderr
+
+    stale_block = {
+        **current,
+        "offline_block_height": 707,
+        "offline_block_hash": previous["offline_block_hash"],
+    }
+    rejected = _run_progress_checker(previous, stale_block)
+    assert rejected.returncode == 1
+    assert "offline readiness did not advance" in rejected.stderr
 
 
 def test_sumeragi_checker_rejects_legacy_shape(tmp_path: Path) -> None:
@@ -379,6 +549,30 @@ def test_status_checker_accepts_expected_git_sha_prefix(tmp_path: Path) -> None:
     }
     result = _run_status_checker(tmp_path, payload, expected_git_sha="490dacc")
     assert result.returncode == 0, result.stderr
+
+
+def test_release_status_checker_requires_full_exact_git_sha(tmp_path: Path) -> None:
+    expected = "490dacc287f00d490dacc287f00d490dacc287f0"
+    exact = _run_status_checker(
+        tmp_path,
+        {"build": {"git_commit_sha": expected}, "blocks": 42, "queue_size": 0},
+        expected_git_sha=expected,
+        require_exact=True,
+    )
+    assert exact.returncode == 0, exact.stderr
+
+    shortened = _run_status_checker(
+        tmp_path,
+        {
+            "build": {"git_commit_sha": expected[:12]},
+            "blocks": 42,
+            "queue_size": 0,
+        },
+        expected_git_sha=expected,
+        require_exact=True,
+    )
+    assert shortened.returncode == 1
+    assert "does not exactly match release commit" in shortened.stderr
 
 
 def test_status_checker_rejects_missing_or_mismatched_git_sha(tmp_path: Path) -> None:

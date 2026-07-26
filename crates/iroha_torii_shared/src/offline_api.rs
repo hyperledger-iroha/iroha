@@ -15,6 +15,7 @@ use iroha_data_model::{
         KagemushaActiveReceiverWitnessProofV1, KagemushaRecipientPaymentRequestV2,
     },
 };
+use iroha_schema::IntoSchema;
 
 use crate::ErrorEnvelope;
 
@@ -410,7 +411,15 @@ pub type OfflineTopUpFinalityProof = iroha_data_model::offline::KagemushaTopUpFi
 
 /// One machine-readable reason why an asset is not ready for offline payments.
 #[derive(
-    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    IntoSchema,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
 pub struct OfflineReadinessBlocker {
@@ -422,7 +431,15 @@ pub struct OfflineReadinessBlocker {
 
 /// Stable registry identity of the verifier selected for offline transfers.
 #[derive(
-    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    IntoSchema,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
 pub struct OfflineVerifierId {
@@ -438,7 +455,9 @@ pub struct OfflineVerifierId {
 /// record. The inclusive activation and exclusive withdrawal bounds let a
 /// wallet prove that the same verifier was active at
 /// [`OfflineReadiness::evaluated_block_height`].
-#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, IntoSchema, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
 pub struct OfflineActiveTransferVerifier {
     /// Stable registry identity used by proof attachments and top-up anchors.
     pub id: OfflineVerifierId,
@@ -482,7 +501,15 @@ pub type OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier;
 /// policy, attestation, evidence, manifest, verifier records, and verifier-side
 /// artifact bytes.
 #[derive(
-    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    IntoSchema,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
 pub struct OfflineAuthenticatedArtifactSet {
@@ -594,8 +621,12 @@ impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
 }
 
 /// Snapshot-bound readiness result for one asset definition.
-#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, IntoSchema, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
 pub struct OfflineReadiness {
+    /// Exact peer-cash handoff/finality contract required by this chain build.
+    pub cash_handoff_capability: String,
     /// Minimum native bridge ABI required by this chain build.
     pub required_bridge_abi_version: u32,
     /// Maximum peer-spend hop depth accepted by the protocol.
@@ -636,6 +667,42 @@ pub struct OfflineReadiness {
     pub blockers: Vec<OfflineReadinessBlocker>,
 }
 
+/// Complete mandatory offline-cash projection embedded in node status.
+///
+/// `ready` is true only when the catalog is non-empty, every configured asset
+/// is ready, and no fleet-level configuration or evaluation blocker exists.
+/// Keeping the exact capability and ABI at the root lets orchestration fail
+/// closed without guessing which asset entry represents the protocol contract.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    IntoSchema,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineStatus {
+    /// Offline cash is a mandatory service of this node profile.
+    pub mandatory: bool,
+    /// Exact irreversible peer-cash handoff contract.
+    pub cash_handoff_capability: String,
+    /// Exact native bridge ABI required for authenticated V4 artifacts.
+    pub required_bridge_abi_version: u32,
+    /// Maximum peer-spend hop depth accepted by the protocol.
+    pub max_hops: u32,
+    /// Aggregate readiness across every configured escrow asset.
+    pub ready: bool,
+    /// Per-asset readiness snapshots, sorted by canonical asset definition id.
+    pub assets: Vec<OfflineReadiness>,
+    /// Fleet-level configuration or evaluation failures.
+    pub blockers: Vec<OfflineReadinessBlocker>,
+}
+
 impl norito::json::JsonDeserialize for OfflineReadiness {
     #[expect(
         clippy::too_many_lines,
@@ -647,6 +714,7 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         use norito::json::{Error, MapVisitor};
 
         let mut visitor = MapVisitor::new(parser)?;
+        let mut cash_handoff_capability = None;
         let mut required_bridge_abi_version = None;
         let mut max_hops = None;
         let mut asset_definition_id = None;
@@ -667,6 +735,12 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         while let Some(key) = visitor.next_key()? {
             let field = key.as_str();
             match field {
+                "cash_handoff_capability" => {
+                    if cash_handoff_capability.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    cash_handoff_capability = Some(visitor.parse_value::<String>()?);
+                }
                 "required_bridge_abi_version" => {
                     if required_bridge_abi_version.is_some() {
                         return Err(Error::duplicate_field(field));
@@ -777,6 +851,8 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         visitor.finish()?;
 
         Ok(Self {
+            cash_handoff_capability: cash_handoff_capability
+                .ok_or_else(|| Error::missing_field("cash_handoff_capability"))?,
             required_bridge_abi_version: required_bridge_abi_version
                 .ok_or_else(|| Error::missing_field("required_bridge_abi_version"))?,
             max_hops: max_hops.ok_or_else(|| Error::missing_field("max_hops"))?,
@@ -1016,6 +1092,8 @@ mod tests {
             );
         }
         OfflineReadiness {
+            cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
@@ -1071,6 +1149,8 @@ mod tests {
 
     fn available_readiness() -> OfflineReadiness {
         OfflineReadiness {
+            cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version: 21,
             max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),

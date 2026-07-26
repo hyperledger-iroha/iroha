@@ -427,8 +427,8 @@ fn inbound_certified_merge_sidecar_topic(
     let (tag, remaining) = inbound_enum_parts(payload)?;
     inbound_enum_field(remaining, flags)?;
     match tag {
-        0 => Ok(Topic::Consensus),
-        1 => Ok(Topic::ConsensusChunk),
+        0..=3 => Ok(Topic::Consensus),
+        4 => Ok(Topic::ConsensusChunk),
         _ => Err(norito::core::Error::Message(
             "unknown certified merge-sidecar discriminant".to_owned(),
         )),
@@ -631,7 +631,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
                 CertifiedMergeSidecarMessage::Request(_)
                 | CertifiedMergeSidecarMessage::Close(_)
-                | CertifiedMergeSidecarMessage::CloseAck(_) => T::Consensus,
+                | CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::GenerationHint(_) => T::Consensus,
                 CertifiedMergeSidecarMessage::Chunk(_) => T::ConsensusChunk,
             },
             NetworkMessage::LaneRelay(_)
@@ -1612,7 +1613,9 @@ mod tests {
         use crate::merge_sidecar::{
             CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
             CertifiedMergeSidecarCloseAckV1, CertifiedMergeSidecarCloseV1,
-            CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+            CertifiedMergeSidecarGenerationHintV1, CertifiedMergeSidecarMessage,
+            CertifiedMergeSidecarRequestV1, CertifiedMergeSidecarSemanticSequenceV1,
+            CertifiedMergeSidecarServiceGenerationV1, CertifiedMergeSidecarStreamEpochV1,
         };
 
         #[derive(Encode)]
@@ -1640,11 +1643,19 @@ mod tests {
         let entry_hash = iroha_crypto::HashOf::<MergeLedgerEntry>::from_untyped_unchecked(
             Hash::new(b"merge-sidecar-entry"),
         );
-        let request = CertifiedMergeSidecarRequestV1 {
+        let stream_epoch = CertifiedMergeSidecarStreamEpochV1(
+            NonZeroU64::new(1).expect("sidecar fixture stream epoch is non-zero"),
+        );
+        let service_generation = CertifiedMergeSidecarServiceGenerationV1::INITIAL;
+        let mut request = CertifiedMergeSidecarRequestV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            semantic_sequence: 1,
+            service_generation,
+            stream_epoch,
+            semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1(
+                NonZeroU64::new(1).expect("sidecar semantic sequence is non-zero"),
+            ),
             closed_through: 0,
-            request_id: Hash::new(b"merge-sidecar-request"),
+            request_id: Hash::prehashed([0; Hash::LENGTH]),
             entry_hash,
             encoded_len: 3,
             epoch_id: 4,
@@ -1652,6 +1663,7 @@ mod tests {
             requester: requester.clone(),
             responder: responder.clone(),
         };
+        request.request_id = request.canonical_request_id();
         let request_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
             CertifiedMergeSidecarMessage::Request(request.clone()),
         ));
@@ -1666,15 +1678,21 @@ mod tests {
         let decoded =
             norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar request");
         assert_eq!(HashOf::new(&decoded), request_hash);
-        assert!(matches!(
-            decoded,
-            NetworkMessage::CertifiedMergeSidecar(message)
-                if message.as_ref() == &CertifiedMergeSidecarMessage::Request(request.clone())
-        ));
+        let NetworkMessage::CertifiedMergeSidecar(message) = decoded else {
+            panic!("decoded sidecar request uses the sidecar variant");
+        };
+        let CertifiedMergeSidecarMessage::Request(decoded_request) = message.as_ref() else {
+            panic!("decoded sidecar request preserves the request variant");
+        };
+        assert_eq!(decoded_request.service_generation, service_generation);
+        assert_eq!(decoded_request.stream_epoch, stream_epoch);
+        assert_eq!(decoded_request, &request);
 
         let mut close = CertifiedMergeSidecarCloseV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            closed_through: request.semantic_sequence,
+            service_generation,
+            stream_epoch,
+            closed_through: request.semantic_sequence.get(),
             close_id: Hash::prehashed([0; Hash::LENGTH]),
             requester: requester.clone(),
             responder: responder.clone(),
@@ -1684,17 +1702,24 @@ mod tests {
             CertifiedMergeSidecarMessage::Close(close.clone()),
         ));
         assert_eq!(close_message.topic(), NetworkTopic::Consensus);
+        assert_eq!(raw_network_topic(&close_message), NetworkTopic::Consensus);
         let encoded = norito::to_bytes(&close_message).expect("encode sidecar close");
         let decoded =
             norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar close");
-        assert!(matches!(
-            decoded,
-            NetworkMessage::CertifiedMergeSidecar(message)
-                if message.as_ref() == &CertifiedMergeSidecarMessage::Close(close.clone())
-        ));
+        let NetworkMessage::CertifiedMergeSidecar(message) = decoded else {
+            panic!("decoded sidecar close uses the sidecar variant");
+        };
+        let CertifiedMergeSidecarMessage::Close(decoded_close) = message.as_ref() else {
+            panic!("decoded sidecar close preserves the close variant");
+        };
+        assert_eq!(decoded_close.service_generation, service_generation);
+        assert_eq!(decoded_close.stream_epoch, stream_epoch);
+        assert_eq!(decoded_close, &close);
 
         let close_ack = CertifiedMergeSidecarCloseAckV1 {
             version: close.version,
+            service_generation: close.service_generation,
+            stream_epoch: close.stream_epoch,
             closed_through: close.closed_through,
             close_id: close.close_id,
             requester: requester.clone(),
@@ -1704,17 +1729,78 @@ mod tests {
             CertifiedMergeSidecarMessage::CloseAck(close_ack.clone()),
         ));
         assert_eq!(close_ack_message.topic(), NetworkTopic::Consensus);
+        assert_eq!(
+            raw_network_topic(&close_ack_message),
+            NetworkTopic::Consensus
+        );
         let encoded = norito::to_bytes(&close_ack_message).expect("encode sidecar close ACK");
         let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
             .expect("decode sidecar close ACK");
-        assert!(matches!(
-            decoded,
-            NetworkMessage::CertifiedMergeSidecar(message)
-                if message.as_ref() == &CertifiedMergeSidecarMessage::CloseAck(close_ack)
+        let NetworkMessage::CertifiedMergeSidecar(message) = decoded else {
+            panic!("decoded sidecar close ACK uses the sidecar variant");
+        };
+        let CertifiedMergeSidecarMessage::CloseAck(decoded_close_ack) = message.as_ref() else {
+            panic!("decoded sidecar close ACK preserves the close ACK variant");
+        };
+        assert_eq!(decoded_close_ack.service_generation, service_generation);
+        assert_eq!(decoded_close_ack.stream_epoch, stream_epoch);
+        assert_eq!(decoded_close_ack, &close_ack);
+
+        let current_generation = CertifiedMergeSidecarServiceGenerationV1(
+            NonZeroU64::new(2).expect("sidecar fixture successor generation is non-zero"),
+        );
+        let mut generation_hint = CertifiedMergeSidecarGenerationHintV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            observed_generation: service_generation,
+            current_generation,
+            observed_message_hash: HashOf::new(&request).into(),
+            hint_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        generation_hint.hint_id = generation_hint.canonical_hint_id();
+        let generation_hint_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
+            CertifiedMergeSidecarMessage::GenerationHint(generation_hint.clone()),
         ));
+        let NetworkMessage::CertifiedMergeSidecar(generation_hint_payload) =
+            &generation_hint_message
+        else {
+            unreachable!("generation Hint fixture uses the sidecar variant")
+        };
+        assert_shared_carrier_wire_compatible(generation_hint_payload.as_ref());
+        assert_eq!(generation_hint_message.topic(), NetworkTopic::Consensus);
+        assert_eq!(
+            raw_network_topic(&generation_hint_message),
+            NetworkTopic::Consensus
+        );
+        let generation_hint_hash = HashOf::new(&generation_hint_message);
+        let encoded =
+            norito::to_bytes(&generation_hint_message).expect("encode sidecar generation Hint");
+        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
+            .expect("decode sidecar generation Hint");
+        assert_eq!(HashOf::new(&decoded), generation_hint_hash);
+        let NetworkMessage::CertifiedMergeSidecar(message) = decoded else {
+            panic!("decoded sidecar generation Hint uses the sidecar variant");
+        };
+        let CertifiedMergeSidecarMessage::GenerationHint(decoded_generation_hint) =
+            message.as_ref()
+        else {
+            panic!("decoded sidecar generation Hint preserves the Hint variant");
+        };
+        assert_eq!(
+            decoded_generation_hint.observed_generation,
+            service_generation
+        );
+        assert_eq!(
+            decoded_generation_hint.current_generation,
+            current_generation
+        );
+        assert_eq!(decoded_generation_hint, &generation_hint);
 
         let chunk = CertifiedMergeSidecarChunkV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            service_generation: request.service_generation,
+            stream_epoch: request.stream_epoch,
             semantic_sequence: request.semantic_sequence,
             request_id: request.request_id,
             entry_hash,
@@ -1744,11 +1830,15 @@ mod tests {
         let decoded =
             norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar chunk");
         assert_eq!(HashOf::new(&decoded), chunk_hash);
-        assert!(matches!(
-            decoded,
-            NetworkMessage::CertifiedMergeSidecar(message)
-                if message.as_ref() == &CertifiedMergeSidecarMessage::Chunk(chunk)
-        ));
+        let NetworkMessage::CertifiedMergeSidecar(message) = decoded else {
+            panic!("decoded sidecar chunk uses the sidecar variant");
+        };
+        let CertifiedMergeSidecarMessage::Chunk(decoded_chunk) = message.as_ref() else {
+            panic!("decoded sidecar chunk preserves the chunk variant");
+        };
+        assert_eq!(decoded_chunk.service_generation, service_generation);
+        assert_eq!(decoded_chunk.stream_epoch, stream_epoch);
+        assert_eq!(decoded_chunk, &chunk);
     }
 
     #[test]

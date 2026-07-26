@@ -7127,6 +7127,10 @@ pub struct Network {
     /// (clamped to >= 100ms).
     #[config(default = "defaults::network::IDLE_TIMEOUT.into()")]
     pub idle_timeout_ms: DurationMs,
+    /// Base deadline for an exact reply to await one peer writer's full flush
+    /// (clamped to >= 100ms).
+    #[config(default = "defaults::network::REPLY_WRITER_FLUSH_TIMEOUT.into()")]
+    pub reply_writer_flush_timeout_ms: DurationMs,
     /// Delay outbound peer dials after startup (milliseconds).
     #[config(default = "defaults::network::CONNECT_STARTUP_DELAY.into()")]
     pub connect_startup_delay_ms: DurationMs,
@@ -7468,6 +7472,7 @@ impl Network {
             transaction_gossip_restricted_fallback,
             transaction_gossip_restricted_public_payload,
             idle_timeout_ms: idle_timeout,
+            reply_writer_flush_timeout_ms: reply_writer_flush_timeout,
             connect_startup_delay_ms: connect_startup_delay,
             dial_timeout_ms: dial_timeout,
             deferred_send_ttl_ms,
@@ -7667,6 +7672,7 @@ impl Network {
         };
         let min_interval = MIN_TIMER_INTERVAL;
         let idle_timeout = idle_timeout.get().max(min_interval);
+        let reply_writer_flush_timeout = reply_writer_flush_timeout.get().max(min_interval);
         let dial_timeout = dial_timeout.get().max(min_interval);
         let peer_gossip_period = peer_gossip_period.get().max(min_interval);
         let peer_gossip_max_period = peer_gossip_max_period.get().max(peer_gossip_period);
@@ -7700,6 +7706,7 @@ impl Network {
                 relay_hub_addresses,
                 relay_ttl,
                 idle_timeout,
+                reply_writer_flush_timeout,
                 connect_startup_delay: connect_startup_delay.get(),
                 dial_timeout,
                 deferred_send_ttl: deferred_send_ttl_ms.get().max(min_interval),
@@ -7903,9 +7910,6 @@ pub struct Queue {
     /// Maximum number of entries scanned per expired-transaction sweep.
     #[config(default = "defaults::queue::EXPIRED_CULL_BATCH")]
     pub expired_cull_batch: NonZeroUsize,
-    /// Persist pending transaction routing plans for local restart replay.
-    #[config(default = "defaults::queue::PLAN_JOURNAL_ENABLED")]
-    pub plan_journal_enabled: bool,
     /// Maximum queue-plan journal size before atomic compaction is considered.
     #[config(default = "defaults::queue::PLAN_JOURNAL_MAX_BYTES")]
     pub plan_journal_max_bytes: u64,
@@ -7921,7 +7925,6 @@ impl Queue {
             transaction_time_to_live_ms: transaction_time_to_live,
             expired_cull_interval_ms: expired_cull_interval,
             expired_cull_batch,
-            plan_journal_enabled,
             plan_journal_max_bytes,
         } = self;
         actual::Queue {
@@ -7931,7 +7934,6 @@ impl Queue {
             transaction_time_to_live: transaction_time_to_live.0,
             expired_cull_interval: expired_cull_interval.0,
             expired_cull_batch,
-            plan_journal_enabled,
             plan_journal_max_bytes,
         }
     }
@@ -7973,7 +7975,7 @@ pub struct Repo {
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
     /// Require Kagemusha cash to be escrow-backed.
-    #[config(default = "false")]
+    #[config(default = "true")]
     pub escrow_required: bool,
     /// Escrow account bindings keyed by asset definition id.
     #[config(default = "BTreeMap::new()")]
@@ -7990,7 +7992,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            escrow_required: false,
+            escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
@@ -8221,6 +8223,11 @@ impl Offline {
             kagemusha_artifact_dir,
             mut kagemusha_max_decoded_bytes,
         } = self;
+        if !escrow_required {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline.escrow_required cannot be false; offline cash is mandatory",
+            ));
+        }
         if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
             emitter.emit(
                 Report::new(ParseError::InvalidSettlementConfig).attach(
@@ -24354,6 +24361,7 @@ publish_delay_seconds = 17
             Value::Integer(0),
         );
         network.insert("idle_timeout_ms".into(), Value::Integer(0));
+        network.insert("reply_writer_flush_timeout_ms".into(), Value::Integer(0));
         let actual = load_root(table);
         let min = StdDuration::from_millis(100);
         assert_eq!(actual.block_sync.gossip_period, min);
@@ -24376,6 +24384,49 @@ publish_delay_seconds = 17
         assert_eq!(actual.network.peer_gossip_period, min);
         assert_eq!(actual.network.peer_gossip_max_period, min);
         assert_eq!(actual.network.idle_timeout, min);
+        assert_eq!(actual.network.reply_writer_flush_timeout, min);
+    }
+
+    #[test]
+    fn network_reply_writer_flush_timeout_defaults_and_parses() {
+        let default = load_root(base_table());
+        assert_eq!(
+            default.network.reply_writer_flush_timeout,
+            defaults::network::REPLY_WRITER_FLUSH_TIMEOUT
+        );
+
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert(
+            "reply_writer_flush_timeout_ms".into(),
+            Value::Integer(1_234),
+        );
+        let configured = load_root(table);
+        assert_eq!(
+            configured.network.reply_writer_flush_timeout,
+            StdDuration::from_millis(1_234)
+        );
+
+        let mut table = base_table();
+        table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table")
+            .insert(
+                "reply_writer_flush_timeout_ms".into(),
+                Value::Integer(i64::MAX),
+            );
+        let configured = load_root(table);
+        assert_eq!(
+            configured.network.reply_writer_flush_timeout,
+            StdDuration::from_millis(
+                u64::try_from(i64::MAX).expect("positive i64 maximum fits u64"),
+            ),
+            "the largest TOML integer timeout must not overflow deadline construction"
+        );
     }
 
     #[test]
@@ -25813,17 +25864,31 @@ mod settlement_offline_tests {
     use super::*;
 
     #[test]
-    fn offline_parse_preserves_unconfigured_kagemusha_defaults() {
+    fn offline_parse_defaults_to_mandatory_escrow() {
         let mut emitter = Emitter::new();
         let actual = Offline::default().parse(&mut emitter);
 
         assert!(emitter.into_result().is_ok());
+        assert!(actual.escrow_required);
         assert!(actual.kagemusha_release_policy_path.is_none());
         assert!(actual.kagemusha_artifact_dir.is_none());
         assert_eq!(
             actual.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
         );
+    }
+
+    #[test]
+    fn offline_parse_rejects_false_escrow_opt_out() {
+        let mut emitter = Emitter::new();
+        let actual = Offline {
+            escrow_required: false,
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
+        assert!(!actual.escrow_required);
     }
 
     #[test]

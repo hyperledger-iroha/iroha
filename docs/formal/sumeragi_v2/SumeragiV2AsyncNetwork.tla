@@ -1102,15 +1102,18 @@ ResponsiveReplayScheduledCandidates(node) ==
 CandidateScheduledIn(candidate, commandQueues,
                      deferredCompletionQueues, deferredProgressQueues,
                      deferredNormalQueues, causalQueues, outstandingWork) ==
+  \* Keep every prefix UNION parenthesized.  Without these parentheses TLA+
+  \* parses the old surface form as UNION({command queue sets} \cup
+  \* UNION(...)), rather than as the union of the four candidate carriers.
   candidate \in
-    UNION {SequenceSet(commandQueues[node]): node \in ValidatorIds}
-      \cup UNION
-          {SequenceSet(deferredCompletionQueues[node])
-             \cup SequenceSet(deferredProgressQueues[node])
-             \cup SequenceSet(deferredNormalQueues[node]):
-             node \in ValidatorIds}
-      \cup UNION {SequenceSet(causalQueues[node]): node \in ValidatorIds}
-      \cup UNION {outstandingWork[node]: node \in ValidatorIds}
+    (UNION {SequenceSet(commandQueues[node]): node \in ValidatorIds})
+      \cup (UNION
+            {SequenceSet(deferredCompletionQueues[node])
+               \cup SequenceSet(deferredProgressQueues[node])
+               \cup SequenceSet(deferredNormalQueues[node]):
+               node \in ValidatorIds})
+      \cup (UNION {SequenceSet(causalQueues[node]): node \in ValidatorIds})
+      \cup (UNION {outstandingWork[node]: node \in ValidatorIds})
 
 CandidateScheduled(candidate) ==
   CandidateScheduledIn(

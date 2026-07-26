@@ -113,7 +113,10 @@ require_exact_token \
   "readonly native_amx_grouped_parity_harness=\"${grouped_parity_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=256"
+  "readonly expected_multilane_focus_test_count=277"
+require_exact_token \
+  "$release_runner" \
+  "readonly expected_production_liveness_test_count=704"
 require_exact_token \
   "$release_runner" \
   "  readonly expected_corridor_leg_count=81"
@@ -151,7 +154,10 @@ require_exact_token \
   "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 50"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 256"
+  "_G_UNIT_TEST_COUNT = 277"
+require_exact_token \
+  "$release_receipt_writer" \
+  "_PRODUCTION_TEST_COUNT = 704"
 require_exact_token \
   "$release_receipt_writer" \
   "_G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER = ("
@@ -168,9 +174,11 @@ for grouped_suite in \
   require_exact_token "$release_receipt_writer" "$grouped_suite"
 done
 
-python3 -I -S - "$release_runner" <<'PY'
+python3 -I -S - "$release_runner" "$release_receipt_writer" <<'PY'
 from __future__ import annotations
 
+import ast
+import hashlib
 from pathlib import Path
 import re
 import sys
@@ -179,6 +187,8 @@ import sys
 runner = Path(sys.argv[1])
 source = runner.read_text(encoding="utf-8")
 lines = source.splitlines()
+receipt_writer = Path(sys.argv[2])
+receipt_source = receipt_writer.read_text(encoding="utf-8")
 
 
 def reject(message: str) -> None:
@@ -190,6 +200,75 @@ def exact_line(line: str) -> int:
     if len(matches) != 1:
         reject(f"expected one exact line {line!r}; found {len(matches)}")
     return matches[0]
+
+
+production_marker = "required_production_liveness_tests=(\n"
+if source.count(production_marker) != 1:
+    reject("release runner must contain one canonical production inventory")
+production_body = source.split(production_marker, 1)[1].split("\n)", 1)[0]
+production_tests = [
+    line.strip() for line in production_body.splitlines() if line.strip()
+]
+if len(production_tests) != 704 or len(set(production_tests)) != 704:
+    reject("production inventory must contain exactly 704 unique tests")
+
+receipt_tree = ast.parse(receipt_source, filename=str(receipt_writer))
+receipt_assignments: dict[str, object] = {}
+for node in receipt_tree.body:
+    if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+        continue
+    target = node.targets[0]
+    if (
+        isinstance(target, ast.Name)
+        and target.id in {"_PRODUCTION_TEST_COUNT", "_PRODUCTION_MODULES"}
+    ):
+        receipt_assignments[target.id] = ast.literal_eval(node.value)
+if receipt_assignments.get("_PRODUCTION_TEST_COUNT") != 704:
+    reject("receipt writer production count must equal 704")
+production_modules = receipt_assignments.get("_PRODUCTION_MODULES")
+if not isinstance(production_modules, tuple) or len(production_modules) != 38:
+    reject("receipt writer must bind exactly 38 production modules")
+module_counts = {
+    module: count for _leg_id, module, count in production_modules
+}
+if len(module_counts) != 38 or sum(module_counts.values()) != 704:
+    reject("receipt writer production-module counts must sum exactly to 704")
+expected_changed_module_counts = {
+    "sumeragi::authoritative_runtime_gate_tests": 32,
+    "merge_sidecar::tests": 102,
+    "sumeragi::v2_lane_work::tests": 51,
+    "sumeragi::v2_runner::tests": 30,
+    "sumeragi::v2_worker::tests": 77,
+    "network::tests": 84,
+    "network::inbound_source_memory_bound_tests": 2,
+    "network::handle_update_tests": 4,
+    "network_relay_tests": 3,
+}
+if any(
+    module_counts.get(module) != expected
+    for module, expected in expected_changed_module_counts.items()
+):
+    reject("receipt writer changed-module production counts are not canonical")
+
+canonical_rows = ["module\ttest"]
+observed_counts = {module: 0 for module in module_counts}
+for test in production_tests:
+    matches = [
+        module for module in module_counts if test.startswith(f"{module}::")
+    ]
+    if len(matches) != 1:
+        reject(f"production test has no unique module owner: {test}")
+    module = matches[0]
+    observed_counts[module] += 1
+    canonical_rows.append(f"{module}\t{test}")
+if observed_counts != module_counts:
+    reject("release runner inventory does not match receipt module counts")
+canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
+if hashlib.sha256(canonical_inventory).hexdigest() != (
+    "fd2176898c873bc00fae598689f6bf0e"
+    "c2f9cd5de58ccf37fbe6713a061811da"
+):
+    reject("canonical 704-test production TSV digest changed")
 
 
 wait_definition = exact_line("wait_for_external_cargo() {")
@@ -337,11 +416,11 @@ for block in source_sealed_blocks:
         reject(f"source-sealed command/evidence block {label} is missing or duplicated")
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 99,
-    "required_multilane_queue_journal_focus_tests": 101,
+    "required_multilane_core_focus_tests": 101,
+    "required_multilane_queue_journal_focus_tests": 119,
     "required_multilane_config_lib_focus_tests": 3,
     "required_multilane_config_runtime_focus_tests": 2,
-    "required_multilane_config_fixtures_focus_tests": 1,
+    "required_multilane_config_fixtures_focus_tests": 2,
     "required_multilane_data_model_focus_tests": 8,
     "required_multilane_torii_focus_tests": 39,
     "required_multilane_torii_shared_focus_tests": 1,
@@ -381,9 +460,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 256 or len(set(all_focus_entries)) != 256:
+if len(all_focus_entries) != 277 or len(set(all_focus_entries)) != 277:
     reject(
-        "multilane focus-test arrays must contain 256 globally distinct tests; "
+        "multilane focus-test arrays must contain 277 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -393,14 +472,14 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        99,
+        101,
         "--lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        101,
+        119,
         "--lib",
     ),
     (
@@ -421,7 +500,7 @@ g_unit_groups = (
         "required_multilane_config_fixtures_focus_tests",
         "g-unit-iroha-config-fixtures",
         "iroha_config",
-        1,
+        2,
         "--test fixtures",
     ),
     (
@@ -465,7 +544,7 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 256 count is not published exactly once")
+        reject("G-UNIT expected 277 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -1056,4 +1135,4 @@ if [[ "$(grep -Fxc -- "    env \"\${ENV_VARS[@]}\" IROHA_MULTILANE_RELEASE_MODE=
   exit 1
 fi
 
-echo "[multilane-release-inventory] 81 corridor legs, exact 256/256 G-UNIT (99 core, 101 queue-journal, 6 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 81 corridor legs, exact 704/704 production tests across 38 modules, exact 277/277 G-UNIT (101 core, 119 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"

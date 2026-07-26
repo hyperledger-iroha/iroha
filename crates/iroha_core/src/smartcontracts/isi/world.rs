@@ -138,13 +138,13 @@ pub mod isi {
             OpenVerifyEnvelopeValidationError, StarkFriOpenProofV1,
         },
     };
+    #[cfg(test)]
+    use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
         json::Json,
         numeric::{Numeric, Quantity},
         unique_vec::PushResult,
     };
-    #[cfg(test)]
-    use iroha_primitives::numeric::NumericSpec;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::GovernanceManifestActivation;
     use mv::storage::StorageReadOnly;

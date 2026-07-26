@@ -1516,6 +1516,7 @@ final class ToriiClientTests: XCTestCase {
 
     private var currentKagemushaReadinessFields: String {
         """
+        "cash_handoff_capability": "cash_handoff_v1",
         "required_bridge_abi_version": 21,
         "max_hops": 8,
         "active_unshield_verifier": {
@@ -11860,6 +11861,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertFalse(blockedReadiness.ready)
 
         let mutations: [((inout [String: Any]) -> Void, String)] = [
+            ({ $0["cash_handoff_capability"] = "cash_handoff_v2" }, "cash_handoff_capability"),
             ({ $0["required_bridge_abi_version"] = 20 }, "required_bridge_abi_version"),
             ({ $0["max_hops"] = 9 }, "max_hops"),
             ({ $0["proof_backend_available"] = false }, "proof_backend_available"),
@@ -12727,6 +12729,10 @@ final class ToriiClientTests: XCTestCase {
         }
         let cases: [(String, String)] = try [
             (
+                without("cash_handoff_capability"),
+                "cash_handoff_capability"
+            ),
+            (
                 without("asset_scale"),
                 "asset_scale is required"
             ),
@@ -12791,6 +12797,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessAcceptsUnsupportedScaleAndUnavailableVerifierBlockers() async throws {
         let payload = """
         {
+          "cash_handoff_capability": "cash_handoff_v1",
           "required_bridge_abi_version": 21,
           "max_hops": 8,
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",

@@ -29,6 +29,8 @@ fn base_cfg(addr: IrohaSocketAddr) -> Config {
         public_address: WithOrigin::inline(addr),
         soranet_handshake: ActualSoranetHandshake::default(),
         idle_timeout: Duration::from_millis(1500),
+        reply_writer_flush_timeout:
+            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
         prefer_ws_fallback: false,
         happy_eyeballs_stagger: Duration::from_millis(50),
         addr_ipv6_first: false,

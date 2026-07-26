@@ -3704,7 +3704,10 @@ mod tests {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount,
     };
-    use iroha_primitives::{json::Json, numeric::{NumericSpec, Quantity}};
+    use iroha_primitives::{
+        json::Json,
+        numeric::{NumericSpec, Quantity},
+    };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
 

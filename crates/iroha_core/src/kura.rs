@@ -31181,12 +31181,16 @@ impl Kura {
                     "autonomous entrypoint belongs to a durably retired lane payload",
                 ));
             }
-            if existing.as_ref().is_some_and(|claim| {
-                !matches!(
-                    claim.state,
+            if let Some(existing) = existing.as_ref()
+                && !matches!(
+                    existing.state,
                     AutonomousLaneEntrypointClaimStateV3::Released(_)
                 )
-            }) {
+                && !self
+                    .autonomous_lane_entrypoint_claim_is_superseded_by_active_recreation_locked(
+                        existing, &incoming,
+                    )?
+            {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
                     "autonomous entrypoint is already claimed by another lane payload",
@@ -65738,9 +65742,10 @@ mod tests {
             .expect("advance fixture view");
             certificate_prefix.push(durable);
         }
+        let store_root = kura.store_root();
         let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
             lane_entry,
-            &kura.store_root,
+            &store_root,
             1,
             payload.origin_proposal.descriptor.proposal_height,
         );

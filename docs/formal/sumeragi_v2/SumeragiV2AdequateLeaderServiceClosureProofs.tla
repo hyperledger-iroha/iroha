@@ -59,83 +59,112 @@ MatchingVoteSignRequest(candidate, phase) ==
     /\ request.vote.subject = candidate.subject
     /\ request.vote.phase = phase
 
-ExactLeaderCandidateRank(candidate, rank) ==
-  /\ ResponsiveProtectedCandidateOwned(candidate)
-  /\ CandidateConsumerCurrent(candidate)
-  /\ \/ /\ candidate.kind = "PersistTimeout"
+ExactLeaderViewChangeRank(candidate, rank) ==
+  \/ /\ candidate.kind = "PersistTimeout"
         /\ rank = ViewChangeSemanticRank(7)
-     \/ /\ candidate.kind = "SignTimeout"
+  \/ /\ candidate.kind = "SignTimeout"
         /\ rank = ViewChangeSemanticRank(6)
-     \/ /\ candidate.kind = "DeliverTimeout"
+  \/ /\ candidate.kind = "DeliverTimeout"
         /\ candidate.item.kind = "TimeoutVote"
         /\ rank = ViewChangeSemanticRank(5)
-     \/ /\ candidate.kind = "FormTC"
+  \/ /\ candidate.kind = "FormTC"
         /\ rank = ViewChangeSemanticRank(4)
-     \/ /\ candidate.kind = "DeliverTC"
+  \/ /\ candidate.kind = "DeliverTC"
         /\ candidate.item.kind = "TimeoutCertificate"
         /\ rank = ViewChangeSemanticRank(4)
-     \/ /\ candidate.kind = "BeginInstallTC"
+  \/ /\ candidate.kind = "BeginInstallTC"
         /\ rank = ViewChangeSemanticRank(3)
-     \/ /\ candidate.kind = "PersistInstallTC"
+  \/ /\ candidate.kind = "PersistInstallTC"
         /\ rank = ViewChangeSemanticRank(2)
-     \/ /\ candidate.kind = "AssembleBody"
+
+ExactLeaderProposalRank(candidate, rank) ==
+  \/ /\ candidate.kind = "AssembleBody"
         /\ candidate.node = Leader(candidate.consumerContext,
                                     candidate.view)
         /\ rank = ProposalSemanticRank(9)
-     \/ /\ candidate.kind = "BeginProposal"
+  \/ /\ candidate.kind = "BeginProposal"
         /\ rank = ProposalSemanticRank(8)
-     \/ /\ candidate.kind = "PersistProposal"
+  \/ /\ candidate.kind = "PersistProposal"
         /\ rank = ProposalSemanticRank(7)
-     \/ /\ candidate.kind = "SignProposal"
+  \/ /\ candidate.kind = "SignProposal"
         /\ rank = ProposalSemanticRank(6)
-     \/ /\ candidate.kind \in {"DeliverProposal", "DeliverChunk"}
+  \/ /\ candidate.kind \in {"DeliverProposal", "DeliverChunk"}
         /\ rank = ProposalSemanticRank(5)
-     \/ /\ candidate.kind
-              \in {"FetchBody", "RebindRetainedBody",
-                   "FetchCertifiedBody"}
+  \/ /\ candidate.kind
+          \in {"FetchBody", "RebindRetainedBody", "FetchCertifiedBody"}
         /\ rank = ProposalSemanticRank(4)
-     \/ /\ candidate.kind = "StoreBody"
+  \/ /\ candidate.kind = "StoreBody"
         /\ rank = ProposalSemanticRank(3)
-     \/ /\ candidate.kind = "ValidateBody"
+  \/ /\ candidate.kind = "ValidateBody"
         /\ rank = ProposalSemanticRank(2)
-     \/ /\ candidate.kind = "BeginPrepare"
+
+ExactLeaderPrepareStaticRank(candidate, rank) ==
+  \/ /\ candidate.kind = "BeginPrepare"
         /\ rank = PrepareSemanticRank(9)
-     \/ /\ candidate.kind = "PersistPrepare"
+  \/ /\ candidate.kind = "PersistPrepare"
         /\ rank = PrepareSemanticRank(8)
-     \/ /\ candidate.kind = "SignVote"
-        /\ MatchingVoteSignRequest(candidate, "Prepare")
-        /\ rank = PrepareSemanticRank(7)
-     \/ /\ candidate.kind = "DeliverVote"
+  \/ /\ candidate.kind = "DeliverVote"
         /\ candidate.item.kind = "PrepareVote"
         /\ rank = PrepareSemanticRank(6)
-     \/ /\ candidate.kind = "FormPrepareQC"
+  \/ /\ candidate.kind = "FormPrepareQC"
         /\ rank = PrepareSemanticRank(5)
-     \/ /\ candidate.kind = "DeliverQC"
+  \/ /\ candidate.kind = "DeliverQC"
         /\ candidate.item.kind = "PrepareQC"
         /\ rank = PrepareSemanticRank(4)
-     \/ /\ candidate.kind = "BeginObservePrepare"
+  \/ /\ candidate.kind = "BeginObservePrepare"
         /\ rank = PrepareSemanticRank(3)
-     \/ /\ candidate.kind = "PersistObservePrepare"
+  \/ /\ candidate.kind = "PersistObservePrepare"
         /\ rank = PrepareSemanticRank(2)
-     \/ /\ candidate.kind = "BeginLockCommit"
+
+ExactLeaderPrepareSignRank(candidate, rank) ==
+  /\ candidate.kind = "SignVote"
+  /\ MatchingVoteSignRequest(candidate, "Prepare")
+  /\ rank = PrepareSemanticRank(7)
+
+ExactLeaderPrepareRank(candidate, rank) ==
+  \/ ExactLeaderPrepareStaticRank(candidate, rank)
+  \/ ExactLeaderPrepareSignRank(candidate, rank)
+
+ExactLeaderCommitStaticRank(candidate, rank) ==
+  \/ /\ candidate.kind = "BeginLockCommit"
         /\ rank = CommitSemanticRank(9)
-     \/ /\ candidate.kind = "PersistLockCommit"
+  \/ /\ candidate.kind = "PersistLockCommit"
         /\ rank = CommitSemanticRank(8)
-     \/ /\ candidate.kind = "SignVote"
-        /\ MatchingVoteSignRequest(candidate, "Commit")
-        /\ rank = CommitSemanticRank(7)
-     \/ /\ candidate.kind = "DeliverVote"
+  \/ /\ candidate.kind = "DeliverVote"
         /\ candidate.item.kind = "CommitVote"
         /\ rank = CommitSemanticRank(6)
-     \/ /\ candidate.kind = "FormCommitQC"
+  \/ /\ candidate.kind = "FormCommitQC"
         /\ rank = CommitSemanticRank(5)
-     \/ /\ candidate.kind = "DeliverQC"
+  \/ /\ candidate.kind = "DeliverQC"
         /\ candidate.item.kind = "CommitQC"
         /\ rank = CommitSemanticRank(4)
-     \/ /\ candidate.kind = "BeginDecision"
+
+ExactLeaderCommitSignRank(candidate, rank) ==
+  /\ candidate.kind = "SignVote"
+  /\ MatchingVoteSignRequest(candidate, "Commit")
+  /\ rank = CommitSemanticRank(7)
+
+ExactLeaderCommitRank(candidate, rank) ==
+  \/ ExactLeaderCommitStaticRank(candidate, rank)
+  \/ ExactLeaderCommitSignRank(candidate, rank)
+
+ExactLeaderDecisionRank(candidate, rank) ==
+  \/ /\ candidate.kind = "BeginDecision"
         /\ rank = DecisionSemanticRank(3)
-     \/ /\ candidate.kind = "PersistDecision"
+  \/ /\ candidate.kind = "PersistDecision"
         /\ rank = DecisionSemanticRank(2)
+
+ExactLeaderPhaseRank(candidate, rank) ==
+  \/ ExactLeaderViewChangeRank(candidate, rank)
+  \/ ExactLeaderProposalRank(candidate, rank)
+  \/ ExactLeaderPrepareRank(candidate, rank)
+  \/ ExactLeaderCommitRank(candidate, rank)
+  \/ ExactLeaderDecisionRank(candidate, rank)
+
+ExactLeaderCandidateRank(candidate, rank) ==
+  /\ ResponsiveProtectedCandidateOwned(candidate)
+  /\ CandidateConsumerCurrent(candidate)
+  /\ ExactLeaderPhaseRank(candidate, rank)
 
 ExactLeaderServiceCandidate(candidate) ==
   \E rank \in (1..5) \X Nat:
@@ -432,6 +461,25 @@ SameIdentityLeaderOwner(candidate) ==
     /\ other.subject = candidate.subject
     /\ ExactLeaderCandidateRank(other, otherRank)
 
+(***************************************************************************
+The scheduler-origin invariant cannot use an arbitrary alternate owner as its
+base case.  Two disabled owners would otherwise justify one another and an
+idle discard of either would strand the survivor.  The readiness-only anchor
+therefore names an independently dispatchable exact owner.  The unanchored
+predicate above remains the semantic statement that an exact owner survived
+the removal of its peer.
+***************************************************************************)
+DispatchableSameIdentityLeaderOwner(candidate) ==
+  \E other \in AsyncCandidateSet,
+     otherRank \in (1..5) \X Nat:
+    /\ other # candidate
+    /\ other.node = candidate.node
+    /\ other.height = candidate.height
+    /\ other.view = candidate.view
+    /\ other.subject = candidate.subject
+    /\ ExactLeaderCandidateRank(other, otherRank)
+    /\ CommandDispatchable(other)
+
 ProposalEvidenceAt(candidate) ==
   \/ BodyHeldBy(durableBodies, candidate.node,
                 candidate.consumerContext,
@@ -505,6 +553,46 @@ ExactLeaderEvidenceAt(candidate, rank) ==
   \/ (rank[1] = 2 /\ CommitEvidenceAt(candidate))
   \/ (rank[1] = 1 /\ NodeHasDecision(candidate.node))
 
+(***************************************************************************
+Authenticated discard provenance is not phase progress.
+
+The exact candidate field is checked against append-only authentication
+history.  Certified responses use their canonical signed-wire identity, whose
+route-neutral comparison is itself the model's exact immutable payload
+identity.  Successors retain the exact parent item in `evidence`, so the
+second arm covers causal work without reconstructing a packet from mutable
+view state.
+
+The durable-lineage arms are deliberately one phase behind the candidate
+rank.  They explain why a disabled candidate exists, but they are not added
+to `ExactLeaderEvidenceAt` and never constitute a lower rank or mode goal.
+***************************************************************************)
+AuthenticatedLeaderDiscardProvenance(candidate) ==
+  \/ /\ candidate.item \in AsyncNetworkItems
+        /\ IngressItemHasAuthenticatedHistory(candidate.item)
+  \/ /\ candidate.evidence \in AsyncNetworkItems
+        /\ IngressItemHasAuthenticatedHistory(candidate.evidence)
+
+PriorPhaseLeaderDiscardProvenance(candidate, rank) ==
+  \/ /\ rank[1] = 3
+        /\ ProposalEvidenceAt(candidate)
+  \/ /\ rank[1] = 2
+        /\ (ProposalEvidenceAt(candidate)
+              \/ PrepareEvidenceAt(candidate))
+  \/ /\ rank[1] = 1
+        /\ (ProposalEvidenceAt(candidate)
+              \/ PrepareEvidenceAt(candidate)
+              \/ CommitEvidenceAt(candidate))
+
+ExactLeaderDiscardProvenanceAt(candidate, rank) ==
+  \/ AuthenticatedLeaderDiscardProvenance(candidate)
+  \/ PriorPhaseLeaderDiscardProvenance(candidate, rank)
+
+\* A down process owns no executable scheduler turn.  This is a preservation
+\* classification only; it is excluded from every post-GST progress target.
+ExactLeaderSchedulerParked(candidate) ==
+  candidate.node \notin up
+
 SelectedSuccessfulLeaderExecution(candidate) ==
   \/ \E node \in ValidatorIds:
        /\ NodeQueueNonempty(node)
@@ -519,6 +607,7 @@ SelectedSuccessfulLeaderExecution(candidate) ==
 
 SameConsumerLeaderDiscard(candidate) ==
   /\ CandidateConsumerCurrent(candidate)'
+  /\ candidate.node \in up
   /\ \/ \E node \in ValidatorIds:
           /\ NodeQueueNonempty(node)
           /\ NextNodeCommand(node) = candidate
@@ -589,12 +678,14 @@ CoveredSameConsumerLeaderDiscard(candidate, rank) ==
   /\ \/ ExactLeaderCandidatePostMilestone(candidate, rank)'
      \/ SameIdentityLeaderOwner(candidate)'
      \/ ExactLeaderEvidenceAt(candidate, rank)'
+     \/ ExactLeaderDiscardProvenanceAt(candidate, rank)'
 
 UnexplainedSameConsumerLeaderDiscard(candidate, rank) ==
   /\ SameConsumerLeaderDiscard(candidate)
   /\ ~ExactLeaderCandidatePostMilestone(candidate, rank)'
   /\ ~SameIdentityLeaderOwner(candidate)'
   /\ ~ExactLeaderEvidenceAt(candidate, rank)'
+  /\ ~ExactLeaderDiscardProvenanceAt(candidate, rank)'
 
 ExactLeaderOwnerExitStep(candidate, rank) ==
   /\ gst
@@ -694,32 +785,472 @@ restart, and removal action.  No theorem in this module assumes the desired
 exit-safety conclusion in place of that source-preservation proof.
 ***************************************************************************)
 
-ExactLeaderSchedulerOriginReadinessInvariant ==
+ExactLeaderSchedulerOriginProvenanceInvariant ==
+  \A candidate \in AsyncCandidateSet,
+     rank \in (1..5) \X Nat:
+    ExactLeaderCandidateRank(candidate, rank)
+      => \/ CommandExecutionReady(candidate)
+         \/ DispatchableSameIdentityLeaderOwner(candidate)
+         \/ ExactLeaderEvidenceAt(candidate, rank)
+         \/ ExactLeaderDiscardProvenanceAt(candidate, rank)
+         \/ ExactLeaderSchedulerParked(candidate)
+
+ExactLeaderSchedulerIdleReadinessInvariant ==
   \A candidate \in AsyncCandidateSet,
      rank \in (1..5) \X Nat:
     /\ ExactLeaderCandidateRank(candidate, rank)
     /\ NodeIdle(candidate.node)
     => \/ CommandDispatchable(candidate)
-       \/ SameIdentityLeaderOwner(candidate)
+       \/ DispatchableSameIdentityLeaderOwner(candidate)
        \/ ExactLeaderEvidenceAt(candidate, rank)
+       \/ ExactLeaderDiscardProvenanceAt(candidate, rank)
+       \/ ExactLeaderSchedulerParked(candidate)
+
+ExactLeaderSchedulerOriginReadinessInvariant ==
+  /\ ExactLeaderSchedulerOriginProvenanceInvariant
+  /\ ExactLeaderSchedulerIdleReadinessInvariant
 
 ExactLeaderSchedulerOriginReadinessProperty(specification) ==
   specification => []ExactLeaderSchedulerOriginReadinessInvariant
 
-THEOREM AsyncInitSchedulesOnlyInitialCausalCandidates ==
+THEOREM ResponsivePostGstExactLeaderOwnerCannotRemainParked ==
+  \A candidate, rank:
+    /\ AsyncStrongTypeInvariant
+    /\ gst
+    /\ ExactLeaderCandidateRank(candidate, rank)
+    => ~ExactLeaderSchedulerParked(candidate)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                NEW rank,
+                AsyncStrongTypeInvariant,
+                gst,
+                ExactLeaderCandidateRank(candidate, rank)
+         PROVE ~ExactLeaderSchedulerParked(candidate)
+    <2>1. /\ AsyncRecoveryTypeInvariant
+           /\ AsyncGstRecoveryPhaseInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2. Responsive \subseteq up
+      BY <1>1, <2>1, GstResponsiveNodesAreUp
+    <2>3. candidate.node \in Responsive
+      BY <1>1
+         DEF ExactLeaderCandidateRank,
+             ResponsiveProtectedCandidateOwned,
+             AsyncCurrentResponsiveVoters
+    <2> QED BY <2>2, <2>3 DEF ExactLeaderSchedulerParked
+  <1> QED BY <1>1
+
+THEOREM CandidateScheduledIsExactFourCarrierUnion ==
+  \A candidate:
+    CandidateScheduled(candidate)
+      <=> candidate \in ActiveScheduledCandidates
+BY Isa
+   DEF CandidateScheduled, CandidateScheduledIn,
+       ActiveScheduledCandidates, QueuedCandidates,
+       DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates
+
+THEOREM AsyncInitActiveCandidatesAreInitialCausalCandidates ==
   \A initialContext:
     AsyncInitAt(initialContext)
-      => \A candidate:
-           CandidateScheduled(candidate)
-             => \E node \in ValidatorIds:
-                  candidate = InitialCausalCandidate(node)
+      => \A candidate \in ActiveScheduledCandidates:
+           \E node \in ValidatorIds:
+             candidate = InitialCausalCandidate(node)
 BY Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncRuntimeInit,
        AsyncIoInit, AsyncDeferredInit,
-       CandidateScheduled, CandidateScheduledIn,
-       QueuedCandidates, DeferredCandidates,
-       CausalCandidates, TrackedWorkCandidates,
+       ActiveScheduledCandidates, QueuedCandidates,
+       DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates,
        InitialCausalCandidate, SequenceSet
+
+THEOREM InitialCausalCandidateExactIdentity ==
+  \A node:
+    /\ InitialCausalCandidate(node).kind = "AssembleBody"
+    /\ InitialCausalCandidate(node).node = node
+    /\ InitialCausalCandidate(node).consumerContext = context
+    /\ InitialCausalCandidate(node).view = nodeView[node]
+BY DEF InitialCausalCandidate, NoItemCandidate,
+       AsyncCandidate, AsyncCandidateWithIdentity
+
+THEOREM InitialCausalCandidateExactLeaderRankShape ==
+  \A node, rank:
+    ExactLeaderCandidateRank(InitialCausalCandidate(node), rank)
+      => /\ rank = ProposalSemanticRank(9)
+         /\ node = Leader(context, nodeView[node])
+         /\ node \in AsyncCurrentResponsiveVoters
+         /\ CandidateConsumerCurrent(InitialCausalCandidate(node))
+PROOF
+  <1>1. ASSUME NEW node,
+                NEW rank,
+                ExactLeaderCandidateRank(
+                  InitialCausalCandidate(node), rank)
+         PROVE /\ rank = ProposalSemanticRank(9)
+               /\ node = Leader(context, nodeView[node])
+               /\ node \in AsyncCurrentResponsiveVoters
+               /\ CandidateConsumerCurrent(
+                    InitialCausalCandidate(node))
+    <2>1. /\ InitialCausalCandidate(node).kind = "AssembleBody"
+           /\ InitialCausalCandidate(node).node = node
+           /\ InitialCausalCandidate(node).consumerContext = context
+           /\ InitialCausalCandidate(node).view = nodeView[node]
+      BY InitialCausalCandidateExactIdentity
+    <2>2. /\ rank = ProposalSemanticRank(9)
+           /\ InitialCausalCandidate(node).node =
+                Leader(InitialCausalCandidate(node).consumerContext,
+                       InitialCausalCandidate(node).view)
+      BY <1>1, <2>1, IsaT(60) DEF ExactLeaderCandidateRank
+    <2>3. /\ ResponsiveProtectedCandidateOwned(
+                InitialCausalCandidate(node))
+           /\ CandidateConsumerCurrent(
+                InitialCausalCandidate(node))
+      BY <1>1 DEF ExactLeaderCandidateRank
+    <2>4. node \in AsyncCurrentResponsiveVoters
+      BY <2>1, <2>3 DEF ResponsiveProtectedCandidateOwned
+    <2> QED BY <2>1, <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM AsyncInitTypesInitialCausalCandidate ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A node \in ValidatorIds:
+           AsyncCandidateTyped(InitialCausalCandidate(node))
+BY AsyncInitEstablishesStrongTypeInvariant,
+   InitialCausalCandidateIsTyped, Isa
+   DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety
+
+THEOREM AsyncInitInitialProposalSubjectIsValid ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A node \in ValidatorIds:
+           /\ AsyncProposalSubject(node) = AsyncHeartbeatSubject
+           /\ AsyncProposalSubject(node) \in ValidSubjects
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncInitAt(initialContext),
+                NEW node \in ValidatorIds
+         PROVE /\ AsyncProposalSubject(node) = AsyncHeartbeatSubject
+               /\ AsyncProposalSubject(node) \in ValidSubjects
+    <2>1. /\ ModelConfiguration
+           /\ highestRank[node] = NoRank
+      BY <1>1 DEF AsyncInitAt, AsyncBaseInitAt, InitAt
+    <2>2. AsyncProposalSubject(node) = AsyncHeartbeatSubject
+      BY <2>1 DEF AsyncProposalSubject
+    <2>3. AsyncHeartbeatSubject \in ValidSubjects
+      BY <2>1, AsyncHeartbeatSubjectIsValid
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM AsyncInitHasNoCurrentDurableBody ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A node \in ValidatorIds,
+            roundView \in Views,
+            subject \in Subjects:
+           ~BodyHeldBy(durableBodies, node, context,
+                       roundView, subject)
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncInitAt(initialContext),
+                NEW node \in ValidatorIds,
+                NEW roundView \in Views,
+                NEW subject \in Subjects
+         PROVE ~BodyHeldBy(durableBodies, node, context,
+                           roundView, subject)
+    <2>1. /\ context = initialContext
+           /\ initialContext.height \in Nat
+           /\ durableBodies =
+                IF initialContext.height = 0
+                THEN {}
+                ELSE BootstrapParentBodies(initialContext)
+      BY <1>1, FrozenContextFieldsTyped
+         DEF AsyncInitAt, AsyncBaseInitAt, InitAt, Heights
+    <2>2. initialContext.height = 0
+             \/ initialContext.height > 0
+      BY <2>1, SMT
+    <2>3. CASE initialContext.height = 0
+      BY <1>1, <2>1, <2>3 DEF BodyHeldBy
+    <2>4. CASE initialContext.height > 0
+      <3>1. BootstrapParentContext(initialContext) # initialContext
+        BY <1>1, <2>4, BootstrapParentContextPrecedes
+           DEF AsyncInitAt, AsyncBaseInitAt, InitAt
+      <3>2. ASSUME BodyHeldBy(durableBodies, node, context,
+                              roundView, subject)
+             PROVE FALSE
+        <4>1. BodyRecord(node, context, roundView, subject)
+                 \in BootstrapParentBodies(initialContext)
+          BY <2>1, <2>4, <3>2 DEF BodyHeldBy
+        <4>2. context = BootstrapParentContext(initialContext)
+          BY <4>1, Isa DEF BootstrapParentBodies, BodyRecord
+        <4> QED BY <2>1, <3>1, <4>2
+      <3> QED BY <3>2
+    <2> QED BY <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM AsyncInitHasNoCurrentDecision ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A decision \in decisions:
+           decision.qc.context # context
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncInitAt(initialContext),
+                NEW decision \in decisions
+         PROVE decision.qc.context # context
+    <2>1. /\ context = initialContext
+           /\ initialContext.height \in Nat
+           /\ (initialContext.height = 0 => decisions = {})
+           /\ (initialContext.height > 0
+                 => /\ decisions =
+                          {BootstrapParentDecision(initialContext)}
+                    /\ BootstrapParentContext(initialContext)
+                         # initialContext)
+      BY <1>1, FrozenContextFieldsTyped,
+         BootstrapParentContextPrecedes, Isa
+         DEF AsyncInitAt, AsyncBaseInitAt, InitAt, Heights
+    <2>2. CASE initialContext.height = 0
+      BY <1>1, <2>1, <2>2
+    <2>3. CASE initialContext.height > 0
+      <3>1. decision = BootstrapParentDecision(initialContext)
+        BY <1>1, <2>1, <2>3
+      <3>2. decision.qc.context =
+               BootstrapParentContext(initialContext)
+        BY <3>1
+           DEF BootstrapParentDecision, BootstrapParentCommitQC, QC
+      <3> QED BY <2>1, <3>2
+    <2> QED BY <2>1, <2>2, <2>3, SMT
+  <1> QED BY <1>1
+
+THEOREM AsyncInitHasNoCurrentLocalBodyOrDecision ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A node \in ValidatorIds,
+            roundView \in Views,
+            subject \in Subjects:
+           /\ ~BodyHeldBy(durableBodies, node, context,
+                          roundView, subject)
+           /\ LocalBodyNotSupersededByDecision(
+                node, roundView, subject)
+BY AsyncInitHasNoCurrentDurableBody,
+   AsyncInitHasNoCurrentDecision, Isa
+   DEF LocalBodyNotSupersededByDecision
+
+THEOREM AsyncInitEstablishesAssemblyEnvironment ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => /\ up = ValidatorIds
+         /\ Responsive \subseteq Honest
+         /\ TypeInvariant
+BY AsyncInitEstablishesStrongTypeInvariant, Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, InitAt,
+       AsyncStrongTypeInvariant, StrongInductiveInvariant,
+       Safety, ModelConfiguration
+
+THEOREM TypeInvariantTypesLocalAssemblyRecords ==
+  \A node \in ValidatorIds,
+     subject \in Subjects:
+    TypeInvariant
+      => /\ BodyRecord(node, context, nodeView[node], subject)
+              \in BodyRecordSet
+         /\ ValidationRecord(node, context, nodeView[node],
+                             generation[node], subject)
+              \in ValidationRecordSet
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW subject \in Subjects,
+                TypeInvariant
+         PROVE /\ BodyRecord(node, context, nodeView[node], subject)
+                    \in BodyRecordSet
+               /\ ValidationRecord(node, context, nodeView[node],
+                                   generation[node], subject)
+                    \in ValidationRecordSet
+    <2>1. /\ context \in ContextRecords
+           /\ nodeView[node] \in Views
+           /\ generation[node] \in Generations
+      BY <1>1, Isa DEF TypeInvariant
+    <2>2. BodyRecord(node, context, nodeView[node], subject)
+             \in BodyRecordSet
+      BY <1>1, <2>1, BodyRecordConstructorTyped
+    <2>3. ValidationRecord(node, context, nodeView[node],
+                           generation[node], subject)
+             \in ValidationRecordSet
+      BY <1>1, <2>1, ValidationRecordConstructorTyped
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM AsyncInitInitialLeaderAssemblyGuards ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A node \in ValidatorIds,
+            rank \in (1..5) \X Nat:
+           ExactLeaderCandidateRank(
+             InitialCausalCandidate(node), rank)
+             => /\ node \in Honest \cap up \cap CurrentVoters
+                /\ node = Leader(context, nodeView[node])
+                /\ AsyncProposalSubject(node) \in ValidSubjects
+                /\ LocalBodyNotSupersededByDecision(
+                     node, nodeView[node],
+                     AsyncProposalSubject(node))
+                /\ BodyRecord(
+                     node, context, nodeView[node],
+                     AsyncProposalSubject(node)) \in BodyRecordSet
+                /\ ValidationRecord(
+                     node, context, nodeView[node],
+                     generation[node], AsyncProposalSubject(node))
+                     \in ValidationRecordSet
+                /\ ~BodyHeldBy(
+                     durableBodies, node, context, nodeView[node],
+                     AsyncProposalSubject(node))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncInitAt(initialContext),
+                NEW node \in ValidatorIds,
+                NEW rank \in (1..5) \X Nat,
+                ExactLeaderCandidateRank(
+                  InitialCausalCandidate(node), rank)
+         PROVE /\ node \in Honest \cap up \cap CurrentVoters
+               /\ node = Leader(context, nodeView[node])
+               /\ AsyncProposalSubject(node) \in ValidSubjects
+               /\ LocalBodyNotSupersededByDecision(
+                    node, nodeView[node],
+                    AsyncProposalSubject(node))
+               /\ BodyRecord(
+                    node, context, nodeView[node],
+                    AsyncProposalSubject(node)) \in BodyRecordSet
+               /\ ValidationRecord(
+                    node, context, nodeView[node],
+                    generation[node], AsyncProposalSubject(node))
+                    \in ValidationRecordSet
+               /\ ~BodyHeldBy(
+                    durableBodies, node, context, nodeView[node],
+                    AsyncProposalSubject(node))
+    <2>1. /\ node = Leader(context, nodeView[node])
+           /\ node \in Responsive \cap CurrentVoters
+      BY <1>1, InitialCausalCandidateExactLeaderRankShape
+    <2>2. /\ up = ValidatorIds
+           /\ Responsive \subseteq Honest
+           /\ TypeInvariant
+      BY <1>1, AsyncInitEstablishesAssemblyEnvironment
+    <2>3. node \in Honest \cap up \cap CurrentVoters
+      BY <1>1, <2>1, <2>2, Isa
+    <2>4. /\ AsyncProposalSubject(node) \in ValidSubjects
+           /\ AsyncProposalSubject(node) \in Subjects
+      BY <1>1, <2>2, AsyncInitInitialProposalSubjectIsValid, Isa
+         DEF TypeInvariant, ModelConfiguration
+    <2>5. /\ nodeView[node] \in Views
+           /\ generation[node] \in Generations
+      BY <1>1, <2>2, Isa DEF TypeInvariant
+    <2>6. /\ LocalBodyNotSupersededByDecision(
+                node, nodeView[node], AsyncProposalSubject(node))
+           /\ ~BodyHeldBy(
+                durableBodies, node, context, nodeView[node],
+                AsyncProposalSubject(node))
+      BY <1>1, <2>4, <2>5,
+         AsyncInitHasNoCurrentLocalBodyOrDecision
+    <2>7. /\ BodyRecord(
+                node, context, nodeView[node],
+                AsyncProposalSubject(node)) \in BodyRecordSet
+           /\ ValidationRecord(
+                node, context, nodeView[node],
+                generation[node], AsyncProposalSubject(node))
+                \in ValidationRecordSet
+      BY <1>1, <2>2, <2>4,
+         TypeInvariantTypesLocalAssemblyRecords
+    <2> QED BY <2>1, <2>3, <2>4, <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM AsyncInitInitialLeaderAssembleBodyIsReady ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A node \in ValidatorIds,
+            rank \in (1..5) \X Nat:
+           ExactLeaderCandidateRank(
+             InitialCausalCandidate(node), rank)
+             => AssembleLocalBodyReady(
+                  node, AsyncProposalSubject(node))
+BY AsyncInitInitialLeaderAssemblyGuards
+   DEF AssembleLocalBodyReady
+
+THEOREM InitialCausalCandidateDispatchShape ==
+  \A node:
+    /\ InitialCausalCandidate(node).class = "Normal"
+    /\ InitialCausalCandidate(node).kind = "AssembleBody"
+    /\ InitialCausalCandidate(node).node = node
+    /\ InitialCausalCandidate(node).view = nodeView[node]
+    /\ InitialCausalCandidate(node).subject =
+         AsyncProposalSubject(node)
+    /\ InitialCausalCandidate(node).item = NoAsyncItem
+    /\ CommandMatches(
+         InitialCausalCandidate(node), node, nodeView[node],
+         AsyncProposalSubject(node))
+    /\ CandidateConsumerCurrent(InitialCausalCandidate(node))
+    /\ LocalAssemblyBusyDispatchAllowed(
+         InitialCausalCandidate(node))
+BY DEF InitialCausalCandidate, NoItemCandidate,
+       AsyncCandidate, AsyncCandidateWithIdentity,
+       CommandMatches, CandidateConsumerCurrent,
+       LocalAssemblyBusyDispatchAllowed
+
+RegularAssembleCommandReady(command) ==
+  /\ command.kind = "AssembleBody"
+  /\ CommandMatches(
+       command, command.node, nodeView[command.node], command.subject)
+  /\ AssembleLocalBodyReady(command.node, command.subject)
+
+THEOREM RegularAssembleCommandReadyProjectsRegularCore ==
+  \A command:
+    RegularAssembleCommandReady(command)
+      => RegularCoreCommandReady(command)
+BY DEF RegularAssembleCommandReady, RegularCoreCommandReady
+
+THEOREM AsyncInitInitialLeaderRegularAssembleCommandReady ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A node \in ValidatorIds,
+            rank \in (1..5) \X Nat:
+           ExactLeaderCandidateRank(
+             InitialCausalCandidate(node), rank)
+             => RegularAssembleCommandReady(
+                  InitialCausalCandidate(node))
+BY InitialCausalCandidateDispatchShape,
+   AsyncInitInitialLeaderAssembleBodyIsReady, Isa
+   DEF RegularAssembleCommandReady
+
+THEOREM AsyncInitInitialLeaderRegularCoreCommandReady ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A node \in ValidatorIds,
+            rank \in (1..5) \X Nat:
+           ExactLeaderCandidateRank(
+             InitialCausalCandidate(node), rank)
+             => RegularCoreCommandReady(
+                  InitialCausalCandidate(node))
+BY AsyncInitInitialLeaderRegularAssembleCommandReady,
+   RegularAssembleCommandReadyProjectsRegularCore
+
+THEOREM RegularCoreCommandReadyProjectsExecuteRegular ==
+  \A command:
+    RegularCoreCommandReady(command)
+      => ExecuteRegularCommandReady(command)
+BY DEF ExecuteRegularCommandReady
+
+THEOREM ExecuteRegularCommandReadyProjectsCommandExecution ==
+  \A command:
+    ExecuteRegularCommandReady(command)
+      => CommandExecutionReady(command)
+BY DEF CommandExecutionReady
+
+THEOREM AsyncInitInitialLeaderCommandExecutionReady ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A node \in ValidatorIds,
+            rank \in (1..5) \X Nat:
+           ExactLeaderCandidateRank(
+             InitialCausalCandidate(node), rank)
+             => CommandExecutionReady(
+                  InitialCausalCandidate(node))
+BY AsyncInitInitialLeaderRegularCoreCommandReady,
+   RegularCoreCommandReadyProjectsExecuteRegular,
+   ExecuteRegularCommandReadyProjectsCommandExecution
 
 THEOREM AsyncInitialLeaderCandidateIsReadyOrHasProposalEvidence ==
   \A initialContext:
@@ -732,33 +1263,1155 @@ THEOREM AsyncInitialLeaderCandidateIsReadyOrHasProposalEvidence ==
            => \/ CommandDispatchable(InitialCausalCandidate(node))
               \/ ExactLeaderEvidenceAt(
                    InitialCausalCandidate(node), rank)
-BY InitialCausalCandidateIsTyped, IsaT(180)
-   DEF AsyncInitAt, AsyncBaseInitAt, InitAt,
-       AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
-       InitialCausalCandidate, NoItemCandidate,
-       AsyncCandidate, AsyncCandidateWithIdentity,
-       AsyncProposalSubject,
-       ExactLeaderCandidateRank, ExactLeaderEvidenceAt,
-       ProposalEvidenceAt, PrepareEvidenceAt,
-       CommitEvidenceAt, ViewChangeEvidenceAt,
-       ResponsiveProtectedCandidateOwned,
-       ProtectedCandidateOwned,
-       CommandDispatchable, CommandExecutionReady,
-       ExecuteRegularCommandReady, RegularCoreCommandReady,
-       AssembleLocalBodyReady, CommandMatches,
-       LocalAssemblyBusyDispatchAllowed,
-       LocalBodyNotSupersededByDecision, BodyHeldBy
+BY InitialCausalCandidateExactLeaderRankShape,
+   AsyncInitTypesInitialCausalCandidate,
+   InitialCausalCandidateDispatchShape,
+   AsyncInitInitialLeaderCommandExecutionReady, Isa
+   DEF CommandDispatchable
+
+THEOREM ExactLeaderCandidateRankIsScheduled ==
+  \A candidate, rank:
+    ExactLeaderCandidateRank(candidate, rank)
+      => CandidateScheduled(candidate)
+BY ExactLeaderCandidateRankIsSemanticRank, Isa
+   DEF ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned
+
+THEOREM ExactLeaderOriginProvenanceImpliesIdleReadiness ==
+  /\ ExactLeaderSchedulerOriginProvenanceInvariant
+  /\ AsyncStrongTypeInvariant
+  => ExactLeaderSchedulerIdleReadinessInvariant
+PROOF
+  <1>1. ASSUME ExactLeaderSchedulerOriginProvenanceInvariant,
+                AsyncStrongTypeInvariant
+         PROVE ExactLeaderSchedulerIdleReadinessInvariant
+    <2>1. ASSUME NEW candidate \in AsyncCandidateSet,
+                  NEW rank \in (1..5) \X Nat,
+                  /\ ExactLeaderCandidateRank(candidate, rank)
+                     /\ NodeIdle(candidate.node)
+           PROVE \/ CommandDispatchable(candidate)
+                 \/ DispatchableSameIdentityLeaderOwner(candidate)
+                 \/ ExactLeaderEvidenceAt(candidate, rank)
+                 \/ ExactLeaderDiscardProvenanceAt(candidate, rank)
+                 \/ ExactLeaderSchedulerParked(candidate)
+      <3>1. \/ CommandExecutionReady(candidate)
+             \/ DispatchableSameIdentityLeaderOwner(candidate)
+             \/ ExactLeaderEvidenceAt(candidate, rank)
+             \/ ExactLeaderDiscardProvenanceAt(candidate, rank)
+             \/ ExactLeaderSchedulerParked(candidate)
+        BY <1>1, <2>1
+           DEF ExactLeaderSchedulerOriginProvenanceInvariant
+      <3>2. AsyncTypeInvariant
+        BY <1>1, AsyncStrongTypeProjectsAsyncType
+      <3>3. candidate \in ActiveScheduledCandidates
+        BY <2>1, ExactLeaderCandidateRankIsScheduled,
+           CandidateScheduledIsExactFourCarrierUnion
+      <3>4. AsyncCandidateTyped(candidate)
+        BY <3>2, <3>3, ActiveScheduledCandidatesAreTyped
+      <3>5. CandidateConsumerCurrent(candidate)
+        BY <2>1 DEF ExactLeaderCandidateRank
+      <3>6. CommandExecutionReady(candidate)
+               => CommandDispatchable(candidate)
+        BY <2>1, <3>4, <3>5 DEF CommandDispatchable
+      <3> QED BY <3>1, <3>6
+    <2> QED BY <2>1
+         DEF ExactLeaderSchedulerIdleReadinessInvariant
+  <1> QED BY <1>1
+
+THEOREM AsyncInitRankedLeaderCandidateIsInitialCausalCandidate ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A candidate \in AsyncCandidateSet,
+            rank \in (1..5) \X Nat:
+           ExactLeaderCandidateRank(candidate, rank)
+             => \E node \in ValidatorIds:
+                  candidate = InitialCausalCandidate(node)
+BY ExactLeaderCandidateRankIsScheduled,
+   CandidateScheduledIsExactFourCarrierUnion,
+   AsyncInitActiveCandidatesAreInitialCausalCandidates
+
+THEOREM AsyncInitEstablishesExactLeaderSchedulerOriginProvenance ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => ExactLeaderSchedulerOriginProvenanceInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncInitAt(initialContext)
+         PROVE ExactLeaderSchedulerOriginProvenanceInvariant
+    <2>1. ASSUME NEW candidate \in AsyncCandidateSet,
+                  NEW rank \in (1..5) \X Nat,
+                  ExactLeaderCandidateRank(candidate, rank)
+           PROVE \/ CommandExecutionReady(candidate)
+                 \/ DispatchableSameIdentityLeaderOwner(candidate)
+                 \/ ExactLeaderEvidenceAt(candidate, rank)
+                 \/ ExactLeaderDiscardProvenanceAt(candidate, rank)
+                 \/ ExactLeaderSchedulerParked(candidate)
+      <3>1. \E node \in ValidatorIds:
+               candidate = InitialCausalCandidate(node)
+        BY <1>1, <2>1,
+           AsyncInitRankedLeaderCandidateIsInitialCausalCandidate
+      <3>2. \A node \in ValidatorIds:
+               candidate = InitialCausalCandidate(node)
+                 => CommandExecutionReady(candidate)
+        <4>1. ASSUME NEW node \in ValidatorIds,
+                      candidate = InitialCausalCandidate(node)
+               PROVE CommandExecutionReady(candidate)
+          <5>1. /\ ExactLeaderCandidateRank(
+                       InitialCausalCandidate(node), rank)
+            BY <2>1, <4>1
+          <5> QED BY <1>1, <4>1, <5>1,
+                     AsyncInitInitialLeaderCommandExecutionReady
+        <4> QED BY <4>1
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>1
+         DEF ExactLeaderSchedulerOriginProvenanceInvariant
+  <1> QED BY <1>1
 
 THEOREM AsyncInitEstablishesExactLeaderSchedulerOriginReadiness ==
   \A initialContext:
     AsyncInitAt(initialContext)
       => ExactLeaderSchedulerOriginReadinessInvariant
-BY AsyncInitSchedulesOnlyInitialCausalCandidates,
-   AsyncInitialLeaderCandidateIsReadyOrHasProposalEvidence, Isa
+BY AsyncInitEstablishesExactLeaderSchedulerOriginProvenance,
+   AsyncInitEstablishesStrongTypeInvariant,
+   ExactLeaderOriginProvenanceImpliesIdleReadiness, Isa
+   DEF ExactLeaderSchedulerOriginReadinessInvariant
+
+(***************************************************************************
+Preservation starts with the literal four scheduler carriers.  This frame is
+intentionally stronger than an informal "does not enqueue work" argument:
+every Core field inspected by exact rank, idleness, dispatch readiness, and
+semantic evidence is frozen together with every carrier in
+`CandidateScheduledIn`.
+***************************************************************************)
+
+ExactLeaderSchedulerReadinessFrame ==
+  /\ UNCHANGED vars
+  /\ UNCHANGED <<asyncCommandQueues,
+                 asyncDeferredCompletionQueues,
+                 asyncDeferredProgressQueues,
+                 asyncDeferredNormalQueues,
+                 asyncCausalQueues,
+                 asyncOutstandingWork,
+                 asyncSentItems,
+                 asyncHeldChunks>>
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesScheduled ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (CandidateScheduled(candidate)'
+            <=> CandidateScheduled(candidate))
+BY IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       CandidateScheduled, CandidateScheduledIn
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCurrentConsumer ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (CandidateConsumerCurrent(candidate)'
+            <=> CandidateConsumerCurrent(candidate))
+BY Isa
+   DEF ExactLeaderSchedulerReadinessFrame,
+       CandidateConsumerCurrent, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesMatchingVoteSign ==
+  \A candidate, phase:
+    ExactLeaderSchedulerReadinessFrame
+      => (MatchingVoteSignRequest(candidate, phase)'
+            <=> MatchingVoteSignRequest(candidate, phase))
+BY Isa
+   DEF ExactLeaderSchedulerReadinessFrame,
+       MatchingVoteSignRequest, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesNetworkItems ==
+  ExactLeaderSchedulerReadinessFrame
+    => UNCHANGED AsyncNetworkItems
+BY AsyncNetworkItemsStableUnderContextAndViewFrame, Isa
+   DEF ExactLeaderSchedulerReadinessFrame, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesNetworkItemMembership ==
+  \A item:
+    ExactLeaderSchedulerReadinessFrame
+      => ((item \in AsyncNetworkItems)'
+            <=> item \in AsyncNetworkItems)
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, Isa
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesEvidenceSet ==
+  ExactLeaderSchedulerReadinessFrame
+    => UNCHANGED AsyncEvidenceSet
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, Isa
+   DEF AsyncEvidenceSet
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCandidateSet ==
+  ExactLeaderSchedulerReadinessFrame
+    => UNCHANGED AsyncCandidateSet
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems,
+   ExactLeaderSchedulerReadinessFramePreservesEvidenceSet, Isa
+   DEF AsyncCandidateSet
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCandidateMembership ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => ((candidate \in AsyncCandidateSet)'
+            <=> candidate \in AsyncCandidateSet)
+BY ExactLeaderSchedulerReadinessFramePreservesCandidateSet, Isa
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesNoItemProposalPrepare ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (NormalProposalPrepareNoItemCandidate(candidate)'
+            <=> NormalProposalPrepareNoItemCandidate(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesCandidateSet, Isa
+   DEF NormalProposalPrepareNoItemCandidate
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesNetworkProposalPrepare ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (NormalProposalPrepareNetworkCandidate(candidate)'
+            <=> NormalProposalPrepareNetworkCandidate(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, Isa
+   DEF NormalProposalPrepareNetworkCandidate
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesNormalProposalPrepare ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (NormalProposalPrepareCandidate(candidate)'
+            <=> NormalProposalPrepareCandidate(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesCandidateMembership,
+   ExactLeaderSchedulerReadinessFramePreservesNoItemProposalPrepare,
+   ExactLeaderSchedulerReadinessFramePreservesNetworkProposalPrepare, Isa
+   DEF NormalProposalPrepareCandidate
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesProtectedService ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ProtectedServiceCandidate(candidate)'
+            <=> ProtectedServiceCandidate(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesCandidateMembership,
+   ExactLeaderSchedulerReadinessFramePreservesNormalProposalPrepare, Isa
+   DEF ProtectedServiceCandidate
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesProtectedOwnership ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ResponsiveProtectedCandidateOwned(candidate)'
+            <=> ResponsiveProtectedCandidateOwned(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesScheduled,
+   ExactLeaderSchedulerReadinessFramePreservesProtectedService,
+   IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       NodeHasApplication, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesViewChangeRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderViewChangeRank(candidate, rank)'
+            <=> ExactLeaderViewChangeRank(candidate, rank))
+OBVIOUS
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesProposalRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderProposalRank(candidate, rank)'
+            <=> ExactLeaderProposalRank(candidate, rank))
+OBVIOUS
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesPrepareStaticRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderPrepareStaticRank(candidate, rank)'
+            <=> ExactLeaderPrepareStaticRank(candidate, rank))
+OBVIOUS
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesPrepareSignRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderPrepareSignRank(candidate, rank)'
+            <=> ExactLeaderPrepareSignRank(candidate, rank))
+BY ExactLeaderSchedulerReadinessFramePreservesMatchingVoteSign, Isa
+   DEF ExactLeaderPrepareSignRank
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesPrepareRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderPrepareRank(candidate, rank)'
+            <=> ExactLeaderPrepareRank(candidate, rank))
+BY ExactLeaderSchedulerReadinessFramePreservesPrepareStaticRank,
+   ExactLeaderSchedulerReadinessFramePreservesPrepareSignRank, Isa
+   DEF ExactLeaderPrepareRank
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCommitStaticRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderCommitStaticRank(candidate, rank)'
+            <=> ExactLeaderCommitStaticRank(candidate, rank))
+OBVIOUS
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCommitSignRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderCommitSignRank(candidate, rank)'
+            <=> ExactLeaderCommitSignRank(candidate, rank))
+BY ExactLeaderSchedulerReadinessFramePreservesMatchingVoteSign, Isa
+   DEF ExactLeaderCommitSignRank
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCommitRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderCommitRank(candidate, rank)'
+            <=> ExactLeaderCommitRank(candidate, rank))
+BY ExactLeaderSchedulerReadinessFramePreservesCommitStaticRank,
+   ExactLeaderSchedulerReadinessFramePreservesCommitSignRank, Isa
+   DEF ExactLeaderCommitRank
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesDecisionRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderDecisionRank(candidate, rank)'
+            <=> ExactLeaderDecisionRank(candidate, rank))
+OBVIOUS
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesPhaseRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderPhaseRank(candidate, rank)'
+            <=> ExactLeaderPhaseRank(candidate, rank))
+BY ExactLeaderSchedulerReadinessFramePreservesViewChangeRank,
+   ExactLeaderSchedulerReadinessFramePreservesProposalRank,
+   ExactLeaderSchedulerReadinessFramePreservesPrepareRank,
+   ExactLeaderSchedulerReadinessFramePreservesCommitRank,
+   ExactLeaderSchedulerReadinessFramePreservesDecisionRank, Isa
+   DEF ExactLeaderPhaseRank
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRank ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderCandidateRank(candidate, rank)'
+            <=> ExactLeaderCandidateRank(candidate, rank))
+BY ExactLeaderSchedulerReadinessFramePreservesCurrentConsumer,
+   ExactLeaderSchedulerReadinessFramePreservesProtectedOwnership,
+   ExactLeaderSchedulerReadinessFramePreservesPhaseRank, Isa
+   DEF ExactLeaderCandidateRank
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesPersistDecisionReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecutePersistDecisionReady(candidate)'
+            <=> ExecutePersistDecisionReady(candidate))
+BY Isa
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecutePersistDecisionReady, CommandMatches,
+       PersistDecisionReady, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesApplyReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteApplyReady(candidate)'
+            <=> ExecuteApplyReady(candidate))
+BY Isa
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteApplyReady, CommandMatches, ApplyDecisionReady,
+       DecisionQcValues, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesPersistInstallReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecutePersistInstallReady(candidate)'
+            <=> ExecutePersistInstallReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecutePersistInstallReady, InstallTcEvidenceMatches,
+       PersistInstallTCReady, StrictSameRoundTcUpgrade,
+       NodeInstalledTC, TcHighRank, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesSignProposalReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteSignProposalReady(candidate)'
+            <=> ExecuteSignProposalReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteSignProposalReady, CommandMatches,
+       CompleteProposalSignatureReady, ProposalOutbox,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesSignVoteReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteSignVoteReady(candidate)'
+            <=> ExecuteSignVoteReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteSignVoteReady, CommandMatches,
+       CompleteVoteSignatureReady, VoteRoundAdmissible,
+       LockedPrepareRound, VoteOutbox,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesFormPrepareQCReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteFormPrepareQCReady(candidate)'
+            <=> ExecuteFormPrepareQCReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteFormPrepareQCReady, FormPrepareQCReady,
+       VoteSignersAt, QcWireValid, QcOutbox,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesSignTimeoutReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteSignTimeoutReady(candidate)'
+            <=> ExecuteSignTimeoutReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteSignTimeoutReady, CommandMatches,
+       CompleteTimeoutSignatureReady, LocalTimeoutCompletionGuard,
+       PendingNodes, NoDecisionForNode, LocalTimeoutVoteFor,
+       ExactPrepareQcMatchesRef, PrepareQcOptionWireValid,
+       QcWireValid, PrepareQcRank, PrepareQcSubject,
+       TimeoutOutbox, CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesDecisionFetchReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteDecisionFetchReady(candidate)'
+            <=> ExecuteDecisionFetchReady(candidate))
+BY IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteDecisionFetchReady, CertifiedRecoveryFetchFrontier,
+       DecisionFetchFrontier, LockedPrepareFetchFrontier,
+       DecisionQcValues, DecisionCertifiedBodyRecoveryAuthority,
+       LockedPrepareRecoverySource, HistoricalLockedPrepareSource,
+       HistoricalLockedPrepareRecoveryProvenance,
+       InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
+       NoDecisionForNode, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRequestCertifiedBodyReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteRequestCertifiedBodyReady(candidate)'
+            <=> ExecuteRequestCertifiedBodyReady(candidate))
+BY IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteRequestCertifiedBodyReady, CommandMatches,
+       BodyHeldBy, DecisionQcValues,
+       CertifiedBodyRecoveryAuthority,
+       DecisionCertifiedBodyRecoveryAuthority,
+       HistoricalLockedPrepareSource,
+       HistoricalLockedPrepareRecoveryProvenance,
+       InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
+       NoDecisionForNode, CertifiedRequestOutbox,
+       CertifiedArchiveRoutes, CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesDeliverProposalReady ==
+  \A envelope:
+    ExactLeaderSchedulerReadinessFrame
+      => (DeliverProposalReady(envelope)'
+            <=> DeliverProposalReady(envelope))
+BY IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       DeliverProposalReady, ProposalWireValidFor,
+       ProposalJustified, SafeToPrepare, TCValid,
+       ExactPrepareQcMatchesRef, PrepareQcOptionWireValid,
+       QcWireValid, PrepareQcRank, PrepareQcSubject,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesDeliverVoteReady ==
+  \A envelope:
+    ExactLeaderSchedulerReadinessFrame
+      => (DeliverVoteReady(envelope)'
+            <=> DeliverVoteReady(envelope))
+BY IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       DeliverVoteReady, VoteRoundAdmissible, LockedPrepareRound,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesDeliverQCReady ==
+  \A envelope:
+    ExactLeaderSchedulerReadinessFrame
+      => (DeliverQCReady(envelope)'
+            <=> DeliverQCReady(envelope))
+BY IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       DeliverQCReady, QcWireValid,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesDeliverTimeoutReady ==
+  \A envelope:
+    ExactLeaderSchedulerReadinessFrame
+      => (DeliverTimeoutReady(envelope)'
+            <=> DeliverTimeoutReady(envelope))
+BY IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       DeliverTimeoutReady, TimeoutDeliveryGuard, NodeIdle,
+       PendingNodes, SigningNodes, ExactPrepareQcMatchesRef,
+       PrepareQcOptionWireValid, QcWireValid,
+       PrepareQcRank, PrepareQcSubject,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesDeliverTCReady ==
+  \A envelope:
+    ExactLeaderSchedulerReadinessFrame
+      => (DeliverTCReady(envelope)'
+            <=> DeliverTCReady(envelope))
+BY IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       DeliverTCReady, TCValid,
+       ExactPrepareQcMatchesRef, PrepareQcOptionWireValid,
+       QcWireValid, PrepareQcRank, PrepareQcSubject,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCoreProposalReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "DeliverProposal")
+      => (ExecuteCoreDeliveryReady(candidate)'
+            <=> ExecuteCoreDeliveryReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteCoreDeliveryReady, DeliverProposalReady,
+       ProposalWireValidFor, ProposalJustified, SafeToPrepare,
+       TCValid, ExactPrepareQcMatchesRef,
+       PrepareQcOptionWireValid, QcWireValid,
+       PrepareQcRank, PrepareQcSubject,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCoreVoteReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "DeliverVote")
+      => (ExecuteCoreDeliveryReady(candidate)'
+            <=> ExecuteCoreDeliveryReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteCoreDeliveryReady, DeliverVoteReady,
+       VoteRoundAdmissible, LockedPrepareRound,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCoreQCReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "DeliverQC")
+      => (ExecuteCoreDeliveryReady(candidate)'
+            <=> ExecuteCoreDeliveryReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteCoreDeliveryReady, DeliverQCReady,
+       QcWireValid, CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCoreTimeoutReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "DeliverTimeout")
+      => (ExecuteCoreDeliveryReady(candidate)'
+            <=> ExecuteCoreDeliveryReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteCoreDeliveryReady, DeliverTimeoutReady,
+       TimeoutDeliveryGuard, NodeIdle, PendingNodes, SigningNodes,
+       ExactPrepareQcMatchesRef, PrepareQcOptionWireValid,
+       QcWireValid, PrepareQcRank, PrepareQcSubject,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCoreTCReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "DeliverTC")
+      => (ExecuteCoreDeliveryReady(candidate)'
+            <=> ExecuteCoreDeliveryReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteCoreDeliveryReady, DeliverTCReady, TCValid,
+       ExactPrepareQcMatchesRef, PrepareQcOptionWireValid,
+       QcWireValid, PrepareQcRank, PrepareQcSubject,
+       CurrentVoters, CurrentEpoch, vars
+
+CoreDeliveryCommandKind(candidate) ==
+  candidate.kind
+    \in {"DeliverProposal", "DeliverVote", "DeliverQC",
+         "DeliverTimeout", "DeliverTC"}
+
+THEOREM CoreDeliveryReadyHasDeliveryCommandKind ==
+  \A candidate:
+    ExecuteCoreDeliveryReady(candidate)
+      => CoreDeliveryCommandKind(candidate)
+BY Isa
+   DEF ExecuteCoreDeliveryReady, CoreDeliveryCommandKind
+
+THEOREM PrimedCoreDeliveryReadyHasDeliveryCommandKind ==
+  \A candidate:
+    ExecuteCoreDeliveryReady(candidate)'
+      => CoreDeliveryCommandKind(candidate)
+BY Isa
+   DEF ExecuteCoreDeliveryReady, CoreDeliveryCommandKind
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCoreDeliveryReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteCoreDeliveryReady(candidate)'
+            <=> ExecuteCoreDeliveryReady(candidate))
+BY CoreDeliveryReadyHasDeliveryCommandKind,
+   PrimedCoreDeliveryReadyHasDeliveryCommandKind,
+   ExactLeaderSchedulerReadinessFramePreservesCoreProposalReady,
+   ExactLeaderSchedulerReadinessFramePreservesCoreVoteReady,
+   ExactLeaderSchedulerReadinessFramePreservesCoreQCReady,
+   ExactLeaderSchedulerReadinessFramePreservesCoreTimeoutReady,
+   ExactLeaderSchedulerReadinessFramePreservesCoreTCReady, IsaT(60)
+   DEF CoreDeliveryCommandKind
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesCertifiedCapability ==
+  \A item:
+    ExactLeaderSchedulerReadinessFrame
+      => (CertifiedResponseCapabilityAuthorized(item)'
+            <=> CertifiedResponseCapabilityAuthorized(item))
+BY IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       CertifiedResponseCapabilityAuthorized,
+       MatchingSentCertifiedRequests,
+       FrozenCertifiedResponseBinding,
+       FrozenCertifiedRequestRegistration,
+       CertifiedResponseAuthenticatedOccurrence, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularAssembleReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "AssembleBody")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       AssembleLocalBodyReady, LocalBodyNotSupersededByDecision,
+       BodyHeldBy, BodyValidatedBy, NodeIdle, PendingNodes,
+       SigningNodes, NodeInstalledTC,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginProposalReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "BeginProposal")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, BeginLocalProposalReady,
+       LocalBodyNotSupersededByDecision,
+       BodyHeldBy, BodyValidatedBy, NodeIdle, PendingNodes,
+       SigningNodes, NodeInstalledTC, LocalProposalFor,
+       LocalProposalJustification,
+       LocalProposalReproposesJustifiedHigh,
+       ProposalWireValidFor, ProposalJustified, SafeToPrepare,
+       TCValid, ExactPrepareQcMatchesRef,
+       PrepareQcOptionWireValid, QcWireValid,
+       PrepareQcRank, PrepareQcSubject,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularPersistProposalReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "PersistProposal")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       PersistProposalReady, ProposalWireValidFor,
+       ProposalJustified, SafeToPrepare, TCValid,
+       ExactPrepareQcMatchesRef, PrepareQcOptionWireValid,
+       QcWireValid, PrepareQcRank, PrepareQcSubject,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularLocalReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind
+          \in {"AssembleBody", "BeginProposal", "PersistProposal"})
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesRegularAssembleReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularBeginProposalReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularPersistProposalReady,
+   Isa
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularFetchReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "FetchBody")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       CertifiedRecoveryFetchFrontier,
+       DecisionFetchFrontier, LockedPrepareFetchFrontier,
+       DecisionQcValues, DecisionCertifiedBodyRecoveryAuthority,
+       LockedPrepareRecoverySource, HistoricalLockedPrepareSource,
+       HistoricalLockedPrepareRecoveryProvenance,
+       InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
+       NoDecisionForNode, HeldChunksFor, BodyHeldBy,
+       SeenProposalValues, FetchBodyReady, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularRebindReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "RebindRetainedBody")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       SeenProposalValues, RebindRetainedBodyReady,
+       RetainedLockedBodyHeldBy, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularStoreReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "StoreBody")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, StoreBodyReady, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBodyReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind
+          \in {"FetchBody", "RebindRetainedBody", "StoreBody"})
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesRegularFetchReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularRebindReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularStoreReady, Isa
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularValidateReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "ValidateBody")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       SeenProposalValues, DecisionQcValues,
+       ValidateBodyReady, RejectBodyReady,
+       ValidateDecidedBodyReady, ValidateLockedBodyReady,
+       BodyHeldBy, HistoricalLockedPrepareSource,
+       HistoricalLockedPrepareRecoveryProvenance,
+       InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
+       NoDecisionForNode, CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesProposalWireValidity ==
+  \A node, proposal:
+    ExactLeaderSchedulerReadinessFrame
+      => (ProposalWireValidFor(node, proposal)'
+            <=> ProposalWireValidFor(node, proposal))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ProposalWireValidFor, ProposalJustified, SafeToPrepare,
+       TCValid, ExactPrepareQcMatchesRef,
+       PrepareQcOptionWireValid, QcWireValid,
+       PrepareQcRank, PrepareQcSubject,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesBeginPrepareReady ==
+  \A node, proposal:
+    ExactLeaderSchedulerReadinessFrame
+      => (BeginPrepareReady(node, proposal)'
+            <=> BeginPrepareReady(node, proposal))
+BY ExactLeaderSchedulerReadinessFramePreservesProposalWireValidity,
+   IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       BeginPrepareReady, PrepareSignerAvailability,
+       BodyHeldBy, BodyValidatedBy,
+       NodeIdle, PendingNodes, SigningNodes, NodeTimedOut,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginPrepareReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "BeginPrepare")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesBeginPrepareReady,
+   IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       SeenProposalValues, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularPersistPrepareReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "PersistPrepare")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY IsaT(180)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       SeenProposalValues, ReceivedQcValues,
+       BeginPrepareReady, PersistPrepareReady,
+       BeginObservePrepareReady, PersistObservePrepareReady,
+       NodeIdle, PendingNodes, SigningNodes,
+       ProposalWireValidFor, ProposalJustified, SafeToPrepare,
+       TCValid, ExactPrepareQcMatchesRef,
+       PrepareQcOptionWireValid, QcWireValid,
+       PrepareQcRank, PrepareQcSubject,
+       PrepareSignerAvailability, BodyHeldBy, BodyValidatedBy,
+       NodeTimedOut, CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginObservePrepareReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "BeginObservePrepare")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY IsaT(180)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       SeenProposalValues, ReceivedQcValues,
+       BeginPrepareReady, PersistPrepareReady,
+       BeginObservePrepareReady, PersistObservePrepareReady,
+       NodeIdle, PendingNodes, SigningNodes,
+       ProposalWireValidFor, ProposalJustified, SafeToPrepare,
+       TCValid, ExactPrepareQcMatchesRef,
+       PrepareQcOptionWireValid, QcWireValid,
+       PrepareQcRank, PrepareQcSubject,
+       PrepareSignerAvailability, BodyHeldBy, BodyValidatedBy,
+       NodeTimedOut, CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularPersistObservePrepareReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "PersistObservePrepare")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY IsaT(180)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       SeenProposalValues, ReceivedQcValues,
+       BeginPrepareReady, PersistPrepareReady,
+       BeginObservePrepareReady, PersistObservePrepareReady,
+       NodeIdle, PendingNodes, SigningNodes,
+       ProposalWireValidFor, ProposalJustified, SafeToPrepare,
+       TCValid, ExactPrepareQcMatchesRef,
+       PrepareQcOptionWireValid, QcWireValid,
+       PrepareQcRank, PrepareQcSubject,
+       PrepareSignerAvailability, BodyHeldBy, BodyValidatedBy,
+       NodeTimedOut, CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularPrepareReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind
+          \in {"BeginPrepare", "PersistPrepare",
+               "BeginObservePrepare", "PersistObservePrepare"})
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesRegularBeginPrepareReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularPersistPrepareReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularBeginObservePrepareReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularPersistObservePrepareReady,
+   Isa
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginLockCommitReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "BeginLockCommit")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(180)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       LockCommitQcValues, ReceivedQcValues,
+       BeginLockCommandEvidenceMatches, BeginLockCommitReady,
+       PersistLockCommitReady, FormCommitQCReady,
+       BeginDecisionReady, CurrentOpenPrepareForCommit,
+       NodeTimedOut, BodyHeldBy, BodyValidatedBy,
+       RetainedLockedBodyRecord, VoteSignersAt,
+       CommitRoundAdmissible, LockedPrepareRound,
+       QcWireValid, NodeIdle, PendingNodes, SigningNodes,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularPersistLockCommitReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "PersistLockCommit")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(180)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       LockCommitQcValues, ReceivedQcValues,
+       BeginLockCommandEvidenceMatches, BeginLockCommitReady,
+       PersistLockCommitReady, FormCommitQCReady,
+       BeginDecisionReady, CurrentOpenPrepareForCommit,
+       NodeTimedOut, BodyHeldBy, BodyValidatedBy,
+       RetainedLockedBodyRecord, VoteSignersAt,
+       CommitRoundAdmissible, LockedPrepareRound,
+       QcWireValid, NodeIdle, PendingNodes, SigningNodes,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularFormCommitQCReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "FormCommitQC")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(180)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       LockCommitQcValues, ReceivedQcValues,
+       BeginLockCommandEvidenceMatches, BeginLockCommitReady,
+       PersistLockCommitReady, FormCommitQCReady,
+       BeginDecisionReady, CurrentOpenPrepareForCommit,
+       NodeTimedOut, BodyHeldBy, BodyValidatedBy,
+       RetainedLockedBodyRecord, VoteSignersAt,
+       CommitRoundAdmissible, LockedPrepareRound,
+       QcWireValid, NodeIdle, PendingNodes, SigningNodes,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginDecisionReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "BeginDecision")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(180)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       LockCommitQcValues, ReceivedQcValues,
+       BeginLockCommandEvidenceMatches, BeginLockCommitReady,
+       PersistLockCommitReady, FormCommitQCReady,
+       BeginDecisionReady, CurrentOpenPrepareForCommit,
+       NodeTimedOut, BodyHeldBy, BodyValidatedBy,
+       RetainedLockedBodyRecord, VoteSignersAt,
+       CommitRoundAdmissible, LockedPrepareRound,
+       QcWireValid, NodeIdle, PendingNodes, SigningNodes,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularCommitReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind
+          \in {"BeginLockCommit", "PersistLockCommit",
+               "FormCommitQC", "BeginDecision"})
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesRegularBeginLockCommitReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularPersistLockCommitReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularFormCommitQCReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularBeginDecisionReady,
+   Isa
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularPersistTimeoutReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "PersistTimeout")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems,
+   ExactLeaderSchedulerReadinessFramePreservesCertifiedCapability,
+   IsaT(180)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       PersistTimeoutReady, ReceivedTcValues,
+       InstallTcEvidenceMatches, BeginInstallTCReady,
+       StrictSameRoundTcUpgrade, NodeInstalledTC, TcHighRank,
+       NodeIdle, PendingNodes, SigningNodes, NoDecisionForNode,
+       CertifiedResponseCapabilityAuthorized,
+       InstallCertifiedBodyEffectReady, BodyHeldBy, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginInstallTCReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "BeginInstallTC")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems,
+   ExactLeaderSchedulerReadinessFramePreservesCertifiedCapability,
+   IsaT(180)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       PersistTimeoutReady, ReceivedTcValues,
+       InstallTcEvidenceMatches, BeginInstallTCReady,
+       StrictSameRoundTcUpgrade, NodeInstalledTC, TcHighRank,
+       NodeIdle, PendingNodes, SigningNodes, NoDecisionForNode,
+       CertifiedResponseCapabilityAuthorized,
+       InstallCertifiedBodyEffectReady, BodyHeldBy, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularFetchCertifiedBodyReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind = "FetchCertifiedBody")
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems,
+   ExactLeaderSchedulerReadinessFramePreservesCertifiedCapability,
+   IsaT(180)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       RegularCoreCommandReady, CommandMatches,
+       PersistTimeoutReady, ReceivedTcValues,
+       InstallTcEvidenceMatches, BeginInstallTCReady,
+       StrictSameRoundTcUpgrade, NodeInstalledTC, TcHighRank,
+       NodeIdle, PendingNodes, SigningNodes, NoDecisionForNode,
+       CertifiedResponseCapabilityAuthorized,
+       InstallCertifiedBodyEffectReady, BodyHeldBy, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularTimeoutReady ==
+  \A candidate:
+    (/\ ExactLeaderSchedulerReadinessFrame
+     /\ candidate.kind
+          \in {"PersistTimeout", "BeginInstallTC",
+               "FetchCertifiedBody"})
+      => (RegularCoreCommandReady(candidate)'
+            <=> RegularCoreCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesRegularPersistTimeoutReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularBeginInstallTCReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularFetchCertifiedBodyReady,
+   Isa
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteRegularCommandReady(candidate)'
+            <=> ExecuteRegularCommandReady(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesRegularLocalReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularBodyReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularValidateReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularPrepareReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularCommitReady,
+   ExactLeaderSchedulerReadinessFramePreservesRegularTimeoutReady, IsaT(60)
+   DEF ExecuteRegularCommandReady, RegularCoreCommandReady
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesChunkDeliveryReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteChunkDeliveryReady(candidate)'
+            <=> ExecuteChunkDeliveryReady(candidate))
+BY Isa
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteChunkDeliveryReady, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesRejectJunkReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExecuteRejectAuthenticatedJunkReady(candidate)'
+            <=> ExecuteRejectAuthenticatedJunkReady(candidate))
+BY Isa
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExecuteRejectAuthenticatedJunkReady, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesExecutionReady ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (CommandExecutionReady(candidate)'
+            <=> CommandExecutionReady(candidate))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       CommandExecutionReady, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesDispatchable ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (CommandDispatchable(candidate)'
+            <=> CommandDispatchable(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesExecutionReady,
+   IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       CommandDispatchable, CandidateConsumerCurrent,
+       LocalAssemblyBusyDispatchAllowed, NodeIdle, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesAlternateOwner ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (DispatchableSameIdentityLeaderOwner(candidate)'
+            <=> DispatchableSameIdentityLeaderOwner(candidate))
+BY ExactLeaderSchedulerReadinessFramePreservesRank,
+   ExactLeaderSchedulerReadinessFramePreservesDispatchable,
+   IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       DispatchableSameIdentityLeaderOwner
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesEvidence ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderEvidenceAt(candidate, rank)'
+            <=> ExactLeaderEvidenceAt(candidate, rank))
+BY IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExactLeaderEvidenceAt, ProposalEvidenceAt,
+       PrepareEvidenceAt, CommitEvidenceAt,
+       ViewChangeEvidenceAt, NodeIdle, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesDiscardProvenance ==
+  \A candidate, rank:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderDiscardProvenanceAt(candidate, rank)'
+            <=> ExactLeaderDiscardProvenanceAt(candidate, rank))
+BY ExactLeaderSchedulerReadinessFramePreservesEvidence,
+   IsaT(120)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExactLeaderDiscardProvenanceAt,
+       AuthenticatedLeaderDiscardProvenance,
+       PriorPhaseLeaderDiscardProvenance,
+       IngressItemHasAuthenticatedHistory,
+       CertifiedResponseAuthenticatedOccurrence,
+       ProposalEvidenceAt, PrepareEvidenceAt, CommitEvidenceAt,
+       vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesParking ==
+  \A candidate:
+    ExactLeaderSchedulerReadinessFrame
+      => (ExactLeaderSchedulerParked(candidate)'
+            <=> ExactLeaderSchedulerParked(candidate))
+BY Isa
+   DEF ExactLeaderSchedulerReadinessFrame,
+       ExactLeaderSchedulerParked, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesIdleness ==
+  \A node:
+    ExactLeaderSchedulerReadinessFrame
+      => (NodeIdle(node)' <=> NodeIdle(node))
+BY Isa
+   DEF ExactLeaderSchedulerReadinessFrame, NodeIdle, vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesInvariant ==
+  /\ ExactLeaderSchedulerOriginReadinessInvariant
+  /\ ExactLeaderSchedulerReadinessFrame
+  => ExactLeaderSchedulerOriginReadinessInvariant'
+BY ExactLeaderSchedulerReadinessFramePreservesRank,
+   ExactLeaderSchedulerReadinessFramePreservesExecutionReady,
+   ExactLeaderSchedulerReadinessFramePreservesDispatchable,
+   ExactLeaderSchedulerReadinessFramePreservesAlternateOwner,
+   ExactLeaderSchedulerReadinessFramePreservesEvidence,
+   ExactLeaderSchedulerReadinessFramePreservesDiscardProvenance,
+   ExactLeaderSchedulerReadinessFramePreservesParking,
+   ExactLeaderSchedulerReadinessFramePreservesIdleness,
+   IsaT(120)
    DEF ExactLeaderSchedulerOriginReadinessInvariant,
-       ExactLeaderCandidateRank,
-       ResponsiveProtectedCandidateOwned,
-       ProtectedCandidateOwned
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       ExactLeaderSchedulerIdleReadinessInvariant
+
+THEOREM AsyncTickPreservesExactLeaderSchedulerOriginReadiness ==
+  /\ ExactLeaderSchedulerOriginReadinessInvariant
+  /\ AsyncTick
+  => ExactLeaderSchedulerOriginReadinessInvariant'
+BY ExactLeaderSchedulerReadinessFramePreservesInvariant, Isa
+   DEF ExactLeaderSchedulerReadinessFrame,
+       AsyncTick, AsyncNonClockVars
+
+THEOREM AsyncNetworkStepPreservesExactLeaderSchedulerOriginReadiness ==
+  /\ ExactLeaderSchedulerOriginReadinessInvariant
+  /\ AsyncNetworkStep
+  => ExactLeaderSchedulerOriginReadinessInvariant'
+BY ExactLeaderSchedulerReadinessFramePreservesInvariant, Isa
+   DEF ExactLeaderSchedulerReadinessFrame,
+       AsyncNetworkStep, AdmitIngressPacket,
+       AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket,
+       AsyncIoVars, AsyncDeferredVars, LeaveCausalQueues
 
 THEOREM SameConsumerLeaderDiscardIsIdleAndDisabled ==
   \A candidate:
@@ -784,6 +2437,28 @@ BY Isa
    DEF SameConsumerLeaderDiscard, ExactLeaderEvidenceAt,
        ProposalEvidenceAt, PrepareEvidenceAt, CommitEvidenceAt,
        ViewChangeEvidenceAt, DiscardCommand
+
+THEOREM ExactLeaderDiscardProvenanceSurvivesSameConsumerDiscard ==
+  \A candidate, rank:
+    /\ ExactLeaderDiscardProvenanceAt(candidate, rank)
+    /\ SameConsumerLeaderDiscard(candidate)
+    => ExactLeaderDiscardProvenanceAt(candidate, rank)'
+BY Isa
+   DEF ExactLeaderDiscardProvenanceAt,
+       AuthenticatedLeaderDiscardProvenance,
+       PriorPhaseLeaderDiscardProvenance,
+       IngressItemHasAuthenticatedHistory,
+       CertifiedResponseAuthenticatedOccurrence,
+       ProposalEvidenceAt, PrepareEvidenceAt, CommitEvidenceAt,
+       SameConsumerLeaderDiscard, FifoRuntimeStep,
+       DeferredDrainStep, DiscardCommand
+
+THEOREM DispatchableSameIdentityOwnerIsSemanticOwner ==
+  \A candidate:
+    DispatchableSameIdentityLeaderOwner(candidate)
+      => SameIdentityLeaderOwner(candidate)
+BY DEF DispatchableSameIdentityLeaderOwner,
+       SameIdentityLeaderOwner
 
 THEOREM OtherExactLeaderOwnerSurvivesSameConsumerDiscard ==
   \A candidate:
@@ -817,8 +2492,11 @@ THEOREM SchedulerOriginReadinessExcludesUnexplainedDiscard ==
     => ~UnexplainedSameConsumerLeaderDiscard(candidate, rank)
 BY SameConsumerLeaderDiscardIsIdleAndDisabled,
    ExactLeaderEvidenceSurvivesSameConsumerDiscard,
+   ExactLeaderDiscardProvenanceSurvivesSameConsumerDiscard,
+   DispatchableSameIdentityOwnerIsSemanticOwner,
    OtherExactLeaderOwnerSurvivesSameConsumerDiscard, Isa
    DEF ExactLeaderSchedulerOriginReadinessInvariant,
+       ExactLeaderSchedulerIdleReadinessInvariant,
        UnexplainedSameConsumerLeaderDiscard
 
 UnexplainedExactLeaderExitAction ==
@@ -865,6 +2543,7 @@ ExactLeaderCandidateExitOutcome(candidate, rank) ==
   \/ ExactLeaderCandidatePostMilestone(candidate, rank)
   \/ SameIdentityLeaderOwner(candidate)
   \/ ExactLeaderEvidenceAt(candidate, rank)
+  \/ ExactLeaderDiscardProvenanceAt(candidate, rank)
 
 ExactLeaderCandidateSemanticHandoffProperty(specification) ==
   specification
@@ -999,6 +2678,15 @@ LeaderWireCurrentContextWitnessIdentity(item) ==
     item, context, item.envelope.recipient,
     DeliveryView(item), DeliverySubject(item))
 
+\* Generic unauthenticated transport-completion traffic is drainable cleanup,
+\* not a semantic leader corridor.  This classifier depends only on immutable
+\* item fields; unlike `IngressPacketPolicyRejected`, it cannot change while a
+\* frozen packet waits.
+LeaderWireProductiveTransportIdentity(item) ==
+  /\ LeaderWireCurrentContextWitnessIdentity(item)
+  /\ ~(/\ IngressAdmissionClass(item) = "TransportCompletion"
+       /\ IngressResourceSource(item) = AsyncUntrustedSource)
+
 LeaderWireIngressOwned(item) ==
   /\ IngressResourceSource(item) \in AsyncIngressSources
   /\ item \in SequenceSet(
@@ -1011,42 +2699,40 @@ LeaderWireCandidateOwned(item) ==
   ELSE CandidateScheduled(DeliveryCandidate(item))
 
 LeaderWireConsumerMilestone(item) ==
-  CASE item.kind = "Proposal" ->
-         ProposalAt(item.envelope.recipient,
-                    item.envelope.proposal) \in seenProposals
-    [] item.kind = "Chunk" ->
-         AsyncChunkReceipt(item.envelope.recipient,
-                           item.envelope.view,
-                           item.envelope.subject,
-                           item.envelope.chunk) \in asyncHeldChunks
-    [] item.kind \in {"PrepareVote", "CommitVote"} ->
-         VoteAt(item.envelope.recipient,
-                item.envelope.vote) \in receivedVotes
-    [] item.kind \in {"PrepareQC", "CommitQC"} ->
-         QcAt(item.envelope.recipient,
-              item.envelope.qc) \in receivedQCs
-           \/ NodeHasDecision(item.envelope.recipient)
-    [] item.kind = "TimeoutVote" ->
-         ReceivedTimeoutVoteAt(
-           item.envelope.recipient,
-           item.envelope.vote.signer,
-           item.envelope.vote.view)
-           \/ NodeHasDecision(item.envelope.recipient)
-    [] item.kind = "TimeoutCertificate" ->
-         TcAt(item.envelope.recipient,
-              item.envelope.tc) \in receivedTCs
-           \/ nodeView[item.envelope.recipient]
-                > item.envelope.tc.view
-           \/ NodeHasDecision(item.envelope.recipient)
-    [] item.kind = "CertifiedResponse" ->
-         \/ SameIdentityLeaderOwner(
-              CertifiedResponseCandidate(item))
-         \/ BodyHeldBy(durableBodies,
-                       item.envelope.recipient, context,
-                       item.envelope.view, item.envelope.subject)
-         \/ nodeView[item.envelope.recipient] > item.envelope.view
-         \/ NodeHasDecision(item.envelope.recipient)
-    [] OTHER -> FALSE
+  \/ NodeHasDecision(item.envelope.recipient)
+  \/ NodeHasApplication(item.envelope.recipient)
+  \/ CASE item.kind = "Proposal" ->
+            ProposalAt(item.envelope.recipient,
+                       item.envelope.proposal) \in seenProposals
+       [] item.kind = "Chunk" ->
+            AsyncChunkReceipt(item.envelope.recipient,
+                              item.envelope.view,
+                              item.envelope.subject,
+                              item.envelope.chunk) \in asyncHeldChunks
+       [] item.kind \in {"PrepareVote", "CommitVote"} ->
+            VoteAt(item.envelope.recipient,
+                   item.envelope.vote) \in receivedVotes
+       [] item.kind \in {"PrepareQC", "CommitQC"} ->
+            QcAt(item.envelope.recipient,
+                 item.envelope.qc) \in receivedQCs
+       [] item.kind = "TimeoutVote" ->
+            ReceivedTimeoutVoteAt(
+              item.envelope.recipient,
+              item.envelope.vote.signer,
+              item.envelope.vote.view)
+       [] item.kind = "TimeoutCertificate" ->
+            TcAt(item.envelope.recipient,
+                 item.envelope.tc) \in receivedTCs
+              \/ nodeView[item.envelope.recipient]
+                   > item.envelope.tc.view
+       [] item.kind = "CertifiedResponse" ->
+            \/ SameIdentityLeaderOwner(
+                 CertifiedResponseCandidate(item))
+            \/ BodyHeldBy(durableBodies,
+                          item.envelope.recipient, context,
+                          item.envelope.view, item.envelope.subject)
+            \/ nodeView[item.envelope.recipient] > item.envelope.view
+       [] OTHER -> FALSE
 
 LeaderWirePacket(packet) ==
   /\ packet \in AsyncPacketSet
@@ -1340,18 +3026,11 @@ MissingResponsiveTimeoutSigners(recipient, roundView) ==
   {signer \in AsyncCurrentResponsiveVoters:
      ~ReceivedTimeoutVoteAt(recipient, signer, roundView)}
 
+\* A global `formedTCs` occurrence is not a handoff to every validator.
+\* Preserve the exact recipient through retained delivery, transport,
+\* ingress, reducer ownership, or the recipient's install owner.
 CertifiedFutureViewFrontier(node, roundView) ==
-  \/ \E request \in pendingInstallTC:
-       /\ request.node = node
-       /\ request.tc.context = context
-       /\ request.tc.view >= roundView
-  \/ \E received \in receivedTCs:
-       /\ received.node = node
-       /\ received.tc.context = context
-       /\ received.tc.view >= roundView
-  \/ \E tc \in formedTCs:
-       /\ tc.context = context
-       /\ tc.view >= roundView
+  TcFrontier(node, roundView)
 
 TimeoutQuorumViewRotationResidual(node, roundView) ==
   /\ node \in AsyncCurrentResponsiveVoters
@@ -1480,9 +3159,8 @@ The first residual arm above is an action-safety defect and is discharged by
 into a state predicate under `~>`.  The four predicates below are the exact
 physical handoffs for the remaining state-level arms:
 
-  * transport transfers the selected non-policy item to ingress, a reducer
-    candidate, or a concrete consumer receipt;
-  * a policy-rejected current-context occurrence retires its exact packet;
+  * transport transfers the selected item to ingress, a reducer candidate,
+    or a concrete consumer receipt;
   * runner admission removes the exact ingress owner or creates the candidate
     or receipt;
   * certified-response capacity does the same after the linear claim; and
@@ -1493,9 +3171,15 @@ The complete property remains deliberately split.  The exact
 certified-response arm is proved below; the open physical property retains
 transport, ordinary runner admission, and timeout/view rotation.  Together
 they form the full off-scheduler property consumed by the semantic reduction,
-with action-safety readiness bundled separately.  Policy retirement appears
-in that inventory but is intentionally absent from the productive semantic
-frontier: discarding rejected traffic is not leader progress.
+with action-safety readiness bundled separately.
+
+Transport policy is deliberately not split into temporal branches.
+`IngressPacketPolicyRejected` depends on mutable request/claim state.
+Cleanup therefore converges to one combined handoff-or-exact-absence target.
+The productive promise uses an immutable item classifier which excludes
+generic untrusted transport completions; if its certified-response policy
+later rejects, the response already has an exact candidate or consumer
+milestone.
 ***************************************************************************)
 
 LeaderWireTransportHandoff(packet) ==
@@ -1505,11 +3189,16 @@ LeaderWireTransportHandoff(packet) ==
      \/ LeaderWireCandidateOwned(packet.item)
      \/ LeaderWireConsumerMilestone(packet.item)
 
-LeaderWirePolicyRetirement(packet) ==
+\* Exact occurrence retirement is useful for nonproductive cleanup traffic.
+\* It is intentionally not accepted as progress for the stable productive
+\* transport classifier above.
+LeaderWireTransportOccurrenceAbsent(packet) ==
   /\ packet \in AsyncPacketSet
-  /\ LeaderWireCurrentContextWitnessIdentity(packet.item)
-  /\ IngressPacketPolicyRejected(packet.item)
   /\ packet \notin asyncTransport
+
+LeaderWireTransportResolution(packet) ==
+  \/ LeaderWireTransportHandoff(packet)
+  \/ LeaderWireTransportOccurrenceAbsent(packet)
 
 LeaderWireRunnerAdmissionHandoff(item) ==
   /\ LeaderWireCurrentContextWitnessIdentity(item)
@@ -1521,6 +3210,53 @@ CertifiedResponsePhysicalCompletionHandoff(item) ==
   /\ item.kind = "CertifiedResponse"
   /\ \/ LeaderWireCandidateOwned(item)
      \/ LeaderWireConsumerMilestone(item)
+
+THEOREM PolicyRejectedLeaderWireAlreadyHasSemanticHandoff ==
+  \A packet \in AsyncPacketSet:
+    /\ LeaderWireProductiveTransportIdentity(packet.item)
+    /\ IngressPacketPolicyRejected(packet.item)
+    => LeaderWireTransportHandoff(packet)
+PROOF
+  <1>1. ASSUME NEW packet \in AsyncPacketSet,
+                LeaderWireProductiveTransportIdentity(packet.item),
+                IngressPacketPolicyRejected(packet.item)
+         PROVE LeaderWireTransportHandoff(packet)
+    <2>1. /\ LeaderWireCurrentContextWitnessIdentity(packet.item)
+           /\ ~(/\ IngressAdmissionClass(packet.item) =
+                    "TransportCompletion"
+                /\ IngressResourceSource(packet.item) =
+                    AsyncUntrustedSource)
+      BY <1>1 DEF LeaderWireProductiveTransportIdentity
+    <2>2. ~UntrustedGenericCompletionPacketPolicyRejected(packet.item)
+      BY <2>1 DEF UntrustedGenericCompletionPacketPolicyRejected
+    <2>3. CertifiedResponsePacketPolicyRejected(packet.item)
+      BY <1>1, <2>2 DEF IngressPacketPolicyRejected
+    <2>4. /\ packet.item.kind = "CertifiedResponse"
+           /\ ~CertifiedResponseAuthorized(packet.item)
+      BY <2>3 DEF CertifiedResponsePacketPolicyRejected
+    <2>5. LeaderCertifiedResponseRelevant(packet.item)
+      BY <2>1, <2>4
+         DEF LeaderWireCurrentContextWitnessIdentity,
+             LeaderWireExactSemanticIdentity, LeaderWireItem
+    <2>6. \/ CandidateScheduled(
+                CertifiedResponseCandidate(packet.item))
+           \/ SameIdentityLeaderOwner(
+                CertifiedResponseCandidate(packet.item))
+           \/ BodyHeldBy(durableBodies,
+                         packet.item.envelope.recipient, context,
+                         packet.item.envelope.view,
+                         packet.item.envelope.subject)
+           \/ nodeView[packet.item.envelope.recipient]
+                > packet.item.envelope.view
+           \/ NodeHasDecision(packet.item.envelope.recipient)
+      BY <2>4, <2>5, Isa DEF LeaderCertifiedResponseRelevant
+    <2>7. \/ LeaderWireCandidateOwned(packet.item)
+           \/ LeaderWireConsumerMilestone(packet.item)
+      BY <2>4, <2>6, Isa
+         DEF LeaderWireCandidateOwned, LeaderWireConsumerMilestone
+    <2> QED BY <1>1, <2>1, <2>7
+         DEF LeaderWireTransportHandoff
+  <1> QED BY <1>1
 
 (***************************************************************************
 Exact claim-exit safety.
@@ -1789,9 +3525,8 @@ AdequateLeaderExactPhysicalHandoff ==
 
 AdequateLeaderProductivePhysicalResidual ==
   \/ \E packet \in OverdueResponsivePackets:
-       /\ LeaderWireCurrentContextWitnessIdentity(packet.item)
+       /\ LeaderWireProductiveTransportIdentity(packet.item)
        /\ LeaderWireDueTransportResidual(packet)
-       /\ ~IngressPacketPolicyRejected(packet.item)
   \/ \E item \in AsyncNetworkItems:
        /\ LeaderWireCurrentContextWitnessIdentity(item)
        /\ LeaderWireRunnerAdmissionResidual(item)
@@ -1807,17 +3542,15 @@ AdequateLeaderOpenPhysicalResidualConvergenceProperty(specification) ==
     => /\ \A packet \in AsyncPacketSet:
              (gst
                /\ LeaderWireCurrentContextWitnessIdentity(packet.item)
-               /\ LeaderWireDueTransportResidual(packet)
-               /\ ~IngressPacketPolicyRejected(packet.item))
+               /\ LeaderWireDueTransportResidual(packet))
                ~> (ResponsiveNodesDecide
-                    \/ LeaderWireTransportHandoff(packet))
+                    \/ LeaderWireTransportResolution(packet))
        /\ \A packet \in AsyncPacketSet:
              (gst
-               /\ LeaderWireCurrentContextWitnessIdentity(packet.item)
-               /\ LeaderWireDueTransportResidual(packet)
-               /\ IngressPacketPolicyRejected(packet.item))
+               /\ LeaderWireProductiveTransportIdentity(packet.item)
+               /\ LeaderWireDueTransportResidual(packet))
                ~> (ResponsiveNodesDecide
-                    \/ LeaderWirePolicyRetirement(packet))
+                    \/ LeaderWireTransportHandoff(packet))
        /\ \A item \in AsyncNetworkItems:
              (gst
                /\ LeaderWireCurrentContextWitnessIdentity(item)
@@ -1873,8 +3606,8 @@ composition:
      residual, or one ranked exact candidate;
   2. each completed physical handoff exposes a terminal result or a ranked
      candidate; and
-  3. each exact candidate exit outcome exposes a terminal result or a
-     strictly lower semantic rank.
+  3. each actual current owned rank frontier persists across a step or the
+     step exposes a terminal result or a strictly lower semantic rank.
 
 No convergence theorem for this property is asserted.  Its rank relation is
 the finite lexicographic product of phase 1..5 and the concrete inner
@@ -1884,11 +3617,11 @@ rather than assuming the aggregate leader-service conclusion.
 The source exposure is necessarily stated at each release antecedent.  Every
 non-terminal target below is nevertheless narrower: a wire handoff retains
 one fixed packet/item plus its current context, responsive recipient, view,
-and subject; a candidate handoff retains its frozen consumer context,
-responsive witness, protocol view, subject, and exact semantic rank.  Thus a
-historical packet cannot satisfy a current-context wire handoff, and the
-candidate chosen at a rank frontier cannot be replaced by an unrelated exit
-existential in the reduction.
+and subject; the candidate step retains the actual current owned candidate,
+its frozen consumer context, responsive witness, protocol view, subject, and
+exact semantic rank.  Thus a historical packet cannot satisfy a
+current-context wire handoff, and a fabricated stale candidate cannot replace
+the candidate chosen at a rank frontier.
 ***************************************************************************)
 
 AdequateLeaderCompositionModes ==
@@ -2050,10 +3783,71 @@ AdequateLeaderModeRankFrontier(mode, rank) ==
             candidate, rank, leaderContext, witness, roundView, subject)
        /\ IF mode = "DecideFromAdequateView"
           THEN \E leader \in ValidatorIds,
-                  leaderView \in Views:
+                 leaderView \in Views:
                  /\ ExactAdequateLeaderViewIdentity(leader, leaderView)
+                 /\ candidate.view = leaderView
                  /\ candidate.consumerView = leaderView
           ELSE TRUE
+
+(***************************************************************************
+Owned rank-step anchor.
+
+The old composition family quantified an arbitrary candidate and used
+`ExactLeaderCandidateExitOutcome` as a state antecedent.  Because that outcome
+contains `~CandidateConsumerCurrent`, an unowned fabricated stale
+PersistDecision record at rank <<1, 2>> could trigger the family; ranks
+<<1, 0>> and <<1, 1>> have no candidate constructors, so the family collapsed
+to the terminal Decision property.  The action predicate below instead
+anchors every step to the exact current owned candidate which witnesses the
+mode frontier.  It says that one concrete bracketed step either preserves
+that same anchor, reaches the mode goal, or exposes a strictly lower owned
+frontier.
+***************************************************************************)
+
+ExactLeaderModeRankAnchor(
+    mode, candidate, rank, leaderContext, witness, roundView, subject) ==
+  /\ AdequateLeaderModeActive(mode)
+  /\ ExactLeaderCurrentRankWitness(
+       candidate, rank, leaderContext, witness, roundView, subject)
+  /\ IF mode = "DecideFromAdequateView"
+     THEN \E leader \in ValidatorIds,
+             leaderView \in Views:
+            /\ ExactAdequateLeaderViewIdentity(leader, leaderView)
+            /\ candidate.view = leaderView
+            /\ candidate.consumerView = leaderView
+     ELSE TRUE
+
+ExactLeaderAnchoredRankProgressStep(
+    mode, candidate, rank, leaderContext, witness, roundView, subject) ==
+  ExactLeaderModeRankAnchor(
+    mode, candidate, rank, leaderContext, witness, roundView, subject)
+    => \/ ExactLeaderModeRankAnchor(
+            mode, candidate, rank, leaderContext,
+            witness, roundView, subject)'
+       \/ AdequateLeaderModeGoal(mode)'
+       \/ \E lowerRank \in
+              SetLessThan(
+                rank,
+                ExactLeaderSemanticRankOrdering,
+                ExactLeaderSemanticRankCarrier):
+            AdequateLeaderModeRankFrontier(mode, lowerRank)'
+
+THEOREM FabricatedStaleUnownedPersistDecisionCannotTriggerRankStep ==
+  \A mode \in AdequateLeaderCompositionModes,
+     candidate,
+     rank \in ExactLeaderSemanticRankCarrier,
+     leaderContext \in ContextRecords,
+     witness \in ValidatorIds,
+     roundView \in Views,
+     subject \in SubjectOrNone:
+    /\ candidate.kind = "PersistDecision"
+    /\ ~ResponsiveProtectedCandidateOwned(candidate)
+    => ~ExactLeaderModeRankAnchor(
+          mode, candidate, rank, leaderContext,
+          witness, roundView, subject)
+BY ExactLeaderCandidateRankIsSemanticRank, Isa
+   DEF ExactLeaderModeRankAnchor,
+       ExactLeaderCurrentRankWitness
 
 THEOREM ExactLeaderCandidateRankIsInBoundedSemanticCarrier ==
   \A candidate, rank:
@@ -2143,36 +3937,25 @@ AdequateLeaderSemanticCompositionProperty(specification) ==
                ~> (AdequateLeaderModeGoal(mode)
                     \/ \E rank \in ExactLeaderSemanticRankCarrier:
                          AdequateLeaderModeRankFrontier(mode, rank))
-       /\ \A candidate:
-            \A mode \in AdequateLeaderCompositionModes,
-               rank \in ExactLeaderSemanticRankCarrier,
-               leaderContext \in ContextRecords,
-               witness \in ValidatorIds,
-               roundView \in Views,
-               subject \in SubjectOrNone:
-              (/\ AdequateLeaderModeActive(mode)
-               /\ ExactLeaderFrozenSemanticIdentity(
-                    candidate, rank, leaderContext,
-                    witness, roundView, subject)
-               /\ ExactLeaderCandidateExitOutcome(candidate, rank))
-                ~> (AdequateLeaderModeGoal(mode)
-                     \/ \E lowerRank \in
-                            SetLessThan(
-                              rank,
-                              ExactLeaderSemanticRankOrdering,
-                              ExactLeaderSemanticRankCarrier):
-                          AdequateLeaderModeRankFrontier(
-                            mode, lowerRank))
+       /\ \A mode \in AdequateLeaderCompositionModes,
+             rank \in ExactLeaderSemanticRankCarrier:
+            AdequateLeaderModeRankFrontier(mode, rank)
+              ~> (AdequateLeaderModeGoal(mode)
+                   \/ \E lowerRank \in
+                          SetLessThan(
+                            rank,
+                            ExactLeaderSemanticRankOrdering,
+                            ExactLeaderSemanticRankCarrier):
+                        AdequateLeaderModeRankFrontier(
+                          mode, lowerRank))
 
 \* TODO: prove the semantic-composition property from exact timeout/view
 \* rotation, leader selection, and command-successor phase mappings.
 
 THEOREM ExactCandidateHandoffsLowerSemanticRank ==
   \A initialContext:
-    (/\ ExactLeaderCandidateSemanticHandoffProperty(
-          AsyncLiveSpecAt(initialContext))
-     /\ AdequateLeaderSemanticCompositionProperty(
-          AsyncLiveSpecAt(initialContext)))
+    AdequateLeaderSemanticCompositionProperty(
+      AsyncLiveSpecAt(initialContext))
       => (AsyncLiveSpecAt(initialContext)
             => \A mode \in AdequateLeaderCompositionModes,
                   rank \in ExactLeaderSemanticRankCarrier:
@@ -2185,16 +3968,7 @@ THEOREM ExactCandidateHandoffsLowerSemanticRank ==
                                  ExactLeaderSemanticRankCarrier):
                              AdequateLeaderModeRankFrontier(
                                mode, lowerRank)))
-BY AsyncLiveSpecProjectsAsyncSpec,
-   AsyncSpecKeepsGstOnceSet, Isa, PTL
-   DEF ExactLeaderCandidateSemanticHandoffProperty,
-       AdequateLeaderSemanticCompositionProperty,
-       AdequateLeaderModeRankFrontier,
-       AdequateLeaderModeActive,
-       ExactLeaderCurrentRankWitness,
-       ExactLeaderFrozenSemanticIdentity,
-       ExactLeaderStaticSemanticRank,
-       ExactLeaderSemanticRankCarrier
+BY DEF AdequateLeaderSemanticCompositionProperty
 
 THEOREM ExactCandidateSemanticRanksReachModeGoal ==
   \A initialContext:

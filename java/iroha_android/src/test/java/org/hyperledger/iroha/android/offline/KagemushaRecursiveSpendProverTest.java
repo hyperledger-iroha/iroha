@@ -878,6 +878,10 @@ public final class KagemushaRecursiveSpendProverTest {
         .chainArtifactSetReady();
     assert !readinessProjection(transfer, unshield, stepEq, artifactSet, false)
         .chainArtifactSetReady();
+    assertThrowsIllegalArgument(() -> readinessProjection(
+        "cash_handoff_v2", transfer, unshield, stepEq, artifactSet, true));
+    assertThrowsIllegalArgument(() -> readinessProjection(
+        null, transfer, unshield, stepEq, artifactSet, true));
 
     final byte[] exposedManifestDigest = artifactSet.manifestSha256();
     Arrays.fill(exposedManifestDigest, (byte) 0);
@@ -930,7 +934,24 @@ public final class KagemushaRecursiveSpendProverTest {
       final KagemushaRecursiveSpendProver.ActiveVerifier stepEq,
       final KagemushaRecursiveSpendProver.AuthenticatedArtifactSet artifactSet,
       final boolean proofBackendAvailable) {
+    return readinessProjection(
+        KagemushaRecursiveSpendProver.CASH_HANDOFF_CAPABILITY_V1,
+        transfer,
+        unshield,
+        stepEq,
+        artifactSet,
+        proofBackendAvailable);
+  }
+
+  private static KagemushaRecursiveSpendProver.ReadinessProjection readinessProjection(
+      final String cashHandoffCapability,
+      final KagemushaRecursiveSpendProver.ActiveVerifier transfer,
+      final KagemushaRecursiveSpendProver.ActiveVerifier unshield,
+      final KagemushaRecursiveSpendProver.ActiveVerifier stepEq,
+      final KagemushaRecursiveSpendProver.AuthenticatedArtifactSet artifactSet,
+      final boolean proofBackendAvailable) {
     return new KagemushaRecursiveSpendProver.ReadinessProjection(
+        cashHandoffCapability,
         21,
         8,
         "xor#sora",

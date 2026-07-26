@@ -1249,6 +1249,34 @@ pub mod core {
         reason: "orchestrator health-probe convention",
     })
     .with_implicit_head(true);
+    /// Process-only liveness probe. This does not imply protocol readiness.
+    pub const LIVEZ: RouteDescriptor = RouteDescriptor::new(
+        "protocol.livez",
+        HttpMethod::Get,
+        "/livez",
+        ApiSurface::Protocol,
+        Listener::Torii,
+    )
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
+    .with_projections(RouteProjections::ALL)
+    .with_path_policy(PathPolicy::ProtocolException {
+        reason: "orchestrator liveness-probe convention",
+    })
+    .with_implicit_head(true);
+    /// Complete node readiness probe, including mandatory offline cash.
+    pub const READYZ: RouteDescriptor = RouteDescriptor::new(
+        "protocol.readyz",
+        HttpMethod::Get,
+        "/readyz",
+        ApiSurface::Protocol,
+        Listener::Torii,
+    )
+    .with_authentication(AuthenticationPolicy::Unauthenticated)
+    .with_projections(RouteProjections::ALL)
+    .with_path_policy(PathPolicy::ProtocolException {
+        reason: "orchestrator readiness-probe convention",
+    })
+    .with_implicit_head(true);
     /// Read the effective node configuration.
     pub const CONFIGURATION_GET: RouteDescriptor = RouteDescriptor::new(
         "operator.configuration.read",
@@ -1436,6 +1464,8 @@ pub mod core {
         API_VERSION,
         PEERS,
         HEALTH,
+        LIVEZ,
+        READYZ,
         CONFIGURATION_GET,
         CONFIGURATION_POST,
         NEXUS_LIFECYCLE_GET,
@@ -4308,6 +4338,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     core::API_VERSION,
     core::PEERS,
     core::HEALTH,
+    core::LIVEZ,
+    core::READYZ,
     core::CONFIGURATION_GET,
     core::CONFIGURATION_POST,
     core::NEXUS_LIFECYCLE_GET,

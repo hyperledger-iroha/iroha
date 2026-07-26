@@ -1,0 +1,4 @@
+extends = "base.toml"
+
+[queue]
+plan_journal_enabled = false

@@ -65,9 +65,9 @@ use super::{
     },
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
-        HistoricalRecoveryServiceOutcome, MergeSidecarDeferralDisposition, V2LaneIngressOutcome,
-        V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError, V2LaneWorkLimits,
-        require_validator_storage_platform,
+        HistoricalRecoveryServiceOutcome, MergeSidecarDeferralDisposition, RetainedMergeSidecars,
+        V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError,
+        V2LaneWorkLimits, require_validator_storage_platform,
     },
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
@@ -76,14 +76,14 @@ use super::{
         successor_context_refinement_projection,
     },
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
-    v2_worker::{ExactFanoutOwnership, ProductionV2Services, V2CleanupSupervisor},
+    v2_worker::{
+        ExactFanoutOwnership, ProductionV2Services, V2CleanupSupervisor,
+        durable_exact_output_handoff_owner_pair,
+    },
 };
 use crate::{
     kura::Kura,
-    merge_sidecar::{
-        CertifiedMergeSidecarMessage, MergeSidecarLimits, MergeSidecarTransport,
-        MergeSigningGuardLimits,
-    },
+    merge_sidecar::{CertifiedMergeSidecarMessage, MergeSidecarLimits, MergeSigningGuardLimits},
     native_amx::NativeAmxMessage,
     queue::{GlobalQueueSelectionLease, Queue},
     state::State,
@@ -808,7 +808,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         .transpose()?;
     let mut liveness_watchdog = super::status::V2LivenessWatchdog::default();
     let deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(0);
-    let mut retained_merge_sidecars: Option<MergeSidecarTransport> = None;
+    let mut retained_merge_sidecars: Option<RetainedMergeSidecars> = None;
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -956,6 +956,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 return Err(V2RunnerError::ConflictingGenesisNexusContext);
             }
         }
+        let (exact_output_service_owner, exact_output_transport_owner) =
+            durable_exact_output_handoff_owner_pair();
         let mut services = ProductionV2Services::start(
             context.clone(),
             executor.current_tag(),
@@ -976,6 +978,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             certified_request_capacity,
             chunk_queue_capacity,
             Arc::clone(&output_guard),
+            exact_output_service_owner,
         )
         .map_err(V2RunnerError::Service)?;
 
@@ -1072,6 +1075,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     authenticated_genesis_nexus_amx_context,
                     recovered_applied_height,
                     Arc::clone(&output_guard),
+                    exact_output_transport_owner,
                     retained_merge_sidecars.take(),
                 )
                 .map_err(V2RunnerError::from)
@@ -1429,6 +1433,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     let _ = wake_rx.recv_timeout(IDLE_POLL);
                     continue;
                 }
+                if lane_work.effect_count() != 0 {
+                    committed_lane_status_publisher.publish_if_changed(&lane_work);
+                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    continue;
+                }
                 if services
                     .has_pending_exact_output()
                     .map_err(V2RunnerError::Service)?
@@ -1438,6 +1447,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             .to_owned(),
                     ));
                 }
+                let exact_output_handoff = services
+                    .seal_applied_height_output_handoff(
+                        &durable_receipt,
+                        &durable_artifact,
+                        &durable_lane_authority,
+                    )
+                    .map_err(V2RunnerError::Service)?;
                 let (runtime, receipt, artifact) = executor.into_finalized_parts()?;
                 let wal_retirement = output_guard
                     .begin_fail_stop_operation()
@@ -1464,7 +1480,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     );
                 }
                 committed_lane_status_publisher.publish_if_changed(&lane_work);
-                break (receipt, artifact);
+                break (receipt, artifact, exact_output_handoff);
             }
 
             if recovering_interrupted_tip {
@@ -1502,7 +1518,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             let _ = wake_rx.recv_timeout(IDLE_POLL);
         };
 
-        let (receipt, artifact) = finality;
+        let (receipt, artifact, exact_output_handoff) = finality;
         eager_block_sync =
             retain_eager_block_sync(recovering_interrupted_tip, admitted_discovered_commit_qc);
         let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)?;
@@ -1543,7 +1559,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             build_verified_successor(state.as_ref(), &context_store, &artifact, &receipt)?;
         successor_construction.complete();
         let (next_verified_context, successor_authority) = successor.into_parts();
-        retained_merge_sidecars = Some(lane_work.into_retained_merge_sidecars());
+        retained_merge_sidecars = Some(lane_work.into_retained_merge_sidecars(
+            exact_output_handoff,
+            &artifact,
+            next_verified_context.context(),
+        )?);
         pending_successor_activation = Some(activation.bind(successor_authority)?);
         verified_context = next_verified_context;
         signature_policy = BlockSignaturePolicy::RotatingLeader;
@@ -2919,6 +2939,18 @@ fn apply_certified_merge_sidecar_closed_prefixes(
     Ok(())
 }
 
+/// Require the exact queue owner observed by the preceding guarded peek.
+///
+/// The runner holds exclusive access to the lane adapter, so an empty second
+/// read cannot reflect a competing dequeue. It means the shared output guard
+/// closed between the peek and drain permits; leave the original queued owner
+/// untouched and surface the already-required process restart.
+fn require_peeked_lane_work_effect(
+    drained: Option<V2LaneWorkEffect>,
+) -> Result<V2LaneWorkEffect, V2RunnerError> {
+    drained.ok_or(V2RunnerError::RestartRequired)
+}
+
 fn dispatch_lane_work_effects(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
@@ -2936,20 +2968,14 @@ fn dispatch_lane_work_effects(
             break;
         };
         if !retain_active_owned_reply_routes(&mut next_effect) {
-            let _ = lane_work
-                .drain_effects(1)
-                .pop()
-                .expect("peeked lane-work effect must remain queued");
+            let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
             continue;
         }
         if !services
             .can_retain_lane_work_effect(&next_effect)
             .map_err(V2RunnerError::Service)?
         {
-            let effect = lane_work
-                .drain_effects(1)
-                .pop()
-                .expect("peeked lane-work effect must remain queued");
+            let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
             drop(effect);
             if !lane_work.requeue_effect(next_effect) {
                 return Err(V2RunnerError::Service(
@@ -2958,9 +2984,7 @@ fn dispatch_lane_work_effects(
             }
             continue;
         }
-        let Some(effect) = lane_work.drain_effects(1).pop() else {
-            break;
-        };
+        let effect = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
         drop(effect);
         match dispatch_lane_work_effect(services, next_effect)? {
             LaneWorkEffectDispatch::Complete => {
@@ -3041,7 +3065,13 @@ where
             reply_routes,
             message,
             ..
-        } if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(_)) => reply_routes,
+        } if matches!(
+            message.as_ref(),
+            CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_)
+        ) =>
+        {
+            reply_routes
+        }
         V2LaneWorkEffect::PostLaneBlock { .. }
         | V2LaneWorkEffect::PostDurableLaneCertificate { .. }
         | V2LaneWorkEffect::PostNativeAmx { .. }
@@ -3133,8 +3163,9 @@ fn dispatch_lane_work_effect(
             let route_shape_is_valid = match message.as_ref() {
                 CertifiedMergeSidecarMessage::Request(_)
                 | CertifiedMergeSidecarMessage::Close(_)
-                | CertifiedMergeSidecarMessage::CloseAck(_) => reply_routes.is_none(),
-                CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
+                | CertifiedMergeSidecarMessage::GenerationHint(_) => reply_routes.is_none(),
+                CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
             };
             if !route_shape_is_valid {
                 return Err(V2RunnerError::Service(
@@ -3438,8 +3469,11 @@ mod tests {
         NetworkMessage,
         merge_sidecar::{
             CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
-            CertifiedMergeSidecarMessage,
+            CertifiedMergeSidecarCloseV1, CertifiedMergeSidecarMessage,
+            CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
+            CertifiedMergeSidecarStreamEpochV1,
         },
+        sumeragi::LaneRelayMessage,
     };
 
     #[test]
@@ -3566,6 +3600,14 @@ mod tests {
         );
         assert_eq!(result, Err("fail-stop acknowledgement"));
         assert_eq!(queued, VecDeque::from([3]));
+    }
+
+    #[test]
+    fn empty_drain_after_peek_is_restart_required_without_panicking() {
+        assert!(matches!(
+            require_peeked_lane_work_effect(None),
+            Err(V2RunnerError::RestartRequired)
+        ));
     }
 
     fn context() -> (wire::HeightContext, Vec<KeyPair>) {
@@ -3726,7 +3768,13 @@ mod tests {
     ) -> CertifiedMergeSidecarChunkV1 {
         CertifiedMergeSidecarChunkV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            semantic_sequence: 1,
+            service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
+            stream_epoch: CertifiedMergeSidecarStreamEpochV1(
+                NonZeroU64::new(1).expect("runner sidecar stream epoch is non-zero"),
+            ),
+            semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1(
+                NonZeroU64::new(1).expect("runner semantic sequence is non-zero"),
+            ),
             request_id: Hash::new(label),
             entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"runner sidecar entry")),
             encoded_len: 4,
@@ -4029,6 +4077,182 @@ mod tests {
     }
 
     #[test]
+    fn direct_close_ack_retains_reply_route_from_lane_through_worker() {
+        let super::super::v2_lane_work::tests::CertifiedSidecarServerFixture {
+            mut adapter,
+            validators,
+            kura,
+            context,
+            local_validator,
+            requester,
+            request,
+        } = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+        let mut services =
+            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
+                kura,
+                context,
+                &validators,
+                local_validator,
+            );
+        services.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+        let reply_route = routes.mint(requester.clone());
+        let mut close = CertifiedMergeSidecarCloseV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            service_generation: request.service_generation,
+            stream_epoch: request.stream_epoch,
+            closed_through: request.semantic_sequence.get(),
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: requester.clone(),
+            responder: request.responder,
+        };
+        close.close_id = close.canonical_close_id();
+
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::CertifiedMergeSidecar {
+                    sender: requester,
+                    reply_route: Some(reply_route.clone()),
+                    message: CertifiedMergeSidecarMessage::Close(close),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert!(matches!(
+            adapter.next_effect(),
+            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                reply_routes: Some(reply_routes),
+                message,
+                ..
+            }) if reply_routes
+                .iter()
+                .any(|route| route.same_delivery(&reply_route))
+                && matches!(
+                    message.as_ref(),
+                    CertifiedMergeSidecarMessage::CloseAck(_)
+                )
+        ));
+        let mut malformed = adapter
+            .next_effect()
+            .expect("the direct CloseAck remains lane-owned before dispatch");
+        let V2LaneWorkEffect::PostCertifiedMergeSidecar { reply_routes, .. } = &mut malformed
+        else {
+            unreachable!("the direct CloseAck keeps its sidecar effect kind")
+        };
+        *reply_routes = None;
+        assert!(
+            dispatch_lane_work_effect(&services, malformed)
+                .expect_err("a responder control without its return route is malformed")
+                .to_string()
+                .contains("reply-route ownership")
+        );
+
+        dispatch_lane_work_effects(&mut adapter, &services, 1)
+            .expect("dispatch the direct CloseAck through exact output");
+        assert_eq!(adapter.effect_count(), 0);
+        assert!(
+            services
+                .retains_reply_route_for_test(&reply_route)
+                .expect("inspect direct CloseAck route in worker ownership")
+        );
+    }
+
+    #[test]
+    fn relayed_generation_hint_is_route_free_from_lane_through_worker() {
+        let super::super::v2_lane_work::tests::CertifiedSidecarServerFixture {
+            mut adapter,
+            validators,
+            kura,
+            context,
+            local_validator,
+            requester,
+            request,
+        } = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+        adapter
+            .roll_merge_sidecar_service_generation_for_test()
+            .expect("advance the quiescent responder generation");
+        let mut services =
+            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
+                kura,
+                context,
+                &validators,
+                local_validator,
+            );
+        services.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
+        let reply_route = routes.mint_via(requester.clone(), hub);
+
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::CertifiedMergeSidecar {
+                    sender: requester.clone(),
+                    reply_route: Some(reply_route.clone()),
+                    message: CertifiedMergeSidecarMessage::Request(request),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert!(matches!(
+            adapter.next_effect(),
+            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                reply_routes: None,
+                message,
+                ..
+            }) if matches!(
+                    message.as_ref(),
+                    CertifiedMergeSidecarMessage::GenerationHint(_)
+                )
+        ));
+
+        let mut malformed = adapter
+            .next_effect()
+            .expect("the route-free GenerationHint remains lane-owned before dispatch");
+        let V2LaneWorkEffect::PostCertifiedMergeSidecar { reply_routes, .. } = &mut malformed
+        else {
+            unreachable!("the GenerationHint keeps its sidecar effect kind")
+        };
+        *reply_routes = Some(
+            NetworkReplyRoutes::try_from_route(reply_route.clone())
+                .expect("construct an adversarial routed Hint"),
+        );
+        assert!(
+            dispatch_lane_work_effect(&services, malformed)
+                .expect_err("a GenerationHint with reply-route ownership is malformed")
+                .to_string()
+                .contains("reply-route ownership")
+        );
+
+        dispatch_lane_work_effects(&mut adapter, &services, 1)
+            .expect("dispatch the route-free GenerationHint through exact output");
+        assert_eq!(adapter.effect_count(), 0);
+        assert!(
+            services
+                .retains_route_free_generation_hint_for_test(&requester)
+                .expect("inspect route-free GenerationHint worker ownership")
+        );
+        assert!(
+            !services
+                .retains_reply_route_for_test(&reply_route)
+                .expect("the triggering request route must not escape into Hint ownership")
+        );
+    }
+
+    #[test]
     fn runner_dispatch_prunes_retired_sidecar_source_without_losing_live_sibling() {
         let (mut services, keys) = super::super::v2_worker::tests::fixture();
         services.set_exact_output_admission_hook(|post, ticket| {
@@ -4188,7 +4412,8 @@ mod tests {
                     CertifiedMergeSidecarMessage::Chunk(chunk) => &chunk.request_id,
                     CertifiedMergeSidecarMessage::Request(_)
                     | CertifiedMergeSidecarMessage::Close(_)
-                    | CertifiedMergeSidecarMessage::CloseAck(_) => {
+                    | CertifiedMergeSidecarMessage::CloseAck(_)
+                    | CertifiedMergeSidecarMessage::GenerationHint(_) => {
                         panic!("retained sidecar filler changed into a request")
                     }
                 },

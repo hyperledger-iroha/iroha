@@ -17,6 +17,18 @@ DEFAULT_TORII_ADDRESS = "0.0.0.0:18080"
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
 MAX_VALIDATORS = 128
+TAIRA_CHAIN_DISCRIMINANT = 369
+TAIRA_DS_ASSET_ALIAS = "ds#boi.is"
+TAIRA_DS_ASSET_SCALE = 2
+BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+I105_ALPHABET = tuple(BASE58_ALPHABET) + (
+    "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
+    "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
+    "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
+)
+I105_INDEX = {symbol: index for index, symbol in enumerate(I105_ALPHABET)}
+I105_CHECKSUM_LEN = 6
+I105_BECH32M_CONST = 0x2BC830A3
 
 
 @dataclass(frozen=True)
@@ -55,6 +67,11 @@ class SharedSecrets:
     account_onboarding_scope_dataspace: str | None = None
     torii_faucet_authority: str | None = None
     torii_faucet_private_key: str | None = None
+    kagemusha_commands_private_key: str | None = None
+    offline_asset_alias: str | None = None
+    offline_asset_definition_id: str | None = None
+    offline_asset_scale: int | None = None
+    offline_escrow_account: str | None = None
     streaming_identity_public_key: str | None = None
     streaming_identity_private_key: str | None = None
     sorafs_council_public_keys: tuple[str, ...] = ()
@@ -129,6 +146,129 @@ def _scaled_sumeragi_body_bytes(
 def _quote_toml(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
+
+
+def _decode_base_digits(digits: list[int], base: int) -> bytes:
+    value = 0
+    for digit in digits:
+        value = value * base + digit
+    decoded = value.to_bytes((value.bit_length() + 7) // 8, "big") if value else b""
+    leading_zeroes = 0
+    for digit in digits:
+        if digit != 0:
+            break
+        leading_zeroes += 1
+    return b"\0" * leading_zeroes + decoded
+
+
+def _convert_to_base32(data: bytes) -> list[int]:
+    accumulator = 0
+    bits = 0
+    result: list[int] = []
+    for byte in data:
+        accumulator = (accumulator << 8) | byte
+        bits += 8
+        while bits >= 5:
+            bits -= 5
+            result.append((accumulator >> bits) & 0x1F)
+    if bits:
+        result.append((accumulator << (5 - bits)) & 0x1F)
+    return result
+
+
+def _bech32_polymod(values: list[int]) -> int:
+    generators = (0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)
+    checksum = 1
+    for value in values:
+        top = checksum >> 25
+        checksum = ((checksum & 0x1FF_FFFF) << 5) ^ value
+        for index, generator in enumerate(generators):
+            if (top >> index) & 1:
+                checksum ^= generator
+    return checksum
+
+
+def _i105_checksum_digits(canonical: bytes) -> list[int]:
+    values = [ord(character) >> 5 for character in "snx"]
+    values.append(0)
+    values.extend(ord(character) & 0x1F for character in "snx")
+    values.extend(_convert_to_base32(canonical))
+    values.extend([0] * I105_CHECKSUM_LEN)
+    polymod = _bech32_polymod(values) ^ I105_BECH32M_CONST
+    return [
+        (polymod >> (5 * (I105_CHECKSUM_LEN - 1 - index))) & 0x1F
+        for index in range(I105_CHECKSUM_LEN)
+    ]
+
+
+def _encode_taira_i105(canonical: bytes) -> str:
+    leading_zeroes = len(canonical) - len(canonical.lstrip(b"\0"))
+    value = int.from_bytes(canonical, "big")
+    digits: list[int] = []
+    while value:
+        value, remainder = divmod(value, len(I105_ALPHABET))
+        digits.append(remainder)
+    encoded_digits = [0] * leading_zeroes + list(reversed(digits))
+    if not encoded_digits:
+        encoded_digits = [0]
+    return "test" + "".join(
+        I105_ALPHABET[digit]
+        for digit in (*encoded_digits, *_i105_checksum_digits(canonical))
+    )
+
+
+def _validate_taira_i105_account(value: str, context: str) -> None:
+    if not value.startswith("test") or value != value.strip() or "@" in value:
+        raise ValueError(f"{context} must be an exact canonical Taira I105 account id")
+    payload = value[len("test") :]
+    try:
+        digits = [I105_INDEX[symbol] for symbol in payload]
+    except KeyError as error:
+        raise ValueError(
+            f"{context} must be an exact canonical Taira I105 account id"
+        ) from error
+    if len(digits) <= I105_CHECKSUM_LEN:
+        raise ValueError(f"{context} must be an exact canonical Taira I105 account id")
+    canonical = _decode_base_digits(digits[:-I105_CHECKSUM_LEN], len(I105_ALPHABET))
+    if digits[-I105_CHECKSUM_LEN:] != _i105_checksum_digits(canonical):
+        raise ValueError(f"{context} must be an exact canonical Taira I105 account id")
+    if _encode_taira_i105(canonical) != value:
+        raise ValueError(f"{context} must be an exact canonical Taira I105 account id")
+
+
+def _validate_asset_definition_id(value: str, context: str) -> None:
+    try:
+        index = {symbol: offset for offset, symbol in enumerate(BASE58_ALPHABET)}
+        digits = [index[symbol] for symbol in value]
+    except KeyError as error:
+        raise ValueError(
+            f"{context} must be an exact canonical asset definition id"
+        ) from error
+    decoded = _decode_base_digits(digits, len(BASE58_ALPHABET))
+    if len(decoded) != 21 or decoded[0] != 1:
+        raise ValueError(f"{context} must be an exact canonical asset definition id")
+    aid_bytes = decoded[1:17]
+    if aid_bytes[6] >> 4 != 4 or aid_bytes[8] & 0xC0 != 0x80:
+        raise ValueError(f"{context} must encode UUIDv4 asset-definition bytes")
+    try:
+        import blake3
+    except ModuleNotFoundError as error:  # pragma: no cover - environment specific
+        raise SystemExit(
+            "install scripts/requirements.txt before rendering Taira bundles"
+        ) from error
+    if decoded[17:] != blake3.blake3(decoded[:17]).digest()[:4]:
+        raise ValueError(f"{context} asset definition checksum is invalid")
+    canonical_digits: list[int] = []
+    integer = int.from_bytes(decoded, "big")
+    while integer:
+        integer, remainder = divmod(integer, len(BASE58_ALPHABET))
+        canonical_digits.append(remainder)
+    leading_zeroes = len(decoded) - len(decoded.lstrip(b"\0"))
+    canonical = "1" * leading_zeroes + "".join(
+        BASE58_ALPHABET[digit] for digit in reversed(canonical_digits)
+    )
+    if canonical != value:
+        raise ValueError(f"{context} must be an exact canonical asset definition id")
 
 
 def _format_literal(tag: str, body: str) -> str:
@@ -252,6 +392,61 @@ def _validate_account_onboarding_secrets(
                 f"{context} account onboarding must set exactly one of "
                 "account_onboarding_scope_domain or account_onboarding_scope_dataspace"
             )
+        if shared.account_onboarding_scope_domain is not None:
+            raise ValueError(
+                f"{context} BOI/Taira onboarding must use the deployed `is` dataspace, not a domain"
+            )
+        if shared.account_onboarding_scope_dataspace != "is":
+            raise ValueError(
+                f"{context} BOI/Taira onboarding dataspace must be exactly `is`"
+            )
+
+
+def _validate_mandatory_offline_secrets(
+    shared: SharedSecrets, context: str
+) -> None:
+    required = {
+        "kagemusha_commands_private_key": shared.kagemusha_commands_private_key,
+        "offline_asset_alias": shared.offline_asset_alias,
+        "offline_asset_definition_id": shared.offline_asset_definition_id,
+        "offline_asset_scale": shared.offline_asset_scale,
+        "offline_escrow_account": shared.offline_escrow_account,
+    }
+    missing = [key for key, value in required.items() if value is None]
+    if missing:
+        raise ValueError(
+            f"{context} offline cash configuration is mandatory; missing "
+            + ", ".join(missing)
+        )
+    placeholders = [
+        key
+        for key, value in required.items()
+        if isinstance(value, str) and value.startswith("REPLACE_WITH_")
+    ]
+    if placeholders:
+        raise ValueError(
+            f"{context} offline cash fields still contain placeholders: "
+            + ", ".join(placeholders)
+        )
+    if shared.offline_asset_alias != TAIRA_DS_ASSET_ALIAS:
+        raise ValueError(
+            f"{context} offline_asset_alias must be the registered {TAIRA_DS_ASSET_ALIAS} alias"
+        )
+    if (
+        type(shared.offline_asset_scale) is not int
+        or shared.offline_asset_scale != TAIRA_DS_ASSET_SCALE
+    ):
+        raise ValueError(
+            f"{context} offline_asset_scale must be {TAIRA_DS_ASSET_SCALE}"
+        )
+    _validate_asset_definition_id(
+        shared.offline_asset_definition_id or "",
+        f"{context} offline_asset_definition_id",
+    )
+    _validate_taira_i105_account(
+        shared.offline_escrow_account or "",
+        f"{context} offline_escrow_account",
+    )
 
 
 def _load_validator_tables(payload: dict[str, Any], context: str) -> list[dict[str, Any]]:
@@ -445,6 +640,19 @@ def load_secret_material(path: Path) -> SecretMaterial:
         torii_faucet_private_key=_optional_string(
             shared_raw, "torii_faucet_private_key", f"secrets file `{path}`"
         ),
+        kagemusha_commands_private_key=_optional_string(
+            shared_raw, "kagemusha_commands_private_key", f"secrets file `{path}`"
+        ),
+        offline_asset_alias=_optional_string(
+            shared_raw, "offline_asset_alias", f"secrets file `{path}`"
+        ),
+        offline_asset_definition_id=_optional_string(
+            shared_raw, "offline_asset_definition_id", f"secrets file `{path}`"
+        ),
+        offline_asset_scale=shared_raw.get("offline_asset_scale"),
+        offline_escrow_account=_optional_string(
+            shared_raw, "offline_escrow_account", f"secrets file `{path}`"
+        ),
         streaming_identity_public_key=_optional_string(
             shared_raw, "streaming_identity_public_key", f"secrets file `{path}`"
         ),
@@ -460,7 +668,7 @@ def load_secret_material(path: Path) -> SecretMaterial:
             f"secrets file `{path}` must configure both torii_faucet_authority "
             "and torii_faucet_private_key"
         )
-
+    _validate_mandatory_offline_secrets(shared, f"secrets file `{path}`")
     return SecretMaterial(
         validators=secrets,
         shared=shared,
@@ -863,6 +1071,27 @@ def render_validator_config(
             and shared.torii_faucet_authority is not None
         ):
             rendered.append(f'authority = {_quote_toml(shared.torii_faucet_authority)}')
+            continue
+        if (
+            current_section == "[torii.kagemusha_commands]"
+            and stripped.startswith("private_key = ")
+            and shared.kagemusha_commands_private_key is not None
+        ):
+            rendered.append(
+                f'private_key = {_quote_toml(shared.kagemusha_commands_private_key)}'
+            )
+            continue
+        if (
+            current_section == "[settlement.offline]"
+            and stripped.startswith("escrow_accounts = ")
+            and shared.offline_asset_definition_id is not None
+            and shared.offline_escrow_account is not None
+        ):
+            rendered.append(
+                "escrow_accounts = { "
+                f"{_quote_toml(shared.offline_asset_definition_id)} = "
+                f'{_quote_toml(shared.offline_escrow_account)} }}'
+            )
             continue
         if (
             current_section == "[torii.faucet]"

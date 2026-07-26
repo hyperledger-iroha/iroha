@@ -143,11 +143,8 @@ fn transfer_numeric_asset_for_vpn(
     amount: &Quantity,
     source_policy: NumericAssetTransferSourcePolicy,
 ) -> Result<TransferDeltaTranscript, Error> {
-    let control_update = prepare_outbound_asset_transfer_control_update(
-        state_transaction,
-        source_id,
-        amount,
-    )?;
+    let control_update =
+        prepare_outbound_asset_transfer_control_update(state_transaction, source_id, amount)?;
     let (source_id, destination_id, delta) = apply_numeric_asset_transfer_delta(
         state_transaction,
         source_id,

@@ -2519,6 +2519,9 @@ macro_rules! production_reliable_flush_trace_body {
                 refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
                 refinement_tag_value!(IDENTITY_KIND_SIDECAR_REQUEST)
             )
+            && $projection.service_generation > 0u64
+            && $projection.stream_epoch > 0u64
+            && $projection.semantic_sequence > 0u64
             && canonical_identity_is_typed_body!(
                 $projection.entry_hash,
                 refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
@@ -2630,6 +2633,9 @@ macro_rules! production_reliable_flush_application_body {
                 refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
                 refinement_tag_value!(IDENTITY_KIND_SIDECAR_REQUEST)
             )
+            && $projection.service_generation > 0u64
+            && $projection.stream_epoch > 0u64
+            && $projection.semantic_sequence > 0u64
             && canonical_identity_is_typed_body!(
                 $projection.entry_hash,
                 refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
@@ -2662,6 +2668,12 @@ macro_rules! production_reliable_flush_application_body {
                 refinement_tag_value!(IDENTITY_KIND_SIDECAR_PAYLOAD)
             )
             && canonical_identity_equal_body!($projection.request_id, $projection.marker_request_id)
+            && $projection.marker_service_generation > 0u64
+            && $projection.marker_stream_epoch > 0u64
+            && $projection.marker_semantic_sequence > 0u64
+            && $projection.service_generation == $projection.marker_service_generation
+            && $projection.stream_epoch == $projection.marker_stream_epoch
+            && $projection.semantic_sequence == $projection.marker_semantic_sequence
             && canonical_identity_equal_body!($projection.entry_hash, $projection.marker_entry_hash)
             && $projection.encoded_len == $projection.marker_encoded_len
             && $projection.epoch_id == $projection.marker_epoch_id
@@ -2895,12 +2907,28 @@ macro_rules! production_reliable_flush_two_phase_link_body {
             && $worker.ticket_id == $application.ticket_id
             && $worker.ticket_rank == $application.ticket_rank
             && $worker.ticket_topic == $application.ticket_topic
+            && $worker.reply_writer_timeout_attempt == $application.reply_writer_timeout_attempt
             && canonical_identity_equal_body!(
                 $worker.canonical_request_digest,
                 $application.canonical_request_digest
             )
             && $worker.stream_wire_bytes == $application.stream_wire_bytes
             && canonical_identity_equal_body!($worker.request_id, $application.request_id)
+            && $worker.service_generation > 0u64
+            && $application.service_generation > 0u64
+            && $application.marker_service_generation > 0u64
+            && $worker.service_generation == $application.service_generation
+            && $worker.service_generation == $application.marker_service_generation
+            && $worker.stream_epoch > 0u64
+            && $application.stream_epoch > 0u64
+            && $application.marker_stream_epoch > 0u64
+            && $worker.stream_epoch == $application.stream_epoch
+            && $worker.stream_epoch == $application.marker_stream_epoch
+            && $worker.semantic_sequence > 0u64
+            && $application.semantic_sequence > 0u64
+            && $application.marker_semantic_sequence > 0u64
+            && $worker.semantic_sequence == $application.semantic_sequence
+            && $worker.semantic_sequence == $application.marker_semantic_sequence
             && canonical_identity_equal_body!($worker.entry_hash, $application.entry_hash)
             && $worker.encoded_len == $application.encoded_len
             && $worker.epoch_id == $application.epoch_id
@@ -3721,6 +3749,11 @@ pub struct ProductionTwoStageRelayRetryTraceProjection {
 }
 
 /// Primitive per-source sidecar-flush cursor movement.
+///
+/// `stream_epoch` retains the non-zero durable request-stream incarnation,
+/// `service_generation` binds it to one responder service lifetime, and
+/// `semantic_sequence` identifies the occurrence within that stream. All
+/// three are independent of the merge reference's `epoch_id`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionReliableFlushTraceProjection {
     pub(crate) status: u8,
@@ -3738,9 +3771,13 @@ pub struct ProductionReliableFlushTraceProjection {
     pub(crate) ticket_id: u64,
     pub(crate) ticket_rank: u64,
     pub(crate) ticket_topic: u8,
+    pub(crate) reply_writer_timeout_attempt: u8,
     pub(crate) canonical_request_digest: CanonicalIdentityProjection,
     pub(crate) stream_wire_bytes: u64,
     pub(crate) request_id: CanonicalIdentityProjection,
+    pub(crate) service_generation: u64,
+    pub(crate) stream_epoch: u64,
+    pub(crate) semantic_sequence: u64,
     pub(crate) entry_hash: CanonicalIdentityProjection,
     pub(crate) encoded_len: u64,
     pub(crate) epoch_id: u64,
@@ -3767,7 +3804,9 @@ pub struct ProductionReliableFlushTraceProjection {
 /// Identity fields mirror the worker projection so the formal harness can
 /// prove a non-vacuous two-phase link. The source-key, delivery-route, and
 /// writer-occurrence identities are process-local only and never enter wire,
-/// persistence, or consensus state. `marker_*` fields are independently
+/// persistence, or consensus state. `service_generation`, `stream_epoch`, and
+/// `semantic_sequence` are captured from the admitted occurrence, while their
+/// `marker_*` counterparts and the other marker fields are independently
 /// observed from the retained byte-free gate marker. Sibling state is both
 /// compared as exact records by production and committed to a fixed-width,
 /// domain-separated projection; it is never reduced to lane counts.
@@ -3787,9 +3826,13 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub(crate) ticket_id: u64,
     pub(crate) ticket_rank: u64,
     pub(crate) ticket_topic: u8,
+    pub(crate) reply_writer_timeout_attempt: u8,
     pub(crate) canonical_request_digest: CanonicalIdentityProjection,
     pub(crate) stream_wire_bytes: u64,
     pub(crate) request_id: CanonicalIdentityProjection,
+    pub(crate) service_generation: u64,
+    pub(crate) stream_epoch: u64,
+    pub(crate) semantic_sequence: u64,
     pub(crate) entry_hash: CanonicalIdentityProjection,
     pub(crate) encoded_len: u64,
     pub(crate) epoch_id: u64,
@@ -3805,6 +3848,9 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub(crate) chunk_cursor_before: u64,
     pub(crate) chunk_cursor_after: u64,
     pub(crate) marker_request_id: CanonicalIdentityProjection,
+    pub(crate) marker_service_generation: u64,
+    pub(crate) marker_stream_epoch: u64,
+    pub(crate) marker_semantic_sequence: u64,
     pub(crate) marker_entry_hash: CanonicalIdentityProjection,
     pub(crate) marker_encoded_len: u64,
     pub(crate) marker_epoch_id: u64,
@@ -8078,6 +8124,7 @@ mod tests {
             ticket_id: 3,
             ticket_rank: 1,
             ticket_topic: 3,
+            reply_writer_timeout_attempt: 4,
             canonical_request_digest: identity(
                 IDENTITY_DOMAIN_PAYLOAD,
                 IDENTITY_KIND_REPLY_PAYLOAD,
@@ -8085,6 +8132,9 @@ mod tests {
             ),
             stream_wire_bytes: 512,
             request_id: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST, 24),
+            service_generation: 6,
+            stream_epoch: 5,
+            semantic_sequence: 7,
             entry_hash: identity(IDENTITY_DOMAIN_PAYLOAD, IDENTITY_KIND_MERGE_ENTRY, 25),
             encoded_len: 256,
             epoch_id: 4,
@@ -8118,6 +8168,30 @@ mod tests {
         assert!(flush.chunk_index < flush.chunk_count);
         assert_eq!(flush.chunk_cursor_before, flush.chunk_index);
         assert!(flush.flushing_after <= flush.capacity);
+        assert!(
+            !production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                ProductionReliableFlushTraceProjection {
+                    stream_epoch: 0,
+                    ..flush
+                }
+            )
+        );
+        assert!(
+            !production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                ProductionReliableFlushTraceProjection {
+                    semantic_sequence: 0,
+                    ..flush
+                }
+            )
+        );
+        assert!(
+            !production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                ProductionReliableFlushTraceProjection {
+                    service_generation: 0,
+                    ..flush
+                }
+            )
+        );
         assert!(
             !production_reliable_flush_trace_refines_outbound_ownership_kernel(
                 ProductionReliableFlushTraceProjection {
@@ -8162,9 +8236,13 @@ mod tests {
             ticket_id: flush.ticket_id,
             ticket_rank: flush.ticket_rank,
             ticket_topic: flush.ticket_topic,
+            reply_writer_timeout_attempt: flush.reply_writer_timeout_attempt,
             canonical_request_digest: flush.canonical_request_digest,
             stream_wire_bytes: flush.stream_wire_bytes,
             request_id: flush.request_id,
+            service_generation: flush.service_generation,
+            stream_epoch: flush.stream_epoch,
+            semantic_sequence: flush.semantic_sequence,
             entry_hash: flush.entry_hash,
             encoded_len: flush.encoded_len,
             epoch_id: flush.epoch_id,
@@ -8180,6 +8258,9 @@ mod tests {
             chunk_cursor_before: flush.chunk_cursor_before,
             chunk_cursor_after: flush.chunk_cursor_after,
             marker_request_id: flush.request_id,
+            marker_service_generation: flush.service_generation,
+            marker_stream_epoch: flush.stream_epoch,
+            marker_semantic_sequence: flush.semantic_sequence,
             marker_entry_hash: flush.entry_hash,
             marker_encoded_len: flush.encoded_len,
             marker_epoch_id: flush.epoch_id,
@@ -8238,6 +8319,208 @@ mod tests {
         assert!(production_reliable_flush_application_refines_source_lane_kernel(lane_application));
         assert!(production_reliable_flush_two_phase_link_kernel(
             flush,
+            lane_application
+        ));
+        let disconnected_application_timeout_attempt =
+            ProductionReliableFlushApplicationProjection {
+                reply_writer_timeout_attempt: lane_application
+                    .reply_writer_timeout_attempt
+                    .saturating_add(1),
+                ..lane_application
+            };
+        assert!(
+            production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_application_timeout_attempt
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_application_timeout_attempt
+        ));
+        let disconnected_worker_timeout_attempt = ProductionReliableFlushTraceProjection {
+            reply_writer_timeout_attempt: flush.reply_writer_timeout_attempt.saturating_add(1),
+            ..flush
+        };
+        assert!(
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                disconnected_worker_timeout_attempt
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            disconnected_worker_timeout_attempt,
+            lane_application
+        ));
+
+        let zero_stream_epoch_application = ProductionReliableFlushApplicationProjection {
+            stream_epoch: 0,
+            marker_stream_epoch: 0,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                zero_stream_epoch_application
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            ProductionReliableFlushTraceProjection {
+                stream_epoch: 0,
+                ..flush
+            },
+            zero_stream_epoch_application
+        ));
+        let disconnected_marker_stream_epoch = ProductionReliableFlushApplicationProjection {
+            marker_stream_epoch: lane_application.marker_stream_epoch + 1,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_marker_stream_epoch
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_marker_stream_epoch
+        ));
+        let disconnected_occurrence_stream_epoch = ProductionReliableFlushApplicationProjection {
+            stream_epoch: lane_application.stream_epoch + 1,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_occurrence_stream_epoch
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_occurrence_stream_epoch
+        ));
+        let disconnected_worker_stream_epoch = ProductionReliableFlushTraceProjection {
+            stream_epoch: flush.stream_epoch + 1,
+            ..flush
+        };
+        assert!(
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                disconnected_worker_stream_epoch
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            disconnected_worker_stream_epoch,
+            lane_application
+        ));
+
+        let zero_service_generation_application = ProductionReliableFlushApplicationProjection {
+            service_generation: 0,
+            marker_service_generation: 0,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                zero_service_generation_application
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            ProductionReliableFlushTraceProjection {
+                service_generation: 0,
+                ..flush
+            },
+            zero_service_generation_application
+        ));
+        let disconnected_marker_service_generation = ProductionReliableFlushApplicationProjection {
+            marker_service_generation: lane_application.marker_service_generation + 1,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_marker_service_generation
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_marker_service_generation
+        ));
+        let disconnected_occurrence_service_generation =
+            ProductionReliableFlushApplicationProjection {
+                service_generation: lane_application.service_generation + 1,
+                ..lane_application
+            };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_occurrence_service_generation
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_occurrence_service_generation
+        ));
+        let disconnected_worker_service_generation = ProductionReliableFlushTraceProjection {
+            service_generation: flush.service_generation + 1,
+            ..flush
+        };
+        assert!(
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                disconnected_worker_service_generation
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            disconnected_worker_service_generation,
+            lane_application
+        ));
+
+        let zero_semantic_sequence_application = ProductionReliableFlushApplicationProjection {
+            semantic_sequence: 0,
+            marker_semantic_sequence: 0,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                zero_semantic_sequence_application
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            ProductionReliableFlushTraceProjection {
+                semantic_sequence: 0,
+                ..flush
+            },
+            zero_semantic_sequence_application
+        ));
+        let disconnected_marker_semantic_sequence = ProductionReliableFlushApplicationProjection {
+            marker_semantic_sequence: lane_application.marker_semantic_sequence + 1,
+            ..lane_application
+        };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_marker_semantic_sequence
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_marker_semantic_sequence
+        ));
+        let disconnected_occurrence_semantic_sequence =
+            ProductionReliableFlushApplicationProjection {
+                semantic_sequence: lane_application.semantic_sequence + 1,
+                ..lane_application
+            };
+        assert!(
+            !production_reliable_flush_application_refines_source_lane_kernel(
+                disconnected_occurrence_semantic_sequence
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            flush,
+            disconnected_occurrence_semantic_sequence
+        ));
+        let disconnected_worker_semantic_sequence = ProductionReliableFlushTraceProjection {
+            semantic_sequence: flush.semantic_sequence + 1,
+            ..flush
+        };
+        assert!(
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(
+                disconnected_worker_semantic_sequence
+            )
+        );
+        assert!(!production_reliable_flush_two_phase_link_kernel(
+            disconnected_worker_semantic_sequence,
             lane_application
         ));
 

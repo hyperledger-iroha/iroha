@@ -3798,6 +3798,11 @@ pub struct ProductionTwoStageRelayRetryTraceProjection {
 }
 
 /// Verus-side primitive writer-flush ownership trace.
+///
+/// `stream_epoch` retains the non-zero durable request-stream incarnation,
+/// `service_generation` binds it to one responder service lifetime, and
+/// `semantic_sequence` identifies the occurrence within that stream. All
+/// three are independent of the merge reference's `epoch_id`.
 #[derive(Copy, Clone)]
 pub struct ProductionReliableFlushTraceProjection {
     pub status: u8,
@@ -3815,9 +3820,13 @@ pub struct ProductionReliableFlushTraceProjection {
     pub ticket_id: u64,
     pub ticket_rank: u64,
     pub ticket_topic: u8,
+    pub reply_writer_timeout_attempt: u8,
     pub canonical_request_digest: CanonicalIdentityProjection,
     pub stream_wire_bytes: u64,
     pub request_id: CanonicalIdentityProjection,
+    pub service_generation: u64,
+    pub stream_epoch: u64,
+    pub semantic_sequence: u64,
     pub entry_hash: CanonicalIdentityProjection,
     pub encoded_len: u64,
     pub epoch_id: u64,
@@ -3840,6 +3849,10 @@ pub struct ProductionReliableFlushTraceProjection {
 }
 
 /// Verus-side exact lane application of one actor-confirmed writer flush.
+///
+/// `service_generation`, `stream_epoch`, and `semantic_sequence` are captured
+/// from the admitted occurrence, while their `marker_*` counterparts are
+/// independently observed from the retained byte-free gate marker.
 #[derive(Copy, Clone)]
 pub struct ProductionReliableFlushApplicationProjection {
     pub semantic_target: CanonicalIdentityProjection,
@@ -3856,9 +3869,13 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub ticket_id: u64,
     pub ticket_rank: u64,
     pub ticket_topic: u8,
+    pub reply_writer_timeout_attempt: u8,
     pub canonical_request_digest: CanonicalIdentityProjection,
     pub stream_wire_bytes: u64,
     pub request_id: CanonicalIdentityProjection,
+    pub service_generation: u64,
+    pub stream_epoch: u64,
+    pub semantic_sequence: u64,
     pub entry_hash: CanonicalIdentityProjection,
     pub encoded_len: u64,
     pub epoch_id: u64,
@@ -3874,6 +3891,9 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub chunk_cursor_before: u64,
     pub chunk_cursor_after: u64,
     pub marker_request_id: CanonicalIdentityProjection,
+    pub marker_service_generation: u64,
+    pub marker_stream_epoch: u64,
+    pub marker_semantic_sequence: u64,
     pub marker_entry_hash: CanonicalIdentityProjection,
     pub marker_encoded_len: u64,
     pub marker_epoch_id: u64,
@@ -4694,6 +4714,25 @@ pub proof fn production_reliable_flush_trace_refines_outbound_ownership(
             production_reliable_flush_application_projection(application),
         ),
         worker.status == 2u8,
+        worker.stream_epoch > 0u64,
+        application.stream_epoch > 0u64,
+        application.marker_stream_epoch > 0u64,
+        worker.stream_epoch == application.stream_epoch,
+        worker.stream_epoch == application.marker_stream_epoch,
+        application.stream_epoch == application.marker_stream_epoch,
+        worker.service_generation > 0u64,
+        application.service_generation > 0u64,
+        application.marker_service_generation > 0u64,
+        worker.service_generation == application.service_generation,
+        worker.service_generation == application.marker_service_generation,
+        application.service_generation == application.marker_service_generation,
+        worker.semantic_sequence > 0u64,
+        application.semantic_sequence > 0u64,
+        application.marker_semantic_sequence > 0u64,
+        worker.semantic_sequence == application.semantic_sequence,
+        worker.semantic_sequence == application.marker_semantic_sequence,
+        application.semantic_sequence == application.marker_semantic_sequence,
+        worker.reply_writer_timeout_attempt == application.reply_writer_timeout_attempt,
         application.claim_acquired,
         application.gate_marker_present_before,
         !application.gate_marker_present_after,
@@ -4735,6 +4774,158 @@ pub proof fn production_reliable_flush_trace_refines_outbound_ownership(
         production_reliable_flush_trace_projection(worker),
         production_reliable_flush_application_projection(application),
     ));
+}
+
+/// A durable writer occurrence without a stream incarnation cannot satisfy
+/// the worker-side ownership kernel.
+pub proof fn production_reliable_flush_trace_rejects_zero_stream_epoch(
+    worker: ProductionReliableFlushTraceProjection,
+)
+    requires
+        worker.stream_epoch == 0u64,
+    ensures
+        !production_reliable_flush_trace_refines_outbound_ownership_kernel(worker),
+{
+    reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
+}
+
+/// A writer occurrence without a responder service lifetime cannot satisfy the
+/// worker-side ownership kernel.
+pub proof fn production_reliable_flush_trace_rejects_zero_service_generation(
+    worker: ProductionReliableFlushTraceProjection,
+)
+    requires
+        worker.service_generation == 0u64,
+    ensures
+        !production_reliable_flush_trace_refines_outbound_ownership_kernel(worker),
+{
+    reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
+}
+
+/// A writer occurrence without a semantic sequence cannot satisfy the
+/// worker-side ownership kernel.
+pub proof fn production_reliable_flush_trace_rejects_zero_semantic_sequence(
+    worker: ProductionReliableFlushTraceProjection,
+)
+    requires
+        worker.semantic_sequence == 0u64,
+    ensures
+        !production_reliable_flush_trace_refines_outbound_ownership_kernel(worker),
+{
+    reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
+}
+
+/// Lane application rejects either an absent stream incarnation or a marker
+/// retained from a different incarnation.
+pub proof fn production_reliable_flush_application_rejects_disconnected_stream_epoch(
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        application.stream_epoch == 0u64
+            || application.marker_stream_epoch == 0u64
+            || application.stream_epoch != application.marker_stream_epoch,
+    ensures
+        !production_reliable_flush_application_refines_source_lane_kernel(application),
+{
+    reveal(production_reliable_flush_application_refines_source_lane_kernel);
+}
+
+/// Lane application rejects an erased responder service lifetime or a gate
+/// marker retained from a different service lifetime.
+pub proof fn production_reliable_flush_application_rejects_disconnected_service_generation(
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        application.service_generation == 0u64
+            || application.marker_service_generation == 0u64
+            || application.service_generation != application.marker_service_generation,
+    ensures
+        !production_reliable_flush_application_refines_source_lane_kernel(application),
+{
+    reveal(production_reliable_flush_application_refines_source_lane_kernel);
+}
+
+/// Lane application rejects an erased semantic occurrence or a gate marker
+/// retained from a different request sequence.
+pub proof fn production_reliable_flush_application_rejects_disconnected_semantic_sequence(
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        application.semantic_sequence == 0u64
+            || application.marker_semantic_sequence == 0u64
+            || application.semantic_sequence != application.marker_semantic_sequence,
+    ensures
+        !production_reliable_flush_application_refines_source_lane_kernel(application),
+{
+    reveal(production_reliable_flush_application_refines_source_lane_kernel);
+}
+
+/// Worker confirmation and lane application cannot be linked across distinct
+/// durable stream incarnations.
+pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_stream_epoch(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        worker.stream_epoch == 0u64
+            || application.stream_epoch == 0u64
+            || application.marker_stream_epoch == 0u64
+            || worker.stream_epoch != application.stream_epoch
+            || worker.stream_epoch != application.marker_stream_epoch,
+    ensures
+        !production_reliable_flush_two_phase_link_kernel(worker, application),
+{
+    reveal(production_reliable_flush_two_phase_link_kernel);
+}
+
+/// Worker confirmation and lane application cannot be linked across distinct
+/// responder service lifetimes.
+pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_service_generation(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        worker.service_generation == 0u64
+            || application.service_generation == 0u64
+            || application.marker_service_generation == 0u64
+            || worker.service_generation != application.service_generation
+            || worker.service_generation != application.marker_service_generation,
+    ensures
+        !production_reliable_flush_two_phase_link_kernel(worker, application),
+{
+    reveal(production_reliable_flush_two_phase_link_kernel);
+}
+
+/// Worker confirmation and lane application cannot be linked across distinct
+/// semantic request occurrences.
+pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_semantic_sequence(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        worker.semantic_sequence == 0u64
+            || application.semantic_sequence == 0u64
+            || application.marker_semantic_sequence == 0u64
+            || worker.semantic_sequence != application.semantic_sequence
+            || worker.semantic_sequence != application.marker_semantic_sequence,
+    ensures
+        !production_reliable_flush_two_phase_link_kernel(worker, application),
+{
+    reveal(production_reliable_flush_two_phase_link_kernel);
+}
+
+/// Worker confirmation and lane application cannot be linked across distinct
+/// adaptive writer-timeout generations.
+pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_timeout_attempt(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        worker.reply_writer_timeout_attempt != application.reply_writer_timeout_attempt,
+    ensures
+        !production_reliable_flush_two_phase_link_kernel(worker, application),
+{
+    reveal(production_reliable_flush_two_phase_link_kernel);
 }
 
 /// A returned application completion binds the task to the exact durable

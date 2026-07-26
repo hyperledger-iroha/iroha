@@ -28,6 +28,7 @@ transaction_gossip_period_ms = 1_000
 transaction_gossip_resend_ticks = 3
 transaction_gossip_size = 500
 idle_timeout_ms = 10_000
+reply_writer_flush_timeout_ms = 10_000
 
 [torii]
 address = "addr:localhost:5000#A9D1"
@@ -127,7 +128,6 @@ capacity_per_user = 65_536
 transaction_time_to_live_ms = 100
 expired_cull_interval_ms = 1_000
 expired_cull_batch = 256
-plan_journal_enabled = true
 plan_journal_max_bytes = 67_108_864
 
 [snapshot]
