@@ -678,24 +678,27 @@ BY Isa
        ContextRecords, Heights, ModelConfiguration, ValidatorIds
 
 THEOREM IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress ==
-  /\ IndexedChainSpec
+  /\ IndexedLiveChainSpec
   /\ IndexedExactHistoricalRecoveryProgress
   /\ IndexedSuccessorActivationProgress
   /\ VerificationOneHeightCompletion
   => IndexedExactHeightLivenessProperty
 PROOF
-  <1>1. ASSUME IndexedChainSpec,
+  <1>1. ASSUME IndexedLiveChainSpec,
               IndexedExactHistoricalRecoveryProgress,
               IndexedSuccessorActivationProgress,
               VerificationOneHeightCompletion
          PROVE IndexedExactHeightLivenessProperty
+    <2>0. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
     <2>1. IndexedHeightLivenessProperty
       BY <1>1, HeightLivenessFromOneHeightAndExactRecoveryProgress
     <2>2. CASE VerificationContext \in AdmissibleContextRecords
       <3>1. (IndexedTargetJoined(VerificationContext)
                /\ IndexedContextCompleted(VerificationContext))
                ~> IndexedExactContextCompleted(VerificationContext)
-        BY <1>1, <2>2, IndexedProjectedCompletionReachesExactCompletion
+        BY <1>1, <2>0, <2>2,
+           IndexedProjectedCompletionReachesExactCompletion
       <3>2. IndexedTargetJoined(VerificationContext)
                /\ [IndexedChainNext]_IndexedChainVars
                => IndexedTargetJoined(VerificationContext)'
@@ -710,17 +713,20 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedExactHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs ==
-  /\ IndexedChainSpec
+  /\ IndexedLiveChainSpec
   /\ IndexedHistoricalRecoveryTemporalPrerequisites
   => IndexedExactHeightLivenessProperty
 PROOF
-  <1>1. ASSUME IndexedChainSpec,
+  <1>1. ASSUME IndexedLiveChainSpec,
               IndexedHistoricalRecoveryTemporalPrerequisites
          PROVE IndexedExactHeightLivenessProperty
+    <2>0. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
     <2>1. IndexedExactHistoricalRecoveryProgress
-      BY <1>1, IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites
+      BY <1>1, <2>0,
+         IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites
     <2>2. IndexedSuccessorActivationProgress
-      BY <1>1, IndexedSuccessorActivationProgressFromStarvationProof
+      BY <2>0, IndexedSuccessorActivationProgressFromStarvationProof
     <2>3. VerificationOneHeightCompletion
       BY VerificationOneHeightCompletionObligation
     <2> QED BY <1>1, <2>1, <2>2, <2>3,
@@ -728,24 +734,27 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM IndexedHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs ==
-  /\ IndexedChainSpec
+  /\ IndexedLiveChainSpec
   /\ IndexedHistoricalRecoveryTemporalPrerequisites
   => IndexedHeightLivenessProperty
 PROOF
-  <1>1. ASSUME IndexedChainSpec,
+  <1>1. ASSUME IndexedLiveChainSpec,
               IndexedHistoricalRecoveryTemporalPrerequisites
          PROVE IndexedHeightLivenessProperty
+    <2>0. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
     <2>1. IndexedExactHistoricalRecoveryProgress
-      BY <1>1, IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites
+      BY <1>1, <2>0,
+         IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites
     <2>2. IndexedSuccessorActivationProgress
-      BY <1>1, IndexedSuccessorActivationProgressFromStarvationProof
+      BY <2>0, IndexedSuccessorActivationProgressFromStarvationProof
     <2>3. VerificationOneHeightCompletion
       BY VerificationOneHeightCompletionObligation
     <2>4. IndexedExactHeightLivenessProperty
       BY <1>1, <2>1, <2>2, <2>3,
          IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress
     <2>5. []IndexedCompositionInvariant
-      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant
+      BY <2>0, IndexedChainSpecEstablishesCompositionInvariant
     <2>6. VerificationContext \in AdmissibleContextRecords
              => (IndexedExactContextCompleted(VerificationContext)
                   => IndexedContextCompleted(VerificationContext))
@@ -761,12 +770,14 @@ Release-facing declaration.
 This remains proofless until the chain composition proves eventual recovery
 eligibility and the Async application-liveness work proves both
 target-to-Decision and responsive Decision-to-application for the exact
-indexed product. Keeping the declaration here makes those debts visible
-without adding a 55th ledger entry or pretending the production
-safety/refinement seam is a temporal theorem.
+indexed product. The live chain premise also keeps the finite install-
+generation budget explicit rather than treating it as a safety invariant.
+Keeping the declaration here makes those debts visible without adding a
+synthetic ledger entry or pretending the production safety/refinement seam is
+a temporal theorem.
 ***************************************************************************)
 THEOREM HeightLivenessObligation ==
-  IndexedChainSpec => IndexedHeightLivenessProperty
+  IndexedLiveChainSpec => IndexedHeightLivenessProperty
 
 
 =============================================================================

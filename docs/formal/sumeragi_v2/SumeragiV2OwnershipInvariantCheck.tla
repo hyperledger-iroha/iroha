@@ -4,8 +4,9 @@ EXTENDS SumeragiV2AsyncLivenessProofs
 (***************************************************************************
 Small exhaustive counterexample search for scheduler ownership.  The state
 constraint holds the logical clock at its initial value while retaining every
-non-clock AsyncNext branch, so TLC can enumerate all zero-clock ownership
-transfers without conflating this finite check with deductive proof evidence.
+production outer AsyncNext branch, so TLC can enumerate all zero-clock
+ownership transfers without conflating this finite check with deductive proof
+evidence.
 ***************************************************************************)
 
 SingleValidatorRosters == <<<<0>>>>
@@ -22,13 +23,142 @@ The production evidence union has one powerset-valued branch.  The runtime
 type invariant already proves every command evidence value structurally
 typed, so this bounded TLC instance may select the TC branch without
 materializing `TcRecordSet`.  `ownership_n1.cfg` overrides only the equivalent
-selector definition; the production transition relation remains otherwise
-unchanged.
+finite-search definitions in this module; each override preserves the
+production predicate while avoiding an intractable generic carrier.
 ***************************************************************************)
 OwnershipInstallTcFromEvidence(command) ==
   IF AsyncTcRecordTyped(command.evidence)
   THEN command.evidence
   ELSE command.evidence.envelope.tc
+
+(***************************************************************************
+The same structural expansion is required at the two authenticated-evidence
+unions and at control publication.  Enumerating `AsyncNetworkItems` first
+materializes the powerset-valued TC branch even though the runtime supplies
+one already-typed value or a tiny concrete outbox.  These operators are exact
+finite-search expansions of those membership/subset tests.
+***************************************************************************)
+OwnershipInstallTcEvidenceMatches(command, tc) ==
+  \/ command.evidence = tc
+  \/ /\ AsyncItemTyped(command.evidence)
+     /\ command.evidence.kind = "TimeoutCertificate"
+     /\ command.evidence.envelope.tc = tc
+
+OwnershipBeginLockCommandEvidenceMatches(command, qc) ==
+  \/ command.evidence = qc
+  \/ /\ AsyncItemTyped(command.evidence)
+     /\ \/ /\ command.evidence.kind = "PrepareQC"
+           /\ command.evidence.envelope.qc = qc
+        \/ /\ command.evidence.kind = "CertifiedResponse"
+           /\ CertifiedResponseCapabilityAuthorized(command.evidence)
+           /\ \E request \in
+                  MatchingSentCertifiedRequests(command.evidence):
+                /\ FrozenCertifiedResponseBinding(
+                     command.evidence, request)
+                /\ request.envelope.certificate = qc
+
+OwnershipControlItemsTyped(items) ==
+  \A item \in items:
+    /\ AsyncItemTyped(item)
+    /\ item.kind \in AsyncControlKinds
+
+OwnershipPublishControlItems(items) ==
+  /\ OwnershipControlItemsTyped(items)
+  /\ asyncRetainedControl' =
+       RememberedControl(asyncRetainedControl, items)
+  /\ asyncSentItems' = asyncSentItems \cup items
+  /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
+  /\ UNCHANGED <<asyncActiveRequests, asyncCertifiedResponseClaim>>
+
+OwnershipPublishControlAndEphemeralItems(controlItems, ephemeralItems) ==
+  /\ OwnershipControlItemsTyped(controlItems)
+  /\ asyncRetainedControl' =
+       RememberedControl(asyncRetainedControl, controlItems)
+  /\ asyncSentItems' =
+       asyncSentItems \cup controlItems \cup ephemeralItems
+  /\ asyncTransport' =
+       asyncTransport
+         \cup PacketsForItems(controlItems \cup ephemeralItems)
+  /\ UNCHANGED <<asyncActiveRequests, asyncCertifiedResponseClaim>>
+
+OwnershipExecuteSignProposalReady(command) ==
+  /\ command.kind = "SignProposal"
+  /\ \E request \in signProposals:
+       LET controlItems == ProposalOutbox(request)
+       IN /\ CommandMatches(command, request.node, request.proposal.view,
+                             request.proposal.subject)
+          /\ CompleteProposalSignatureReady(request)
+          /\ OwnershipControlItemsTyped(controlItems)
+
+OwnershipExecuteSignVoteReady(command) ==
+  /\ command.kind = "SignVote"
+  /\ \E request \in signVotes:
+       /\ CommandMatches(command, request.node, request.vote.view,
+                         request.vote.subject)
+       /\ CompleteVoteSignatureReady(request)
+       /\ OwnershipControlItemsTyped(VoteOutbox(request))
+
+OwnershipExecuteFormPrepareQCReady(command) ==
+  LET signers == VoteSignersAt(command.node, command.view, "Prepare",
+                               command.subject)
+      qc == QC(context, command.view, "Prepare", command.subject, signers)
+      items == QcOutbox(command.node, qc)
+  IN /\ command.kind = "FormPrepareQC"
+     /\ FormPrepareQCReady(command.node, command.view, command.subject)
+     /\ OwnershipControlItemsTyped(items)
+
+OwnershipExecuteSignTimeoutReady(command) ==
+  /\ command.kind = "SignTimeout"
+  /\ \E request \in signTimeouts:
+       /\ CommandMatches(command, request.node, request.vote.view,
+                         request.vote.highSubject)
+       /\ CompleteTimeoutSignatureReady(request)
+       /\ OwnershipControlItemsTyped(TimeoutOutbox(request))
+
+(***************************************************************************
+The claim invariant already requires every claim to have an authenticated
+sent occurrence.  Its separate universe-membership conjunct can therefore
+range over the finite sent history without changing the accepted states.
+Using the same sent occurrence for authentication is equivalent to the
+generic existential because the canonical claim projection omits only its
+transport source.
+***************************************************************************)
+OwnershipAsyncCertifiedResponseClaimValues ==
+  {AsyncCertifiedResponseCanonicalWireIdentity(item):
+     item \in {candidate \in asyncSentItems:
+       /\ AsyncItemTyped(candidate)
+       /\ candidate.kind = "CertifiedResponse"}}
+
+OwnershipCertifiedResponseClaimProjectionAuthenticated(projection) ==
+  \E item \in asyncSentItems:
+    /\ AsyncItemTyped(item)
+    /\ item.kind = "CertifiedResponse"
+    /\ AsyncCertifiedResponseCanonicalWireIdentity(item) = projection
+    /\ CertifiedResponseAuthenticatedOccurrence(item)
+    /\ item.envelope.archiveServer \in AsyncArchiveServerIds
+    /\ MatchingCertifiedRequests(item) # {}
+    /\ \E request \in MatchingCertifiedRequests(item):
+         FrozenCertifiedResponseBinding(item, request)
+
+OwnershipAsyncDeferredHandoffTyped(handoff) ==
+  \/ handoff = NoAsyncDeferredHandoff
+  \/ /\ DOMAIN handoff = {"active", "candidate", "identity"}
+     /\ handoff.active = TRUE
+     /\ AsyncCandidateTyped(handoff.candidate)
+     /\ handoff.identity =
+          ExactAsyncCandidateIdentity(handoff.candidate)
+
+OwnershipAsyncDeferredTopologyTypeInvariant ==
+  /\ DOMAIN asyncDeferredCompletionQueues = ValidatorIds
+  /\ DOMAIN asyncDeferredProgressQueues = ValidatorIds
+  /\ DOMAIN asyncDeferredNormalQueues = ValidatorIds
+  /\ DOMAIN asyncDeferredHandoffs = ValidatorIds
+  /\ \A node \in ValidatorIds:
+       OwnershipAsyncDeferredHandoffTyped(
+         asyncDeferredHandoffs[node])
+  /\ asyncNextDeferredClass \in
+       [ValidatorIds -> AsyncCommandClasses]
+  /\ asyncDeferredDrainOwed \in [ValidatorIds -> BOOLEAN]
 
 (***************************************************************************
 The generic definition quantifies over `AsyncCandidateSet` before constraining
@@ -37,6 +167,25 @@ large for TLC once a historical lock appears. Constructing the unique
 candidate and checking its structural type is logically equivalent and keeps
 the bounded ownership search executable.
 ***************************************************************************)
+OwnershipHistoricalLockRestartExactCurrentFetchOwner(authority) ==
+  \E qc \in prepareQCs:
+    LET candidate ==
+          AsyncCandidateWithIdentity(
+            "Completion", "FetchBody", authority.node,
+            authority.context.height, authority.view, authority.subject,
+            NoAsyncItem, authority.context, nodeView[authority.node],
+            generation[authority.node], qc, authority.subject,
+            authority.subject, authority.subject)
+    IN /\ AsyncCandidateTyped(candidate)
+       /\ HistoricalLockRestartAuthoritySourceKernel(
+            authority, qc, context, nodeView, lockRank, lockSubject,
+            installedTCs, commitIntents, decisions)
+       /\ HistoricalLockRestartExactCurrentFetchKernel(
+            authority, qc, candidate, context, nodeView, generation,
+            asyncCommandQueues, asyncDeferredCompletionQueues,
+            asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+            asyncCausalQueues, asyncOutstandingWork)
+
 OwnershipHistoricalLockRestartExactCurrentFetchOwnerAfter(authority) ==
   \E qc \in prepareQCs':
     LET candidate ==
@@ -55,20 +204,6 @@ OwnershipHistoricalLockRestartExactCurrentFetchOwnerAfter(authority) ==
             asyncCommandQueues', asyncDeferredCompletionQueues',
             asyncDeferredProgressQueues', asyncDeferredNormalQueues',
             asyncCausalQueues', asyncOutstandingWork')
-
-OwnershipHistoricalLockRestartAuthorityTransition ==
-  \/ \E node \in ValidatorIds:
-       /\ ResponsiveCrashRecoveryRegistration(node)
-       /\ asyncHistoricalLockRestartAuthorities' =
-            asyncHistoricalLockRestartAuthorities
-              \cup ResponsiveCrashHistoricalLockRestartAuthorities(node)
-  \/ /\ ~\E node \in ValidatorIds:
-             ResponsiveCrashRecoveryRegistration(node)
-     /\ asyncHistoricalLockRestartAuthorities' =
-          {authority \in asyncHistoricalLockRestartAuthorities:
-             /\ HistoricalLockRestartAuthoritySourceAfter(authority)
-             /\ ~OwnershipHistoricalLockRestartExactCurrentFetchOwnerAfter(
-                   authority)}
 
 (***************************************************************************
 The production relation keeps Byzantine signer membership inside each Core
@@ -108,61 +243,21 @@ OwnershipFaultStep ==
        roundView \in Views, highestPrepare \in PrepareQcOptionSet:
        AsyncByzantineTimeout(signer, roundView, highestPrepare)
 
-OwnershipNonRunnerStep ==
-  /\ \/ AsyncSetGST
-     \/ AsyncTick
-     \/ (\E node \in ValidatorIds: OpenHistoricalRecovery(node))
-     \/ (\E node \in AsyncCurrentResponsiveVoters:
-           DirectCommitCertificateDiscoveryStep(node))
-     \/ (\E node \in asyncHistoricalRecoveryTargets:
-           DirectHistoricalCommitCertificateDiscoveryStep(node))
-     \/ (\E node \in AsyncArchiveIoServiceNodes:
-           ServiceIoWorker(node))
-     \/ (\E node \in asyncHistoricalRecoveryTargets:
-           ServiceHistoricalRecoveryIoWorker(node))
-     \/ (\E node \in AsyncCurrentResponsiveVoters:
-           EnqueueIoLocalControl(node))
-     \/ (\E node \in asyncHistoricalRecoveryTargets:
-           EnqueueHistoricalRecoveryIoLocalControl(node))
-     \/ AsyncNetworkStep
-     \/ OwnershipFaultStep
-  /\ UNCHANGED asyncNodeServiceDeadlines
-
-OwnershipNonRunnerNoFaultStep ==
-  /\ \/ AsyncSetGST
-     \/ AsyncTick
-     \/ (\E node \in ValidatorIds: OpenHistoricalRecovery(node))
-     \/ (\E node \in AsyncCurrentResponsiveVoters:
-           DirectCommitCertificateDiscoveryStep(node))
-     \/ (\E node \in asyncHistoricalRecoveryTargets:
-           DirectHistoricalCommitCertificateDiscoveryStep(node))
-     \/ (\E node \in AsyncArchiveIoServiceNodes:
-           ServiceIoWorker(node))
-     \/ (\E node \in asyncHistoricalRecoveryTargets:
-           ServiceHistoricalRecoveryIoWorker(node))
-     \/ (\E node \in AsyncCurrentResponsiveVoters:
-           EnqueueIoLocalControl(node))
-     \/ (\E node \in asyncHistoricalRecoveryTargets:
-           EnqueueHistoricalRecoveryIoLocalControl(node))
-     \/ AsyncNetworkStep
-  /\ UNCHANGED asyncNodeServiceDeadlines
-
-OwnershipNonCrashStep ==
-  \/ /\ (AsyncRunnerStep \/ OwnershipNonRunnerStep)
-     /\ UNCHANGED <<up, AsyncRecoveryControlVars>>
-     /\ OwnershipHistoricalLockRestartAuthorityTransition
-  \/ /\ (DriveResponsiveReplayHead \/ FinishResponsiveReplay)
-     /\ UNCHANGED up
-  \/ /\ RearmResponsiveRecovery
-     /\ UNCHANGED up
-
+(***************************************************************************
+`AsyncNext` conjoins the exact outer action with `[Next]_vars`.  Every outer
+branch already executes a proved Core action or Core stutter; re-evaluating
+the whole generic Core relation is semantically redundant and forces TLC to
+materialize unrelated Cartesian carriers.  This bounded projection removes
+only that redundant search conjunct.  All production outer branches, restart
+authority transitions, and height/context frames remain exact.
+***************************************************************************)
 OwnershipAsyncNext ==
-  /\ (OwnershipNonCrashStep
+  /\ (AsyncNonCrashStep
         \/ (\E node \in ValidatorIds: PreGstCrash(node))
         \/ (\E node \in ValidatorIds: PreGstResponsiveCrash(node))
         \/ PreGstResponsiveRestart
         \/ PreGstResponsiveReplay)
-  /\ OwnershipHistoricalLockRestartAuthorityTransition
+  /\ AsyncHistoricalLockRestartAuthorityTransition
   /\ UNCHANGED <<height, context>>
 
 OwnershipBoundedNext ==
@@ -171,107 +266,6 @@ OwnershipBoundedNext ==
 
 OwnershipDebugStutter ==
   UNCHANGED OwnershipAllVars
-
-OwnershipDebugAsyncOnlyNext ==
-  OwnershipBoundedNext
-
-OwnershipDebugNonRunnerOnlyNext ==
-  /\ OwnershipNonRunnerStep
-  /\ UNCHANGED <<up, AsyncRecoveryControlVars>>
-  /\ OwnershipHistoricalLockRestartAuthorityTransition
-  /\ UNCHANGED <<height, context, acquisitionVars>>
-
-OwnershipDebugRunnerOnlyNext ==
-  /\ AsyncRunnerStep
-  /\ UNCHANGED <<up, AsyncRecoveryControlVars>>
-  /\ OwnershipHistoricalLockRestartAuthorityTransition
-  /\ UNCHANGED <<height, context, acquisitionVars>>
-
-OwnershipDebugRunnerAndNonFaultNext ==
-  /\ (\/ /\ (AsyncRunnerStep \/ OwnershipNonRunnerNoFaultStep)
-           /\ UNCHANGED <<up, AsyncRecoveryControlVars>>
-           /\ OwnershipHistoricalLockRestartAuthorityTransition
-        \/ /\ (DriveResponsiveReplayHead \/ FinishResponsiveReplay)
-           /\ UNCHANGED up
-        \/ /\ RearmResponsiveRecovery
-           /\ UNCHANGED up
-        \/ (\E node \in ValidatorIds: PreGstCrash(node))
-        \/ (\E node \in ValidatorIds: PreGstResponsiveCrash(node))
-        \/ PreGstResponsiveRestart
-        \/ PreGstResponsiveReplay)
-  /\ OwnershipHistoricalLockRestartAuthorityTransition
-  /\ UNCHANGED <<height, context, acquisitionVars>>
-
-OwnershipDebugStableRunnerAndNonFaultNext ==
-  /\ (AsyncRunnerStep \/ OwnershipNonRunnerNoFaultStep)
-  /\ UNCHANGED <<up, AsyncRecoveryControlVars>>
-  /\ OwnershipHistoricalLockRestartAuthorityTransition
-  /\ UNCHANGED <<height, context, acquisitionVars>>
-
-OwnershipDebugClockStep ==
-  /\ (AsyncSetGST \/ AsyncTick)
-  /\ UNCHANGED asyncNodeServiceDeadlines
-
-OwnershipDebugRecoveryStep ==
-  /\ (\/ (\E node \in ValidatorIds: OpenHistoricalRecovery(node))
-      \/ (\E node \in AsyncCurrentResponsiveVoters:
-            DirectCommitCertificateDiscoveryStep(node))
-      \/ (\E node \in asyncHistoricalRecoveryTargets:
-            DirectHistoricalCommitCertificateDiscoveryStep(node)))
-  /\ UNCHANGED asyncNodeServiceDeadlines
-
-OwnershipDebugIoStep ==
-  /\ (\/ (\E node \in AsyncArchiveIoServiceNodes:
-            ServiceIoWorker(node))
-      \/ (\E node \in asyncHistoricalRecoveryTargets:
-            ServiceHistoricalRecoveryIoWorker(node))
-      \/ (\E node \in AsyncCurrentResponsiveVoters:
-            EnqueueIoLocalControl(node))
-      \/ (\E node \in asyncHistoricalRecoveryTargets:
-            EnqueueHistoricalRecoveryIoLocalControl(node)))
-  /\ UNCHANGED asyncNodeServiceDeadlines
-
-OwnershipDebugIoServiceStep ==
-  /\ (\/ (\E node \in AsyncArchiveIoServiceNodes:
-            ServiceIoWorker(node))
-      \/ (\E node \in asyncHistoricalRecoveryTargets:
-            ServiceHistoricalRecoveryIoWorker(node)))
-  /\ UNCHANGED asyncNodeServiceDeadlines
-
-OwnershipDebugIoEnqueueStep ==
-  /\ (\/ (\E node \in AsyncCurrentResponsiveVoters:
-            EnqueueIoLocalControl(node))
-      \/ (\E node \in asyncHistoricalRecoveryTargets:
-            EnqueueHistoricalRecoveryIoLocalControl(node)))
-  /\ UNCHANGED asyncNodeServiceDeadlines
-
-OwnershipDebugNetworkStep ==
-  /\ AsyncNetworkStep
-  /\ UNCHANGED asyncNodeServiceDeadlines
-
-OwnershipDebugStableRunnerWith(nonRunnerStep) ==
-  /\ (AsyncRunnerStep \/ nonRunnerStep)
-  /\ UNCHANGED <<up, AsyncRecoveryControlVars>>
-  /\ OwnershipHistoricalLockRestartAuthorityTransition
-  /\ UNCHANGED <<height, context, acquisitionVars>>
-
-OwnershipDebugStableRunnerAndClockNext ==
-  OwnershipDebugStableRunnerWith(OwnershipDebugClockStep)
-
-OwnershipDebugStableRunnerAndRecoveryNext ==
-  OwnershipDebugStableRunnerWith(OwnershipDebugRecoveryStep)
-
-OwnershipDebugStableRunnerAndIoNext ==
-  OwnershipDebugStableRunnerWith(OwnershipDebugIoStep)
-
-OwnershipDebugStableRunnerAndIoServiceNext ==
-  OwnershipDebugStableRunnerWith(OwnershipDebugIoServiceStep)
-
-OwnershipDebugStableRunnerAndIoEnqueueNext ==
-  OwnershipDebugStableRunnerWith(OwnershipDebugIoEnqueueStep)
-
-OwnershipDebugStableRunnerAndNetworkNext ==
-  OwnershipDebugStableRunnerWith(OwnershipDebugNetworkStep)
 
 OwnershipBoundedSpec ==
   OwnershipBoundedInit /\ [][OwnershipBoundedNext]_OwnershipAllVars

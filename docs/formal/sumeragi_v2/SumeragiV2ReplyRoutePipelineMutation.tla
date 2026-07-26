@@ -45,6 +45,24 @@ VARIABLES
   connectionTenure,
   sourceActive,
   nextServiceIndex,
+  semanticSequence,
+  semanticHash,
+  requesterNextSequence,
+  requesterClosedThrough,
+  closePendingThrough,
+  closeSentThrough,
+  closeAcknowledgedThrough,
+  closeRetryGeneration,
+  serviceGeneration,
+  responderGeneration,
+  durableResponderGeneration,
+  requesterNextStreamEpoch,
+  requesterStreamEpoch,
+  closeStreamEpoch,
+  closedPrefix,
+  attemptLifecycleIdentities,
+  pendingHintResets,
+  discardedPartialIdentities,
   pendingAttachments,
   items,
   nextFifoOrdinal,
@@ -72,12 +90,38 @@ MutationPipeline ==
     rrConnectionTenure <- connectionTenure,
     rrSourceActive <- sourceActive,
     rrNextServiceIndex <- nextServiceIndex,
+    rrSemanticSequence <- semanticSequence,
+    rrSemanticHash <- semanticHash,
+    rrRequesterNextSequence <- requesterNextSequence,
+    rrRequesterClosedThrough <- requesterClosedThrough,
+    rrClosePendingThrough <- closePendingThrough,
+    rrCloseSentThrough <- closeSentThrough,
+    rrCloseAcknowledgedThrough <- closeAcknowledgedThrough,
+    rrCloseRetryGeneration <- closeRetryGeneration,
+    rrServiceGeneration <- serviceGeneration,
+    rrResponderGeneration <- responderGeneration,
+    rrDurableResponderGeneration <- durableResponderGeneration,
+    rrRequesterNextStreamEpoch <- requesterNextStreamEpoch,
+    rrRequesterStreamEpoch <- requesterStreamEpoch,
+    rrCloseStreamEpoch <- closeStreamEpoch,
+    rrClosedPrefix <- closedPrefix,
+    rrAttemptLifecycleIdentities <- attemptLifecycleIdentities,
+    rrPendingHintResets <- pendingHintResets,
+    rrDiscardedPartialIdentities <- discardedPartialIdentities,
     rpPendingAttachments <- pendingAttachments,
     rpItems <- items,
     rpNextFifoOrdinal <- nextFifoOrdinal,
     rpNextTicketId <- nextTicketId
 
 MutationPipelineVars == MutationPipeline!ReplyPipelineVars
+MutationLifecycleVars ==
+  <<semanticSequence, semanticHash, requesterNextSequence,
+    requesterClosedThrough, closePendingThrough, closeSentThrough,
+    closeAcknowledgedThrough, closeRetryGeneration,
+    serviceGeneration, responderGeneration, durableResponderGeneration,
+    requesterNextStreamEpoch, requesterStreamEpoch, closeStreamEpoch,
+    closedPrefix, attemptLifecycleIdentities, pendingHintResets,
+    discardedPartialIdentities>>
 MutationVars ==
   <<MutationPipelineVars, oldFlushAppliedTwice, phase>>
 
@@ -120,6 +164,7 @@ BuggyBypassSourceClassFifo ==
      /\ nextTicketId' = [nextTicketId EXCEPT ![0] = @ + 1]
      /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
                     connectionTenure, sourceActive, nextServiceIndex,
+                    MutationLifecycleVars,
                     pendingAttachments, nextFifoOrdinal,
                     oldFlushAppliedTwice>>
      /\ phase' = 30
@@ -132,7 +177,8 @@ BuggyReuseWrongTenureAndPayloadTicket ==
   LET item == SourceItem(RequestA)
       wrongPayload ==
         MutationPipeline!ReplyPipelinePayload(
-          RequestB, item.messageCursor, item.chunkCursor)
+          RequestB, item.messageCursor, item.chunkCursor,
+          SourceItem(RequestB).requestIdentity)
       ticketed ==
         BuggyTicketItem(
           item, item.routeTenure + 1, {wrongPayload})
@@ -144,6 +190,7 @@ BuggyReuseWrongTenureAndPayloadTicket ==
      /\ nextTicketId' = [nextTicketId EXCEPT ![0] = @ + 1]
      /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
                     connectionTenure, sourceActive, nextServiceIndex,
+                    MutationLifecycleVars,
                     pendingAttachments, nextFifoOrdinal,
                     oldFlushAppliedTwice>>
      /\ phase' = 31
@@ -180,6 +227,7 @@ BuggyApplyOldFlushTwice ==
      /\ oldFlushAppliedTwice' = TRUE
      /\ UNCHANGED <<payloads, nextDeliveryOrdinal,
                     connectionTenure, sourceActive, nextServiceIndex,
+                    MutationLifecycleVars,
                     pendingAttachments, items,
                     nextFifoOrdinal, nextTicketId>>
      /\ phase' = 33
@@ -197,6 +245,7 @@ BuggyRegressAppliedCursor ==
           MutationPipeline!ReplaceReplyAttempt(current, regressed)
      /\ UNCHANGED <<payloads, nextDeliveryOrdinal,
                     connectionTenure, sourceActive, nextServiceIndex,
+                    MutationLifecycleVars,
                     pendingAttachments, items,
                     nextFifoOrdinal, nextTicketId,
                     oldFlushAppliedTwice>>
@@ -226,6 +275,7 @@ BuggyAdvanceTwoAttemptsAtOnce ==
      /\ items' = items \ {itemA}
      /\ UNCHANGED <<payloads, nextDeliveryOrdinal,
                     connectionTenure, sourceActive, nextServiceIndex,
+                    MutationLifecycleVars,
                     pendingAttachments,
                     nextFifoOrdinal, nextTicketId,
                     oldFlushAppliedTwice>>
@@ -262,12 +312,38 @@ BuggyObserveReconnectWithoutReadiness ==
             0, Source)
      /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
                     connectionTenure, sourceActive, nextServiceIndex,
+                    MutationLifecycleVars,
                     nextFifoOrdinal, nextTicketId,
                     oldFlushAppliedTwice>>
      /\ phase' = 36
 
 PipelineMutationInit ==
-  /\ MutationPipeline!ReplyPipelineInit
+  /\ MutationPipeline!ReplyRouteInit
+  /\ MutationPipeline!ReplyPipelineConfiguration
+  /\ pendingAttachments = {}
+  /\ items = {}
+  /\ nextFifoOrdinal = [owner \in MutationOwners |-> 1]
+  /\ nextTicketId = [owner \in MutationOwners |-> 1]
+  /\ serviceGeneration =
+       [owner \in MutationOwners |->
+          [source \in MutationSources |-> 1]]
+  /\ responderGeneration =
+       [source \in MutationSources |-> 1]
+  /\ durableResponderGeneration =
+       [source \in MutationSources |-> 1]
+  /\ requesterNextStreamEpoch =
+       [owner \in MutationOwners |-> 2]
+  /\ requesterStreamEpoch =
+       [owner \in MutationOwners |->
+          [source \in MutationSources |-> 1]]
+  /\ closeStreamEpoch = requesterStreamEpoch
+  /\ closedPrefix =
+       [owner \in MutationOwners |->
+          [source \in MutationSources |->
+             MutationPipeline!ReplyOccurrenceCoordinate(0, 0, 0)]]
+  /\ attemptLifecycleIdentities = {}
+  /\ pendingHintResets = {}
+  /\ discardedPartialIdentities = {}
   /\ oldFlushAppliedTwice = FALSE
   /\ phase = 0
 
@@ -433,6 +509,7 @@ ClassWriterCloseA ==
      /\ nextTicketId' = [nextTicketId EXCEPT ![0] = 1]
      /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
                     connectionTenure, sourceActive, nextServiceIndex,
+                    MutationLifecycleVars,
                     pendingAttachments, nextFifoOrdinal,
                     oldFlushAppliedTwice>>
      /\ phase' = 6
@@ -511,7 +588,7 @@ SiblingLaterRebindBlocksOldTenureTicket ==
 OldFlushAppliedAtMostOnce == ~oldFlushAppliedTwice
 
 PipelineMutationSafety ==
-  /\ MutationPipeline!ReplyPipelineSafetyInvariant
+  /\ MutationPipeline!ReplyPipelineV2SafetyInvariant
   /\ RequestACursorNeverRegressesAfterApply
   /\ SiblingLaterRebindBlocksOldTenureTicket
   /\ OldFlushAppliedAtMostOnce

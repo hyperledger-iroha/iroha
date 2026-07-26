@@ -9140,6 +9140,11 @@ THEOREM ReplyAdvancedBracketObligationHoldsAt ==
 BY ReplyAdvancedBracketIsStable
    DEF ReplyAdvancedBracketObligation
 
+(***************************************************************************
+Lift the checked action bracket into suffix persistence.  This is the form
+consumed by the convergence proof: once the source is at or beyond a cursor,
+no later state can fall below that disjunction.
+***************************************************************************)
 THEOREM ReplyCursorOrAdvancedPersists ==
   \A owner \in ReplyOwners, semantic \in ReplySemantics,
      source \in ReplySources,
@@ -9147,17 +9152,17 @@ THEOREM ReplyCursorOrAdvancedPersists ==
      chunkCursor \in 0..ReplyChunkCount:
     ReplyRouteSpec =>
       []((\/ ReplySourceAtCursor(
-                 owner, semantic, source,
-                 messageCursor, chunkCursor)
-              \/ ReplySourceAdvancedFrom(
-                 owner, semantic, source,
-                 messageCursor, chunkCursor))
-           => (\/ ReplySourceAtCursor(
+                owner, semantic, source,
+                messageCursor, chunkCursor)
+             \/ ReplySourceAdvancedFrom(
+                owner, semantic, source,
+                messageCursor, chunkCursor))
+          => [](\/ ReplySourceAtCursor(
                     owner, semantic, source,
-                    messageCursor, chunkCursor)'
+                    messageCursor, chunkCursor)
                  \/ ReplySourceAdvancedFrom(
                     owner, semantic, source,
-                    messageCursor, chunkCursor)'))
+                    messageCursor, chunkCursor)))
 PROOF
   <1>1. ASSUME NEW owner \in ReplyOwners,
                 NEW semantic \in ReplySemantics,
@@ -9166,50 +9171,36 @@ PROOF
                 NEW chunkCursor \in 0..ReplyChunkCount
          PROVE ReplyRouteSpec =>
                  []((\/ ReplySourceAtCursor(
-                            owner, semantic, source,
-                            messageCursor, chunkCursor)
-                         \/ ReplySourceAdvancedFrom(
-                            owner, semantic, source,
-                            messageCursor, chunkCursor))
-                      => (\/ ReplySourceAtCursor(
+                           owner, semantic, source,
+                           messageCursor, chunkCursor)
+                        \/ ReplySourceAdvancedFrom(
+                           owner, semantic, source,
+                           messageCursor, chunkCursor))
+                     => [](\/ ReplySourceAtCursor(
                                owner, semantic, source,
-                               messageCursor, chunkCursor)'
+                               messageCursor, chunkCursor)
                             \/ ReplySourceAdvancedFrom(
                                owner, semantic, source,
-                               messageCursor, chunkCursor)'))
+                               messageCursor, chunkCursor)))
+    <2> DEFINE CursorState ==
+           \/ ReplySourceAtCursor(
+                owner, semantic, source,
+                messageCursor, chunkCursor)
+           \/ ReplySourceAdvancedFrom(
+                owner, semantic, source,
+                messageCursor, chunkCursor)
     <2>1. /\ ReplyRouteConfiguration
            /\ ReplyRouteFullSafetyInvariant
            /\ ReplyRouteFullSafetyInvariant'
            /\ [ReplyTenureAwareReplayStep]_ReplyRouteVars
            /\ [ReplySourceIsolationStep]_ReplyRouteVars
            /\ [ReplyRouteNext]_ReplyRouteVars
-          => ((\/ ReplySourceAtCursor(
-                    owner, semantic, source,
-                    messageCursor, chunkCursor)
-               \/ ReplySourceAdvancedFrom(
-                    owner, semantic, source,
-                    messageCursor, chunkCursor))
-              => (\/ ReplySourceAtCursor(
-                       owner, semantic, source,
-                       messageCursor, chunkCursor)'
-                  \/ ReplySourceAdvancedFrom(
-                       owner, semantic, source,
-                       messageCursor, chunkCursor)'))
+          => (CursorState => CursorState')
       BY <1>1, ReplyCursorOrAdvancedStepPersists,
          IsaM("blast")
+         DEF CursorState
     <2>2. ASSUME ReplyRouteSpec
-           PROVE []((\/ ReplySourceAtCursor(
-                            owner, semantic, source,
-                            messageCursor, chunkCursor)
-                         \/ ReplySourceAdvancedFrom(
-                            owner, semantic, source,
-                            messageCursor, chunkCursor))
-                      => (\/ ReplySourceAtCursor(
-                               owner, semantic, source,
-                               messageCursor, chunkCursor)'
-                            \/ ReplySourceAdvancedFrom(
-                               owner, semantic, source,
-                               messageCursor, chunkCursor)'))
+           PROVE [][CursorState => CursorState']_ReplyRouteVars
       <3>1. /\ []ReplyRouteConfiguration
              /\ []ReplyRouteFullSafetyInvariant
         BY <2>2,
@@ -9221,41 +9212,26 @@ PROOF
       <3>3. [][ReplyRouteNext]_ReplyRouteVars
         BY <2>2, PTL
            DEF ReplyRouteSpec
-      <3>4. [](/\ ReplyRouteConfiguration
-                 /\ ReplyRouteFullSafetyInvariant
-                 /\ ReplyRouteFullSafetyInvariant'
-                 /\ [ReplyTenureAwareReplayStep]_ReplyRouteVars
-                 /\ [ReplySourceIsolationStep]_ReplyRouteVars
-                 /\ [ReplyRouteNext]_ReplyRouteVars
-                => ((\/ ReplySourceAtCursor(
-                          owner, semantic, source,
-                          messageCursor, chunkCursor)
-                     \/ ReplySourceAdvancedFrom(
-                          owner, semantic, source,
-                          messageCursor, chunkCursor))
-                    => (\/ ReplySourceAtCursor(
-                             owner, semantic, source,
-                             messageCursor, chunkCursor)'
-                        \/ ReplySourceAdvancedFrom(
-                             owner, semantic, source,
-                             messageCursor, chunkCursor)')))
+      <3>4. [][(/\ ReplyRouteConfiguration
+                  /\ ReplyRouteFullSafetyInvariant
+                  /\ ReplyRouteFullSafetyInvariant'
+                  /\ [ReplyTenureAwareReplayStep]_ReplyRouteVars
+                  /\ [ReplySourceIsolationStep]_ReplyRouteVars
+                  /\ [ReplyRouteNext]_ReplyRouteVars)
+                 => (CursorState => CursorState')]_ReplyRouteVars
         BY <2>1, PTL
-      <3>5. []((\/ ReplySourceAtCursor(
-                      owner, semantic, source,
-                      messageCursor, chunkCursor)
-                 \/ ReplySourceAdvancedFrom(
-                      owner, semantic, source,
-                      messageCursor, chunkCursor))
-                => (\/ ReplySourceAtCursor(
-                         owner, semantic, source,
-                         messageCursor, chunkCursor)'
-                    \/ ReplySourceAdvancedFrom(
-                         owner, semantic, source,
-                         messageCursor, chunkCursor)'))
+      <3>5. [][CursorState => CursorState']_ReplyRouteVars
         BY <3>1, <3>2, <3>3, <3>4, PTL
            DEF ReplyTenureAwareReplay, ReplySourceIsolation
       <3> QED BY <3>5, PTL
-    <2> QED BY <2>2
+    <2>3. [][CursorState => CursorState']_ReplyRouteVars
+             => [](CursorState => []CursorState)
+      <3>1. CursorState
+               /\ [CursorState => CursorState']_ReplyRouteVars
+               => CursorState'
+        BY PTL
+      <3> QED BY <3>1, PTL
+    <2> QED BY <2>2, <2>3, PTL DEF CursorState
   <1> QED BY <1>1
 
 THEOREM ReplyCursorReachesStableSuffixOrAdvances ==
@@ -9295,17 +9271,17 @@ PROOF
                          /\ []ReplySourceRouteStable(
                               owner, semantic, source)))
     <2>1. []((\/ ReplySourceAtCursor(
-                      owner, semantic, source,
-                      messageCursor, chunkCursor)
-                   \/ ReplySourceAdvancedFrom(
-                      owner, semantic, source,
-                      messageCursor, chunkCursor))
-                => (\/ ReplySourceAtCursor(
+                     owner, semantic, source,
+                     messageCursor, chunkCursor)
+                  \/ ReplySourceAdvancedFrom(
+                     owner, semantic, source,
+                     messageCursor, chunkCursor))
+               => [](\/ ReplySourceAtCursor(
                          owner, semantic, source,
-                         messageCursor, chunkCursor)'
+                         messageCursor, chunkCursor)
                       \/ ReplySourceAdvancedFrom(
                          owner, semantic, source,
-                         messageCursor, chunkCursor)'))
+                         messageCursor, chunkCursor)))
       BY <1>1, ReplyCursorOrAdvancedPersists
     <2>2. [](ReplySourceAtCursor(
                owner, semantic, source,
@@ -10486,24 +10462,23 @@ BY ReplyTicketPendingPersistsOrBecomesReady
        ReplyTicketPendingPersistenceObligation,
        ReplyTicketCursorKeys
 
-ReplyTicketPendingEnablementObligation(
-    owner, semantic, source, messageCursor, chunkCursor) ==
-  ReplySourceTicketPending(
-    owner, semantic, source, messageCursor, chunkCursor)
-    => ENABLED
-         <<AcquireReplyTicket(owner, semantic, source)>>_ReplyRouteVars
-
 ReplyTicketPendingEnablementObligationsHold ==
   \A key \in ReplyTicketCursorKeys:
-    ReplyTicketPendingEnablementObligation(
+    ReplySourceTicketPending(
       key[1], key[2], key[3], key[4], key[5])
+      => ENABLED
+           <<AcquireReplyTicket(
+               key[1], key[2], key[3])>>_ReplyRouteVars
 
 THEOREM ReplyTicketPendingEnablementObligationsHoldProof ==
   ReplyTicketPendingEnablementObligationsHold
 PROOF
   <1>1. ASSUME NEW key \in ReplyTicketCursorKeys
-         PROVE ReplyTicketPendingEnablementObligation(
-                 key[1], key[2], key[3], key[4], key[5])
+         PROVE ReplySourceTicketPending(
+                   key[1], key[2], key[3], key[4], key[5])
+                 => ENABLED
+                      <<AcquireReplyTicket(
+                          key[1], key[2], key[3])>>_ReplyRouteVars
     <2>1. /\ key[1] \in ReplyOwners
            /\ key[2] \in ReplySemantics
            /\ key[3] \in ReplySources
@@ -10529,7 +10504,6 @@ PROOF
       <3> QED BY <2>1, <2>2, <3>1, ExpandENABLED, Isa
            DEF AcquireReplyTicket, ReplyRouteVars
     <2> QED BY <2>2
-         DEF ReplyTicketPendingEnablementObligation
   <1> QED BY <1>1
        DEF ReplyTicketPendingEnablementObligationsHold
 
@@ -10609,12 +10583,17 @@ PROOF
                owner, semantic, source,
                messageCursor, chunkCursor)]_ReplyRouteVars
       BY <2>3, PTL
-    <2>5. ReplyTicketPendingEnablementObligation(
+    <2>5. ReplySourceTicketPending(
              owner, semantic, source, messageCursor, chunkCursor)
+             => ENABLED
+                  <<AcquireReplyTicket(
+                      owner, semantic, source)>>_ReplyRouteVars
       BY <1>1, ReplyTicketPendingEnablesAcquire
-         DEF ReplyTicketPendingEnablementObligation
-    <2>6. []ReplyTicketPendingEnablementObligation(
-             owner, semantic, source, messageCursor, chunkCursor)
+    <2>6. [](ReplySourceTicketPending(
+               owner, semantic, source, messageCursor, chunkCursor)
+               => ENABLED
+                    <<AcquireReplyTicket(
+                        owner, semantic, source)>>_ReplyRouteVars)
       BY <2>5, PTL
     <2>7. ReplyTicketAcquireReadinessObligation(
              owner, semantic, source, messageCursor, chunkCursor)
@@ -10649,7 +10628,6 @@ PROOF
                    <<AcquireReplyTicket(
                        owner, semantic, source)>>_ReplyRouteVars
         BY <2>6, PTL
-           DEF ReplyTicketPendingEnablementObligation
       <3>3. /\ ReplySourceTicketPending(
                     owner, semantic, source,
                     messageCursor, chunkCursor)
@@ -12544,27 +12522,20 @@ THEOREM ReplyServiceRankPersistenceObligationHoldsAt ==
 BY ReplyServiceRankPersistsOrExits
    DEF ReplyServiceRankPersistenceObligation
 
-ReplyServiceRankEnablementObligation(
-    owner, semantic, source, messageCursor, chunkCursor, distance) ==
-  (/\ ReplyRouteConfiguration
-   /\ ReplySourceServiceRank(
-        owner, semantic, source,
-        messageCursor, chunkCursor, distance))
-  => ENABLED
-       <<ServiceReplyRoute(owner, semantic)>>_ReplyRouteVars
-
 THEOREM ReplyServiceRankEnablementObligationsHold ==
   \A owner \in ReplyOwners, semantic \in ReplySemantics,
      source \in ReplySources,
      messageCursor \in 0..ReplyMessageCount,
      chunkCursor \in 0..ReplyChunkCount,
      distance \in ReplyDistanceCarrier:
-    ReplyServiceRankEnablementObligation(
-      owner, semantic, source,
-      messageCursor, chunkCursor, distance)
+    (/\ ReplyRouteConfiguration
+     /\ ReplySourceServiceRank(
+          owner, semantic, source,
+          messageCursor, chunkCursor, distance))
+    => ENABLED
+         <<ServiceReplyRoute(owner, semantic)>>_ReplyRouteVars
 BY ReplyReadyCursorEnablesService
-   DEF ReplyServiceRankEnablementObligation,
-       ReplySourceServiceRank
+   DEF ReplySourceServiceRank
 
 THEOREM ReplyServiceRankEnablementObligationHoldsAt ==
   ASSUME NEW owner \in ReplyOwners,
@@ -12573,12 +12544,14 @@ THEOREM ReplyServiceRankEnablementObligationHoldsAt ==
          NEW messageCursor \in 0..ReplyMessageCount,
          NEW chunkCursor \in 0..ReplyChunkCount,
          NEW distance \in ReplyDistanceCarrier
-  PROVE ReplyServiceRankEnablementObligation(
-          owner, semantic, source,
-          messageCursor, chunkCursor, distance)
+  PROVE (/\ ReplyRouteConfiguration
+          /\ ReplySourceServiceRank(
+               owner, semantic, source,
+               messageCursor, chunkCursor, distance))
+        => ENABLED
+             <<ServiceReplyRoute(owner, semantic)>>_ReplyRouteVars
 BY ReplyReadyCursorEnablesService
-   DEF ReplyServiceRankEnablementObligation,
-       ReplySourceServiceRank
+   DEF ReplySourceServiceRank
 
 ReplyServiceRankOutcomeObligation(
     owner, semantic, source, messageCursor, chunkCursor, distance) ==
@@ -12690,14 +12663,22 @@ PROOF
       BY <2>8, PTL
     <2>3. []ReplyServiceRankEnablementObligationsHold
       BY ReplyServiceRankEnablementObligationsHold, PTL
-    <2>9. ReplyServiceRankEnablementObligation(
-               owner, semantic, source,
-               messageCursor, chunkCursor, distance)
+    <2>9. (/\ ReplyRouteConfiguration
+            /\ ReplySourceServiceRank(
+                 owner, semantic, source,
+                 messageCursor, chunkCursor, distance))
+           => ENABLED
+                <<ServiceReplyRoute(
+                    owner, semantic)>>_ReplyRouteVars
       BY <1>1, ReplyServiceRankEnablementObligationsHold,
          IsaM("blast")
-    <2>4. []ReplyServiceRankEnablementObligation(
-               owner, semantic, source,
-               messageCursor, chunkCursor, distance)
+    <2>4. []((/\ ReplyRouteConfiguration
+               /\ ReplySourceServiceRank(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor, distance))
+              => ENABLED
+                   <<ServiceReplyRoute(
+                       owner, semantic)>>_ReplyRouteVars)
       BY <2>9, PTL
     <2>5. [][ReplyServiceRankOutcomeObligationsHold]_ReplyRouteVars
       BY ReplyServiceRankOutcomeObligationsHold, PTL
@@ -12749,8 +12730,7 @@ PROOF
                        <<ServiceReplyRoute(
                            owner, semantic)>>_ReplyRouteVars)
         BY <2>4, <2>7, <3>1, PTL
-           DEF ReplyRouteInductiveInvariant,
-               ReplyServiceRankEnablementObligation
+           DEF ReplyRouteInductiveInvariant
       <3>4. [][/\ ReplySourceServiceRank(
                           owner, semantic, source,
                           messageCursor, chunkCursor, distance)
@@ -13810,17 +13790,17 @@ PROOF
             BY <5>2, <5>4, <5>8, <5>12, <5>21, PTL
                DEF ReplyReadyCursorLiveSuffixObligation
           <5>15. []((\/ ReplySourceAtCursor(
-                             owner, semantic, source,
-                             messageCursor, chunkCursor)
-                          \/ ReplySourceAdvancedFrom(
-                             owner, semantic, source,
-                             messageCursor, chunkCursor))
-                       => (\/ ReplySourceAtCursor(
+                            owner, semantic, source,
+                            messageCursor, chunkCursor)
+                         \/ ReplySourceAdvancedFrom(
+                            owner, semantic, source,
+                            messageCursor, chunkCursor))
+                      => [](\/ ReplySourceAtCursor(
                                 owner, semantic, source,
-                                messageCursor, chunkCursor)'
+                                messageCursor, chunkCursor)
                              \/ ReplySourceAdvancedFrom(
                                 owner, semantic, source,
-                                messageCursor, chunkCursor)'))
+                                messageCursor, chunkCursor)))
             BY <1>1, <4>1, ReplyCursorOrAdvancedPersists
           <5>16. ReplySourceAtCursor(
                     owner, semantic, source,

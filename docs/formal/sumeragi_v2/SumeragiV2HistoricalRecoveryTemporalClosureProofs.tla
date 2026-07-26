@@ -23,9 +23,11 @@ production state:
     CommitCertificateRequest transit/Serve ownership, the exact published
     CommitCertificateResponse, and recipient-specific CommitQC
     import/delivery/Decision-WAL ownership;
-  * Decision ranks 6..1 are respectively FetchBody, one exact
-    body-holding CertifiedRequest route, FetchCertifiedBody, StoreBody,
-    ValidateBody, and Apply;
+  * Decision ranks 6..1 are respectively FetchBody, one exact active
+    CertifiedRequest owner, FetchCertifiedBody, StoreBody, ValidateBody,
+    and Apply;
+  * responsive archive-route selection and body service after rank 5 remain
+    in the separate certified-request rank-progress residual;
   * exact application is handed to the existing chain receipt classifier.
 
 The rank predicates do not place a historical target in
@@ -92,7 +94,7 @@ IndexedHistoricalRequestInIngress(
     initialContext, request) ==
   \E source \in IndexedAsync(initialContext)!AsyncIngressSources:
     request \in
-      SequenceSet(IndexedScheduler(initialContext, 32)
+      SequenceSet(IndexedScheduler(initialContext, 33)
                     [request.envelope.recipient][source])
 
 IndexedHistoricalRequestInServeQueue(
@@ -105,8 +107,8 @@ IndexedHistoricalRequestInServeQueue(
 
 IndexedHistoricalRequestPhysicalOwner(
     initialContext, request) ==
-  \/ request \in IndexedScheduler(initialContext, 29)
-  \/ \E packet \in IndexedScheduler(initialContext, 31):
+  \/ request \in IndexedScheduler(initialContext, 30)
+  \/ \E packet \in IndexedScheduler(initialContext, 32):
        packet.item = request
   \/ IndexedHistoricalRequestInIngress(initialContext, request)
   \/ IndexedHistoricalRequestInServeQueue(initialContext, request)
@@ -136,7 +138,7 @@ IndexedHistoricalCommitResponseIdentity(
 IndexedHistoricalCommitResponsePublished(initialContext, node) ==
   /\ IndexedHistoricalRecoveryTargetOwned(initialContext, node)
   /\ \E request, qc, response:
-       /\ response \in IndexedScheduler(initialContext, 27)
+       /\ response \in IndexedScheduler(initialContext, 28)
        /\ IndexedHistoricalCommitResponseIdentity(
             initialContext, node, request, qc, response)
 
@@ -235,10 +237,10 @@ BY Isa
 (***************************************************************************
 Exact durable-Decision body corridor.
 
-The body request owner requires a responsive addressed archive which already
-holds the exact certified body.  This excludes an unresponsive route from
-serving as the liveness witness while preserving the route/archive/signer
-identity separation of the production protocol.
+Rank 5 names only the exact active CertifiedRequest for the Decision record.
+Responsive archive-route selection, body-holder availability, retransmission,
+packet admission, and Serve/I/O service remain obligations of
+`IndexedHistoricalDecisionCertifiedRequestResidualProperty`.
 ***************************************************************************)
 
 IndexedHistoricalDecisionRecord(initialContext, node, qc) ==
@@ -247,28 +249,11 @@ IndexedHistoricalDecisionRecord(initialContext, node, qc) ==
   /\ qc.context = initialContext
   /\ qc.phase = "Commit"
 
-IndexedHistoricalBodyRequestIdentity(
-    initialContext, node, qc, archive, request) ==
-  /\ archive \in Responsive
-  /\ archive \in IndexedCore(initialContext, 6)
-  /\ archive \in joinedByContext[initialContext]
-  /\ archive \in
-       IndexedAsync(initialContext)!AsyncArchiveIoServiceNodes
-  /\ request \in
-       IndexedAsync(initialContext)!
-         CertifiedRequestOutbox(node, qc)
-  /\ request.envelope.recipient = archive
-  /\ IndexedAsync(initialContext)!BodyHeldBy(
-       IndexedCore(initialContext, 9), archive,
-       initialContext, qc.view, qc.subject)
-
-IndexedHistoricalCertifiedBodyRequestOwned(
+IndexedHistoricalDecisionCertifiedRequestActiveExact(
     initialContext, node, qc) ==
-  \E archive, request:
-    /\ IndexedHistoricalBodyRequestIdentity(
-         initialContext, node, qc, archive, request)
-    /\ IndexedHistoricalRequestPhysicalOwner(
-         initialContext, request)
+  \E request \in IndexedScheduler(initialContext, 30):
+    request \in
+      IndexedAsync(initialContext)!CertifiedRequestOutbox(node, qc)
 
 IndexedHistoricalDecisionCandidateFor(
     initialContext, node, qc, candidate, commandKind) ==
@@ -314,15 +299,17 @@ IndexedHistoricalDecisionCandidateFor(
 Decision rank:
 
   6  FetchBody
-  5  one responsive exact body-holding CertifiedRequest route
+  5  exact active CertifiedRequest owner
   4  FetchCertifiedBody
   3  StoreBody
   2  ValidateBody
   1  Apply
 
-Rank 5 is deliberately a separate off-scheduler stage.  Its convergence uses
-request retransmission, historical packet admission and Serve/I/O fairness;
-it is not implied merely by weak fairness of the node runner.
+Rank 5 deliberately names only the exact active CertifiedRequest owner.  Route
+selection, responsive body-holder availability, retransmission, packet
+admission, and Serve/I/O service belong to
+`IndexedHistoricalDecisionCertifiedRequestResidualProperty`; they are not
+preconditions for exposing the stage owner.
 ***************************************************************************)
 
 IndexedHistoricalDecisionStageAt(
@@ -338,7 +325,7 @@ IndexedHistoricalDecisionStageAt(
                      initialContext, node, qc,
                      candidate, "FetchBody")
             [] rank = 5 ->
-                 IndexedHistoricalCertifiedBodyRequestOwned(
+                 IndexedHistoricalDecisionCertifiedRequestActiveExact(
                    initialContext, node, qc)
             [] rank = 4 ->
                  \E candidate:
@@ -959,7 +946,8 @@ Exact Open and the application receipt handoff are proved above from
 `IndexedChainSpec`.  The certificate residual is split into historical
 discovery, request packet/archive Serve/ordinary-I/O service, response packet
 import, and target-runner Decision.  The body residual is split into exact
-FetchBody, certified-request archive route, FetchCertifiedBody, StoreBody,
+FetchBody, an exact active CertifiedRequest owner, the separate
+certified-request route/body-service corridor, FetchCertifiedBody, StoreBody,
 ValidateBody, and Apply owners.  No item in this inventory assumes
 `IndexedExactHistoricalRecoveryProgress`,
 `ApplicationLivenessProperty`, or `ExactDecisionStageServiceProperty`.

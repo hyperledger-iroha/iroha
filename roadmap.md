@@ -42,8 +42,9 @@ The remaining work is evidence-driven and must stay in order:
   `MergeSidecarLifecycleSnapshotV2` must remain the only durable schema, with
   V1 rejected and the checked generation increment plus empty responder state
   persisted atomically. Generation rollover is permitted only for necessary
-  unified server-table compaction after every old stream, gate, transfer, and
-  flush is terminal. Historical test receipts and inventory seals predate this
+  unified server-table compaction—either a full table or certified roster
+  geometry replacement—after every old stream, gate, transfer, and flush is
+  terminal. Historical test receipts and inventory seals predate this
   final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity

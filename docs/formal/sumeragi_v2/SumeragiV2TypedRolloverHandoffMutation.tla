@@ -2,20 +2,19 @@
 EXTENDS SumeragiV2TypedRolloverHandoff
 
 (***************************************************************************
-Independent adversarial substitutions for the move-only rollover boundary.
+Negative controls for the sole-V2 lifecycle and typed handoff boundary.
 
-Each configuration enables exactly one defect and checks the fixed safety
-invariant: untyped live force, same-context foreign owner nonce, premature
-seal/mint, ignored or clean-rejected validation candidates, accepted
-predecessor/successor mismatches, late enqueue after sealing, clean persistence
-failures, old callback mutation, missing high-water persistence, unsafe
-torn-midpoint reopen, or same-roster retry loss.
+Each mode introduces one forbidden transition.  The lifecycle controls cover
+active-state compaction, publication before the one atomic V2 snapshot,
+snapshot-crash recovery without restoration, generation overflow, epoch use
+before persistence, post-crash epoch reuse, and epoch overflow.  No mutation
+reintroduces a separate generation marker or migration schema.
 ***************************************************************************)
 
 CONSTANT MutationMode
 
 MutationModes ==
-  {"UntypedForce",
+  {"PrematureSeal",
    "ForeignOwnerNonce",
    "IgnoreForeignCandidate",
    "CleanForeignOwnerReject",
@@ -23,585 +22,350 @@ MutationModes ==
    "AcceptPredecessorArtifactMismatch",
    "CleanPredecessorContextReject",
    "CleanPredecessorArtifactReject",
-   "PrematureSeal",
    "ForeignSuccessor",
    "CleanWrongSuccessorReject",
    "LateEnqueue",
    "CleanLateEnqueueReject",
+   "LoseSameRosterRetry",
    "LateOldCallback",
-   "SkipHighWater",
-   "CleanHighWaterPersistenceFailure",
-   "CleanLifecycleSnapshotPersistenceFailure",
-   "OmitLifecycleSnapshotTornHistory",
-   "OpenHighWaterAheadSnapshot",
-   "LoseSameRosterRetry"}
+   "UntypedForce",
+   "CleanAtomicV2PersistenceFailure",
+   "CleanCrashAfterAtomicV2Persist",
+   "SkipSnapshotCrashHistory",
+   "OpenSnapshotAheadWithoutRestore",
+   "PublishBeforeAtomicV2Persist",
+   "ActiveStateRoll",
+   "GenerationOverflowWrap",
+   "EpochUseBeforePersist",
+   "EpochReuseAfterCrash",
+   "EpochOverflowWrap"}
 
-MutationInit ==
-  /\ Init
-  /\ MutationMode \in MutationModes
+MutationConfiguration ==
+  MutationMode \in MutationModes
 
 PrematureSealAndMint ==
-  /\ receiptStage = "Absent"
-  /\ ~ownerSealed
-  /\ ~successorActive
-  /\ ~restartRequired
-  /\ ownerSealed' = TRUE
-  /\ receiptStage' = "Minted"
-  /\ receiptOwnerNonce' = ServiceOwnerNonce
-  /\ receiptContext' = ExpectedContext
-  /\ receiptArtifact' = ExpectedArtifact
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, constructionParent,
-                 constructionSuccessor, retainedSuccessor,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, successorActive, transitionAuthority,
-                 forcedTransitionUsed, transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, failureReason,
-                 tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent,
-                 validationHistoryVars>>
+  /\ state.finalityValidated
+  /\ state.workerOutstanding > 0
+  /\ state.receiptStage = "Absent"
+  /\ state' =
+       [state EXCEPT
+          !.ownerSealed = TRUE,
+          !.receiptStage = "Minted",
+          !.receiptOwnerNonce = ServiceOwnerNonce,
+          !.receiptContext = ExpectedContext,
+          !.receiptArtifact = ExpectedArtifact]
 
-RetainSameContextForeignOwnerReceipt ==
-  /\ receiptStage = "Minted"
+RetainForeignOwnerReceipt ==
+  /\ state.receiptStage = "Minted"
   /\ ExactSuccessorConstruction
-  /\ foreignReceiptCandidatePresent
-  /\ retainedSuccessor = NoIdentity
-  /\ ~successorActive
-  /\ ~restartRequired
-  /\ receiptStage' = "Retained"
-  /\ receiptOwnerNonce' = ForeignOwnerNonce
-  /\ retainedSuccessor' = ExpectedSuccessor
-  /\ foreignReceiptCandidatePresent' = FALSE
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptContext, receiptArtifact,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, successorActive, transitionAuthority,
-                 forcedTransitionUsed, transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, failureReason,
-                 tornMidpointOpenRejected, validationHistoryVars>>
+  /\ state' =
+       [state EXCEPT !.receiptOwnerNonce = ForeignOwnerNonce]
 
-IgnoreForeignOwnerCandidateAndRetainLocalReceipt ==
-  /\ receiptStage = "Minted"
+IgnoreForeignOwnerCandidate ==
+  /\ state.receiptStage = "Minted"
+  /\ ExactSuccessorConstruction
+  /\ ~state.foreignReceiptRejected
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT !.foreignReceiptRejected = TRUE]
+
+CleanRejectForeignOwnerReceipt ==
+  IgnoreForeignOwnerCandidate
+
+AcceptPredecessorContextMismatch ==
+  /\ state.receiptStage = "Minted"
+  /\ ExactSuccessorConstruction
+  /\ state' =
+       [state EXCEPT !.receiptContext = "ContextB"]
+
+AcceptPredecessorArtifactMismatch ==
+  /\ state.receiptStage = "Minted"
+  /\ ExactSuccessorConstruction
+  /\ state' =
+       [state EXCEPT !.receiptArtifact = "ArtifactB"]
+
+CleanRejectPredecessorContextMismatch ==
+  /\ state.receiptStage = "Minted"
+  /\ ExactSuccessorConstruction
+  /\ ~state.predecessorMismatchRejected
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT !.predecessorMismatchRejected = TRUE]
+
+CleanRejectPredecessorArtifactMismatch ==
+  CleanRejectPredecessorContextMismatch
+
+RetainForeignSuccessor ==
+  /\ state.receiptStage = "Minted"
   /\ ExactPredecessorReceipt
   /\ ExactSuccessorConstruction
-  /\ foreignReceiptCandidatePresent
-  /\ retainedSuccessor = NoIdentity
-  /\ ~successorActive
-  /\ ~restartRequired
-  /\ receiptStage' = "Retained"
-  /\ retainedSuccessor' = ExpectedSuccessor
-  /\ foreignReceiptCandidatePresent' = FALSE
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptOwnerNonce, receiptContext,
-                 receiptArtifact, receiptConsumeCount, serviceGeneration,
-                 durableHighWater, responderActive, responderWritable,
-                 responderAuthorized, retryableChunk, successorActive,
-                 transitionAuthority, forcedTransitionUsed,
-                 transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, failureReason,
-                 tornMidpointOpenRejected,
-                 validationHistoryVars>>
-
-CleanRejectSameContextForeignOwnerReceipt ==
-  /\ foreignReceiptCandidatePresent
-  /\ ForeignOwnerNonce # TransportOwnerNonce
-  /\ ~foreignReceiptRejected
-  /\ ~restartRequired
-  /\ foreignReceiptRejected' = TRUE
-  /\ foreignReceiptCandidatePresent' = FALSE
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptStage, receiptOwnerNonce,
-                 receiptContext, receiptArtifact, retainedSuccessor,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, successorActive, transitionAuthority,
-                 forcedTransitionUsed, transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, lateEnqueueRejected,
-                 lateOldCallbackObserved, successorCursor, restartRequired,
-                 failureReason, tornMidpointOpenRejected,
-                 validationHistoryVars>>
-
-AcceptMismatchedPredecessorReceipt(kind) ==
-  /\ kind \in {"ContextMismatch", "ArtifactMismatch"}
-  /\ receiptStage = "Minted"
-  /\ ExactPredecessorReceipt
-  /\ ExactSuccessorConstruction
-  /\ predecessorMismatchCandidateKind = kind
-  /\ retainedSuccessor = NoIdentity
-  /\ ~successorActive
-  /\ ~restartRequired
-  /\ receiptStage' = "Retained"
-  /\ receiptContext' =
-       IF kind = "ContextMismatch" THEN "ContextB" ELSE receiptContext
-  /\ receiptArtifact' =
-       IF kind = "ArtifactMismatch" THEN "ArtifactB" ELSE receiptArtifact
-  /\ retainedSuccessor' = ExpectedSuccessor
-  /\ predecessorMismatchCandidateKind' = "NoMismatch"
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptOwnerNonce,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, successorActive, transitionAuthority,
-                 forcedTransitionUsed, transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, failureReason,
-                 tornMidpointOpenRejected, foreignReceiptCandidatePresent,
-                 validationHistoriesExceptPredecessorCandidate>>
-
-CleanRejectMismatchedPredecessorReceipt(kind) ==
-  /\ kind \in {"ContextMismatch", "ArtifactMismatch"}
-  /\ predecessorMismatchCandidateKind = kind
-  /\ ~predecessorMismatchRejected
-  /\ ~restartRequired
-  /\ predecessorMismatchCandidateKind' = "NoMismatch"
-  /\ predecessorMismatchRejected' = TRUE
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptStage, receiptOwnerNonce,
-                 receiptContext, receiptArtifact, retainedSuccessor,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, successorActive, transitionAuthority,
-                 forcedTransitionUsed, transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, failureReason,
-                 tornMidpointOpenRejected, foreignReceiptCandidatePresent,
-                 tornHighWaterHistory, foreignReceiptCandidateObserved,
-                 predecessorMismatchObservedKind,
-                 wrongSuccessorCandidatePresent,
-                 wrongSuccessorCandidateObserved, wrongSuccessorRejected>>
-
-RetainForeignSuccessorIdentity ==
-  /\ receiptStage = "Minted"
-  /\ ExactPredecessorReceipt
-  /\ ExactSuccessorConstruction
-  /\ wrongSuccessorCandidatePresent
-  /\ retainedSuccessor = NoIdentity
-  /\ ~successorActive
-  /\ ~restartRequired
-  /\ receiptStage' = "Retained"
-  /\ retainedSuccessor' = ForeignSuccessor
-  /\ wrongSuccessorCandidatePresent' = FALSE
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptOwnerNonce, receiptContext,
-                 receiptArtifact, receiptConsumeCount, serviceGeneration,
-                 durableHighWater, responderActive, responderWritable,
-                 responderAuthorized, retryableChunk, successorActive,
-                 transitionAuthority, forcedTransitionUsed,
-                 transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, failureReason,
-                 tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent,
-                 validationHistoriesExceptWrongSuccessorCandidate>>
+  /\ state' =
+       [state EXCEPT
+          !.receiptStage = "Retained",
+          !.retainedSuccessor = ForeignSuccessor]
 
 CleanRejectWrongImmediateSuccessor ==
-  /\ wrongSuccessorCandidatePresent
-  /\ ~wrongSuccessorRejected
-  /\ ~restartRequired
-  /\ wrongSuccessorCandidatePresent' = FALSE
-  /\ wrongSuccessorRejected' = TRUE
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptStage, receiptOwnerNonce,
-                 receiptContext, receiptArtifact, retainedSuccessor,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, successorActive, transitionAuthority,
-                 forcedTransitionUsed, transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, failureReason,
-                 tornMidpointOpenRejected, foreignReceiptCandidatePresent,
-                 tornHighWaterHistory, foreignReceiptCandidateObserved,
-                 predecessorMismatchCandidateKind,
-                 predecessorMismatchObservedKind,
-                 predecessorMismatchRejected,
-                 wrongSuccessorCandidateObserved>>
+  /\ state.receiptStage = "Minted"
+  /\ ~state.wrongSuccessorRejected
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT !.wrongSuccessorRejected = TRUE]
 
 EnqueueAfterOwnerSeal ==
-  /\ ownerSealed
-  /\ workerOutstanding = 0
-  /\ ~restartRequired
-  /\ workerOutstanding' = 1
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 ownerSealed, constructionParent, constructionSuccessor,
-                 receiptStage, receiptOwnerNonce, receiptContext,
-                 receiptArtifact, retainedSuccessor, receiptConsumeCount,
-                 serviceGeneration, durableHighWater, responderActive,
-                 responderWritable, responderAuthorized, retryableChunk,
-                 successorActive, transitionAuthority, forcedTransitionUsed,
-                 transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, failureReason,
-                 tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent,
-                 validationHistoryVars>>
+  /\ state.ownerSealed
+  /\ state.workerOutstanding = 0
+  /\ state' =
+       [state EXCEPT !.workerOutstanding = 1]
 
 CleanRejectLateExactOutputEnqueue ==
-  /\ ownerSealed
-  /\ receiptStage = "Minted"
-  /\ ~successorActive
-  /\ ~restartRequired
-  /\ ~ValidationCandidatePending
-  /\ ~lateEnqueueRejected
-  /\ lateEnqueueRejected' = TRUE
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptStage, receiptOwnerNonce,
-                 receiptContext, receiptArtifact, retainedSuccessor,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, successorActive, transitionAuthority,
-                 forcedTransitionUsed, transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateOldCallbackObserved, successorCursor, restartRequired,
-                 failureReason, tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent,
-                 validationHistoryVars>>
-
-CleanFailNextServiceHighWaterPersistence ==
-  /\ targetRoster = "ChangedRoster"
-  /\ ExactRetainedMergeSidecars
-  /\ durableHighWater = InitialGeneration
-  /\ serviceGeneration = InitialGeneration
-  /\ failureReason = "None"
-  /\ ~restartRequired
-  /\ ~successorActive
-  /\ failureReason' = "PersistenceFailure"
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptStage, receiptOwnerNonce,
-                 receiptContext, receiptArtifact, retainedSuccessor,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, successorActive, transitionAuthority,
-                 forcedTransitionUsed, transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent, validationHistoryVars>>
-
-CleanFailLifecycleSnapshotAfterHighWaterPersistence ==
-  /\ targetRoster = "ChangedRoster"
-  /\ ExactRetainedMergeSidecars
-  /\ PreparedHighWaterSnapshotMidpoint
-  /\ ~successorActive
-  /\ failureReason' = "SnapshotPersistenceFailure"
-  /\ tornHighWaterHistory' = TRUE
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptStage, receiptOwnerNonce,
-                 receiptContext, receiptArtifact, retainedSuccessor,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, successorActive, transitionAuthority,
-                 forcedTransitionUsed, transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent,
-                 validationHistoriesExceptTorn>>
-
-FailLifecycleSnapshotWithoutTornHistory ==
-  /\ targetRoster = "ChangedRoster"
-  /\ ExactRetainedMergeSidecars
-  /\ PreparedHighWaterSnapshotMidpoint
-  /\ ~successorActive
-  /\ restartRequired' = TRUE
-  /\ successorActive' = FALSE
-  /\ failureReason' = "SnapshotPersistenceFailure"
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptStage, receiptOwnerNonce,
-                 receiptContext, receiptArtifact, retainedSuccessor,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, transitionAuthority, forcedTransitionUsed,
-                 transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent, validationHistoryVars>>
-
-UntypedLiveChangedRosterForce ==
-  /\ targetRoster = "ChangedRoster"
-  /\ ExactRetainedMergeSidecars
-  /\ ~successorActive
-  /\ ResponderBlocksOrdinaryTransition
-  /\ ~restartRequired
-  /\ serviceGeneration' = NextGeneration
-  /\ durableHighWater' = NextGeneration
-  /\ responderActive' = FALSE
-  /\ responderWritable' = FALSE
-  /\ responderAuthorized' = FALSE
-  /\ retryableChunk' = 0
-  /\ successorActive' = TRUE
-  /\ transitionAuthority' = "Ordinary"
-  /\ forcedTransitionUsed' = TRUE
-  /\ transitionedFromLiveResponder' = TRUE
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptStage, receiptOwnerNonce,
-                 receiptContext, receiptArtifact, retainedSuccessor,
-                 receiptConsumeCount, ordinaryLiveTransitionRejected,
-                 foreignReceiptRejected, lateEnqueueRejected,
-                 lateOldCallbackObserved, successorCursor, restartRequired,
-                 failureReason, tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent,
-                 validationHistoryVars>>
-
-ActivateBeforeHighWaterPersistence ==
-  /\ targetRoster = "ChangedRoster"
-  /\ ExactRetainedMergeSidecars
-  /\ durableHighWater = InitialGeneration
-  /\ ~successorActive
-  /\ ~restartRequired
-  /\ receiptStage' = "Consumed"
-  /\ receiptConsumeCount' = 1
-  /\ serviceGeneration' = NextGeneration
-  /\ responderActive' = FALSE
-  /\ responderWritable' = FALSE
-  /\ responderAuthorized' = FALSE
-  /\ retryableChunk' = 0
-  /\ successorActive' = TRUE
-  /\ transitionAuthority' = "Typed"
-  /\ forcedTransitionUsed' = TRUE
-  /\ transitionedFromLiveResponder' = ResponderBlocksOrdinaryTransition
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptOwnerNonce, receiptContext,
-                 receiptArtifact, retainedSuccessor, durableHighWater,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, lateOldCallbackObserved,
-                 successorCursor, restartRequired, failureReason,
-                 tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent,
-                 validationHistoryVars>>
+  /\ state.ownerSealed
+  /\ state.receiptStage = "Minted"
+  /\ ~state.lateEnqueueRejected
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT !.lateEnqueueRejected = TRUE]
 
 SameRosterDropsRetryableChunk ==
-  /\ targetRoster = "SameRoster"
+  /\ state.targetRoster = "SameRoster"
+  /\ state.compactionCause = "NoCompaction"
   /\ ExactRetainedMergeSidecars
-  /\ durableHighWater = InitialGeneration
-  /\ ~successorActive
-  /\ ~restartRequired
-  /\ receiptStage' = "Consumed"
-  /\ receiptConsumeCount' = 1
-  /\ retryableChunk' = 0
-  /\ successorActive' = TRUE
-  /\ transitionAuthority' = "RetainedSameRoster"
-  /\ forcedTransitionUsed' = FALSE
-  /\ transitionedFromLiveResponder' = ResponderBlocksOrdinaryTransition
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptOwnerNonce, receiptContext,
-                 receiptArtifact, retainedSuccessor, serviceGeneration,
-                 durableHighWater, responderActive, responderWritable,
-                 responderAuthorized, ordinaryLiveTransitionRejected,
-                 foreignReceiptRejected, lateEnqueueRejected,
-                 lateOldCallbackObserved, successorCursor, restartRequired,
-                 failureReason, tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent,
-                 validationHistoryVars>>
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.receiptStage = "Consumed",
+          !.receiptConsumeCount = 1,
+          !.successorActive = TRUE,
+          !.transitionAuthority = "SameRoster",
+          !.retryableChunk = 0]
 
 LateOldWriterMutatesSuccessor ==
-  /\ targetRoster = "ChangedRoster"
-  /\ successorActive
-  /\ transitionAuthority = "Typed"
-  /\ ~lateOldCallbackObserved
-  /\ lateOldCallbackObserved' = TRUE
-  /\ successorCursor' = 1
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptStage, receiptOwnerNonce,
-                 receiptContext, receiptArtifact, retainedSuccessor,
-                 receiptConsumeCount, serviceGeneration, durableHighWater,
-                 responderActive, responderWritable, responderAuthorized,
-                 retryableChunk, successorActive, transitionAuthority,
-                 forcedTransitionUsed, transitionedFromLiveResponder,
-                 ordinaryLiveTransitionRejected, foreignReceiptRejected,
-                 lateEnqueueRejected, restartRequired, failureReason,
-                 tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent,
-                 validationHistoryVars>>
+  /\ state.successorActive
+  /\ state.transitionAuthority = "LifecycleV2"
+  /\ state.serverStreamState = "Empty"
+  /\ state' =
+       [state EXCEPT
+          !.lateOldCallbackObserved = TRUE,
+          !.serverStreamState = "Active"]
 
-OpenTornHighWaterAheadSnapshot ==
-  /\ targetRoster = "ChangedRoster"
+UntypedActiveLifecycleForce ==
   /\ ExactRetainedMergeSidecars
-  /\ TornHighWaterSnapshotMidpoint
-  /\ tornHighWaterHistory
-  /\ ~successorActive
-  /\ receiptStage' = "Consumed"
-  /\ receiptConsumeCount' = 1
-  /\ serviceGeneration' = NextGeneration
-  /\ responderActive' = FALSE
-  /\ responderWritable' = FALSE
-  /\ responderAuthorized' = FALSE
-  /\ retryableChunk' = 0
-  /\ successorActive' = TRUE
-  /\ transitionAuthority' = "Typed"
-  /\ forcedTransitionUsed' = TRUE
-  /\ transitionedFromLiveResponder' = ResponderBlocksOrdinaryTransition
-  /\ restartRequired' = FALSE
-  /\ failureReason' = "None"
-  /\ UNCHANGED <<targetRoster, finalityValidated, workerIngressClosed,
-                 workerOutstanding, ownerSealed, constructionParent,
-                 constructionSuccessor, receiptOwnerNonce, receiptContext,
-                 receiptArtifact, retainedSuccessor, durableHighWater,
-                 ordinaryLiveTransitionRejected,
-                 foreignReceiptRejected, lateEnqueueRejected,
-                 lateOldCallbackObserved, successorCursor,
-                 tornMidpointOpenRejected,
-                 foreignReceiptCandidatePresent,
-                 validationHistoryVars>>
+  /\ CompactionNeeded
+  /\ ~AllOldLifecycleTerminal
+  /\ state.serviceGeneration < GenerationLimit
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.durableLifecycleSnapshotV2 =
+            LifecycleSnapshotV2(
+              state.serviceGeneration + 1,
+              state.nextStreamEpoch,
+              "Empty",
+              "Empty"),
+          !.serviceGeneration = state.serviceGeneration + 1,
+          !.serverStreamState = "Empty",
+          !.requestGateState = "Empty",
+          !.transferState = "Empty",
+          !.flushState = "Empty",
+          !.retryableChunk = 0,
+          !.lifecycleSnapshotPhase = "Published",
+          !.receiptStage = "Consumed",
+          !.receiptConsumeCount = 1,
+          !.successorActive = TRUE,
+          !.transitionAuthority = "SameRoster"]
 
-MutationSeal ==
-  IF MutationMode = "PrematureSeal"
-  THEN PrematureSealAndMint
-  ELSE SealAppliedHeightOutputHandoff
+CleanFailAtomicV2Persistence ==
+  /\ ExactRetainedMergeSidecars
+  /\ CompactionNeeded
+  /\ AllOldLifecycleTerminal
+  /\ state.serviceGeneration < GenerationLimit
+  /\ state.lifecycleSnapshotPhase = "Current"
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.failureReason =
+            "LifecycleSnapshotV2PersistenceFailure"]
 
-MutationPresentValidationCandidate ==
-  CASE MutationMode \in
-         {"ForeignOwnerNonce",
-          "IgnoreForeignCandidate",
-          "CleanForeignOwnerReject"} ->
-         PresentSameContextForeignOwnerReceipt
-    [] MutationMode \in
-         {"AcceptPredecessorContextMismatch",
-          "CleanPredecessorContextReject"} ->
-         PresentMismatchedPredecessorContextReceipt
-    [] MutationMode \in
-         {"AcceptPredecessorArtifactMismatch",
-          "CleanPredecessorArtifactReject"} ->
-         PresentMismatchedPredecessorArtifactReceipt
-    [] MutationMode \in
-         {"ForeignSuccessor", "CleanWrongSuccessorReject"} ->
-         PresentWrongImmediateSuccessor
-    [] OTHER ->
-         \/ PresentSameContextForeignOwnerReceipt
-         \/ PresentMismatchedPredecessorContextReceipt
-         \/ PresentMismatchedPredecessorArtifactReceipt
-         \/ PresentWrongImmediateSuccessor
+CleanCrashAfterAtomicV2Persist ==
+  /\ LifecycleSnapshotV2AheadOfMemory
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.lifecycleSnapshotPhase = "Restored",
+          !.snapshotCrashObserved = TRUE]
 
-MutationForeignOwnerReject ==
-  IF MutationMode = "CleanForeignOwnerReject"
-  THEN CleanRejectSameContextForeignOwnerReceipt
-  ELSE RejectSameContextForeignOwnerReceipt
+CrashWithoutSnapshotHistory ==
+  /\ LifecycleSnapshotV2AheadOfMemory
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.restartRequired = TRUE,
+          !.failureReason =
+            "CrashAfterLifecycleSnapshotV2Persistence"]
 
-MutationPredecessorMismatchReject ==
-  CASE MutationMode = "CleanPredecessorContextReject" ->
-         CleanRejectMismatchedPredecessorReceipt("ContextMismatch")
-    [] MutationMode = "CleanPredecessorArtifactReject" ->
-         CleanRejectMismatchedPredecessorReceipt("ArtifactMismatch")
-    [] OTHER ->
-         RejectMismatchedPredecessorReceipt
+OpenSnapshotAheadWithoutRestore ==
+  /\ LifecycleSnapshotV2AheadOfMemory
+  /\ state.restartRequired
+  /\ state.failureReason =
+       "CrashAfterLifecycleSnapshotV2Persistence"
+  /\ state' =
+       [state EXCEPT
+          !.restartRequired = FALSE,
+          !.failureReason = "None",
+          !.receiptStage = "Consumed",
+          !.receiptConsumeCount = 1,
+          !.successorActive = TRUE,
+          !.transitionAuthority = "LifecycleV2"]
 
-MutationWrongSuccessorReject ==
-  IF MutationMode = "CleanWrongSuccessorReject"
-  THEN CleanRejectWrongImmediateSuccessor
-  ELSE RejectWrongImmediateSuccessor
+PublishBeforeAtomicV2Persist ==
+  /\ ExactRetainedMergeSidecars
+  /\ CompactionNeeded
+  /\ AllOldLifecycleTerminal
+  /\ state.serviceGeneration < GenerationLimit
+  /\ state.lifecycleSnapshotPhase = "Current"
+  /\ LifecycleMemoryMatchesDurableSnapshotV2
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.serviceGeneration = state.serviceGeneration + 1,
+          !.serverStreamState = "Empty",
+          !.requestGateState = "Empty",
+          !.transferState = "Empty",
+          !.flushState = "Empty",
+          !.retryableChunk = 0,
+          !.lifecycleSnapshotPhase = "Published",
+          !.receiptStage = "Consumed",
+          !.receiptConsumeCount = 1,
+          !.successorActive = TRUE,
+          !.transitionAuthority = "LifecycleV2"]
 
-MutationRetain ==
-  CASE MutationMode = "ForeignOwnerNonce" ->
-         RetainSameContextForeignOwnerReceipt
+RollActiveLifecycleState ==
+  /\ ExactRetainedMergeSidecars
+  /\ CompactionNeeded
+  /\ ~AllOldLifecycleTerminal
+  /\ state.serviceGeneration < GenerationLimit
+  /\ state.lifecycleSnapshotPhase = "Current"
+  /\ ~state.restartRequired
+  /\ state' =
+       [state EXCEPT
+          !.durableLifecycleSnapshotV2 =
+            LifecycleSnapshotV2(
+              state.serviceGeneration + 1,
+              state.nextStreamEpoch,
+              "Empty",
+              "Empty"),
+          !.lifecycleSnapshotPhase = "Persisted"]
+
+WrapGenerationCounter ==
+  /\ state.successorActive
+  /\ state.serviceGeneration = GenerationLimit
+  /\ state' =
+       [state EXCEPT
+          !.serviceGeneration = GenerationLimit + 1,
+          !.durableLifecycleSnapshotV2 =
+            LifecycleSnapshotV2(
+              GenerationLimit + 1,
+              state.nextStreamEpoch,
+              "Empty",
+              "Empty")]
+
+UseRequesterEpochBeforePersistence ==
+  /\ state.requesterEpochPhase = "Idle"
+  /\ state.nextStreamEpoch < StreamEpochLimit
+  /\ state.activeStreamEpoch = 0
+  /\ state' =
+       [state EXCEPT
+          !.requesterEpochPhase = "InUse",
+          !.activeStreamEpoch = state.nextStreamEpoch]
+
+ReuseRequesterEpochAfterCrash ==
+  /\ state.restartRequired
+  /\ state.failureReason = "CrashAfterRequesterEpochPersistence"
+  /\ state.epochCrashObserved
+  /\ state.skippedStreamEpoch # 0
+  /\ state' =
+       [state EXCEPT
+          !.nextStreamEpoch =
+            state.durableLifecycleSnapshotV2.nextStreamEpoch,
+          !.requesterEpochPhase = "InUse",
+          !.pendingStreamEpoch = 0,
+          !.activeStreamEpoch = state.skippedStreamEpoch,
+          !.restartRequired = FALSE,
+          !.failureReason = "None"]
+
+WrapRequesterEpochCounter ==
+  /\ state.requesterEpochPhase = "Idle"
+  /\ state.nextStreamEpoch = StreamEpochLimit
+  /\ state' =
+       [state EXCEPT
+          !.nextStreamEpoch = InitialNextStreamEpoch,
+          !.durableLifecycleSnapshotV2 =
+            LifecycleSnapshotV2(
+              state.serviceGeneration,
+              InitialNextStreamEpoch,
+              state.serverStreamState,
+              state.requestGateState),
+          !.requesterEpochPhase = "InUse",
+          !.activeStreamEpoch = StreamEpochLimit]
+
+SelectedMutationAction ==
+  CASE MutationMode = "PrematureSeal" ->
+         PrematureSealAndMint
+    [] MutationMode = "ForeignOwnerNonce" ->
+         RetainForeignOwnerReceipt
     [] MutationMode = "IgnoreForeignCandidate" ->
-         IgnoreForeignOwnerCandidateAndRetainLocalReceipt
+         IgnoreForeignOwnerCandidate
+    [] MutationMode = "CleanForeignOwnerReject" ->
+         CleanRejectForeignOwnerReceipt
     [] MutationMode = "AcceptPredecessorContextMismatch" ->
-         AcceptMismatchedPredecessorReceipt("ContextMismatch")
+         AcceptPredecessorContextMismatch
     [] MutationMode = "AcceptPredecessorArtifactMismatch" ->
-         AcceptMismatchedPredecessorReceipt("ArtifactMismatch")
+         AcceptPredecessorArtifactMismatch
+    [] MutationMode = "CleanPredecessorContextReject" ->
+         CleanRejectPredecessorContextMismatch
+    [] MutationMode = "CleanPredecessorArtifactReject" ->
+         CleanRejectPredecessorArtifactMismatch
     [] MutationMode = "ForeignSuccessor" ->
-         RetainForeignSuccessorIdentity
-    [] OTHER ->
-         ConsumeReceiptIntoRetainedMergeSidecars
-
-MutationLateEnqueue ==
-  CASE MutationMode = "LateEnqueue" ->
+         RetainForeignSuccessor
+    [] MutationMode = "CleanWrongSuccessorReject" ->
+         CleanRejectWrongImmediateSuccessor
+    [] MutationMode = "LateEnqueue" ->
          EnqueueAfterOwnerSeal
     [] MutationMode = "CleanLateEnqueueReject" ->
          CleanRejectLateExactOutputEnqueue
-    [] OTHER ->
-         RejectLateExactOutputEnqueue
-
-MutationChangedRosterTransition ==
-  CASE MutationMode = "UntypedForce" ->
-         UntypedLiveChangedRosterForce
-    [] MutationMode = "SkipHighWater" ->
-         ActivateBeforeHighWaterPersistence
-    [] OTHER ->
-         TypedChangedRosterTransition
-
-MutationSameRosterTransition ==
-  IF MutationMode = "LoseSameRosterRetry"
-  THEN SameRosterDropsRetryableChunk
-  ELSE SameRosterRetainedTransportRollover
-
-MutationLateCallback ==
-  IF MutationMode = "LateOldCallback"
-  THEN LateOldWriterMutatesSuccessor
-  ELSE ObserveLateOldWriterCallback
-
-MutationTornMidpointOpen ==
-  IF MutationMode = "OpenHighWaterAheadSnapshot"
-  THEN OpenTornHighWaterAheadSnapshot
-  ELSE RejectTornHighWaterSnapshotOpen
-
-MutationHighWaterPersistenceFailure ==
-  IF MutationMode = "CleanHighWaterPersistenceFailure"
-  THEN CleanFailNextServiceHighWaterPersistence
-  ELSE FailNextServiceHighWaterPersistence
-
-MutationLifecycleSnapshotPersistenceFailure ==
-  CASE MutationMode = "CleanLifecycleSnapshotPersistenceFailure" ->
-         CleanFailLifecycleSnapshotAfterHighWaterPersistence
-    [] MutationMode = "OmitLifecycleSnapshotTornHistory" ->
-         FailLifecycleSnapshotWithoutTornHistory
-    [] OTHER ->
-         FailLifecycleSnapshotAfterHighWaterPersistence
+    [] MutationMode = "LoseSameRosterRetry" ->
+         SameRosterDropsRetryableChunk
+    [] MutationMode = "LateOldCallback" ->
+         LateOldWriterMutatesSuccessor
+    [] MutationMode = "UntypedForce" ->
+         UntypedActiveLifecycleForce
+    [] MutationMode = "CleanAtomicV2PersistenceFailure" ->
+         CleanFailAtomicV2Persistence
+    [] MutationMode = "CleanCrashAfterAtomicV2Persist" ->
+         CleanCrashAfterAtomicV2Persist
+    [] MutationMode = "SkipSnapshotCrashHistory" ->
+         CrashWithoutSnapshotHistory
+    [] MutationMode = "OpenSnapshotAheadWithoutRestore" ->
+         OpenSnapshotAheadWithoutRestore
+    [] MutationMode = "PublishBeforeAtomicV2Persist" ->
+         PublishBeforeAtomicV2Persist
+    [] MutationMode = "ActiveStateRoll" ->
+         RollActiveLifecycleState
+    [] MutationMode = "GenerationOverflowWrap" ->
+         WrapGenerationCounter
+    [] MutationMode = "EpochUseBeforePersist" ->
+         UseRequesterEpochBeforePersistence
+    [] MutationMode = "EpochReuseAfterCrash" ->
+         ReuseRequesterEpochAfterCrash
+    [] MutationMode = "EpochOverflowWrap" ->
+         WrapRequesterEpochCounter
 
 MutationNext ==
-  \/ ValidateFinality
-  \/ CloseWorkerIngress
-  \/ ClearOneWorkerExactOutput
-  \/ MutationSeal
-  \/ MutationLateEnqueue
-  \/ BeginExactSuccessorConstruction
-  \/ MutationPresentValidationCandidate
-  \/ MutationForeignOwnerReject
-  \/ MutationPredecessorMismatchReject
-  \/ MutationWrongSuccessorReject
-  \/ MutationRetain
-  \/ PersistNextServiceHighWater
-  \/ MutationHighWaterPersistenceFailure
-  \/ MutationLifecycleSnapshotPersistenceFailure
-  \/ CrashAtHighWaterAheadSnapshot
-  \/ MutationTornMidpointOpen
-  \/ RejectOrdinaryLiveChangedRosterTransition
-  \/ QuiesceChangedRosterResponder
-  \/ MutationChangedRosterTransition
-  \/ MutationSameRosterTransition
-  \/ MutationLateCallback
-  \/ CrashWithRolledBackHighWater
+  \/ Next
+  \/ SelectedMutationAction
 
 MutationSpec ==
-  /\ MutationInit
+  /\ MutationConfiguration
+  /\ Init
   /\ [][MutationNext]_typedRolloverVars
 
 =============================================================================

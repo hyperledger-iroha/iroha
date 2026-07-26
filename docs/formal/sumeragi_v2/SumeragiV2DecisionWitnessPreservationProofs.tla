@@ -109,9 +109,13 @@ AsyncDecisionRecoveryStageExact(node, qc) ==
   \/ DecisionRecoveryStageExact(node, qc)
   \/ DecisionRecoveryAuthority(node, qc)
 
+DecisionExactSourceOwner(node) ==
+  \/ node \in AsyncCurrentResponsiveVoters
+  \/ HistoricalRecoveryTarget(node)
+
 DecisionExactSourceRetentionInvariant ==
   \A decision \in decisions:
-    (decision.node \in AsyncCurrentResponsiveVoters
+    (DecisionExactSourceOwner(decision.node)
       /\ decision.qc.context = context)
       => AsyncDecisionRecoveryStageExact(decision.node, decision.qc)
 
@@ -170,7 +174,9 @@ PROOF
                    decision.node, decision.qc)
       <3>1. AsyncDecisionRecoveryStageExact(
                decision.node, decision.qc)
-        BY <1>1, <2>1 DEF DecisionExactSourceRetentionInvariant
+        BY <1>1, <2>1
+           DEF DecisionExactSourceRetentionInvariant,
+               DecisionExactSourceOwner
       <3>2. DecisionRecoveryStageExact(
                decision.node, decision.qc)
                => DecisionCompletionWitness(
@@ -215,7 +221,7 @@ PROOF
          BootstrapParentContextPrecedes, Isa
          DEF AsyncInitAt, AsyncBaseInitAt, InitAt, Heights
     <2>2. ASSUME NEW decision \in decisions,
-                  /\ decision.node \in AsyncCurrentResponsiveVoters
+                  /\ DecisionExactSourceOwner(decision.node)
                      /\ decision.qc.context = context
            PROVE AsyncDecisionRecoveryStageExact(
                    decision.node, decision.qc)
@@ -230,7 +236,8 @@ PROOF
              DEF BootstrapParentDecision, BootstrapParentCommitQC, QC
         <4> QED BY <2>1, <2>2, <4>2
       <3> QED BY <2>1, <3>1, <3>2, SMT
-    <2> QED BY <2>2 DEF DecisionExactSourceRetentionInvariant
+    <2> QED BY <2>2
+         DEF DecisionExactSourceRetentionInvariant
   <1> QED BY <1>1
 
 THEOREM AsyncInitEstablishesDecisionFrontierAndExactStage ==
@@ -793,9 +800,11 @@ BY DurableDecisionNodeCannotOwnPendingInstall, Isa
 Carrier-neutral exact-stage frame.  It is used for unrelated commands and
 non-runner transitions after those transitions have established the exact
 retention clauses rather than merely claiming a scheduler stutter.  The
-authenticated sent history is append-only: new responses may be published,
-but an exact response witness already used by the Decision pipeline cannot
-disappear.
+combined ordinary-voter/historical-target owner set may only shrink; opening
+a new historical target is handled separately by the final closure module.
+The authenticated sent history is append-only: new responses may be
+published, but an exact response witness already used by the Decision
+pipeline cannot disappear.
 ***************************************************************************)
 
 DecisionExactCertifiedRequestsRetained ==
@@ -815,8 +824,11 @@ DecisionExactRetentionFrame ==
   /\ UNCHANGED <<context, nodeView, generation, decisions, applied,
                  availableBodies, durableBodies, validatedBodies,
                  AsyncRecoveryVars>>
-  /\ AsyncCurrentResponsiveVoters'
-       \subseteq AsyncCurrentResponsiveVoters
+  /\ (AsyncCurrentResponsiveVoters'
+        \cup asyncHistoricalRecoveryTargets')
+       \subseteq
+         (AsyncCurrentResponsiveVoters
+            \cup asyncHistoricalRecoveryTargets)
   /\ DecisionExactAuthenticatedHistoryRetained
   /\ DecisionExactCertifiedRequestsRetained
   /\ DecisionExactScheduledCandidatesRetained
@@ -827,6 +839,7 @@ THEOREM DecisionExactRetentionFramePreservesSource ==
   => DecisionExactSourceRetentionInvariant'
 BY IsaT(180)
    DEF DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryStageExact,
        DecisionFetchBodyOwnedExact,
@@ -867,6 +880,7 @@ THEOREM LocalAdmissionPreservesDecisionExactSourceRetention ==
     => DecisionExactSourceRetentionInvariant'
 BY LocalAdmissionPreservesScheduledCandidateSet, IsaT(120)
    DEF DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryStageExact,
        DecisionFetchBodyOwnedExact,
@@ -916,6 +930,7 @@ BY DecisionNodeExcludesLockedPrepareRecoveryAuthority,
    SequenceWithoutIndexRetainsOtherValue,
    SequenceSetAfterAppend, IsaT(420)
    DEF DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryStageExact,
        DecisionFetchBodyOwnedExact,
@@ -1000,6 +1015,7 @@ BY SelectedExactFifoOwnerCannotDeferOrDiscard,
    SequenceWithoutIndexRetainsOtherValue,
    TailRetainsNonHeadValue, IsaT(600)
    DEF DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryStageExact,
        DecisionFetchBodyOwnedExact,
