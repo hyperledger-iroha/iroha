@@ -39,6 +39,7 @@ def declaration(source: str, symbol: str, *, theorem: bool) -> tuple[str, str]:
     following = DECLARATION_RE.search(source, match.end())
     end = following.start() if following is not None else len(source)
     body = source[match.end() : end]
+    body = re.split(r"(?m)^={10,}\s*$", body, maxsplit=1)[0]
     parts = re.split(r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1)
     statement = parts[0]
     proof = parts[1] if len(parts) == 2 else ""
@@ -88,7 +89,7 @@ def validate(module_path: Path) -> list[str]:
 
     theorem = "IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress"
     expected_theorem = (
-        "/\\ IndexedChainSpec "
+        "/\\ IndexedLiveChainSpec "
         "/\\ IndexedExactHistoricalRecoveryProgress "
         "/\\ IndexedSuccessorActivationProgress "
         "/\\ VerificationOneHeightCompletion "
@@ -106,6 +107,7 @@ def validate(module_path: Path) -> list[str]:
             )
         required_proof_tokens = (
             "HeightLivenessFromOneHeightAndExactRecoveryProgress",
+            "IndexedLiveChainSpecProjectsIndexedChainSpec",
             "IndexedProjectedCompletionReachesExactCompletion",
             "IndexedTargetJoinedIsStable",
             "IndexedExactHeightLivenessProperty",
@@ -120,13 +122,40 @@ def validate(module_path: Path) -> list[str]:
         ):
             errors.append(f"{theorem} proof contains a vacuous assertion")
 
-    wrapper = "IndexedHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs"
-    try:
-        _, wrapper_proof = declaration(source, wrapper, theorem=True)
-    except ValueError as error:
-        errors.append(str(error))
-    else:
-        if theorem not in wrapper_proof:
+    downstream_contracts = {
+        "IndexedExactHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs": (
+            "/\\ IndexedLiveChainSpec "
+            "/\\ IndexedHistoricalRecoveryTemporalPrerequisites "
+            "=> IndexedExactHeightLivenessProperty"
+        ),
+        "IndexedHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs": (
+            "/\\ IndexedLiveChainSpec "
+            "/\\ IndexedHistoricalRecoveryTemporalPrerequisites "
+            "=> IndexedHeightLivenessProperty"
+        ),
+        "HeightLivenessObligation": (
+            "IndexedLiveChainSpec => IndexedHeightLivenessProperty"
+        ),
+    }
+    downstream_proofs: dict[str, str] = {}
+    for symbol, expected in downstream_contracts.items():
+        try:
+            statement, proof = declaration(source, symbol, theorem=True)
+        except ValueError as error:
+            errors.append(str(error))
+            continue
+        downstream_proofs[symbol] = proof
+        if statement != expected:
+            errors.append(
+                f"{symbol} must state only {expected!r}; found {statement!r}"
+            )
+
+    for wrapper in (
+        "IndexedExactHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs",
+        "IndexedHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs",
+    ):
+        wrapper_proof = downstream_proofs.get(wrapper)
+        if wrapper_proof is not None and theorem not in wrapper_proof:
             errors.append(
                 f"{wrapper} must consume {theorem} rather than bypass exact membership"
             )

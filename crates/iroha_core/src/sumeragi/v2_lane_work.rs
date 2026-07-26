@@ -1739,8 +1739,9 @@ struct LanePersistencePause {
 ///
 /// Only [`RetainedMergeSidecars`] can construct this value, after matching the
 /// exact service/transport owner pair, predecessor artifact, empty lane-output
-/// handoff, and immediate successor context. The merge transport consumes it
-/// on the one path allowed to clear a still-writable predecessor response.
+/// handoff, and immediate successor context. The authority authenticates that
+/// binding only; it cannot clear or otherwise bypass non-terminal responder
+/// streams, gates, transfers, or flush ownership.
 pub(crate) struct DurableMergeSidecarRolloverAuthority {
     _exact_output_handoff: DurableExactOutputHandoffReceipt,
 }
@@ -8292,28 +8293,7 @@ impl V2LaneWorkAdapter {
         let mut changed = false;
         for prefix in self.merge_sidecars.drain_closed_server_prefixes() {
             let requester = prefix.requester.clone();
-            match self.closed_sidecar_prefixes.get_mut(&requester) {
-                Some(retained) if prefix.covers(retained) => {
-                    if retained != &prefix {
-                        *retained = prefix.clone();
-                        changed = true;
-                    }
-                }
-                Some(retained) if retained.covers(&prefix) => {}
-                Some(retained) => {
-                    debug_assert_eq!(retained.service_generation, prefix.service_generation);
-                    debug_assert_eq!(retained.stream_epoch, prefix.stream_epoch);
-                    if prefix.closed_through > retained.closed_through {
-                        retained.closed_through = prefix.closed_through;
-                        changed = true;
-                    }
-                }
-                None => {
-                    self.closed_sidecar_prefixes
-                        .insert(requester.clone(), prefix.clone());
-                    changed = true;
-                }
-            }
+            changed |= self.coalesce_closed_sidecar_prefix(prefix.clone());
             let effects_before = self.sidecar_effects.len();
             self.sidecar_effects.retain(|effect| {
                 !matches!(
@@ -8343,6 +8323,38 @@ impl V2LaneWorkAdapter {
         changed
     }
 
+    fn coalesce_closed_sidecar_prefix(
+        &mut self,
+        prefix: CertifiedMergeSidecarClosedPrefix,
+    ) -> bool {
+        let requester = prefix.requester.clone();
+        match self.closed_sidecar_prefixes.get_mut(&requester) {
+            Some(retained) if prefix.covers(retained) => {
+                if retained == &prefix {
+                    false
+                } else {
+                    *retained = prefix;
+                    true
+                }
+            }
+            Some(retained) if retained.covers(&prefix) => false,
+            Some(retained) => {
+                debug_assert_eq!(retained.service_generation, prefix.service_generation);
+                debug_assert_eq!(retained.stream_epoch, prefix.stream_epoch);
+                if prefix.closed_through <= retained.closed_through {
+                    false
+                } else {
+                    retained.closed_through = prefix.closed_through;
+                    true
+                }
+            }
+            None => {
+                self.closed_sidecar_prefixes.insert(requester, prefix);
+                true
+            }
+        }
+    }
+
     /// Drain authenticated close prefixes for the worker exact-output owner.
     pub(crate) fn drain_closed_sidecar_prefixes(
         &mut self,
@@ -8351,6 +8363,25 @@ impl V2LaneWorkAdapter {
             .into_iter()
             .map(|(_, prefix)| prefix)
             .collect()
+    }
+
+    /// Restore a failed exact-output handoff suffix for an ordered retry.
+    ///
+    /// Prefixes which arrived after the failed drain are coalesced by the same
+    /// lexicographic generation/epoch/floor relation as ordinary ingress.
+    pub(crate) fn requeue_closed_sidecar_prefixes(
+        &mut self,
+        prefixes: impl IntoIterator<Item = CertifiedMergeSidecarClosedPrefix>,
+    ) {
+        for prefix in prefixes {
+            let _ = self.coalesce_closed_sidecar_prefix(prefix);
+        }
+    }
+
+    /// Confirm that drained sidecar prefixes have terminated every covered
+    /// exact-output fanout and writer-flush receipt.
+    pub(crate) fn confirm_closed_sidecar_prefix_handoff(&mut self) {
+        self.merge_sidecars.confirm_closed_server_prefix_handoff();
     }
 
     fn push_merge_sidecar_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
@@ -14178,7 +14209,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn typed_finality_handoff_rolls_changed_roster_with_active_writable_writer() {
+    fn typed_finality_handoff_rejects_changed_roster_with_active_writable_writer() {
         let CertifiedSidecarServerFixture {
             mut adapter,
             validators,
@@ -14192,7 +14223,7 @@ pub(super) mod tests {
         let (service_owner, transport_owner) = durable_exact_output_handoff_owner_pair();
         adapter.exact_output_handoff_owner = transport_owner;
         let mut service = service_for_history_context_with_local_validator_and_handoff_owner(
-            kura,
+            Arc::clone(&kura),
             context,
             &validators,
             local_validator,
@@ -14203,7 +14234,14 @@ pub(super) mod tests {
             &artifact,
             Hash::new(b"typed sidecar rollover has no winning lane output"),
         );
-        let local_peer = adapter.local_peer.clone();
+        let predecessor_generation = request.service_generation;
+        let predecessor_roster = adapter
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let predecessor_roster_digest = canonical_merge_sidecar_roster_digest(&predecessor_roster);
         let reply_source_capacity = adapter.limits.reply_source_capacity.get();
         let sidecar_limits = adapter.limits.merge_sidecar_limits;
         let hub = PeerId::new(
@@ -14283,6 +14321,13 @@ pub(super) mod tests {
         let exact_output_handoff = service
             .seal_applied_height_output_handoff(&durable_receipt, &artifact, &lane_authority)
             .expect("seal the final empty writer corridor");
+        let output_guard = Arc::clone(&adapter.output_guard);
+        let lifecycle_state = adapter
+            .merge_sidecars
+            .lifecycle_journal_temp_path_for_test()
+            .with_file_name("state.norito");
+        let predecessor_snapshot =
+            std::fs::read(&lifecycle_state).expect("read the active predecessor V2 snapshot");
 
         let replacement = PeerId::new(
             KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::BlsNormal)
@@ -14296,25 +14341,67 @@ pub(super) mod tests {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
+        let successor_roster_digest = canonical_merge_sidecar_roster_digest(&successor_roster);
         let retained = adapter
             .into_retained_merge_sidecars(exact_output_handoff, &artifact, &successor)
             .expect("exact service/transport owner binds the retained predecessor");
-        let mut transitioned = retained
-            .rehydrate_for_successor(
-                &successor,
-                reply_source_capacity,
-                sidecar_limits,
-                successor_roster.len(),
-                canonical_merge_sidecar_roster_digest(&successor_roster),
-                Instant::now(),
-            )
-            .expect("typed finality authority clears changed-roster output");
+        let successor_construction = output_guard
+            .begin_fail_stop_operation()
+            .expect("successor construction starts while output remains open");
+        let error = match retained.rehydrate_for_successor(
+            &successor,
+            reply_source_capacity,
+            sidecar_limits,
+            successor_roster.len(),
+            successor_roster_digest,
+            Instant::now(),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("a move-only handoff cannot bypass active responder ownership"),
+        };
+        drop(successor_construction);
 
-        assert!(route.is_active() && route.is_reply_writable());
-        assert_eq!(transitioned.server_stream_count_for_test(), 0);
-        assert_eq!(transitioned.server_request_gate_count_for_test(), 0);
-        assert_eq!(transitioned.retained_outbound_attempt_count_for_test(), 0);
-        assert_eq!(transitioned.retained_outbound_bytes_for_test(), 0);
+        assert!(matches!(
+            error,
+            V2LaneWorkError::InvalidContext(ref reason)
+                if reason.contains(
+                    "certified merge-sidecar transport capacity reached: \
+                     server semantic requester geometry"
+                )
+        ));
+        assert!(
+            output_guard.restart_required(),
+            "failed successor construction must latch restart recovery"
+        );
+        assert_eq!(
+            std::fs::read(&lifecycle_state)
+                .expect("reread the fail-atomic predecessor V2 snapshot"),
+            predecessor_snapshot,
+            "capacity rejection must not publish successor lifecycle state"
+        );
+        let recovered = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            &kura.store_root(),
+            reply_source_capacity,
+            sidecar_limits,
+            predecessor_roster.len(),
+            predecessor_roster_digest.clone(),
+        )
+        .expect("restart reopens the exact predecessor responder state");
+        assert_eq!(
+            recovered.server_service_generation_for_test(),
+            predecessor_generation
+        );
+        assert_eq!(
+            recovered.server_roster_digest_for_test(),
+            &predecessor_roster_digest
+        );
+        assert_eq!(recovered.server_stream_count_for_test(), 1);
+        assert_eq!(recovered.server_request_gate_count_for_test(), 1);
+        assert_eq!(recovered.server_request_attempt_count_for_test(), 1);
+        assert!(
+            route.is_active() && route.is_reply_writable(),
+            "transport rejection does not revoke the independent reply route"
+        );
         assert!(
             !writer_control
                 .lock()
@@ -14322,34 +14409,13 @@ pub(super) mod tests {
                 .as_mut()
                 .expect("predecessor reached writer admission")
                 .flush(),
-            "the cleared exact worker receiver makes a late old flush unobservable"
+            "the sealed predecessor writer cannot complete after handoff"
         );
         assert!(
             !service
                 .retry_pending_exact_output()
                 .expect("late predecessor completion is a sealed no-op")
         );
-        let admission = transitioned
-            .admit_server_request(
-                &requester,
-                &request,
-                Some(&route),
-                &local_peer,
-                Instant::now(),
-            )
-            .expect("stale predecessor traffic receives the successor fence");
-        assert!(matches!(
-            admission,
-            ServerRequestAdmission::GenerationHint(ref post)
-                if matches!(
-                    post.message.as_ref(),
-                    CertifiedMergeSidecarMessage::GenerationHint(hint)
-                        if hint.observed_generation == request.service_generation
-                            && hint.current_generation.get()
-                                == request.service_generation.get() + 1
-                )
-        ));
-        assert_eq!(transitioned.retained_outbound_attempt_count_for_test(), 0);
     }
 
     #[test]
@@ -14514,7 +14580,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn typed_changed_roster_high_water_crash_fails_closed_on_reopen() {
+    fn typed_changed_roster_v2_snapshot_failure_preserves_predecessor_state() {
         let CertifiedSidecarServerFixture {
             mut adapter,
             validators,
@@ -14533,14 +14599,22 @@ pub(super) mod tests {
         let (receipt, artifact) = durable_finality_fixture(&service, &validators);
         let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
             &artifact,
-            Hash::new(b"typed high-water crash has no winning lane output"),
+            Hash::new(b"typed V2 snapshot crash has no winning lane output"),
         );
         let handoff = service
             .seal_applied_height_output_handoff(&receipt, &artifact, &lane_authority)
-            .expect("seal the empty typed high-water fixture");
+            .expect("seal the empty typed V2 snapshot fixture");
+        let predecessor_generation = adapter.merge_sidecars.server_service_generation_for_test();
+        let predecessor_roster = adapter
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let predecessor_roster_digest = canonical_merge_sidecar_roster_digest(&predecessor_roster);
         let replacement = PeerId::new(
             KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::BlsNormal)
-                .expect("deterministic high-water replacement validator")
+                .expect("deterministic V2-snapshot replacement validator")
                 .public_key()
                 .clone(),
         );
@@ -14556,37 +14630,91 @@ pub(super) mod tests {
         let lifecycle_temp = adapter
             .merge_sidecars
             .lifecycle_journal_temp_path_for_test();
+        let lifecycle_state = lifecycle_temp.with_file_name("state.norito");
+        let predecessor_snapshot =
+            std::fs::read(&lifecycle_state).expect("read the predecessor V2 lifecycle snapshot");
+        let output_guard = Arc::clone(&adapter.output_guard);
         adapter
             .merge_sidecars
             .obstruct_lifecycle_journal_temp_for_test();
         let retained = adapter
             .into_retained_merge_sidecars(handoff, &artifact, &successor)
-            .expect("bind the high-water fixture to its exact transport");
+            .expect("bind the V2 snapshot fixture to its exact transport");
 
+        let successor_construction = output_guard
+            .begin_fail_stop_operation()
+            .expect("successor construction starts while output remains open");
+        let error = match retained.rehydrate_for_successor(
+            &successor,
+            reply_source_capacity,
+            sidecar_limits,
+            successor_roster.len(),
+            successor_roster_digest.clone(),
+            Instant::now(),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("an obstructed V2 lifecycle snapshot cannot commit a successor"),
+        };
+        drop(successor_construction);
         assert!(matches!(
-            retained.rehydrate_for_successor(
-                &successor,
-                reply_source_capacity,
-                sidecar_limits,
-                successor_roster.len(),
-                successor_roster_digest.clone(),
-                Instant::now(),
-            ),
-            Err(V2LaneWorkError::InvalidContext(ref reason))
-                if reason.contains("lifecycle")
+            error,
+            V2LaneWorkError::InvalidContext(ref reason) if reason.contains("lifecycle")
         ));
-        std::fs::remove_dir(lifecycle_temp).expect("remove the injected state obstruction");
-        assert!(matches!(
+        assert!(
+            output_guard.restart_required(),
+            "a failed durable successor transition must latch restart recovery"
+        );
+        assert_eq!(
+            std::fs::read(&lifecycle_state).expect("reread the predecessor V2 lifecycle snapshot"),
+            predecessor_snapshot,
+            "the sole V2 snapshot must retain the complete predecessor on write failure"
+        );
+
+        std::fs::remove_dir(lifecycle_temp).expect("remove the injected V2 state obstruction");
+        let recovered_predecessor =
             MergeSidecarTransport::open_durable_with_server_stream_capacity(
                 &kura.store_root(),
                 reply_source_capacity,
                 sidecar_limits,
-                successor_roster.len(),
-                successor_roster_digest,
-            ),
-            Err(crate::merge_sidecar::MergeSidecarError::LifecycleJournal(ref reason))
-                if reason.contains("differs from durable high-water")
-        ));
+                predecessor_roster.len(),
+                predecessor_roster_digest.clone(),
+            )
+            .expect("restart reopens the complete predecessor V2 state");
+        assert_eq!(
+            recovered_predecessor.server_service_generation_for_test(),
+            predecessor_generation
+        );
+        assert_eq!(
+            recovered_predecessor.server_roster_digest_for_test(),
+            &predecessor_roster_digest
+        );
+        assert_eq!(recovered_predecessor.server_stream_count_for_test(), 0);
+        assert_eq!(
+            recovered_predecessor.server_request_gate_count_for_test(),
+            0
+        );
+        drop(recovered_predecessor);
+
+        let recovered_successor = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            &kura.store_root(),
+            reply_source_capacity,
+            sidecar_limits,
+            successor_roster.len(),
+            successor_roster_digest.clone(),
+        )
+        .expect("restart retries the terminal changed-roster transition");
+        assert_eq!(
+            recovered_successor
+                .server_service_generation_for_test()
+                .get(),
+            predecessor_generation.get() + 1
+        );
+        assert_eq!(
+            recovered_successor.server_roster_digest_for_test(),
+            &successor_roster_digest
+        );
+        assert_eq!(recovered_successor.server_stream_count_for_test(), 0);
+        assert_eq!(recovered_successor.server_request_gate_count_for_test(), 0);
     }
 
     #[test]

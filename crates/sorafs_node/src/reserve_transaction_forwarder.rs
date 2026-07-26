@@ -1693,9 +1693,7 @@ fn validate_operation(
                 *instruction.provider_id(),
                 *instruction.expected_provider_revision(),
             )?;
-            if !(1..=RESERVE_RENT_MAX_BILLING_PERIODS_V1)
-                .contains(instruction.billing_periods())
-            {
+            if !(1..=RESERVE_RENT_MAX_BILLING_PERIODS_V1).contains(instruction.billing_periods()) {
                 return Err(ReserveTransactionForwarderError::InvalidReserveOperation);
             }
         }

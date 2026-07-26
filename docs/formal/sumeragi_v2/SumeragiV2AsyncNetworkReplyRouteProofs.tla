@@ -28,7 +28,15 @@ AsyncReplyRouteProofs ==
     rrNextDeliveryOrdinal <- asyncNextReplyDeliveryOrdinal,
     rrConnectionTenure <- asyncReplyConnectionTenure,
     rrSourceActive <- asyncReplySourceActive,
-    rrNextServiceIndex <- asyncNextReplyServiceIndex
+    rrNextServiceIndex <- asyncNextReplyServiceIndex,
+    rrSemanticSequence <- asyncReplySemanticSequence,
+    rrSemanticHash <- asyncReplySemanticHash,
+    rrRequesterNextSequence <- asyncReplyRequesterNextSequence,
+    rrRequesterClosedThrough <- asyncReplyRequesterClosedThrough,
+    rrClosePendingThrough <- asyncReplyClosePendingThrough,
+    rrCloseSentThrough <- asyncReplyCloseSentThrough,
+    rrCloseAcknowledgedThrough <- asyncReplyCloseAcknowledgedThrough,
+    rrCloseRetryGeneration <- asyncReplyCloseRetryGeneration
 
 THEOREM AsyncReplyRouteInitProvidesSourceGeometry ==
   AsyncReplyRouteInit => AsyncReplyRoute!ReplySources = ValidatorIds
@@ -40,7 +48,7 @@ BY Isa
 
 THEOREM AsyncReplyRouteNextRefinesOwnershipNext ==
   AsyncReplyRouteNext => AsyncReplyRoute!ReplyRouteNext
-BY Isa
+BY SMT
    DEF AsyncReplyRouteNext, AsyncObserveNewReplySource,
        AsyncObserveLaterReplyDelivery, AsyncReconnectReplySource,
        AsyncExactReplyCapabilityRetry,
@@ -49,12 +57,12 @@ BY Isa
 THEOREM AsyncProductionBracketProjectsAsyncBracket ==
   [AsyncProductionNext]_AsyncProductionVars
     => [AsyncNext]_AsyncAllVars
-BY PTL DEF AsyncProductionNext, AsyncProductionVars
+BY SMT DEF AsyncProductionNext, AsyncProductionVars
 
 THEOREM AsyncProductionBracketProjectsReplyRouteBracket ==
   [AsyncProductionNext]_AsyncProductionVars
     => [AsyncReplyRoute!ReplyRouteNext]_AsyncReplyRouteVars
-BY AsyncReplyRouteNextRefinesOwnershipNext, PTL
+BY AsyncReplyRouteNextRefinesOwnershipNext, SMT
    DEF AsyncProductionNext, AsyncProductionVars
 
 THEOREM AsyncReplyRouteFairnessProjectsOwnershipFairness ==
@@ -134,8 +142,14 @@ THEOREM AsyncProductionSpecAtProvidesReplyRouteProgress ==
   \A initialContext:
     AsyncProductionSpecAt(initialContext) =>
       /\ []AsyncReplyRouteSafetyInvariant
+      /\ []AsyncReplyRouteFullSafetyInvariant
       /\ AsyncReplyTenureAwareReplay
       /\ AsyncReplySourceIsolation
+      /\ AsyncReplyLifecycleJournal
+      /\ \A requester \in ValidatorIds,
+            responder \in ValidatorIds:
+           AsyncReplyCloseWorkEventuallyTerminates(
+             requester, responder)
       /\ \A owner \in ValidatorIds,
             semantic \in AsyncReplySemanticIdentities,
             source \in ValidatorIds:
@@ -145,8 +159,14 @@ PROOF
   <1>1. ASSUME NEW initialContext,
                 AsyncProductionSpecAt(initialContext)
          PROVE /\ []AsyncReplyRouteSafetyInvariant
+               /\ []AsyncReplyRouteFullSafetyInvariant
                /\ AsyncReplyTenureAwareReplay
                /\ AsyncReplySourceIsolation
+               /\ AsyncReplyLifecycleJournal
+               /\ \A requester \in ValidatorIds,
+                     responder \in ValidatorIds:
+                    AsyncReplyCloseWorkEventuallyTerminates(
+                      requester, responder)
                /\ \A owner \in ValidatorIds,
                      semantic \in AsyncReplySemanticIdentities,
                      source \in ValidatorIds:
@@ -155,8 +175,14 @@ PROOF
     <2>1. AsyncReplyRoute!ReplyRouteSpec
       BY <1>1, AsyncProductionSpecAtProjectsReplyRouteSpec
     <2>2. /\ []AsyncReplyRoute!ReplyRouteSafetyInvariant
+           /\ []AsyncReplyRoute!ReplyRouteFullSafetyInvariant
            /\ AsyncReplyRoute!ReplyTenureAwareReplay
            /\ AsyncReplyRoute!ReplySourceIsolation
+           /\ AsyncReplyRoute!ReplyLifecycleJournal
+           /\ \A requester \in ValidatorIds,
+                 responder \in AsyncReplyRoute!ReplySources:
+                AsyncReplyRoute!ReplyCloseWorkEventuallyTerminates(
+                  requester, responder)
            /\ \A owner \in ValidatorIds,
                  semantic \in AsyncReplySemanticIdentities,
                  source \in AsyncReplyRoute!ReplySources:
@@ -169,8 +195,11 @@ PROOF
          DEF AsyncProductionSpecAt
     <2> QED BY <2>2, <2>3
          DEF AsyncReplyRouteSafetyInvariant,
+             AsyncReplyRouteFullSafetyInvariant,
              AsyncReplyTenureAwareReplay,
              AsyncReplySourceIsolation,
+             AsyncReplyLifecycleJournal,
+             AsyncReplyCloseWorkEventuallyTerminates,
              AsyncReplySourceEventuallyProgresses
   <1> QED BY <1>1
 
@@ -180,8 +209,14 @@ THEOREM AsyncNetworkReplyRouteModelObligation ==
       /\ AsyncSpecAt(initialContext)
       /\ AsyncReplyRoute!ReplyRouteSpec
       /\ []AsyncReplyRouteSafetyInvariant
+      /\ []AsyncReplyRouteFullSafetyInvariant
       /\ AsyncReplyTenureAwareReplay
       /\ AsyncReplySourceIsolation
+      /\ AsyncReplyLifecycleJournal
+      /\ \A requester \in ValidatorIds,
+            responder \in ValidatorIds:
+           AsyncReplyCloseWorkEventuallyTerminates(
+             requester, responder)
       /\ \A owner \in ValidatorIds,
             semantic \in AsyncReplySemanticIdentities,
             source \in ValidatorIds:

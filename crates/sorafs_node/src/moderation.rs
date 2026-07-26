@@ -4690,18 +4690,14 @@ fn update_optional_string(hasher: &mut blake3::Hasher, value: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
-    use iroha_data_model::{
-        sorafs::{
-            moderation::{
-                MODERATION_MODEL_WORKING_MEMORY_BYTES_V1, MODERATION_REPRO_MANIFEST_VERSION_V1,
-                MODERATION_SIGNED_RESULT_VERSION_V1, MODERATION_TRUST_POLICY_VERSION_V1,
-                ModerationFeatureProfileV1, ModerationModelEngineV1, ModerationModelFingerprintV1,
-                ModerationModelScoreV1, ModerationReproBodyV1, ModerationReproSignatureV1,
-                ModerationSeedMaterialV1, ModerationSignedScreeningBodyV1, ModerationThresholdsV1,
-                ModerationTrustPolicyBodyV1, ModerationTrustPolicySignatureV1,
-                ModerationTrustedSignerV1, moderation_model_required_operations_v1,
-            },
-        },
+    use iroha_data_model::sorafs::moderation::{
+        MODERATION_MODEL_WORKING_MEMORY_BYTES_V1, MODERATION_REPRO_MANIFEST_VERSION_V1,
+        MODERATION_SIGNED_RESULT_VERSION_V1, MODERATION_TRUST_POLICY_VERSION_V1,
+        ModerationFeatureProfileV1, ModerationModelEngineV1, ModerationModelFingerprintV1,
+        ModerationModelScoreV1, ModerationReproBodyV1, ModerationReproSignatureV1,
+        ModerationSeedMaterialV1, ModerationSignedScreeningBodyV1, ModerationThresholdsV1,
+        ModerationTrustPolicyBodyV1, ModerationTrustPolicySignatureV1, ModerationTrustedSignerV1,
+        moderation_model_required_operations_v1,
     };
 
     use super::*;
@@ -5685,6 +5681,5 @@ mod tests {
             ModerationScreeningError::ResourceExhausted { .. }
         ));
         assert_eq!(screening.snapshot(), screening_before);
-
     }
 }

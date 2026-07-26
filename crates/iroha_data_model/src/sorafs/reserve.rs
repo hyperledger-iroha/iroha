@@ -920,10 +920,7 @@ impl ReserveProviderAccountV1 {
     ///
     /// Returns [`ReservePolicyError::RentTimestampRollback`] when the
     /// finalized block time predates the authoritative rent anchor.
-    pub fn rent_periods_due_at(
-        &self,
-        observed_at_unix: u64,
-    ) -> Result<u64, ReservePolicyError> {
+    pub fn rent_periods_due_at(&self, observed_at_unix: u64) -> Result<u64, ReservePolicyError> {
         let elapsed = observed_at_unix
             .checked_sub(self.rent_charged_through_unix)
             .ok_or(ReservePolicyError::RentTimestampRollback {
@@ -941,10 +938,7 @@ impl ReserveProviderAccountV1 {
     /// # Errors
     ///
     /// Returns an error for a finalized timestamp rollback or anchor overflow.
-    pub fn rent_days_past_due_at(
-        &self,
-        observed_at_unix: u64,
-    ) -> Result<u16, ReservePolicyError> {
+    pub fn rent_days_past_due_at(&self, observed_at_unix: u64) -> Result<u16, ReservePolicyError> {
         self.rent_periods_due_at(observed_at_unix)?;
         let first_unsettled_boundary = self
             .rent_charged_through_unix
@@ -1698,8 +1692,7 @@ mod tests {
         assert_eq!(
             account
                 .rent_days_past_due_at(
-                    account.rent_charged_through_unix
-                        + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1,
+                    account.rent_charged_through_unix + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1,
                 )
                 .expect("the exact rent boundary is valid"),
             0

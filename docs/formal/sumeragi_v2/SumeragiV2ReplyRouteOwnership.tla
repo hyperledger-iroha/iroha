@@ -44,7 +44,12 @@ ReplySources ==
 ReplyDeliveryOrdinals == 1..ReplyDeliveryOrdinalLimit
 ReplyConnectionTenures == 1..ReplyDeliveryOrdinalLimit
 ReplySemanticSequences == 1..ReplyDeliveryOrdinalLimit
+ReplyServiceGenerations == 1..ReplyDeliveryOrdinalLimit
+ReplyStreamEpochs == 1..ReplyDeliveryOrdinalLimit
 NoReplyTicketTenure == 0
+NoReplyServiceGeneration == 0
+NoReplyStreamEpoch == 0
+NoReplySemanticSequence == 0
 ReplyActiveWindowCapacity == ReplySourceCapacity
 
 (***************************************************************************
@@ -53,6 +58,75 @@ requirement that canonical bytes determine it.  The singleton is injective
 over ReplySemantics, so a hash cannot be rebound to a different semantic.
 ***************************************************************************)
 ReplyCanonicalSemanticHash(semantic) == {semantic}
+
+(***************************************************************************
+Wire version one is the sole first-release format.  The canonical request
+identity binds every immutable semantic coordinate and intentionally ignores
+only the cumulative close floor.  `semantic` is the finite-model carrier for
+the immutable payload; its singleton hash is the compact-reference digest.
+***************************************************************************)
+ReplyProtocolVersion == 1
+
+ReplyCanonicalReference(semantic) ==
+  [entryHash |-> ReplyCanonicalSemanticHash(semantic),
+   encodedLength |-> ReplyMessageCount + ReplyChunkCount,
+   mergeEpoch |-> ReplyMessageCount,
+   referenceDigest |-> ReplyCanonicalSemanticHash(semantic)]
+
+ReplyCanonicalRequestIdentity(
+    serviceGeneration, streamEpoch, semanticSequence,
+    semantic, requester, responder) ==
+  [version |-> ReplyProtocolVersion,
+   serviceGeneration |-> serviceGeneration,
+   streamEpoch |-> streamEpoch,
+   semanticSequence |-> semanticSequence,
+   payload |-> semantic,
+   reference |-> ReplyCanonicalReference(semantic),
+   requesterPeer |-> requester,
+   responderPeer |-> responder]
+
+ReplyCanonicalRequestIdentityWithCloseFloor(
+    serviceGeneration, streamEpoch, semanticSequence,
+    semantic, requester, responder, closedThrough) ==
+  ReplyCanonicalRequestIdentity(
+    serviceGeneration, streamEpoch, semanticSequence,
+    semantic, requester, responder)
+
+ReplyRequestIdentitySet ==
+  [version: {ReplyProtocolVersion},
+   serviceGeneration: ReplyServiceGenerations,
+   streamEpoch: ReplyStreamEpochs,
+   semanticSequence: ReplySemanticSequences,
+   payload: ReplySemantics,
+   reference:
+     [entryHash: SUBSET ReplySemantics,
+      encodedLength: {ReplyMessageCount + ReplyChunkCount},
+      mergeEpoch: {ReplyMessageCount},
+      referenceDigest: SUBSET ReplySemantics],
+   requesterPeer: ReplyOwners,
+   responderPeer: ReplySources]
+
+ReplyOccurrenceCoordinate(serviceGeneration, streamEpoch,
+                          semanticSequence) ==
+  [serviceGeneration |-> serviceGeneration,
+   streamEpoch |-> streamEpoch,
+   semanticSequence |-> semanticSequence]
+
+ReplyOccurrenceCoordinateSet ==
+  [serviceGeneration: 0..ReplyDeliveryOrdinalLimit,
+   streamEpoch: 0..ReplyDeliveryOrdinalLimit,
+   semanticSequence: 0..ReplyDeliveryOrdinalLimit]
+
+ReplyCoordinateAtOrBefore(left, right) ==
+  \/ left.serviceGeneration < right.serviceGeneration
+  \/ /\ left.serviceGeneration = right.serviceGeneration
+     /\ \/ left.streamEpoch < right.streamEpoch
+        \/ /\ left.streamEpoch = right.streamEpoch
+           /\ left.semanticSequence <= right.semanticSequence
+
+ReplyCoordinateStrictlyBefore(left, right) ==
+  /\ ReplyCoordinateAtOrBefore(left, right)
+  /\ left # right
 
 ReplyRouteConfiguration ==
   /\ IsFiniteSet(ReplyOwners)
@@ -136,7 +210,17 @@ VARIABLES
   rrClosePendingThrough,
   rrCloseSentThrough,
   rrCloseAcknowledgedThrough,
-  rrCloseRetryGeneration
+  rrCloseRetryGeneration,
+  rrServiceGeneration,
+  rrResponderGeneration,
+  rrDurableResponderGeneration,
+  rrRequesterNextStreamEpoch,
+  rrRequesterStreamEpoch,
+  rrCloseStreamEpoch,
+  rrClosedPrefix,
+  rrAttemptLifecycleIdentities,
+  rrPendingHintResets,
+  rrDiscardedPartialIdentities
 
 ReplyLifecycleVars ==
   <<rrSemanticSequence, rrSemanticHash, rrRequesterNextSequence,
@@ -146,12 +230,95 @@ ReplyCloseVars ==
   <<rrClosePendingThrough, rrCloseSentThrough,
     rrCloseAcknowledgedThrough, rrCloseRetryGeneration>>
 
+ReplyCoordinateVars ==
+  <<rrServiceGeneration, rrResponderGeneration,
+    rrDurableResponderGeneration, rrRequesterNextStreamEpoch,
+    rrRequesterStreamEpoch, rrCloseStreamEpoch, rrClosedPrefix,
+    rrAttemptLifecycleIdentities, rrPendingHintResets,
+    rrDiscardedPartialIdentities>>
+
 ReplyRouteVars ==
   <<rrAttempts, rrPayloads, rrNextDeliveryOrdinal, rrConnectionTenure,
     rrSourceActive, rrNextServiceIndex, rrSemanticSequence, rrSemanticHash,
     rrRequesterNextSequence, rrRequesterClosedThrough,
     rrClosePendingThrough, rrCloseSentThrough,
     rrCloseAcknowledgedThrough, rrCloseRetryGeneration>>
+
+ReplyRouteV2Vars == <<ReplyRouteVars, ReplyCoordinateVars>>
+
+(***************************************************************************
+The bounded route attempt remains the process-local cursor carrier proved
+below.  This second, durable carrier is its V2 occurrence identity.  The
+coupling invariant gives every live route attempt exactly one identity with
+the non-zero generation/epoch/sequence triple used by request gates, chunks,
+flush receipts, and cancellation.
+***************************************************************************)
+ReplyAttemptLifecycleIdentity(
+    owner, semantic, source, serviceGeneration,
+    streamEpoch, semanticSequence) ==
+  [owner |-> owner,
+   semantic |-> semantic,
+   source |-> source,
+   serviceGeneration |-> serviceGeneration,
+   streamEpoch |-> streamEpoch,
+   semanticSequence |-> semanticSequence,
+   requestIdentity |->
+     ReplyCanonicalRequestIdentity(
+       serviceGeneration, streamEpoch, semanticSequence,
+       semantic, owner, source)]
+
+ReplyAttemptLifecycleIdentitySet ==
+  [owner: ReplyOwners,
+   semantic: ReplySemantics,
+   source: ReplySources,
+   serviceGeneration: ReplyServiceGenerations,
+   streamEpoch: ReplyStreamEpochs,
+   semanticSequence: ReplySemanticSequences,
+   requestIdentity: ReplyRequestIdentitySet]
+
+ReplyAttemptLifecycleIdentitiesFor(owner, semantic, source) ==
+  {identity \in rrAttemptLifecycleIdentities:
+     /\ identity.owner = owner
+     /\ identity.semantic = semantic
+     /\ identity.source = source}
+
+ReplyAttemptLifecycleIdentityOwned(owner, semantic, source) ==
+  ReplyAttemptLifecycleIdentitiesFor(owner, semantic, source) # {}
+
+ReplyAttemptLifecycleIdentityFor(owner, semantic, source) ==
+  CHOOSE identity
+    \in ReplyAttemptLifecycleIdentitiesFor(owner, semantic, source):
+      TRUE
+
+ReplyLifecycleIdentityCoordinate(identity) ==
+  ReplyOccurrenceCoordinate(
+    identity.serviceGeneration,
+    identity.streamEpoch,
+    identity.semanticSequence)
+
+ReplyLifecycleIdentityMatchesCanonicalRequest(identity) ==
+  identity.requestIdentity =
+    ReplyCanonicalRequestIdentity(
+      identity.serviceGeneration,
+      identity.streamEpoch,
+      identity.semanticSequence,
+      identity.semantic,
+      identity.owner,
+      identity.source)
+
+ReplyAttemptOccurrenceCancelled(identity) ==
+  ReplyCoordinateAtOrBefore(
+    ReplyLifecycleIdentityCoordinate(identity),
+    rrClosedPrefix[identity.owner][identity.source])
+
+ReplyAttemptOccurrenceCurrent(identity) ==
+  /\ identity.serviceGeneration =
+       rrServiceGeneration[identity.owner][identity.source]
+  /\ identity.streamEpoch =
+       rrRequesterStreamEpoch[identity.owner][identity.source]
+  /\ identity.semanticSequence =
+       rrSemanticSequence[identity.owner][identity.semantic]
+  /\ ~ReplyAttemptOccurrenceCancelled(identity)
 
 ReplySemanticBound(owner, semantic) ==
   /\ rrSemanticSequence[owner][semantic] \in ReplySemanticSequences
@@ -184,76 +351,299 @@ NextReplyCloseRetryGeneration(generation) ==
   THEN 0
   ELSE generation + 1
 
+ReplyCanonicalCloseIdentity(serviceGeneration, streamEpoch, closedThrough,
+                            requester, responder) ==
+  [version |-> ReplyProtocolVersion,
+   serviceGeneration |-> serviceGeneration,
+   streamEpoch |-> streamEpoch,
+   closedThrough |-> closedThrough,
+   requesterPeer |-> requester,
+   responderPeer |-> responder]
+
+ReplyCloseIdentitySet ==
+  [version: {ReplyProtocolVersion},
+   serviceGeneration: ReplyServiceGenerations,
+   streamEpoch: ReplyStreamEpochs,
+   closedThrough: 0..ReplyDeliveryOrdinalLimit,
+   requesterPeer: ReplyOwners,
+   responderPeer: ReplySources]
+
 ReplyCloseWitness(requester, authenticatedRequester, responder,
-                  authenticatedResponder, closedThrough,
+                  authenticatedResponder, serviceGeneration,
+                  streamEpoch, closedThrough, closeIdentity,
                   bindingRequester, bindingResponder,
-                  bindingClosedThrough) ==
-  [requester |-> requester,
+                  bindingServiceGeneration, bindingStreamEpoch,
+                  bindingClosedThrough, bindingCloseIdentity) ==
+  [version |-> ReplyProtocolVersion,
+   requester |-> requester,
    authenticatedRequester |-> authenticatedRequester,
    responder |-> responder,
    authenticatedResponder |-> authenticatedResponder,
+   serviceGeneration |-> serviceGeneration,
+   streamEpoch |-> streamEpoch,
    closedThrough |-> closedThrough,
+   closeIdentity |-> closeIdentity,
    bindingRequester |-> bindingRequester,
    bindingResponder |-> bindingResponder,
-   bindingClosedThrough |-> bindingClosedThrough]
+   bindingServiceGeneration |-> bindingServiceGeneration,
+   bindingStreamEpoch |-> bindingStreamEpoch,
+   bindingClosedThrough |-> bindingClosedThrough,
+   bindingCloseIdentity |-> bindingCloseIdentity]
 
 ReplyCloseWitnessSet ==
-  [requester: ReplyOwners,
+  [version: {ReplyProtocolVersion},
+   requester: ReplyOwners,
    authenticatedRequester: ReplyOwners,
    responder: ReplySources,
    authenticatedResponder: ReplySources,
+   serviceGeneration: ReplyServiceGenerations,
+   streamEpoch: ReplyStreamEpochs,
    closedThrough: 0..ReplyDeliveryOrdinalLimit,
+   closeIdentity: ReplyCloseIdentitySet,
    bindingRequester: ReplyOwners,
    bindingResponder: ReplySources,
-   bindingClosedThrough: 0..ReplyDeliveryOrdinalLimit]
+   bindingServiceGeneration: ReplyServiceGenerations,
+   bindingStreamEpoch: ReplyStreamEpochs,
+   bindingClosedThrough: 0..ReplyDeliveryOrdinalLimit,
+   bindingCloseIdentity: ReplyCloseIdentitySet]
 
 ReplyCloseWitnessValid(witness) ==
   /\ witness \in ReplyCloseWitnessSet
+  /\ witness.version = ReplyProtocolVersion
   /\ witness.authenticatedRequester = witness.requester
   /\ witness.authenticatedResponder = witness.responder
+  /\ witness.serviceGeneration =
+       rrServiceGeneration[witness.requester][witness.responder]
+  /\ witness.streamEpoch =
+       rrCloseStreamEpoch[witness.requester][witness.responder]
+  /\ witness.closeIdentity =
+       ReplyCanonicalCloseIdentity(
+         witness.serviceGeneration, witness.streamEpoch,
+         witness.closedThrough, witness.requester, witness.responder)
   /\ witness.bindingRequester = witness.requester
   /\ witness.bindingResponder = witness.responder
+  /\ witness.bindingServiceGeneration = witness.serviceGeneration
+  /\ witness.bindingStreamEpoch = witness.streamEpoch
   /\ witness.bindingClosedThrough = witness.closedThrough
+  /\ witness.bindingCloseIdentity = witness.closeIdentity
 
 ReplyCanonicalCloseWitness(requester, responder, closedThrough) ==
-  ReplyCloseWitness(
-    requester, requester, responder, responder, closedThrough,
-    requester, responder, closedThrough)
+  LET serviceGeneration == rrServiceGeneration[requester][responder]
+      streamEpoch == rrCloseStreamEpoch[requester][responder]
+      closeIdentity ==
+        ReplyCanonicalCloseIdentity(
+          serviceGeneration, streamEpoch, closedThrough,
+          requester, responder)
+  IN ReplyCloseWitness(
+       requester, requester, responder, responder,
+       serviceGeneration, streamEpoch, closedThrough, closeIdentity,
+       requester, responder, serviceGeneration, streamEpoch,
+       closedThrough, closeIdentity)
 
 ReplyCloseAcknowledgement(requester, responder, authenticatedResponder,
-                          closedThrough,
+                          serviceGeneration, streamEpoch,
+                          closedThrough, closeIdentity,
                           bindingRequester, bindingResponder,
-                          bindingClosedThrough) ==
-  [requester |-> requester,
+                          bindingServiceGeneration, bindingStreamEpoch,
+                          bindingClosedThrough, bindingCloseIdentity) ==
+  [version |-> ReplyProtocolVersion,
+   requester |-> requester,
    responder |-> responder,
    authenticatedResponder |-> authenticatedResponder,
+   serviceGeneration |-> serviceGeneration,
+   streamEpoch |-> streamEpoch,
    closedThrough |-> closedThrough,
+   closeIdentity |-> closeIdentity,
    bindingRequester |-> bindingRequester,
    bindingResponder |-> bindingResponder,
-   bindingClosedThrough |-> bindingClosedThrough]
+   bindingServiceGeneration |-> bindingServiceGeneration,
+   bindingStreamEpoch |-> bindingStreamEpoch,
+   bindingClosedThrough |-> bindingClosedThrough,
+   bindingCloseIdentity |-> bindingCloseIdentity]
 
 ReplyCloseAcknowledgementSet ==
-  [requester: ReplyOwners,
+  [version: {ReplyProtocolVersion},
+   requester: ReplyOwners,
    responder: ReplySources,
    authenticatedResponder: ReplySources,
+   serviceGeneration: ReplyServiceGenerations,
+   streamEpoch: ReplyStreamEpochs,
    closedThrough: 0..ReplyDeliveryOrdinalLimit,
+   closeIdentity: ReplyCloseIdentitySet,
    bindingRequester: ReplyOwners,
    bindingResponder: ReplySources,
-   bindingClosedThrough: 0..ReplyDeliveryOrdinalLimit]
+   bindingServiceGeneration: ReplyServiceGenerations,
+   bindingStreamEpoch: ReplyStreamEpochs,
+   bindingClosedThrough: 0..ReplyDeliveryOrdinalLimit,
+   bindingCloseIdentity: ReplyCloseIdentitySet]
 
 ReplyCloseAcknowledgementValid(acknowledgement) ==
   /\ acknowledgement \in ReplyCloseAcknowledgementSet
+  /\ acknowledgement.version = ReplyProtocolVersion
   /\ acknowledgement.authenticatedResponder =
        acknowledgement.responder
+  /\ acknowledgement.serviceGeneration =
+       rrServiceGeneration
+         [acknowledgement.requester][acknowledgement.responder]
+  /\ acknowledgement.streamEpoch =
+       rrCloseStreamEpoch
+         [acknowledgement.requester][acknowledgement.responder]
+  /\ acknowledgement.closeIdentity =
+       ReplyCanonicalCloseIdentity(
+         acknowledgement.serviceGeneration,
+         acknowledgement.streamEpoch,
+         acknowledgement.closedThrough,
+         acknowledgement.requester,
+         acknowledgement.responder)
   /\ acknowledgement.bindingRequester = acknowledgement.requester
   /\ acknowledgement.bindingResponder = acknowledgement.responder
+  /\ acknowledgement.bindingServiceGeneration =
+       acknowledgement.serviceGeneration
+  /\ acknowledgement.bindingStreamEpoch = acknowledgement.streamEpoch
   /\ acknowledgement.bindingClosedThrough =
        acknowledgement.closedThrough
+  /\ acknowledgement.bindingCloseIdentity =
+       acknowledgement.closeIdentity
 
 ReplyCanonicalCloseAcknowledgement(requester, responder, closedThrough) ==
-  ReplyCloseAcknowledgement(
-    requester, responder, responder, closedThrough,
-    requester, responder, closedThrough)
+  LET serviceGeneration == rrServiceGeneration[requester][responder]
+      streamEpoch == rrCloseStreamEpoch[requester][responder]
+      closeIdentity ==
+        ReplyCanonicalCloseIdentity(
+          serviceGeneration, streamEpoch, closedThrough,
+          requester, responder)
+  IN ReplyCloseAcknowledgement(
+       requester, responder, responder, serviceGeneration, streamEpoch,
+       closedThrough, closeIdentity, requester, responder,
+       serviceGeneration, streamEpoch, closedThrough, closeIdentity)
+
+ReplyGenerationHintKinds == {"Request", "Close"}
+
+ReplyGenerationHint(
+    requester, responder, authenticatedResponder, messageKind, semantic,
+    observedGeneration, currentGeneration, observedMessageHash,
+    bindingRequester, bindingResponder, bindingObservedGeneration,
+    bindingCurrentGeneration, bindingObservedMessageHash) ==
+  [version |-> ReplyProtocolVersion,
+   requester |-> requester,
+   responder |-> responder,
+   authenticatedResponder |-> authenticatedResponder,
+   messageKind |-> messageKind,
+   semantic |-> semantic,
+   observedGeneration |-> observedGeneration,
+   currentGeneration |-> currentGeneration,
+   observedMessageHash |-> observedMessageHash,
+   bindingRequester |-> bindingRequester,
+   bindingResponder |-> bindingResponder,
+   bindingObservedGeneration |-> bindingObservedGeneration,
+   bindingCurrentGeneration |-> bindingCurrentGeneration,
+   bindingObservedMessageHash |-> bindingObservedMessageHash]
+
+ReplyGenerationHintSet ==
+  [version: {ReplyProtocolVersion},
+   requester: ReplyOwners,
+   responder: ReplySources,
+   authenticatedResponder: ReplySources,
+   messageKind: ReplyGenerationHintKinds,
+   semantic: ReplySemantics,
+   observedGeneration: ReplyServiceGenerations,
+   currentGeneration: ReplyServiceGenerations,
+   observedMessageHash:
+     SUBSET (ReplyRequestIdentitySet \cup ReplyCloseIdentitySet),
+   bindingRequester: ReplyOwners,
+   bindingResponder: ReplySources,
+   bindingObservedGeneration: ReplyServiceGenerations,
+   bindingCurrentGeneration: ReplyServiceGenerations,
+   bindingObservedMessageHash:
+     SUBSET (ReplyRequestIdentitySet \cup ReplyCloseIdentitySet)]
+
+ReplyOutstandingRequestHash(requester, semantic, responder) ==
+  IF ReplyAttemptLifecycleIdentityOwned(
+       requester, semantic, responder)
+     /\ \E attempt \in rrAttempts:
+          /\ attempt.owner = requester
+          /\ attempt.semantic = semantic
+          /\ attempt.source = responder
+          /\ \/ attempt.messageCursor # ReplyMessageCount
+             \/ attempt.chunkCursor # ReplyChunkCount
+     /\ ~ReplyAttemptOccurrenceCancelled(
+          ReplyAttemptLifecycleIdentityFor(
+            requester, semantic, responder))
+  THEN {ReplyAttemptLifecycleIdentityFor(
+          requester, semantic, responder).requestIdentity}
+  ELSE {}
+
+ReplyOutstandingCloseHash(requester, responder) ==
+  IF ReplyCloseWorkPending(requester, responder)
+  THEN {ReplyCanonicalCloseIdentity(
+          rrServiceGeneration[requester][responder],
+          rrCloseStreamEpoch[requester][responder],
+          rrClosePendingThrough[requester][responder],
+          requester, responder)}
+  ELSE {}
+
+ReplyGenerationHintExactTrigger(hint) ==
+  /\ hint.observedMessageHash # {}
+  /\ CASE hint.messageKind = "Request" ->
+            hint.observedMessageHash =
+              ReplyOutstandingRequestHash(
+                hint.requester, hint.semantic, hint.responder)
+       [] hint.messageKind = "Close" ->
+            hint.observedMessageHash =
+              ReplyOutstandingCloseHash(
+                hint.requester, hint.responder)
+
+ReplyGenerationHintValid(hint) ==
+  /\ hint \in ReplyGenerationHintSet
+  /\ hint.version = ReplyProtocolVersion
+  /\ hint.authenticatedResponder = hint.responder
+  /\ hint.bindingRequester = hint.requester
+  /\ hint.bindingResponder = hint.responder
+  /\ hint.bindingObservedGeneration = hint.observedGeneration
+  /\ hint.bindingCurrentGeneration = hint.currentGeneration
+  /\ hint.bindingObservedMessageHash = hint.observedMessageHash
+  /\ hint.observedGeneration =
+       rrServiceGeneration[hint.requester][hint.responder]
+  /\ hint.currentGeneration = rrResponderGeneration[hint.responder]
+  /\ hint.currentGeneration > hint.observedGeneration
+  /\ ReplyGenerationHintExactTrigger(hint)
+
+ReplyHintReset(
+    requester, responder, messageKind, semantic,
+    oldGeneration, newGeneration, oldEpoch, newEpoch,
+    observedMessageHash) ==
+  [requester |-> requester,
+   responder |-> responder,
+   messageKind |-> messageKind,
+   semantic |-> semantic,
+   oldGeneration |-> oldGeneration,
+   newGeneration |-> newGeneration,
+   oldEpoch |-> oldEpoch,
+   newEpoch |-> newEpoch,
+   observedMessageHash |-> observedMessageHash]
+
+ReplyHintResetSet ==
+  [requester: ReplyOwners,
+   responder: ReplySources,
+   messageKind: ReplyGenerationHintKinds,
+   semantic: ReplySemantics,
+   oldGeneration: ReplyServiceGenerations,
+   newGeneration: ReplyServiceGenerations,
+   oldEpoch: ReplyStreamEpochs,
+   newEpoch: ReplyStreamEpochs,
+   observedMessageHash:
+     SUBSET (ReplyRequestIdentitySet \cup ReplyCloseIdentitySet)]
+
+ReplyResetMatchesLifecycleIdentity(reset, identity) ==
+  /\ identity.owner = reset.requester
+  /\ identity.source = reset.responder
+  /\ identity.serviceGeneration = reset.oldGeneration
+  /\ identity.streamEpoch = reset.oldEpoch
+
+ReplyLifecycleIdentityAfterHint(reset, identity) ==
+  ReplyAttemptLifecycleIdentity(
+    identity.owner, identity.semantic, identity.source,
+    reset.newGeneration, reset.newEpoch, identity.semanticSequence)
 
 ReplyAttemptsFor(owner, semantic) ==
   {attempt \in rrAttempts:
@@ -456,10 +846,24 @@ ReplyAttemptsAfterReconnect(oldAttempt, routedAttempt) ==
         THEN ReplyAttemptWithoutTicket(attempt)
         ELSE attempt: attempt \in rrAttempts}
 
-ReplyAttemptsAfterClose(requester, closedThrough) ==
+ReplyAttemptCoveredByClosedPrefix(
+    attempt, requester, serviceGeneration, streamEpoch, closedThrough) ==
+  /\ attempt.owner = requester
+  /\ ReplyAttemptLifecycleIdentityOwned(
+       attempt.owner, attempt.semantic, attempt.source)
+  /\ LET identity ==
+           ReplyAttemptLifecycleIdentityFor(
+             attempt.owner, attempt.semantic, attempt.source)
+     IN ReplyCoordinateAtOrBefore(
+          ReplyLifecycleIdentityCoordinate(identity),
+          ReplyOccurrenceCoordinate(
+            serviceGeneration, streamEpoch, closedThrough))
+
+ReplyAttemptsAfterClose(
+    requester, serviceGeneration, streamEpoch, closedThrough) ==
   {attempt \in rrAttempts:
-     \/ attempt.owner # requester
-     \/ rrSemanticSequence[requester][attempt.semantic] > closedThrough}
+     ~ReplyAttemptCoveredByClosedPrefix(
+       attempt, requester, serviceGeneration, streamEpoch, closedThrough)}
 
 ReplyAttemptWithTicket(attempt) ==
   [attempt EXCEPT
@@ -850,7 +1254,9 @@ CloseSemanticRequest(witness) ==
       responder == witness.responder
       closedThrough == witness.closedThrough
       remainingAttempts ==
-        ReplyAttemptsAfterClose(requester, closedThrough)
+        ReplyAttemptsAfterClose(
+          requester, witness.serviceGeneration,
+          witness.streamEpoch, closedThrough)
   IN /\ ReplyCloseWitnessValid(witness)
      /\ ~ReplyCloseWorkPending(requester, responder)
      /\ closedThrough > rrRequesterClosedThrough[requester]
@@ -1000,6 +1406,385 @@ ReplyRouteSpec ==
   ReplyRouteInit
     /\ [][ReplyRouteNext]_ReplyRouteVars
     /\ ReplyRouteFairness
+
+(***************************************************************************
+V2 lifecycle composition.
+
+The route kernel above is the established cursor/tenure projection.  These
+actions couple it to the sole durable first-release lifecycle.  Stream epochs
+are reserved in their own persistence step before an occurrence may be used.
+Generation-hint acceptance likewise persists a fresh epoch and strictly
+advances the expected generation before the old partial identity is discarded
+in a later step.  Rejected future-generation input and route-free hint emission
+are fail-atomic stutters.
+***************************************************************************)
+ReplyRouteV2Init ==
+  /\ ReplyRouteInit
+  /\ rrServiceGeneration =
+       [owner \in ReplyOwners |->
+          [source \in ReplySources |-> 1]]
+  /\ rrResponderGeneration =
+       [source \in ReplySources |-> 1]
+  /\ rrDurableResponderGeneration =
+       [source \in ReplySources |-> 1]
+  /\ rrRequesterNextStreamEpoch =
+       [owner \in ReplyOwners |-> 1]
+  /\ rrRequesterStreamEpoch =
+       [owner \in ReplyOwners |->
+          [source \in ReplySources |-> NoReplyStreamEpoch]]
+  /\ rrCloseStreamEpoch =
+       [owner \in ReplyOwners |->
+          [source \in ReplySources |-> NoReplyStreamEpoch]]
+  /\ rrClosedPrefix =
+       [owner \in ReplyOwners |->
+          [source \in ReplySources |->
+             ReplyOccurrenceCoordinate(
+               NoReplyServiceGeneration,
+               NoReplyStreamEpoch,
+               NoReplySemanticSequence)]]
+  /\ rrAttemptLifecycleIdentities = {}
+  /\ rrPendingHintResets = {}
+  /\ rrDiscardedPartialIdentities = {}
+
+PersistFreshRequesterStreamEpoch(owner, source) ==
+  LET streamEpoch == rrRequesterNextStreamEpoch[owner]
+  IN /\ owner \in ReplyOwners
+     /\ source \in ReplySources
+     /\ rrRequesterStreamEpoch[owner][source] = NoReplyStreamEpoch
+     /\ ~\E attempt \in rrAttempts:
+          /\ attempt.owner = owner
+          /\ attempt.source = source
+     /\ streamEpoch \in ReplyStreamEpochs
+     /\ rrRequesterStreamEpoch' =
+          [rrRequesterStreamEpoch EXCEPT
+             ![owner][source] = streamEpoch]
+     /\ rrCloseStreamEpoch' =
+          [rrCloseStreamEpoch EXCEPT
+             ![owner][source] = streamEpoch]
+     /\ rrRequesterNextStreamEpoch' =
+          [rrRequesterNextStreamEpoch EXCEPT ![owner] = @ + 1]
+     /\ UNCHANGED <<ReplyRouteVars, rrServiceGeneration,
+                    rrResponderGeneration,
+                    rrDurableResponderGeneration,
+                    rrClosedPrefix,
+                    rrAttemptLifecycleIdentities,
+                    rrPendingHintResets,
+                    rrDiscardedPartialIdentities>>
+
+ObserveNewReplySourceV2(owner, semantic, source) ==
+  LET semanticSequence ==
+        IF ReplySemanticBound(owner, semantic)
+        THEN rrSemanticSequence[owner][semantic]
+        ELSE rrRequesterNextSequence[owner]
+      identity ==
+        ReplyAttemptLifecycleIdentity(
+          owner, semantic, source,
+          rrServiceGeneration[owner][source],
+          rrRequesterStreamEpoch[owner][source],
+          semanticSequence)
+  IN /\ rrRequesterStreamEpoch[owner][source]
+          \in ReplyStreamEpochs
+     /\ ~ReplyAttemptLifecycleIdentityOwned(
+          owner, semantic, source)
+     /\ ObserveNewReplySource(owner, semantic, source)
+     /\ rrAttemptLifecycleIdentities' =
+          rrAttemptLifecycleIdentities \cup {identity}
+     /\ UNCHANGED <<rrServiceGeneration,
+                    rrResponderGeneration,
+                    rrDurableResponderGeneration,
+                    rrRequesterNextStreamEpoch,
+                    rrRequesterStreamEpoch,
+                    rrCloseStreamEpoch, rrClosedPrefix,
+                    rrPendingHintResets,
+                    rrDiscardedPartialIdentities>>
+
+ObserveLaterReplyDeliveryV2(owner, semantic, source) ==
+  /\ ReplyAttemptLifecycleIdentityOwned(owner, semantic, source)
+  /\ ReplyAttemptOccurrenceCurrent(
+       ReplyAttemptLifecycleIdentityFor(owner, semantic, source))
+  /\ ObserveLaterReplyDelivery(owner, semantic, source)
+  /\ UNCHANGED ReplyCoordinateVars
+
+RetryExactReplySourceV2(owner, semantic, source) ==
+  /\ ReplyAttemptLifecycleIdentityOwned(owner, semantic, source)
+  /\ ReplyAttemptOccurrenceCurrent(
+       ReplyAttemptLifecycleIdentityFor(owner, semantic, source))
+  /\ RetryExactReplySource(owner, semantic, source)
+  /\ UNCHANGED ReplyCoordinateVars
+
+RetireReplySourceV2(owner, source) ==
+  /\ RetireReplySource(owner, source)
+  /\ UNCHANGED ReplyCoordinateVars
+
+ReconnectReplySourceV2(owner, semantic, source) ==
+  /\ ReplyAttemptLifecycleIdentityOwned(owner, semantic, source)
+  /\ ReplyAttemptOccurrenceCurrent(
+       ReplyAttemptLifecycleIdentityFor(owner, semantic, source))
+  /\ ReconnectReplySource(owner, semantic, source)
+  /\ UNCHANGED ReplyCoordinateVars
+
+AcquireReplyTicketV2(owner, semantic, source) ==
+  /\ ReplyAttemptLifecycleIdentityOwned(owner, semantic, source)
+  /\ ReplyAttemptOccurrenceCurrent(
+       ReplyAttemptLifecycleIdentityFor(owner, semantic, source))
+  /\ AcquireReplyTicket(owner, semantic, source)
+  /\ UNCHANGED ReplyCoordinateVars
+
+ServiceReplyRouteV2(owner, semantic) ==
+  /\ ServiceReplyRoute(owner, semantic)
+  /\ UNCHANGED ReplyCoordinateVars
+
+AdvanceCurrentReplyAttemptV2(owner, semantic, source) ==
+  /\ ReplyAttemptLifecycleIdentityOwned(owner, semantic, source)
+  /\ ReplyAttemptOccurrenceCurrent(
+       ReplyAttemptLifecycleIdentityFor(owner, semantic, source))
+  /\ AdvanceCurrentReplyAttempt(owner, semantic, source)
+  /\ UNCHANGED ReplyCoordinateVars
+
+ReplyCloseCoordinate(witness) ==
+  ReplyOccurrenceCoordinate(
+    witness.serviceGeneration,
+    witness.streamEpoch,
+    witness.closedThrough)
+
+ReplyClosedPrefixUpdate(witness) ==
+  LET oldFloor ==
+        rrClosedPrefix[witness.requester][witness.responder]
+      newFloor == ReplyCloseCoordinate(witness)
+      cancelled ==
+        {identity \in rrAttemptLifecycleIdentities:
+           /\ identity.owner = witness.requester
+           /\ identity.source = witness.responder
+           /\ ReplyCoordinateAtOrBefore(
+                ReplyLifecycleIdentityCoordinate(identity),
+                newFloor)}
+      legacyProjectionRetired ==
+        {identity \in rrAttemptLifecycleIdentities:
+           /\ identity.owner = witness.requester
+           /\ identity.semanticSequence <= witness.closedThrough}
+      discarded == cancelled \cup legacyProjectionRetired
+  IN /\ ReplyCloseWitnessValid(witness)
+     /\ ReplyCoordinateAtOrBefore(oldFloor, newFloor)
+     /\ rrClosedPrefix' =
+          [rrClosedPrefix EXCEPT
+             ![witness.requester][witness.responder] = newFloor]
+     /\ rrDiscardedPartialIdentities' =
+          rrDiscardedPartialIdentities \cup discarded
+     /\ rrAttemptLifecycleIdentities' =
+          rrAttemptLifecycleIdentities \ discarded
+     /\ UNCHANGED <<rrServiceGeneration,
+                    rrResponderGeneration,
+                    rrDurableResponderGeneration,
+                    rrRequesterNextStreamEpoch,
+                    rrRequesterStreamEpoch,
+                    rrCloseStreamEpoch,
+                    rrPendingHintResets>>
+
+CoalesceAuthenticatedClosedPrefix(witness) ==
+  /\ ReplyClosedPrefixUpdate(witness)
+  /\ UNCHANGED ReplyRouteVars
+
+CloseSemanticRequestV2(witness) ==
+  /\ CloseSemanticRequest(witness)
+  /\ ReplyClosedPrefixUpdate(witness)
+
+PiggybackCloseSemanticRequestV2(witness) ==
+  CloseSemanticRequestV2(witness)
+
+RetryCloseSemanticRequestV2(witness) ==
+  /\ RetryCloseSemanticRequest(witness)
+  /\ UNCHANGED ReplyCoordinateVars
+
+AcknowledgeCloseSemanticRequestV2(acknowledgement) ==
+  /\ AcknowledgeCloseSemanticRequest(acknowledgement)
+  /\ UNCHANGED ReplyCoordinateVars
+
+PersistFreshEpochForGenerationHint(hint) ==
+  LET freshEpoch == rrRequesterNextStreamEpoch[hint.requester]
+      oldEpoch ==
+        rrRequesterStreamEpoch[hint.requester][hint.responder]
+      reset ==
+        ReplyHintReset(
+          hint.requester, hint.responder, hint.messageKind, hint.semantic,
+          hint.observedGeneration, hint.currentGeneration,
+          oldEpoch, freshEpoch, hint.observedMessageHash)
+  IN /\ ReplyGenerationHintValid(hint)
+     /\ freshEpoch \in ReplyStreamEpochs
+     /\ oldEpoch \in ReplyStreamEpochs
+     /\ \A pending \in rrPendingHintResets:
+          /\ pending.requester = hint.requester
+          /\ pending.responder = hint.responder
+          => FALSE
+     /\ rrServiceGeneration' =
+          [rrServiceGeneration EXCEPT
+             ![hint.requester][hint.responder] =
+               hint.currentGeneration]
+     /\ rrRequesterNextStreamEpoch' =
+          [rrRequesterNextStreamEpoch EXCEPT
+             ![hint.requester] = @ + 1]
+     /\ rrRequesterStreamEpoch' =
+          [rrRequesterStreamEpoch EXCEPT
+             ![hint.requester][hint.responder] = freshEpoch]
+     /\ rrCloseStreamEpoch' =
+          [rrCloseStreamEpoch EXCEPT
+             ![hint.requester][hint.responder] = freshEpoch]
+     /\ rrPendingHintResets' = rrPendingHintResets \cup {reset}
+     /\ UNCHANGED <<ReplyRouteVars,
+                    rrResponderGeneration,
+                    rrDurableResponderGeneration,
+                    rrClosedPrefix,
+                    rrAttemptLifecycleIdentities,
+                    rrDiscardedPartialIdentities>>
+
+DiscardPersistedHintPartialState(reset) ==
+  LET discarded ==
+        {identity \in rrAttemptLifecycleIdentities:
+           ReplyResetMatchesLifecycleIdentity(reset, identity)}
+      successorIdentities ==
+        {IF ReplyResetMatchesLifecycleIdentity(reset, identity)
+         THEN ReplyLifecycleIdentityAfterHint(reset, identity)
+         ELSE identity:
+           identity \in rrAttemptLifecycleIdentities}
+  IN /\ reset \in rrPendingHintResets
+     /\ rrServiceGeneration[reset.requester][reset.responder] =
+          reset.newGeneration
+     /\ rrRequesterStreamEpoch
+          [reset.requester][reset.responder] = reset.newEpoch
+     /\ rrCloseStreamEpoch
+          [reset.requester][reset.responder] = reset.newEpoch
+     /\ rrAttemptLifecycleIdentities' = successorIdentities
+     /\ rrDiscardedPartialIdentities' =
+          rrDiscardedPartialIdentities \cup discarded
+     /\ rrPendingHintResets' = rrPendingHintResets \ {reset}
+     /\ UNCHANGED <<ReplyRouteVars, rrServiceGeneration,
+                    rrResponderGeneration,
+                    rrDurableResponderGeneration,
+                    rrRequesterNextStreamEpoch,
+                    rrRequesterStreamEpoch,
+                    rrCloseStreamEpoch, rrClosedPrefix>>
+
+ReplyResponderStateTerminal(source) ==
+  /\ \A attempt \in rrAttempts:
+       attempt.source = source =>
+         /\ ReplyAttemptComplete(attempt)
+         /\ ReplyAttemptHasNoTicket(attempt)
+  /\ \A owner \in ReplyOwners:
+       ~ReplyCloseWorkPending(owner, source)
+  /\ \A reset \in rrPendingHintResets:
+       reset.responder # source
+
+PersistTerminalResponderGeneration(source) ==
+  /\ source \in ReplySources
+  /\ ReplyResponderStateTerminal(source)
+  /\ rrResponderGeneration[source] =
+       rrDurableResponderGeneration[source]
+  /\ rrDurableResponderGeneration[source]
+       < ReplyDeliveryOrdinalLimit
+  /\ rrDurableResponderGeneration' =
+       [rrDurableResponderGeneration EXCEPT ![source] = @ + 1]
+  /\ UNCHANGED <<ReplyRouteVars, rrServiceGeneration,
+                 rrResponderGeneration,
+                 rrRequesterNextStreamEpoch,
+                 rrRequesterStreamEpoch, rrCloseStreamEpoch,
+                 rrClosedPrefix, rrAttemptLifecycleIdentities,
+                 rrPendingHintResets, rrDiscardedPartialIdentities>>
+
+InstallPersistedResponderGeneration(source) ==
+  /\ source \in ReplySources
+  /\ ReplyResponderStateTerminal(source)
+  /\ rrDurableResponderGeneration[source] =
+       rrResponderGeneration[source] + 1
+  /\ rrResponderGeneration' =
+       [rrResponderGeneration EXCEPT
+          ![source] = rrDurableResponderGeneration[source]]
+  /\ UNCHANGED <<ReplyRouteVars, rrServiceGeneration,
+                 rrDurableResponderGeneration,
+                 rrRequesterNextStreamEpoch,
+                 rrRequesterStreamEpoch, rrCloseStreamEpoch,
+                 rrClosedPrefix, rrAttemptLifecycleIdentities,
+                 rrPendingHintResets, rrDiscardedPartialIdentities>>
+
+RejectFutureGenerationWithoutMutation(
+    requester, responder, inputGeneration) ==
+  /\ requester \in ReplyOwners
+  /\ responder \in ReplySources
+  /\ inputGeneration \in ReplyServiceGenerations
+  /\ inputGeneration > rrResponderGeneration[responder]
+  /\ UNCHANGED ReplyRouteV2Vars
+
+ReturnOlderGenerationHintWithoutRoute(
+    requester, responder, observedMessageHash) ==
+  /\ requester \in ReplyOwners
+  /\ responder \in ReplySources
+  /\ rrServiceGeneration[requester][responder]
+       < rrResponderGeneration[responder]
+  /\ observedMessageHash
+       \in {ReplyOutstandingCloseHash(requester, responder)}
+            \cup
+            {ReplyOutstandingRequestHash(
+               requester, semantic, responder):
+               semantic \in ReplySemantics}
+  /\ UNCHANGED ReplyRouteV2Vars
+
+RejectResponderGenerationOverflow(source) ==
+  /\ source \in ReplySources
+  /\ rrDurableResponderGeneration[source] =
+       ReplyDeliveryOrdinalLimit
+  /\ UNCHANGED ReplyRouteV2Vars
+
+ReplyRouteV2Next ==
+  \/ \E owner \in ReplyOwners, source \in ReplySources:
+       PersistFreshRequesterStreamEpoch(owner, source)
+  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
+       source \in ReplySources:
+       ObserveNewReplySourceV2(owner, semantic, source)
+  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
+       source \in ReplySources:
+       ObserveLaterReplyDeliveryV2(owner, semantic, source)
+  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
+       source \in ReplySources:
+       RetryExactReplySourceV2(owner, semantic, source)
+  \/ \E owner \in ReplyOwners, source \in ReplySources:
+       RetireReplySourceV2(owner, source)
+  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
+       source \in ReplySources:
+       ReconnectReplySourceV2(owner, semantic, source)
+  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
+       source \in ReplySources:
+       AcquireReplyTicketV2(owner, semantic, source)
+  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics:
+       ServiceReplyRouteV2(owner, semantic)
+  \/ \E witness \in ReplyCloseWitnessSet:
+       CloseSemanticRequestV2(witness)
+  \/ \E witness \in ReplyCloseWitnessSet:
+       PiggybackCloseSemanticRequestV2(witness)
+  \/ \E witness \in ReplyCloseWitnessSet:
+       RetryCloseSemanticRequestV2(witness)
+  \/ \E acknowledgement \in ReplyCloseAcknowledgementSet:
+       AcknowledgeCloseSemanticRequestV2(acknowledgement)
+  \/ \E hint \in ReplyGenerationHintSet:
+       PersistFreshEpochForGenerationHint(hint)
+  \/ \E reset \in ReplyHintResetSet:
+       DiscardPersistedHintPartialState(reset)
+  \/ \E source \in ReplySources:
+       PersistTerminalResponderGeneration(source)
+  \/ \E source \in ReplySources:
+       InstallPersistedResponderGeneration(source)
+  \/ \E requester \in ReplyOwners, responder \in ReplySources,
+       inputGeneration \in ReplyServiceGenerations:
+       RejectFutureGenerationWithoutMutation(
+         requester, responder, inputGeneration)
+  \/ \E requester \in ReplyOwners, responder \in ReplySources,
+       observedMessageHash
+         \in SUBSET (ReplyRequestIdentitySet \cup ReplyCloseIdentitySet):
+       ReturnOlderGenerationHintWithoutRoute(
+         requester, responder, observedMessageHash)
+  \/ \E source \in ReplySources:
+       RejectResponderGenerationOverflow(source)
+
+ReplyRouteV2Spec ==
+  ReplyRouteV2Init
+    /\ [][ReplyRouteV2Next]_ReplyRouteV2Vars
 
 ReplyRouteTypeInvariant ==
   /\ rrAttempts \subseteq ReplyAttemptSet
@@ -1221,6 +2006,141 @@ ReplyRouteLifecycleInvariant ==
 ReplyRouteFullSafetyInvariant ==
   /\ ReplyRouteSafetyInvariant
   /\ ReplyRouteLifecycleInvariant
+
+ReplyRouteV2CoordinateTypeInvariant ==
+  /\ rrServiceGeneration
+       \in [ReplyOwners ->
+             [ReplySources -> ReplyServiceGenerations]]
+  /\ rrResponderGeneration
+       \in [ReplySources -> ReplyServiceGenerations]
+  /\ rrDurableResponderGeneration
+       \in [ReplySources -> ReplyServiceGenerations]
+  /\ rrRequesterNextStreamEpoch
+       \in [ReplyOwners -> 1..(ReplyDeliveryOrdinalLimit + 1)]
+  /\ rrRequesterStreamEpoch
+       \in [ReplyOwners ->
+             [ReplySources -> 0..ReplyDeliveryOrdinalLimit]]
+  /\ rrCloseStreamEpoch
+       \in [ReplyOwners ->
+             [ReplySources -> 0..ReplyDeliveryOrdinalLimit]]
+  /\ rrClosedPrefix
+       \in [ReplyOwners ->
+             [ReplySources -> ReplyOccurrenceCoordinateSet]]
+  /\ rrAttemptLifecycleIdentities
+       \subseteq ReplyAttemptLifecycleIdentitySet
+  /\ rrPendingHintResets \subseteq ReplyHintResetSet
+  /\ rrDiscardedPartialIdentities
+       \subseteq ReplyAttemptLifecycleIdentitySet
+
+ReplyAttemptLifecycleIdentityInvariant ==
+  /\ \A owner \in ReplyOwners, semantic \in ReplySemantics,
+       source \in ReplySources:
+       /\ IsFiniteSet(
+            ReplyAttemptLifecycleIdentitiesFor(
+              owner, semantic, source))
+       /\ Cardinality(
+            ReplyAttemptLifecycleIdentitiesFor(
+              owner, semantic, source)) <= 1
+       /\ ReplyAttemptOwned(owner, semantic, source) =>
+            ReplyAttemptLifecycleIdentityOwned(
+              owner, semantic, source)
+  /\ \A identity \in rrAttemptLifecycleIdentities:
+       /\ ReplyLifecycleIdentityMatchesCanonicalRequest(identity)
+       /\ ReplyAttemptOwned(
+            identity.owner, identity.semantic, identity.source)
+            \/ identity \in rrDiscardedPartialIdentities
+            \/ ReplyAttemptOccurrenceCancelled(identity)
+       /\ ReplyAttemptOccurrenceCurrent(identity)
+            \/ identity \in rrDiscardedPartialIdentities
+            \/ \E reset \in rrPendingHintResets:
+                 ReplyResetMatchesLifecycleIdentity(reset, identity)
+  /\ \A identity \in rrAttemptLifecycleIdentities:
+       identity \notin rrDiscardedPartialIdentities
+  /\ \A discarded \in rrDiscardedPartialIdentities:
+       \A current \in rrAttemptLifecycleIdentities:
+         discarded.requestIdentity # current.requestIdentity
+
+ReplyRequesterEpochPersistenceInvariant ==
+  /\ \A owner \in ReplyOwners, source \in ReplySources:
+       /\ rrRequesterStreamEpoch[owner][source] =
+            rrCloseStreamEpoch[owner][source]
+       /\ rrRequesterStreamEpoch[owner][source] # NoReplyStreamEpoch
+            => rrRequesterStreamEpoch[owner][source]
+                 < rrRequesterNextStreamEpoch[owner]
+       /\ (\E attempt \in rrAttempts:
+             /\ attempt.owner = owner
+             /\ attempt.source = source)
+            => rrRequesterStreamEpoch[owner][source]
+                 \in ReplyStreamEpochs
+  /\ \A reset \in rrPendingHintResets:
+       /\ rrServiceGeneration[reset.requester][reset.responder] =
+            reset.newGeneration
+       /\ reset.newGeneration > reset.oldGeneration
+       /\ reset.newEpoch < rrRequesterNextStreamEpoch[reset.requester]
+       /\ rrRequesterStreamEpoch
+            [reset.requester][reset.responder] = reset.newEpoch
+       /\ rrCloseStreamEpoch
+            [reset.requester][reset.responder] = reset.newEpoch
+
+ReplyClosedPrefixLexicographicInvariant ==
+  /\ \A owner \in ReplyOwners, source \in ReplySources:
+       rrClosedPrefix[owner][source]
+         \in ReplyOccurrenceCoordinateSet
+  /\ \A identity \in rrAttemptLifecycleIdentities:
+       ReplyAttemptOccurrenceCancelled(identity) =>
+         /\ identity \in rrDiscardedPartialIdentities
+            \/ ~ReplyAttemptOwned(
+                 identity.owner, identity.semantic, identity.source)
+            \/ ReplyAttemptComplete(
+                 ReplyAttemptFor(
+                   identity.owner, identity.semantic, identity.source))
+
+ReplyTerminalRolloverCompositionInvariant ==
+  \A source \in ReplySources:
+    /\ rrResponderGeneration[source]
+         <= rrDurableResponderGeneration[source]
+    /\ rrDurableResponderGeneration[source]
+         <= rrResponderGeneration[source] + 1
+    /\ rrDurableResponderGeneration[source]
+         > rrResponderGeneration[source]
+         => ReplyResponderStateTerminal(source)
+
+ReplyRouteV2CoordinateSafetyInvariant ==
+  /\ ReplyRouteV2CoordinateTypeInvariant
+  /\ ReplyAttemptLifecycleIdentityInvariant
+  /\ ReplyRequesterEpochPersistenceInvariant
+  /\ ReplyClosedPrefixLexicographicInvariant
+  /\ ReplyTerminalRolloverCompositionInvariant
+
+ReplyRouteV2SafetyInvariant ==
+  /\ ReplyRouteFullSafetyInvariant
+  /\ ReplyRouteV2CoordinateSafetyInvariant
+
+ReplyStaleArtifactCannotAffectSuccessor ==
+  \A stale \in rrDiscardedPartialIdentities,
+     successor \in rrAttemptLifecycleIdentities:
+    /\ stale.owner = successor.owner
+    /\ stale.semantic = successor.semantic
+    /\ stale.source = successor.source
+    => /\ stale.requestIdentity # successor.requestIdentity
+       /\ ReplyCoordinateStrictlyBefore(
+            ReplyLifecycleIdentityCoordinate(stale),
+            ReplyLifecycleIdentityCoordinate(successor))
+
+ReplyFutureGenerationRejectIsAtomic ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     inputGeneration \in ReplyServiceGenerations:
+    RejectFutureGenerationWithoutMutation(
+      requester, responder, inputGeneration)
+      => UNCHANGED ReplyRouteV2Vars
+
+ReplyHintPersistencePrecedesPartialDiscard ==
+  \A reset \in ReplyHintResetSet:
+    DiscardPersistedHintPartialState(reset) =>
+      /\ rrServiceGeneration[reset.requester][reset.responder] =
+           reset.newGeneration
+      /\ reset.newEpoch <
+           rrRequesterNextStreamEpoch[reset.requester]
 
 (***************************************************************************
 This is an explicit liveness obligation, not a safety shorthand.  Stability

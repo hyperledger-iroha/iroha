@@ -157,10 +157,9 @@ use iroha_data_model::{
     sorafs::pin_registry::StorageClass,
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, IvmProved,
-        PrivateCreateKaigi,
-        PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction, PrivateKaigiArtifacts,
-        PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionPayload,
-        TransactionSubmissionReceipt,
+        PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
+        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
+        TransactionPayload, TransactionSubmissionReceipt,
         executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
     },
@@ -2002,9 +2001,7 @@ fn subscription_syscall_program_bytes(syscall: u32, max_cycles: NonZeroU64) -> V
 pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Result<String> {
     use iroha_data_model::{
         events::EventFilterBox,
-        subscription::{
-            SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionTriggerRef,
-        },
+        subscription::{SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionTriggerRef},
     };
 
     let action: Action =
@@ -2023,10 +2020,7 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
         )
     })?;
     let program_kind = if bytecode.as_ref()
-        == subscription_syscall_program_bytes(
-            ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
-            max_cycles,
-        )
+        == subscription_syscall_program_bytes(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL, max_cycles)
     {
         "billing"
     } else if bytecode.as_ref()
@@ -16665,13 +16659,14 @@ mod tests {
     fn subscription_trigger_action_inspection_binds_first_release_semantics() {
         use iroha_data_model::{
             events::execute_trigger::ExecuteTriggerEventFilter,
-            subscription::{
-                SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionTriggerRef,
-            },
+            subscription::{SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionTriggerRef},
         };
 
-        let authority =
-            AccountId::new(KeyPair::random_with_algorithm(Algorithm::Ed25519).public_key().clone());
+        let authority = AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
         let subscription_id: NftId = "sub_demo$subscriptions.universal"
             .parse()
             .expect("subscription NFT id");
@@ -16819,9 +16814,7 @@ mod tests {
                 .expect("asset definition"),
             base_fee: "0.00001".parse().expect("base fee"),
             resource_profile: None,
-            max_compute_reservation_fee: "0.000008"
-                .parse()
-                .expect("max compute reservation fee"),
+            max_compute_reservation_fee: "0.000008".parse().expect("max compute reservation fee"),
             provenance,
         };
         let boxed = InstructionBox::from(instruction);

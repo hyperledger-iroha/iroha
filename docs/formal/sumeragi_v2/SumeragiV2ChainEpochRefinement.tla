@@ -130,6 +130,16 @@ AsyncChainSpec ==
   /\ AsyncFairness
 
 (***************************************************************************
+Safety and refinement use AsyncChainSpec without a resource assumption.
+One-height progress additionally requires the exact finite install-generation
+budget already exposed by AsyncLiveSpecAt; it is a liveness premise, not an
+inductive consequence of the chain product.
+***************************************************************************)
+AsyncLiveChainSpec ==
+  /\ AsyncChainSpec
+  /\ []AsyncInstallGenerationBudget
+
+(***************************************************************************
 The product projects to both of its components.  The Chain projection is the
 formal safety bridge; the Async projection preserves the production scheduler
 and all of its historical-service fairness obligations.
@@ -158,6 +168,21 @@ PROOF
   <1>2. [AsyncChainNext]_AsyncChainVars => [AsyncNext]_AsyncAllVars
     BY AsyncChainStepProjectsAsyncStep
   <1> QED BY <1>1, <1>2, PTL DEF AsyncChainSpec, AsyncSpec
+
+THEOREM AsyncLiveChainSpecProjectsGenesisAsyncLiveSpec ==
+  AsyncLiveChainSpec
+    => AsyncLiveSpecAt(ContextRecord(0, <<>>))
+PROOF
+  <1>1. AsyncLiveChainSpec
+           => /\ AsyncChainSpec
+              /\ []AsyncInstallGenerationBudget
+    BY DEF AsyncLiveChainSpec
+  <1>2. AsyncChainSpec => AsyncSpec
+    BY AsyncChainSpecProjectsAsyncSpec
+  <1>3. AsyncSpec => AsyncSpecAt(ContextRecord(0, <<>>))
+    BY DEF AsyncSpec, AsyncSpecAt, AsyncInit, AsyncFairness
+  <1> QED BY <1>1, <1>2, <1>3
+     DEF AsyncLiveSpecAt
 
 THEOREM AsyncChainInitProjectsChainEpochInit ==
   AsyncChainInit => Chain!ChainEpochInit
@@ -856,25 +881,24 @@ PROOF
     <2> QED BY <1>1, PTL
   <1> QED BY <1>1
 THEOREM GenesisHeightSuccessorHandoffFromOneHeightCompletion ==
-  /\ AsyncChainSpec
+  /\ AsyncLiveChainSpec
   /\ OneHeightCompletionLiveness(ContextRecord(0, <<>>))
   => GenesisHeightSuccessorHandoffProperty
 PROOF
-  <1>1. ASSUME AsyncChainSpec,
+  <1>1. ASSUME AsyncLiveChainSpec,
               OneHeightCompletionLiveness(ContextRecord(0, <<>>))
          PROVE GenesisHeightSuccessorHandoffProperty
-    <2>1. AsyncSpec
-      BY <1>1, AsyncChainSpecProjectsAsyncSpec
-    <2>2. AsyncSpecAt(ContextRecord(0, <<>>))
-      BY <2>1
-         DEF AsyncSpec, AsyncSpecAt, AsyncInit, AsyncFairness
+    <2>1. AsyncChainSpec
+      BY <1>1 DEF AsyncLiveChainSpec
+    <2>2. AsyncLiveSpecAt(ContextRecord(0, <<>>))
+      BY <1>1, AsyncLiveChainSpecProjectsGenesisAsyncLiveSpec
     <2>3. gst ~> AsyncAllResponsiveAppliedAt(
                   ContextRecord(0, <<>>))
       BY <1>1, <2>2 DEF OneHeightCompletionLiveness
     <2>4. []GenesisApplicationHandoffInvariant
-      BY <1>1, AsyncChainAlwaysGenesisApplicationHandoff
+      BY <2>1, AsyncChainAlwaysGenesisApplicationHandoff
     <2>5. CurrentEpoch = ContextRecord(0, <<>>).epoch
-      BY <1>1
+      BY <2>1
          DEF AsyncChainSpec, AsyncChainInit, AsyncInit,
              AsyncInitAt, AsyncBaseInitAt, InitAt,
              ContextRecord, CurrentEpoch
@@ -926,7 +950,7 @@ OneHeightCompletionObligation currently depends on the proofless rotating-
 leader and application-liveness declarations in AsyncLivenessProofs.
 ***************************************************************************)
 THEOREM GenesisHeightSuccessorHandoffObligation ==
-  AsyncChainSpec => GenesisHeightSuccessorHandoffProperty
+  AsyncLiveChainSpec => GenesisHeightSuccessorHandoffProperty
 PROOF
   <1>1. OneHeightCompletionLiveness(ContextRecord(0, <<>>))
     BY OneHeightCompletionObligation
@@ -1527,7 +1551,7 @@ IndexedJoinedRunnerStep(initialContext) ==
        /\ IndexedAsync(initialContext)!RunNode(node)
   \/ \E node \in Responsive:
        IndexedAsync(initialContext)!RunHistoricalRecoveryNode(node)
-  \/ \E node \in IndexedAsync(initialContext)!AsyncCurrentResponsiveVoters:
+  \/ \E node \in Responsive:
        /\ node \in joinedByContext[initialContext]
        /\ IndexedAsync(initialContext)!RunHistoricalServer(node)
 
@@ -1553,7 +1577,7 @@ IndexedJoinedNonRunnerStep(initialContext) ==
            source \in Chain!DecisionEvidenceSet:
           IndexedOpenHistoricalRecovery(
             initialContext, node, server, source)
-     \/ \E node \in IndexedAsync(initialContext)!AsyncCurrentResponsiveVoters:
+     \/ \E node \in Responsive:
           /\ node \in joinedByContext[initialContext]
           /\ IndexedAsync(initialContext)!ServiceIoWorker(node)
      \/ \E node \in IndexedAsync(initialContext)!AsyncCurrentResponsiveVoters:
@@ -1566,12 +1590,15 @@ IndexedJoinedNonRunnerStep(initialContext) ==
 IndexedJoinedNonCrashStep(initialContext) ==
   /\ (IndexedJoinedRunnerStep(initialContext)
         \/ IndexedJoinedNonRunnerStep(initialContext))
-  /\ UNCHANGED IndexedCore(initialContext, 6)
+  /\ UNCHANGED <<IndexedCore(initialContext, 6),
+                 IndexedAsync(initialContext)!AsyncRecoveryControlVars>>
 
 IndexedJoinedAsyncNext(initialContext) ==
   /\ (IndexedJoinedNonCrashStep(initialContext)
         \/ \E node \in ValidatorIds:
              IndexedAsync(initialContext)!PreGstCrash(node))
+  /\ IndexedAsync(initialContext)!
+       AsyncHistoricalLockRestartAuthorityTransition
   /\ UNCHANGED <<IndexedCore(initialContext, 1),
                  IndexedCore(initialContext, 2)>>
   /\ [IndexedAsync(initialContext)!Next]_(
@@ -2320,6 +2347,18 @@ FiniteHorizonSuccessorProjectionDormant ==
          /\ successorPredecessorStatusOwnership[terminalContext][node]
               = "Absent"
 
+(***************************************************************************
+The indexed product deliberately excludes responsive-process crash/restart
+transitions.  Every pre-created Async instance therefore remains in its
+initialized recovery phase.  This state invariant is the exact reason that
+the six responsive restart/replay weak-fairness clauses of AsyncSpecAt are
+vacuous in the product projection; absence from the product action inventory
+alone would not be sufficient without the recovery-control frame above.
+***************************************************************************)
+IndexedResponsiveRecoveryDormant ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedRecovery(initialContext, 1) = "Eligible"
+
 SuccessorPublicationOrSuperseded(parentContext, node) ==
   \/ SuccessorHeightActivated(parentContext, node)
   \/ nodeHeight[node] > parentContext.height + 1
@@ -2492,25 +2531,23 @@ IndexedFairness ==
          WF_IndexedChainVars(
            IndexedHistoricalCommitCertificateDiscoveryStep(
              initialContext, node))
-    /\ \A node \in IndexedAsync(initialContext)!
-                   AsyncVotersAt(initialContext):
+    /\ \A node \in Responsive:
          WF_IndexedChainVars(
            IndexedHistoricalServerStep(initialContext, node))
-    /\ \A node \in IndexedAsync(initialContext)!
-                   AsyncVotersAt(initialContext):
+    /\ \A node \in Responsive:
          WF_IndexedChainVars(
            IndexedIoWorkerStep(initialContext, node))
     /\ \A node \in Responsive:
          WF_IndexedChainVars(
            IndexedHistoricalRecoveryIoWorkerStep(
              initialContext, node))
-    /\ \A recipient \in IndexedAsync(initialContext)!
-                        AsyncVotersAt(initialContext),
+    /\ \A recipient \in Responsive,
           source \in IndexedAsync(initialContext)!
-                     AsyncVotersAt(initialContext):
+                     AsyncIngressSources:
          WF_IndexedChainVars(
            IndexedAdmitPacketStep(initialContext, recipient, source))
-    /\ \A recipient \in ValidatorIds, source \in ValidatorIds:
+    /\ \A recipient \in ValidatorIds,
+          source \in IndexedAsync(initialContext)!AsyncIngressSources:
          WF_IndexedChainVars(
            IndexedAdmitHistoricalRecoveryPacketStep(
              initialContext, recipient, source))
@@ -2524,6 +2561,24 @@ IndexedChainSpec ==
   /\ [][IndexedChainNext]_IndexedChainVars
   /\ IndexedFairness
   /\ EventualFailureFreeSuccessorStartupSuffix
+
+(***************************************************************************
+The indexed safety product remains unconditional on finite install capacity.
+Multi-height liveness uses the exact per-instance budget required by
+AsyncLiveSpecAt.  Quantifying every pre-created admissible instance prevents a
+verification-only context or joined-context subset from hiding exhaustion.
+***************************************************************************)
+IndexedInstallGenerationBudgetPremise ==
+  \A initialContext \in AdmissibleContextRecords:
+    []IndexedAsync(initialContext)!AsyncInstallGenerationBudget
+
+IndexedLiveChainSpec ==
+  /\ IndexedChainSpec
+  /\ IndexedInstallGenerationBudgetPremise
+
+THEOREM IndexedLiveChainSpecProjectsIndexedChainSpec ==
+  IndexedLiveChainSpec => IndexedChainSpec
+BY DEF IndexedLiveChainSpec
 
 (***************************************************************************
 `MaxHeight` is only the finite verification projection. A fresh exact Async
@@ -2785,21 +2840,119 @@ THEOREM JoinedRunnerIsExactAsyncWork ==
     IndexedJoinedRunnerStep(initialContext)
       => IndexedAsync(initialContext)!AsyncRunnerStep
 BY Isa DEF IndexedJoinedRunnerStep,
-           IndexedAsync!AsyncRunnerStep
+           IndexedAsync!AsyncRunnerStep,
+           IndexedAsync!RunHistoricalRecoveryNode,
+           IndexedAsync!HistoricalRecoveryTarget,
+           IndexedAsync!RunHistoricalServer
 
 THEOREM JoinedNonRunnerIsExactAsyncWork ==
   \A initialContext \in AdmissibleContextRecords:
     IndexedJoinedNonRunnerStep(initialContext)
       => IndexedAsync(initialContext)!AsyncNonRunnerStep
 BY Isa DEF IndexedJoinedNonRunnerStep,
-           IndexedAsync!AsyncNonRunnerStep
+           IndexedAsync!AsyncNonRunnerStep,
+           IndexedOpenHistoricalRecovery,
+           IndexedAsync!DirectHistoricalCommitCertificateDiscoveryStep,
+           IndexedAsync!HistoricalCommitCertificateDiscoveryDue,
+           IndexedAsync!ServiceIoWorker,
+           IndexedAsync!ServiceHistoricalRecoveryIoWorker,
+           IndexedAsync!EnqueueHistoricalRecoveryIoLocalControl,
+           IndexedAsync!HistoricalRecoveryTarget
 
 THEOREM JoinedAsyncStepRefinesExactAsyncStep ==
   \A initialContext \in AdmissibleContextRecords:
     IndexedJoinedAsyncNext(initialContext)
       => IndexedAsync(initialContext)!AsyncNext
+BY Isa, JoinedRunnerIsExactAsyncWork,
+   JoinedNonRunnerIsExactAsyncWork
+   DEF IndexedJoinedAsyncNext, IndexedJoinedNonCrashStep,
+       IndexedAsync!AsyncNext, IndexedAsync!AsyncNonCrashStep
+
+(***************************************************************************
+Responsive restart/replay is intentionally outside the indexed chain product.
+The normal joined branch now carries the complete production non-crash
+recovery-control frame, and the remaining non-responsive crash branch already
+frames AsyncRecoveryVars.  Successor activation stutters every indexed Async
+instance.  These facts make the initialized Eligible phase inductive without
+silently adding a favourable restart relation.
+***************************************************************************)
+THEOREM IndexedInitEstablishesResponsiveRecoveryDormancy ==
+  IndexedChainInit => IndexedResponsiveRecoveryDormant
+BY Isa DEF IndexedChainInit, IndexedResponsiveRecoveryDormant,
+           IndexedAsync!AsyncInitAt, IndexedAsync!AsyncBaseInitAt,
+           IndexedAsync!AsyncRecoveryInit, IndexedRecovery
+
+THEOREM IndexedJoinedAsyncStepPreservesResponsiveRecoveryEligibility ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedRecovery(initialContext, 1) = "Eligible"
+      /\ IndexedJoinedAsyncNext(initialContext)
+      => IndexedRecovery(initialContext, 1)' = "Eligible"
 BY Isa DEF IndexedJoinedAsyncNext, IndexedJoinedNonCrashStep,
-           IndexedAsync!AsyncNext, IndexedAsync!AsyncNonCrashStep
+           IndexedAsync!PreGstCrash,
+           IndexedAsync!AsyncRecoveryVars,
+           IndexedAsync!AsyncRecoveryControlVars,
+           IndexedRecovery
+
+THEOREM IndexedProductActionPreservesResponsiveRecoveryDormancy ==
+  \A selectedContext \in AdmissibleContextRecords:
+    IndexedResponsiveRecoveryDormant
+      /\ IndexedProductActionAt(selectedContext)
+      => IndexedResponsiveRecoveryDormant'
+BY Isa, IndexedJoinedAsyncStepPreservesResponsiveRecoveryEligibility
+   DEF IndexedResponsiveRecoveryDormant, IndexedProductActionAt,
+       IndexedAsyncStateAt, IndexedRecovery
+
+THEOREM IndexedSuccessorActivationStepStuttersAsyncState ==
+  \A parentContext \in AdmissibleContextRecords,
+     node \in ValidatorIds:
+    IndexedSuccessorActivationProgressStep(parentContext, node)
+      => UNCHANGED indexedAsyncState
+BY Isa DEF IndexedSuccessorActivationProgressStep,
+           BeginSuccessorActivation,
+           BindAppliedSuccessorActivationToken,
+           LatchAppliedSuccessorStartupFailure,
+           LatchRecoveredSuccessorStartupFailure,
+           RehydrateCleanCompleteTipSuccessorStartup,
+           RehydrateFailedSuccessorStartup,
+           AuthenticateRecoveredSuccessorActivation,
+           OpenDeferredSuccessorAdapter,
+           ConstructSuccessorRuntime,
+           StartSuccessorServices,
+           ApplySuccessorStartupEffects,
+           ArmSuccessorClocks,
+           PrepareSuccessorActivationMarker,
+           OpenSuccessorIngress,
+           ActivateAppliedSuccessorHeight,
+           ActivateRecoveredSuccessorHeight,
+           SuccessorActivationEnvironmentStutter
+
+THEOREM IndexedActionPreservesResponsiveRecoveryDormancy ==
+  IndexedResponsiveRecoveryDormant /\ IndexedChainNext
+    => IndexedResponsiveRecoveryDormant'
+BY Isa, IndexedProductActionPreservesResponsiveRecoveryDormancy,
+   IndexedSuccessorActivationStepStuttersAsyncState
+   DEF IndexedChainNext, JoinedContexts,
+       IndexedResponsiveRecoveryDormant,
+       IndexedRecovery
+
+THEOREM IndexedStepPreservesResponsiveRecoveryDormancy ==
+  IndexedResponsiveRecoveryDormant
+    /\ [IndexedChainNext]_IndexedChainVars
+    => IndexedResponsiveRecoveryDormant'
+BY Isa, IndexedActionPreservesResponsiveRecoveryDormancy
+   DEF IndexedChainVars, IndexedResponsiveRecoveryDormant,
+       IndexedRecovery
+
+THEOREM IndexedChainSpecKeepsResponsiveRecoveryDormant ==
+  IndexedChainSpec => []IndexedResponsiveRecoveryDormant
+PROOF
+  <1>1. IndexedChainInit => IndexedResponsiveRecoveryDormant
+    BY IndexedInitEstablishesResponsiveRecoveryDormancy
+  <1>2. IndexedResponsiveRecoveryDormant
+           /\ [IndexedChainNext]_IndexedChainVars
+           => IndexedResponsiveRecoveryDormant'
+    BY IndexedStepPreservesResponsiveRecoveryDormancy
+  <1> QED BY <1>1, <1>2, PTL DEF IndexedChainSpec
 
 THEOREM JoinedNodeNeverWaitsForAllPeers ==
   \A initialContext \in AdmissibleContextRecords:
@@ -3333,7 +3486,9 @@ THEOREM IndexedFairActionsRemainEnabledInProduct ==
                           => ENABLED
                                IndexedCommitCertificateDiscoveryStep(
                                  initialContext, node))
-                   /\ (ENABLED IndexedAsync(initialContext)!
+         /\ \A node \in Responsive:
+              node \in joinedByContext[initialContext]
+                => /\ (ENABLED IndexedAsync(initialContext)!
                                   PostGstRunHistoricalServer(node)
                           => ENABLED IndexedHistoricalServerStep(
                                initialContext, node))
@@ -3341,9 +3496,7 @@ THEOREM IndexedFairActionsRemainEnabledInProduct ==
                                   PostGstServiceIoWorker(node)
                           => ENABLED
                                IndexedIoWorkerStep(initialContext, node))
-         /\ \A node \in Responsive:
-              node \in joinedByContext[initialContext]
-                => /\ (ENABLED IndexedAsync(initialContext)!
+                   /\ (ENABLED IndexedAsync(initialContext)!
                                   PostGstOpenHistoricalRecovery(node)
                           => ENABLED IndexedOpenHistoricalRecoveryStep(
                                initialContext, node))
@@ -3362,15 +3515,16 @@ THEOREM IndexedFairActionsRemainEnabledInProduct ==
                           => ENABLED
                                IndexedHistoricalRecoveryIoWorkerStep(
                                  initialContext, node))
-         /\ \A recipient \in IndexedAsync(initialContext)!
-                            AsyncVotersAt(initialContext),
+         /\ \A recipient \in Responsive,
                source \in IndexedAsync(initialContext)!
-                         AsyncVotersAt(initialContext):
+                         AsyncIngressSources:
               ENABLED IndexedAsync(initialContext)!
                         PostGstAdmitHiddenPacket(recipient, source)
                 => ENABLED IndexedAdmitPacketStep(
                      initialContext, recipient, source)
-         /\ \A recipient \in ValidatorIds, source \in ValidatorIds:
+         /\ \A recipient \in ValidatorIds,
+               source \in IndexedAsync(initialContext)!
+                          AsyncIngressSources:
               ENABLED IndexedAsync(initialContext)!
                         PostGstAdmitHistoricalRecoveryPacket(
                           recipient, source)
@@ -3509,6 +3663,116 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
+The product never leaves the Eligible recovery phase, so the six pre-GST
+restart/replay actions required by AsyncFairnessAt are permanently disabled.
+Their weak-fairness clauses are therefore satisfied semantically, rather than
+being dropped from the exact AsyncSpecAt projection.
+***************************************************************************)
+IndexedResponsiveRecoveryActionsDisabled ==
+  \A initialContext \in AdmissibleContextRecords:
+    /\ ~ENABLED
+          <<IndexedAsync(initialContext)!PreGstResponsiveRestart>>_(
+            IndexedAsyncStateAt(initialContext))
+    /\ ~ENABLED
+          <<IndexedAsync(initialContext)!PreGstResponsiveReplay>>_(
+            IndexedAsyncStateAt(initialContext))
+    /\ ~ENABLED
+          <<IndexedAsync(initialContext)!ResponsiveReplayRunNode>>_(
+            IndexedAsyncStateAt(initialContext))
+    /\ ~ENABLED
+          <<IndexedAsync(initialContext)!
+              ResponsiveReplayServiceIoWorker>>_(
+            IndexedAsyncStateAt(initialContext))
+    /\ ~ENABLED
+          <<IndexedAsync(initialContext)!DriveResponsiveReplayHead>>_(
+            IndexedAsyncStateAt(initialContext))
+    /\ ~ENABLED
+          <<IndexedAsync(initialContext)!FinishResponsiveReplay>>_(
+            IndexedAsyncStateAt(initialContext))
+
+THEOREM IndexedResponsiveRecoveryDormancyDisablesFairActions ==
+  IndexedResponsiveRecoveryDormant
+    => IndexedResponsiveRecoveryActionsDisabled
+BY ExpandENABLED, Isa
+   DEF IndexedResponsiveRecoveryDormant,
+       IndexedResponsiveRecoveryActionsDisabled,
+       IndexedAsyncStateAt, IndexedRecovery,
+       IndexedAsync!PreGstResponsiveRestart,
+       IndexedAsync!PreGstResponsiveReplay,
+       IndexedAsync!ResponsiveReplayRunNode,
+       IndexedAsync!ResponsiveReplayServiceIoWorker,
+       IndexedAsync!DriveResponsiveReplayHead,
+       IndexedAsync!FinishResponsiveReplay,
+       IndexedAsync!ResponsiveReplayDraining
+
+THEOREM IndexedChainSpecAlwaysDisablesResponsiveRecoveryActions ==
+  IndexedChainSpec => []IndexedResponsiveRecoveryActionsDisabled
+BY IndexedChainSpecKeepsResponsiveRecoveryDormant,
+   IndexedResponsiveRecoveryDormancyDisablesFairActions, PTL
+
+THEOREM IndexedResponsiveRecoveryFairnessIsVacuous ==
+  IndexedChainSpec
+    => \A initialContext \in AdmissibleContextRecords:
+         /\ WF_(IndexedAsyncStateAt(initialContext))(
+              IndexedAsync(initialContext)!PreGstResponsiveRestart)
+         /\ WF_(IndexedAsyncStateAt(initialContext))(
+              IndexedAsync(initialContext)!PreGstResponsiveReplay)
+         /\ WF_(IndexedAsyncStateAt(initialContext))(
+              IndexedAsync(initialContext)!ResponsiveReplayRunNode)
+         /\ WF_(IndexedAsyncStateAt(initialContext))(
+              IndexedAsync(initialContext)!
+                ResponsiveReplayServiceIoWorker)
+         /\ WF_(IndexedAsyncStateAt(initialContext))(
+              IndexedAsync(initialContext)!DriveResponsiveReplayHead)
+         /\ WF_(IndexedAsyncStateAt(initialContext))(
+              IndexedAsync(initialContext)!FinishResponsiveReplay)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+               NEW initialContext \in AdmissibleContextRecords
+         PROVE
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                IndexedAsync(initialContext)!PreGstResponsiveRestart)
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                IndexedAsync(initialContext)!PreGstResponsiveReplay)
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                IndexedAsync(initialContext)!ResponsiveReplayRunNode)
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                IndexedAsync(initialContext)!
+                  ResponsiveReplayServiceIoWorker)
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                IndexedAsync(initialContext)!DriveResponsiveReplayHead)
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                IndexedAsync(initialContext)!FinishResponsiveReplay)
+    <2>1. /\ []~ENABLED
+                  <<IndexedAsync(initialContext)!
+                      PreGstResponsiveRestart>>_(
+                    IndexedAsyncStateAt(initialContext))
+            /\ []~ENABLED
+                  <<IndexedAsync(initialContext)!
+                      PreGstResponsiveReplay>>_(
+                    IndexedAsyncStateAt(initialContext))
+            /\ []~ENABLED
+                  <<IndexedAsync(initialContext)!
+                      ResponsiveReplayRunNode>>_(
+                    IndexedAsyncStateAt(initialContext))
+            /\ []~ENABLED
+                  <<IndexedAsync(initialContext)!
+                      ResponsiveReplayServiceIoWorker>>_(
+                    IndexedAsyncStateAt(initialContext))
+            /\ []~ENABLED
+                  <<IndexedAsync(initialContext)!
+                      DriveResponsiveReplayHead>>_(
+                    IndexedAsyncStateAt(initialContext))
+            /\ []~ENABLED
+                  <<IndexedAsync(initialContext)!
+                      FinishResponsiveReplay>>_(
+                    IndexedAsyncStateAt(initialContext))
+      BY <1>1, IndexedChainSpecAlwaysDisablesResponsiveRecoveryActions, PTL
+         DEF IndexedResponsiveRecoveryActionsDisabled
+    <2> QED BY <2>1, PTL
+  <1> QED BY <1>1
+
+(***************************************************************************
 Every weakly fair product action is an exact nonstuttering action of the
 selected Async instance.  Conversely, after activation the product
 enabledness theorem extends every exact nonstuttering witness to the paired
@@ -3534,6 +3798,7 @@ THEOREM IndexedFairProductStepsProjectExactOccurrences ==
                => <<IndexedAsync(initialContext)!
                        PostGstCommitCertificateDiscovery(node)>>_(
                     IndexedAsyncStateAt(initialContext)))
+    /\ \A node \in Responsive:
          /\ (IndexedHistoricalServerStep(initialContext, node)
                => <<IndexedAsync(initialContext)!
                        PostGstRunHistoricalServer(node)>>_(
@@ -3542,7 +3807,6 @@ THEOREM IndexedFairProductStepsProjectExactOccurrences ==
                => <<IndexedAsync(initialContext)!
                        PostGstServiceIoWorker(node)>>_(
                     IndexedAsyncStateAt(initialContext)))
-    /\ \A node \in Responsive:
          /\ (IndexedOpenHistoricalRecoveryStep(initialContext, node)
                => <<IndexedAsync(initialContext)!
                        PostGstOpenHistoricalRecovery(node)>>_(
@@ -3561,15 +3825,15 @@ THEOREM IndexedFairProductStepsProjectExactOccurrences ==
                => <<IndexedAsync(initialContext)!
                        PostGstServiceHistoricalRecoveryIoWorker(node)>>_(
                     IndexedAsyncStateAt(initialContext)))
-    /\ \A recipient \in IndexedAsync(initialContext)!
-                         AsyncVotersAt(initialContext),
+    /\ \A recipient \in Responsive,
           source \in IndexedAsync(initialContext)!
-                    AsyncVotersAt(initialContext):
+                    AsyncIngressSources:
          IndexedAdmitPacketStep(initialContext, recipient, source)
            => <<IndexedAsync(initialContext)!
                    PostGstAdmitHiddenPacket(recipient, source)>>_(
                 IndexedAsyncStateAt(initialContext))
-    /\ \A recipient \in ValidatorIds, source \in ValidatorIds:
+    /\ \A recipient \in ValidatorIds,
+          source \in IndexedAsync(initialContext)!AsyncIngressSources:
          IndexedAdmitHistoricalRecoveryPacketStep(
            initialContext, recipient, source)
            => <<IndexedAsync(initialContext)!
@@ -3642,6 +3906,7 @@ THEOREM IndexedFairExactOccurrencesEnableProductOccurrences ==
                     => ENABLED
                          <<IndexedCommitCertificateDiscoveryStep(
                              initialContext, node)>>_(IndexedChainVars))
+         /\ \A node \in Responsive:
               /\ (ENABLED
                     <<IndexedAsync(initialContext)!
                         PostGstRunHistoricalServer(node)>>_(
@@ -3656,7 +3921,6 @@ THEOREM IndexedFairExactOccurrencesEnableProductOccurrences ==
                     => ENABLED
                          <<IndexedIoWorkerStep(initialContext, node)>>_(
                            IndexedChainVars))
-         /\ \A node \in Responsive:
               /\ (ENABLED
                     <<IndexedAsync(initialContext)!
                         PostGstOpenHistoricalRecovery(node)>>_(
@@ -3685,10 +3949,9 @@ THEOREM IndexedFairExactOccurrencesEnableProductOccurrences ==
                     => ENABLED
                          <<IndexedHistoricalRecoveryIoWorkerStep(
                              initialContext, node)>>_(IndexedChainVars))
-         /\ \A recipient \in IndexedAsync(initialContext)!
-                            AsyncVotersAt(initialContext),
+         /\ \A recipient \in Responsive,
                source \in IndexedAsync(initialContext)!
-                        AsyncVotersAt(initialContext):
+                        AsyncIngressSources:
               ENABLED
                 <<IndexedAsync(initialContext)!
                     PostGstAdmitHiddenPacket(recipient, source)>>_(
@@ -3697,7 +3960,9 @@ THEOREM IndexedFairExactOccurrencesEnableProductOccurrences ==
                      <<IndexedAdmitPacketStep(
                          initialContext, recipient, source)>>_(
                        IndexedChainVars)
-         /\ \A recipient \in ValidatorIds, source \in ValidatorIds:
+         /\ \A recipient \in ValidatorIds,
+               source \in IndexedAsync(initialContext)!
+                          AsyncIngressSources:
               ENABLED
                 <<IndexedAsync(initialContext)!
                     PostGstAdmitHistoricalRecoveryPacket(
@@ -3792,11 +4057,6 @@ THEOREM IndexedNodeFairnessTransfers ==
            /\ WF_(IndexedAsyncStateAt(initialContext))(
                   IndexedAsync(initialContext)!
                     PostGstCommitCertificateDiscovery(node))
-           /\ WF_(IndexedAsyncStateAt(initialContext))(
-                  IndexedAsync(initialContext)!
-                    PostGstRunHistoricalServer(node))
-           /\ WF_(IndexedAsyncStateAt(initialContext))(
-                  IndexedAsync(initialContext)!PostGstServiceIoWorker(node))
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
               NEW node \in IndexedAsync(initialContext)!
@@ -3809,12 +4069,6 @@ PROOF
                 /\ WF_(IndexedAsyncStateAt(initialContext))(
                        IndexedAsync(initialContext)!
                          PostGstCommitCertificateDiscovery(node))
-                /\ WF_(IndexedAsyncStateAt(initialContext))(
-                       IndexedAsync(initialContext)!
-                         PostGstRunHistoricalServer(node))
-                /\ WF_(IndexedAsyncStateAt(initialContext))(
-                       IndexedAsync(initialContext)!
-                         PostGstServiceIoWorker(node))
     <2>1. (/\ IndexedChainSpec
             /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
              => <>[]IndexedActivationStable(initialContext)
@@ -3834,20 +4088,6 @@ PROOF
                        => ENABLED
                             <<IndexedCommitCertificateDiscoveryStep(
                                 initialContext, node)>>_(IndexedChainVars))
-                /\ (ENABLED
-                       <<IndexedAsync(initialContext)!
-                           PostGstRunHistoricalServer(node)>>_(
-                         IndexedAsyncStateAt(initialContext))
-                       => ENABLED
-                            <<IndexedHistoricalServerStep(
-                                initialContext, node)>>_(IndexedChainVars))
-                /\ (ENABLED
-                       <<IndexedAsync(initialContext)!
-                           PostGstServiceIoWorker(node)>>_(
-                         IndexedAsyncStateAt(initialContext))
-                       => ENABLED
-                            <<IndexedIoWorkerStep(
-                                initialContext, node)>>_(IndexedChainVars))
       BY <1>1, IndexedFairExactOccurrencesEnableProductOccurrences
     <2>3. /\ (IndexedRunNodeStep(initialContext, node)
                    => <<IndexedAsync(initialContext)!
@@ -3858,14 +4098,6 @@ PROOF
                    => <<IndexedAsync(initialContext)!
                            PostGstCommitCertificateDiscovery(node)>>_(
                         IndexedAsyncStateAt(initialContext)))
-              /\ (IndexedHistoricalServerStep(initialContext, node)
-                   => <<IndexedAsync(initialContext)!
-                           PostGstRunHistoricalServer(node)>>_(
-                        IndexedAsyncStateAt(initialContext)))
-              /\ (IndexedIoWorkerStep(initialContext, node)
-                   => <<IndexedAsync(initialContext)!
-                           PostGstServiceIoWorker(node)>>_(
-                        IndexedAsyncStateAt(initialContext)))
       BY <1>1, IndexedFairProductStepsProjectExactOccurrences
     <2>4. IndexedChainSpec
              => /\ WF_IndexedChainVars(
@@ -3873,13 +4105,25 @@ PROOF
                 /\ WF_IndexedChainVars(
                        IndexedCommitCertificateDiscoveryStep(
                          initialContext, node))
-                /\ WF_IndexedChainVars(
-                       IndexedHistoricalServerStep(initialContext, node))
-                /\ WF_IndexedChainVars(
-                       IndexedIoWorkerStep(initialContext, node))
       BY <1>1 DEF IndexedChainSpec, IndexedFairness
     <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
   <1> QED BY <1>1
+
+THEOREM IndexedResponsiveServiceFairnessTransfers ==
+  \A initialContext \in AdmissibleContextRecords:
+    \A node \in Responsive:
+      (/\ IndexedChainSpec
+       /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+        => /\ WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!
+                    PostGstRunHistoricalServer(node))
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!
+                    PostGstServiceIoWorker(node))
+BY IndexedActivationEventuallyStabilizes,
+   IndexedFairExactOccurrencesEnableProductOccurrences,
+   IndexedFairProductStepsProjectExactOccurrences, PTL
+   DEF IndexedChainSpec, IndexedFairness
 
 THEOREM IndexedHistoricalRecoveryFairnessTransfers ==
   \A initialContext \in AdmissibleContextRecords:
@@ -3905,10 +4149,9 @@ BY IndexedActivationEventuallyStabilizes,
 
 THEOREM IndexedPacketFairnessTransfers ==
   \A initialContext \in AdmissibleContextRecords:
-    \A recipient \in IndexedAsync(initialContext)!
-                        AsyncVotersAt(initialContext),
+    \A recipient \in Responsive,
        source \in IndexedAsync(initialContext)!
-                  AsyncVotersAt(initialContext):
+                  AsyncIngressSources:
       (/\ IndexedChainSpec
        /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
         => WF_(IndexedAsyncStateAt(initialContext))(
@@ -3916,10 +4159,9 @@ THEOREM IndexedPacketFairnessTransfers ==
                PostGstAdmitHiddenPacket(recipient, source))
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
-              NEW recipient \in IndexedAsync(initialContext)!
-                                  AsyncVotersAt(initialContext),
+              NEW recipient \in Responsive,
               NEW source \in IndexedAsync(initialContext)!
-                               AsyncVotersAt(initialContext)
+                               AsyncIngressSources
          PROVE
            (/\ IndexedChainSpec
             /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
@@ -3954,7 +4196,8 @@ PROOF
 
 THEOREM IndexedHistoricalRecoveryPacketFairnessTransfers ==
   \A initialContext \in AdmissibleContextRecords:
-    \A recipient \in ValidatorIds, source \in ValidatorIds:
+    \A recipient \in ValidatorIds,
+       source \in IndexedAsync(initialContext)!AsyncIngressSources:
       (/\ IndexedChainSpec
        /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
         => WF_(IndexedAsyncStateAt(initialContext))(
@@ -3990,17 +4233,37 @@ PROOF
       BY <1>1, IndexedChainSpecEstablishesCompositionInvariant,
          IndexedInstanceVariablesAreExact, PTL
          DEF IndexedCompositionInvariant
-    <2>4. (/\ IndexedChainSpec
+    <2>4. IndexedChainSpec
+             => /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PreGstResponsiveRestart)
+                /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PreGstResponsiveReplay)
+                /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         ResponsiveReplayRunNode)
+                /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         ResponsiveReplayServiceIoWorker)
+                /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         DriveResponsiveReplayHead)
+                /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         FinishResponsiveReplay)
+      BY <1>1, IndexedResponsiveRecoveryFairnessIsVacuous
+    <2>5. (/\ IndexedChainSpec
             /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
              => WF_(IndexedAsyncStateAt(initialContext))(
                   IndexedAsync(initialContext)!AsyncSetGST)
       BY <1>1, IndexedSetGstFairnessTransfers
-    <2>5. (/\ IndexedChainSpec
+    <2>6. (/\ IndexedChainSpec
             /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
              => WF_(IndexedAsyncStateAt(initialContext))(
                   IndexedAsync(initialContext)!AsyncTick)
       BY <1>1, IndexedTickFairnessTransfers
-    <2>6. (/\ IndexedChainSpec
+    <2>7. (/\ IndexedChainSpec
             /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
              => \A node \in IndexedAsync(initialContext)!
                                AsyncVotersAt(initialContext):
@@ -4009,14 +4272,18 @@ PROOF
                   /\ WF_(IndexedAsyncStateAt(initialContext))(
                        IndexedAsync(initialContext)!
                          PostGstCommitCertificateDiscovery(node))
+      BY <1>1, IndexedNodeFairnessTransfers
+    <2>8. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => \A node \in Responsive:
                   /\ WF_(IndexedAsyncStateAt(initialContext))(
                        IndexedAsync(initialContext)!
                          PostGstRunHistoricalServer(node))
                   /\ WF_(IndexedAsyncStateAt(initialContext))(
                        IndexedAsync(initialContext)!
                          PostGstServiceIoWorker(node))
-      BY <1>1, IndexedNodeFairnessTransfers
-    <2>7. (/\ IndexedChainSpec
+      BY <1>1, IndexedResponsiveServiceFairnessTransfers
+    <2>9. (/\ IndexedChainSpec
             /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
              => \A node \in Responsive:
                   /\ WF_(IndexedAsyncStateAt(initialContext))(
@@ -4032,28 +4299,59 @@ PROOF
                        IndexedAsync(initialContext)!
                          PostGstServiceHistoricalRecoveryIoWorker(node))
       BY <1>1, IndexedHistoricalRecoveryFairnessTransfers
-    <2>8. (/\ IndexedChainSpec
-            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
-             => \A recipient \in IndexedAsync(initialContext)!
-                                  AsyncVotersAt(initialContext),
-                   source \in IndexedAsync(initialContext)!
-                             AsyncVotersAt(initialContext):
-                  WF_(IndexedAsyncStateAt(initialContext))(
-                    IndexedAsync(initialContext)!
-                      PostGstAdmitHiddenPacket(recipient, source))
+    <2>10. (/\ IndexedChainSpec
+             /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+              => \A recipient \in Responsive,
+                    source \in IndexedAsync(initialContext)!
+                              AsyncIngressSources:
+                   WF_(IndexedAsyncStateAt(initialContext))(
+                     IndexedAsync(initialContext)!
+                       PostGstAdmitHiddenPacket(recipient, source))
       BY <1>1, IndexedPacketFairnessTransfers
-    <2>9. (/\ IndexedChainSpec
-            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
-             => \A recipient \in ValidatorIds,
-                   source \in ValidatorIds:
-                  WF_(IndexedAsyncStateAt(initialContext))(
-                    IndexedAsync(initialContext)!
-                      PostGstAdmitHistoricalRecoveryPacket(
-                        recipient, source))
+    <2>11. (/\ IndexedChainSpec
+             /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+              => \A recipient \in ValidatorIds,
+                    source \in IndexedAsync(initialContext)!
+                              AsyncIngressSources:
+                   WF_(IndexedAsyncStateAt(initialContext))(
+                     IndexedAsync(initialContext)!
+                       PostGstAdmitHistoricalRecoveryPacket(
+                         recipient, source))
       BY <1>1, IndexedHistoricalRecoveryPacketFairnessTransfers
     <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
-                 <2>7, <2>8, <2>9, PTL
+                 <2>7, <2>8, <2>9, <2>10, <2>11, PTL
          DEF IndexedAsync!AsyncSpecAt, IndexedAsync!AsyncFairnessAt
+  <1> QED BY <1>1
+
+THEOREM IndexedLiveInstanceActivationObligation ==
+  \A initialContext \in AdmissibleContextRecords:
+    (/\ IndexedLiveChainSpec
+     /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+      => IndexedAsync(initialContext)!AsyncLiveSpecAt(initialContext)
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords
+         PROVE
+           (/\ IndexedLiveChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => IndexedAsync(initialContext)!
+                  AsyncLiveSpecAt(initialContext)
+    <2>1. (/\ IndexedLiveChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => (/\ IndexedChainSpec
+                 /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+      BY DEF IndexedLiveChainSpec
+    <2>2. (/\ IndexedLiveChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => IndexedAsync(initialContext)!AsyncSpecAt(initialContext)
+      BY <1>1, <2>1, IndexedInstanceActivationObligation
+    <2>3. IndexedLiveChainSpec
+             => []IndexedAsync(initialContext)!
+                    AsyncInstallGenerationBudget
+      BY <1>1
+         DEF IndexedLiveChainSpec,
+             IndexedInstallGenerationBudgetPremise
+    <2> QED BY <2>2, <2>3
+         DEF IndexedAsync!AsyncLiveSpecAt
   <1> QED BY <1>1
 
 (***************************************************************************
@@ -4098,7 +4396,7 @@ IndexedExactHistoricalRecoveryProgress ==
       ~> HistoricalRecoveryComplete(initialContext, node)
 
 VerificationOneHeightCompletion ==
-  IndexedAsync(VerificationContext)!AsyncSpecAt(VerificationContext)
+  IndexedAsync(VerificationContext)!AsyncLiveSpecAt(VerificationContext)
     => (IndexedCore(VerificationContext, 7)
           ~> IndexedAsync(VerificationContext)!
                AsyncAllResponsiveAppliedAt(VerificationContext))
@@ -4111,9 +4409,11 @@ PROOF
   <1> QED BY <1>1
        DEF VerificationOneHeightCompletion,
            VerificationAsyncProof!OneHeightCompletionLiveness,
-           VerificationAsyncProof!AsyncSpecAt,
+           VerificationAsyncProof!AsyncLiveSpecAt,
+           VerificationAsyncProof!AsyncInstallGenerationBudget,
            VerificationAsyncProof!AsyncAllResponsiveAppliedAt,
-           IndexedAsync!AsyncSpecAt,
+           IndexedAsync!AsyncLiveSpecAt,
+           IndexedAsync!AsyncInstallGenerationBudget,
            IndexedAsync!AsyncAllResponsiveAppliedAt,
            IndexedAsyncStateAt, IndexedCore, IndexedRecovery,
            VerificationCore, VerificationScheduler, VerificationRecovery
@@ -4137,7 +4437,7 @@ BY Isa DEF IndexedChainNext, IndexedChainVars,
            IndexedAsync!NodeHasApplication
 
 THEOREM VerificationFrontierActivatedInstanceEventuallyApplies ==
-  /\ IndexedChainSpec
+  /\ IndexedLiveChainSpec
     /\ VerificationOneHeightCompletion
     /\ VerificationContext \in AdmissibleContextRecords
     /\ []~JoinedCanonicalDescendant(VerificationContext)
@@ -4145,31 +4445,35 @@ THEOREM VerificationFrontierActivatedInstanceEventuallyApplies ==
          ~> IndexedAsync(VerificationContext)!
                AsyncAllResponsiveAppliedAt(VerificationContext)
 PROOF
-  <1>1. ASSUME IndexedChainSpec,
+  <1>1. ASSUME IndexedLiveChainSpec,
               VerificationOneHeightCompletion,
               VerificationContext \in AdmissibleContextRecords,
               []~JoinedCanonicalDescendant(VerificationContext)
          PROVE IndexedAllResponsiveJoined(VerificationContext)
                  ~> IndexedAsync(VerificationContext)!
                        AsyncAllResponsiveAppliedAt(VerificationContext)
+    <2>0. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
     <2>1. IndexedAllResponsiveJoined(VerificationContext)
              /\ [IndexedChainNext]_IndexedChainVars
              => IndexedAllResponsiveJoined(VerificationContext)'
       BY <1>1, IndexedAllResponsiveJoinedIsStable
     <2>2. <>IndexedAllResponsiveJoined(VerificationContext)
              => (TRUE ~> IndexedAllResponsiveJoined(VerificationContext))
-      BY <2>1, PTL DEF IndexedChainSpec
-    <2>3. (/\ IndexedChainSpec
+      BY <2>0, <2>1, PTL DEF IndexedChainSpec
+    <2>3. (/\ IndexedLiveChainSpec
             /\ TRUE ~> IndexedAllResponsiveJoined(VerificationContext)
             /\ []~JoinedCanonicalDescendant(VerificationContext))
              => IndexedAsync(VerificationContext)!
-                  AsyncSpecAt(VerificationContext)
-      BY <1>1, IndexedInstanceActivationObligation
+                  AsyncLiveSpecAt(VerificationContext)
+      BY <1>1, IndexedLiveInstanceActivationObligation
     <2>4. IndexedAsync(VerificationContext)!
-             AsyncSpecAt(VerificationContext)
+             AsyncLiveSpecAt(VerificationContext)
              => <>IndexedCore(VerificationContext, 7)
       BY VerificationAsyncProof!AsyncGstEventually
-         DEF VerificationAsyncProof!AsyncSpecAt,
+         DEF VerificationAsyncProof!AsyncLiveSpecAt,
+             VerificationAsyncProof!AsyncSpecAt,
+             IndexedAsync!AsyncLiveSpecAt,
              IndexedAsync!AsyncSpecAt, IndexedAsyncStateAt,
              IndexedCore, IndexedRecovery,
              VerificationCore, VerificationScheduler,
@@ -4195,19 +4499,21 @@ BY Isa, JoinedCanonicalDescendantIsStable,
    DEF VerificationFrontierEscape
 
 THEOREM VerificationActivatedFrontierEventuallyEscapes ==
-  /\ IndexedChainSpec
+  /\ IndexedLiveChainSpec
     /\ VerificationOneHeightCompletion
     /\ VerificationContext \in AdmissibleContextRecords
     => IndexedAllResponsiveJoined(VerificationContext)
          ~> VerificationFrontierEscape
 PROOF
-  <1>1. ASSUME IndexedChainSpec,
+  <1>1. ASSUME IndexedLiveChainSpec,
               VerificationOneHeightCompletion,
               VerificationContext \in AdmissibleContextRecords
          PROVE IndexedAllResponsiveJoined(VerificationContext)
                  ~> VerificationFrontierEscape
+    <2>0. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
     <2>1. []IndexedCompositionInvariant
-      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+      BY <2>0, IndexedChainSpecEstablishesCompositionInvariant, PTL
     <2>2. IndexedCompositionInvariant
              /\ VerificationFrontierEscape
              /\ [IndexedChainNext]_IndexedChainVars
@@ -4216,7 +4522,7 @@ PROOF
     <2>3. <>JoinedCanonicalDescendant(VerificationContext)
              => (IndexedAllResponsiveJoined(VerificationContext)
                    ~> VerificationFrontierEscape)
-      BY <1>1, <2>1, <2>2, PTL
+      BY <2>0, <2>1, <2>2, PTL
          DEF VerificationFrontierEscape, IndexedChainSpec
     <2>4. []~JoinedCanonicalDescendant(VerificationContext)
              => (IndexedAllResponsiveJoined(VerificationContext)
@@ -5404,7 +5710,7 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM VerificationJoinedTargetEventuallyReachesAndEscapes ==
-  /\ IndexedChainSpec
+  /\ IndexedLiveChainSpec
     /\ IndexedExactHistoricalRecoveryProgress
     /\ IndexedSuccessorActivationProgress
     /\ VerificationOneHeightCompletion
@@ -5415,7 +5721,7 @@ THEOREM VerificationJoinedTargetEventuallyReachesAndEscapes ==
                   VerificationContext.height)
              /\ VerificationFrontierEscape)
 PROOF
-  <1>1. ASSUME IndexedChainSpec,
+  <1>1. ASSUME IndexedLiveChainSpec,
               IndexedExactHistoricalRecoveryProgress,
               IndexedSuccessorActivationProgress,
               VerificationOneHeightCompletion,
@@ -5425,14 +5731,17 @@ PROOF
                      /\ IndexedResponsiveHeightReached(
                           VerificationContext.height)
                      /\ VerificationFrontierEscape)
+    <2>0. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
     <2>1. []IndexedCompositionInvariant
-      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+      BY <2>0, IndexedChainSpecEstablishesCompositionInvariant, PTL
     <2>2. []IndexedJoinedThroughLocalHeight
-      BY <1>1, IndexedChainSpecJoinsEveryNodeThroughLocalHeight, PTL
+      BY <2>0, IndexedChainSpecJoinsEveryNodeThroughLocalHeight, PTL
     <2>3. IndexedTargetJoined(VerificationContext)
              ~> IndexedResponsiveHeightReached(
                   VerificationContext.height)
-      BY <1>1, IndexedJoinedTargetEventuallyReachesEveryAncestorHeight,
+      BY <1>1, <2>0,
+         IndexedJoinedTargetEventuallyReachesEveryAncestorHeight,
          Isa DEF AdmissibleContextRecords, FrozenContextAdmissible,
                  ContextRecords, Heights
     <2>4. IndexedTargetJoined(VerificationContext)
@@ -5451,6 +5760,7 @@ PROOF
                   VerificationContext.height))
              ~> IndexedAllResponsiveJoined(VerificationContext)
       BY <1>1,
+         <2>0,
          IndexedReachedAncestorEventuallyJoinsEveryResponsiveNode,
          IndexedJoinedTargetIdentifiesEveryCanonicalAncestor,
          PTL DEF IndexedAncestorContext
@@ -5595,17 +5905,19 @@ canonical context becomes joined; in the latter case the exact recovery
 obligation moves every lagging responsive node past the target.
 ***************************************************************************)
 THEOREM HeightLivenessFromOneHeightAndExactRecoveryProgress ==
-  /\ IndexedChainSpec
+  /\ IndexedLiveChainSpec
   /\ IndexedExactHistoricalRecoveryProgress
   /\ IndexedSuccessorActivationProgress
   /\ VerificationOneHeightCompletion
   => IndexedHeightLivenessProperty
 PROOF
-  <1>1. ASSUME IndexedChainSpec,
+  <1>1. ASSUME IndexedLiveChainSpec,
               IndexedExactHistoricalRecoveryProgress,
               IndexedSuccessorActivationProgress,
               VerificationOneHeightCompletion
          PROVE IndexedHeightLivenessProperty
+    <2>0. IndexedChainSpec
+      BY <1>1, IndexedLiveChainSpecProjectsIndexedChainSpec
     <2>1. CASE VerificationContext \in AdmissibleContextRecords
       <3>1. IndexedTargetJoined(VerificationContext)
                ~> (/\ IndexedTargetJoined(VerificationContext)
@@ -5619,7 +5931,7 @@ PROOF
                    VerificationContext.height)
               /\ VerificationFrontierEscape)
                ~> IndexedContextCompleted(VerificationContext)
-        BY <1>1, <2>1,
+        BY <1>1, <2>0, <2>1,
            VerificationReachedEscapeEventuallyCompletes
       <3> QED BY <3>1, <3>2, PTL
            DEF IndexedHeightLivenessProperty, IndexedTargetJoined
@@ -5635,7 +5947,7 @@ this base module avoids the former impossible parent-to-child dependency while
 leaving the conditional finite-height kernel above reusable.
 ***************************************************************************)
 IndexedHeightLivenessReleaseTarget ==
-  IndexedChainSpec => IndexedHeightLivenessProperty
+  IndexedLiveChainSpec => IndexedHeightLivenessProperty
 
 
 =============================================================================

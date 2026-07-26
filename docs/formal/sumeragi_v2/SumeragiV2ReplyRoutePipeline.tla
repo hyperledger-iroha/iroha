@@ -56,9 +56,14 @@ ReplyAttachmentSet ==
   [owner: ReplyOwners, semantic: ReplySemantics,
    source: ReplySources, kind: ReplyAttachmentKinds]
 
-ReplyPipelinePayload(semantic, messageCursor, chunkCursor) ==
+ReplyPipelinePayload(semantic, messageCursor, chunkCursor,
+                     requestIdentity) ==
   [semantic |-> semantic,
    target |-> ReplySemanticTarget(semantic),
+   requestIdentity |-> requestIdentity,
+   serviceGeneration |-> requestIdentity.serviceGeneration,
+   streamEpoch |-> requestIdentity.streamEpoch,
+   semanticSequence |-> requestIdentity.semanticSequence,
    messageCursor |-> messageCursor,
    chunkCursor |-> chunkCursor,
    outputClass |-> ReplyItemClass(
@@ -74,6 +79,10 @@ whose three bound coordinates are not supported by every strict TLAPS backend.
 ReplyPipelinePayloads ==
   [semantic: ReplySemantics,
    target: ReplyTargets,
+   requestIdentity: ReplyRequestIdentitySet,
+   serviceGeneration: ReplyServiceGenerations,
+   streamEpoch: ReplyStreamEpochs,
+   semanticSequence: ReplySemanticSequences,
    messageCursor: 0..ReplyMessageCount,
    chunkCursor: 0..ReplyChunkCount,
    outputClass: ReplyOutputClasses]
@@ -81,8 +90,12 @@ ReplyPipelinePayloads ==
 ReplyPipelineRawItem(owner, semantic, source, messageCursor, chunkCursor,
                      outputClass, flushRequired, fifoOrdinal,
                      routeTenure, phase, ticketId, ticketTenure,
-                     ticketPayload) ==
+                     ticketPayload, requestIdentity) ==
   [owner |-> owner, semantic |-> semantic, source |-> source,
+   requestIdentity |-> requestIdentity,
+   serviceGeneration |-> requestIdentity.serviceGeneration,
+   streamEpoch |-> requestIdentity.streamEpoch,
+   semanticSequence |-> requestIdentity.semanticSequence,
    messageCursor |-> messageCursor, chunkCursor |-> chunkCursor,
    outputClass |-> outputClass, flushRequired |-> flushRequired,
    fifoOrdinal |-> fifoOrdinal, routeTenure |-> routeTenure,
@@ -97,10 +110,16 @@ ReplyPipelineItem(owner, semantic, source, messageCursor, chunkCursor,
     ReplyItemClass(semantic, messageCursor, chunkCursor),
     ReplyItemRequiresFlush(semantic, messageCursor, chunkCursor),
     fifoOrdinal, routeTenure, phase, ticketId,
-    ticketTenure, ticketPayload)
+    ticketTenure, ticketPayload,
+    ReplyAttemptLifecycleIdentityFor(
+      owner, semantic, source).requestIdentity)
 
 ReplyPipelineItemSet ==
   [owner: ReplyOwners, semantic: ReplySemantics, source: ReplySources,
+   requestIdentity: ReplyRequestIdentitySet,
+   serviceGeneration: ReplyServiceGenerations,
+   streamEpoch: ReplyStreamEpochs,
+   semanticSequence: ReplySemanticSequences,
    messageCursor: 0..ReplyMessageCount,
    chunkCursor: 0..ReplyChunkCount,
    outputClass: ReplyOutputClasses, flushRequired: BOOLEAN,
@@ -115,6 +134,10 @@ ReplyPipelineItemHasType(item) ==
   /\ item.owner \in ReplyOwners
   /\ item.semantic \in ReplySemantics
   /\ item.source \in ReplySources
+  /\ item.requestIdentity \in ReplyRequestIdentitySet
+  /\ item.serviceGeneration \in ReplyServiceGenerations
+  /\ item.streamEpoch \in ReplyStreamEpochs
+  /\ item.semanticSequence \in ReplySemanticSequences
   /\ item.messageCursor \in 0..ReplyMessageCount
   /\ item.chunkCursor \in 0..ReplyChunkCount
   /\ item.outputClass \in ReplyOutputClasses
@@ -136,7 +159,7 @@ ReplyPipelineLocalVars ==
   <<rpPendingAttachments, rpItems,
     rpNextFifoOrdinal, rpNextTicketId>>
 
-ReplyPipelineVars == <<ReplyRouteVars, ReplyPipelineLocalVars>>
+ReplyPipelineVars == <<ReplyRouteV2Vars, ReplyPipelineLocalVars>>
 
 ReplyPendingAttachmentsFor(owner, semantic, source) ==
   {attachment \in rpPendingAttachments:
@@ -183,7 +206,8 @@ ReplyPipelineItemFor(owner, semantic, source) ==
 
 ReplyPipelinePayloadForItem(item) ==
   ReplyPipelinePayload(
-    item.semantic, item.messageCursor, item.chunkCursor)
+    item.semantic, item.messageCursor, item.chunkCursor,
+    item.requestIdentity)
 
 ReplyPipelineItemMatchesAttempt(item, attempt) ==
   /\ item.owner = attempt.owner
@@ -191,6 +215,15 @@ ReplyPipelineItemMatchesAttempt(item, attempt) ==
   /\ item.source = attempt.source
   /\ item.messageCursor = attempt.messageCursor
   /\ item.chunkCursor = attempt.chunkCursor
+
+ReplyPipelineItemMatchesLifecycleIdentity(item, identity) ==
+  /\ item.owner = identity.owner
+  /\ item.semantic = identity.semantic
+  /\ item.source = identity.source
+  /\ item.requestIdentity = identity.requestIdentity
+  /\ item.serviceGeneration = identity.serviceGeneration
+  /\ item.streamEpoch = identity.streamEpoch
+  /\ item.semanticSequence = identity.semanticSequence
 
 ReplyPipelineLiveCurrentCursor(
     owner, semantic, source, item, attempt) ==
@@ -201,6 +234,12 @@ ReplyPipelineLiveCurrentCursor(
        rrConnectionTenure[owner][source]
   /\ ~ReplyAttemptComplete(attempt)
   /\ ReplyPipelineItemMatchesAttempt(item, attempt)
+  /\ ReplyAttemptLifecycleIdentityOwned(owner, semantic, source)
+  /\ ReplyAttemptOccurrenceCurrent(
+       ReplyAttemptLifecycleIdentityFor(owner, semantic, source))
+  /\ ReplyPipelineItemMatchesLifecycleIdentity(
+       item,
+       ReplyAttemptLifecycleIdentityFor(owner, semantic, source))
   /\ item.routeTenure = attempt.connectionTenure
 
 ReplyPipelineQueuedItem(item) ==
@@ -216,11 +255,50 @@ ReplyPipelineTicketValid(item) ==
   /\ item.ticketTenure = item.routeTenure
   /\ item.ticketPayload = {ReplyPipelinePayloadForItem(item)}
 
+(***************************************************************************
+The actor gate and writer-flush receipt each retain the complete occurrence
+triple and canonical request identity.  The close floor is absent from both:
+advancing a piggybacked floor cannot rematerialize or reticket the same request.
+***************************************************************************)
+ReplyRequestGateIdentity(item) ==
+  [requestIdentity |-> item.requestIdentity,
+   serviceGeneration |-> item.serviceGeneration,
+   streamEpoch |-> item.streamEpoch,
+   semanticSequence |-> item.semanticSequence,
+   requesterPeer |-> item.owner,
+   responderPeer |-> item.source,
+   routeTenure |-> item.routeTenure,
+   fifoOrdinal |-> item.fifoOrdinal,
+   ticketId |-> item.ticketId]
+
+ReplyFlushIdentity(item) ==
+  [gateIdentity |-> ReplyRequestGateIdentity(item),
+   requestIdentity |-> item.requestIdentity,
+   serviceGeneration |-> item.serviceGeneration,
+   streamEpoch |-> item.streamEpoch,
+   semanticSequence |-> item.semanticSequence,
+   payload |-> ReplyPipelinePayloadForItem(item),
+   messageCursor |-> item.messageCursor,
+   chunkCursor |-> item.chunkCursor,
+   outputClass |-> item.outputClass]
+
+ReplyFlushIdentityMatchesCurrentOccurrence(item) ==
+  /\ ReplyAttemptLifecycleIdentityOwned(
+       item.owner, item.semantic, item.source)
+  /\ ReplyAttemptOccurrenceCurrent(
+       ReplyAttemptLifecycleIdentityFor(
+         item.owner, item.semantic, item.source))
+  /\ ReplyPipelineItemMatchesLifecycleIdentity(
+       item,
+       ReplyAttemptLifecycleIdentityFor(
+         item.owner, item.semantic, item.source))
+
 ReplyPipelineExactTicketAuthority(
     owner, semantic, source, item, attempt) ==
   /\ ReplyPipelineLiveCurrentCursor(
        owner, semantic, source, item, attempt)
   /\ ReplyPipelineTicketValid(item)
+  /\ ReplyFlushIdentityMatchesCurrentOccurrence(item)
 
 ReplyPipelineItemWithoutTicket(item) ==
   ReplyPipelineRawItem(
@@ -228,7 +306,8 @@ ReplyPipelineItemWithoutTicket(item) ==
     item.messageCursor, item.chunkCursor,
     item.outputClass, item.flushRequired,
     item.fifoOrdinal, item.routeTenure, "Queued",
-    NoReplyPipelineTicket, NoReplyTicketTenure, {})
+    NoReplyPipelineTicket, NoReplyTicketTenure, {},
+    item.requestIdentity)
 
 ReplyPipelineItemWithTicket(item, ticketId) ==
   ReplyPipelineRawItem(
@@ -237,7 +316,8 @@ ReplyPipelineItemWithTicket(item, ticketId) ==
     item.outputClass, item.flushRequired,
     item.fifoOrdinal, item.routeTenure, "Ticketed",
     ticketId, item.routeTenure,
-    {ReplyPipelinePayloadForItem(item)})
+    {ReplyPipelinePayloadForItem(item)},
+    item.requestIdentity)
 
 ReplyPipelineItemWithRouteTenure(item, connectionTenure) ==
   ReplyPipelineRawItem(
@@ -245,7 +325,8 @@ ReplyPipelineItemWithRouteTenure(item, connectionTenure) ==
     item.messageCursor, item.chunkCursor,
     item.outputClass, item.flushRequired,
     item.fifoOrdinal, connectionTenure, item.phase,
-    item.ticketId, item.ticketTenure, item.ticketPayload)
+    item.ticketId, item.ticketTenure, item.ticketPayload,
+    item.requestIdentity)
 
 ReplyPipelineReplaceItem(oldItem, newItem) ==
   (rpItems \ {oldItem}) \cup {newItem}
@@ -326,7 +407,7 @@ ReplyPendingAfterReconnectAttach(selected) ==
      attachment \in rpPendingAttachments \ {selected}}
 
 ReplyPipelineInit ==
-  /\ ReplyRouteInit
+  /\ ReplyRouteV2Init
   /\ ReplyPipelineConfiguration
   /\ rpPendingAttachments = {}
   /\ rpItems = {}
@@ -373,7 +454,7 @@ ObserveAuthenticatedReplyDelivery(owner, semantic, source, kind) ==
           IF kind = "Reconnect"
           THEN ReplyPipelineItemsAfterReconnectObservation(owner, source)
           ELSE rpItems
-     /\ UNCHANGED <<ReplyRouteVars,
+     /\ UNCHANGED <<ReplyRouteV2Vars,
                     rpNextFifoOrdinal, rpNextTicketId>>
 
 RetirePendingReconnectSource(owner, source) ==
@@ -383,18 +464,18 @@ RetirePendingReconnectSource(owner, source) ==
   /\ rrSourceActive[owner][source]
   /\ ~ReplyPipelineHasUnresolvedWriter(owner, source)
   /\ ReplyPipelineEverySourceAttemptHasRebind(owner, source)
-  /\ RetireReplySource(owner, source)
+  /\ RetireReplySourceV2(owner, source)
   /\ UNCHANGED ReplyPipelineLocalVars
 
 ReplyAttachmentRouteAction(owner, semantic, source, kind) ==
   CASE kind = "New" ->
-         ObserveNewReplySource(owner, semantic, source)
+         ObserveNewReplySourceV2(owner, semantic, source)
     [] kind = "Exact" ->
-         RetryExactReplySource(owner, semantic, source)
+         RetryExactReplySourceV2(owner, semantic, source)
     [] kind = "Later" ->
-         ObserveLaterReplyDelivery(owner, semantic, source)
+         ObserveLaterReplyDeliveryV2(owner, semantic, source)
     [] kind = "Reconnect" ->
-         ReconnectReplySource(owner, semantic, source)
+         ReconnectReplySourceV2(owner, semantic, source)
 
 AttachPendingReplyDelivery(owner, semantic, source) ==
   LET attachment == ReplyPendingAttachmentFor(owner, semantic, source)
@@ -440,7 +521,7 @@ EnqueueCurrentReplyItem(owner, semantic, source) ==
      /\ rpItems' = rpItems \cup {item}
      /\ rpNextFifoOrdinal' =
           [rpNextFifoOrdinal EXCEPT ![owner] = @ + 1]
-     /\ UNCHANGED <<ReplyRouteVars, rpPendingAttachments,
+     /\ UNCHANGED <<ReplyRouteV2Vars, rpPendingAttachments,
                     rpNextTicketId>>
 
 AcquireReplyPipelineTicket(owner, semantic, source) ==
@@ -461,7 +542,7 @@ AcquireReplyPipelineTicket(owner, semantic, source) ==
      /\ rpItems' = ReplyPipelineReplaceItem(item, ticketed)
      /\ rpNextTicketId' =
           [rpNextTicketId EXCEPT ![owner] = @ + 1]
-     /\ UNCHANGED <<ReplyRouteVars, rpPendingAttachments,
+     /\ UNCHANGED <<ReplyRouteV2Vars, rpPendingAttachments,
                     rpNextFifoOrdinal>>
 
 ReplyPipelineAdvanceAttempt(item) ==
@@ -471,7 +552,7 @@ ReplyPipelineAdvanceAttempt(item) ==
      /\ ReplyAttemptCurrent(oldAttempt)
      /\ ~ReplyAttemptComplete(oldAttempt)
      /\ ReplyPipelineItemMatchesAttempt(item, oldAttempt)
-     /\ AdvanceCurrentReplyAttempt(
+     /\ AdvanceCurrentReplyAttemptV2(
           item.owner, item.semantic, item.source)
 
 ReplyPipelineItemWithPhase(item, phase) ==
@@ -481,13 +562,13 @@ ReplyPipelineItemWithPhase(item, phase) ==
     item.outputClass, item.flushRequired,
     item.fifoOrdinal, item.routeTenure,
     phase, item.ticketId, item.ticketTenure,
-    item.ticketPayload)
+    item.ticketPayload, item.requestIdentity)
 
 ReplyPipelineFlushAdmission(item) ==
   /\ rpItems' =
        ReplyPipelineReplaceItem(
          item, ReplyPipelineItemWithPhase(item, "Admitted"))
-  /\ UNCHANGED ReplyRouteVars
+  /\ UNCHANGED ReplyRouteV2Vars
 
 ReplyPipelineFlushedApplication(item) ==
   /\ ReplyPipelineAdvanceAttempt(item)
@@ -529,7 +610,7 @@ FlushAdmittedReplyPipelineItem(owner, semantic, source) ==
      /\ rpItems' =
           ReplyPipelineReplaceItem(
             item, ReplyPipelineItemWithPhase(item, "Flushed"))
-     /\ UNCHANGED <<ReplyRouteVars, rpPendingAttachments,
+     /\ UNCHANGED <<ReplyRouteV2Vars, rpPendingAttachments,
                     rpNextFifoOrdinal, rpNextTicketId>>
 
 CloseAdmittedReplyPipelineItem(owner, semantic, source) ==
@@ -547,7 +628,7 @@ CloseAdmittedReplyPipelineItem(owner, semantic, source) ==
      /\ rpItems' =
           ReplyPipelineReplaceItem(
             item, ReplyPipelineItemWithoutTicket(item))
-     /\ UNCHANGED <<ReplyRouteVars, rpPendingAttachments,
+     /\ UNCHANGED <<ReplyRouteV2Vars, rpPendingAttachments,
                     rpNextFifoOrdinal, rpNextTicketId>>
 
 ApplyFlushedReplyPipelineItem(owner, semantic, source) ==
@@ -593,8 +674,68 @@ ReplyPipelineResponsiveSource(owner, source) ==
     ReplyPipelineResponsiveOutputClass(
       owner, source, outputClass)
 
+ReplyPipelineItemsAfterHintReset(reset) ==
+  {item \in rpItems:
+     \/ item.owner # reset.requester
+     \/ item.source # reset.responder
+     \/ item.serviceGeneration # reset.oldGeneration
+     \/ item.streamEpoch # reset.oldEpoch}
+
+ReplyPendingAttachmentsAfterHintReset(reset) ==
+  {attachment \in rpPendingAttachments:
+     \/ attachment.owner # reset.requester
+     \/ attachment.source # reset.responder}
+
+DiscardPersistedPipelinePartialState(reset) ==
+  /\ DiscardPersistedHintPartialState(reset)
+  /\ rpItems' = ReplyPipelineItemsAfterHintReset(reset)
+  /\ rpPendingAttachments' =
+       ReplyPendingAttachmentsAfterHintReset(reset)
+  /\ UNCHANGED <<rpNextFifoOrdinal, rpNextTicketId>>
+
+ReplyPipelineItemsAfterClosedPrefix(witness) ==
+  LET floor == ReplyCloseCoordinate(witness)
+  IN {item \in rpItems:
+        \/ item.owner # witness.requester
+        \/ item.source # witness.responder
+        \/ ~ReplyCoordinateAtOrBefore(
+             ReplyOccurrenceCoordinate(
+               item.serviceGeneration,
+               item.streamEpoch,
+               item.semanticSequence),
+             floor)}
+
+CloseSemanticPipelineRequest(witness) ==
+  /\ CloseSemanticRequestV2(witness)
+  /\ rpItems' = ReplyPipelineItemsAfterClosedPrefix(witness)
+  /\ UNCHANGED <<rpPendingAttachments,
+                 rpNextFifoOrdinal, rpNextTicketId>>
+
+ReplyPipelineResponderTerminal(source) ==
+  /\ ReplyResponderStateTerminal(source)
+  /\ \A item \in rpItems:
+       item.source # source
+  /\ \A attachment \in rpPendingAttachments:
+       attachment.source # source
+
+PersistTerminalPipelineResponderGeneration(source) ==
+  /\ ReplyPipelineResponderTerminal(source)
+  /\ PersistTerminalResponderGeneration(source)
+  /\ UNCHANGED ReplyPipelineLocalVars
+
+InstallPersistedPipelineResponderGeneration(source) ==
+  /\ ReplyPipelineResponderTerminal(source)
+  /\ InstallPersistedResponderGeneration(source)
+  /\ UNCHANGED ReplyPipelineLocalVars
+
+RejectStaleFlushReceiptWithoutMutation(item) ==
+  /\ item \in ReplyPipelineItemSet
+  /\ item \notin rpItems
+  /\ ~ReplyFlushIdentityMatchesCurrentOccurrence(item)
+  /\ UNCHANGED ReplyPipelineVars
+
 ReplyPipelineNext ==
-  /\ ReplyRouteSafetyInvariant
+  /\ ReplyRouteV2SafetyInvariant
   /\ (\/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
           source \in ReplySources, kind \in ReplyAttachmentKinds:
           ObserveAuthenticatedReplyDelivery(
@@ -621,7 +762,34 @@ ReplyPipelineNext ==
           CloseAdmittedReplyPipelineItem(owner, semantic, source)
       \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
           source \in ReplySources:
-          ApplyFlushedReplyPipelineItem(owner, semantic, source))
+          ApplyFlushedReplyPipelineItem(owner, semantic, source)
+      \/ \E owner \in ReplyOwners, source \in ReplySources:
+          /\ PersistFreshRequesterStreamEpoch(owner, source)
+          /\ UNCHANGED ReplyPipelineLocalVars
+      \/ \E witness \in ReplyCloseWitnessSet:
+          CloseSemanticPipelineRequest(witness)
+      \/ \E witness \in ReplyCloseWitnessSet:
+          /\ RetryCloseSemanticRequestV2(witness)
+          /\ UNCHANGED ReplyPipelineLocalVars
+      \/ \E acknowledgement \in ReplyCloseAcknowledgementSet:
+          /\ AcknowledgeCloseSemanticRequestV2(acknowledgement)
+          /\ UNCHANGED ReplyPipelineLocalVars
+      \/ \E hint \in ReplyGenerationHintSet:
+          /\ PersistFreshEpochForGenerationHint(hint)
+          /\ UNCHANGED ReplyPipelineLocalVars
+      \/ \E reset \in ReplyHintResetSet:
+          DiscardPersistedPipelinePartialState(reset)
+      \/ \E source \in ReplySources:
+          PersistTerminalPipelineResponderGeneration(source)
+      \/ \E source \in ReplySources:
+          InstallPersistedPipelineResponderGeneration(source)
+      \/ \E requester \in ReplyOwners, responder \in ReplySources,
+          inputGeneration \in ReplyServiceGenerations:
+          /\ RejectFutureGenerationWithoutMutation(
+               requester, responder, inputGeneration)
+          /\ UNCHANGED ReplyPipelineLocalVars
+      \/ \E item \in ReplyPipelineItemSet:
+          RejectStaleFlushReceiptWithoutMutation(item))
 
 (***************************************************************************
 Exact route projection of every pipeline transition.  Local queue/ticket/
@@ -632,24 +800,24 @@ the production model makes the temporal replay and source-isolation proof a
 call-path obligation rather than an imported alias of `ReplyRouteNext`.
 ***************************************************************************)
 ReplyPipelineRouteStep ==
-  \/ UNCHANGED ReplyRouteVars
+  \/ UNCHANGED ReplyRouteV2Vars
   \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
        source \in ReplySources:
-       ObserveNewReplySource(owner, semantic, source)
+       ObserveNewReplySourceV2(owner, semantic, source)
   \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
        source \in ReplySources:
-       RetryExactReplySource(owner, semantic, source)
+       RetryExactReplySourceV2(owner, semantic, source)
   \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
        source \in ReplySources:
-       ObserveLaterReplyDelivery(owner, semantic, source)
+       ObserveLaterReplyDeliveryV2(owner, semantic, source)
   \/ \E owner \in ReplyOwners, source \in ReplySources:
-       RetireReplySource(owner, source)
+       RetireReplySourceV2(owner, source)
   \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
        source \in ReplySources:
-       ReconnectReplySource(owner, semantic, source)
+       ReconnectReplySourceV2(owner, semantic, source)
   \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
        source \in ReplySources:
-       AdvanceCurrentReplyAttempt(owner, semantic, source)
+       AdvanceCurrentReplyAttemptV2(owner, semantic, source)
 
 ReplyPipelineFairness ==
   /\ \A owner \in ReplyOwners, source \in ReplySources:
@@ -724,6 +892,13 @@ ReplyPipelineItemCoreBinding(item) ==
         ReplyAttemptFor(item.owner, item.semantic, item.source)
   IN /\ ReplyAttemptOwned(item.owner, item.semantic, item.source)
      /\ ReplyPipelineItemMatchesAttempt(item, attempt)
+     /\ ReplyPipelineItemMatchesLifecycleIdentity(
+          item,
+          ReplyAttemptLifecycleIdentityFor(
+            item.owner, item.semantic, item.source))
+     /\ ReplyLifecycleIdentityMatchesCanonicalRequest(
+          ReplyAttemptLifecycleIdentityFor(
+            item.owner, item.semantic, item.source))
      /\ ~ReplyAttemptComplete(attempt)
      /\ item.outputClass =
           ReplyItemClass(
@@ -778,9 +953,53 @@ ReplyPipelineOwnershipInvariant ==
   /\ ReplyPipelineReconnectBarrierInvariant
 
 ReplyPipelineSafetyInvariant ==
-  /\ ReplyRouteSafetyInvariant
+  /\ ReplyRouteV2SafetyInvariant
   /\ ReplyPipelineTypeInvariant
   /\ ReplyPipelineOwnershipInvariant
+
+ReplyPipelineCoordinateIdentityInvariant ==
+  \A item \in rpItems:
+    /\ item.requestIdentity =
+         ReplyCanonicalRequestIdentity(
+           item.serviceGeneration,
+           item.streamEpoch,
+           item.semanticSequence,
+           item.semantic,
+           item.owner,
+           item.source)
+    /\ ReplyRequestGateIdentity(item).requestIdentity =
+         item.requestIdentity
+    /\ ReplyFlushIdentity(item).requestIdentity =
+         item.requestIdentity
+    /\ ReplyFlushIdentity(item).serviceGeneration =
+         item.serviceGeneration
+    /\ ReplyFlushIdentity(item).streamEpoch = item.streamEpoch
+    /\ ReplyFlushIdentity(item).semanticSequence =
+         item.semanticSequence
+
+ReplyPipelineSuccessorIsolationInvariant ==
+  \A item \in rpItems:
+    /\ ReplyFlushIdentityMatchesCurrentOccurrence(item)
+    /\ \A discarded \in rrDiscardedPartialIdentities:
+         discarded.requestIdentity # item.requestIdentity
+
+ReplyPipelineV2SafetyInvariant ==
+  /\ ReplyPipelineSafetyInvariant
+  /\ ReplyPipelineCoordinateIdentityInvariant
+  /\ ReplyPipelineSuccessorIsolationInvariant
+
+ReplyStaleChunkAckOrFlushCannotAffectSuccessor ==
+  \A stale \in rrDiscardedPartialIdentities,
+     item \in rpItems:
+    /\ stale.owner = item.owner
+    /\ stale.source = item.source
+    => /\ stale.requestIdentity # item.requestIdentity
+       /\ ReplyCoordinateStrictlyBefore(
+            ReplyLifecycleIdentityCoordinate(stale),
+            ReplyOccurrenceCoordinate(
+              item.serviceGeneration,
+              item.streamEpoch,
+              item.semanticSequence))
 
 ReplyPendingAttachmentEventuallyConsumed(owner, semantic, source) ==
   ReplyPendingAttachmentOwned(owner, semantic, source)

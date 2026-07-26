@@ -100,14 +100,19 @@ Carrier-neutral monotone frame.
 OpenProgressWitnessCarrierFrame fixes every semantic Core/recovery component
 read by either strengthened stage, retains active requests and authenticated
 sent occurrences monotonically, and retains the union of every scheduler
-carrier.  The explicit responsive-voter inclusion permits a non-responsive
-crash while preventing a new quantified source from appearing.
+carrier.  The explicit inclusion for the union of responsive voters and
+historical recovery targets permits either source class to shrink while
+preventing a new quantified Decision source from appearing.  Opening a new
+historical target is proved separately from this monotone frame.
 ***************************************************************************)
 
 FinalWitnessMonotoneCarrierFrame ==
   /\ OpenProgressWitnessCarrierFrame
-  /\ AsyncCurrentResponsiveVoters'
-       \subseteq AsyncCurrentResponsiveVoters
+  /\ (AsyncCurrentResponsiveVoters'
+        \cup asyncHistoricalRecoveryTargets')
+       \subseteq
+         (AsyncCurrentResponsiveVoters
+            \cup asyncHistoricalRecoveryTargets)
 
 THEOREM FinalMonotoneCarrierFrameEstablishesDecisionExactFrame ==
   FinalWitnessMonotoneCarrierFrame
@@ -234,18 +239,133 @@ BY Isa
        TrackedWorkCandidates, SequenceSet, AsyncCurrentResponsiveVoters,
        CurrentVoters, CurrentEpoch, vars
 
-THEOREM OpenHistoricalRecoveryEstablishesFinalMonotoneCarrierFrame ==
+THEOREM StrongDecisionRecordsAreCommit ==
+  AsyncStrongTypeInvariant
+    => \A decision \in decisions:
+         decision.qc.phase = "Commit"
+BY Isa
+   DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
+       Safety, DecisionAgreement,
+       LineageInvariant, CertificatePhasesCorrect
+
+(***************************************************************************
+Opening historical recovery is the sole non-runner action which grows the
+Decision source-owner set.  Its new owner is decisionless by construction.
+Every current-context durable Decision is Commit-only under the strong
+inductive invariant, so the `~NodeHasDecision(node)` guard excludes a
+Decision at the newly added target.  All pre-existing owners retain their
+exact stage because the action frames Core, recovery, authentication history,
+active requests, and every scheduler carrier except the target set itself.
+***************************************************************************)
+
+THEOREM OpenHistoricalRecoveryPreservesDecisionExactSource ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ DecisionExactSourceRetentionInvariant
+    /\ OpenHistoricalRecovery(node)
+    => DecisionExactSourceRetentionInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                DecisionExactSourceRetentionInvariant,
+                OpenHistoricalRecovery(node)
+         PROVE DecisionExactSourceRetentionInvariant'
+    <2>1. \A decision \in decisions:
+             decision.qc.phase = "Commit"
+      BY <1>1, StrongDecisionRecordsAreCommit
+    <2>2. /\ ~NodeHasDecision(node)
+           /\ decisions' = decisions
+           /\ context' = context
+           /\ asyncHistoricalRecoveryTargets' =
+                asyncHistoricalRecoveryTargets \cup {node}
+      BY <1>1
+         DEF OpenHistoricalRecovery, HistoricalRecoverySourceReady,
+             vars
+    <2>3. ASSUME NEW decision \in decisions',
+                  /\ DecisionExactSourceOwner(decision.node)'
+                     /\ decision.qc.context = context'
+           PROVE AsyncDecisionRecoveryStageExact(
+                   decision.node, decision.qc)'
+      <3>1. /\ decision \in decisions
+             /\ decision.qc.context = context
+             /\ decision.qc.phase = "Commit"
+        BY <2>1, <2>2, <2>3
+      <3>2. CASE decision.node = node
+        BY <2>2, <3>1, <3>2 DEF NodeHasDecision
+      <3>3. CASE decision.node # node
+        <4>1. DecisionExactSourceOwner(decision.node)
+          BY <1>1, <2>2, <2>3, <3>3, Isa
+             DEF DecisionExactSourceOwner, HistoricalRecoveryTarget,
+                 OpenHistoricalRecovery,
+                 AsyncCurrentResponsiveVoters,
+                 CurrentVoters, CurrentEpoch, vars
+        <4>2. AsyncDecisionRecoveryStageExact(
+                 decision.node, decision.qc)
+          BY <1>1, <3>1, <4>1
+             DEF DecisionExactSourceRetentionInvariant
+        <4> QED BY <1>1, <3>1, <4>2, IsaT(300)
+             DEF AsyncDecisionRecoveryStageExact,
+                 DecisionRecoveryStageExact,
+                 DecisionFetchBodyOwnedExact,
+                 DecisionCertifiedRequestActiveExact,
+                 DecisionCertifiedResponseLineageExact,
+                 DecisionCertifiedFetchOwnedExact,
+                 DecisionStoreBodyOwned, DecisionValidateBodyOwned,
+                 DecisionApplyOwned, DecisionPipelineKindOwned,
+                 DecisionPipelineCandidate,
+                 DecisionValidationHeld, DecisionBody,
+                 DecisionRecoveryAuthority,
+                 DurableDecisionRecoveryAuthority,
+                 DurableDecisionRecoveryExecutorCurrent,
+                 CertifiedResponseAuthenticatedOccurrence,
+                 CertifiedResponseCapabilityAuthorized,
+                 MatchingSentCertifiedRequests,
+                 FrozenCertifiedResponseBinding,
+                 FrozenCertifiedRequestRegistration,
+                 AsyncCertifiedResponseAuthProjection,
+                 CandidateConsumerCurrent, CandidateScheduled,
+                 OpenHistoricalRecovery,
+                 AsyncSchedulerExceptHistoricalRecoveryTargets,
+                 QueuedCandidates, DeferredCandidates, CausalCandidates,
+                 TrackedWorkCandidates, SequenceSet, vars
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>3 DEF DecisionExactSourceRetentionInvariant
+  <1> QED BY <1>1
+
+THEOREM OpenHistoricalRecoveryEstablishesHistoricalLineageFrame ==
   \A node \in ValidatorIds:
     OpenHistoricalRecovery(node)
-      => FinalWitnessMonotoneCarrierFrame
-BY Isa
-   DEF FinalWitnessMonotoneCarrierFrame,
-       OpenProgressWitnessCarrierFrame,
-       OpenProgressWitnessSemanticVars, ScheduledCandidateSet,
+      => HistoricalLockedBodyLineageRetentionFrame
+BY IsaT(150)
+   DEF HistoricalLockedBodyLineageRetentionFrame,
+       HistoricalLockedBodyLineageSemanticVars,
+       HistoricalLockedAuthenticatedHistoryRetained,
+       HistoricalLockedLineagedRequestsRetained,
+       HistoricalLockedLineagedCandidatesRetained,
+       HistoricalLockedCertifiedRequestActiveLineaged,
+       HistoricalLockedBodyFetchCandidate,
+       HistoricalLockedBodyCertifiedFetchCandidate,
+       HistoricalLockedBodyStoreCandidate,
+       HistoricalLockedBodyValidateCandidate,
+       HistoricalLockedBodyBeginLockCandidate,
+       CandidateScheduled,
        OpenHistoricalRecovery, AsyncSchedulerExceptHistoricalRecoveryTargets,
        QueuedCandidates, DeferredCandidates, CausalCandidates,
        TrackedWorkCandidates, SequenceSet, AsyncCurrentResponsiveVoters,
        CurrentVoters, CurrentEpoch, vars
+
+THEOREM OpenHistoricalRecoveryPreservesFinalProgressWitnessClosure ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ FinalProgressWitnessClosureInvariant
+    /\ OpenHistoricalRecovery(node)
+    => FinalProgressWitnessClosureInvariant'
+BY OpenHistoricalRecoveryPreservesDecisionExactSource,
+   OpenHistoricalRecoveryEstablishesHistoricalLineageFrame,
+   HistoricalLockedBodyLineageFramePreservesSourceRetention,
+   HistoricalLineageFramePreservesResponsiveReplayCarrier
+   DEF FinalProgressWitnessClosureInvariant,
+       FinalWitnessSourceRetentionInvariant
 
 THEOREM CommitDiscoveryEstablishesFinalMonotoneCarrierFrame ==
   \A node \in ValidatorIds:
@@ -344,6 +464,7 @@ BY IsaT(420)
        FinalProgressWitnessClosureInvariant,
        FinalWitnessSourceRetentionInvariant,
        DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryStageExact,
        DecisionFetchBodyOwnedExact,
@@ -413,8 +534,7 @@ PROOF
          FinalMonotoneCarrierFramePreservesClosure
     <2>3. CASE \E node \in ValidatorIds: OpenHistoricalRecovery(node)
       BY <1>1, <2>3,
-         OpenHistoricalRecoveryEstablishesFinalMonotoneCarrierFrame,
-         FinalMonotoneCarrierFramePreservesClosure
+         OpenHistoricalRecoveryPreservesFinalProgressWitnessClosure
     <2>4. CASE \E node \in ValidatorIds:
                     DirectCommitCertificateDiscoveryStep(node)
       BY <1>1, <2>4,
@@ -749,6 +869,7 @@ BY IsaT(360)
        FinalProgressWitnessClosureInvariant,
        FinalWitnessSourceRetentionInvariant,
        DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryStageExact,
        DecisionFetchBodyOwnedExact,
@@ -785,6 +906,7 @@ BY ResponsiveRestartAdvancesExactDurableDecisionAuthority, IsaT(420)
        FinalProgressWitnessClosureInvariant,
        FinalWitnessSourceRetentionInvariant,
        DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryStageExact,
        DecisionFetchBodyOwnedExact,
@@ -899,6 +1021,7 @@ BY ResponsiveReplayInstallsExactCurrentDecisionFetchUpdate,
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        StrongInductiveInvariant, Safety, TypeInvariant,
        DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryStageExact,
        DecisionFetchBodyOwnedExact,
@@ -964,6 +1087,7 @@ BY IsaT(300)
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        StrongInductiveInvariant, Safety, TypeInvariant,
        DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryStageExact,
        DecisionFetchBodyOwnedExact,
@@ -1110,6 +1234,7 @@ BY IsaT(360)
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        StrongInductiveInvariant, Safety, TypeInvariant,
        DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryStageExact,
        DecisionFetchBodyOwnedExact,
@@ -1150,6 +1275,7 @@ BY IsaT(180)
    DEF FinalProgressWitnessClosureInvariant,
        FinalWitnessSourceRetentionInvariant,
        DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
        AsyncDecisionRecoveryStageExact,
        DecisionRecoveryAuthority,
        DurableDecisionRecoveryAuthority,

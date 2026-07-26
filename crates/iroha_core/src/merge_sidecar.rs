@@ -3382,6 +3382,15 @@ pub(crate) struct MergeSidecarTransport {
     /// Durable first-level round-robin cursor for response materialization.
     materialization_requester_cursor: Option<PeerId>,
     pending_server_closures: BTreeMap<PeerId, CertifiedMergeSidecarClosedPrefix>,
+    /// A drained close prefix still awaiting application by the exact-output
+    /// owner.
+    ///
+    /// Transport gates and bytes may already be gone, but a lane or worker can
+    /// still retain the covered chunk or its writer-flush receipt. Responder
+    /// generation rollover therefore remains blocked until the runner confirms
+    /// that every drained prefix reached that downstream owner. This flag is
+    /// deliberately process-local: after a crash none of those queues survives.
+    server_closure_handoff_pending: bool,
     lifecycle_journal: Option<MergeSidecarLifecycleJournal>,
     #[cfg(test)]
     obstruct_next_terminal_retirement_persist: bool,
@@ -3485,6 +3494,7 @@ impl MergeSidecarTransport {
             server_streams: BTreeMap::new(),
             materialization_requester_cursor: None,
             pending_server_closures: BTreeMap::new(),
+            server_closure_handoff_pending: false,
             lifecycle_journal: None,
             #[cfg(test)]
             obstruct_next_terminal_retirement_persist: false,
@@ -4090,6 +4100,9 @@ impl MergeSidecarTransport {
         self.outbound.clear();
         self.outbound_order.clear();
         self.pending_server_closures.clear();
+        // Exact-output fanouts and writer-flush receipts are process-local and
+        // cannot survive the restart which owns snapshot restoration.
+        self.server_closure_handoff_pending = false;
         Ok(())
     }
 
@@ -4338,7 +4351,12 @@ impl MergeSidecarTransport {
                 .then(|| {
                     self.request_streams
                         .iter()
-                        .find(|(_, stream)| stream.open_sequences.is_empty())
+                        // A sent Close remains durable retry ownership until
+                        // its exact CloseAck advances the acknowledgement floor.
+                        .find(|(_, stream)| {
+                            stream.open_sequences.is_empty()
+                                && stream.closed_through == stream.acknowledged_through
+                        })
                         .map(|(peer, _)| peer.clone())
                 })
                 .flatten();
@@ -5481,6 +5499,7 @@ impl MergeSidecarTransport {
             && self.outbound.is_empty()
             && self.outbound_order.is_empty()
             && self.pending_server_closures.is_empty()
+            && !self.server_closure_handoff_pending
     }
 
     /// Compact a full, terminal responder table behind a fresh durable fence.
@@ -5596,8 +5615,9 @@ impl MergeSidecarTransport {
 
     /// Ensure that requester admission stays inside the immutable roster bound.
     ///
-    /// Exhaustion rejects locally. Only an externally certified roster change
-    /// may advance the responder generation after every output layer drains.
+    /// Active exhaustion rejects locally. A full terminal table is compacted
+    /// by the admission path, while a certified roster-geometry replacement
+    /// uses the same terminal transition before advancing the generation.
     fn ensure_server_stream_slot(&self, sender: &PeerId) -> Result<(), MergeSidecarError> {
         if self.server_streams.contains_key(sender) {
             return Ok(());
@@ -5893,13 +5913,30 @@ impl MergeSidecarTransport {
 
     /// Drain coalesced server prefixes so every downstream queue can cancel
     /// covered response chunks before dispatching newer work.
+    ///
+    /// Responder-generation rollover stays blocked until the downstream owner
+    /// applies the entire drained batch and calls
+    /// [`Self::confirm_closed_server_prefix_handoff`].
     pub(crate) fn drain_closed_server_prefixes(
         &mut self,
     ) -> Vec<CertifiedMergeSidecarClosedPrefix> {
-        std::mem::take(&mut self.pending_server_closures)
+        let prefixes = std::mem::take(&mut self.pending_server_closures)
             .into_iter()
             .map(|(_, prefix)| prefix)
-            .collect()
+            .collect::<Vec<_>>();
+        self.server_closure_handoff_pending |= !prefixes.is_empty();
+        prefixes
+    }
+
+    /// Confirm that every previously drained close prefix reached the
+    /// process-local exact-output owner.
+    ///
+    /// A new closure recorded after the drain keeps rollover blocked until it
+    /// is drained and confirmed by a later call.
+    pub(crate) fn confirm_closed_server_prefix_handoff(&mut self) {
+        if self.pending_server_closures.is_empty() {
+            self.server_closure_handoff_pending = false;
+        }
     }
 
     fn server_request_source(
@@ -8798,6 +8835,20 @@ mod tests {
         hint
     }
 
+    fn close_for_request(request: &CertifiedMergeSidecarRequestV1) -> CertifiedMergeSidecarCloseV1 {
+        let mut close = CertifiedMergeSidecarCloseV1 {
+            version: request.version,
+            service_generation: request.service_generation,
+            stream_epoch: request.stream_epoch,
+            closed_through: request.semantic_sequence.get(),
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: request.requester.clone(),
+            responder: request.responder.clone(),
+        };
+        close.bind_canonical_close_id();
+        close
+    }
+
     fn signing_candidate(context: &MergeSigningContextV1, label: &[u8]) -> MergeLedgerCandidate {
         MergeLedgerCandidate {
             version: MergeLedgerCandidate::VERSION,
@@ -9047,6 +9098,19 @@ mod tests {
         assert_eq!(transport.server_request_gates.len(), 1);
 
         transport.cancel_unmaterialized_server_request(&requester, &request);
+        assert!(matches!(
+            transport
+                .transition_server_service_generation(grown_roster.len(), grown_digest.clone(),),
+            Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry"
+            ))
+        ));
+        let close = close_for_request(&request);
+        transport
+            .admit_server_close(&requester, &close, None, &local_peer)
+            .expect("the exact close makes the old roster stream terminal");
+        assert_eq!(transport.drain_closed_server_prefixes().len(), 1);
+        transport.confirm_closed_server_prefix_handoff();
         let transport = transport
             .rehydrate_with_exact_geometry(
                 source_capacity,
@@ -9069,6 +9133,9 @@ mod tests {
         assert!(transport.server_streams.is_empty());
         assert!(transport.server_request_gates.is_empty());
 
+        let mut transport = transport;
+        assert_eq!(transport.drain_closed_server_prefixes().len(), 1);
+        transport.confirm_closed_server_prefix_handoff();
         let transport = transport
             .rehydrate_with_exact_geometry(
                 source_capacity,
@@ -9179,6 +9246,24 @@ mod tests {
             .expect("retain one active old-roster output");
         assert_eq!(server.outbound.len(), 1);
         assert!(routes.retire(&route));
+        assert!(matches!(
+            server.transition_server_service_generation(new_roster.len(), new_digest.clone(),),
+            Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry"
+            ))
+        ));
+        assert_eq!(
+            server.server_service_generation,
+            CertifiedMergeSidecarServiceGenerationV1::INITIAL
+        );
+        assert_eq!(server.outbound.len(), 1);
+
+        let close = close_for_request(&request);
+        server
+            .admit_server_close(&retained_requester, &close, None, &local_peer)
+            .expect("an authenticated close terminally releases inactive old-roster output");
+        assert_eq!(server.drain_closed_server_prefixes().len(), 1);
+        server.confirm_closed_server_prefix_handoff();
 
         let mut transitioned = server
             .rehydrate_with_exact_geometry(
@@ -9188,7 +9273,7 @@ mod tests {
                 new_digest.clone(),
                 now,
             )
-            .expect("inactive output is reclaimed before the roster transition");
+            .expect("closed inactive output permits the roster transition");
         assert_eq!(
             transitioned.server_service_generation,
             service_generation(2)
@@ -9326,7 +9411,7 @@ mod tests {
             source_capacity,
             limits,
             old_roster.len(),
-            old_digest,
+            old_digest.clone(),
         )
         .expect("open the old durable roster");
 
@@ -9385,7 +9470,48 @@ mod tests {
         server
             .persist_lifecycle_state()
             .expect("persist all old-roster lifecycle state");
+        let predecessor_state_path = server
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable roster fixture retains its journal")
+            .state_path();
+        let predecessor_bytes =
+            fs::read(&predecessor_state_path).expect("read the active predecessor V2 snapshot");
         drop(server);
+
+        assert!(matches!(
+            MergeSidecarTransport::open_durable_with_server_stream_capacity(
+                temp.path(),
+                source_capacity,
+                limits,
+                new_roster.len(),
+                new_digest.clone(),
+            ),
+            Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry"
+            ))
+        ));
+        assert_eq!(
+            fs::read(&predecessor_state_path)
+                .expect("reread the fail-atomic predecessor V2 snapshot"),
+            predecessor_bytes
+        );
+
+        let mut predecessor = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            source_capacity,
+            limits,
+            old_roster.len(),
+            old_digest,
+        )
+        .expect("reopen the exact predecessor geometry after rejected replacement");
+        assert_eq!(predecessor.server_request_gates.len(), 1);
+        let close = close_for_request(&old_request);
+        predecessor
+            .admit_server_close(&retained_requester, &close, None, &local_peer)
+            .expect("persist the exact terminal close under predecessor geometry");
+        assert_eq!(predecessor.drain_closed_server_prefixes().len(), 1);
+        drop(predecessor);
 
         let mut restarted = MergeSidecarTransport::open_durable_with_server_stream_capacity(
             temp.path(),
@@ -12292,10 +12418,8 @@ mod tests {
             .admit_server_close(&requester, &close, Some(&reply_route), &responder)
             .expect("stale Close receives the current responder fence");
         assert!(
-            first_hint_post
-                .reply_route
-                .as_ref()
-                .is_some_and(|retained| retained.same_delivery(&reply_route))
+            first_hint_post.reply_route.is_none(),
+            "GenerationHint is route-free Consensus control traffic"
         );
         let CertifiedMergeSidecarMessage::GenerationHint(hint) =
             Arc::unwrap_or_clone(first_hint_post.message)
@@ -12316,7 +12440,7 @@ mod tests {
             repeated,
             MergeSidecarPost {
                 peer: requester.clone(),
-                reply_route: Some(reply_route),
+                reply_route: None,
                 message: Arc::new(CertifiedMergeSidecarMessage::GenerationHint(hint.clone())),
             }
         );
@@ -12491,9 +12615,25 @@ mod tests {
         let successor_requester = peer(b"generation rollover successor requester");
         let mut successor =
             routed_server_request(&request, successor_requester.clone(), b"successor", 1);
+        assert!(matches!(
+            server.admit_server_request(&successor_requester, &successor, None, &responder, now),
+            Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry"
+            ))
+        ));
+        assert_eq!(
+            server.server_service_generation,
+            CertifiedMergeSidecarServiceGenerationV1::INITIAL,
+            "a drained prefix is not terminal until exact output confirms cancellation"
+        );
+        assert_eq!(
+            server.server_streams.len(),
+            MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+        );
+        server.confirm_closed_server_prefix_handoff();
         let hint = match server
             .admit_server_request(&successor_requester, &successor, None, &responder, now)
-            .expect("the full terminal table advances the durable generation")
+            .expect("the externally terminal full table advances the durable generation")
         {
             ServerRequestAdmission::GenerationHint(post) => {
                 let CertifiedMergeSidecarMessage::GenerationHint(hint) =
@@ -12716,6 +12856,7 @@ mod tests {
             .admit_server_close(&first_requester, &close, None, &responder)
             .expect("terminate the only predecessor stream");
         assert_eq!(server.drain_closed_server_prefixes().len(), 1);
+        server.confirm_closed_server_prefix_handoff();
         assert!(server.server_generation_is_terminal());
 
         let post = match server
@@ -13140,6 +13281,23 @@ mod tests {
             !server.server_generation_is_terminal(),
             "writability pruning, not the timeout callback, releases retained authority"
         );
+        assert!(matches!(
+            server.transition_server_service_generation(new_roster.len(), new_digest.clone(),),
+            Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry"
+            ))
+        ));
+        for (requester, request) in [
+            (&output_requester, &output_request),
+            (&authorized_requester, &authorized_request),
+        ] {
+            let close = close_for_request(request);
+            server
+                .admit_server_close(requester, &close, None, &responder)
+                .expect("the authenticated close terminally releases unwritable ownership");
+        }
+        assert_eq!(server.drain_closed_server_prefixes().len(), 2);
+        server.confirm_closed_server_prefix_handoff();
 
         let mut transitioned = server
             .rehydrate_with_exact_geometry(
@@ -13149,7 +13307,7 @@ mod tests {
                 new_digest,
                 now,
             )
-            .expect("unwritable output and authorization are reclaimed before transition");
+            .expect("closed unwritable ownership permits the roster transition");
         assert_eq!(
             transitioned.server_service_generation,
             service_generation(2)
@@ -15645,13 +15803,13 @@ mod tests {
             MergeSidecarTransport::open_durable(temp.path(), reply_source_capacity, limits)
                 .expect("open durable churn fixture");
 
-        let churn = MAX_CERTIFIED_MERGE_SEMANTIC_PEERS + 16;
+        let churn = MAX_CERTIFIED_MERGE_SEMANTIC_PEERS;
         let mut allocated_epochs = BTreeSet::new();
         for index in 0..churn {
             let responder = peer(format!("semantic responder {index}").as_bytes());
             let (epoch, sequence, closed_through) = transport
                 .allocate_request_sequence(&responder)
-                .expect("quiescent streams compact before admitting a new responder");
+                .expect("one requester stream fits each bounded semantic responder");
             assert!(
                 allocated_epochs.insert(epoch),
                 "requester-issued stream epochs are globally unique"
@@ -15667,6 +15825,23 @@ mod tests {
         assert_eq!(
             transport.next_stream_epoch,
             u64::try_from(churn).expect("bounded churn count fits u64")
+        );
+        let blocked_responder = peer(b"semantic responder blocked by close debt");
+        let full_requester_snapshot = transport
+            .lifecycle_snapshot()
+            .expect("snapshot the full requester table with unacknowledged close debt");
+        assert!(matches!(
+            transport.allocate_request_sequence(&blocked_responder),
+            Err(MergeSidecarError::Capacity(
+                "requester semantic responder geometry"
+            ))
+        ));
+        assert_eq!(
+            transport
+                .lifecycle_snapshot()
+                .expect("snapshot after requester-capacity rejection"),
+            full_requester_snapshot,
+            "capacity must not discard a durable Close which still needs an exact ACK"
         );
 
         let (_, _, _, base_request, _) = start_session(1, 1);
@@ -15696,6 +15871,7 @@ mod tests {
                 .admit_server_close(&requester, &close, None, &local_peer)
                 .expect("retire the requester's only active semantic gate");
             assert_eq!(transport.drain_closed_server_prefixes().len(), 1);
+            transport.confirm_closed_server_prefix_handoff();
             assert!(transport.server_request_gates.is_empty());
         }
         assert_eq!(
@@ -15798,9 +15974,49 @@ mod tests {
         assert_eq!(restarted.server_service_generation, hint.current_generation);
 
         let post_restart_responder = peer(b"post-restart semantic responder");
+        let restart_snapshot = restarted
+            .lifecycle_snapshot()
+            .expect("snapshot retained post-restart Close debt");
+        assert!(matches!(
+            restarted.allocate_request_sequence(&post_restart_responder),
+            Err(MergeSidecarError::Capacity(
+                "requester semantic responder geometry"
+            ))
+        ));
+        assert_eq!(
+            restarted
+                .lifecycle_snapshot()
+                .expect("snapshot rejected post-restart allocation"),
+            restart_snapshot,
+            "restart must retain every unacknowledged Close before admitting peer churn"
+        );
+
+        let close_requester = peer(b"post-restart Close requester");
+        let releasable_responder = peer(b"semantic responder 0");
+        let close = restarted
+            .begin_close(&close_requester, &releasable_responder, now)
+            .and_then(|post| match Arc::unwrap_or_clone(post.message) {
+                CertifiedMergeSidecarMessage::Close(close) => Some(close),
+                _ => None,
+            })
+            .expect("the retained requester stream retries its exact Close");
+        let ack = CertifiedMergeSidecarCloseAckV1 {
+            version: close.version,
+            service_generation: close.service_generation,
+            stream_epoch: close.stream_epoch,
+            closed_through: close.closed_through,
+            close_id: close.close_id,
+            requester: close.requester,
+            responder: close.responder,
+        };
+        assert!(
+            restarted
+                .acknowledge_close(&releasable_responder, &ack, &close_requester)
+                .expect("an exact CloseAck releases one requester-stream slot")
+        );
         let (post_restart_epoch, sequence, closed_through) = restarted
             .allocate_request_sequence(&post_restart_responder)
-            .expect("restart retains a reclaimable bounded stream set");
+            .expect("an exact CloseAck permits a fresh globally unique epoch");
         assert_eq!(post_restart_epoch.get(), durable_epoch_high_water + 1);
         assert_eq!((sequence.get(), closed_through), (1, 0));
         assert!(!allocated_epochs.contains(&post_restart_epoch));

@@ -510,7 +510,8 @@ THEOREM OneHeightCompletionObligation ==
 PROOF
   <1>1. ASSUME NEW initialContext
          PROVE OneHeightCompletionLiveness(initialContext)
-    <2>1. RotatingLeaderProgressProperty(AsyncSpecAt(initialContext))
+    <2>1. RotatingLeaderProgressProperty(
+             AsyncLiveSpecAt(initialContext))
       BY RotatingLeaderProgressObligation
     <2>2. ApplicationLivenessProperty(AsyncSpecAt(initialContext))
       BY ApplicationLivenessObligation

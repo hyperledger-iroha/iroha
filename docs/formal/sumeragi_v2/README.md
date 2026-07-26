@@ -109,12 +109,16 @@ certificate round.
   rollover, or Rust-to-TLA refinement.
 - `SumeragiV2TerminalIngressLifecycleProofs.tla` isolates process-lifetime
   terminal-ingress safety. Within one terminal runner instance,
-  `TerminalReadOnly` and `TerminalRetired` are absorbing, the history-service
-  owner exists exactly in `TerminalReadOnly`, owner exit atomically retires
-  detached and ingress owners, and successful admission cannot follow owner
-  loss. Restart creates a fresh instance, and the module claims neither
-  eventual service exit nor a Rust refinement. Its proof script is SANY-clean,
-  but there is no fresh strict TLAPS evidence; the exact
+  `{TerminalReadOnly, TerminalRetired}` is forward-closed and
+  `TerminalRetired` is individually absorbing. The history-service owner
+  exists exactly in `TerminalReadOnly`, owner exit atomically retires detached
+  and ingress owners without increasing the successful-admission count, and
+  successful admission cannot follow owner loss.
+  Restart creates a fresh instance, and the module claims neither eventual
+  service exit nor a Rust refinement. The existing terminal-application
+  successor-suppression trace sentinel does not map these ingress lifecycle
+  actions. Its proof script is SANY-clean, but there is no fresh strict TLAPS
+  evidence; the exact
   `TerminalIngressProcessLifetimeAbsorbencyObligation` remains
   `specified_unproved` with no promotion.
 - `SumeragiV2AsyncNetwork.tla`,
@@ -1079,10 +1083,11 @@ contains geometry, `next_stream_epoch`, responder generation, requester
 streams, the unified bounded server-stream table, and request gates; V1 is
 unsupported rather than decoded or migrated. The server-stream and gate tables
 are the two bounded responder tables, with attempts bounded inside gates.
-Generation advances only for needed server-table compaction after all old
-streams, gates, transfers, and flushes become terminal. The checked increment
-and empty responder state persist together before memory publication or Hint
-emission; active-state exhaustion and overflow return `Capacity` atomically.
+Generation advances only for needed server-table compaction—a full table or
+certified roster-geometry replacement—after all old streams, gates, transfers,
+and flushes become terminal. The checked increment and empty responder state
+persist together before memory publication or Hint emission; active-state
+exhaustion and overflow return `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
 `fd2176898c873bc00fae598689f6bf0ec2f9cd5de58ccf37fbe6713a061811da`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
@@ -1371,9 +1376,12 @@ no deductive liveness proof, changes no proof-ledger status, and promotes no
 obligation.
 
 An exhaustive one-validator ownership configuration separately checks
-`AsyncProgressOwnershipInvariant` over 983,041 generated states (99,328 distinct,
-depth 49). The expanded graph covers the independent non-timeout-progress and
-TimeoutVote ingress reservations. The deliberately broken configurations must produce their exact
+`AsyncTypeInvariant` and `AsyncProgressOwnershipInvariant` over 616,705
+generated states (62,464 distinct, depth 37). The bounded checker retains the
+independent non-timeout-progress and TimeoutVote ingress reservations, closes
+the inherited acquisition state, and uses structurally equivalent finite-search
+definitions for powerset-valued production carriers. The deliberately broken
+configurations must produce their exact
 counterexamples; all repaired configurations must complete without error.
 
 The producer-first buggy configuration has the pinned three-state fair lasso and exits

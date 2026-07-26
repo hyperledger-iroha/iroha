@@ -197,7 +197,7 @@ MERGE_RUNTIME_CONFIG_FIELDS = (
 
 ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "35ca11ca380d5473a5c800ea3630eecf25b3b5bcf62788217e131585bb555870"
+    "48aa2d4401adfcd3c02726b1850fb7f6b4382107d7b7f0d2174633678923ef76"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -3776,6 +3776,14 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     "chain-prefix": ("SumeragiV2ChainEpochProofs", "ChainPrefixObligation"),
     "crash-restart": ("SumeragiV2Proofs", "CrashRecoveryObligation"),
     "epoch-boundary": ("SumeragiV2ChainEpochProofs", "EpochBoundaryObligation"),
+    "chain-durable-receipt-agreement": (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
+    ),
+    "terminal-ingress-process-lifetime-absorbency": (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressProcessLifetimeAbsorbencyObligation",
+    ),
     "effective-lock-body-acquisition-model": (
         "SumeragiV2EffectiveLockAcquisitionProofs",
         "EffectiveLockAcquisitionModelObligation",
@@ -3868,6 +3876,22 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2AsyncLivenessProofs",
         "ApplicationCompletionProgressObligation",
     ),
+    "historical-recovery-authority-acquisition": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
+    ),
+    "historical-recovery-certificate-rank-progress": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateRankProgressResidualObligation",
+    ),
+    "historical-recovery-decision-stage-ownership": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
+    ),
+    "historical-recovery-decision-rank-progress": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionRankProgressResidualObligation",
+    ),
     "successor-activation-starvation-freedom": (
         "SumeragiV2SuccessorActivationRefinementProofs",
         "SuccessorActivationStarvationFreedomObligation",
@@ -3910,11 +3934,12 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     ),
     "typed-rollover-handoff-model-safety": (
         "SumeragiV2TypedRolloverHandoffProofs",
-        "TypedRolloverSpecAlwaysSafe / TypedRolloverNextSatisfiesActionSafety",
+        "TypedRolloverSpecAlwaysSafeObligation / "
+        "TypedRolloverNextPreservesSafetyObligation",
     ),
     "typed-rollover-handoff-conditional-local-liveness": (
         "SumeragiV2TypedRolloverHandoffProofs",
-        "ResponsiveChangedRosterRolloverLivenessFromWeakFairness",
+        "ResponsiveChangedRosterRolloverLivenessObligation",
     ),
     "cryptography": ("trusted-boundary", "cryptography"),
     "durability-system-call": ("trusted-boundary", "os-fsync"),
@@ -3934,8 +3959,8 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
 # The source ledger intentionally retains ten reviewed supporting or obsolete
 # obligations so their current proof debt cannot disappear through a JSON edit.
 # They are not members of the first-release completion theorem.  Completion is
-# therefore evaluated over the exact ordered 54-ID projection below while the
-# full 64-entry source inventory remains independently mandatory.
+# therefore evaluated over the exact ordered 60-ID projection below while the
+# full 70-entry source inventory remains independently mandatory.
 MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS = (
     "adequate-leader-exact-closure-residual",
     "exact-decision-off-scheduler-residual-convergence",
@@ -3986,7 +4011,7 @@ MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_BY_ID = {
     for obligation_id in MACHINE_CHECKED_COMPLETION_TARGET_IDS
 }
 MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_COUNTS = {
-    "tlaps_proved": 44,
+    "tlaps_proved": 50,
     "cross_tool_proved": 3,
     "specified_unproved": 0,
     "trusted_contract": 6,
@@ -4080,29 +4105,32 @@ REQUIRED_TLC_CONFIG_HEADERS = {
 }
 
 _REPLY_ROUTE_FORMAL_SOURCE_SHA256 = {
+    "SumeragiV2TemporalLemmas.tla": (
+        "7ee323b1fb76922eca0addfc373bdd666723ad5380ce8b2c7800936af7a50eb3"
+    ),
     "SumeragiV2ReplyRouteOwnership.tla": (
-        "b950a0c6c3ed22ecc53387de87e3c9b7e498b315ee3762e677aa3bbaec45729b"
+        "64a6ff05a37f439ab978d36e2b19436baeac0631edc41f6ed34b703387530ef0"
     ),
     "SumeragiV2ReplyRouteOwnershipProofs.tla": (
-        "6b6f531fc48dee534265e45f86c21ada099ae4b37d2dbd0fcab23b253d9eb862"
+        "6eb4b92dc4f072e7241414f1bf29c1f226491df1435b966e77cfbdd3ff640e6d"
     ),
     "SumeragiV2ReplyRoutePipeline.tla": (
         "7b2d991c537ae637df4b545f5e07c968a847892dadb771b5e1b5931585aaf012"
     ),
     "SumeragiV2ReplyRoutePipelineProofs.tla": (
-        "13b1e6ffff9d8cfc83b170508d450cddae4fd4a0b8d13383bf3b4854e5d0aaeb"
+        "caf7f69aa3a01456dd908f35c98f72dcca6c611d2c2f420b006ff9f3adc59e6b"
     ),
     "SumeragiV2AsyncNetworkReplyRoutes.tla": (
-        "915e9bba4471871df43f424029eef86ca45908842cd78e093ec83e81780b53f1"
+        "e199c71e29751812f22b4b3f8de4db6e5d3b9f285ef72c2e135bdd7fa5615da7"
     ),
     "SumeragiV2AsyncNetworkReplyRouteProofs.tla": (
-        "0d5febc62df005522506d29e8006598d8ebbc486aaf0f888f08a873c80c6a08b"
+        "c0e2cf9aadb4a31084f26c3c30a753a169fcaef6a3af8be3456996ca2d757f1c"
     ),
     "SumeragiV2ReplyRouteOwnershipMutation.tla": (
-        "c67a11af2cc37f962df0b8ca78bfb9cda1fc6c4c7e95c1611416542197f84338"
+        "1e0849addf6b6cfed9c5589e7736ac6b8b801610d98606c3e3d0118b8b7dfb7a"
     ),
     "SumeragiV2ReplyRoutePipelineMutation.tla": (
-        "71b8b840cb51fde03611ba71f0b9b94902199c540c610b781e259205a92b5479"
+        "90bf183244e0c064c0b3f244d787e912aec9611e7c192546c78611befa3c4e2e"
     ),
     "reply_route_fixed.cfg": (
         "36bff1ec06f4b517ec080a563faf72e32706bf7c656a63fef79e5af503b195cc"
@@ -4172,6 +4200,93 @@ _REPLY_ROUTE_FORMAL_SOURCE_SHA256 = {
     ),
 }
 
+_REPLY_ROUTE_LIFECYCLE_INSTANCE_CONTRACTS = (
+    (
+        "SumeragiV2ReplyRouteOwnershipMutation.tla",
+        "MutationRoute",
+        "SumeragiV2ReplyRouteOwnership",
+        (
+            ("rrSemanticSequence", "semanticSequence"),
+            ("rrSemanticHash", "semanticHash"),
+            ("rrRequesterNextSequence", "requesterNextSequence"),
+            ("rrRequesterClosedThrough", "requesterClosedThrough"),
+            ("rrClosePendingThrough", "closePendingThrough"),
+            ("rrCloseSentThrough", "closeSentThrough"),
+            ("rrCloseAcknowledgedThrough", "closeAcknowledgedThrough"),
+            ("rrCloseRetryGeneration", "closeRetryGeneration"),
+        ),
+    ),
+    (
+        "SumeragiV2ReplyRoutePipelineMutation.tla",
+        "MutationPipeline",
+        "SumeragiV2ReplyRoutePipeline",
+        (
+            ("rrSemanticSequence", "semanticSequence"),
+            ("rrSemanticHash", "semanticHash"),
+            ("rrRequesterNextSequence", "requesterNextSequence"),
+            ("rrRequesterClosedThrough", "requesterClosedThrough"),
+            ("rrClosePendingThrough", "closePendingThrough"),
+            ("rrCloseSentThrough", "closeSentThrough"),
+            ("rrCloseAcknowledgedThrough", "closeAcknowledgedThrough"),
+            ("rrCloseRetryGeneration", "closeRetryGeneration"),
+        ),
+    ),
+    (
+        "SumeragiV2AsyncNetworkReplyRoutes.tla",
+        "AsyncReplyRoute",
+        "SumeragiV2ReplyRouteOwnership",
+        (
+            ("rrSemanticSequence", "asyncReplySemanticSequence"),
+            ("rrSemanticHash", "asyncReplySemanticHash"),
+            (
+                "rrRequesterNextSequence",
+                "asyncReplyRequesterNextSequence",
+            ),
+            (
+                "rrRequesterClosedThrough",
+                "asyncReplyRequesterClosedThrough",
+            ),
+            ("rrClosePendingThrough", "asyncReplyClosePendingThrough"),
+            ("rrCloseSentThrough", "asyncReplyCloseSentThrough"),
+            (
+                "rrCloseAcknowledgedThrough",
+                "asyncReplyCloseAcknowledgedThrough",
+            ),
+            (
+                "rrCloseRetryGeneration",
+                "asyncReplyCloseRetryGeneration",
+            ),
+        ),
+    ),
+    (
+        "SumeragiV2AsyncNetworkReplyRouteProofs.tla",
+        "AsyncReplyRouteProofs",
+        "SumeragiV2ReplyRouteOwnershipProofs",
+        (
+            ("rrSemanticSequence", "asyncReplySemanticSequence"),
+            ("rrSemanticHash", "asyncReplySemanticHash"),
+            (
+                "rrRequesterNextSequence",
+                "asyncReplyRequesterNextSequence",
+            ),
+            (
+                "rrRequesterClosedThrough",
+                "asyncReplyRequesterClosedThrough",
+            ),
+            ("rrClosePendingThrough", "asyncReplyClosePendingThrough"),
+            ("rrCloseSentThrough", "asyncReplyCloseSentThrough"),
+            (
+                "rrCloseAcknowledgedThrough",
+                "asyncReplyCloseAcknowledgedThrough",
+            ),
+            (
+                "rrCloseRetryGeneration",
+                "asyncReplyCloseRetryGeneration",
+            ),
+        ),
+    ),
+)
+
 _REPLY_WRITER_DEADLINE_FORMAL_SOURCE_SHA256 = {
     "SumeragiV2ReplyWriterDeadline.tla": (
         "5caf1211e920b52c1520026f180a6cb467887a51e181c3ec5a43da737e3e7832"
@@ -4235,81 +4350,96 @@ _REPLY_WRITER_DEADLINE_MUTATION_RUNNER_SHA256 = (
 
 _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "SumeragiV2TypedRolloverHandoff.tla": (
-        "62db39c17981d331b790446555447837abb3eda8747c3ab3c26584ddf35d4833"
+        "24eebb0d15d3f6e634f2500ee94d21e77281a9dbe364b6e8b8c7ae2d40083d2c"
     ),
     "SumeragiV2TypedRolloverHandoffProofs.tla": (
-        "a287638784ec99eae504f383fd09bc7b54f069f3c1b8b0848c1a68e224891afd"
+        "2433f237ffeebf8188eb27ebd6f401387331d2cf20e53548340f7eda07b314df"
     ),
     "SumeragiV2TypedRolloverHandoffMutation.tla": (
-        "fcf9936bd73ad6fcfb4088342c3e89ebca9ab132d7532827e77b08c5f576924c"
+        "40e1d1224421f4bfd36b7eee4febb35ce3410e87e2afcb53610366309a60e4b8"
     ),
     "typed_rollover_handoff_fixed.cfg": (
-        "006b39404ac138e8c388176e37df59788665ee1f0e1f27c8902b352c1adc0223"
+        "7c73d73f87609cea7e71eafb18e1e6aad51014dfac68a6751143bda922bc0e21"
+    ),
+    "typed_rollover_handoff_active_state_roll_bug.cfg": (
+        "a5838333fa1e4871ab6afb658da79586b7ac445a76d3e35730adc1dbb9ba8175"
+    ),
+    "typed_rollover_handoff_clean_atomic_v2_persistence_failure_bug.cfg": (
+        "c91318bd4d863f0a15e1f2d71f13012e7e9cbd4dcbca00a3bf1b42a11b730ac8"
+    ),
+    "typed_rollover_handoff_clean_crash_after_atomic_v2_persist_bug.cfg": (
+        "34eb79a3c070bd9dd57a6d3d13c749ec5fd0f9bfc2d7ca917c36f71cea50cd57"
     ),
     "typed_rollover_handoff_clean_foreign_owner_reject_bug.cfg": (
-        "974a62699dfab87d7d06408b158b1c8a629991fdd949aabd14f5781fd77f6ae0"
-    ),
-    "typed_rollover_handoff_clean_high_water_persistence_failure_bug.cfg": (
-        "b37bc757c117f69611894439ba50c69a1deb65495211df11238455def5517a27"
+        "17621b4de9815bada75b24afe885fa638fa3f1f9b85e9600b6f84e34fdb19b4a"
     ),
     "typed_rollover_handoff_clean_late_enqueue_reject_bug.cfg": (
-        "003120c1908415b20aa9f5088b85a7722fcc1b9f82ff5fa33fe86de05d08e990"
-    ),
-    "typed_rollover_handoff_clean_lifecycle_snapshot_persistence_failure_bug.cfg": (
-        "1a141f8d4140e788d3f33ce7a305ec8c92628a3467cf8ddfa005afe90a893dd5"
+        "2296640b54f23389fbe99288ee012149cb62796412e481a90a29cd96be2bfd29"
     ),
     "typed_rollover_handoff_clean_predecessor_artifact_reject_bug.cfg": (
-        "bf5cc9495f4bead9a0616ca72cf361a750e52123eff1d42d0301f37ff24b9ece"
+        "23b8fdf6f4007ee61356d5dcfe587536db60919ff344bad5f2451bf64c50fdb9"
     ),
     "typed_rollover_handoff_clean_predecessor_context_reject_bug.cfg": (
-        "2620efdab2e966805824dae3a1a0652f3d11d9290f56ea9df8c8c9c626557967"
+        "4eeed7902995ece5be5fd94eda80a5bb3bc28a9ee6a5cbba834fb91f9d101a72"
     ),
     "typed_rollover_handoff_clean_wrong_successor_reject_bug.cfg": (
-        "8914719801e4e009bbd8588838f13950f8b13af43cde66379e2148f4b0a02f67"
+        "a7bc054d397291ca783139464cc78e6c83a68a360bb9af80462863a5b06f7e2e"
+    ),
+    "typed_rollover_handoff_epoch_overflow_bug.cfg": (
+        "a7c29d0ec969c45d27bf973daf2c62b6ce48df957de5f3d7fef5209a0edaef44"
+    ),
+    "typed_rollover_handoff_epoch_reuse_after_crash_bug.cfg": (
+        "935a31d970be95f2d836e6bc5efb0dfc4bda9bf6e24e459b13f208a38ada79bb"
+    ),
+    "typed_rollover_handoff_epoch_use_before_persist_bug.cfg": (
+        "d5a44eb95431ad9525daaeef282ae22289b35206b1784c63551ba84bb9b1a55c"
     ),
     "typed_rollover_handoff_foreign_candidate_ignored_bug.cfg": (
-        "c5a2b5c7bf9af0c607d0ac58f0fc9854b3ad1f54ebcc7f6f4393ade0370f0a00"
+        "11dff749d847f4088a274aee292dd2713c910fa662ea08e40cd2ddbedc973e3d"
     ),
     "typed_rollover_handoff_foreign_receipt_bug.cfg": (
-        "a7fba0e0a195cc18141cc09f9068c34f1064ff4511bc1adf97353f8ae5f119dd"
+        "0edc0adba05c06f5b98b2553c89cc19df1b344f05e519696eb7ffba1ed746c9b"
     ),
     "typed_rollover_handoff_foreign_successor_bug.cfg": (
-        "99030dcdf77d4104b9fda87c6dcbeb65626cf13421d77f61953980f894dd49fe"
+        "2acdd54ee494a6dc121ba9ec0992f40a805ba45c6200c2666a22819e638d543b"
     ),
-    "typed_rollover_handoff_high_water_ahead_open_bug.cfg": (
-        "80423bf521bd15d06ccf4a8a1c1eee5c1505fea4c7b623f692ed0bbc06e16055"
-    ),
-    "typed_rollover_handoff_high_water_skip_bug.cfg": (
-        "6548b3d6e22e3e46b9e39cd11a3510bbc859c4e70a315ce4cbdc908426e258e4"
+    "typed_rollover_handoff_generation_overflow_bug.cfg": (
+        "0c0198b0f59e9aff87c922baa50e3f5ce0adabb60e830e9747969580d148dce5"
     ),
     "typed_rollover_handoff_late_callback_bug.cfg": (
-        "9b23db473bb77ad6f66fa6bd6cf746054aade2065542ede5ad43b565e3aa0dd6"
+        "b7b319b8fd4174cb7dfec365bcf721ad6130ae2d205275a7af454cdcde6c391d"
     ),
     "typed_rollover_handoff_late_enqueue_bug.cfg": (
-        "e67da896213717c80725b453a6804143441bc53598e236d06564bb4aba94019a"
-    ),
-    "typed_rollover_handoff_omit_lifecycle_snapshot_torn_history_bug.cfg": (
-        "91d8662bb6901eb209dc8541c26b2af40b6c03578a17558c910634fe225e702a"
+        "fe4d7ed30dc75131cdb2334de9682b85ef92856b2faa43dbbd7bb808310593c5"
     ),
     "typed_rollover_handoff_predecessor_artifact_accept_bug.cfg": (
-        "8164d506afa2ca01992fe7e0944f2bf7104d787b3f8a707d3510fe886f2efae4"
+        "d36ed8ef0b3345685bbc5402a83d04e46d78c65b61a01081d678725e7d4ee216"
     ),
     "typed_rollover_handoff_predecessor_context_accept_bug.cfg": (
-        "d82962d4c9cd68456d4aa55634b11f69d57c1e371f8e28835918a21b38c27c47"
+        "cbf01d086f254e33e3be649f70a1bc1eba652016ca1924b86bc5b10937be7dde"
     ),
     "typed_rollover_handoff_premature_mint_bug.cfg": (
-        "62f96ff64c3dcc029ea70cad664efab2b905227b1bfa923e18a6bea4f589a02c"
+        "9948bfd56465d1e3fa0c67ce4d34b3ae0cbcdf42cf22a6996f953e4266e75356"
+    ),
+    "typed_rollover_handoff_publish_before_atomic_v2_persist_bug.cfg": (
+        "c4322485e904c9bfb9723f68b99137cda3322a286e689fa27ab3158d06c8779c"
     ),
     "typed_rollover_handoff_retry_loss_bug.cfg": (
-        "f7a1225c31ce9ded0c4d84fc68de61d6e2ab1b66d339e25d0de4d8e406c35c4e"
+        "bea0ffe903d5a8e2df176cf3e90959dfe65353c9085ec1468f0f8d04306218ea"
+    ),
+    "typed_rollover_handoff_skip_snapshot_crash_history_bug.cfg": (
+        "9e56716ecde4814070ed8fe690ec52a41723bd97c2fc299b389fce5d307d469f"
+    ),
+    "typed_rollover_handoff_snapshot_ahead_without_restore_bug.cfg": (
+        "abfb5a694957a1edb9772966becaf8a72b896c1411cca68b01c7129d3550d701"
     ),
     "typed_rollover_handoff_untyped_force_bug.cfg": (
-        "65745d32354e867a47a551f2260df23306c5e323ad29ec721bdf0061988afc1e"
+        "0274ea20cc0f7e3ff1c2aa833de6486ce2e9d7e306d1556e3fcf7848d49f193c"
     ),
 }
 
 _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256 = (
-    "5a9b69261f59eb4a281077d43172215c5ff4f558a0fe74f51cdc38655ede41c2"
+    "edc7a5505da02ea3c9ca04c47f7521f2e206c93fd7ddb2dacaeb074841874f02"
 )
 
 RETIRED_PATHS = (
@@ -4435,6 +4565,10 @@ ASYNC_LIVENESS_EXACT_STATEMENTS = {
         "ENABLED PostGstProductiveStepWith("
         "AsyncTerminatingLocalWorkDecreaseStep))"
     ),
+    "rotating-leader-liveness": (
+        "\\A initialContext: "
+        "RotatingLeaderProgressProperty(AsyncLiveSpecAt(initialContext))"
+    ),
 }
 
 # These obligations are release-architecture seams, not declarations that may
@@ -4453,6 +4587,14 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
     "same-round-lock-and-commit-authorization": (
         "SumeragiV2Proofs",
         "SameRoundLockAndCommitAuthorizationObligation",
+    ),
+    "chain-durable-receipt-agreement": (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
+    ),
+    "terminal-ingress-process-lifetime-absorbency": (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressProcessLifetimeAbsorbencyObligation",
     ),
     "effective-lock-body-acquisition-model": (
         "SumeragiV2EffectiveLockAcquisitionProofs",
@@ -4494,6 +4636,22 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
         "SumeragiV2AsyncLivenessProofs",
         "ProtectedStage5RankProgressFromFairFifo",
     ),
+    "historical-recovery-authority-acquisition": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
+    ),
+    "historical-recovery-certificate-rank-progress": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateRankProgressResidualObligation",
+    ),
+    "historical-recovery-decision-stage-ownership": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
+    ),
+    "historical-recovery-decision-rank-progress": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionRankProgressResidualObligation",
+    ),
     "successor-activation-starvation-freedom": (
         "SumeragiV2SuccessorActivationRefinementProofs",
         "SuccessorActivationStarvationFreedomObligation",
@@ -4512,10 +4670,901 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
     ),
 }
 
+# A fixed module/symbol binding is insufficient when a theorem can retain its
+# name while its statement is weakened.  These release seams therefore pin
+# the complete normalized theorem statement.  The four historical residuals
+# intentionally remain proofless until their exact fairness kernels are
+# discharged.
+EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
+    "chain-durable-receipt-agreement": (
+        "IndexedChainSpec "
+        "=> []ExactPerSlotDurableCommitReceiptSubjectAgreement"
+    ),
+    "terminal-ingress-process-lifetime-absorbency": (
+        "TerminalIngressLifecycleSpec "
+        "=> TerminalIngressProcessLifetimeAbsorbencyProperty"
+    ),
+    "historical-recovery-authority-acquisition": (
+        "IndexedChainSpec "
+        "=> IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty"
+    ),
+    "historical-recovery-certificate-rank-progress": (
+        "IndexedChainSpec "
+        "=> IndexedHistoricalCertificateRankProgressResidualProperty"
+    ),
+    "historical-recovery-decision-stage-ownership": (
+        "IndexedChainSpec "
+        "=> IndexedHistoricalDecisionStageOwnershipResidualProperty"
+    ),
+    "historical-recovery-decision-rank-progress": (
+        "IndexedChainSpec "
+        "=> IndexedHistoricalDecisionRankProgressResidualProperty"
+    ),
+    "genesis-height-successor-handoff": (
+        "AsyncLiveChainSpec => GenesisHeightSuccessorHandoffProperty"
+    ),
+    "height-liveness": (
+        "IndexedLiveChainSpec => IndexedHeightLivenessProperty"
+    ),
+}
+
+PROOFLESS_FIXED_DEBT_OBLIGATION_IDS = frozenset(
+    {
+        "historical-recovery-authority-acquisition",
+        "historical-recovery-certificate-rank-progress",
+        "historical-recovery-decision-stage-ownership",
+        "historical-recovery-decision-rank-progress",
+    }
+)
+
+# Pin the direct property surfaces consumed by the six theorem statements.
+# Without these contracts, replacing a property with TRUE would preserve the
+# theorem declaration and silently turn a real release obligation into a
+# tautology.
+EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "DurableCommitReceiptEvidence",
+    ): "durableDecisionEvidence \\cup durableApplicationEvidence",
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "CommitReceiptSlot",
+    ): "receipt.qc.context.height + 1",
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "IndexedDecisionReceiptSourceOwnership",
+    ): (
+        "\\A decision \\in IndexedDecisionEvidence: "
+        "\\E sourceContext \\in JoinedContexts: "
+        "decision \\in IndexedCurrentDecisions(sourceContext)"
+    ),
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "ExactPerSlotDurableCommitReceiptSubjectAgreement",
+    ): (
+        "\\A left, right \\in DurableCommitReceiptEvidence: "
+        "CommitReceiptSlot(left) = CommitReceiptSlot(right) "
+        "=> /\\ left.qc.context = right.qc.context "
+        "/\\ left.qc.subject = right.qc.subject"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "terminalIngressVars",
+    ): (
+        "<<terminalIngressMode, terminalServiceOwner, "
+        "terminalIngressOwners, terminalDetachedOwners, "
+        "terminalSuccessfulAdmissions>>"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalClosed",
+    ): '"Closed"',
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalReadOnly",
+    ): '"TerminalReadOnly"',
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalRetired",
+    ): '"TerminalRetired"',
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressModes",
+    ): "{TerminalClosed, TerminalReadOnly, TerminalRetired}",
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalAbsorbingModes",
+    ): "{TerminalReadOnly, TerminalRetired}",
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressLifecycleInit",
+    ): (
+        "/\\ terminalIngressMode = TerminalClosed "
+        "/\\ terminalServiceOwner = FALSE "
+        "/\\ terminalIngressOwners = 0 "
+        "/\\ terminalDetachedOwners = 0 "
+        "/\\ terminalSuccessfulAdmissions = 0"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "EnterTerminalReadOnly",
+    ): (
+        "/\\ terminalIngressMode = TerminalClosed "
+        "/\\ ~terminalServiceOwner "
+        "/\\ \\E retainedHistory \\in Nat: "
+        "/\\ terminalIngressMode' = TerminalReadOnly "
+        "/\\ terminalServiceOwner' = TRUE "
+        "/\\ terminalIngressOwners' = 0 "
+        "/\\ terminalDetachedOwners' = retainedHistory "
+        "/\\ terminalSuccessfulAdmissions' = "
+        "terminalSuccessfulAdmissions"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "AdmitTerminalHistoryEnqueue",
+    ): (
+        "/\\ terminalIngressMode = TerminalReadOnly "
+        "/\\ terminalServiceOwner "
+        "/\\ terminalIngressMode' = terminalIngressMode "
+        "/\\ terminalServiceOwner' = terminalServiceOwner "
+        "/\\ terminalIngressOwners' = terminalIngressOwners + 1 "
+        "/\\ terminalDetachedOwners' = terminalDetachedOwners "
+        "/\\ terminalSuccessfulAdmissions' = "
+        "terminalSuccessfulAdmissions + 1"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "AdmitTerminalHistoryCoalesce",
+    ): (
+        "/\\ terminalIngressMode = TerminalReadOnly "
+        "/\\ terminalServiceOwner "
+        "/\\ terminalIngressOwners > 0 "
+        "/\\ terminalIngressMode' = terminalIngressMode "
+        "/\\ terminalServiceOwner' = terminalServiceOwner "
+        "/\\ terminalIngressOwners' = terminalIngressOwners "
+        "/\\ terminalDetachedOwners' = terminalDetachedOwners "
+        "/\\ terminalSuccessfulAdmissions' = "
+        "terminalSuccessfulAdmissions + 1"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "RejectTerminalAdmission",
+    ): (
+        "/\\ terminalIngressMode \\in TerminalAbsorbingModes "
+        "/\\ UNCHANGED terminalIngressVars"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "DequeueTerminalHistory",
+    ): (
+        "/\\ terminalIngressMode = TerminalReadOnly "
+        "/\\ terminalServiceOwner "
+        "/\\ terminalDetachedOwners + terminalIngressOwners > 0 "
+        "/\\ terminalIngressMode' = terminalIngressMode "
+        "/\\ terminalServiceOwner' = terminalServiceOwner "
+        "/\\ terminalDetachedOwners' = "
+        "IF terminalDetachedOwners > 0 "
+        "THEN terminalDetachedOwners - 1 "
+        "ELSE terminalDetachedOwners "
+        "/\\ terminalIngressOwners' = "
+        "IF terminalDetachedOwners > 0 "
+        "THEN terminalIngressOwners "
+        "ELSE terminalIngressOwners - 1 "
+        "/\\ terminalSuccessfulAdmissions' = "
+        "terminalSuccessfulAdmissions"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalControlNoOp",
+    ): (
+        "/\\ terminalIngressMode \\in TerminalAbsorbingModes "
+        "/\\ UNCHANGED terminalIngressVars"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "ExitTerminalHistoryService",
+    ): (
+        "/\\ terminalIngressMode = TerminalReadOnly "
+        "/\\ terminalServiceOwner "
+        "/\\ terminalIngressMode' = TerminalRetired "
+        "/\\ terminalServiceOwner' = FALSE "
+        "/\\ terminalIngressOwners' = 0 "
+        "/\\ terminalDetachedOwners' = 0 "
+        "/\\ terminalSuccessfulAdmissions' = "
+        "terminalSuccessfulAdmissions"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "IdempotentTerminalRetire",
+    ): (
+        "/\\ terminalIngressMode = TerminalRetired "
+        "/\\ ~terminalServiceOwner "
+        "/\\ UNCHANGED terminalIngressVars"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressStutter",
+    ): "UNCHANGED terminalIngressVars",
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressLifecycleNext",
+    ): (
+        "\\/ EnterTerminalReadOnly "
+        "\\/ AdmitTerminalHistoryEnqueue "
+        "\\/ AdmitTerminalHistoryCoalesce "
+        "\\/ RejectTerminalAdmission "
+        "\\/ DequeueTerminalHistory "
+        "\\/ TerminalControlNoOp "
+        "\\/ ExitTerminalHistoryService "
+        "\\/ IdempotentTerminalRetire "
+        "\\/ TerminalIngressStutter"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressLifecycleSpec",
+    ): (
+        "/\\ TerminalIngressLifecycleInit "
+        "/\\ [][TerminalIngressLifecycleNext]_terminalIngressVars"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressAbsorbencyInvariant",
+    ): (
+        "/\\ terminalIngressMode \\in TerminalIngressModes "
+        "/\\ terminalServiceOwner \\in BOOLEAN "
+        "/\\ terminalIngressOwners \\in Nat "
+        "/\\ terminalDetachedOwners \\in Nat "
+        "/\\ terminalSuccessfulAdmissions \\in Nat "
+        "/\\ (terminalServiceOwner "
+        "<=> terminalIngressMode = TerminalReadOnly) "
+        "/\\ (terminalIngressMode = TerminalClosed "
+        "=> /\\ terminalIngressOwners = 0 "
+        "/\\ terminalDetachedOwners = 0) "
+        "/\\ (terminalIngressMode = TerminalRetired "
+        "=> /\\ ~terminalServiceOwner "
+        "/\\ terminalIngressOwners = 0 "
+        "/\\ terminalDetachedOwners = 0)"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalModeAbsorbingStep",
+    ): (
+        "terminalIngressMode \\in TerminalAbsorbingModes "
+        "=> terminalIngressMode' \\in TerminalAbsorbingModes"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalRetiredAbsorbingStep",
+    ): (
+        "terminalIngressMode = TerminalRetired "
+        "=> terminalIngressMode' = TerminalRetired"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "EveryServiceOwnerExitRetiresStep",
+    ): (
+        "terminalServiceOwner /\\ ~terminalServiceOwner' "
+        "=> /\\ terminalIngressMode = TerminalReadOnly "
+        "/\\ terminalIngressMode' = TerminalRetired "
+        "/\\ terminalIngressOwners' = 0 "
+        "/\\ terminalDetachedOwners' = 0 "
+        "/\\ terminalSuccessfulAdmissions' = "
+        "terminalSuccessfulAdmissions"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "NoPostOwnerAdmissionStep",
+    ): (
+        "~terminalServiceOwner "
+        "/\\ terminalIngressMode \\in TerminalAbsorbingModes "
+        "=> terminalSuccessfulAdmissions' = terminalSuccessfulAdmissions"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressAbsorbencyStepProperties",
+    ): (
+        "/\\ TerminalModeAbsorbingStep "
+        "/\\ TerminalRetiredAbsorbingStep "
+        "/\\ EveryServiceOwnerExitRetiresStep "
+        "/\\ NoPostOwnerAdmissionStep"
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressProcessLifetimeAbsorbencyProperty",
+    ): (
+        "/\\ []TerminalIngressAbsorbencyInvariant "
+        "/\\ [][TerminalModeAbsorbingStep]_terminalIngressVars "
+        "/\\ [][TerminalRetiredAbsorbingStep]_terminalIngressVars "
+        "/\\ [][EveryServiceOwnerExitRetiresStep]_terminalIngressVars "
+        "/\\ [][NoPostOwnerAdmissionStep]_terminalIngressVars"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalExactApplication",
+    ): (
+        "/\\ initialContext \\in AdmissibleContextRecords "
+        "/\\ node \\in Responsive "
+        "/\\ IndexedAsync(initialContext)!NodeHasApplication(node)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryRunnerOwned",
+    ): (
+        "\\/ node \\in "
+        "IndexedAsync(initialContext)!AsyncCurrentResponsiveVoters "
+        "\\/ IndexedAsync(initialContext)!HistoricalRecoveryTarget(node)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryOpenable",
+    ): (
+        "/\\ IndexedCore(initialContext, 7) "
+        "/\\ IndexedHistoricalRecoveryTargetReady(initialContext, node) "
+        "/\\ \\E server \\in ValidatorIds, "
+        "source \\in Chain!DecisionEvidenceSet: "
+        "IndexedHistoricalRecoverySourceReady( "
+        "initialContext, server, source)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryTargetOwned",
+    ): (
+        "/\\ HistoricalRecoveryOutstanding(initialContext, node) "
+        "/\\ IndexedAsync(initialContext)!HistoricalRecoveryTarget(node)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionOwned",
+    ): (
+        "/\\ HistoricalRecoveryOutstanding(initialContext, node) "
+        "/\\ IndexedHistoricalRecoveryRunnerOwned(initialContext, node) "
+        "/\\ IndexedAsync(initialContext)!NodeHasDecision(node)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryEntryGoal",
+    ): (
+        "\\/ IndexedHistoricalExactApplication(initialContext, node) "
+        "\\/ IndexedHistoricalDecisionOwned(initialContext, node) "
+        "\\/ IndexedHistoricalRecoveryOpenable(initialContext, node) "
+        "\\/ IndexedHistoricalRecoveryTargetOwned(initialContext, node)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidual",
+    ): (
+        "/\\ HistoricalRecoveryOutstanding(initialContext, node) "
+        "/\\ ~IndexedHistoricalRecoveryEntryGoal(initialContext, node)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidual( "
+        "initialContext, node) "
+        "~> IndexedHistoricalRecoveryEntryGoal(initialContext, node)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCommitRequestIdentity",
+    ): (
+        '/\\ request.kind = "CommitCertificateRequest" '
+        "/\\ request.source = node "
+        "/\\ request.envelope.height = initialContext.height "
+        "/\\ request.envelope.recipient \\in "
+        "(IndexedAsync(initialContext)!CurrentVoters \\ {node}) "
+        "\\cap IndexedAsync(initialContext)! "
+        "AsyncResponsiveAppliedArchiveServers"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRequestInIngress",
+    ): (
+        "\\E source \\in "
+        "IndexedAsync(initialContext)!AsyncIngressSources: "
+        "request \\in SequenceSet(IndexedScheduler(initialContext, 33) "
+        "[request.envelope.recipient][source])"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRequestInServeQueue",
+    ): (
+        "\\E job \\in SequenceSet( "
+        "IndexedScheduler(initialContext, 10) "
+        "[request.envelope.recipient]): "
+        '/\\ job.class = "Serve" '
+        "/\\ job.candidate.item = request"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRequestPhysicalOwner",
+    ): (
+        "\\/ request \\in IndexedScheduler(initialContext, 30) "
+        "\\/ \\E packet \\in IndexedScheduler(initialContext, 32): "
+        "packet.item = request "
+        "\\/ IndexedHistoricalRequestInIngress(initialContext, request) "
+        "\\/ IndexedHistoricalRequestInServeQueue(initialContext, request)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCommitRequestOwned",
+    ): (
+        "/\\ IndexedHistoricalRecoveryTargetOwned(initialContext, node) "
+        "/\\ \\E request: "
+        "/\\ IndexedHistoricalCommitRequestIdentity( "
+        "initialContext, node, request) "
+        "/\\ IndexedHistoricalRequestPhysicalOwner( "
+        "initialContext, request)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCommitResponseIdentity",
+    ): (
+        "/\\ IndexedHistoricalCommitRequestIdentity( "
+        "initialContext, node, request) "
+        "/\\ qc.context = initialContext "
+        '/\\ qc.phase = "Commit" '
+        "/\\ response = IndexedAsync(initialContext)! "
+        "CommitCertificateResponseItem(request, qc) "
+        "/\\ response.source = "
+        "IndexedAsync(initialContext)!AsyncUntrustedSource "
+        "/\\ response.envelope.recipient = node "
+        "/\\ response.envelope.request = request"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCommitResponsePublished",
+    ): (
+        "/\\ IndexedHistoricalRecoveryTargetOwned(initialContext, node) "
+        "/\\ \\E request, qc, response: "
+        "/\\ response \\in IndexedScheduler(initialContext, 28) "
+        "/\\ IndexedHistoricalCommitResponseIdentity( "
+        "initialContext, node, request, qc, response)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateCommandFor",
+    ): (
+        "/\\ candidate \\in "
+        "IndexedAsync(initialContext)!AsyncCandidateSet "
+        "/\\ candidate.node = node "
+        "/\\ candidate.height = initialContext.height "
+        "/\\ candidate.view = qc.view "
+        "/\\ candidate.subject = qc.subject "
+        '/\\ candidate.kind \\in {"DeliverQC", "BeginDecision", '
+        '"PersistDecision"}'
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCommitCertificateImported",
+    ): (
+        "/\\ IndexedHistoricalRecoveryTargetOwned(initialContext, node) "
+        "/\\ \\E qc \\in IndexedCore(initialContext, 23): "
+        "/\\ qc.context = initialContext "
+        '/\\ qc.phase = "Commit" '
+        "/\\ \\/ IndexedAsync(initialContext)!QcEnvelope(node, qc) "
+        "\\in IndexedCore(initialContext, 42) "
+        "\\/ IndexedAsync(initialContext)!QcAt(node, qc) "
+        "\\in IndexedCore(initialContext, 15) "
+        "\\/ IndexedAsync(initialContext)!DecisionWal(node, qc, FALSE) "
+        "\\in IndexedCore(initialContext, 36) "
+        "\\/ \\E candidate: "
+        "IndexedHistoricalCertificateCommandFor( "
+        "initialContext, node, qc, candidate)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateStageAt",
+    ): (
+        "/\\ rank \\in 1..4 "
+        "/\\ IndexedHistoricalRecoveryTargetOwned(initialContext, node) "
+        "/\\ ~IndexedHistoricalDecisionOwned(initialContext, node) "
+        "/\\ CASE rank = 4 -> "
+        "/\\ ~IndexedHistoricalCommitRequestOwned( "
+        "initialContext, node) "
+        "/\\ ~IndexedHistoricalCommitResponsePublished( "
+        "initialContext, node) "
+        "/\\ ~IndexedHistoricalCommitCertificateImported( "
+        "initialContext, node) "
+        "[] rank = 3 -> "
+        "/\\ IndexedHistoricalCommitRequestOwned( "
+        "initialContext, node) "
+        "/\\ ~IndexedHistoricalCommitResponsePublished( "
+        "initialContext, node) "
+        "/\\ ~IndexedHistoricalCommitCertificateImported( "
+        "initialContext, node) "
+        "[] rank = 2 -> "
+        "/\\ IndexedHistoricalCommitResponsePublished( "
+        "initialContext, node) "
+        "/\\ ~IndexedHistoricalCommitCertificateImported( "
+        "initialContext, node) "
+        "[] rank = 1 -> "
+        "IndexedHistoricalCommitCertificateImported( "
+        "initialContext, node) "
+        "[] OTHER -> FALSE"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateGoal",
+    ): (
+        "\\/ IndexedHistoricalExactApplication(initialContext, node) "
+        "\\/ IndexedHistoricalDecisionOwned(initialContext, node)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateRankProgressAt",
+    ): (
+        "IndexedHistoricalCertificateStageAt( "
+        "initialContext, node, rank) "
+        "~> (IndexedHistoricalCertificateGoal(initialContext, node) "
+        "\\/ \\E lower \\in SetLessThan( "
+        "rank, OpToRel(<, Nat), Nat): "
+        "IndexedHistoricalCertificateStageAt( "
+        "initialContext, node, lower))"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateDiscoveryRunnerResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalCertificateRankProgressAt( "
+        "initialContext, node, 4)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateRequestServiceResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalCertificateRankProgressAt( "
+        "initialContext, node, 3)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateResponseImportResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalCertificateRankProgressAt( "
+        "initialContext, node, 2)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateImportedDecisionResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalCertificateRankProgressAt( "
+        "initialContext, node, 1)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateRankProgressResidualProperty",
+    ): (
+        "/\\ IndexedHistoricalCertificateDiscoveryRunnerResidualProperty "
+        "/\\ IndexedHistoricalCertificateRequestServiceResidualProperty "
+        "/\\ IndexedHistoricalCertificateResponseImportResidualProperty "
+        "/\\ IndexedHistoricalCertificateImportedDecisionResidualProperty"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionRecord",
+    ): (
+        "/\\ [node |-> node, qc |-> qc] "
+        "\\in IndexedCore(initialContext, 45) "
+        "/\\ qc.context = initialContext "
+        '/\\ qc.phase = "Commit"'
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionCertifiedRequestActiveExact",
+    ): (
+        "\\E request \\in IndexedScheduler(initialContext, 30): "
+        "request \\in IndexedAsync(initialContext)!"
+        "CertifiedRequestOutbox(node, qc)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionCandidateFor",
+    ): (
+        "/\\ candidate \\in "
+        "IndexedAsync(initialContext)!AsyncCandidateSet "
+        '/\\ candidate.class = "Completion" '
+        "/\\ candidate.node = node "
+        "/\\ candidate.height = qc.context.height "
+        "/\\ candidate.view = qc.view "
+        "/\\ candidate.subject = qc.subject "
+        "/\\ IndexedAsync(initialContext)! "
+        "CandidateConsumerCurrent(candidate) "
+        "/\\ IndexedAsync(initialContext)!CandidateScheduled(candidate) "
+        "/\\ candidate.kind = commandKind "
+        '/\\ CASE commandKind = "FetchBody" '
+        "-> candidate.evidence = qc "
+        '[] commandKind = "FetchCertifiedBody" '
+        "-> /\\ candidate.item.kind = "
+        '"CertifiedResponse" '
+        "/\\ candidate.item.envelope.recipient = node "
+        "/\\ candidate.item.envelope.height = initialContext.height "
+        "/\\ candidate.item.envelope.view = qc.view "
+        "/\\ candidate.item.envelope.subject = qc.subject "
+        "/\\ candidate.item.envelope.requestHash = "
+        "IndexedAsync(initialContext)! "
+        "AsyncCertifiedRequestHashOf(node, qc, 0) "
+        "/\\ candidate.item.envelope.signatureOwner = "
+        "candidate.item.envelope.archiveServer "
+        "/\\ candidate.item.envelope.citedResponder \\in qc.signers "
+        "/\\ IndexedAsync(initialContext)! "
+        "CertifiedResponseAuthenticatedOccurrence( "
+        "candidate.item) "
+        "/\\ IndexedAsync(initialContext)! "
+        "CertifiedResponseCapabilityAuthorized( "
+        "candidate.item) "
+        "/\\ candidate = IndexedAsync(initialContext)! "
+        "CertifiedResponseCandidate(candidate.item) "
+        '[] commandKind \\in {"StoreBody", "ValidateBody", "Apply"} '
+        "-> TRUE "
+        "[] OTHER -> FALSE"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageAt",
+    ): (
+        "/\\ rank \\in 1..6 "
+        "/\\ IndexedHistoricalDecisionOwned(initialContext, node) "
+        "/\\ \\E qc: "
+        "/\\ IndexedHistoricalDecisionRecord( "
+        "initialContext, node, qc) "
+        "/\\ CASE rank = 6 -> \\E candidate: "
+        "IndexedHistoricalDecisionCandidateFor( "
+        'initialContext, node, qc, candidate, "FetchBody") '
+        "[] rank = 5 -> "
+        "IndexedHistoricalDecisionCertifiedRequestActiveExact( "
+        "initialContext, node, qc) "
+        "[] rank = 4 -> \\E candidate: "
+        "IndexedHistoricalDecisionCandidateFor( "
+        "initialContext, node, qc, candidate, "
+        '"FetchCertifiedBody") '
+        "[] rank = 3 -> \\E candidate: "
+        "IndexedHistoricalDecisionCandidateFor( "
+        'initialContext, node, qc, candidate, "StoreBody") '
+        "[] rank = 2 -> \\E candidate: "
+        "IndexedHistoricalDecisionCandidateFor( "
+        'initialContext, node, qc, candidate, "ValidateBody") '
+        "[] rank = 1 -> \\E candidate: "
+        "IndexedHistoricalDecisionCandidateFor( "
+        'initialContext, node, qc, candidate, "Apply") '
+        "[] OTHER -> FALSE"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageGoal",
+    ): (
+        "\\/ IndexedHistoricalExactApplication(initialContext, node) "
+        "\\/ \\E rank \\in 1..6: "
+        "IndexedHistoricalDecisionStageAt( "
+        "initialContext, node, rank)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageOwnershipResidual",
+    ): (
+        "/\\ IndexedHistoricalDecisionOwned(initialContext, node) "
+        "/\\ ~IndexedHistoricalDecisionStageGoal(initialContext, node)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageOwnershipResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalDecisionStageOwnershipResidual( "
+        "initialContext, node) "
+        "~> IndexedHistoricalDecisionStageGoal(initialContext, node)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionRankProgressAt",
+    ): (
+        "IndexedHistoricalDecisionStageAt(initialContext, node, rank) "
+        "~> (IndexedHistoricalExactApplication(initialContext, node) "
+        "\\/ \\E lower \\in SetLessThan( "
+        "rank, OpToRel(<, Nat), Nat): "
+        "IndexedHistoricalDecisionStageAt( "
+        "initialContext, node, lower))"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionFetchBodyResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalDecisionRankProgressAt( "
+        "initialContext, node, 6)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionCertifiedRequestResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalDecisionRankProgressAt( "
+        "initialContext, node, 5)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionFetchCertifiedBodyResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalDecisionRankProgressAt( "
+        "initialContext, node, 4)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStoreBodyResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalDecisionRankProgressAt( "
+        "initialContext, node, 3)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionValidateBodyResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalDecisionRankProgressAt( "
+        "initialContext, node, 2)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionApplyResidualProperty",
+    ): (
+        "\\A initialContext \\in AdmissibleContextRecords, "
+        "node \\in Responsive: "
+        "IndexedHistoricalDecisionRankProgressAt( "
+        "initialContext, node, 1)"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionRankProgressResidualProperty",
+    ): (
+        "/\\ IndexedHistoricalDecisionFetchBodyResidualProperty "
+        "/\\ IndexedHistoricalDecisionCertifiedRequestResidualProperty "
+        "/\\ IndexedHistoricalDecisionFetchCertifiedBodyResidualProperty "
+        "/\\ IndexedHistoricalDecisionStoreBodyResidualProperty "
+        "/\\ IndexedHistoricalDecisionValidateBodyResidualProperty "
+        "/\\ IndexedHistoricalDecisionApplyResidualProperty"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryTemporalResidualKernels",
+    ): (
+        "/\\ IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty "
+        "/\\ IndexedHistoricalCertificateRankProgressResidualProperty "
+        "/\\ IndexedHistoricalDecisionStageOwnershipResidualProperty "
+        "/\\ IndexedHistoricalDecisionRankProgressResidualProperty"
+    ),
+}
+
+# Exact intermediate theorem statements and reviewed proof dependencies keep
+# the release wrappers connected to their advertised non-circular arguments.
+# In particular, receipt subject equality must come from one-height
+# DecisionAgreement, not from the write-once chain projection.
+EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "IndexedChainSpecEstablishesDecisionReceiptSourceOwnership",
+    ): "IndexedChainSpec => []IndexedDecisionReceiptSourceOwnership",
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "IndexedOneHeightDecisionReceiptsAgree",
+    ): (
+        "IndexedEveryInstanceStrongInvariant "
+        "=> \\A initialContext \\in AdmissibleContextRecords: "
+        "\\A left, right \\in IndexedCurrentDecisions(initialContext): "
+        "left.qc.context = right.qc.context "
+        "=> left.qc.subject = right.qc.subject"
+    ),
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "IndexedApplicationEvidenceIsDecisionEvidence",
+    ): (
+        "IndexedCompositionInvariant "
+        "=> durableApplicationEvidence \\subseteq durableDecisionEvidence"
+    ),
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "JoinedContextsAtEqualHeightAreIdentical",
+    ): (
+        "JoinedContextCertificationInvariant "
+        "=> \\A leftContext, rightContext \\in JoinedContexts: "
+        "leftContext.height = rightContext.height "
+        "=> leftContext = rightContext"
+    ),
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "CompositionAndSourceOwnershipImplyExactReceiptAgreement",
+    ): (
+        "IndexedCompositionInvariant "
+        "/\\ IndexedDecisionReceiptSourceOwnership "
+        "=> ExactPerSlotDurableCommitReceiptSubjectAgreement"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
+    ): (
+        "/\\ IndexedChainSpec "
+        "/\\ IndexedHistoricalRecoveryTemporalResidualKernels "
+        "=> IndexedExactHistoricalRecoveryProgress"
+    ),
+}
+
+FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "IndexedOneHeightDecisionReceiptsAgree",
+    ): ("IndexedAsync!DecisionAgreement",),
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "CompositionAndSourceOwnershipImplyExactReceiptAgreement",
+    ): (
+        "IndexedApplicationEvidenceIsDecisionEvidence",
+        "JoinedContextsAtEqualHeightAreIdentical",
+        "IndexedOneHeightDecisionReceiptsAgree",
+    ),
+    (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
+    ): (
+        "IndexedChainSpecEstablishesCompositionInvariant",
+        "IndexedChainSpecEstablishesDecisionReceiptSourceOwnership",
+        "CompositionAndSourceOwnershipImplyExactReceiptAgreement",
+    ),
+    (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressProcessLifetimeAbsorbencyObligation",
+    ): (
+        "TerminalIngressLifecycleSpecAlwaysAbsorbencyInvariant",
+        "TerminalIngressLifecycleSpecAlwaysTerminalModeAbsorbingStep",
+        "TerminalIngressLifecycleSpecAlwaysTerminalRetiredAbsorbingStep",
+        "TerminalIngressLifecycleSpecAlwaysEveryServiceOwnerExitRetiresStep",
+        "TerminalIngressLifecycleSpecAlwaysNoPostOwnerAdmissionStep",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
+    ): (
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty",
+        "IndexedHistoricalCertificateRankProgressResidualProperty",
+        "IndexedHistoricalDecisionStageOwnershipResidualProperty",
+        "IndexedHistoricalDecisionRankProgressResidualProperty",
+        "IndexedChainSpecClosesHistoricalOpenTarget",
+        "IndexedHistoricalCertificateRankConvergence",
+        "IndexedHistoricalDecisionRankConvergence",
+        "IndexedChainSpecClosesHistoricalApplicationReceiptHandoff",
+    ),
+}
+
+FIXED_PROOF_FORBIDDEN_MODULE_TOKENS = {
+    "SumeragiV2ChainReceiptAgreementProofs": (
+        "CanonicalCommitForSlot",
+        "decidedAt",
+    ),
+}
+
 # Temporal composition may be promoted only after its proof dependencies.  The
 # ledger order is intentional as well: reviewers should encounter each
 # prerequisite before the theorem which consumes it.
 PROOF_STATUS_DEPENDENCIES = {
+    "chain-durable-receipt-agreement": (
+        "agreement",
+        "no-conflicting-commit-qcs",
+    ),
     "effective-lock-body-acquisition-production-refinement": (
         "effective-lock-body-acquisition-model",
     ),
@@ -4598,10 +5647,35 @@ PROOF_STATUS_DEPENDENCIES = {
         "progress-witness-preservation",
         "post-gst-starvation-freedom",
     ),
+    "historical-recovery-authority-acquisition": (
+        "chain-durable-receipt-agreement",
+        "rotating-leader-liveness",
+        "application-liveness",
+    ),
+    "historical-recovery-certificate-rank-progress": (
+        "async-type-invariant",
+        "async-fair-action-refinement",
+        "progress-witness-preservation",
+        "post-gst-starvation-freedom",
+    ),
+    "historical-recovery-decision-stage-ownership": (
+        "async-type-invariant",
+        "decision-recovery-across-restart",
+        "progress-witness-preservation",
+        "post-gst-starvation-freedom",
+    ),
+    "historical-recovery-decision-rank-progress": (
+        "async-type-invariant",
+        "async-fair-action-refinement",
+        "decision-recovery-across-restart",
+        "progress-witness-preservation",
+        "post-gst-starvation-freedom",
+    ),
     "successor-activation-exact-recovery-production-refinement": (
         "epoch-boundary",
         "decision-recovery-across-restart",
         "successor-activation-starvation-freedom",
+        "terminal-ingress-process-lifetime-absorbency",
     ),
     "genesis-height-successor-handoff": (
         "rotating-leader-liveness",
@@ -4611,6 +5685,10 @@ PROOF_STATUS_DEPENDENCIES = {
     "height-liveness": (
         "rotating-leader-liveness",
         "application-liveness",
+        "historical-recovery-authority-acquisition",
+        "historical-recovery-certificate-rank-progress",
+        "historical-recovery-decision-stage-ownership",
+        "historical-recovery-decision-rank-progress",
         "successor-activation-starvation-freedom",
     ),
     "typed-rollover-handoff-conditional-local-liveness": (
@@ -5744,7 +6822,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "f848a53734e173e64122e3cf198d6e0adfea99909594e667c56a7e11ea271a84"
     ),
     "certified_sidecar_prefix_covers_occurrence": (
-        "1c00e12996baf5274abbfbf42a9a60accac6ee8a2198ad68a7566b6255873838"
+        "019ae94e6c1ebdea5e6948361cf117d49003d4433cd9daa7c3a28f2e1e391741"
     ),
     "handoff_applied_height_output_to_durable_reconstruction": (
         "2064071eca55b70e01a51bda015e5cda8561a35d2f0d9e09559ac23c01ae6f8d"
@@ -5779,9 +6857,9 @@ _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
     "MergeSidecarTransport::can_add_outbound_attempt": "7ec9222597fcb0ada3b06a589d775066cd94335c8d6bb2cfcb2f685fb922c43d",
     "MergeSidecarTransport::next_server_request_materialization": "77b22d3d97de4c97e08d450f36689f26a938b9674b4386e98ceeaeec02c7efd9",
     "MergeSidecarTransport::admission_after_fair_materialization_selection": "26e50ac363ea2e8c75497ad2df045ab1dcd4ed2315db16147cd9488be04d82e9",
-    "MergeSidecarTransport::admit_server_request": "64aea81efab994f48d3092c830ae977dfccc555e76663813f2c1ced0f3621df1",
-    "MergeSidecarTransport::cancel_unmaterialized_server_request": "c4ef30f59ff633ce5de26fad0c5822be613e4b069fd1171b5311468fde91cab9",
-    "MergeSidecarTransport::enqueue_response": "c3fe039ac15dba965c8f5e974d088c97afd690fb4f5e33750cebb6fd7d79e6c9",
+    "MergeSidecarTransport::admit_server_request": "452d6055d25c19da187c003f16b8971f2253aee113a18f006756054d97efaac4",
+    "MergeSidecarTransport::cancel_unmaterialized_server_request": "40f0831462c1e44e4e55919d9ba9dfc443b6901dd963c47ad79106ce274586fd",
+    "MergeSidecarTransport::enqueue_response": "2e11a16de83ba8372b3ad92e58e6b222f9268d70611be2bb1c56f765f4aaa06b",
     "MergeSidecarTransport::drain_outbound_chunks_durable": "d33df4c3777aba47e5b994ace67ec999a33958a255ee0178d2db5298ceb1d4e8",
     "MergeSidecarTransport::acknowledge_outbound_chunk": "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887",
     "MergeSidecarTransport::tick_bounded": "03f814324638910930a423843518a25b97e6dfb21bb670f59f2fe23d4456ba7c",
@@ -11078,7 +12156,7 @@ def _proofless_release_theorem_errors(
 
 
 def _machine_checked_completion_contract_errors() -> list[str]:
-    """Validate the code-owned 64-source/54-target completion projection."""
+    """Validate the code-owned 70-source/60-target completion projection."""
 
     errors: list[str] = []
     source_ids = tuple(REQUIRED_PROOF_OBLIGATION_INVENTORY)
@@ -11087,9 +12165,9 @@ def _machine_checked_completion_contract_errors() -> list[str]:
     target_ids = MACHINE_CHECKED_COMPLETION_TARGET_IDS
     target_id_set = _MACHINE_CHECKED_COMPLETION_TARGET_ID_SET
 
-    if len(source_ids) != 64:
+    if len(source_ids) != 70:
         errors.append(
-            "reviewed proof source inventory must contain exactly 64 obligations; "
+            "reviewed proof source inventory must contain exactly 70 obligations; "
             f"found {len(source_ids)}"
         )
     if len(excluded_ids) != 10 or len(excluded_id_set) != 10:
@@ -11108,9 +12186,9 @@ def _machine_checked_completion_contract_errors() -> list[str]:
             "machine-checked completion exclusions must be the exact reviewed "
             f"source-ordered IDs {source_excluded_ids!r}; found {excluded_ids!r}"
         )
-    if len(target_ids) != 54 or len(target_id_set) != 54:
+    if len(target_ids) != 60 or len(target_id_set) != 60:
         errors.append(
-            "machine-checked completion target must contain exactly 54 distinct "
+            "machine-checked completion target must contain exactly 60 distinct "
             f"obligations; found {len(target_ids)} entries and "
             f"{len(target_id_set)} distinct IDs"
         )
@@ -11122,12 +12200,12 @@ def _machine_checked_completion_contract_errors() -> list[str]:
     if target_id_set | excluded_id_set != set(source_ids):
         errors.append(
             "machine-checked completion target plus supporting exclusion must "
-            "equal the reviewed 64-entry source inventory"
+            "equal the reviewed 70-entry source inventory"
         )
     if tuple(MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_BY_ID) != target_ids:
         errors.append(
             "machine-checked completion status contract must follow the exact "
-            "54-ID target order"
+            "60-ID target order"
         )
 
     observed_status_counts = {
@@ -11154,7 +12232,7 @@ def _machine_checked_completion_contract_errors() -> list[str]:
 def _machine_checked_completion_status_errors(
     obligations: list[Any],
 ) -> list[str]:
-    """Require exact final statuses for the code-owned 54-obligation target."""
+    """Require exact final statuses for the code-owned 60-obligation target."""
 
     by_id = {
         obligation.get("id"): obligation
@@ -11188,7 +12266,7 @@ def _machine_checked_completion_status_errors(
     if mismatches:
         errors.append(
             "machine_checked_completion=true requires exact statuses for the "
-            "54-obligation target: "
+            "60-obligation target: "
             + "; ".join(mismatches)
         )
     if (
@@ -11384,6 +12462,94 @@ def _proof_obligation_architecture_errors(
                     f"legacy global-barrier operator {retired}"
                 )
 
+    def check_exact_operator(
+        module: str,
+        symbol: str,
+        exact_body: str,
+    ) -> None:
+        source = module_sources.get(module)
+        if source is None:
+            return
+        extracted = _top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module}.tla: missing exact release property operator {symbol}"
+            )
+            return
+        body, line = extracted
+        normalized_body = " ".join(body.split())
+        if normalized_body != exact_body:
+            errors.append(
+                f"{module}.tla:{line}: {symbol} must equal only "
+                f"{exact_body!r}; found {normalized_body!r}"
+            )
+
+    def check_exact_supporting_theorem(
+        module: str,
+        symbol: str,
+        exact_statement: str,
+    ) -> None:
+        source = module_sources.get(module)
+        if source is None:
+            return
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module}.tla: missing exact supporting theorem {symbol}"
+            )
+            return
+        body, line = extracted
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            body,
+            maxsplit=1,
+        )[0]
+        normalized_statement = " ".join(statement.split())
+        if normalized_statement != exact_statement:
+            errors.append(
+                f"{module}.tla:{line}: {symbol} must state only "
+                f"{exact_statement!r}; found {normalized_statement!r}"
+            )
+
+    def check_theorem_proof_tokens(
+        module: str,
+        symbol: str,
+        required_tokens: tuple[str, ...],
+    ) -> None:
+        source = module_sources.get(module)
+        if source is None:
+            return
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module}.tla: missing proof-dependency theorem {symbol}"
+            )
+            return
+        body, line = extracted
+        marker = re.search(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            body,
+        )
+        proof = "" if marker is None else body[marker.start() :]
+        missing = [token for token in required_tokens if token not in proof]
+        if missing:
+            errors.append(
+                f"{module}.tla:{line}: {symbol} must retain reviewed proof "
+                f"dependencies {missing!r}"
+            )
+
     for obligation_id, symbol in ARBITRARY_CONTEXT_SAFETY_OBLIGATIONS.items():
         property_wrapper = ARBITRARY_CONTEXT_SAFETY_PROPERTY_WRAPPERS[obligation_id]
         check_direct_theorem(
@@ -11399,16 +12565,21 @@ def _proof_obligation_architecture_errors(
         )
     for obligation_id, symbol in ASYNC_LIVENESS_OBLIGATIONS.items():
         property_wrapper = ASYNC_LIVENESS_PROPERTY_WRAPPERS[obligation_id]
+        required_spec = (
+            "AsyncLiveSpecAt"
+            if obligation_id == "rotating-leader-liveness"
+            else "AsyncSpecAt"
+        )
         exact_statement = ASYNC_LIVENESS_EXACT_STATEMENTS.get(
             obligation_id,
             f"\\A initialContext: "
-            f"{property_wrapper}(AsyncSpecAt(initialContext))",
+            f"{property_wrapper}({required_spec}(initialContext))",
         )
         check_direct_theorem(
             obligation_id,
             symbol,
             module="SumeragiV2AsyncLivenessProofs",
-            required_spec="AsyncSpecAt",
+            required_spec=required_spec,
             forbidden=("Spec", "NextV2", "AdvanceContext"),
             exact_statement=exact_statement,
         )
@@ -11438,6 +12609,67 @@ def _proof_obligation_architecture_errors(
                 "CommonAppliedSubject",
             ),
         )
+    for obligation_id, exact_statement in (
+        EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS.items()
+    ):
+        module, symbol = FIXED_PROOF_OBLIGATION_TARGETS[obligation_id]
+        check_closed_theorem(
+            obligation_id,
+            symbol,
+            module=module,
+            exact_statement=exact_statement,
+            forbidden=(),
+        )
+        if (
+            obligation_id not in PROOFLESS_FIXED_DEBT_OBLIGATION_IDS
+            or by_id.get(obligation_id, {}).get("status")
+            != "specified_unproved"
+        ):
+            continue
+        source = module_sources.get(module)
+        if source is None:
+            continue
+        extracted = _top_level_theorem_body(source, symbol)
+        if extracted is None:
+            continue
+        body, line = extracted
+        if re.search(r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body):
+            errors.append(
+                f"{module}.tla:{line}: proof-debt theorem {symbol} must remain "
+                "proofless while ledgered specified_unproved"
+            )
+    for (
+        module,
+        symbol,
+    ), exact_body in EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES.items():
+        check_exact_operator(module, symbol, exact_body)
+    for (
+        module,
+        symbol,
+    ), exact_statement in EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS.items():
+        check_exact_supporting_theorem(module, symbol, exact_statement)
+    for (
+        module,
+        symbol,
+    ), required_tokens in FIXED_PROOF_REQUIRED_PROOF_TOKENS.items():
+        check_theorem_proof_tokens(module, symbol, required_tokens)
+    for module, forbidden_tokens in FIXED_PROOF_FORBIDDEN_MODULE_TOKENS.items():
+        source = module_sources.get(module)
+        if source is None:
+            continue
+        stripped = strip_tla_comments(
+            source,
+            preserve_string_contents=True,
+        )
+        for token in forbidden_tokens:
+            match = re.search(rf"\b{re.escape(token)}\b", stripped)
+            if match is None:
+                continue
+            line = stripped.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{module}.tla:{line}: release proof may not derive receipt "
+                f"agreement from chain-history projection {token}"
+            )
     return errors
 
 
@@ -11541,6 +12773,18 @@ def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
             "AsyncFiniteInitAt(initialContext) "
             "/\\ [][AsyncNext]_AsyncAllVars "
             "/\\ AsyncFairnessAt(initialContext)"
+        ),
+        "AsyncInstallGenerationBudget": (
+            "\\A request \\in pendingInstallTC: "
+            "generation[request.node] < MaxGeneration"
+        ),
+        "AsyncLiveSpecAt": (
+            "/\\ AsyncSpecAt(initialContext) "
+            "/\\ []AsyncInstallGenerationBudget"
+        ),
+        "AsyncFiniteLiveSpec": (
+            "/\\ AsyncFiniteSpec "
+            "/\\ []AsyncInstallGenerationBudget"
         ),
         "AsyncFairness": "AsyncFairnessAt(ContextRecord(0, <<>>))",
     }
@@ -11662,6 +12906,11 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
         and (formal_dir / "SumeragiV2LivenessProofs.tla").is_file()
     ):
         expected.update({
+            "RotatingLeaderProgressObligation": (
+                ASYNC_LIVENESS_EXACT_STATEMENTS[
+                    "rotating-leader-liveness"
+                ]
+            ),
             "AsyncSpecAlwaysProgressOwnershipInvariant": (
                 "\\A initialContext: AsyncSpecAt(initialContext) "
                 "=> []AsyncProgressOwnershipInvariant"
@@ -12454,7 +13703,10 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             ),
             "OneHeightCompletionObligation": (
                 "RotatingLeaderProgressObligation",
+                "RotatingLeaderProgressProperty(",
+                "AsyncLiveSpecAt(initialContext)",
                 "ApplicationLivenessObligation",
+                "ApplicationLivenessProperty(AsyncSpecAt(initialContext))",
             ),
         }
         forbidden_transition_automation = re.compile(
@@ -19293,6 +20545,71 @@ def _reply_route_ownership_source_fidelity_errors(
                     f"fragment {fragment!r}"
                 )
 
+    direct_instance_pattern = re.compile(
+        r"\bINSTANCE\s+SumeragiV2ReplyRoute"
+        r"(?:Ownership(?:Proofs)?|Pipeline(?:Proofs)?)\s+WITH\b"
+    )
+    expected_instance_counts: dict[str, int] = {}
+    for source_name, _, _, _ in _REPLY_ROUTE_LIFECYCLE_INSTANCE_CONTRACTS:
+        expected_instance_counts[source_name] = (
+            expected_instance_counts.get(source_name, 0) + 1
+        )
+    for source_name, source in sources.items():
+        observed_count = len(direct_instance_pattern.findall(source))
+        expected_count = expected_instance_counts.get(source_name, 0)
+        if observed_count != expected_count:
+            errors.append(
+                f"{formal_dir / source_name}: direct reply-route "
+                "Ownership/Pipeline instance inventory must contain exactly "
+                f"{expected_count} reviewed instances; found {observed_count}"
+            )
+
+    lifecycle_targets = tuple(
+        target
+        for target, _ in _REPLY_ROUTE_LIFECYCLE_INSTANCE_CONTRACTS[0][3]
+    )
+    lifecycle_substitution_pattern = re.compile(
+        r"\b("
+        + "|".join(re.escape(target) for target in lifecycle_targets)
+        + r")\s*<-\s*([A-Za-z_][A-Za-z0-9_]*)\b"
+    )
+    for (
+        source_name,
+        symbol,
+        instance_module,
+        expected_substitutions,
+    ) in _REPLY_ROUTE_LIFECYCLE_INSTANCE_CONTRACTS:
+        source = sources.get(source_name)
+        if source is None:
+            continue
+        path = formal_dir / source_name
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed direct reply-route instance {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        instance_marker = f"INSTANCE {instance_module} WITH"
+        if normalized.count(instance_marker) != 1:
+            errors.append(
+                f"{path}:{line}: {symbol} must instantiate {instance_module} "
+                "exactly once"
+            )
+        observed_substitutions = tuple(
+            lifecycle_substitution_pattern.findall(normalized)
+        )
+        if observed_substitutions != expected_substitutions:
+            errors.append(
+                f"{path}:{line}: {symbol} must supply the exact eight "
+                "terminal-close lifecycle substitutions "
+                f"{expected_substitutions!r}; found "
+                f"{observed_substitutions!r}"
+            )
+
     ownership = "SumeragiV2ReplyRouteOwnership.tla"
     require_operator_fragments(
         ownership,
@@ -19490,6 +20807,16 @@ def _reply_route_ownership_source_fidelity_errors(
             "~> ReplySourceAdvancedFrom(owner, semantic, source, messageCursor, chunkCursor)",
         ),
         forbidden=("~ReplySourceAtCursor", "~ReplyAttemptOwned"),
+    )
+    require_theorem_fragments(
+        "SumeragiV2ReplyRouteOwnershipProofs.tla",
+        "ReplyCursorOrAdvancedPersists",
+        (
+            "PROVE [][CursorState => CursorState']_ReplyRouteVars",
+            "<2>3. [][CursorState => CursorState']_ReplyRouteVars => [](CursorState => []CursorState)",
+            "CursorState /\\ [CursorState => CursorState']_ReplyRouteVars => CursorState'",
+            "QED BY <2>2, <2>3, PTL DEF CursorState",
+        ),
     )
     require_theorem_fragments(
         "SumeragiV2ReplyRouteOwnershipProofs.tla",
@@ -32660,14 +33987,124 @@ if self.retained_effect_batch.is_some() {
     return errors
 
 
+_OWNERSHIP_N1_MODEL_SHA256 = (
+    "68468b4869ddee1da8c59916e968a87b8d522e4523b5bfe2141ea2aa145f7c14"
+)
+_OWNERSHIP_N1_CONFIG_SHA256 = (
+    "7d08a3e8d5c039b31ff11e25775a36cf97da205c00ca2819191f41296eff5ffc"
+)
+_OWNERSHIP_N1_DEFINITION_OVERRIDES = (
+    ("InstallTcFromEvidence", "OwnershipInstallTcFromEvidence"),
+    ("InstallTcEvidenceMatches", "OwnershipInstallTcEvidenceMatches"),
+    (
+        "BeginLockCommandEvidenceMatches",
+        "OwnershipBeginLockCommandEvidenceMatches",
+    ),
+    (
+        "HistoricalLockRestartExactCurrentFetchOwner",
+        "OwnershipHistoricalLockRestartExactCurrentFetchOwner",
+    ),
+    (
+        "HistoricalLockRestartExactCurrentFetchOwnerAfter",
+        "OwnershipHistoricalLockRestartExactCurrentFetchOwnerAfter",
+    ),
+    ("AsyncFaultStep", "OwnershipFaultStep"),
+    ("PublishControlItems", "OwnershipPublishControlItems"),
+    (
+        "PublishControlAndEphemeralItems",
+        "OwnershipPublishControlAndEphemeralItems",
+    ),
+    ("ExecuteSignProposalReady", "OwnershipExecuteSignProposalReady"),
+    ("ExecuteSignVoteReady", "OwnershipExecuteSignVoteReady"),
+    ("ExecuteFormPrepareQCReady", "OwnershipExecuteFormPrepareQCReady"),
+    ("ExecuteSignTimeoutReady", "OwnershipExecuteSignTimeoutReady"),
+    (
+        "AsyncCertifiedResponseClaimValues",
+        "OwnershipAsyncCertifiedResponseClaimValues",
+    ),
+    (
+        "CertifiedResponseClaimProjectionAuthenticated",
+        "OwnershipCertifiedResponseClaimProjectionAuthenticated",
+    ),
+    (
+        "AsyncDeferredTopologyTypeInvariant",
+        "OwnershipAsyncDeferredTopologyTypeInvariant",
+    ),
+)
+_OWNERSHIP_N1_STRUCTURAL_OPERATOR_SHA256 = {
+    "OwnershipInstallTcFromEvidence": (
+        "52cdf76ec05bf7ecde28b02bb382f27d10c9a74ac0ee7c14b447366dfc369301"
+    ),
+    "OwnershipInstallTcEvidenceMatches": (
+        "c3b7b0da04c84046c37513a9dc94e63aa3ff50d3f612dd8b7372cd9b1c616f62"
+    ),
+    "OwnershipBeginLockCommandEvidenceMatches": (
+        "9246d693a855f650a2f023567563390d7ddd1001d60fc661ceff6f4b5cc68ecc"
+    ),
+    "OwnershipControlItemsTyped": (
+        "31467b59432cb24f6741f545ad65388af4e9ce8c2ed0633b37562912e55efd44"
+    ),
+    "OwnershipPublishControlItems": (
+        "efe7488ba8e7a2b171263798e7ce39bc6fc4e172f4ec77e57093e1c0d07909d4"
+    ),
+    "OwnershipPublishControlAndEphemeralItems": (
+        "6f0bf8bb01da13b400d7ea7cca4a2411ba8f56147d6301a27f8ca802a24df154"
+    ),
+    "OwnershipExecuteSignProposalReady": (
+        "d9f2fe8e2cfd2a68ff9b9c535b53ad3289e9e2b35a1c2dcc2f09710e4b13aa7e"
+    ),
+    "OwnershipExecuteSignVoteReady": (
+        "0b25822c163eaa8a042d1593e95e02c0a32fdb2a28560ce43d90b6df90a2384c"
+    ),
+    "OwnershipExecuteFormPrepareQCReady": (
+        "622e358c046d38442545a780e00b9daa58d42f847b29e095ade126e43943327b"
+    ),
+    "OwnershipExecuteSignTimeoutReady": (
+        "bae4e432c56235b48c6eb6a261acfe925aeb7d4a2977049bdc01b14ddeb9af5a"
+    ),
+    "OwnershipAsyncCertifiedResponseClaimValues": (
+        "8308ae015870d2875953ef751e239048b1df47249e490017cd85217261338069"
+    ),
+    "OwnershipCertifiedResponseClaimProjectionAuthenticated": (
+        "9e598deb0c60585047771b74d4e1ebc2f4bfba7f07d0a5f298e5b3a0152ed2a9"
+    ),
+    "OwnershipAsyncDeferredHandoffTyped": (
+        "9170f34a12ca7a4deb9c1273451b6b4cbd5818bf1d7f65ca4233e5514f5184df"
+    ),
+    "OwnershipAsyncDeferredTopologyTypeInvariant": (
+        "a894648ec95e7dfdebfab695520bff1518ca3b28dfcb2395c01c6db9ed2c137c"
+    ),
+    "OwnershipHistoricalLockRestartExactCurrentFetchOwner": (
+        "f0bd21114f81038ed2bfa8e38bb2efdcd115eb4eae63c9cf6e94f932ccaa97e8"
+    ),
+    "OwnershipHistoricalLockRestartExactCurrentFetchOwnerAfter": (
+        "5d5b39aa00fc4cb5f45c8fcf9d783b0a01da20b7da354e98d3b44833161ab98a"
+    ),
+    "OwnershipFaultStep": (
+        "a47ec8df06cd6f1f51947fe2a6947cc4b3f5890fae5673ed2006b755ed142566"
+    ),
+    "OwnershipAsyncNext": (
+        "e518803e04ce32514d99cfc24bfd816566ded1b22632938c53263e7c5a7a76c1"
+    ),
+}
+
+
 def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
     """Keep the one-validator ownership search on its exact closed model."""
 
     path = formal_dir / "ownership_n1.cfg"
-    if not path.is_file():
-        return [f"{path}: missing one-validator ownership configuration"]
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: one-validator ownership configuration must be a regular file"
+        ]
     source = path.read_text(encoding="utf-8")
     errors: list[str] = []
+    observed_config_sha256 = _sha256_file(path)
+    if observed_config_sha256 != _OWNERSHIP_N1_CONFIG_SHA256:
+        errors.append(
+            f"{path}: one-validator ownership configuration SHA-256 must be "
+            f"{_OWNERSHIP_N1_CONFIG_SHA256}; found {observed_config_sha256}"
+        )
     model_path = formal_dir / "SumeragiV2OwnershipInvariantCheck.tla"
     if not model_path.is_file() or model_path.is_symlink():
         errors.append(
@@ -32675,12 +34112,20 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
         )
     else:
         model_source = model_path.read_text(encoding="utf-8")
+        observed_model_sha256 = _sha256_file(model_path)
+        if observed_model_sha256 != _OWNERSHIP_N1_MODEL_SHA256:
+            errors.append(
+                f"{model_path}: one-validator ownership model SHA-256 must be "
+                f"{_OWNERSHIP_N1_MODEL_SHA256}; found {observed_model_sha256}"
+            )
         exact_operators = {
             "SingleValidatorRosters": "<<<<0>>>>",
             "SingleValidatorPowers": "<<<<1>>>>",
             "OwnershipAllVars": "<<AsyncAllVars, acquisitionVars>>",
             "OwnershipBoundedInit": "/\\ AsyncFiniteInit /\\ AcquisitionInit",
-            "OwnershipBoundedNext": "/\\ AsyncNext /\\ UNCHANGED acquisitionVars",
+            "OwnershipBoundedNext": (
+                "/\\ OwnershipAsyncNext /\\ UNCHANGED acquisitionVars"
+            ),
             "OwnershipDebugStutter": "UNCHANGED OwnershipAllVars",
             "OwnershipBoundedSpec": (
                 "OwnershipBoundedInit /\\ "
@@ -32704,6 +34149,53 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
                     f"{model_path}:{line}: ownership model operator {symbol} "
                     f"must equal only {expected!r}; found {normalized!r}"
                 )
+        for (
+            symbol,
+            expected_sha256,
+        ) in _OWNERSHIP_N1_STRUCTURAL_OPERATOR_SHA256.items():
+            extracted = _top_level_operator_body(
+                model_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{model_path}: missing ownership structural helper {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            observed_sha256 = hashlib.sha256(
+                normalized.encode("utf-8")
+            ).hexdigest()
+            if observed_sha256 != expected_sha256:
+                errors.append(
+                    f"{model_path}:{line}: ownership structural helper {symbol} "
+                    "must match exact reviewed body digest "
+                    f"{expected_sha256}; found {observed_sha256}"
+                )
+
+    observed_overrides = tuple(
+        re.findall(
+            r"(?m)^  ([A-Za-z_][A-Za-z0-9_]*) <- "
+            r"([A-Za-z_][A-Za-z0-9_]*)$",
+            source,
+        )
+    )
+    expected_overrides = (
+        ("EpochRosters", "SingleValidatorRosters"),
+        ("EpochPowers", "SingleValidatorPowers"),
+        ("ViewDomain", "FiniteViews"),
+        ("LeaderStarts", "StartsHeightZero"),
+        ("LaneHashes", "LaneHashesOneHeight"),
+        ("DaHashes", "DaHashesOneHeight"),
+        *_OWNERSHIP_N1_DEFINITION_OVERRIDES,
+    )
+    if observed_overrides != expected_overrides:
+        errors.append(
+            f"{path}: ownership search substitutions must equal the reviewed "
+            "six closed-domain assignments followed by the ordered "
+            "fifteen-entry structural definition inventory; "
+            f"found {observed_overrides}"
+        )
 
     def natural(name: str) -> int | None:
         matches = re.findall(rf"(?m)^  {re.escape(name)} = ([0-9]+)$", source)
@@ -32758,6 +34250,8 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
         "SPECIFICATION OwnershipBoundedSpec",
         "CHECK_DEADLOCK FALSE",
         "CONSTRAINT OwnershipInitialClock",
+        "INVARIANT AsyncTypeInvariant",
+        "INVARIANT AsyncProgressOwnershipInvariant",
         "  EpochRosters <- SingleValidatorRosters",
         "  EpochPowers <- SingleValidatorPowers",
         '  ValidSubjects = {"A"}',
@@ -38609,7 +40103,7 @@ let projection = CertifiedMergeSidecarChunkFlushProjection {
     request_id: chunk.request_id,
     service_generation: chunk.service_generation,
     stream_epoch: chunk.stream_epoch,
-    semantic_sequence: chunk.semantic_sequence.get(),
+    semantic_sequence: chunk.semantic_sequence,
     entry_hash: chunk.entry_hash,
     encoded_len: chunk.encoded_len,
     epoch_id: chunk.epoch_id,
@@ -38960,7 +40454,7 @@ self.server_request_gates
         (&key.0 != sender
             || gate.stream_epoch > stream_epoch
                 || (gate.stream_epoch == stream_epoch
-                    && gate.semantic_sequence > closed_through))
+                    && gate.semantic_sequence.get() > closed_through))
             && gate
                 .attempts
                 .keys()
@@ -39083,7 +40577,19 @@ if request.service_generation < self.server_service_generation {
         self.generation_hint_post(
             sender,
             local_peer,
-            reply_route,
+            request.service_generation,
+            observed_message_hash,
+        ),
+    ));
+}
+if !self.server_streams.contains_key(sender)
+    && self.server_streams.len() >= self.server_stream_capacity
+{
+    self.roll_server_service_generation()?;
+    return Ok(ServerRequestAdmission::GenerationHint(
+        self.generation_hint_post(
+            sender,
+            local_peer,
             request.service_generation,
             observed_message_hash,
         ),
@@ -39091,7 +40597,7 @@ if request.service_generation < self.server_service_generation {
 }
 self.prune_server_gates(now)?;
 """,
-        "a canonical future-generation request must be rejected while a stale-generation request returns a stateless exact hint before pruning, parking a route, or touching durable responder state",
+        "a canonical future-generation request must reject atomically, while stale input or terminal full-table compaction returns an exact route-free hint before ordinary request-state mutation",
         errors,
     )
     _require_rust_token_sequence(
@@ -39106,7 +40612,6 @@ if close.service_generation < self.server_service_generation {
     return Ok(self.generation_hint_post(
         sender,
         local_peer,
-        reply_route,
         close.service_generation,
         observed_message_hash,
     ));
@@ -39841,12 +41346,11 @@ let key = (sender.clone(), request.request_id);
 if self.outbound.contains_key(&key) {
     return;
 }
-let request_hash = HashOf::new(request);
 if let Some(gate) = self.server_request_gates.get_mut(&key).filter(|gate| {
     gate.service_generation == request.service_generation
         && gate.stream_epoch == request.stream_epoch
         && gate.semantic_sequence == request.semantic_sequence
-        && gate.request_hash == request_hash
+        && gate.request.same_occurrence_except_close_floor(request)
 }) {
     Self::release_authorized_server_request_attempts(gate);
 }
@@ -41128,7 +42632,7 @@ self.sidecar_effects.retain(|effect| {
                                 == prefix.service_generation
                                 && (chunk.stream_epoch < prefix.stream_epoch
                                     || (chunk.stream_epoch == prefix.stream_epoch
-                                        && chunk.semantic_sequence
+                                    && chunk.semantic_sequence.get()
                                             <= prefix.closed_through))))
             )
     )
@@ -41431,7 +42935,20 @@ fn retryable_sidecar_server_control_peer(effect: &V2LaneWorkEffect) -> Option<&P
         lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::push_merge_sidecar_post"),
         """
-let reply_routes = match post.reply_route {
+let MergeSidecarPost {
+    peer,
+    reply_route,
+    message,
+} = post;
+let reply_route = if matches!(
+    message.as_ref(),
+    CertifiedMergeSidecarMessage::GenerationHint(_)
+) {
+    None
+} else {
+    reply_route
+};
+let reply_routes = match reply_route {
     Some(reply_route) => {
         let Ok(reply_routes) = NetworkReplyRoutes::try_from_route(reply_route) else {
             return false;
@@ -41441,12 +42958,12 @@ let reply_routes = match post.reply_route {
     None => None,
 };
 self.push_merge_sidecar_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
-    peer: post.peer,
+    peer,
     reply_routes,
-    message: post.message,
+    message,
 })
 """,
-        "lane sidecar post conversion must preserve the exact peer, bounded route authority, and message",
+        "lane sidecar post conversion must preserve the exact peer and message while stripping only GenerationHint reply-route ownership",
         errors,
     )
     _require_rust_token_sequence(
@@ -42599,7 +44116,11 @@ fn target_reservation(
 (
     [NetworkMessage::CertifiedMergeSidecar(message)],
     ExactOutputRolloverClaim::CertifiedSidecarControl { target, .. },
-) if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Close(_))
+) if matches!(
+    message.as_ref(),
+    CertifiedMergeSidecarMessage::Close(_)
+        | CertifiedMergeSidecarMessage::GenerationHint(_)
+)
     && matches!(
         self.targets.as_slice(),
         [route] if matches!(&route.route, ExactTargetRoute::Topology)
@@ -42608,7 +44129,7 @@ fn target_reservation(
     target
 }
 """,
-        "sidecar topology-progress reservation must include requester-owned Close but exclude reply-routed responder controls",
+        "sidecar topology-progress reservation must include requester-owned Close and route-free GenerationHint while excluding reply-routed responder controls",
         errors,
     )
     _require_rust_token_sequence(
@@ -49534,8 +51055,45 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"tuple projection; missing {missing_definitions}"
                 )
 
+        joined_runner = _top_level_operator_body(
+            raw_source, "IndexedJoinedRunnerStep"
+        )
+        exact_historical_server_branch = (
+            "\\/ \\E node \\in Responsive: "
+            "/\\ node \\in joinedByContext[initialContext] "
+            "/\\ IndexedAsync(initialContext)!RunHistoricalServer(node)"
+        )
+        if joined_runner is None:
+            errors.append(f"{refinement_path}: missing IndexedJoinedRunnerStep")
+        else:
+            body, line = joined_runner
+            normalized = " ".join(body.split())
+            if (
+                normalized.count(exact_historical_server_branch) != 1
+                or normalized.count(
+                    "IndexedAsync(initialContext)!RunHistoricalServer(node)"
+                )
+                != 1
+            ):
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedJoinedRunnerStep must "
+                    "contain exactly one Responsive, joined-context "
+                    "RunHistoricalServer branch"
+                )
+
         joined_non_runner = _top_level_operator_body(
             raw_source, "IndexedJoinedNonRunnerStep"
+        )
+        exact_io_worker_branch = (
+            "\\/ \\E node \\in Responsive: "
+            "/\\ node \\in joinedByContext[initialContext] "
+            "/\\ IndexedAsync(initialContext)!ServiceIoWorker(node)"
+        )
+        exact_enqueue_control_branch = (
+            "\\/ \\E node \\in IndexedAsync(initialContext)!"
+            "AsyncCurrentResponsiveVoters: "
+            "/\\ node \\in joinedByContext[initialContext] "
+            "/\\ IndexedAsync(initialContext)!EnqueueIoLocalControl(node)"
         )
         if joined_non_runner is None:
             errors.append(
@@ -49566,6 +51124,99 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"{refinement_path}:{line}: indexed non-runner frame must "
                     f"preserve scheduler slot {node_service_deadline_slot} "
                     "(asyncNodeServiceDeadlines)"
+                )
+            if (
+                normalized.count(exact_io_worker_branch) != 1
+                or normalized.count(
+                    "IndexedAsync(initialContext)!ServiceIoWorker(node)"
+                )
+                != 1
+            ):
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedJoinedNonRunnerStep must "
+                    "contain exactly one Responsive, joined-context "
+                    "ServiceIoWorker branch"
+                )
+            if (
+                normalized.count(exact_enqueue_control_branch) != 1
+                or normalized.count(
+                    "IndexedAsync(initialContext)!EnqueueIoLocalControl(node)"
+                )
+                != 1
+            ):
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedJoinedNonRunnerStep must "
+                    "keep exactly one joined-context EnqueueIoLocalControl "
+                    "branch restricted to AsyncCurrentResponsiveVoters"
+                )
+
+        joined_non_crash = _top_level_operator_body(
+            raw_source,
+            "IndexedJoinedNonCrashStep",
+            preserve_string_contents=True,
+        )
+        exact_joined_non_crash = (
+            "/\\ (IndexedJoinedRunnerStep(initialContext) "
+            "\\/ IndexedJoinedNonRunnerStep(initialContext)) "
+            "/\\ UNCHANGED <<IndexedCore(initialContext, 6), "
+            "IndexedAsync(initialContext)!AsyncRecoveryControlVars>>"
+        )
+        if joined_non_crash is None:
+            errors.append(
+                f"{refinement_path}: missing IndexedJoinedNonCrashStep"
+            )
+        else:
+            body, line = joined_non_crash
+            normalized = re.sub(r"!\s+", "!", " ".join(body.split()))
+            if normalized != exact_joined_non_crash:
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedJoinedNonCrashStep must "
+                    "retain the complete non-crash recovery-control frame; "
+                    f"found={normalized!r}"
+                )
+
+        joined_async_next = _top_level_operator_body(
+            raw_source, "IndexedJoinedAsyncNext", preserve_string_contents=True
+        )
+        exact_joined_async_next = (
+            "/\\ (IndexedJoinedNonCrashStep(initialContext) "
+            "\\/ \\E node \\in ValidatorIds: "
+            "IndexedAsync(initialContext)!PreGstCrash(node)) "
+            "/\\ IndexedAsync(initialContext)!"
+            "AsyncHistoricalLockRestartAuthorityTransition "
+            "/\\ UNCHANGED <<IndexedCore(initialContext, 1), "
+            "IndexedCore(initialContext, 2)>> "
+            "/\\ [IndexedAsync(initialContext)!Next]_( "
+            "IndexedAsync(initialContext)!vars)"
+        )
+        prohibited_joined_recovery_actions = (
+            "PreGstResponsiveCrash",
+            "PreGstResponsiveRestart",
+            "PreGstResponsiveReplay",
+            "ResponsiveReplayRunNode",
+            "ResponsiveReplayServiceIoWorker",
+            "DriveResponsiveReplayHead",
+            "FinishResponsiveReplay",
+            "RearmResponsiveRecovery",
+        )
+        if joined_async_next is None:
+            errors.append(f"{refinement_path}: missing IndexedJoinedAsyncNext")
+        else:
+            body, line = joined_async_next
+            normalized = re.sub(r"!\s+", "!", " ".join(body.split()))
+            prohibited = [
+                action
+                for action in prohibited_joined_recovery_actions
+                if action in normalized
+            ]
+            if normalized != exact_joined_async_next or prohibited:
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedJoinedAsyncNext must "
+                    "contain only joined non-crash work or non-responsive "
+                    "PreGstCrash, apply the global historical-lock "
+                    "restart-authority transition, and exclude responsive "
+                    "crash/replay/rearm "
+                    f"actions; prohibited={prohibited!r}, found={normalized!r}"
                 )
 
         discovery_step = _top_level_operator_body(
@@ -49657,6 +51308,12 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 )
             return operator_normalized
 
+        def normalize_chain_contract(text: str) -> str:
+            normalized = " ".join(text.split())
+            normalized = re.sub(r"!\s+", "!", normalized)
+            normalized = re.sub(r"\(\s+", "(", normalized)
+            return re.sub(r"\s+\)", ")", normalized)
+
         def require_chain_theorem(symbol: str, exact: str) -> None:
             extracted = _top_level_theorem_body(
                 raw_source, symbol, preserve_string_contents=True
@@ -49679,6 +51336,839 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"{exact!r}; found {theorem_normalized!r}"
                 )
 
+        def require_chain_theorem_contract(
+            symbol: str,
+            *,
+            exact: str | None = None,
+            required: tuple[str, ...] = (),
+            forbidden: tuple[str, ...] = (),
+            exact_counts: dict[str, int] | None = None,
+            proof_required: tuple[str, ...] = (),
+            proof_forbidden: tuple[str, ...] = (),
+        ) -> None:
+            extracted = _top_level_theorem_body(
+                raw_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{refinement_path}: missing explicit chain theorem {symbol}"
+                )
+                return
+            theorem_body, theorem_line = extracted
+            theorem_parts = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+                theorem_body,
+                maxsplit=1,
+            )
+            theorem_statement = normalize_chain_contract(theorem_parts[0])
+            theorem_proof = (
+                normalize_chain_contract(theorem_parts[1])
+                if len(theorem_parts) == 2
+                else ""
+            )
+            exact_normalized = (
+                None if exact is None else normalize_chain_contract(exact)
+            )
+            if exact_normalized is not None and theorem_statement != exact_normalized:
+                errors.append(
+                    f"{refinement_path}:{theorem_line}: {symbol} must state only "
+                    f"{exact_normalized!r}; found {theorem_statement!r}"
+                )
+            missing = [
+                token
+                for token in required
+                if normalize_chain_contract(token) not in theorem_statement
+            ]
+            present_forbidden = [
+                token
+                for token in forbidden
+                if normalize_chain_contract(token) in theorem_statement
+            ]
+            invalid_counts = {
+                token: theorem_statement.count(normalize_chain_contract(token))
+                for token, expected_count in (exact_counts or {}).items()
+                if theorem_statement.count(normalize_chain_contract(token))
+                != expected_count
+            }
+            if missing or present_forbidden or invalid_counts:
+                errors.append(
+                    f"{refinement_path}:{theorem_line}: {symbol} must retain "
+                    "the exact indexed fairness domains and action partition; "
+                    f"missing={missing!r}, prohibited={present_forbidden!r}, "
+                    f"counts={invalid_counts!r}"
+                )
+            missing_proof = [
+                token
+                for token in proof_required
+                if normalize_chain_contract(token) not in theorem_proof
+            ]
+            present_proof_forbidden = [
+                token
+                for token in proof_forbidden
+                if normalize_chain_contract(token) in theorem_proof
+            ]
+            if (
+                proof_required or proof_forbidden
+            ) and (
+                len(theorem_parts) != 2
+                or missing_proof
+                or present_proof_forbidden
+            ):
+                errors.append(
+                    f"{refinement_path}:{theorem_line}: {symbol} proof must "
+                    "retain the exact indexed fairness dependencies; "
+                    f"missing={missing_proof!r}, "
+                    f"prohibited={present_proof_forbidden!r}, "
+                    f"has_proof={len(theorem_parts) == 2}"
+                )
+
+        def require_normalized_chain_operator_contract(
+            symbol: str,
+            exact: str,
+            *,
+            forbidden: tuple[str, ...] = (),
+        ) -> None:
+            extracted = _top_level_operator_body(
+                raw_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{refinement_path}: missing explicit chain operator {symbol}"
+                )
+                return
+            operator_body, operator_line = extracted
+            normalized = normalize_chain_contract(operator_body)
+            exact_normalized = normalize_chain_contract(exact)
+            present_forbidden = [
+                token
+                for token in forbidden
+                if normalize_chain_contract(token) in normalized
+            ]
+            if normalized != exact_normalized or present_forbidden:
+                errors.append(
+                    f"{refinement_path}:{operator_line}: {symbol} must equal "
+                    f"only {exact_normalized!r}; "
+                    f"prohibited={present_forbidden!r}, found={normalized!r}"
+                )
+
+        require_normalized_chain_operator_contract(
+            "AsyncLiveChainSpec",
+            "/\\ AsyncChainSpec /\\ []AsyncInstallGenerationBudget",
+        )
+        require_chain_theorem_contract(
+            "AsyncLiveChainSpecProjectsGenesisAsyncLiveSpec",
+            exact=(
+                "AsyncLiveChainSpec "
+                "=> AsyncLiveSpecAt(ContextRecord(0, <<>>))"
+            ),
+            proof_required=(
+                "AsyncLiveChainSpec",
+                "AsyncInstallGenerationBudget",
+                "AsyncChainSpecProjectsAsyncSpec",
+                "AsyncLiveSpecAt",
+            ),
+        )
+        require_chain_theorem_contract(
+            "GenesisHeightSuccessorHandoffFromOneHeightCompletion",
+            exact=(
+                "/\\ AsyncLiveChainSpec "
+                "/\\ OneHeightCompletionLiveness(ContextRecord(0, <<>>)) "
+                "=> GenesisHeightSuccessorHandoffProperty"
+            ),
+            proof_required=(
+                "AsyncLiveChainSpecProjectsGenesisAsyncLiveSpec",
+                "AsyncLiveSpecAt(ContextRecord(0, <<>>))",
+                "AsyncLiveChainSpec",
+            ),
+        )
+        require_chain_theorem_contract(
+            "GenesisHeightSuccessorHandoffObligation",
+            exact=(
+                "AsyncLiveChainSpec "
+                "=> GenesisHeightSuccessorHandoffProperty"
+            ),
+            proof_required=(
+                "OneHeightCompletionObligation",
+                "GenesisHeightSuccessorHandoffFromOneHeightCompletion",
+            ),
+        )
+        require_normalized_chain_operator_contract(
+            "IndexedInstallGenerationBudgetPremise",
+            (
+                "\\A initialContext \\in AdmissibleContextRecords: "
+                "[]IndexedAsync(initialContext)!"
+                "AsyncInstallGenerationBudget"
+            ),
+        )
+        require_normalized_chain_operator_contract(
+            "IndexedLiveChainSpec",
+            (
+                "/\\ IndexedChainSpec "
+                "/\\ IndexedInstallGenerationBudgetPremise"
+            ),
+        )
+        require_chain_theorem_contract(
+            "IndexedLiveChainSpecProjectsIndexedChainSpec",
+            exact="IndexedLiveChainSpec => IndexedChainSpec",
+            proof_required=("IndexedLiveChainSpec",),
+        )
+        require_chain_theorem_contract(
+            "IndexedLiveInstanceActivationObligation",
+            exact=(
+                "\\A initialContext \\in AdmissibleContextRecords: "
+                "(/\\ IndexedLiveChainSpec "
+                "/\\ TRUE ~> IndexedAllResponsiveJoined(initialContext)) "
+                "=> IndexedAsync(initialContext)!"
+                "AsyncLiveSpecAt(initialContext)"
+            ),
+            proof_required=(
+                "IndexedLiveChainSpec",
+                "IndexedInstallGenerationBudgetPremise",
+                "IndexedInstanceActivationObligation",
+                "IndexedAsync(initialContext)!"
+                "AsyncInstallGenerationBudget",
+                "IndexedAsync!AsyncLiveSpecAt",
+            ),
+        )
+        require_normalized_chain_operator_contract(
+            "VerificationOneHeightCompletion",
+            (
+                "IndexedAsync(VerificationContext)!"
+                "AsyncLiveSpecAt(VerificationContext) "
+                "=> (IndexedCore(VerificationContext, 7) "
+                "~> IndexedAsync(VerificationContext)!"
+                "AsyncAllResponsiveAppliedAt(VerificationContext))"
+            ),
+        )
+        require_chain_theorem_contract(
+            "VerificationOneHeightCompletionObligation",
+            exact="VerificationOneHeightCompletion",
+            proof_required=(
+                "VerificationAsyncProof!OneHeightCompletionObligation",
+                "VerificationAsyncProof!AsyncLiveSpecAt",
+                "VerificationAsyncProof!AsyncInstallGenerationBudget",
+                "IndexedAsync!AsyncLiveSpecAt",
+                "IndexedAsync!AsyncInstallGenerationBudget",
+            ),
+        )
+        require_chain_theorem_contract(
+            "VerificationFrontierActivatedInstanceEventuallyApplies",
+            exact=(
+                "/\\ IndexedLiveChainSpec "
+                "/\\ VerificationOneHeightCompletion "
+                "/\\ VerificationContext \\in AdmissibleContextRecords "
+                "/\\ []~JoinedCanonicalDescendant(VerificationContext) "
+                "=> IndexedAllResponsiveJoined(VerificationContext) "
+                "~> IndexedAsync(VerificationContext)!"
+                "AsyncAllResponsiveAppliedAt(VerificationContext)"
+            ),
+            proof_required=(
+                "IndexedLiveChainSpecProjectsIndexedChainSpec",
+                "IndexedLiveInstanceActivationObligation",
+                "IndexedAsync!AsyncLiveSpecAt",
+            ),
+        )
+        require_chain_theorem_contract(
+            "VerificationActivatedFrontierEventuallyEscapes",
+            exact=(
+                "/\\ IndexedLiveChainSpec "
+                "/\\ VerificationOneHeightCompletion "
+                "/\\ VerificationContext \\in AdmissibleContextRecords "
+                "=> IndexedAllResponsiveJoined(VerificationContext) "
+                "~> VerificationFrontierEscape"
+            ),
+            proof_required=(
+                "IndexedLiveChainSpecProjectsIndexedChainSpec",
+                "VerificationFrontierActivatedInstanceEventuallyApplies",
+            ),
+        )
+        require_chain_theorem_contract(
+            "VerificationJoinedTargetEventuallyReachesAndEscapes",
+            exact=(
+                "/\\ IndexedLiveChainSpec "
+                "/\\ IndexedExactHistoricalRecoveryProgress "
+                "/\\ IndexedSuccessorActivationProgress "
+                "/\\ VerificationOneHeightCompletion "
+                "/\\ VerificationContext \\in AdmissibleContextRecords "
+                "=> IndexedTargetJoined(VerificationContext) "
+                "~> (/\\ IndexedTargetJoined(VerificationContext) "
+                "/\\ IndexedResponsiveHeightReached("
+                "VerificationContext.height) "
+                "/\\ VerificationFrontierEscape)"
+            ),
+            proof_required=(
+                "IndexedLiveChainSpecProjectsIndexedChainSpec",
+                "VerificationActivatedFrontierEventuallyEscapes",
+            ),
+        )
+
+        composition_invariant = _top_level_operator_body(
+            raw_source,
+            "IndexedCompositionInvariant",
+            preserve_string_contents=True,
+        )
+        if composition_invariant is not None:
+            invariant_body, invariant_line = composition_invariant
+            embedded_budget_tokens = [
+                token
+                for token in (
+                    "AsyncInstallGenerationBudget",
+                    "IndexedInstallGenerationBudgetPremise",
+                    "IndexedLiveChainSpec",
+                )
+                if token in invariant_body
+            ]
+            if embedded_budget_tokens:
+                errors.append(
+                    f"{refinement_path}:{invariant_line}: "
+                    "IndexedCompositionInvariant may not embed the liveness-only "
+                    "install-generation budget; "
+                    f"found={embedded_budget_tokens!r}"
+                )
+
+        for theorem_symbol, theorem_kind, _, _ in _top_level_declarations(
+            raw_source
+        ):
+            if theorem_kind != "theorem":
+                continue
+            extracted = _top_level_theorem_body(
+                raw_source,
+                theorem_symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                continue
+            theorem_body, theorem_line = extracted
+            statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+                theorem_body,
+                maxsplit=1,
+            )[0]
+            if (
+                "IndexedChainSpec" in statement
+                and "IndexedLiveChainSpec" not in statement
+                and (
+                    "IndexedInstallGenerationBudgetPremise" in statement
+                    or "AsyncInstallGenerationBudget" in statement
+                )
+            ):
+                errors.append(
+                    f"{refinement_path}:{theorem_line}: {theorem_symbol} may "
+                    "not derive the install-generation budget from "
+                    "IndexedChainSpec"
+                )
+
+        responsive_recovery_dormant = _top_level_operator_body(
+            raw_source,
+            "IndexedResponsiveRecoveryDormant",
+            preserve_string_contents=True,
+        )
+        exact_responsive_recovery_dormant = (
+            "\\A initialContext \\in AdmissibleContextRecords: "
+            'IndexedRecovery(initialContext, 1) = "Eligible"'
+        )
+        if responsive_recovery_dormant is None:
+            errors.append(
+                f"{refinement_path}: missing explicit chain operator "
+                "IndexedResponsiveRecoveryDormant"
+            )
+        else:
+            body, line = responsive_recovery_dormant
+            normalized = normalize_chain_contract(body)
+            if normalized != exact_responsive_recovery_dormant:
+                errors.append(
+                    f"{refinement_path}:{line}: "
+                    "IndexedResponsiveRecoveryDormant must pin every indexed "
+                    "instance to the initialized Eligible recovery phase; "
+                    f"found={normalized!r}"
+                )
+
+        responsive_recovery_actions = (
+            "PreGstResponsiveRestart",
+            "PreGstResponsiveReplay",
+            "ResponsiveReplayRunNode",
+            "ResponsiveReplayServiceIoWorker",
+            "DriveResponsiveReplayHead",
+            "FinishResponsiveReplay",
+        )
+        require_chain_theorem_contract(
+            "JoinedAsyncStepRefinesExactAsyncStep",
+            exact=(
+                "\\A initialContext \\in AdmissibleContextRecords: "
+                "IndexedJoinedAsyncNext(initialContext) "
+                "=> IndexedAsync(initialContext)!AsyncNext"
+            ),
+            proof_required=(
+                "JoinedRunnerIsExactAsyncWork",
+                "JoinedNonRunnerIsExactAsyncWork",
+                "IndexedJoinedAsyncNext",
+                "IndexedJoinedNonCrashStep",
+            ),
+        )
+        exact_responsive_recovery_actions_disabled = (
+            "\\A initialContext \\in AdmissibleContextRecords: "
+            "/\\ ~ENABLED "
+            "<<IndexedAsync(initialContext)!PreGstResponsiveRestart>>_("
+            "IndexedAsyncStateAt(initialContext)) "
+            "/\\ ~ENABLED "
+            "<<IndexedAsync(initialContext)!PreGstResponsiveReplay>>_("
+            "IndexedAsyncStateAt(initialContext)) "
+            "/\\ ~ENABLED "
+            "<<IndexedAsync(initialContext)!ResponsiveReplayRunNode>>_("
+            "IndexedAsyncStateAt(initialContext)) "
+            "/\\ ~ENABLED "
+            "<<IndexedAsync(initialContext)!"
+            "ResponsiveReplayServiceIoWorker>>_("
+            "IndexedAsyncStateAt(initialContext)) "
+            "/\\ ~ENABLED "
+            "<<IndexedAsync(initialContext)!DriveResponsiveReplayHead>>_("
+            "IndexedAsyncStateAt(initialContext)) "
+            "/\\ ~ENABLED "
+            "<<IndexedAsync(initialContext)!FinishResponsiveReplay>>_("
+            "IndexedAsyncStateAt(initialContext))"
+        )
+        recovery_actions_disabled = _top_level_operator_body(
+            raw_source,
+            "IndexedResponsiveRecoveryActionsDisabled",
+            preserve_string_contents=True,
+        )
+        if recovery_actions_disabled is None:
+            errors.append(
+                f"{refinement_path}: missing explicit chain operator "
+                "IndexedResponsiveRecoveryActionsDisabled"
+            )
+        else:
+            body, line = recovery_actions_disabled
+            normalized = normalize_chain_contract(body)
+            actual_disabled_actions = tuple(
+                re.findall(
+                    r"<<IndexedAsync\(initialContext\)!\s*"
+                    r"([A-Za-z][A-Za-z0-9_]*)>>_",
+                    body,
+                )
+            )
+            if (
+                normalized
+                != normalize_chain_contract(
+                    exact_responsive_recovery_actions_disabled
+                )
+                or actual_disabled_actions != responsive_recovery_actions
+            ):
+                errors.append(
+                    f"{refinement_path}:{line}: "
+                    "IndexedResponsiveRecoveryActionsDisabled must contain "
+                    "exactly the six reviewed always-disabled recovery actions "
+                    f"{responsive_recovery_actions!r}; "
+                    f"found={actual_disabled_actions!r}"
+                )
+
+        require_chain_theorem_contract(
+            "IndexedInitEstablishesResponsiveRecoveryDormancy",
+            exact=(
+                "IndexedChainInit => IndexedResponsiveRecoveryDormant"
+            ),
+            proof_required=(
+                "IndexedAsync!AsyncRecoveryInit",
+                "IndexedRecovery",
+            ),
+        )
+        require_chain_theorem_contract(
+            "IndexedJoinedAsyncStepPreservesResponsiveRecoveryEligibility",
+            exact=(
+                "\\A initialContext \\in AdmissibleContextRecords: "
+                'IndexedRecovery(initialContext, 1) = "Eligible" '
+                "/\\ IndexedJoinedAsyncNext(initialContext) "
+                "=> IndexedRecovery(initialContext, 1)' = \"Eligible\""
+            ),
+            proof_required=(
+                "IndexedJoinedNonCrashStep",
+                "IndexedAsync!PreGstCrash",
+                "IndexedAsync!AsyncRecoveryControlVars",
+            ),
+        )
+        require_chain_theorem_contract(
+            "IndexedProductActionPreservesResponsiveRecoveryDormancy",
+            exact=(
+                "\\A selectedContext \\in AdmissibleContextRecords: "
+                "IndexedResponsiveRecoveryDormant "
+                "/\\ IndexedProductActionAt(selectedContext) "
+                "=> IndexedResponsiveRecoveryDormant'"
+            ),
+            proof_required=(
+                "IndexedJoinedAsyncStepPreservesResponsiveRecoveryEligibility",
+            ),
+        )
+        require_chain_theorem_contract(
+            "IndexedSuccessorActivationStepStuttersAsyncState",
+            exact=(
+                "\\A parentContext \\in AdmissibleContextRecords, "
+                "node \\in ValidatorIds: "
+                "IndexedSuccessorActivationProgressStep(parentContext, node) "
+                "=> UNCHANGED indexedAsyncState"
+            ),
+            proof_required=("SuccessorActivationEnvironmentStutter",),
+        )
+        require_chain_theorem_contract(
+            "IndexedActionPreservesResponsiveRecoveryDormancy",
+            exact=(
+                "IndexedResponsiveRecoveryDormant /\\ IndexedChainNext "
+                "=> IndexedResponsiveRecoveryDormant'"
+            ),
+            proof_required=(
+                "IndexedProductActionPreservesResponsiveRecoveryDormancy",
+                "IndexedSuccessorActivationStepStuttersAsyncState",
+            ),
+        )
+        require_chain_theorem_contract(
+            "IndexedStepPreservesResponsiveRecoveryDormancy",
+            exact=(
+                "IndexedResponsiveRecoveryDormant "
+                "/\\ [IndexedChainNext]_IndexedChainVars "
+                "=> IndexedResponsiveRecoveryDormant'"
+            ),
+            proof_required=(
+                "IndexedActionPreservesResponsiveRecoveryDormancy",
+            ),
+        )
+        require_chain_theorem_contract(
+            "IndexedChainSpecKeepsResponsiveRecoveryDormant",
+            exact=(
+                "IndexedChainSpec => []IndexedResponsiveRecoveryDormant"
+            ),
+            proof_required=(
+                "IndexedInitEstablishesResponsiveRecoveryDormancy",
+                "IndexedStepPreservesResponsiveRecoveryDormancy",
+                "PTL",
+            ),
+        )
+        require_chain_theorem_contract(
+            "IndexedResponsiveRecoveryDormancyDisablesFairActions",
+            exact=(
+                "IndexedResponsiveRecoveryDormant "
+                "=> IndexedResponsiveRecoveryActionsDisabled"
+            ),
+            proof_required=(
+                "ExpandENABLED",
+                "Isa",
+                *(
+                    f"IndexedAsync!{action}"
+                    for action in responsive_recovery_actions
+                ),
+            ),
+        )
+        require_chain_theorem_contract(
+            "IndexedChainSpecAlwaysDisablesResponsiveRecoveryActions",
+            exact=(
+                "IndexedChainSpec "
+                "=> []IndexedResponsiveRecoveryActionsDisabled"
+            ),
+            proof_required=(
+                "IndexedChainSpecKeepsResponsiveRecoveryDormant",
+                "IndexedResponsiveRecoveryDormancyDisablesFairActions",
+                "PTL",
+            ),
+        )
+        exact_responsive_recovery_fairness = (
+            "IndexedChainSpec "
+            "=> \\A initialContext \\in AdmissibleContextRecords: "
+            "/\\ WF_(IndexedAsyncStateAt(initialContext))("
+            "IndexedAsync(initialContext)!PreGstResponsiveRestart) "
+            "/\\ WF_(IndexedAsyncStateAt(initialContext))("
+            "IndexedAsync(initialContext)!PreGstResponsiveReplay) "
+            "/\\ WF_(IndexedAsyncStateAt(initialContext))("
+            "IndexedAsync(initialContext)!ResponsiveReplayRunNode) "
+            "/\\ WF_(IndexedAsyncStateAt(initialContext))("
+            "IndexedAsync(initialContext)!"
+            "ResponsiveReplayServiceIoWorker) "
+            "/\\ WF_(IndexedAsyncStateAt(initialContext))("
+            "IndexedAsync(initialContext)!DriveResponsiveReplayHead) "
+            "/\\ WF_(IndexedAsyncStateAt(initialContext))("
+            "IndexedAsync(initialContext)!FinishResponsiveReplay)"
+        )
+        require_chain_theorem_contract(
+            "IndexedResponsiveRecoveryFairnessIsVacuous",
+            exact=exact_responsive_recovery_fairness,
+            exact_counts={
+                f"IndexedAsync(initialContext)!{action}": 1
+                for action in responsive_recovery_actions
+            },
+            proof_required=(
+                "IndexedChainSpecAlwaysDisablesResponsiveRecoveryActions",
+                "IndexedResponsiveRecoveryActionsDisabled",
+                "PTL",
+            ),
+        )
+
+        voter_node_domain = (
+            "\\A node \\in IndexedAsync(initialContext)!"
+            "AsyncVotersAt(initialContext):"
+        )
+        responsive_node_domain = "\\A node \\in Responsive:"
+        ordinary_packet_domain = (
+            "\\A recipient \\in Responsive, "
+            "source \\in IndexedAsync(initialContext)!AsyncIngressSources:"
+        )
+        historical_packet_domain = (
+            "\\A recipient \\in ValidatorIds, "
+            "source \\in IndexedAsync(initialContext)!AsyncIngressSources:"
+        )
+        fairness_bridge_contracts = {
+            "IndexedFairActionsRemainEnabledInProduct": (
+                (
+                    voter_node_domain,
+                    (
+                        f"{responsive_node_domain} "
+                        "node \\in joinedByContext[initialContext] "
+                        "=> /\\ (ENABLED IndexedAsync(initialContext)!"
+                        "PostGstRunHistoricalServer(node)"
+                    ),
+                    ordinary_packet_domain,
+                    historical_packet_domain,
+                ),
+                {
+                    "PostGstRunHistoricalServer(node)": 1,
+                    "PostGstServiceIoWorker(node)": 1,
+                    "PostGstAdmitHiddenPacket(recipient, source)": 1,
+                    "PostGstAdmitHistoricalRecoveryPacket(recipient, source)": 1,
+                },
+            ),
+            "IndexedFairProductStepsProjectExactOccurrences": (
+                (
+                    voter_node_domain,
+                    (
+                        f"{responsive_node_domain} "
+                        "/\\ (IndexedHistoricalServerStep(initialContext, node)"
+                    ),
+                    ordinary_packet_domain,
+                    historical_packet_domain,
+                ),
+                {
+                    "PostGstRunHistoricalServer(node)": 1,
+                    "PostGstServiceIoWorker(node)": 1,
+                    "PostGstAdmitHiddenPacket(recipient, source)": 1,
+                    "PostGstAdmitHistoricalRecoveryPacket(recipient, source)": 1,
+                },
+            ),
+            "IndexedFairExactOccurrencesEnableProductOccurrences": (
+                (
+                    voter_node_domain,
+                    (
+                        f"{responsive_node_domain} "
+                        "/\\ (ENABLED <<IndexedAsync(initialContext)!"
+                        "PostGstRunHistoricalServer(node)"
+                    ),
+                    ordinary_packet_domain,
+                    historical_packet_domain,
+                ),
+                {
+                    "PostGstRunHistoricalServer(node)": 1,
+                    "PostGstServiceIoWorker(node)": 1,
+                    "PostGstAdmitHiddenPacket(recipient, source)": 1,
+                    "PostGstAdmitHistoricalRecoveryPacket(recipient, source)": 1,
+                },
+            ),
+        }
+        for symbol, (required_domains, exact_action_counts) in (
+            fairness_bridge_contracts.items()
+        ):
+            require_chain_theorem_contract(
+                symbol,
+                required=required_domains,
+                exact_counts=exact_action_counts,
+            )
+
+        def require_chain_fairness_transfer(
+            symbol: str,
+            domain: str,
+            actions: tuple[str, ...],
+        ) -> None:
+            require_chain_theorem_contract(
+                symbol,
+                required=(domain,),
+                exact_counts={f"{action}(": 1 for action in actions},
+            )
+            extracted = _top_level_theorem_body(
+                raw_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                return
+            theorem_body, theorem_line = extracted
+            theorem_statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+                theorem_body,
+                maxsplit=1,
+            )[0]
+            actual_actions = tuple(
+                re.findall(
+                    r"IndexedAsync\(initialContext\)!\s*"
+                    r"(PostGst[A-Za-z0-9_]+)\(",
+                    theorem_statement,
+                )
+            )
+            if actual_actions != actions:
+                errors.append(
+                    f"{refinement_path}:{theorem_line}: {symbol} must transfer "
+                    f"exactly the indexed Async fair actions {actions!r}; "
+                    f"found {actual_actions!r}"
+                )
+
+        require_chain_fairness_transfer(
+            "IndexedNodeFairnessTransfers",
+            voter_node_domain,
+            ("PostGstRunNode", "PostGstCommitCertificateDiscovery"),
+        )
+        require_chain_fairness_transfer(
+            "IndexedResponsiveServiceFairnessTransfers",
+            responsive_node_domain,
+            ("PostGstRunHistoricalServer", "PostGstServiceIoWorker"),
+        )
+        require_chain_fairness_transfer(
+            "IndexedPacketFairnessTransfers",
+            ordinary_packet_domain,
+            ("PostGstAdmitHiddenPacket",),
+        )
+        require_chain_fairness_transfer(
+            "IndexedHistoricalRecoveryPacketFairnessTransfers",
+            historical_packet_domain,
+            ("PostGstAdmitHistoricalRecoveryPacket",),
+        )
+
+        require_chain_theorem_contract(
+            "IndexedInstanceActivationObligation",
+            exact=(
+                "\\A initialContext \\in AdmissibleContextRecords: "
+                "(/\\ IndexedChainSpec "
+                "/\\ TRUE ~> IndexedAllResponsiveJoined(initialContext)) "
+                "=> IndexedAsync(initialContext)!AsyncSpecAt(initialContext)"
+            ),
+            proof_required=(
+                "IndexedResponsiveRecoveryFairnessIsVacuous",
+                *responsive_recovery_actions,
+                "IndexedNodeFairnessTransfers",
+                "IndexedResponsiveServiceFairnessTransfers",
+                "IndexedHistoricalRecoveryFairnessTransfers",
+                "IndexedPacketFairnessTransfers",
+                "IndexedHistoricalRecoveryPacketFairnessTransfers",
+                ordinary_packet_domain,
+                historical_packet_domain,
+            ),
+            proof_forbidden=(
+                "\\A recipient \\in ValidatorIds, source \\in ValidatorIds:",
+                (
+                    "\\A recipient \\in IndexedAsync(initialContext)!"
+                    "AsyncVotersAt(initialContext), "
+                    "source \\in IndexedAsync(initialContext)!"
+                    "AsyncVotersAt(initialContext):"
+                ),
+            ),
+        )
+
+        require_chain_theorem(
+            "IndexedFreshReceiptActionHasProductExtension",
+            (
+                "\\A initialContext \\in AdmissibleContextRecords: "
+                "(IndexedCompositionInvariant "
+                "/\\ initialContext \\in JoinedContexts "
+                "/\\ ENABLED IndexedFreshReceiptAsyncAction(initialContext)) "
+                "=> ENABLED "
+                "(/\\ IndexedProductActionAt(initialContext) "
+                "/\\ IndexedFreshReceiptAsyncAction(initialContext))"
+            ),
+        )
+        receipt_product_operators = {
+            "IndexedCurrentDecisions": (
+                "{decision \\in IndexedDecisions(initialContext): "
+                "/\\ decision.qc.context = initialContext "
+                "/\\ decision.qc.height = initialContext.height}"
+            ),
+            "IndexedCurrentApplications": (
+                "{application \\in IndexedApplications(initialContext): "
+                "/\\ application.qc.context = initialContext "
+                "/\\ application.qc.height = initialContext.height}"
+            ),
+            "IndexedDecisionEvidence": (
+                "UNION {IndexedCurrentDecisions(initialContext): "
+                "initialContext \\in AdmissibleContextRecords}"
+            ),
+            "IndexedApplicationEvidence": (
+                "UNION {IndexedCurrentApplications(initialContext): "
+                "initialContext \\in AdmissibleContextRecords}"
+            ),
+            "IndexedDecisionReceiptProjection": (
+                "durableDecisionEvidence = IndexedDecisionEvidence"
+            ),
+            "IndexedApplicationReceiptProjection": (
+                "durableApplicationEvidence = IndexedApplicationEvidence"
+            ),
+            "IndexedTotalReceiptProjection": (
+                "/\\ IndexedDecisionReceiptProjection "
+                "/\\ IndexedApplicationReceiptProjection"
+            ),
+            "NewIndexedDecisionReceipt": (
+                "/\\ decision \\notin IndexedDecisions(initialContext) "
+                "/\\ IndexedDecisions(initialContext)' = "
+                "IndexedDecisions(initialContext) \\cup {decision} "
+                "/\\ IndexedApplications(initialContext)' = "
+                "IndexedApplications(initialContext)"
+            ),
+            "NewIndexedApplicationReceipt": (
+                "/\\ application \\notin IndexedApplications(initialContext) "
+                "/\\ IndexedApplications(initialContext)' = "
+                "IndexedApplications(initialContext) \\cup {application} "
+                "/\\ IndexedDecisions(initialContext)' = "
+                "IndexedDecisions(initialContext)"
+            ),
+            "NoNewIndexedDurableReceipt": (
+                "/\\ IndexedDecisions(initialContext)' = "
+                "IndexedDecisions(initialContext) "
+                "/\\ IndexedApplications(initialContext)' = "
+                "IndexedApplications(initialContext)"
+            ),
+            "IndexedReceiptFreeChainStutter": (
+                "/\\ NoNewIndexedDurableReceipt(initialContext) "
+                "/\\ UNCHANGED <<joinedByContext, "
+                "SuccessorActivationVars, Chain!ChainEpochVars>>"
+            ),
+            "IndexedReceiptFreeAsyncAction": (
+                "/\\ IndexedJoinedAsyncNext(initialContext) "
+                "/\\ NoNewIndexedDurableReceipt(initialContext)"
+            ),
+            "IndexedFreshReceiptAsyncAction": (
+                "/\\ IndexedJoinedAsyncNext(initialContext) "
+                "/\\ \\/ \\E decision \\in Chain!DecisionEvidenceSet: "
+                "NewIndexedDecisionReceipt(initialContext, decision) "
+                "\\/ \\E application \\in Chain!DecisionEvidenceSet: "
+                "NewIndexedApplicationReceipt(initialContext, application)"
+            ),
+            "IndexedReceiptClassification": (
+                "\\/ IndexedReceiptFreeChainStutter(initialContext) "
+                "\\/ \\E decision \\in Chain!DecisionEvidenceSet: "
+                "IndexedDecisionReceiptHandoff(initialContext, decision) "
+                "\\/ \\E application \\in Chain!DecisionEvidenceSet: "
+                "IndexedApplicationReceiptHandoff(initialContext, application)"
+            ),
+            "IndexedDecisionReceiptHandoff": (
+                "/\\ NewIndexedDecisionReceipt(initialContext, decision) "
+                "/\\ UNCHANGED <<joinedByContext, SuccessorActivationVars>> "
+                "/\\ \\/ Chain!RecordCertifiedNext(decision) "
+                "\\/ Chain!RecordKnownDecision(decision)"
+            ),
+            "IndexedApplicationReceiptHandoff": (
+                "/\\ NewIndexedApplicationReceipt(initialContext, application) "
+                "/\\ \\/ /\\ ExactNodeLocationAt("
+                "initialContext, application.node) "
+                "/\\ Chain!RecordAppliedNext(application) "
+                "/\\ QueueSuccessorActivation("
+                "initialContext, application.node) "
+                "/\\ UNCHANGED joinedByContext "
+                "\\/ /\\ Chain!RecordKnownApplication(application) "
+                "/\\ UNCHANGED <<joinedByContext, SuccessorActivationVars>>"
+            ),
+        }
+        for symbol, exact_body in receipt_product_operators.items():
+            require_chain_operator(symbol, exact=exact_body)
         require_chain_operator(
             "IndexedSuccessorActivationProgress",
             exact=(
@@ -49742,19 +52232,24 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "IndexedAncestorContext(targetContext, blockHeight))"
             ),
         )
-        require_chain_theorem(
+        require_chain_theorem_contract(
             "HeightLivenessFromOneHeightAndExactRecoveryProgress",
-            (
-                "/\\ IndexedChainSpec "
+            exact=(
+                "/\\ IndexedLiveChainSpec "
                 "/\\ IndexedExactHistoricalRecoveryProgress "
                 "/\\ IndexedSuccessorActivationProgress "
                 "/\\ VerificationOneHeightCompletion "
                 "=> IndexedHeightLivenessProperty"
             ),
+            proof_required=(
+                "IndexedLiveChainSpecProjectsIndexedChainSpec",
+                "VerificationJoinedTargetEventuallyReachesAndEscapes",
+                "VerificationReachedEscapeEventuallyCompletes",
+            ),
         )
         require_chain_operator(
             "IndexedHeightLivenessReleaseTarget",
-            exact="IndexedChainSpec => IndexedHeightLivenessProperty",
+            exact="IndexedLiveChainSpec => IndexedHeightLivenessProperty",
         )
         if _top_level_theorem_body(
             raw_source,
@@ -50418,7 +52913,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"{exact_bridge_proof!r}; found {bridge_proof!r}"
                 )
         if indexed_fairness is not None:
-            fairness_normalized = " ".join(indexed_fairness[0].split())
+            fairness_normalized = normalize_chain_contract(indexed_fairness[0])
             exact_historical_fairness = (
                 "\\A node \\in Responsive: WF_IndexedChainVars( "
                 "IndexedOpenHistoricalRecoveryStep(initialContext, node))",
@@ -50429,27 +52924,105 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "initialContext, node))",
                 "\\A node \\in Responsive: WF_IndexedChainVars( "
                 "IndexedHistoricalRecoveryIoWorkerStep( initialContext, node))",
-                "\\A recipient \\in ValidatorIds, source \\in ValidatorIds: "
+                "\\A recipient \\in ValidatorIds, "
+                "source \\in IndexedAsync(initialContext)!AsyncIngressSources: "
                 "WF_IndexedChainVars( IndexedAdmitHistoricalRecoveryPacketStep( "
                 "initialContext, recipient, source))",
+            )
+            exact_responsive_service_fairness = (
+                "\\A node \\in Responsive: WF_IndexedChainVars( "
+                "IndexedHistoricalServerStep(initialContext, node))",
+                "\\A node \\in Responsive: WF_IndexedChainVars( "
+                "IndexedIoWorkerStep(initialContext, node))",
+            )
+            exact_ordinary_packet_fairness = (
+                "\\A recipient \\in Responsive, "
+                "source \\in IndexedAsync(initialContext)!AsyncIngressSources: "
+                "WF_IndexedChainVars( "
+                "IndexedAdmitPacketStep(initialContext, recipient, source))"
             )
             activation_fairness = (
                 "\\A node \\in Responsive: WF_IndexedChainVars( "
                 "IndexedSuccessorActivationProgressStep( initialContext, node))"
             )
             for exact_fairness in exact_historical_fairness:
-                if fairness_normalized.count(exact_fairness) != 1:
+                normalized_fairness = normalize_chain_contract(exact_fairness)
+                if fairness_normalized.count(normalized_fairness) != 1:
                     errors.append(
                         f"{refinement_path}:{indexed_fairness[1]}: "
                         "IndexedFairness must contain exactly one all-required-"
                         "node exact historical-recovery product clause "
-                        f"{exact_fairness!r}"
+                        f"{normalized_fairness!r}"
                     )
-            if fairness_normalized.count(activation_fairness) != 1:
+            for exact_fairness in exact_responsive_service_fairness:
+                normalized_fairness = normalize_chain_contract(exact_fairness)
+                if fairness_normalized.count(normalized_fairness) != 1:
+                    errors.append(
+                        f"{refinement_path}:{indexed_fairness[1]}: "
+                        "IndexedFairness must contain exactly one Responsive "
+                        "joined archive-service product clause "
+                        f"{normalized_fairness!r}"
+                    )
+            normalized_ordinary_packet_fairness = normalize_chain_contract(
+                exact_ordinary_packet_fairness
+            )
+            if (
+                fairness_normalized.count(normalized_ordinary_packet_fairness)
+                != 1
+            ):
+                errors.append(
+                    f"{refinement_path}:{indexed_fairness[1]}: "
+                    "IndexedFairness must contain exactly one ordinary packet "
+                    "clause over Responsive x AsyncIngressSources"
+                )
+            normalized_activation_fairness = normalize_chain_contract(
+                activation_fairness
+            )
+            if fairness_normalized.count(normalized_activation_fairness) != 1:
                 errors.append(
                     f"{refinement_path}:{indexed_fairness[1]}: IndexedFairness "
                     "must contain exactly one responsive-validator fair "
                     "successor-activation pipeline"
+                )
+            fair_action_names = re.findall(
+                r"WF_IndexedChainVars\s*\(\s*([A-Za-z][A-Za-z0-9_]*)",
+                indexed_fairness[0],
+            )
+            canonical_fair_actions = (
+                "IndexedSetGstStep",
+                "IndexedTickStep",
+                "IndexedRunNodeStep",
+                "IndexedOpenHistoricalRecoveryStep",
+                "IndexedRunHistoricalRecoveryStep",
+                "IndexedCommitCertificateDiscoveryStep",
+                "IndexedHistoricalCommitCertificateDiscoveryStep",
+                "IndexedHistoricalServerStep",
+                "IndexedIoWorkerStep",
+                "IndexedHistoricalRecoveryIoWorkerStep",
+                "IndexedAdmitPacketStep",
+                "IndexedAdmitHistoricalRecoveryPacketStep",
+                "IndexedSuccessorActivationProgressStep",
+            )
+            fair_action_counts = {
+                action: fair_action_names.count(action)
+                for action in canonical_fair_actions
+                if fair_action_names.count(action) != 1
+            }
+            unexpected_fair_actions = sorted(
+                set(fair_action_names).difference(canonical_fair_actions)
+            )
+            if (
+                fair_action_counts
+                or unexpected_fair_actions
+                or len(fair_action_names) != len(canonical_fair_actions)
+            ):
+                errors.append(
+                    f"{refinement_path}:{indexed_fairness[1]}: "
+                    "IndexedFairness must name exactly the 13 canonical indexed "
+                    "product fair actions; "
+                    f"counts={fair_action_counts!r}, "
+                    f"unexpected={unexpected_fair_actions!r}, "
+                    f"total={len(fair_action_names)}"
                 )
 
     liveness_path = formal_dir / "SumeragiV2ChainLivenessProofs.tla"
@@ -50614,23 +53187,54 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
         )
         require_liveness_theorem(
+            "IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress",
+            exact_statement=(
+                "/\\ IndexedLiveChainSpec "
+                "/\\ IndexedExactHistoricalRecoveryProgress "
+                "/\\ IndexedSuccessorActivationProgress "
+                "/\\ VerificationOneHeightCompletion "
+                "=> IndexedExactHeightLivenessProperty"
+            ),
+            required_proof_tokens=(
+                "IndexedLiveChainSpecProjectsIndexedChainSpec",
+                "HeightLivenessFromOneHeightAndExactRecoveryProgress",
+                "IndexedProjectedCompletionReachesExactCompletion",
+            ),
+        )
+        require_liveness_theorem(
+            "IndexedExactHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs",
+            exact_statement=(
+                "/\\ IndexedLiveChainSpec "
+                "/\\ IndexedHistoricalRecoveryTemporalPrerequisites "
+                "=> IndexedExactHeightLivenessProperty"
+            ),
+            required_proof_tokens=(
+                "IndexedLiveChainSpecProjectsIndexedChainSpec",
+                "IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites",
+                "IndexedSuccessorActivationProgressFromStarvationProof",
+                "VerificationOneHeightCompletionObligation",
+                "IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress",
+            ),
+        )
+        require_liveness_theorem(
             "IndexedHeightLivenessFromAsyncHistoricalRecoveryAndSuccessorProofs",
             exact_statement=(
-                "/\\ IndexedChainSpec "
+                "/\\ IndexedLiveChainSpec "
                 "/\\ IndexedHistoricalRecoveryTemporalPrerequisites "
                 "=> IndexedHeightLivenessProperty"
             ),
             required_proof_tokens=(
+                "IndexedLiveChainSpecProjectsIndexedChainSpec",
                 "IndexedExactHistoricalRecoveryFromAsyncTemporalPrerequisites",
                 "IndexedSuccessorActivationProgressFromStarvationProof",
                 "VerificationOneHeightCompletionObligation",
-                "HeightLivenessFromOneHeightAndExactRecoveryProgress",
+                "IndexedExactHeightLivenessFromOneHeightAndExactRecoveryProgress",
             ),
         )
         require_liveness_theorem(
             "HeightLivenessObligation",
             exact_statement=(
-                "IndexedChainSpec => IndexedHeightLivenessProperty"
+                "IndexedLiveChainSpec => IndexedHeightLivenessProperty"
             ),
         )
 
