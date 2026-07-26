@@ -6,8 +6,8 @@ direction: ltr
 source: docs/source/sorafs_release_pipeline_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 15abb16415f47ea687d992531d988b44ca4a5f2f79451f0c5998471d01b14ec1
-source_last_modified: "2026-07-24T01:46:21.546423+00:00"
+source_hash: 3cf97e7c532532c0ae9a6e1f5da066a481c3fe041d413f66d6297aeddbc0d27a
+source_last_modified: "2026-07-25T16:37:50.761316+00:00"
 translation_last_reviewed: null
 ---
 

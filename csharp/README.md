@@ -198,14 +198,13 @@ injected transport and cannot be changed after `HttpClient` construction.
   hashes/status text, lifecycle counters, and revocation metadata before callers
   serialize or trust manually constructed space-directory metadata
 - account/asset/contract alias lookup and resolve helpers validate exact aliases, dataspace, and domain filters before HTTP dispatch, with by-account lookup requiring canonical I105 account ids; alias lookup/resolve responses plus raw account alias lookup, alias index, alias resolution, and alias binding DTO deserialization reject duplicate/type-confused envelopes, duplicate keys inside ignored alias lookup/index/resolution/binding extension JSON, missing or malformed aliases, noncanonical account ids, malformed asset/contract ids, dataspace/source/status fields, null lookup lists/items, required alias-index indexes, negative index fields, and non-positive binding timestamp fields before callers trust alias metadata; direct alias lookup/resolution/binding DTO metadata rejects malformed aliases, dataspace/domain/source/status fields, account ids, asset/contract identifiers, negative indexes, and non-positive binding timestamps before callers can serialize or trust manually constructed alias results
-- typed Torii VPN and SoraFS helpers for `/v1/vpn/profile`, signed VPN quote/session/receipt flows under `/v1/vpn/quotes`, `/v1/vpn/sessions`, and `/v1/vpn/receipts`, `/v1/sorafs/cid/{cid}`, and CID content reads under `/sorafs/cid/{cid}/...`; VPN quote/session/receipt writes validate exact exit-class text, 32-byte quote/payment/metering/lease hex fields, and receipt/voucher hex payload shape before HTTP dispatch; VPN profile, quote, session, receipt, and receipt-list responses plus raw VPN response/native-instruction DTO deserialization reject null, duplicate, or type-confused envelopes, duplicate keys inside ignored VPN response/native-instruction extension JSON, noncanonical account, escrow, and operator account ids, missing or malformed route/DNS/tunnel lists, required native-instruction arrays, and counters, non-positive lease/DNS/MTU operational fields, zero or reversed VPN quote/session/receipt timestamps, missing VPN accounting counters, inconsistent receipt-list totals, and non-exact lowercase SPKI/key/hash/id/native-instruction hex fields before callers trust tunnel or settlement material; VPN session reads/deletes validate 32-byte hex route ids, SoraFS CID lookup/content reads validate lowercase multibase base32 CID route ids, and content relative path identifiers validate exact path segments before dispatch while preserving valid internal SoraFS path text; SoraFS CID lookup responses plus raw CID lookup/file-entry DTO deserialization reject duplicate/type-confused fields, duplicate keys inside ignored CID lookup/file-entry extension JSON, missing or non-exact content CIDs, missing or malformed lowercase manifest digest/id hex, malformed path components, and missing or negative file geometry before callers trust gateway listings; buffered SoraFS content responses reject malformed or duplicated `sora-content-cid` headers and direct malformed content CIDs or negative content lengths before returning content metadata, and defensively copy buffered response bytes; SoraFS pin registration validates canonical I105 authority, exact signer, chunker, storage-class, alias, digest, canonical manifest/proof base64, and successor fields before HTTP dispatch, snapshots inline manifest byte arrays before serialization, and retains explicit digest and storage-class canonicalization after exact preflight; raw chunker/storage-class/pin-policy DTO deserialization rejects null, duplicate, case-drifted, or type-confused fields, duplicate keys inside ignored extension JSON, invalid counters, non-exact chunker text, and unknown storage-class values while canonicalizing omitted optional multihash/retention counters to zero; and pin alias/register responses plus raw pin DTO deserialization reject duplicate/type-confused envelopes, duplicate keys inside ignored pin alias/register extension JSON, noncanonical returned manifest/successor hashes, malformed alias namespace/name/proof base64, unsigned epoch/length/fee counters, malformed fee ids, noncanonical I105 fee treasury account ids, and non-exact `chunker_handle` values before returning trusted DTOs
+- typed Torii VPN and SoraFS helpers for `/v1/vpn/profile`, signed VPN quote/session/receipt flows under `/v1/vpn/quotes`, `/v1/vpn/sessions`, and `/v1/vpn/receipts`, `/v1/sorafs/cid/{cid}`, and CID content reads under `/sorafs/cid/{cid}/...`; VPN quote/session/receipt writes validate exact exit-class text, 32-byte quote/payment/metering/lease hex fields, and receipt/voucher hex payload shape before HTTP dispatch; VPN profile, quote, session, receipt, and receipt-list responses plus raw VPN response/native-instruction DTO deserialization reject null, duplicate, or type-confused envelopes, duplicate keys inside ignored VPN response/native-instruction extension JSON, noncanonical account, escrow, and operator account ids, missing or malformed route/DNS/tunnel lists, required native-instruction arrays, and counters, non-positive lease/DNS/MTU operational fields, zero or reversed VPN quote/session/receipt timestamps, missing VPN accounting counters, inconsistent receipt-list totals, and non-exact lowercase SPKI/key/hash/id/native-instruction hex fields before callers trust tunnel or settlement material; VPN session reads/deletes validate 32-byte hex route ids, SoraFS CID lookup/content reads validate lowercase multibase base32 CID route ids, and content relative path identifiers validate exact path segments before dispatch while preserving valid internal SoraFS path text; SoraFS CID lookup responses plus raw CID lookup/file-entry DTO deserialization reject duplicate/type-confused fields, duplicate keys inside ignored CID lookup/file-entry extension JSON, missing or non-exact content CIDs, missing or malformed lowercase manifest digest/id hex, malformed path components, and missing or negative file geometry before callers trust gateway listings; buffered SoraFS content responses reject malformed or duplicated `sora-content-cid` headers and direct malformed content CIDs or negative content lengths before returning content metadata, and defensively copy buffered response bytes; SoraFS pin registration accepts an already signed `SignedTransactionEnvelope`, posts only its Norito bytes, requires HTTP 202, and returns the strict admission identity (`status: submitted`, transaction hash, and manifest digest) without claiming finality, fees, custody, or pin status; raw chunker/storage-class/pin-policy DTO deserialization rejects null, duplicate, case-drifted, or type-confused fields, duplicate keys inside ignored extension JSON, invalid counters, non-exact chunker text, and unknown storage-class values while canonicalizing omitted optional multihash/retention counters to zero
 - SoraFS CID lookup file path/file-list DTOs snapshot assigned arrays and return
   detached arrays on access while preserving malformed null/missing list
   rejection in the raw converters
-- direct SoraFS CID lookup/file and pin-register response DTO construction rejects
-  malformed CIDs, hashes, path components, noncanonical fee treasury accounts,
-  alias proofs, required pin counters, and negative counts before callers
-  serialize or trust manually constructed SoraFS metadata
+- direct SoraFS CID lookup/file response DTO construction rejects malformed CIDs,
+  hashes, path components, and negative counts before callers serialize or trust
+  manually constructed SoraFS metadata
 - VPN profile, quote, and session network route/DNS/tunnel list DTOs snapshot
   assigned list arrays, return detached arrays on access, and reject null
   elements during direct initialization while preserving missing/null list
@@ -726,7 +725,33 @@ catch (ToriiApiException exception)
 - `ToriiClient.GetExplorerHealthAsync(...)`
 - `ToriiClient.GetExplorerMetricsAsync(...)`
 
-The managed transaction encoder is deterministic and now covers the current asset quantity plus domain, asset, account, and asset-definition metadata slice. The Torii client can also parse generic SSE frames, project the common pipeline, proof, and explorer block/transaction/instruction streams into typed models, read the core explorer JSON endpoints including latest/health/metrics snapshots with typed DTOs, and build/sign the current singular set plus the first fast_dsl iterable-query subset, but broader iterable families, richer instruction families beyond that slice, broader typed event families, and the broader parity surfaces are still open work.
+The managed transaction encoder is deterministic and now covers the current asset quantity, metadata, and native SoraFS replication-order slice. The Torii client can also parse generic SSE frames, project the common pipeline, proof, and explorer block/transaction/instruction streams into typed models, read the core explorer JSON endpoints including latest/health/metrics snapshots with typed DTOs, and build/sign the current singular set plus the first fast_dsl iterable-query subset, but broader iterable families, richer instruction families beyond that slice, broader typed event families, and the broader parity surfaces are still open work.
+
+## SoraFS replication-order instructions
+
+The managed encoder exposes all three canonical V1 instructions through both
+`TransactionInstruction` and fluent `TransactionBuilder` factories:
+
+```csharp
+var issue = TransactionInstruction.IssueReplicationOrder(
+    orderId,
+    replicationOrderBytes,
+    issuedEpoch: 20,
+    deadlineEpoch: 28);
+var complete = TransactionInstruction.CompleteReplicationOrder(
+    orderId,
+    providerId,
+    completionEpoch: 27);
+var expire = TransactionInstruction.ExpireReplicationOrder(
+    orderId,
+    expirationEpoch: 29);
+```
+
+IDs must be non-zero lowercase 64-hex strings. Issue accepts bytes or canonical
+standard base64, caps the decoded archive at 1 MiB, and validates canonical
+`ReplicationOrderV1` framing, ID binding, target/provider ordering, and
+deadlines. Completion has no legacy two-field overload: `providerId` is
+mandatory and becomes the native `provider_id` field.
 
 ## Build
 

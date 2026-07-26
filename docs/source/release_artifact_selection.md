@@ -17,25 +17,29 @@ Each tarball contains:
 - `config/` — profile-specific genesis/client configuration (single vs. nexus). Nexus bundles include `config.toml` with lane and DA parameters.
 - `PROFILE.toml` — metadata describing profile, config, version, commit, OS/arch, and enabled feature set.
 - Metadata artefacts written alongside the tarball:
-  - `<profile>-<version>-<os>.tar.zst`
-  - `<profile>-<version>-<os>.tar.zst.sha256`
-  - `<profile>-<version>-<os>.tar.zst.sig` containing a raw 64-byte Ed25519
-    signature when the complete external-signer option set is supplied
-  - `<profile>-<version>-<os>.tar.zst.pub` containing generated Ed25519 SPKI PEM
-  - `<profile>-<version>-manifest.json` capturing the tarball path, hash,
-    `signature_algorithm=ed25519`, `public_key_format=pem-spki-ed25519`, and
-    the reviewed SHA-256 fingerprint of the exact raw public-key bytes
+  - `<profile>-<version>-<os>-<arch>.tar.zst`
+  - `<profile>-<version>-<os>-<arch>.tar.zst.sha256`
+  - `<profile>-<version>-<os>-<arch>-manifest.json` capturing the target
+    triple, tarball path, and hash
 
 ## Container Images
 
-Container images are produced via `scripts/build_release_image.sh` with the same profile/config arguments.
+Container images are produced via `scripts/build_release_image.sh` for the
+explicit `linux/amd64` and `linux/arm64` platform matrix. The production
+builder accepts only the `single` and `nexus` configurations, requires
+reviewed prebuilt binaries and digest-pinned builder/runtime images, and builds
+the closed context with network access disabled. Taira is intentionally not a
+release-pipeline configuration.
 
 Outputs:
 
-- `<profile>-<version>-<os>-image.tar`
-- `<profile>-<version>-<os>-image.tar.sha256`
-- Ed25519 signature/public key (`*.sig`/`*.pub`) for promotable artifacts
-- `<profile>-<version>-image.json` recording tag, image ID, hash, and signature metadata
+- `<profile>-<version>-linux-<arch>-image.oci.tar`
+- `<profile>-<version>-linux-<arch>-image.oci.tar.sha256`
+- `<profile>-<version>-linux-<arch>-image.json` recording the exact platform,
+  OCI graph, base-image digests, tool digests, and archive hash
+
+The builders deliberately expose no signing interface. The retired
+per-artifact OpenSSL/PEM signature format is not part of V1.
 
 ## Aggregate release inventory
 
@@ -78,37 +82,31 @@ valid for promotion.
    - **SORA Nexus / multi-lane** -> use the `iroha3` bundle and image.
    - **Self-hosted single-lane** -> use the `iroha2` artefacts.
    - When in doubt, run `scripts/select_release_profile.py --network <alias>` or `--chain-id <id>`; the helper maps networks to the correct profile per `release/network_profiles.toml`.
-2. Download the desired tarball and accompanying checksum, signature, public
-   key, and manifest. Promoted artifacts must include all of them; unsigned
-   local builds are development-only. Validate the checksum, compare the
-   manifest's `signer_fingerprint_sha256` with the independently reviewed
-   release-ticket fingerprint, confirm the generated public key is Ed25519,
-   and verify the detached signature before unpacking:
+2. Download the desired tarball, checksum, per-build metadata manifest, and the
+   signed aggregate-manifest tuple. Verify the aggregate tuple first using the
+   command above. Then bind the artifact bytes to both manifests before
+   unpacking:
    ```bash
-   ARTIFACT=iroha3-<version>-linux.tar.zst
-   MANIFEST=iroha3-<version>-manifest.json
-   TRUSTED_SIGNING_FINGERPRINT=<reviewed-lowercase-sha256>
+   ARTIFACT=iroha3-<version>-linux-x86_64.tar.zst
+   MANIFEST=iroha3-<version>-linux-x86_64-manifest.json
 
-   sha256sum -c iroha3-<version>-linux.tar.zst.sha256
-   test "$(jq -r '.artifacts[0].signature_algorithm' "$MANIFEST")" = ed25519
-   test "$(jq -r '.artifacts[0].public_key_format' "$MANIFEST")" = pem-spki-ed25519
-   test "$(jq -r '.artifacts[0].signer_fingerprint_sha256' "$MANIFEST")" \
-     = "$TRUSTED_SIGNING_FINGERPRINT"
-   ACTUAL_SIGNING_FINGERPRINT="$(
-     openssl pkey -pubin -in "$ARTIFACT.pub" -outform DER |
-       python3 -c 'import hashlib,sys; d=sys.stdin.buffer.read(); p=bytes.fromhex("302a300506032b6570032100"); assert len(d)==44 and d.startswith(p); print(hashlib.sha256(d[len(p):]).hexdigest())'
+   sha256sum -c iroha3-<version>-linux-x86_64.tar.zst.sha256
+   EXPECTED_SHA256="$(
+     jq -er --arg artifact "$ARTIFACT" \
+       '.artifacts[] | select(.path == $artifact) | .sha256' \
+       release_manifest.json
    )"
-   test "$ACTUAL_SIGNING_FINGERPRINT" = "$TRUSTED_SIGNING_FINGERPRINT"
-   openssl pkeyutl -verify -pubin -rawin \
-     -inkey "$ARTIFACT.pub" \
-     -in "$ARTIFACT" \
-     -sigfile "$ARTIFACT.sig"
+   test "$(jq -er '.artifacts[0].sha256' "$MANIFEST")" = "$EXPECTED_SHA256"
+   printf '%s  %s\n' "$EXPECTED_SHA256" "$ARTIFACT" | sha256sum -c -
    ```
-   The public-key fingerprint must come from the reviewed release ticket or
-   another authenticated channel; a fingerprint copied only from the
+   The aggregate public-key fingerprint must come from the reviewed release
+   ticket or another authenticated channel; a fingerprint copied only from the
    downloaded manifest does not establish trust.
 3. Extract the bundle (`tar --use-compress-program=zstd -xf <tar>`) and place `bin/` in the deployment PATH. Apply local configuration overrides where necessary.
-4. Load the container image with `docker load -i <profile>-<version>-<os>-image.tar` if using containerised deployments. Verify the hash/signature as above before loading.
+4. Load the container image with
+   `docker load -i <profile>-<version>-linux-<arch>-image.oci.tar` if using
+   containerised deployments. Verify its hash and authenticated
+   aggregate-manifest binding as above before loading.
 
 ## Validator host platform
 
@@ -143,11 +141,12 @@ certification.
 - `scripts/select_release_profile.py --list`
 - `docs/source/sora_nexus_operator_onboarding.md` — end-to-end onboarding flow for Sora Nexus data-space operators once artefacts are selected.
 
-The builders accept no private key. Reference signing requires a reviewed
-PKCS#11/HSM wrapper through `--external-signer`, a raw 32-byte Ed25519 public
-key through `--signing-public-key`, and its independently approved lowercase
-SHA-256 fingerprint through `--trusted-signing-fingerprint`. Aggregate
-production signing and publish-plan validation additionally require the
-packaged `sorafs-validate` candidate and its independently approved exact
-executable SHA-256. OIDC/cosign provenance, hosted scan results, publication
-receipts, and rollback/yank evidence remain external promotion inputs.
+The builders accept no signing or private-key option. Aggregate production
+signing uses a reviewed PKCS#11/HSM wrapper through `--external-signer`, a raw
+32-byte Ed25519 public key through `--signing-public-key`, and its independently
+approved lowercase SHA-256 fingerprint through
+`--trusted-signing-fingerprint`. Signing and publish-plan validation also
+require the packaged `sorafs-validate` candidate and its independently approved
+exact executable SHA-256. OIDC/cosign provenance, hosted scan results,
+publication receipts, and rollback/yank evidence remain external promotion
+inputs.

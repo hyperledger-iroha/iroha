@@ -40,6 +40,19 @@ TEST_MANIFEST = (
 ).encode()
 
 
+def _noncanonical_signature(kind: str) -> bytes:
+    signature = bytearray(TEST_SIGNATURE)
+    if kind == "r":
+        signature[: signing.ED25519_PUBLIC_KEY_SIZE] = b"\xff" * 32
+    elif kind == "s":
+        signature[signing.ED25519_PUBLIC_KEY_SIZE :] = (
+            signing.ED25519_SCALAR_ORDER.to_bytes(32, "little")
+        )
+    else:  # pragma: no cover - test helper contract
+        raise AssertionError(f"unsupported noncanonical component: {kind}")
+    return bytes(signature)
+
+
 def _write_executable(path: Path, body: str) -> None:
     path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
     path.chmod(0o700)
@@ -280,6 +293,148 @@ def test_rejects_wrong_fingerprint_and_malformed_raw_key(tmp_path: Path) -> None
             verifier=verifier,
             verifier_digest=verifier_digest,
         )
+
+
+def test_rejects_rsa_pem_and_noncanonical_or_weak_public_keys(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(tmp_path)
+    verifier, verifier_digest, _ = _native_verifier(tmp_path)
+    signature = tmp_path / "release.sig"
+    signature.write_bytes(TEST_SIGNATURE)
+    signature.chmod(0o600)
+
+    rsa_pem = tmp_path / "rsa-public.pem"
+    rsa_pem.write_bytes(
+        b"-----BEGIN PUBLIC KEY-----\n"
+        b"MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\n"
+        b"-----END PUBLIC KEY-----\n"
+    )
+    rsa_pem.chmod(0o600)
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="exactly 32 raw bytes",
+    ):
+        signing.verify_release_manifest(
+            manifest,
+            signature,
+            rsa_pem,
+            hashlib.sha256(rsa_pem.read_bytes()).hexdigest(),
+            verifier,
+            verifier_digest,
+        )
+
+    noncanonical_key = tmp_path / "noncanonical.raw"
+    noncanonical_key.write_bytes(b"\xff" * signing.ED25519_PUBLIC_KEY_SIZE)
+    noncanonical_key.chmod(0o600)
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="non-canonical point encoding",
+    ):
+        signing.verify_release_manifest(
+            manifest,
+            signature,
+            noncanonical_key,
+            hashlib.sha256(noncanonical_key.read_bytes()).hexdigest(),
+            verifier,
+            verifier_digest,
+        )
+
+    weak_key = tmp_path / "weak.raw"
+    weak_key.write_bytes(b"\x01" + b"\x00" * 31)
+    weak_key.chmod(0o600)
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="native release-manifest Ed25519 verification failed",
+    ):
+        signing.verify_release_manifest(
+            manifest,
+            signature,
+            weak_key,
+            hashlib.sha256(weak_key.read_bytes()).hexdigest(),
+            verifier,
+            verifier_digest,
+        )
+
+
+@pytest.mark.parametrize(
+    ("component", "diagnostic"),
+    (
+        ("r", "non-canonical Ed25519 R encoding"),
+        ("s", "non-canonical Ed25519 scalar"),
+    ),
+)
+def test_signing_rejects_noncanonical_signature_before_native_verification(
+    tmp_path: Path,
+    component: str,
+    diagnostic: str,
+) -> None:
+    manifest = _manifest(tmp_path)
+    raw_key = _raw_public_key(tmp_path)
+    verifier, verifier_digest, invocation_log = _native_verifier(tmp_path)
+    signer = tmp_path / f"noncanonical-{component}-signer"
+    bad_signature = _noncanonical_signature(component)
+    _write_executable(
+        signer,
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"signature = bytes.fromhex({bad_signature.hex()!r})\n"
+        "Path(sys.argv[2]).write_bytes(signature)\n",
+    )
+
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match=diagnostic,
+    ):
+        _sign(
+            tmp_path,
+            manifest,
+            tmp_path / f"noncanonical-{component}.sig",
+            tmp_path / f"noncanonical-{component}.pub",
+            signer=signer,
+            raw_public_key=raw_key,
+            verifier=verifier,
+            verifier_digest=verifier_digest,
+        )
+
+    assert not invocation_log.exists()
+    assert not (tmp_path / f"noncanonical-{component}.sig").exists()
+    assert not (tmp_path / f"noncanonical-{component}.pub").exists()
+
+
+@pytest.mark.parametrize(
+    ("component", "diagnostic"),
+    (
+        ("r", "non-canonical Ed25519 R encoding"),
+        ("s", "non-canonical Ed25519 scalar"),
+    ),
+)
+def test_verification_rejects_noncanonical_signature_before_native_verification(
+    tmp_path: Path,
+    component: str,
+    diagnostic: str,
+) -> None:
+    manifest = _manifest(tmp_path)
+    public_key = _raw_public_key(tmp_path)
+    signature = tmp_path / f"noncanonical-{component}.sig"
+    signature.write_bytes(_noncanonical_signature(component))
+    signature.chmod(0o600)
+    verifier, verifier_digest, invocation_log = _native_verifier(tmp_path)
+
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match=diagnostic,
+    ):
+        signing.verify_release_manifest(
+            manifest,
+            signature,
+            public_key,
+            TEST_FINGERPRINT,
+            verifier,
+            verifier_digest,
+        )
+
+    assert not invocation_log.exists()
 
 
 def test_rejects_noncanonical_manifest_bytes(tmp_path: Path) -> None:

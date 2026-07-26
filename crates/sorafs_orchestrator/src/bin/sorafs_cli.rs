@@ -32,8 +32,10 @@ use iroha_crypto::{PrivateKey, PublicKey};
 use iroha_data_model::{
     account::{AccountId, address::AccountAddress},
     da::types::{BlobDigest, StorageTicketId},
+    id::ChainId,
+    isi::sorafs::RegisterPinManifest,
+    metadata::Metadata,
     name::Name,
-    prelude::ExposedPrivateKey,
     sorafs::{
         moderation::{
             AdversarialCorpusManifestV1, MODERATION_MODEL_MAX_INPUT_BYTES_V1,
@@ -41,16 +43,19 @@ use iroha_data_model::{
             ModerationSignedScreeningResultV1, ModerationThresholdsV1, ModerationTrustPolicyV1,
         },
         pin_registry::{
-            ChunkerProfileHandle, PinManifestFinalizedRecordV1, PinPolicy as RegistryPinPolicy,
-            PinStatus, StorageClass as RegistryStorageClass,
+            ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest,
+            PinManifestFinalizedRecordV1, PinPolicy as RegistryPinPolicy, PinStatus,
+            StorageClass as RegistryStorageClass,
         },
     },
     taikai::{
         TaikaiAudioLayout, TaikaiCodec, TaikaiEventId, TaikaiRenditionId, TaikaiResolution,
         TaikaiStreamId, TaikaiTrackMetadata,
     },
+    transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_primitives::numeric::Quantity;
+use iroha_version::codec::EncodeVersioned;
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use norito::{
     decode_from_bytes,
@@ -84,9 +89,6 @@ use sorafs_car::{
     taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata},
 };
 use sorafs_chunker::ChunkProfile;
-use sorafs_manifest::reputation::signed::{
-    MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES, decode_signed_reputation_snapshot,
-};
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
@@ -94,7 +96,7 @@ use sorafs_manifest::{
     MAX_MANIFEST_ENCODED_BYTES, MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestBuildError, ManifestBuilder,
     ManifestV1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1, PorReportIsoWeek,
     PorWeeklyReportV1, ProofStreamHttpRequestV1, ProofStreamRequestV1, ReputationMerkleProofV1,
-    ReputationSnapshotV1, SignedReputationSnapshotV1, StorageClass, ValidationOutcomeV1,
+    ReputationSnapshotV1, StorageClass, ValidationOutcomeV1,
     chunker_registry as manifest_chunker_registry, decode_manifest_v1_canonical,
     governance_dag_block_cid_v1, validate_governance_dag_head_against_chain_v1,
     validate_governance_log_node_bytes,
@@ -422,7 +424,6 @@ fn run() -> Result<(), String> {
             };
             match sub.as_str() {
                 "fetch" => reputation_fetch(args.collect()),
-                "publish" => reputation_publish(args.collect()),
                 "snapshot" => reputation_snapshot(args.collect()),
                 "watch" => reputation_watch(args.collect()),
                 "verify" => reputation_verify(args.collect()),
@@ -435,7 +436,6 @@ fn run() -> Result<(), String> {
             };
             match sub.as_str() {
                 "prepare" => storage_prepare(args.collect()),
-                "pin" => storage_pin(args.collect()),
                 _ => Err(usage()),
             }
         }
@@ -611,17 +611,15 @@ struct DeployClientConfig {
     torii_url: Option<String>,
     public_key: PublicKey,
     private_key: PrivateKey,
+    chain_id: ChainId,
     chain_discriminant: u16,
 }
 
 struct DeployPackArtifacts {
     manifest: ManifestV1,
-    manifest_bytes: Vec<u8>,
     manifest_digest_hex: String,
     root_cid_hex: String,
     root_cid_base32: String,
-    payload_bytes: Vec<u8>,
-    storage_files: Option<Vec<StorageFileEntryOwned>>,
     gateway_expectations: Vec<GatewayExpectation>,
     payload_kind: &'static str,
     payload_digest_hex: String,
@@ -634,23 +632,8 @@ struct GatewayExpectation {
     blake3_hex: String,
 }
 
-struct StoragePinHttpResponse {
-    endpoint: String,
-    status: StatusCode,
-    response_bytes: Vec<u8>,
-    response_value: Value,
-    already_stored: bool,
-}
-
-impl StoragePinHttpResponse {
-    fn success(&self) -> bool {
-        self.status.is_success() || self.already_stored
-    }
-}
-
 struct PublishPeerDiscovery {
     gateway_base_url: Option<String>,
-    pin_torii_urls: Vec<String>,
     status: Option<u16>,
     error: Option<String>,
 }
@@ -667,6 +650,8 @@ struct ManifestRegisterSubmission {
 struct ManifestSubmitRequest<'a> {
     client: &'a HttpClient,
     torii_base_url: &'a Url,
+    chain_id: &'a ChainId,
+    authority: &'a AccountId,
     private_key: &'a PrivateKey,
     alias_inputs: Option<&'a AliasInputs>,
 }
@@ -678,7 +663,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut name: Option<String> = None;
     let mut out_dir_override: Option<PathBuf> = None;
     let mut gateway_base_url_override: Option<String> = None;
-    let mut explicit_pin_torii_urls: Vec<String> = Vec::new();
     let mut peer_discovery_enabled = true;
     let mut submitted_epoch_override: Option<u64> = None;
     let mut summary_out: Option<PathBuf> = None;
@@ -698,7 +682,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             "--name" => name = Some(value.to_string()),
             "--out-dir" => out_dir_override = Some(PathBuf::from(value)),
             "--gateway-base-url" => gateway_base_url_override = Some(value.to_string()),
-            "--pin-torii-url" => explicit_pin_torii_urls.push(value.to_string()),
             "--submitted-epoch" => {
                 let parsed: u64 = value
                     .parse()
@@ -859,17 +842,13 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let submit_request = ManifestSubmitRequest {
         client: &client,
         torii_base_url: &torii_base_url,
+        chain_id: &client_config.chain_id,
+        authority: &authority,
         private_key: &client_config.private_key,
         alias_inputs: None,
     };
     let registration = if errors.is_empty() {
-        submit_pin_register(
-            &submit_request,
-            &authority_literal,
-            &artifacts.manifest,
-            submitted_epoch,
-            None,
-        )
+        submit_pin_register(&submit_request, &artifacts.manifest, submitted_epoch, None)
     } else {
         Err(
             "skipped paid pin registration because submitted epoch could not be resolved"
@@ -927,7 +906,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     } else {
         PublishPeerDiscovery {
             gateway_base_url: None,
-            pin_torii_urls: Vec::new(),
             status: None,
             error: Some("peer discovery disabled by --no-peer-discovery".to_string()),
         }
@@ -944,17 +922,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             .as_ref()
             .map_or(Value::Null, |url| Value::from(url.clone())),
     );
-    discovery_json.insert(
-        "pin_torii_urls".into(),
-        Value::Array(
-            discovery
-                .pin_torii_urls
-                .iter()
-                .cloned()
-                .map(Value::from)
-                .collect(),
-        ),
-    );
     if let Some(status) = discovery.status {
         discovery_json.insert("status".into(), Value::from(status as u64));
     }
@@ -963,67 +930,17 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     }
     receipt.insert("peer_discovery".into(), Value::Object(discovery_json));
 
-    let pin_endpoints = resolve_pin_torii_urls(
-        &torii_url,
-        &discovery.pin_torii_urls,
-        &explicit_pin_torii_urls,
-    );
     receipt.insert(
-        "pin_endpoints".into(),
-        Value::Array(pin_endpoints.iter().cloned().map(Value::from).collect()),
+        "provider_ingest".into(),
+        Value::Object(Map::from_iter([
+            (
+                "state".into(),
+                Value::from("awaiting_finalized_provider_assignment"),
+            ),
+            ("queued".into(), Value::from(false)),
+            ("direct_http_ingest".into(), Value::from(false)),
+        ])),
     );
-
-    let mut pin_results = Vec::new();
-    if registration_ok {
-        for (index, peer_url) in pin_endpoints.iter().enumerate() {
-            let response_path =
-                out_dir.join(format!("{deploy_name}.storage-pin.{index}.response.json"));
-            let result = submit_storage_pin_request(
-                &client,
-                peer_url,
-                &artifacts.manifest_bytes,
-                &artifacts.payload_bytes,
-                artifacts.storage_files.as_deref(),
-            );
-            let mut entry = Map::new();
-            entry.insert("torii_url".into(), Value::from(peer_url.clone()));
-            entry.insert(
-                "response_path".into(),
-                Value::from(response_path.display().to_string()),
-            );
-            match result {
-                Ok(response) => {
-                    write_bytes(&response_path, &response.response_bytes)?;
-                    let ok = response.success();
-                    entry.insert("endpoint".into(), Value::from(response.endpoint));
-                    entry.insert(
-                        "status".into(),
-                        Value::from(response.status.as_u16() as u64),
-                    );
-                    entry.insert("success".into(), Value::from(ok));
-                    entry.insert(
-                        "already_stored".into(),
-                        Value::from(response.already_stored),
-                    );
-                    if !ok {
-                        let body = String::from_utf8_lossy(&response.response_bytes);
-                        let message = storage_pin_failure_message(response.status, body.as_ref());
-                        entry.insert("error".into(), Value::from(message.clone()));
-                        errors.push(format!("{peer_url}: {message}"));
-                    }
-                }
-                Err(err) => {
-                    entry.insert("success".into(), Value::from(false));
-                    entry.insert("error".into(), Value::from(err.clone()));
-                    errors.push(format!("{peer_url}: {err}"));
-                }
-            }
-            pin_results.push(Value::Object(entry));
-        }
-    } else {
-        errors.push("skipped storage pinning because paid registration failed".to_string());
-    }
-    receipt.insert("pin_results".into(), Value::Array(pin_results));
 
     let gateway_verification = verify_gateway_deploy(
         &client,
@@ -1084,6 +1001,7 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         .and_then(toml::Value::as_str)
         .ok_or_else(|| "client config `[account]` must define `private_key`".to_string())?;
     let chain_discriminant = resolve_deploy_chain_discriminant(&root, account)?;
+    let chain_id = resolve_deploy_chain_id(&root, chain_discriminant)?;
     let public_key = PublicKey::from_str(public_key_raw)
         .map_err(|err| format!("failed to parse client config public_key: {err}"))?;
     let private_key = parse_private_key_inline(private_key_raw)
@@ -1092,8 +1010,41 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         torii_url,
         public_key,
         private_key,
+        chain_id,
         chain_discriminant,
     })
+}
+
+fn resolve_deploy_chain_id(root: &toml::Table, chain_discriminant: u16) -> Result<ChainId, String> {
+    let literal = root
+        .get("chain")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| known_chain_id_for_discriminant(chain_discriminant).map(str::to_owned))
+        .ok_or_else(|| {
+            format!(
+                "client config must define top-level `chain` for network discriminant \
+                 {chain_discriminant}"
+            )
+        })?;
+    literal
+        .parse()
+        .map_err(|err| format!("failed to parse client config chain `{literal}`: {err}"))
+}
+
+fn known_chain_id_for_discriminant(chain_discriminant: u16) -> Option<&'static str> {
+    match chain_discriminant {
+        369 => Some("fc56984b-2be7-431d-840e-21514d1883f0"),
+        753 => Some("00000000-0000-0000-0000-000000000753"),
+        discriminant
+            if discriminant == iroha_config::parameters::defaults::common::chain_discriminant() =>
+        {
+            Some("00000000-0000-0000-0000-000000000000")
+        }
+        _ => None,
+    }
 }
 
 fn resolve_deploy_chain_discriminant(
@@ -1209,7 +1160,7 @@ fn build_deploy_artifacts(
         &stats,
         por_root,
         car_path,
-    );
+    )?;
     let pack_rendered = to_string_pretty(&pack_summary)
         .map_err(|err| format!("failed to render pack summary JSON: {err}"))?;
     write_text(pack_summary_path, pack_rendered.as_bytes())?;
@@ -1266,12 +1217,9 @@ fn build_deploy_artifacts(
 
     Ok(DeployPackArtifacts {
         manifest,
-        manifest_bytes,
         manifest_digest_hex: hex_encode(manifest_digest.as_bytes()),
         root_cid_hex,
         root_cid_base32,
-        payload_bytes,
-        storage_files,
         gateway_expectations,
         payload_kind,
         payload_digest_hex,
@@ -1335,7 +1283,6 @@ fn read_gateway_expectation(
 
 fn submit_pin_register(
     request: &ManifestSubmitRequest<'_>,
-    authority_literal: &str,
     manifest: &ManifestV1,
     submitted_epoch: u64,
     successor_digest: Option<[u8; 32]>,
@@ -1345,20 +1292,21 @@ fn submit_pin_register(
         .join("v1/sorafs/pin/register")
         .map_err(|err| format!("failed to build Torii pin-register endpoint URL: {err}"))?;
     let requested_endpoint = endpoint.as_str().to_string();
-    let payload = build_pin_register_payload(
-        authority_literal,
-        request.private_key.clone(),
+    let transaction = build_pin_register_transaction(
+        request.chain_id,
+        request.authority,
+        request.private_key,
         manifest,
         submitted_epoch,
         request.alias_inputs,
         successor_digest,
     )?;
-    let body_bytes =
-        to_vec(&payload).map_err(|err| format!("failed to encode Torii payload: {err}"))?;
+    let body_bytes = transaction.encode_versioned();
     let response = request
         .client
         .post(endpoint.as_str())
-        .header(CONTENT_TYPE, "application/json")
+        .header(CONTENT_TYPE, "application/x-norito")
+        .header("Accept", "application/json")
         .body(body_bytes)
         .send()
         .map_err(|err| format!("failed to submit manifest to Torii: {err}"))?;
@@ -1385,55 +1333,12 @@ fn submit_pin_register(
     ))
 }
 
-fn submit_storage_pin_request(
-    client: &HttpClient,
-    torii_url: &str,
-    manifest_bytes: &[u8],
-    payload_bytes: &[u8],
-    files: Option<&[StorageFileEntryOwned]>,
-) -> Result<StoragePinHttpResponse, String> {
-    let torii_base_url =
-        Url::parse(torii_url).map_err(|err| format!("invalid Torii URL `{torii_url}`: {err}"))?;
-    let torii_endpoint = torii_base_url
-        .join("v1/sorafs/storage/pin")
-        .map_err(|err| format!("failed to build Torii storage pin endpoint URL: {err}"))?;
-    let request_body = norito::json!({
-        "manifest_b64": (BASE64_STANDARD.encode(manifest_bytes)),
-        "payload_b64": (BASE64_STANDARD.encode(payload_bytes)),
-        "files": (storage_files_to_json_value(files)),
-    });
-    let body_bytes =
-        to_vec(&request_body).map_err(|err| format!("failed to encode Torii payload: {err}"))?;
-    let response = client
-        .post(torii_endpoint.as_str())
-        .header(CONTENT_TYPE, "application/json")
-        .body(body_bytes)
-        .send()
-        .map_err(|err| format!("failed to submit storage pin request to Torii: {err}"))?;
-    let status = response.status();
-    let response_bytes = response
-        .bytes()
-        .map_err(|err| format!("failed to read Torii response: {err}"))?
-        .to_vec();
-    let response_value = decode_response_value_or_text(&response_bytes);
-    let response_text = String::from_utf8_lossy(&response_bytes);
-    let already_stored = status == StatusCode::CONFLICT && response_text.contains("already stored");
-    Ok(StoragePinHttpResponse {
-        endpoint: torii_endpoint.as_str().to_string(),
-        status,
-        response_bytes,
-        response_value,
-        already_stored,
-    })
-}
-
 fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishPeerDiscovery {
     let endpoint = match torii_base_url.join("v1/sorafs/storage/peers") {
         Ok(endpoint) => endpoint,
         Err(err) => {
             return PublishPeerDiscovery {
                 gateway_base_url: None,
-                pin_torii_urls: Vec::new(),
                 status: None,
                 error: Some(format!(
                     "failed to build peer discovery endpoint URL: {err}"
@@ -1450,7 +1355,6 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         Err(err) => {
             return PublishPeerDiscovery {
                 gateway_base_url: None,
-                pin_torii_urls: Vec::new(),
                 status: None,
                 error: Some(format!("peer discovery unavailable: {err}")),
             };
@@ -1462,7 +1366,6 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         Err(err) => {
             return PublishPeerDiscovery {
                 gateway_base_url: None,
-                pin_torii_urls: Vec::new(),
                 status: Some(status.as_u16()),
                 error: Some(format!("failed to read peer discovery response: {err}")),
             };
@@ -1471,7 +1374,6 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
     if !status.is_success() {
         return PublishPeerDiscovery {
             gateway_base_url: None,
-            pin_torii_urls: Vec::new(),
             status: Some(status.as_u16()),
             error: Some(format!(
                 "peer discovery returned {status}; falling back to primary Torii URL"
@@ -1483,7 +1385,6 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         Err(err) => {
             return PublishPeerDiscovery {
                 gateway_base_url: None,
-                pin_torii_urls: Vec::new(),
                 status: Some(status.as_u16()),
                 error: Some(format!("failed to parse peer discovery JSON: {err}")),
             };
@@ -1493,48 +1394,11 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         .get("gateway_base_url")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let pin_torii_urls = value
-        .get("pin_torii_urls")
-        .and_then(Value::as_array)
-        .map(|urls| {
-            urls.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
     PublishPeerDiscovery {
         gateway_base_url,
-        pin_torii_urls,
         status: Some(status.as_u16()),
         error: None,
     }
-}
-
-fn resolve_pin_torii_urls(
-    primary: &str,
-    discovered: &[String],
-    explicit: &[String],
-) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut urls = Vec::new();
-    for url in discovered.iter().chain(explicit.iter()) {
-        let normalized = normalize_url_for_receipt(url);
-        if normalized.is_empty() {
-            continue;
-        }
-        if seen.insert(normalized.clone()) {
-            urls.push(normalized);
-        }
-    }
-    let normalized_primary = normalize_url_for_receipt(primary);
-    if !normalized_primary.is_empty() && seen.insert(normalized_primary.clone()) {
-        urls.push(normalized_primary);
-    }
-    if urls.is_empty() {
-        urls.push(normalize_url_for_receipt(primary));
-    }
-    urls
 }
 
 fn verify_gateway_deploy(
@@ -1701,19 +1565,6 @@ fn write_deploy_receipt_and_stdout(path: &Path, value: &Value) -> Result<(), Str
         to_string_pretty(value).map_err(|err| format!("failed to render deploy receipt: {err}"))?;
     println!("{rendered}");
     write_text(path, rendered.as_bytes())
-}
-
-fn storage_pin_failure_message(status: StatusCode, response_text: &str) -> String {
-    let mut message =
-        format!("Torii returned {status} when pinning bundle into storage: {response_text}");
-    if status == StatusCode::PAYMENT_REQUIRED
-        || response_text.contains("no paid pin registry record")
-    {
-        message.push_str(
-            ". Register the paid pin first with `sorafs_cli deploy --payload=PATH --client-config=PATH` or `sorafs_cli manifest submit` before running `sorafs_cli storage pin`.",
-        );
-    }
-    message
 }
 
 fn sanitize_deploy_name(raw: &str) -> String {
@@ -2682,7 +2533,7 @@ fn emit_car_and_artifacts(
         write_text(plan_path, spec_json.as_bytes())?;
     }
 
-    let summary = render_summary(&input, descriptor, handle, &plan, &stats, por_root, car_out);
+    let summary = render_summary(&input, descriptor, handle, &plan, &stats, por_root, car_out)?;
     let rendered =
         to_string_pretty(&summary).map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
@@ -2704,7 +2555,10 @@ fn render_summary(
     stats: &sorafs_car::CarWriteStats,
     por_root: [u8; 32],
     car_path: &Path,
-) -> Value {
+) -> Result<Value, String> {
+    let chunk_fetch_specs = plan
+        .try_chunk_fetch_specs()
+        .map_err(|err| format!("failed to validate chunk fetch plan: {err}"))?;
     let mut obj = Map::new();
     obj.insert("chunker_handle".into(), Value::from(handle));
     obj.insert(
@@ -2732,9 +2586,7 @@ fn render_summary(
     );
     obj.insert(
         "chunk_digest_sha3_256_hex".into(),
-        Value::from(hex_encode(chunk_digest_sha3_from_specs(
-            &plan.chunk_fetch_specs(),
-        ))),
+        Value::from(hex_encode(chunk_digest_sha3_from_specs(&chunk_fetch_specs))),
     );
     obj.insert("por_root_hex".into(), Value::from(hex_encode(por_root)));
     obj.insert(
@@ -2767,7 +2619,7 @@ fn render_summary(
             obj.insert("input_file_count".into(), Value::from(*file_count));
         }
     }
-    Value::Object(obj)
+    Ok(Value::Object(obj))
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -2932,17 +2784,15 @@ fn format_car_error(err: CarWriteError) -> String {
 fn usage() -> String {
     "Usage:
   sorafs_cli norito build --source=PATH --bytecode-out=PATH [--summary-out=PATH]
-  sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--submitted-epoch=EPOCH] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--pin-torii-url=URL...] [--no-peer-discovery] [--summary-out=PATH]
+  sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--submitted-epoch=EPOCH] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
-  sorafs_cli storage pin --manifest=PATH --payload=PATH --torii-url=URL [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
-  sorafs_cli reputation publish --torii-url=URL --snapshot=SIGNED_ENVELOPE.to [--summary-out=PATH]
   sorafs_cli reputation snapshot --torii-url=URL [--output=PATH] [--summary-out=PATH]
   sorafs_cli reputation fetch --torii-url=URL --provider-id=ID [--format=table|json] [--summary-out=PATH]
   sorafs_cli reputation watch --torii-url=URL [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
@@ -2987,7 +2837,6 @@ fn usage() -> String {
 
 fn reputation_usage() -> String {
     "Usage:
-  sorafs_cli reputation publish --torii-url=URL --snapshot=SIGNED_ENVELOPE.to [--summary-out=PATH]
   sorafs_cli reputation snapshot --torii-url=URL [--output=PATH] [--summary-out=PATH]
   sorafs_cli reputation fetch --torii-url=URL --provider-id=ID [--format=table|json] [--summary-out=PATH]
   sorafs_cli reputation watch --torii-url=URL [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
@@ -11969,9 +11818,9 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
             AppealSettlementError::MissingDecisionRule { decision } => {
                 format!("settlement config is missing a rule for `{decision}`")
             }
-            AppealSettlementError::InvalidPanelSize | AppealSettlementError::Arithmetic(_) => {
-                err.to_string()
-            }
+            AppealSettlementError::InvalidPanelSize
+            | AppealSettlementError::InvalidXorQuantity { .. }
+            | AppealSettlementError::Arithmetic(_) => err.to_string(),
         })?;
 
     let context = AppealSettlementInputs {
@@ -15711,6 +15560,17 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         )
     })?;
     let authority_literal = authority_payload_literal(&authority, authority_network_prefix)?;
+    let chain_discriminant = authority_network_prefix
+        .unwrap_or_else(iroha_config::parameters::defaults::common::chain_discriminant);
+    let chain_literal = known_chain_id_for_discriminant(chain_discriminant).ok_or_else(|| {
+        format!(
+            "cannot infer a transaction chain id from network discriminant {chain_discriminant}; \
+             use a supported chain-specific account address"
+        )
+    })?;
+    let chain_id: ChainId = chain_literal
+        .parse()
+        .map_err(|err| format!("failed to parse inferred chain id `{chain_literal}`: {err}"))?;
     let private_key = match (private_key_inline, private_key_path) {
         (Some(inline), None) => parse_private_key_inline(&inline)?,
         (None, Some(path)) => load_private_key_from_file(&path)?,
@@ -15756,10 +15616,11 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         &ManifestSubmitRequest {
             client: &client,
             torii_base_url: &torii_base_url,
+            chain_id: &chain_id,
+            authority: &authority,
             private_key: &private_key,
             alias_inputs: alias_inputs.as_ref(),
         },
-        &authority_literal,
         &manifest,
         submitted_epoch,
         successor_digest,
@@ -15954,153 +15815,6 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
 
     Ok(())
 }
-
-fn storage_pin(raw_args: Vec<String>) -> Result<(), String> {
-    let mut manifest_path: Option<PathBuf> = None;
-    let mut payload_path: Option<PathBuf> = None;
-    let mut torii_url: Option<String> = None;
-    let mut summary_out: Option<PathBuf> = None;
-    let mut response_out: Option<PathBuf> = None;
-
-    for arg in raw_args {
-        let (key, value) = arg
-            .split_once('=')
-            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
-        match key {
-            "--manifest" => manifest_path = Some(PathBuf::from(value)),
-            "--payload" => payload_path = Some(PathBuf::from(value)),
-            "--torii-url" => torii_url = Some(value.to_string()),
-            "--summary-out" => summary_out = Some(PathBuf::from(value)),
-            "--response-out" => response_out = Some(PathBuf::from(value)),
-            _ => {
-                return Err(format!(
-                    "unrecognised option `{key}` for `sorafs_cli storage pin`"
-                ));
-            }
-        }
-    }
-
-    let manifest_path = manifest_path.ok_or_else(|| {
-        "missing required `--manifest=PATH` for `sorafs_cli storage pin`".to_string()
-    })?;
-    let payload_path = payload_path.ok_or_else(|| {
-        "missing required `--payload=PATH` for `sorafs_cli storage pin`".to_string()
-    })?;
-    let torii_url = torii_url.ok_or_else(|| {
-        "missing required `--torii-url=URL` for `sorafs_cli storage pin`".to_string()
-    })?;
-
-    let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
-        format!(
-            "failed to read manifest `{}`: {err}",
-            manifest_path.display()
-        )
-    })?;
-    let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes)
-        .map_err(|err| format!("failed to decode manifest: {err}"))?;
-    let manifest_digest = manifest
-        .digest()
-        .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-    let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
-    let manifest_id_hex = manifest_root_cid_hex(&manifest)?;
-
-    let (payload_bytes, files, payload_kind) = load_storage_pin_payload(&payload_path, &manifest)?;
-    let payload_bytes_len = u64::try_from(payload_bytes.len())
-        .map_err(|_| "payload exceeds host limits".to_string())?;
-    let payload_file_count = files.as_ref().map_or(0_u64, |entries| {
-        u64::try_from(entries.len()).unwrap_or(u64::MAX)
-    });
-
-    let client = HttpClient::builder()
-        .build()
-        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
-    let response = submit_storage_pin_request(
-        &client,
-        &torii_url,
-        &manifest_bytes,
-        &payload_bytes,
-        files.as_deref(),
-    )?;
-
-    if let Some(path) = response_out {
-        write_bytes(&path, &response.response_bytes)?;
-    }
-
-    let response_text = String::from_utf8_lossy(&response.response_bytes);
-    if !response.success() {
-        return Err(storage_pin_failure_message(
-            response.status,
-            response_text.as_ref(),
-        ));
-    }
-
-    let mut summary = Map::new();
-    summary.insert("torii_url".into(), Value::from(torii_url));
-    summary.insert("torii_endpoint".into(), Value::from(response.endpoint));
-    summary.insert(
-        "status".into(),
-        Value::from(response.status.as_u16() as u64),
-    );
-    summary.insert(
-        "manifest_path".into(),
-        Value::from(manifest_path.display().to_string()),
-    );
-    summary.insert(
-        "payload_path".into(),
-        Value::from(payload_path.display().to_string()),
-    );
-    summary.insert("payload_kind".into(), Value::from(payload_kind));
-    summary.insert("payload_bytes".into(), Value::from(payload_bytes_len));
-    summary.insert("payload_file_count".into(), Value::from(payload_file_count));
-    summary.insert(
-        "manifest_digest_hex".into(),
-        Value::from(manifest_digest_hex),
-    );
-    summary.insert("manifest_id_hex".into(), Value::from(manifest_id_hex));
-    summary.insert(
-        "chunker_handle".into(),
-        Value::from(format!(
-            "{}.{}@{}",
-            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
-        )),
-    );
-    summary.insert(
-        "already_stored".into(),
-        Value::from(response.already_stored),
-    );
-    summary.insert("torii_response".into(), response.response_value);
-
-    let rendered = to_string_pretty(&Value::Object(summary))
-        .map_err(|err| format!("failed to render summary: {err}"))?;
-    println!("{rendered}");
-    if let Some(path) = summary_out {
-        write_text(&path, rendered.as_bytes())?;
-    }
-
-    Ok(())
-}
-
-fn manifest_root_cid_hex(manifest: &ManifestV1) -> Result<String, String> {
-    if manifest.root_cid.is_empty() {
-        return Err("manifest root_cid is empty".to_string());
-    }
-
-    Ok(hex_encode(&manifest.root_cid))
-}
-
-fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, String> {
-    Ok(ChunkProfile {
-        min_size: usize::try_from(manifest.chunking.min_size)
-            .map_err(|_| "manifest chunking.min_size exceeds host limits".to_string())?,
-        target_size: usize::try_from(manifest.chunking.target_size)
-            .map_err(|_| "manifest chunking.target_size exceeds host limits".to_string())?,
-        max_size: usize::try_from(manifest.chunking.max_size)
-            .map_err(|_| "manifest chunking.max_size exceeds host limits".to_string())?,
-        break_mask: u64::from(manifest.chunking.break_mask),
-    })
-}
-
-type StoragePinPayload = (Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str);
 
 fn load_storage_pin_payload(
     input: &Path,
@@ -16542,51 +16256,6 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn reputation_publish(raw_args: Vec<String>) -> Result<(), String> {
-    let mut torii_url: Option<String> = None;
-    let mut snapshot_path: Option<PathBuf> = None;
-    let mut summary_out: Option<PathBuf> = None;
-
-    for arg in raw_args {
-        let (key, value) = arg
-            .split_once('=')
-            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
-        match key {
-            "--torii-url" => torii_url = Some(value.to_string()),
-            "--snapshot" => snapshot_path = Some(PathBuf::from(value)),
-            "--summary-out" => summary_out = Some(PathBuf::from(value)),
-            _ => {
-                return Err(format!(
-                    "unrecognised option `{key}` for `sorafs_cli reputation publish`"
-                ));
-            }
-        }
-    }
-
-    let torii_url = torii_url.ok_or_else(|| {
-        "missing required `--torii-url=URL` for `sorafs_cli reputation publish`".to_string()
-    })?;
-    let snapshot_path = snapshot_path.ok_or_else(|| {
-        "missing required `--snapshot=PATH` for `sorafs_cli reputation publish`".to_string()
-    })?;
-    let envelope = read_signed_reputation_snapshot(&snapshot_path)?;
-    let body = to_vec(&envelope)
-        .map_err(|err| format!("failed to encode signed reputation snapshot JSON: {err}"))?;
-    let client = HttpClient::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
-    let endpoint = reputation_endpoint(&torii_url, "v1/sorafs/reputation/latest")?;
-    let response = client
-        .post(endpoint.as_str())
-        .header(CONTENT_TYPE, "application/json")
-        .body(body)
-        .send()
-        .map_err(|err| format!("failed to publish reputation snapshot to `{endpoint}`: {err}"))?;
-    let value = read_json_response(response, "reputation publish", endpoint.as_str())?;
-    emit_reputation_json(value, summary_out.as_deref())
-}
-
 fn reputation_snapshot(raw_args: Vec<String>) -> Result<(), String> {
     let mut torii_url: Option<String> = None;
     let mut output: Option<PathBuf> = None;
@@ -16799,14 +16468,6 @@ fn read_reputation_snapshot(path: &Path) -> Result<ReputationSnapshotV1, String>
         .validate()
         .map_err(|err| format!("invalid reputation snapshot: {err}"))?;
     Ok(snapshot)
-}
-
-fn read_signed_reputation_snapshot(path: &Path) -> Result<SignedReputationSnapshotV1, String> {
-    let maximum = u64::try_from(MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES)
-        .map_err(|_| "signed reputation snapshot size cap does not fit u64".to_owned())?;
-    let envelope_bytes = read_file_bounded(path, maximum, "signed reputation snapshot")?;
-    decode_signed_reputation_snapshot(&envelope_bytes)
-        .map_err(|err| format!("failed to decode signed reputation snapshot: {err}"))
 }
 
 fn reputation_endpoint(torii_url: &str, route: &str) -> Result<Url, String> {
@@ -20763,7 +20424,6 @@ fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str
     match payload {
         GovernanceLogPayloadV1::ProviderAdvert(_) => "provider_advert",
         GovernanceLogPayloadV1::ReplicationOrder(_) => "replication_order",
-        GovernanceLogPayloadV1::PorChallenge(_) => "por_challenge",
         GovernanceLogPayloadV1::PorProof(_) => "por_proof",
         GovernanceLogPayloadV1::PdpArchive(_) => "pdp_archive",
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict",
@@ -21284,53 +20944,42 @@ fn alias_inputs_from_flags(
     }
 }
 
-fn build_pin_register_payload(
-    authority_literal: &str,
-    private_key: PrivateKey,
+fn build_pin_register_transaction(
+    chain_id: &ChainId,
+    authority: &AccountId,
+    private_key: &PrivateKey,
     manifest: &ManifestV1,
     submitted_epoch: u64,
     alias: Option<&AliasInputs>,
     successor_of: Option<[u8; 32]>,
-) -> Result<Value, String> {
+) -> Result<iroha_data_model::transaction::SignedTransaction, String> {
     let manifest_payload = manifest
         .encode()
         .map_err(|err| format!("failed to encode canonical manifest payload: {err}"))?;
-
-    let mut map = Map::new();
-    map.insert(
-        "authority".into(),
-        Value::from(authority_literal.to_owned()),
-    );
-    map.insert(
-        "private_key".into(),
-        to_value(&ExposedPrivateKey(private_key))
-            .map_err(|err| format!("failed to serialise private key: {err}"))?,
-    );
-    map.insert(
-        "manifest_payload".into(),
-        Value::from(BASE64_STANDARD.encode(manifest_payload)),
-    );
-    map.insert("submitted_epoch".into(), Value::from(submitted_epoch));
-
-    if let Some(alias) = alias {
-        let mut alias_map = Map::new();
-        alias_map.insert("namespace".into(), Value::from(alias.namespace.clone()));
-        alias_map.insert("name".into(), Value::from(alias.name.clone()));
-        alias_map.insert(
-            "proof_base64".into(),
-            Value::from(BASE64_STANDARD.encode(&alias.proof)),
-        );
-        map.insert("alias".into(), Value::from(alias_map));
-    }
-
-    if let Some(successor) = successor_of {
-        map.insert(
-            "successor_of_hex".into(),
-            Value::from(hex_encode(successor)),
-        );
-    }
-
-    Ok(Value::Object(map))
+    let alias = alias.map(|alias| ManifestAliasBinding {
+        namespace: alias.namespace.clone(),
+        name: alias.name.clone(),
+        proof: alias.proof.clone(),
+    });
+    let successor_of = successor_of
+        .map(|successor| {
+            if successor == [0; 32] {
+                return Err("successor_of must not be the all-zero digest".to_owned());
+            }
+            Ok(ManifestDigest::new(successor))
+        })
+        .transpose()?;
+    let instruction =
+        RegisterPinManifest::new(manifest_payload, submitted_epoch, alias, successor_of);
+    TransactionBuilder::new(
+        chain_id.clone(),
+        authority.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction])
+    .with_metadata(Metadata::default())
+    .try_sign(private_key)
+    .map_err(|err| format!("failed to sign pin-register transaction locally: {err}"))
 }
 
 struct ManifestProposalSummary<'a> {
@@ -21479,7 +21128,6 @@ fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
 mod tests {
     use std::{fs, path::Path};
 
-    use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         metadata::Metadata,
@@ -21490,12 +21138,7 @@ mod tests {
     use norito::json::Map;
     use sorafs_car::{ChunkStore, por_json::sample_to_map};
     use sorafs_manifest::{
-        GovernanceProofs, PinPolicy as ManifestPinPolicy, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-        REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
-        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-        ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1, ReputationWeightsV1,
-        SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, StorageClass as ManifestStorageClass,
-        build_reputation_snapshot,
+        GovernanceProofs, PinPolicy as ManifestPinPolicy, StorageClass as ManifestStorageClass,
     };
     use sorafs_orchestrator::{PolicyReport, PolicyStatus};
     use tempfile::tempdir;
@@ -21911,73 +21554,6 @@ mod tests {
     }
 
     #[test]
-    fn signed_reputation_publish_input_uses_bounded_canonical_envelope_decode() {
-        let input = ReputationProviderInputV1 {
-            version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
-            provider_id: "provider-a".to_owned(),
-            metrics: ReputationProviderMetricsV1 {
-                version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
-                por_success_bps: 9_800,
-                pdp_success_bps: 9_700,
-                potr_success_bps: 9_600,
-                latency_health_bps: 9_500,
-                dispute_rate_bps: 0,
-                token_violation_rate_bps: 0,
-                repair_breach_rate_bps: 0,
-            },
-            reserve_stage: ReputationReserveStageV1::Active,
-            previous_score_bps: None,
-            active_dispute: false,
-            slashing_event: false,
-        };
-        let scoring_evidence = ReputationScoringEvidenceV1 {
-            version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
-            provider_inputs: vec![input.clone()],
-            trust_edges: Vec::new(),
-        };
-        let snapshot = build_reputation_snapshot(
-            [0x42; 16],
-            1_800_000_000,
-            ReputationWeightsV1::default(),
-            &[input],
-            None,
-        )
-        .expect("build reputation snapshot");
-        let mut envelope = SignedReputationSnapshotV1 {
-            version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
-            policy_digest: [0xA5; 32],
-            snapshot,
-            scoring_evidence_digest: scoring_evidence
-                .canonical_digest()
-                .expect("evidence digest"),
-            scoring_evidence,
-            signatures: Vec::new(),
-        };
-        let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
-        envelope.signatures.push(ReputationSnapshotSignatureV1 {
-            signer_id: "council-1".to_owned(),
-            signature: signing_key
-                .sign(&envelope.signing_digest().expect("signing digest"))
-                .to_bytes(),
-        });
-
-        let temp = tempdir().expect("temp dir");
-        let path = temp.path().join("signed-reputation.to");
-        let canonical = envelope.canonical_bytes().expect("encode signed envelope");
-        fs::write(&path, &canonical).expect("write signed envelope");
-        assert_eq!(
-            read_signed_reputation_snapshot(&path).expect("decode signed envelope"),
-            envelope
-        );
-
-        let mut noncanonical = canonical;
-        noncanonical.push(0);
-        fs::write(&path, noncanonical).expect("write trailing bytes");
-        assert!(read_signed_reputation_snapshot(&path).is_err());
-        assert!(reputation_usage().contains("SIGNED_ENVELOPE.to"));
-    }
-
-    #[test]
     fn numeric_arg_parsers_reject_noncanonical_unsigned_tokens() {
         for value in ["", " 1", "1 ", "+1", "01", "1_000", "-1"] {
             let err = parse_u64_arg("--timeout-ms", value, "sorafs_cli moderation runner-canary")
@@ -22255,40 +21831,45 @@ mod tests {
     }
 
     #[test]
-    fn build_pin_register_payload_uses_supplied_authority_literal() {
+    fn build_pin_register_transaction_signs_exact_native_instruction_locally() {
         let manifest = sample_manifest();
-        let account = fixture_account(0x8D);
-        let authority_literal = account
-            .to_i105_for_discriminant(369)
-            .expect("encode taira authority");
+        let key_pair = fixture_keypair(0x9E);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let chain_id: ChainId = "fc56984b-2be7-431d-840e-21514d1883f0"
+            .parse()
+            .expect("chain id");
 
-        let payload = build_pin_register_payload(
-            &authority_literal,
-            fixture_keypair(0x9E).private_key().clone(),
+        let transaction = build_pin_register_transaction(
+            &chain_id,
+            &authority,
+            key_pair.private_key(),
             &manifest,
             99,
             None,
             None,
         )
-        .expect("build payload");
+        .expect("build signed transaction");
 
+        transaction.verify_signature().expect("signature verifies");
+        assert_eq!(transaction.chain(), &chain_id);
+        assert_eq!(transaction.authority(), &authority);
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            transaction.instructions()
+        else {
+            panic!("pin registration must use native instructions");
+        };
+        let [instruction] = instructions.as_ref() else {
+            panic!("pin registration must contain exactly one instruction");
+        };
+        let register = instruction
+            .as_any()
+            .downcast_ref::<RegisterPinManifest>()
+            .expect("RegisterPinManifest");
         assert_eq!(
-            payload["authority"].as_str().expect("authority literal"),
-            authority_literal
+            register.manifest_payload,
+            manifest.encode().expect("canonical manifest payload")
         );
-        let expected_manifest_payload =
-            BASE64_STANDARD.encode(manifest.encode().expect("canonical manifest payload"));
-        assert_eq!(
-            payload["manifest_payload"]
-                .as_str()
-                .expect("manifest payload"),
-            expected_manifest_payload
-        );
-        assert_eq!(payload["submitted_epoch"], Value::from(99_u64));
-        assert!(payload.get("gas_asset_id").is_none());
-        assert!(payload.get("manifest_digest_hex").is_none());
-        assert!(payload.get("chunk_digest_sha3_256_hex").is_none());
-        assert!(payload.get("pin_policy").is_none());
+        assert_eq!(register.submitted_epoch, 99);
     }
 
     #[test]

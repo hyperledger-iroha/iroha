@@ -3490,6 +3490,15 @@ struct RemoteHydrationSource {
     provider_ids: Vec<[u8; 32]>,
 }
 
+const SORAFS_REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
+const SORAFS_REPLICATION_ORDER_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
+    sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
+    SORAFS_REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1,
+    131_072,
+    SORAFS_REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1 * 4,
+    32,
+);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RemoteHydrationPlan {
     manifest_id_hex: String,
@@ -14573,7 +14582,20 @@ fn collect_remote_hydration_sources(
         if !manifest_is_committed(view, state, record.manifest_digest.as_bytes()) {
             continue;
         }
-        let order = match norito::decode_from_bytes::<ReplicationOrderV1>(&record.canonical_order) {
+        if record.canonical_order.is_empty()
+            || record.canonical_order.len() > SORAFS_REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
+        {
+            iroha_logger::warn!(
+                manifest_digest = %hex::encode(record.manifest_digest.as_bytes()),
+                canonical_bytes = record.canonical_order.len(),
+                "rejected oversized canonical SoraFS replication order during Soracloud hydration"
+            );
+            continue;
+        }
+        let order = match norito::decode_from_bytes_with_limits::<ReplicationOrderV1>(
+            &record.canonical_order,
+            SORAFS_REPLICATION_ORDER_DECODE_LIMITS_V1,
+        ) {
             Ok(order) => order,
             Err(error) => {
                 iroha_logger::warn!(
@@ -14584,17 +14606,35 @@ fn collect_remote_hydration_sources(
                 continue;
             }
         };
-        if order.manifest_cid.is_empty() || order.providers.is_empty() {
+        if let Err(error) = order.validate() {
+            iroha_logger::warn!(
+                ?error,
+                manifest_digest = %hex::encode(record.manifest_digest.as_bytes()),
+                "rejected invalid canonical SoraFS replication order during Soracloud hydration"
+            );
+            continue;
+        }
+        let Ok(canonical_order) = norito::to_bytes(&order) else {
+            continue;
+        };
+        if canonical_order != record.canonical_order
+            || order.order_id != *record.order_id.as_bytes()
+            || order.manifest_digest != *record.manifest_digest.as_bytes()
+            || order.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+        {
+            iroha_logger::warn!(
+                manifest_digest = %hex::encode(record.manifest_digest.as_bytes()),
+                "rejected substituted canonical SoraFS replication order during Soracloud hydration"
+            );
+            continue;
+        }
+        if record.provider_completions.is_empty() {
             continue;
         }
 
         let manifest_digest_hex = hex::encode(record.manifest_digest.as_bytes());
         let manifest_cid_hex = hex::encode(&order.manifest_cid);
-        let chunker_handle = view
-            .world()
-            .pin_manifests()
-            .get(&record.manifest_digest)
-            .map(|manifest| manifest.chunker.to_handle());
+        let chunker_handle = Some(order.chunking_profile.clone());
         let status_rank = match record.status {
             iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(_) => 0,
             iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Pending => 1,
@@ -14612,7 +14652,11 @@ fn collect_remote_hydration_sources(
             chunker_handle,
             provider_ids: Vec::new(),
         });
-        for provider_id in order.providers {
+        for provider_id in record
+            .provider_completions
+            .iter()
+            .map(|completion| *completion.provider_id.as_bytes())
+        {
             if !entry.provider_ids.contains(&provider_id) {
                 entry.provider_ids.push(provider_id);
             }
@@ -16326,6 +16370,7 @@ mod tests {
         chunk_digest_sha3_256: [u8; 32],
         por_root: [u8; 32],
         order_id: ReplicationOrderId,
+        provider_id: [u8; 32],
         issued_epoch: u64,
         canonical_order: Vec<u8>,
         manifest_id_hex: String,
@@ -16502,12 +16547,25 @@ mod tests {
         let plan_response_body = norito::json::to_vec(&norito::json::Value::Object(plan_response))?;
         let order_id = ReplicationOrderId::new([order_seed; 32]);
         let canonical_order = norito::to_bytes(&ReplicationOrderV1 {
+            version: sorafs_manifest::capacity::REPLICATION_ORDER_VERSION_V1,
             order_id: *order_id.as_bytes(),
             manifest_cid: manifest.root_cid.clone(),
-            providers: vec![provider_id],
-            redundancy: 1,
-            deadline: u64::from(order_seed) + 600,
-            policy_hash: [0x91; 32],
+            manifest_digest: *manifest_digest.as_bytes(),
+            chunking_profile: fixed_chunker_handle().to_handle(),
+            target_replicas: 1,
+            assignments: vec![sorafs_manifest::capacity::ReplicationAssignmentV1 {
+                provider_id,
+                slice_gib: 1,
+                lane: None,
+            }],
+            issued_at: u64::from(order_seed),
+            deadline_at: u64::from(order_seed) + 600,
+            sla: sorafs_manifest::capacity::ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 600,
+                min_availability_percent_milli: 99_000,
+                min_por_success_percent_milli: 98_000,
+            },
+            metadata: Vec::new(),
         })?;
         Ok(RemoteManifestFixture {
             manifest_digest,
@@ -16515,6 +16573,7 @@ mod tests {
             chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
             por_root: manifest.por_root,
             order_id,
+            provider_id,
             issued_epoch: u64::from(order_seed),
             canonical_order,
             manifest_id_hex: manifest_id_hex.clone(),
@@ -17074,6 +17133,16 @@ mod tests {
                         issued_epoch: fixture.issued_epoch,
                         deadline_epoch: fixture.issued_epoch + 600,
                         canonical_order: fixture.canonical_order.clone(),
+                        provider_completions: vec![
+                            iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
+                                provider_id:
+                                    iroha_data_model::sorafs::capacity::ProviderId::new(
+                                        fixture.provider_id,
+                                    ),
+                                completed_by: (*ALICE_ID).clone(),
+                                completion_epoch: fixture.issued_epoch + 1,
+                            },
+                        ],
                         status: ReplicationOrderStatus::Completed(fixture.issued_epoch + 1),
                     },
                 );

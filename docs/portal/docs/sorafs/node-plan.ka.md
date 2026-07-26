@@ -1,120 +1,18 @@
+<!-- Auto-generated stub for Georgian (ka) translation. Replace this content with the full translation. -->
+
 ---
 lang: ka
 direction: ltr
 source: docs/portal/docs/sorafs/node-plan.md
-status: complete
+status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 8e34d60198b5809cc1a609ccfb27687357b6814acefebbb1f29f328416c16c05
-source_last_modified: "2026-07-10T10:11:25+00:00"
-translation_last_reviewed: 2026-02-07
-id: node-plan
-title: SoraFS Node Implementation Plan
-sidebar_label: Node Implementation Plan
-description: Translate the SF-3 storage roadmap into actionable engineering work with milestones, tasks, and test coverage.
-translator: machine-google-reviewed
+source_hash: 323637a80f23ec1e5f477e9f3a7883a264b461855bb5995451c389beaa927dc0
+source_last_modified: "2026-07-25T23:16:57.913052+00:00"
+translation_last_reviewed: null
 ---
 
-:::შენიშვნა კანონიკური წყარო
-:::
+# Translation In Progress
 
-SF-3 აწვდის პირველ გაშვებად `sorafs-node` ყუთს, რომელიც აქცევს Iroha/Torii პროცესს SoraFS შენახვის პროვაიდერად. გამოიყენეთ ეს გეგმა [კვანძის შენახვის სახელმძღვანელო] (node-storage.md), [პროვაიდერის დაშვების პოლიტიკა] (provider-admission-policy.md) და [საცავის სიმძლავრის ბაზრის საგზაო რუკა] (storage-capacity-marketplace.md) ერთად მიწოდების თანმიმდევრობისას.
+This file is a placeholder for the Georgian translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
 
-## სამიზნე სფერო (საეტაპო M1)
-
-1. **Chunk Store-ის ინტეგრაცია.** შეფუთეთ `sorafs_car::ChunkStore` მუდმივი ბექენდით, რომელიც ინახავს ბაიტებს, მანიფესტებსა და PoR ხეებს კონფიგურირებული მონაცემთა დირექტორიაში.
-2. **კარიბჭის ბოლო წერტილები.** გამოავლინეთ Norito HTTP ბოლო წერტილები pin-ის წარდგენისთვის, ნაწილაკების მისაღებად, PoR-ის შერჩევისა და შენახვის ტელემეტრია Torii პროცესის ფარგლებში.
-3. **კონფიგურაციის სანტექნიკა.** დაამატეთ `SoraFsStorage` კონფიგურაციის სტრუქტურა (ჩართული დროშა, სიმძლავრე, დირექტორიები, კონკურენტულობის ლიმიტები) გაყვანილი `iroha_config`, `iroha_core` და I18NI0000003.
-4. **კვოტა/დაგეგმვა.** ოპერატორის მიერ განსაზღვრული დისკის/პარალელიზმის ლიმიტების და რიგის მოთხოვნების აღსრულება უკანა წნევით.
-5. **ტელემეტრია.** გამოაქვეყნეთ მეტრიკები/ლოგიები პინის წარმატებისთვის, ნაწილაკების დაჭერის შეყოვნებისთვის, სიმძლავრის გამოყენებისა და PoR შერჩევის შედეგებისთვის.
-
-## სამუშაო ავარია
-
-### ა. კრატის და მოდულის სტრუქტურა
-
-| ამოცანა | მფლობელ(ებ)ი | შენიშვნები |
-|------|----------|-------|
-| შექმენით `crates/sorafs_node` მოდულებით: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | შენახვის გუნდი | მრავალჯერადი გამოყენების ტიპების ხელახალი ექსპორტი Torii ინტეგრაციისთვის. |
-| განახორციელეთ `StorageConfig`, რომელიც შედგენილია `SoraFsStorage`-დან (მომხმარებელი → რეალური → ნაგულისხმევი). | შენახვის გუნდი / Config WG | დარწმუნდით, რომ Norito/`iroha_config` ფენები რჩება განმსაზღვრელი. |
-| მოგვაწოდეთ `NodeHandle` ფასადი Torii, რომელიც იყენებს ქინძისთავების/ჩამოტვირთვას. | შენახვის გუნდი | შეფუთეთ საცავის შიდა ნაწილები და ასინქრონული სანტექნიკა. |
-
-### B. მუდმივი ბლოკის მაღაზია
-
-| ამოცანა | მფლობელ(ებ)ი | შენიშვნები |
-|------|----------|-------|
-| შექმენით დისკის უკანა ნაწილის შეფუთვა `sorafs_car::ChunkStore` დისკზე მანიფესტის ინდექსით (`sled`/`sqlite`). | შენახვის გუნდი | განმსაზღვრელი განლაგება: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| შეინახეთ PoR მეტამონაცემები (64KiB/4KiB ხეები) `ChunkStore::sample_leaves`-ის გამოყენებით. | შენახვის გუნდი | ხელახალი დაკვრის მხარდაჭერა გადატვირთვის შემდეგ; სწრაფად მარცხი კორუფციაზე. |
-| განახორციელეთ მთლიანობის გამეორება გაშვებისას (გადაკეთების მანიფესტები, დაჭრა არასრული ქინძისთავები). | შენახვის გუნდი | დაბლოკვა Torii დაიწყება განმეორებითი დაკვრის დასრულებამდე. |
-
-### C. კარიბჭის ბოლო წერტილები
-
-| Endpoint | Behaviour | Tasks |
-|----------|-----------|-------|
-| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
-| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
-| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
-| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample` | Report peer/storage state and request bounded local PoR samples. Proof and verdict admission use the authenticated capacity lifecycle; direct storage mutation routes are not mounted. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
-
-
-Runtime plumbing threads PoR ურთიერთქმედებები `sorafs_node::por`-ის მეშვეობით: ტრეკერი ჩაწერს ყოველ `PorChallengeV1`, `PorProofV1` და `AuditVerdictV1`, ასე რომ, I18NI000000059X მემგონი ასახავს Torii ლოგიკა.【crates/sorafs_node/src/scheduler.rs#L147】
-
-განხორციელების შენიშვნები:
-
-- გამოიყენეთ Torii-ის Axum სტეკი `norito::json` ტვირთამწეობით.
-- დაამატეთ Norito სქემები პასუხებისთვის (`PinResultV1`, `FetchErrorV1`, ტელემეტრიის სტრუქტურები).
-
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` ახლა ასახავს ნარჩენების სიღრმეს პლუს უძველეს ეპოქას/ვადას და
-  უახლესი წარმატების/წარუმატებლობის დროის ანაბეჭდები თითოეული პროვაიდერისთვის, უზრუნველყოფილია
-  `sorafs_node::NodeHandle::por_ingestion_status` და Torii ჩაწერს
-  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` ლიანდაგები ამისთვის დაფები.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:18 83】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
-
-### D. Scheduler & Quota Enforcement
-
-| ამოცანა | დეტალები |
-|------|---------|
-| დისკის კვოტა | ბაიტების თვალყურის დევნება დისკზე; უარყოთ ახალი ქინძისთავები `max_capacity_bytes`-ზე მეტის შემთხვევაში. უზრუნველყოს გამოსახლების კაკვები მომავალი პოლიტიკისთვის. |
-| პარალელურობის მიღება | გლობალური სემაფორი (`max_parallel_fetches`) პლუს ბიუჯეტები თითოეულ პროვაიდერზე, მიღებული SF-2d დიაპაზონის ქუდებიდან. |
-| პინის რიგი | შეზღუდეთ ამოღებული სამუშაოები; გამოავლინეთ Norito სტატუსის ბოლო წერტილები რიგის სიღრმისთვის. |
-| PoR კადენცია | ფონური მუშაკი, რომელსაც მართავს `por_sample_interval_secs`. |
-
-### E. ტელემეტრია და ლოგირება
-
-მეტრიკა (Prometheus):
-
-- `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (ჰისტოგრაფია `result` ეტიკეტებით)
-- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
-- `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
-- `torii_sorafs_storage_fetch_bytes_per_sec`
-- `torii_sorafs_storage_por_inflight`
-- `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
-
-ჟურნალები / მოვლენები:
-
-- სტრუქტურირებული Norito ტელემეტრია მართვის გადაყლაპვისთვის (`StorageTelemetryV1`).
-- გაფრთხილებები, როდესაც გამოყენება >90% ან PoR წარუმატებლობის ზოლი აჭარბებს ზღვარს.
-
-### F. ტესტირების სტრატეგია
-
-1. **ერთეულის ტესტები.** ნაწილების შენახვის მდგრადობა, კვოტების გამოთვლები, გრაფიკის ინვარიანტები (იხ. `crates/sorafs_node/src/scheduler.rs`).  
-2. **ინტეგრაციული ტესტები** (`crates/sorafs_node/tests`). დამაგრება → ორმხრივი მოგზაურობის მიღება, აღდგენის გადატვირთვა, კვოტის უარყოფა, PoR შერჩევის დადასტურების დადასტურება.  
-3. **Torii ინტეგრაციის ტესტები.** გაუშვით Torii ჩართული მეხსიერებით, განახორციელეთ HTTP საბოლოო წერტილები `assert_cmd`-ის საშუალებით.  
-4. **ქაოსის საგზაო რუკა.** მომავალი წვრთნები სიმულაციას უკეთებს დისკის ამოწურვას, ნელი IO, პროვაიდერის ამოღებას.
-
-## დამოკიდებულებები
-
-- SF-2b დაშვების პოლიტიკა - დარწმუნდით, რომ კვანძები ამოწმებენ დაშვების კონვერტებს რეკლამამდე.  
-- SF-2c სიმძლავრის ბაზარი - დააკავშირეთ ტელემეტრია სიმძლავრის დეკლარაციებში.  
-- SF-2d რეკლამის გაფართოებები - მოიხმარეთ დიაპაზონის შესაძლებლობა + სტრიმინგის ბიუჯეტი ერთხელ ხელმისაწვდომი.
-
-## Milestone გასვლის კრიტერიუმები
-
-- `cargo run -p sorafs_node --example pin_fetch` მუშაობს ადგილობრივი მოწყობილობების წინააღმდეგ.  
-- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
-- დოკუმენტაცია ([კვანძის შენახვის სახელმძღვანელო](node-storage.md)) განახლებულია კონფიგურაციის ნაგულისხმევი პარამეტრებით + CLI მაგალითებით; ხელმისაწვდომია ოპერატორის runbook.  
-- ტელემეტრია ხილული დადგმის დაფებში; სიგნალიზაცია კონფიგურირებულია სიმძლავრის გაჯერებისა და PoR უკმარისობისთვის.
-
-## დოკუმენტაცია და ოპერაციების მიწოდება
-
-- განაახლეთ [node storage reference] (node-storage.md) კონფიგურაციის ნაგულისხმევი პარამეტრებით, CLI გამოყენებისა და პრობლემების მოგვარების ნაბიჯებით.  
-- შეინახეთ [node Operations Runbook] (node-operations.md) გასწორებული იმპლემენტაციისთვის, როგორც SF-3 ვითარდება.  
-- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

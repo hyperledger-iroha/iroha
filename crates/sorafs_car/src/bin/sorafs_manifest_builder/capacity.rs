@@ -35,7 +35,6 @@ where
         "declaration" => run_declaration(args),
         "telemetry" => run_telemetry(args),
         "replication-order" => run_replication_order(args),
-        "complete" => run_complete(args),
         "dispute" => run_dispute(args),
         "help" => {
             println!("{usage}", usage = capacity_usage());
@@ -54,7 +53,6 @@ Available subcommands:
   declaration        Generate a CapacityDeclarationV1 payload from a JSON spec.
   telemetry          Generate a CapacityTelemetryV1 payload from a JSON spec.
   replication-order  Generate a ReplicationOrderV1 payload from a JSON spec.
-  complete           Emit a completion request body referencing an order id.
   dispute            Generate a CapacityDisputeV1 payload from a JSON spec.
 
 Run `sorafs_manifest_builder capacity <subcommand> --help` for detailed usage.
@@ -73,10 +71,6 @@ Options:
   --json-out=<file>            Write a Norito JSON summary to <file>.
   --norito-out=<file>          Write the canonical Norito bytes to <file>.
   --base64-out=<file>          Write the canonical Norito payload (base64) to <file>.
-  --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/declare`) to <file>.
-  --authority=<account_id>     Account identifier used when building the request JSON.
-  --private-key=<key>          Exposed private key (multihash hex) for the request JSON.
-  --private-key-file=<file>    Read the private key from <file> instead of exposing it in argv.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
@@ -92,16 +86,12 @@ Options:
   --json-out=<file>            Write a Norito JSON summary to <file>.
   --norito-out=<file>          Write the canonical Norito bytes to <file>.
   --base64-out=<file>          Write the canonical Norito payload (base64) to <file>.
-  --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/telemetry`) to <file>.
-  --authority=<account_id>     Account identifier used when building the request JSON.
-  --private-key=<key>          Exposed private key (multihash hex) for the request JSON.
-  --private-key-file=<file>    Read the private key from <file> instead of exposing it in argv.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
 The spec schema is documented in `docs/source/sorafs/storage_capacity_marketplace.md`.
 When present, `effective_capacity_gib` (or `effective_gib`) overrides the default effective GiB
-derived from `utilised_capacity_gib` in the generated request payload.
+derived from `utilised_capacity_gib` in the generated summary.
 "#
 }
 
@@ -113,22 +103,10 @@ Options:
   --json-out=<file>            Write a Norito JSON summary to <file>.
   --norito-out=<file>          Write the canonical Norito bytes to <file>.
   --base64-out=<file>          Write the canonical Norito payload (base64) to <file>.
-  --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/schedule`) to <file>.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
 The spec schema is documented in `docs/source/sorafs/storage_capacity_marketplace.md`.
-"#
-}
-
-fn complete_usage() -> &'static str {
-    r#"usage: sorafs_manifest_builder capacity complete --order-id=<hex> [options]
-
-Options:
-  --order-id=<hex>             Replication order identifier (BLAKE3-256, hex) (required).
-  --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/complete`) to <file>.
-  --quiet                      Suppress stdout (otherwise prints the JSON payload).
-  --help                       Show this message.
 "#
 }
 
@@ -140,10 +118,6 @@ Options:
   --json-out=<file>            Write a Norito JSON summary to <file>.
   --norito-out=<file>          Write the canonical Norito bytes to <file>.
   --base64-out=<file>          Write the canonical Norito payload (base64) to <file>.
-  --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/dispute`) to <file>.
-  --authority=<account_id>     Account identifier used when building the request JSON.
-  --private-key=<key>          Exposed private key (multihash hex) for the request JSON.
-  --private-key-file=<file>    Read the private key from <file> instead of exposing it in argv.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
@@ -176,14 +150,9 @@ where
             "--json-out" => opts.json_out = Some(PathBuf::from(value)),
             "--norito-out" => opts.norito_out = Some(PathBuf::from(value)),
             "--base64-out" => opts.base64_out = Some(PathBuf::from(value)),
-            "--request-out" => opts.request_out = Some(PathBuf::from(value)),
-            "--authority" => opts.authority = Some(value.to_string()),
-            "--private-key" => opts.private_key = Some(value.to_string()),
-            "--private-key-file" => opts.private_key_file = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown capacity option `{key}`")),
         }
     }
-
     let spec_path = opts
         .spec
         .clone()
@@ -215,24 +184,6 @@ where
         write_text(path, &json_text)?;
     }
 
-    if let Some(path) = opts.request_out.as_ref() {
-        let authority = opts
-            .authority
-            .as_deref()
-            .ok_or_else(|| "--authority is required when using --request-out".to_string())?;
-        if authority.is_empty() {
-            return Err("--authority must not be empty".to_string());
-        }
-        let private_key = resolve_private_key(
-            opts.private_key.as_deref(),
-            opts.private_key_file.as_deref(),
-        )?;
-
-        let request_value =
-            build_declaration_request_value(&artefacts, &declaration_b64, authority, &private_key)?;
-        write_json_file(path, &request_value)?;
-    }
-
     if !opts.quiet && opts.base64_out.is_none() {
         println!("{declaration_b64}");
     }
@@ -262,10 +213,6 @@ where
             "--json-out" => opts.json_out = Some(PathBuf::from(value)),
             "--norito-out" => opts.norito_out = Some(PathBuf::from(value)),
             "--base64-out" => opts.base64_out = Some(PathBuf::from(value)),
-            "--request-out" => opts.request_out = Some(PathBuf::from(value)),
-            "--authority" => opts.authority = Some(value.to_string()),
-            "--private-key" => opts.private_key = Some(value.to_string()),
-            "--private-key-file" => opts.private_key_file = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown capacity option `{key}`")),
         }
     }
@@ -301,23 +248,6 @@ where
         write_text(path, &json_text)?;
     }
 
-    if let Some(path) = opts.request_out.as_ref() {
-        let authority = opts
-            .authority
-            .as_deref()
-            .ok_or_else(|| "--authority is required when using --request-out".to_string())?;
-        if authority.is_empty() {
-            return Err("--authority must not be empty".to_string());
-        }
-        let private_key = resolve_private_key(
-            opts.private_key.as_deref(),
-            opts.private_key_file.as_deref(),
-        )?;
-        let request_value =
-            build_telemetry_request_value(&telemetry_artefacts, authority, &private_key)?;
-        write_json_file(path, &request_value)?;
-    }
-
     if !opts.quiet && opts.base64_out.is_none() {
         println!("{telemetry_b64}");
     }
@@ -347,7 +277,6 @@ where
             "--json-out" => opts.json_out = Some(PathBuf::from(value)),
             "--norito-out" => opts.norito_out = Some(PathBuf::from(value)),
             "--base64-out" => opts.base64_out = Some(PathBuf::from(value)),
-            "--request-out" => opts.request_out = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown capacity option `{key}`")),
         }
     }
@@ -383,11 +312,6 @@ where
         write_text(path, &json_text)?;
     }
 
-    if let Some(path) = opts.request_out.as_ref() {
-        let request_value = build_replication_order_request_value(&order_b64);
-        write_json_file(path, &request_value)?;
-    }
-
     if !opts.quiet && opts.base64_out.is_none() {
         println!("{order_b64}");
     }
@@ -417,10 +341,6 @@ where
             "--json-out" => opts.json_out = Some(PathBuf::from(value)),
             "--norito-out" => opts.norito_out = Some(PathBuf::from(value)),
             "--base64-out" => opts.base64_out = Some(PathBuf::from(value)),
-            "--request-out" => opts.request_out = Some(PathBuf::from(value)),
-            "--authority" => opts.authority = Some(value.to_string()),
-            "--private-key" => opts.private_key = Some(value.to_string()),
-            "--private-key-file" => opts.private_key_file = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown capacity option `{key}`")),
         }
     }
@@ -456,68 +376,8 @@ where
         write_text(path, &json_text)?;
     }
 
-    if let Some(path) = opts.request_out.as_ref() {
-        let authority = opts
-            .authority
-            .as_deref()
-            .ok_or_else(|| "--authority is required when using --request-out".to_string())?;
-        if authority.is_empty() {
-            return Err("--authority must not be empty".to_string());
-        }
-        let private_key = resolve_private_key(
-            opts.private_key.as_deref(),
-            opts.private_key_file.as_deref(),
-        )?;
-        let request_value =
-            build_dispute_request_value(&dispute, &dispute_b64, authority, &private_key)?;
-        write_json_file(path, &request_value)?;
-    }
-
     if !opts.quiet && opts.base64_out.is_none() {
         println!("{dispute_b64}");
-    }
-
-    Ok(())
-}
-
-fn run_complete<I>(args: I) -> Result<(), String>
-where
-    I: Iterator<Item = String>,
-{
-    let mut opts = CompleteOptions::default();
-    for arg in args {
-        if arg == "--quiet" {
-            opts.quiet = true;
-            continue;
-        }
-        if arg == "--help" {
-            println!("{usage}", usage = complete_usage());
-            return Ok(());
-        }
-        let (key, value) = arg
-            .split_once('=')
-            .ok_or_else(|| format!("expected key=value option, got `{arg}`"))?;
-        match key {
-            "--order-id" => {
-                let bytes = parse_fixed_hex::<32>(value, "order_id_hex")?;
-                opts.order_id_hex = Some(hex::encode(bytes));
-            }
-            "--request-out" => opts.request_out = Some(PathBuf::from(value)),
-            _ => return Err(format!("unknown capacity option `{key}`")),
-        }
-    }
-
-    let order_id_hex = opts
-        .order_id_hex
-        .clone()
-        .ok_or_else(|| "missing required --order-id=<hex> option".to_string())?;
-
-    let request_value = build_complete_request_value(&order_id_hex);
-    if let Some(path) = opts.request_out.as_ref() {
-        write_json_file(path, &request_value)?;
-    }
-    if !opts.quiet && opts.request_out.is_none() {
-        write_json_file(Path::new("-"), &request_value)?;
     }
 
     Ok(())
@@ -532,10 +392,6 @@ struct DeclarationOptions {
     json_out: Option<PathBuf>,
     norito_out: Option<PathBuf>,
     base64_out: Option<PathBuf>,
-    request_out: Option<PathBuf>,
-    authority: Option<String>,
-    private_key: Option<String>,
-    private_key_file: Option<PathBuf>,
     quiet: bool,
 }
 
@@ -553,10 +409,6 @@ struct TelemetryOptions {
     json_out: Option<PathBuf>,
     norito_out: Option<PathBuf>,
     base64_out: Option<PathBuf>,
-    request_out: Option<PathBuf>,
-    authority: Option<String>,
-    private_key: Option<String>,
-    private_key_file: Option<PathBuf>,
     quiet: bool,
 }
 
@@ -571,14 +423,6 @@ struct ReplicationOrderOptions {
     json_out: Option<PathBuf>,
     norito_out: Option<PathBuf>,
     base64_out: Option<PathBuf>,
-    request_out: Option<PathBuf>,
-    quiet: bool,
-}
-
-#[derive(Debug, Default)]
-struct CompleteOptions {
-    order_id_hex: Option<String>,
-    request_out: Option<PathBuf>,
     quiet: bool,
 }
 
@@ -588,10 +432,6 @@ struct DisputeOptions {
     json_out: Option<PathBuf>,
     norito_out: Option<PathBuf>,
     base64_out: Option<PathBuf>,
-    request_out: Option<PathBuf>,
-    authority: Option<String>,
-    private_key: Option<String>,
-    private_key_file: Option<PathBuf>,
     quiet: bool,
 }
 
@@ -975,50 +815,6 @@ fn build_declaration_summary(
     Ok(Value::Object(root))
 }
 
-fn build_declaration_request_value(
-    artefacts: &DeclarationArtefacts,
-    declaration_b64: &str,
-    authority: &str,
-    private_key: &str,
-) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert("authority".into(), Value::String(authority.to_owned()));
-    root.insert("private_key".into(), Value::String(private_key.to_owned()));
-    root.insert(
-        "declaration_b64".into(),
-        Value::String(declaration_b64.to_owned()),
-    );
-    root.insert(
-        "registered_epoch".into(),
-        json::to_value(&artefacts.registered_epoch)
-            .map_err(|err| format!("failed to serialize registered_epoch: {err}"))?,
-    );
-    root.insert(
-        "valid_from_epoch".into(),
-        json::to_value(&artefacts.valid_from_epoch)
-            .map_err(|err| format!("failed to serialize valid_from_epoch: {err}"))?,
-    );
-    root.insert(
-        "valid_until_epoch".into(),
-        json::to_value(&artefacts.valid_until_epoch)
-            .map_err(|err| format!("failed to serialize valid_until_epoch: {err}"))?,
-    );
-
-    let metadata = artefacts
-        .metadata
-        .iter()
-        .map(|entry| {
-            let mut item = Map::new();
-            item.insert("key".into(), Value::String(entry.key.clone()));
-            item.insert("value".into(), Value::String(entry.value.clone()));
-            Value::Object(item)
-        })
-        .collect::<Vec<_>>();
-    root.insert("metadata".into(), Value::Array(metadata));
-
-    Ok(Value::Object(root))
-}
-
 fn build_telemetry(telemetry_value: Value) -> Result<TelemetryArtefacts, String> {
     let map = telemetry_value
         .as_object()
@@ -1170,77 +966,6 @@ fn build_telemetry_summary(
         "telemetry_b64".into(),
         Value::String(telemetry_b64.to_owned()),
     );
-    Ok(Value::Object(root))
-}
-
-fn build_telemetry_request_value(
-    artefacts: &TelemetryArtefacts,
-    authority: &str,
-    private_key: &str,
-) -> Result<Value, String> {
-    let telemetry = &artefacts.telemetry;
-    let mut root = Map::new();
-    root.insert("authority".into(), Value::String(authority.to_owned()));
-    root.insert("private_key".into(), Value::String(private_key.to_owned()));
-    root.insert(
-        "provider_id_hex".into(),
-        Value::String(hex::encode(telemetry.provider_id)),
-    );
-    root.insert(
-        "window_start_epoch".into(),
-        json::to_value(&telemetry.epoch_start)
-            .map_err(|err| format!("failed to serialize window_start_epoch: {err}"))?,
-    );
-    root.insert(
-        "window_end_epoch".into(),
-        json::to_value(&telemetry.epoch_end)
-            .map_err(|err| format!("failed to serialize window_end_epoch: {err}"))?,
-    );
-
-    let declared_gib = telemetry.declared_capacity_gib;
-    let effective_gib = artefacts.effective_gib;
-    let utilised_gib = telemetry.utilised_capacity_gib;
-    let orders_completed = u64::from(telemetry.successful_replications);
-    let orders_issued = orders_completed + u64::from(telemetry.failed_replications);
-    let uptime_bps = (telemetry.uptime_percent_milli + 5) / 10;
-    let por_success_bps = (telemetry.por_success_percent_milli + 5) / 10;
-
-    root.insert(
-        "declared_gib".into(),
-        json::to_value(&declared_gib)
-            .map_err(|err| format!("failed to serialize declared_gib: {err}"))?,
-    );
-    root.insert(
-        "effective_gib".into(),
-        json::to_value(&effective_gib)
-            .map_err(|err| format!("failed to serialize effective_gib: {err}"))?,
-    );
-    root.insert(
-        "utilised_gib".into(),
-        json::to_value(&utilised_gib)
-            .map_err(|err| format!("failed to serialize utilised_gib: {err}"))?,
-    );
-    root.insert(
-        "orders_issued".into(),
-        json::to_value(&orders_issued)
-            .map_err(|err| format!("failed to serialize orders_issued: {err}"))?,
-    );
-    root.insert(
-        "orders_completed".into(),
-        json::to_value(&orders_completed)
-            .map_err(|err| format!("failed to serialize orders_completed: {err}"))?,
-    );
-    root.insert(
-        "uptime_bps".into(),
-        json::to_value(&uptime_bps)
-            .map_err(|err| format!("failed to serialize uptime_bps: {err}"))?,
-    );
-    root.insert(
-        "por_success_bps".into(),
-        json::to_value(&por_success_bps)
-            .map_err(|err| format!("failed to serialize por_success_bps: {err}"))?,
-    );
-
     Ok(Value::Object(root))
 }
 
@@ -1435,12 +1160,6 @@ fn build_replication_order_summary(
     Ok(Value::Object(root))
 }
 
-fn build_replication_order_request_value(order_b64: &str) -> Value {
-    let mut root = Map::new();
-    root.insert("order_b64".into(), Value::String(order_b64.to_owned()));
-    Value::Object(root)
-}
-
 fn build_dispute(dispute_value: Value) -> Result<CapacityDisputeV1, String> {
     let map = dispute_value
         .as_object()
@@ -1604,42 +1323,6 @@ fn build_dispute_summary(dispute: &CapacityDisputeV1, dispute_b64: &str) -> Resu
     Ok(Value::Object(root))
 }
 
-fn build_dispute_request_value(
-    dispute: &CapacityDisputeV1,
-    dispute_b64: &str,
-    authority: &str,
-    private_key: &str,
-) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert("authority".into(), Value::String(authority.to_owned()));
-    root.insert("private_key".into(), Value::String(private_key.to_owned()));
-    root.insert("dispute_b64".into(), Value::String(dispute_b64.to_owned()));
-    root.insert(
-        "submitted_epoch".into(),
-        json::to_value(&dispute.submitted_epoch)
-            .map_err(|err| format!("failed to serialize submitted_epoch: {err}"))?,
-    );
-    root.insert(
-        "provider_id_hex".into(),
-        Value::String(hex::encode(dispute.provider_id)),
-    );
-    root.insert(
-        "complainant_id_hex".into(),
-        Value::String(hex::encode(dispute.complainant_id)),
-    );
-    if let Some(order_id) = dispute.replication_order_id {
-        root.insert(
-            "replication_order_id_hex".into(),
-            Value::String(hex::encode(order_id)),
-        );
-    }
-    root.insert(
-        "kind".into(),
-        Value::String(dispute_kind_to_str(dispute.kind).to_owned()),
-    );
-    Ok(Value::Object(root))
-}
-
 fn parse_dispute_kind(kind: &str) -> Result<CapacityDisputeKind, String> {
     match kind {
         "replication_shortfall" => Ok(CapacityDisputeKind::ReplicationShortfall),
@@ -1664,15 +1347,6 @@ fn dispute_kind_to_str(kind: CapacityDisputeKind) -> &'static str {
         CapacityDisputeKind::FeeDispute => "fee_dispute",
         CapacityDisputeKind::Other => "other",
     }
-}
-
-fn build_complete_request_value(order_id_hex: &str) -> Value {
-    let mut root = Map::new();
-    root.insert(
-        "order_id_hex".into(),
-        Value::String(order_id_hex.to_owned()),
-    );
-    Value::Object(root)
 }
 
 fn capability_label(cap: &CapabilityType) -> &'static str {
@@ -1876,43 +1550,6 @@ fn require_canonical_hex(
     Ok(())
 }
 
-fn resolve_private_key(
-    private_key: Option<&str>,
-    private_key_file: Option<&Path>,
-) -> Result<String, String> {
-    if private_key.is_some() && private_key_file.is_some() {
-        return Err("--private-key and --private-key-file are mutually exclusive".to_string());
-    }
-
-    if let Some(value) = private_key {
-        if value.is_empty() {
-            return Err("--private-key must not be empty".to_string());
-        }
-        return Ok(value.to_string());
-    }
-
-    let Some(path) = private_key_file else {
-        return Err(
-            "--private-key or --private-key-file is required when using --request-out".to_string(),
-        );
-    };
-
-    let value = fs::read_to_string(path).map_err(|err| {
-        format!(
-            "failed to read private key file `{}`: {err}",
-            path.display()
-        )
-    })?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(format!(
-            "private key file `{}` must not be empty",
-            path.display()
-        ));
-    }
-    Ok(trimmed.to_string())
-}
-
 fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if path == Path::new("-") {
         io::stdout()
@@ -1946,13 +1583,6 @@ fn write_text(path: &Path, text: &str) -> Result<(), String> {
             .map_err(|err| format!("failed to write newline to `{}`: {err}", path.display()))?;
     }
     Ok(())
-}
-
-fn write_json_file(path: &Path, value: &Value) -> Result<(), String> {
-    let json_text = json::to_string_pretty(value)
-        .map_err(|err| format!("failed to serialize JSON: {err}"))?
-        + "\n";
-    write_text(path, &json_text)
 }
 
 #[cfg(test)]
@@ -2125,28 +1755,5 @@ mod tests {
             "unexpected error: {err}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_json_file_rejects_symlink_parent() {
-        let (_temp, temp_path) = canonical_tempdir();
-        let real_dir = temp_path.join("real");
-        fs::create_dir(&real_dir).expect("create real dir");
-        let linked_dir = temp_path.join("linked");
-        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
-        let output_path = linked_dir.join("request.json");
-
-        let err = write_json_file(&output_path, &Value::Object(Map::new()))
-            .expect_err("reject symlink parent");
-
-        assert!(
-            err.contains("parent") && err.contains("must not be a symlink"),
-            "unexpected error: {err}"
-        );
-        assert!(
-            !real_dir.join("request.json").exists(),
-            "symlink parent should not receive output"
-        );
     }
 }

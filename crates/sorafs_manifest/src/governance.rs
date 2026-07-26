@@ -14,7 +14,9 @@ use crate::{
     deal::{DealSettlementV1, XorQuantity},
     orderbook::SettlementReceiptV1,
     pdp::{PdpGovernanceArchiveV1, PdpGovernanceArchiveValidationError},
-    por::{AuditVerdictV1, PorChallengeV1, PorProofV1, PorReportIsoWeek},
+    por::{
+        AuditVerdictV1, PorChallengePublicationV1, PorProofV1, PorReportIsoWeek, PorWeeklyReportV1,
+    },
     reconciliation::{SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1},
     repair::{
         GC_AUDIT_EVENT_VERSION_V1, GcAuditEventV1, REPAIR_AUDIT_EVENT_VERSION_V1,
@@ -56,6 +58,16 @@ pub const SORAFS_APPEAL_FINANCE_WEEKLY_ROLLUP_VERSION_V1: u16 = 1;
 
 /// Current SoraFS appeal finance settlement receipt schema version.
 pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1: u16 = 1;
+
+const APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1: usize = 256;
+const APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1: usize = 512;
+const APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1: usize = 128;
+const APPEAL_FINANCE_SETTLEMENT_RECEIPT_SUBMITTED_STEPS_V1: [&str; 2] =
+    ["drawdown_non_refund", "cancel_refund"];
+const APPEAL_FINANCE_SETTLEMENT_RECEIPT_RECONCILIATION_STATUSES_V1: [&str; 2] =
+    ["awaiting_refund_cancel", "settled"];
+const APPEAL_FINANCE_SETTLEMENT_RECEIPT_LIFECYCLE_STATUSES_V1: [&str; 3] =
+    ["locked", "drawn_down", "cancelled"];
 
 /// Current generic external Governance DAG payload schema version.
 pub const SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1: u16 = 1;
@@ -833,41 +845,47 @@ pub struct SoraFsAppealFinanceSettlementReceiptV1 {
     pub version: u16,
     /// Stable receipt identifier derived from the submitted transaction context.
     pub receipt_id: [u8; 16],
-    /// Moderation or appeal case identifier.
+    /// Bounded canonical ASCII moderation or appeal case identifier.
     pub case_id: String,
-    /// Optional moderation ballot round identifier.
+    /// Optional bounded canonical ASCII moderation ballot round identifier.
     #[norito(default)]
     pub round_id: Option<String>,
     /// UTC timestamp (milliseconds) when the settlement transaction was queued.
     pub generated_at_unix_ms: u64,
-    /// Appeal finance config version used to derive the plan.
+    /// Height of the finalized block whose committed state contains the settlement.
+    pub finalized_block_height: u64,
+    /// Exact non-zero hash of the finalized block at `finalized_block_height`.
+    pub finalized_block_hash: [u8; 32],
+    /// Lowercase kebab config name with a positive canonical `-vN` suffix.
     pub appeal_finance_config_version: String,
+    /// Canonical digest of the governed appeal finance policy used to derive the plan.
+    pub appeal_finance_policy_digest: [u8; 32],
     /// Final appeal outcome used by settlement calculation.
     pub outcome: SoraFsAppealFinanceOutcomeV1,
     /// Canonical escrow id as lowercase hexadecimal.
     pub escrow_id_hex: String,
-    /// Account that funded the deposit.
+    /// Bounded canonical ASCII account that funded the deposit.
     pub payer_account: String,
-    /// Account holding the locked asset.
+    /// Bounded canonical ASCII account holding the locked asset.
     pub destination_account: String,
-    /// Optional authority allowed to draw down non-refund funds.
+    /// Optional bounded canonical ASCII authority allowed to draw down funds.
     #[norito(default)]
     pub release_authority_account: Option<String>,
-    /// Submitted settlement step label.
+    /// Finalized step: `drawdown_non_refund` or `cancel_refund`.
     pub submitted_step: String,
-    /// Required transaction authority for the submitted step.
+    /// Bounded canonical ASCII transaction authority for the submitted step.
     pub required_authority: String,
     /// Exact XOR amount affected by the submitted step.
     pub amount_xor: XorQuantity,
-    /// Queued transaction hash as lowercase hexadecimal.
+    /// Exact committed transaction hash as lowercase hexadecimal.
     pub tx_hash_hex: String,
     /// Digest of the reconciliation snapshot that justified submission.
     pub reconciliation_digest_hex: String,
-    /// Reconciliation status before this step was queued.
+    /// Applied reconciliation status: `awaiting_refund_cancel` or `settled`.
     pub reconciliation_status: String,
-    /// Ledger lifecycle status observed before this step was queued.
+    /// Applied lock lifecycle status: `locked`, `drawn_down`, or `cancelled`.
     pub observed_lifecycle_status: String,
-    /// Ledger remaining amount observed before this step was queued.
+    /// Ledger remaining amount observed after the step was applied.
     pub observed_remaining_xor: XorQuantity,
     /// Exact deposited XOR amount.
     pub deposit_xor: XorQuantity,
@@ -889,8 +907,9 @@ impl SoraFsAppealFinanceSettlementReceiptV1 {
     /// # Errors
     ///
     /// Returns [`SoraFsAppealFinanceSettlementReceiptValidationError`] when
-    /// required identifiers are missing, digest fields are malformed, or
-    /// decimal amounts are not canonical.
+    /// required identifiers are missing or noncanonical, finalized-state
+    /// labels are unsupported or inconsistent, digest fields are malformed,
+    /// or required timestamps, finalized cursors, or counts are zero.
     pub fn validate(&self) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
         if self.version != SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1 {
             return Err(
@@ -903,81 +922,72 @@ impl SoraFsAppealFinanceSettlementReceiptV1 {
         if self.receipt_id == [0u8; 16] {
             return Err(SoraFsAppealFinanceSettlementReceiptValidationError::MissingReceiptId);
         }
-        validate_non_empty_settlement_receipt_label(
+        validate_bounded_visible_settlement_receipt_label(
             &self.case_id,
+            "case_id",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
             SoraFsAppealFinanceSettlementReceiptValidationError::MissingCaseId,
         )?;
         if let Some(round_id) = self.round_id.as_deref() {
-            validate_non_empty_settlement_receipt_label(
+            validate_bounded_visible_settlement_receipt_label(
                 round_id,
+                "round_id",
+                APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
                 SoraFsAppealFinanceSettlementReceiptValidationError::MissingRoundId,
             )?;
         }
         if self.generated_at_unix_ms == 0 {
             return Err(SoraFsAppealFinanceSettlementReceiptValidationError::MissingGeneratedAt);
         }
-        validate_non_empty_settlement_receipt_label(
-            &self.appeal_finance_config_version,
-            SoraFsAppealFinanceSettlementReceiptValidationError::MissingFinanceConfigVersion,
-        )?;
+        if self.finalized_block_height == 0 {
+            return Err(
+                SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinalizedBlockHeight,
+            );
+        }
+        if self.finalized_block_hash == [0u8; 32] {
+            return Err(
+                SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinalizedBlockHash,
+            );
+        }
+        validate_settlement_receipt_config_version(&self.appeal_finance_config_version)?;
+        if self.appeal_finance_policy_digest == [0u8; 32] {
+            return Err(
+                SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinancePolicyDigest,
+            );
+        }
         validate_receipt_hex(
             &self.escrow_id_hex,
             "escrow_id_hex",
             32,
             SoraFsAppealFinanceSettlementReceiptValidationError::MissingEscrowId,
         )?;
-        for (field, value, error) in [
-            (
-                "payer_account",
-                &self.payer_account,
-                SoraFsAppealFinanceSettlementReceiptValidationError::MissingPayerAccount,
-            ),
-            (
-                "destination_account",
-                &self.destination_account,
-                SoraFsAppealFinanceSettlementReceiptValidationError::MissingDestinationAccount,
-            ),
-            (
-                "submitted_step",
-                &self.submitted_step,
-                SoraFsAppealFinanceSettlementReceiptValidationError::MissingSubmittedStep,
-            ),
-            (
-                "required_authority",
-                &self.required_authority,
-                SoraFsAppealFinanceSettlementReceiptValidationError::MissingRequiredAuthority,
-            ),
-            (
-                "reconciliation_status",
-                &self.reconciliation_status,
-                SoraFsAppealFinanceSettlementReceiptValidationError::MissingReconciliationStatus,
-            ),
-            (
-                "observed_lifecycle_status",
-                &self.observed_lifecycle_status,
-                SoraFsAppealFinanceSettlementReceiptValidationError::MissingObservedLifecycleStatus,
-            ),
-        ] {
-            validate_non_empty_settlement_receipt_label(value, error)?;
-            if value.trim() != value {
-                return Err(
-                    SoraFsAppealFinanceSettlementReceiptValidationError::InvalidLabel { field },
-                );
-            }
-        }
+        validate_bounded_visible_settlement_receipt_label(
+            &self.payer_account,
+            "payer_account",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
+            SoraFsAppealFinanceSettlementReceiptValidationError::MissingPayerAccount,
+        )?;
+        validate_bounded_visible_settlement_receipt_label(
+            &self.destination_account,
+            "destination_account",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
+            SoraFsAppealFinanceSettlementReceiptValidationError::MissingDestinationAccount,
+        )?;
         if let Some(account) = self.release_authority_account.as_deref() {
-            validate_non_empty_settlement_receipt_label(
+            validate_bounded_visible_settlement_receipt_label(
                 account,
+                "release_authority_account",
+                APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
                 SoraFsAppealFinanceSettlementReceiptValidationError::MissingReleaseAuthorityAccount,
             )?;
-            if account.trim() != account {
-                return Err(
-                    SoraFsAppealFinanceSettlementReceiptValidationError::InvalidLabel {
-                        field: "release_authority_account",
-                    },
-                );
-            }
         }
+        validate_bounded_visible_settlement_receipt_label(
+            &self.required_authority,
+            "required_authority",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
+            SoraFsAppealFinanceSettlementReceiptValidationError::MissingRequiredAuthority,
+        )?;
+        validate_settlement_receipt_submitted_step(&self.submitted_step)?;
         validate_receipt_hex(
             &self.tx_hash_hex,
             "tx_hash_hex",
@@ -989,6 +999,13 @@ impl SoraFsAppealFinanceSettlementReceiptV1 {
             "reconciliation_digest_hex",
             32,
             SoraFsAppealFinanceSettlementReceiptValidationError::MissingReconciliationDigest,
+        )?;
+        validate_settlement_receipt_reconciliation_status(&self.reconciliation_status)?;
+        validate_settlement_receipt_lifecycle_status(&self.observed_lifecycle_status)?;
+        validate_settlement_receipt_finalized_state(
+            &self.submitted_step,
+            &self.reconciliation_status,
+            &self.observed_lifecycle_status,
         )?;
         if self.panel_size == 0 {
             return Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidPanelSize);
@@ -2251,8 +2268,8 @@ pub enum GovernanceLogPayloadV1 {
     ProviderAdvert(crate::provider_advert::ProviderAdvertV1),
     /// Replication order snapshot.
     ReplicationOrder(ReplicationOrderV1),
-    /// Proof-of-Retrievability challenge.
-    PorChallenge(PorChallengeV1),
+    /// Canonical PoR challenge publication with duplicate-sample metadata.
+    PorChallengePublication(PorChallengePublicationV1),
     /// Proof-of-Retrievability response.
     PorProof(PorProofV1),
     /// Admission-bound PDP terminal archive.
@@ -2275,6 +2292,8 @@ pub enum GovernanceLogPayloadV1 {
     OrderbookSettlementReceipt(SettlementReceiptV1),
     /// Canonical external SoraFS governance payload bytes.
     ExternalPayload(GovernanceExternalPayloadV1),
+    /// Validated PoR weekly health report.
+    PorWeeklyReport(PorWeeklyReportV1),
 }
 
 impl GovernanceLogPayloadV1 {
@@ -2289,9 +2308,6 @@ impl GovernanceLogPayloadV1 {
             GovernanceLogPayloadV1::ReplicationOrder(order) => order
                 .validate()
                 .map_err(GovernanceLogValidationError::ReplicationOrder),
-            GovernanceLogPayloadV1::PorChallenge(challenge) => challenge
-                .validate()
-                .map_err(GovernanceLogValidationError::PorChallenge),
             GovernanceLogPayloadV1::PorProof(proof) => proof
                 .validate()
                 .map_err(GovernanceLogValidationError::PorProof),
@@ -2334,6 +2350,12 @@ impl GovernanceLogPayloadV1 {
             GovernanceLogPayloadV1::ExternalPayload(payload) => payload
                 .validate()
                 .map_err(GovernanceLogValidationError::ExternalPayload),
+            GovernanceLogPayloadV1::PorChallengePublication(publication) => publication
+                .validate()
+                .map_err(GovernanceLogValidationError::PorChallengePublication),
+            GovernanceLogPayloadV1::PorWeeklyReport(report) => report
+                .validate()
+                .map_err(GovernanceLogValidationError::PorWeeklyReport),
         }
     }
 }
@@ -2358,12 +2380,121 @@ fn validate_non_empty_appeal_finance_label(
     Ok(())
 }
 
-fn validate_non_empty_settlement_receipt_label(
+fn validate_bounded_visible_settlement_receipt_label(
     value: &str,
+    field: &'static str,
+    max_bytes: usize,
     error: SoraFsAppealFinanceSettlementReceiptValidationError,
 ) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
     if value.trim().is_empty() {
         return Err(error);
+    }
+    if value.len() > max_bytes
+        || !value.is_ascii()
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/' | b'@')
+        })
+    {
+        return Err(
+            SoraFsAppealFinanceSettlementReceiptValidationError::InvalidLabel { field, max_bytes },
+        );
+    }
+    Ok(())
+}
+
+fn validate_settlement_receipt_config_version(
+    value: &str,
+) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
+    if value.trim().is_empty() {
+        return Err(
+            SoraFsAppealFinanceSettlementReceiptValidationError::MissingFinanceConfigVersion,
+        );
+    }
+    let valid = value.len() <= APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1
+        && value.rsplit_once("-v").is_some_and(|(name, version)| {
+            !name.is_empty()
+                && name.split('-').all(|segment| {
+                    !segment.is_empty()
+                        && segment
+                            .bytes()
+                            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                })
+                && matches!(version.as_bytes(), [b'1'..=b'9', rest @ ..]
+                    if rest.iter().all(|byte| byte.is_ascii_digit()))
+        });
+    if !valid {
+        return Err(
+            SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinanceConfigVersion {
+                max_bytes: APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1,
+            },
+        );
+    }
+    Ok(())
+}
+
+fn validate_settlement_receipt_submitted_step(
+    value: &str,
+) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
+    validate_bounded_visible_settlement_receipt_label(
+        value,
+        "submitted_step",
+        APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
+        SoraFsAppealFinanceSettlementReceiptValidationError::MissingSubmittedStep,
+    )?;
+    if !APPEAL_FINANCE_SETTLEMENT_RECEIPT_SUBMITTED_STEPS_V1.contains(&value) {
+        return Err(SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedSubmittedStep);
+    }
+    Ok(())
+}
+
+fn validate_settlement_receipt_reconciliation_status(
+    value: &str,
+) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
+    validate_bounded_visible_settlement_receipt_label(
+        value,
+        "reconciliation_status",
+        APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
+        SoraFsAppealFinanceSettlementReceiptValidationError::MissingReconciliationStatus,
+    )?;
+    if !APPEAL_FINANCE_SETTLEMENT_RECEIPT_RECONCILIATION_STATUSES_V1.contains(&value) {
+        return Err(
+            SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedReconciliationStatus,
+        );
+    }
+    Ok(())
+}
+
+fn validate_settlement_receipt_lifecycle_status(
+    value: &str,
+) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
+    validate_bounded_visible_settlement_receipt_label(
+        value,
+        "observed_lifecycle_status",
+        APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
+        SoraFsAppealFinanceSettlementReceiptValidationError::MissingObservedLifecycleStatus,
+    )?;
+    if !APPEAL_FINANCE_SETTLEMENT_RECEIPT_LIFECYCLE_STATUSES_V1.contains(&value) {
+        return Err(
+            SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedLifecycleStatus,
+        );
+    }
+    Ok(())
+}
+
+fn validate_settlement_receipt_finalized_state(
+    submitted_step: &str,
+    reconciliation_status: &str,
+    lifecycle_status: &str,
+) -> Result<(), SoraFsAppealFinanceSettlementReceiptValidationError> {
+    if !matches!(
+        (submitted_step, reconciliation_status, lifecycle_status),
+        ("drawdown_non_refund", "awaiting_refund_cancel", "locked")
+            | ("drawdown_non_refund", "settled", "drawn_down")
+            | ("cancel_refund", "settled", "cancelled")
+    ) {
+        return Err(
+            SoraFsAppealFinanceSettlementReceiptValidationError::InconsistentFinalizedState,
+        );
     }
     Ok(())
 }
@@ -2983,8 +3114,6 @@ pub enum GovernanceLogValidationError {
     Advert(crate::provider_advert::AdvertValidationError),
     #[error("replication order validation failed: {0}")]
     ReplicationOrder(crate::capacity::ReplicationOrderValidationError),
-    #[error("challenge validation failed: {0}")]
-    PorChallenge(crate::por::PorChallengeValidationError),
     #[error("proof validation failed: {0}")]
     PorProof(crate::por::PorProofValidationError),
     #[error("PDP governance archive validation failed: {0}")]
@@ -3014,6 +3143,10 @@ pub enum GovernanceLogValidationError {
     OrderbookSettlementReceipt(crate::orderbook::OrderbookValidationError),
     #[error("external governance payload validation failed: {0}")]
     ExternalPayload(GovernanceExternalPayloadValidationError),
+    #[error("PoR challenge publication validation failed: {0}")]
+    PorChallengePublication(crate::por::PorChallengePublicationValidationError),
+    #[error("PoR weekly report validation failed: {0}")]
+    PorWeeklyReport(crate::por::PorWeeklyReportValidationError),
 }
 
 /// Validation errors for generic external Governance DAG payloads.
@@ -3422,9 +3555,26 @@ pub enum SoraFsAppealFinanceSettlementReceiptValidationError {
     /// Missing generated timestamp.
     #[error("SoraFS appeal finance settlement receipt generated timestamp is required")]
     MissingGeneratedAt,
+    /// Finalized block height is zero.
+    #[error("SoraFS appeal finance settlement receipt finalized block height must be non-zero")]
+    InvalidFinalizedBlockHeight,
+    /// Finalized block hash is all zero.
+    #[error("SoraFS appeal finance settlement receipt finalized block hash must be non-zero")]
+    InvalidFinalizedBlockHash,
     /// Missing finance config version.
     #[error("SoraFS appeal finance settlement receipt config version is required")]
     MissingFinanceConfigVersion,
+    /// Finance config version was not bounded canonical lowercase kebab syntax.
+    #[error(
+        "SoraFS appeal finance settlement receipt config version must be at most {max_bytes} bytes and use lowercase kebab syntax ending in a positive canonical `-vN`"
+    )]
+    InvalidFinanceConfigVersion {
+        /// Maximum permitted UTF-8 byte length.
+        max_bytes: usize,
+    },
+    /// Governed appeal finance policy digest is all zero.
+    #[error("SoraFS appeal finance settlement receipt policy digest must not be zero")]
+    InvalidFinancePolicyDigest,
     /// Missing escrow id.
     #[error("SoraFS appeal finance settlement receipt escrow id is required")]
     MissingEscrowId,
@@ -3440,6 +3590,9 @@ pub enum SoraFsAppealFinanceSettlementReceiptValidationError {
     /// Missing submitted step.
     #[error("SoraFS appeal finance settlement receipt submitted step is required")]
     MissingSubmittedStep,
+    /// Submitted step is outside the finalized settlement-step inventory.
+    #[error("SoraFS appeal finance settlement receipt submitted step is unsupported")]
+    UnsupportedSubmittedStep,
     /// Missing required authority.
     #[error("SoraFS appeal finance settlement receipt required authority is required")]
     MissingRequiredAuthority,
@@ -3452,14 +3605,29 @@ pub enum SoraFsAppealFinanceSettlementReceiptValidationError {
     /// Missing reconciliation status.
     #[error("SoraFS appeal finance settlement receipt reconciliation status is required")]
     MissingReconciliationStatus,
+    /// Reconciliation status is not valid for a finalized applied receipt.
+    #[error("SoraFS appeal finance settlement receipt reconciliation status is unsupported")]
+    UnsupportedReconciliationStatus,
     /// Missing observed lifecycle status.
     #[error("SoraFS appeal finance settlement receipt observed lifecycle status is required")]
     MissingObservedLifecycleStatus,
-    /// Label contained leading or trailing whitespace.
-    #[error("SoraFS appeal finance settlement receipt label `{field}` is not canonical")]
+    /// Lifecycle status is not valid for a finalized applied receipt.
+    #[error("SoraFS appeal finance settlement receipt lifecycle status is unsupported")]
+    UnsupportedLifecycleStatus,
+    /// Step, reconciliation, and lifecycle labels do not describe one applied state.
+    #[error(
+        "SoraFS appeal finance settlement receipt step, reconciliation, and lifecycle state are inconsistent"
+    )]
+    InconsistentFinalizedState,
+    /// Label was oversized or outside canonical visible ASCII syntax.
+    #[error(
+        "SoraFS appeal finance settlement receipt label `{field}` must be at most {max_bytes} bytes of canonical visible ASCII"
+    )]
     InvalidLabel {
         /// Field containing the invalid label.
         field: &'static str,
+        /// Maximum permitted byte length.
+        max_bytes: usize,
     },
     /// Hex field had the wrong length or non-hex characters.
     #[error(
@@ -4055,6 +4223,23 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
+
+    #[test]
+    fn governance_payload_surface_excludes_bare_por_challenges() {
+        let compact_source: String = include_str!("governance.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let retired_variant = ["PorChallenge", "(PorChallengeV1)"].concat();
+        assert!(
+            !compact_source.contains(&retired_variant),
+            "Governance DAG PoR challenges must use PorChallengePublicationV1"
+        );
+        assert!(
+            compact_source.contains("PorChallengePublication(PorChallengePublicationV1)"),
+            "canonical PoR challenge publication variant must remain in the Governance DAG surface"
+        );
+    }
 
     fn signed_por_proof_payload() -> GovernanceLogPayloadV1 {
         GovernanceLogPayloadV1::PorProof(crate::por::PorProofV1 {
@@ -5610,7 +5795,10 @@ mod tests {
             case_id: "case-42".to_string(),
             round_id: Some("round-1".to_string()),
             generated_at_unix_ms: 1_800_000_032_000,
+            finalized_block_height: 42,
+            finalized_block_hash: [0x43; 32],
             appeal_finance_config_version: "baseline-v1".to_string(),
+            appeal_finance_policy_digest: [0x44; 32],
             outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
             escrow_id_hex: "11".repeat(32),
             payer_account: "payer-account".to_string(),
@@ -5621,9 +5809,9 @@ mod tests {
             amount_xor: "420".parse().expect("canonical XOR quantity"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
-            reconciliation_status: "pending_client_submission".to_string(),
-            observed_lifecycle_status: "locked".to_string(),
-            observed_remaining_xor: "420".parse().expect("canonical XOR quantity"),
+            reconciliation_status: "settled".to_string(),
+            observed_lifecycle_status: "drawn_down".to_string(),
+            observed_remaining_xor: "0".parse().expect("canonical XOR quantity"),
             deposit_xor: "420".parse().expect("canonical XOR quantity"),
             refund_xor: "0".parse().expect("canonical XOR quantity"),
             treasury_xor: "210".parse().expect("canonical XOR quantity"),
@@ -5641,6 +5829,273 @@ mod tests {
         payload
             .validate(1_800_000_032)
             .expect("settlement receipt payload validates");
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_accepts_canonical_bounds_and_applied_states() {
+        let mut bounded = sample_appeal_finance_settlement_receipt();
+        bounded.case_id = "c".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1);
+        bounded.round_id =
+            Some("r".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1));
+        bounded.payer_account = "p".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1);
+        bounded.destination_account =
+            "d".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1);
+        bounded.release_authority_account =
+            Some("a".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1));
+        bounded.required_authority =
+            "s".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1);
+        bounded.appeal_finance_config_version = format!(
+            "{}-v1",
+            "a".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1 - 3)
+        );
+        bounded.validate().expect("maximum canonical bounds");
+
+        for (step, reconciliation, lifecycle) in [
+            ("drawdown_non_refund", "awaiting_refund_cancel", "locked"),
+            ("drawdown_non_refund", "settled", "drawn_down"),
+            ("cancel_refund", "settled", "cancelled"),
+        ] {
+            let mut receipt = sample_appeal_finance_settlement_receipt();
+            receipt.submitted_step = step.to_string();
+            receipt.reconciliation_status = reconciliation.to_string();
+            receipt.observed_lifecycle_status = lifecycle.to_string();
+            receipt
+                .validate()
+                .unwrap_or_else(|error| panic!("{step}/{reconciliation}/{lifecycle}: {error}"));
+        }
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_rejects_noncanonical_visible_identifiers() {
+        fn assert_invalid_label(
+            receipt: SoraFsAppealFinanceSettlementReceiptV1,
+            field: &'static str,
+            max_bytes: usize,
+        ) {
+            assert_eq!(
+                receipt.validate(),
+                Err(
+                    SoraFsAppealFinanceSettlementReceiptValidationError::InvalidLabel {
+                        field,
+                        max_bytes,
+                    }
+                )
+            );
+        }
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.case_id = "case 42".to_string();
+        assert_invalid_label(
+            receipt,
+            "case_id",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
+        );
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.round_id = Some("round-é".to_string());
+        assert_invalid_label(
+            receipt,
+            "round_id",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
+        );
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.payer_account = "payer#account".to_string();
+        assert_invalid_label(
+            receipt,
+            "payer_account",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
+        );
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.destination_account =
+            "d".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1 + 1);
+        assert_invalid_label(
+            receipt,
+            "destination_account",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
+        );
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.release_authority_account = Some("release\nauthority".to_string());
+        assert_invalid_label(
+            receipt,
+            "release_authority_account",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
+        );
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.required_authority = " authority".to_string();
+        assert_invalid_label(
+            receipt,
+            "required_authority",
+            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
+        );
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_requires_canonical_config_version() {
+        for version in [
+            "baseline-v1",
+            "baseline-revision-v2",
+            "baseline-rotated-v2",
+            "appeal-finance-v10",
+        ] {
+            let mut receipt = sample_appeal_finance_settlement_receipt();
+            receipt.appeal_finance_config_version = version.to_string();
+            receipt
+                .validate()
+                .unwrap_or_else(|error| panic!("{version}: {error}"));
+        }
+
+        for version in [
+            "baseline-v0",
+            "baseline-v01",
+            "Baseline-v1",
+            "baseline_v1",
+            "baseline-v1-revision-2",
+            "baseline--revision-v2",
+            "baseline-v2 ",
+        ] {
+            let mut receipt = sample_appeal_finance_settlement_receipt();
+            receipt.appeal_finance_config_version = version.to_string();
+            assert_eq!(
+                receipt.validate(),
+                Err(
+                    SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinanceConfigVersion {
+                        max_bytes:
+                            APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1,
+                    }
+                ),
+                "{version}"
+            );
+        }
+
+        let mut oversized = sample_appeal_finance_settlement_receipt();
+        oversized.appeal_finance_config_version = format!(
+            "{}-v1",
+            "a".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1 - 2)
+        );
+        assert_eq!(
+            oversized.validate(),
+            Err(
+                SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinanceConfigVersion {
+                    max_bytes: APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_rejects_unfinalized_or_unknown_states() {
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.submitted_step = "treasury_release".to_string();
+        assert_eq!(
+            receipt.validate(),
+            Err(SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedSubmittedStep)
+        );
+
+        for status in ["pending_forwarder_submission", "mismatch", "unknown"] {
+            let mut receipt = sample_appeal_finance_settlement_receipt();
+            receipt.reconciliation_status = status.to_string();
+            assert_eq!(
+                receipt.validate(),
+                Err(
+                    SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedReconciliationStatus
+                ),
+                "{status}"
+            );
+        }
+
+        for status in ["funded", "expired", "unknown"] {
+            let mut receipt = sample_appeal_finance_settlement_receipt();
+            receipt.observed_lifecycle_status = status.to_string();
+            assert_eq!(
+                receipt.validate(),
+                Err(
+                    SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedLifecycleStatus
+                ),
+                "{status}"
+            );
+        }
+
+        for (step, reconciliation, lifecycle) in [
+            ("drawdown_non_refund", "settled", "locked"),
+            (
+                "drawdown_non_refund",
+                "awaiting_refund_cancel",
+                "drawn_down",
+            ),
+            ("cancel_refund", "awaiting_refund_cancel", "locked"),
+            ("cancel_refund", "settled", "drawn_down"),
+        ] {
+            let mut receipt = sample_appeal_finance_settlement_receipt();
+            receipt.submitted_step = step.to_string();
+            receipt.reconciliation_status = reconciliation.to_string();
+            receipt.observed_lifecycle_status = lifecycle.to_string();
+            assert_eq!(
+                receipt.validate(),
+                Err(
+                    SoraFsAppealFinanceSettlementReceiptValidationError::InconsistentFinalizedState
+                ),
+                "{step}/{reconciliation}/{lifecycle}"
+            );
+        }
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_rejects_zero_timestamp_and_panel() {
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.generated_at_unix_ms = 0;
+        assert_eq!(
+            receipt.validate(),
+            Err(SoraFsAppealFinanceSettlementReceiptValidationError::MissingGeneratedAt)
+        );
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.panel_size = 0;
+        assert_eq!(
+            receipt.validate(),
+            Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidPanelSize)
+        );
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_requires_finalized_block_cursor() {
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.finalized_block_height = 0;
+        assert_eq!(
+            receipt.validate(),
+            Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinalizedBlockHeight)
+        );
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.finalized_block_hash = [0; 32];
+        assert_eq!(
+            receipt.validate(),
+            Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinalizedBlockHash)
+        );
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_canonical_digest_binds_finalized_cursor() {
+        let receipt = sample_appeal_finance_settlement_receipt();
+        let encoded = norito::to_bytes(&receipt).expect("encode receipt");
+        let digest = blake3::hash(&encoded);
+
+        let mut changed_height = receipt.clone();
+        changed_height.finalized_block_height += 1;
+        let changed_height_encoded =
+            norito::to_bytes(&changed_height).expect("encode changed-height receipt");
+        assert_ne!(changed_height_encoded, encoded);
+        assert_ne!(blake3::hash(&changed_height_encoded), digest);
+
+        let mut changed_hash = receipt;
+        changed_hash.finalized_block_hash[0] ^= 0x01;
+        let changed_hash_encoded =
+            norito::to_bytes(&changed_hash).expect("encode changed-hash receipt");
+        assert_ne!(changed_hash_encoded, encoded);
+        assert_ne!(blake3::hash(&changed_hash_encoded), digest);
     }
 
     fn sample_orderbook_settlement_receipt() -> SettlementReceiptV1 {
@@ -5694,6 +6149,50 @@ mod tests {
                 field: "reconciliation_digest_hex",
                 expected_bytes: 32,
             }
+        );
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_requires_exact_lowercase_hex_fields() {
+        fn assert_invalid_hex(
+            receipt: SoraFsAppealFinanceSettlementReceiptV1,
+            field: &'static str,
+        ) {
+            assert_eq!(
+                receipt.validate(),
+                Err(
+                    SoraFsAppealFinanceSettlementReceiptValidationError::InvalidHex {
+                        field,
+                        expected_bytes: 32,
+                    }
+                )
+            );
+        }
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.escrow_id_hex = "AA".repeat(32);
+        assert_invalid_hex(receipt, "escrow_id_hex");
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.tx_hash_hex = "2".repeat(63);
+        assert_invalid_hex(receipt, "tx_hash_hex");
+
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.reconciliation_digest_hex = format!("{}g", "3".repeat(63));
+        assert_invalid_hex(receipt, "reconciliation_digest_hex");
+    }
+
+    #[test]
+    fn appeal_finance_settlement_receipt_rejects_zero_policy_digest() {
+        let mut receipt = sample_appeal_finance_settlement_receipt();
+        receipt.appeal_finance_policy_digest = [0; 32];
+
+        let err = receipt
+            .validate()
+            .expect_err("zero governed policy digest rejected");
+        assert_eq!(
+            err,
+            SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinancePolicyDigest
         );
     }
 

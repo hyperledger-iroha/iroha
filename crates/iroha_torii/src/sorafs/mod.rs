@@ -9,10 +9,16 @@ pub mod concurrency;
 #[cfg(feature = "app_api")]
 pub mod delegated_routing;
 pub mod discovery;
+#[cfg(feature = "app_api")]
+pub(crate) mod evidence_viewer_api;
+#[cfg(feature = "app_api")]
+pub(crate) mod evidence_viewer_runtime;
 pub mod gateway;
 #[cfg(feature = "app_api")]
 pub(crate) mod gateway_compliance_api;
 pub mod gc;
+#[cfg(feature = "app_api")]
+pub(crate) mod hedging_billing_api;
 pub mod hosts;
 pub mod limits;
 #[cfg(feature = "app_api")]
@@ -20,10 +26,11 @@ pub mod moderation_runtime;
 #[cfg(feature = "app_api")]
 pub(crate) mod orderbook_runtime;
 pub(crate) mod orderbook_worker;
-pub mod pin;
 #[cfg(feature = "app_api")]
 pub mod pop_api;
 pub mod por;
+#[cfg(feature = "app_api")]
+pub mod potr_signing;
 pub mod quota;
 #[cfg(feature = "app_api")]
 pub mod registry;
@@ -60,27 +67,38 @@ pub use hosts::{HostMappingInput, HostMappingSummary};
 pub use limits::{
     QuotaExceeded, SorafsAction, SorafsQuotaConfig, SorafsQuotaEnforcer, SorafsQuotaWindow,
 };
-pub use pin::{PinAuthError, PinPolicyError, PinSubmissionPolicy};
 #[cfg(feature = "app_api")]
 pub use por::{
-    DrandHttpRandomnessProvider, FilesystemGovernancePublisher, GovernancePublisher,
-    PorAutomationError, PorCoordinatorRuntime, PorStorage, RandomnessProvider, VerifiedVrfProvider,
-    VrfError, VrfProvider,
+    DrandHttpRandomnessProvider, PorAutomationError, PorCoordinatorRuntime, PorStorage,
+    RandomnessProvider, VerifiedVrfProvider, VrfError, VrfProvider,
 };
 pub use por::{PorCoordinator, PorCoordinatorError, PorStatusExportV1, PorStatusFilter};
+#[cfg(feature = "app_api")]
+pub use potr_signing::{
+    PotrAdmissionMaterialResolverV1, PotrAdmissionReaderError, PotrAdmissionReaderV1,
+    PotrAdmissionRegistryResolverV1, PotrAdmissionSnapshotV1,
+    PotrFinalizedAdmissionReaderConfigError, PotrFinalizedAdmissionReaderV1,
+    PotrFinalizedPolicySnapshotV1, PotrFinalizedPolicySourceV1, PotrGatewaySignerV1,
+    PotrProviderSignerV1, PotrRuntimeSignerConfigError, PotrRuntimeSignerRolesV1,
+    PotrRuntimeSignersV1, PotrSignerServiceError, PotrStateFinalizedPolicySourceV1,
+};
 pub(crate) use quota::{StreamTokenQuotaError, StreamTokenQuotaTracker};
 #[cfg(feature = "app_api")]
 pub(crate) use registry::{
     CapacitySnapshot, RegistryDeclaration, RegistryError, RegistryFeeLedgerEntry, collect_snapshot,
 };
 pub use sorafs_manifest::{
-    pin_registry::ReplicationOrderV1,
+    capacity::ReplicationOrderV1,
     provider_advert::{EndpointKind, TransportProtocol},
+};
+#[cfg(feature = "app_api")]
+pub use sorafs_node::{
+    PotrAdmissionPolicyBindingError, PotrAdmissionPolicyBindingV1, PotrAdmissionPolicyProgressError,
 };
 pub(crate) use token::{
     MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES, MAX_TOKEN_FUTURE_SKEW_SECS,
 };
 pub use token::{
-    StreamTokenHeaderError, StreamTokenIssuer, StreamTokenIssuerError, TokenOverrides,
-    decode_token_base64, encode_token_base64,
+    StreamTokenHeaderError, StreamTokenIssuer, StreamTokenIssuerError, StreamTokenRuntimeSigner,
+    StreamTokenSigningError, TokenOverrides, decode_token_base64, encode_token_base64,
 };

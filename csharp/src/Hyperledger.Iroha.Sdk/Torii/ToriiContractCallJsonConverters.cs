@@ -6,6 +6,84 @@ namespace Hyperledger.Iroha.Torii;
 
 internal static class ToriiContractCallJson
 {
+    internal static void ValidateContractCallResponseJsonShape(JsonElement root, string context)
+    {
+        if (root.ValueKind == JsonValueKind.Null)
+        {
+            throw new JsonException($"{context} must not be null.");
+        }
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException($"{context} must be an object.");
+        }
+
+        RequireJsonBoolean(root, "ok", context);
+        RequireJsonBoolean(root, "submitted", context);
+        RequireJsonString(root, "dataspace", context);
+        RequireJsonString(root, "code_hash_hex", context);
+        RequireJsonString(root, "abi_hash_hex", context);
+        RequireJsonUInt64(root, "creation_time_ms", context);
+
+        var receipt = RequireJsonObject(root, "operation_receipt", context);
+        var receiptContext = $"{context}.operation_receipt";
+        RequireJsonString(receipt, "operation_kind", receiptContext);
+        RequireJsonString(receipt, "status", receiptContext);
+        RequireJsonString(receipt, "transport", receiptContext);
+        RequireJsonString(receipt, "dataspace", receiptContext);
+        RequireJsonUInt64(receipt, "gas_limit", receiptContext);
+        RequireJsonObject(receipt, "fee_payment", receiptContext);
+        RequireJsonString(receipt, "payload_digest_hex", receiptContext);
+    }
+
+    private static void RequireJsonBoolean(JsonElement root, string name, string context)
+    {
+        if (!root.TryGetProperty(name, out var value))
+        {
+            throw new JsonException($"{context}.{name} must not be null.");
+        }
+        if (value.ValueKind is not JsonValueKind.True and not JsonValueKind.False)
+        {
+            throw new JsonException($"{context}.{name} must be a boolean.");
+        }
+    }
+
+    private static void RequireJsonString(JsonElement root, string name, string context)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
+        {
+            throw new JsonException($"{context}.{name} must not be null.");
+        }
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new JsonException($"{context}.{name} must be a string.");
+        }
+    }
+
+    private static void RequireJsonUInt64(JsonElement root, string name, string context)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
+        {
+            throw new JsonException($"{context}.{name} must not be null.");
+        }
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetUInt64(out _))
+        {
+            throw new JsonException($"{context}.{name} must be an unsigned integer.");
+        }
+    }
+
+    private static JsonElement RequireJsonObject(JsonElement root, string name, string context)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
+        {
+            throw new JsonException($"{context}.{name} must not be null.");
+        }
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException($"{context}.{name} must be an object.");
+        }
+        return value;
+    }
+
     internal static void ValidateContractCallResponse(ToriiContractCallResponse response, string context)
     {
         ArgumentNullException.ThrowIfNull(response);
@@ -92,30 +170,6 @@ internal static class ToriiContractCallJson
             receipt.PayloadDigestHex,
             $"{context}.payload_digest_hex",
             32);
-    }
-
-    internal static void WriteContractCallResponse(
-        Utf8JsonWriter writer,
-        ToriiContractCallResponse response,
-        string context)
-    {
-        ValidateContractCallResponse(response, context);
-
-        writer.WriteStartObject();
-        writer.WriteBoolean("ok", response.Ok);
-        writer.WriteBoolean("submitted", response.Submitted);
-        writer.WriteString("dataspace", response.Dataspace);
-        writer.WriteString("contract_id", response.ContractId);
-        ToriiVpnJson.WriteNullableString(writer, "contract_address", response.ContractAddress);
-        writer.WriteString("code_hash_hex", response.CodeHashHex);
-        writer.WriteString("abi_hash_hex", response.AbiHashHex);
-        writer.WriteNumber("creation_time_ms", response.CreationTimeMilliseconds);
-        ToriiVpnJson.WriteNullableString(writer, "tx_hash_hex", response.TransactionHashHex);
-        ToriiVpnJson.WriteNullableString(writer, "transaction_scaffold_b64", response.TransactionScaffoldBase64);
-        ToriiVpnJson.WriteNullableString(writer, "signed_transaction_b64", response.SignedTransactionBase64);
-        ToriiVpnJson.WriteNullableString(writer, "signing_message_b64", response.SigningMessageBase64);
-        ToriiVpnJson.WriteNullableString(writer, "entrypoint", response.Entrypoint);
-        writer.WriteEndObject();
     }
 
     internal static void ValidateContractViewResponse(ToriiContractViewResponse response, string context)
@@ -505,7 +559,6 @@ internal static class ToriiContractCallJson
         {
             nameof(ToriiContractCallResponse.Submitted) => "submitted",
             nameof(ToriiContractCallResponse.Dataspace) => "dataspace",
-            nameof(ToriiContractCallResponse.ContractId) => "contract_id",
             nameof(ToriiContractCallResponse.ContractAddress) => "contract_address",
             nameof(ToriiContractCallResponse.CodeHashHex) => "code_hash_hex",
             nameof(ToriiContractCallResponse.AbiHashHex) => "abi_hash_hex",
@@ -515,6 +568,7 @@ internal static class ToriiContractCallJson
             nameof(ToriiContractCallResponse.SignedTransactionBase64) => "signed_transaction_b64",
             nameof(ToriiContractCallResponse.SigningMessageBase64) => "signing_message_b64",
             nameof(ToriiContractCallResponse.Entrypoint) => "entrypoint",
+            "ContractId" => "contract_id",
             nameof(ToriiContractViewResponse.Result) => "result",
             nameof(ToriiContractViewErrorResponse.Error) => "error",
             nameof(ToriiContractViewErrorResponse.VmDiagnostic) => "vm_diagnostic",
@@ -542,137 +596,6 @@ internal static class ToriiContractCallJson
         };
 
         return new JsonException($"{context}.{field}: {error.Message}", error);
-    }
-
-    internal static ToriiContractCallResponse ReadContractCallResponse(
-        ref Utf8JsonReader reader,
-        string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (reader.TokenType != JsonTokenType.StartObject)
-        {
-            throw new JsonException($"{context} must be an object.");
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        bool? ok = null;
-        bool? submitted = null;
-        string? dataspace = null;
-        string? contractId = null;
-        string? contractAddress = null;
-        string? codeHashHex = null;
-        string? abiHashHex = null;
-        ulong? creationTimeMilliseconds = null;
-        string? transactionHashHex = null;
-        string? transactionScaffoldBase64 = null;
-        string? signedTransactionBase64 = null;
-        string? signingMessageBase64 = null;
-        string? entrypoint = null;
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-            {
-                try
-                {
-                    var response = new ToriiContractCallResponse
-                    {
-                        Ok = RequireBool(ok, context, "ok"),
-                        Submitted = RequireBool(submitted, context, "submitted"),
-                        Dataspace = RequireString(dataspace, context, "dataspace"),
-                        ContractId = RequireString(contractId, context, "contract_id"),
-                        ContractAddress = contractAddress,
-                        CodeHashHex = RequireString(codeHashHex, context, "code_hash_hex"),
-                        AbiHashHex = RequireString(abiHashHex, context, "abi_hash_hex"),
-                        CreationTimeMilliseconds = RequireUInt64(
-                            creationTimeMilliseconds,
-                            context,
-                            "creation_time_ms"),
-                        TransactionHashHex = transactionHashHex,
-                        TransactionScaffoldBase64 = transactionScaffoldBase64,
-                        SignedTransactionBase64 = signedTransactionBase64,
-                        SigningMessageBase64 = signingMessageBase64,
-                        Entrypoint = entrypoint,
-                    };
-                    ValidateContractCallResponse(response, context);
-                    return response;
-                }
-                catch (ArgumentException error) when (error.ParamName is not null)
-                {
-                    throw DirectMetadataErrorToJsonException(error, context);
-                }
-            }
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-            {
-                throw new JsonException($"{context} property name expected.");
-            }
-
-            var propertyName = reader.GetString() ?? throw new JsonException($"{context} property name must be a string.");
-            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, context);
-            if (!reader.Read())
-            {
-                throw new JsonException($"{context}.{propertyName} is truncated.");
-            }
-
-            switch (propertyName)
-            {
-                case "ok":
-                    ok = ReadBool(ref reader, $"{context}.ok");
-                    break;
-                case "submitted":
-                    submitted = ReadBool(ref reader, $"{context}.submitted");
-                    break;
-                case "dataspace":
-                    dataspace = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.dataspace");
-                    break;
-                case "contract_id":
-                    contractId = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.contract_id");
-                    break;
-                case "contract_address":
-                    contractAddress = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.contract_address");
-                    break;
-                case "code_hash_hex":
-                    codeHashHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.code_hash_hex");
-                    break;
-                case "abi_hash_hex":
-                    abiHashHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.abi_hash_hex");
-                    break;
-                case "creation_time_ms":
-                    creationTimeMilliseconds = ToriiAccountFaucetJson.ReadUInt64(ref reader, $"{context}.creation_time_ms");
-                    break;
-                case "tx_hash_hex":
-                    transactionHashHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.tx_hash_hex");
-                    break;
-                case "transaction_scaffold_b64":
-                    transactionScaffoldBase64 = ToriiAccountFaucetJson.ReadOptionalString(
-                        ref reader,
-                        $"{context}.transaction_scaffold_b64");
-                    break;
-                case "signed_transaction_b64":
-                    signedTransactionBase64 = ToriiAccountFaucetJson.ReadOptionalString(
-                        ref reader,
-                        $"{context}.signed_transaction_b64");
-                    break;
-                case "signing_message_b64":
-                    signingMessageBase64 = ToriiAccountFaucetJson.ReadOptionalString(
-                        ref reader,
-                        $"{context}.signing_message_b64");
-                    break;
-                case "entrypoint":
-                    entrypoint = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.entrypoint");
-                    break;
-                default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
-            }
-        }
-
-        throw new JsonException($"{context} JSON object is incomplete.");
     }
 
     internal static ToriiContractViewResponse ReadContractViewResponse(
@@ -1031,28 +954,6 @@ internal static class ToriiContractCallJson
         }
 
         throw new JsonException($"{context} JSON object is incomplete.");
-    }
-}
-
-internal sealed class ToriiContractCallResponseJsonConverter : JsonConverter<ToriiContractCallResponse>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiContractCallResponse Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiContractCallJson.ReadContractCallResponse(ref reader, "contract call response");
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiContractCallResponse value,
-        JsonSerializerOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        ToriiContractCallJson.WriteContractCallResponse(writer, value, "contract call response");
     }
 }
 

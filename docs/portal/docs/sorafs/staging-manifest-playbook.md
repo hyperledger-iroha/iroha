@@ -27,24 +27,24 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
 3. Ensure the Torii config enables the discovery cache and admission enforcement:
 
    ```toml
-   [torii.sorafs.discovery]
+   [sorafs.discovery]
    discovery_enabled = true
    known_capabilities = ["torii_gateway", "chunk_range_fetch", "vendor_reserved"]
 
-   [torii.sorafs.discovery.admission]
+   [sorafs.discovery.admission]
    envelopes_dir = "/var/lib/iroha/admission/sorafs"
 
-   [torii.sorafs.storage]
+   [sorafs.storage]
    enabled = true
 
-   [torii.sorafs.gateway]
+   [sorafs.gateway]
    enforce_admission = true
    enforce_capabilities = true
    ```
 
 ## 2. Publish Admission Envelopes
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. Copy the approved provider admission envelopes into the directory referenced by `sorafs.discovery.admission.envelopes_dir`:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \

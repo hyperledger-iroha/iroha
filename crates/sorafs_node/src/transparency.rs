@@ -414,10 +414,22 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         "appeal_finance_config_version".to_string(),
         receipt.appeal_finance_config_version.clone(),
     );
+    metadata.insert(
+        "appeal_finance_policy_digest_hex".to_string(),
+        hex::encode(receipt.appeal_finance_policy_digest),
+    );
     metadata.insert("amount_xor".to_string(), receipt.amount_xor.to_string());
     metadata.insert(
         "configured_signer_count".to_string(),
         receipt.configured_signer_count.to_string(),
+    );
+    metadata.insert(
+        "finalized_block_hash_hex".to_string(),
+        hex::encode(receipt.finalized_block_hash),
+    );
+    metadata.insert(
+        "finalized_block_height".to_string(),
+        receipt.finalized_block_height.to_string(),
     );
     metadata.insert("held_xor".to_string(), receipt.held_xor.to_string());
     metadata.insert("outcome".to_string(), receipt.outcome.as_str().to_string());
@@ -435,14 +447,12 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         metadata.insert("round_id".to_string(), round_id.clone());
     }
     let metadata = metadata_vec(metadata);
-    let policy_digest = hex_32_to_digest(
-        &receipt.reconciliation_digest_hex,
-        "appeal finance settlement reconciliation digest",
-    )?;
     let entry = TransparencyLedgerSourceEntry {
         event_id: format!(
-            "appeal-finance-settlement:{}",
-            hex::encode(receipt.receipt_id)
+            "appeal-finance-settlement:{}:{}:{}",
+            hex::encode(receipt.receipt_id),
+            receipt.finalized_block_height,
+            hex::encode(receipt.finalized_block_hash)
         ),
         occurred_at_unix: unix_ms_to_secs(receipt.generated_at_unix_ms).map_err(|message| {
             TransparencySourceEntryAdapterError::InvalidAppealFinanceSettlementReceipt { message }
@@ -456,7 +466,7 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         ),
         payload_digest,
         summary_digest: source_summary_digest("appeal_finance_settlement_receipt", &metadata),
-        policy_digest: Some(policy_digest),
+        policy_digest: Some(receipt.appeal_finance_policy_digest),
         evidence_uris: Vec::new(),
         metadata,
     };
@@ -3823,30 +3833,6 @@ fn unix_ms_to_secs(unix_ms: u64) -> Result<u64, String> {
     Ok(unix)
 }
 
-fn hex_32_to_digest(
-    value: &str,
-    field: &'static str,
-) -> Result<[u8; 32], TransparencySourceEntryAdapterError> {
-    let decoded = hex::decode(value).map_err(|err| {
-        TransparencySourceEntryAdapterError::InvalidAppealFinanceSettlementReceipt {
-            message: format!("{field} must be lowercase 32-byte hex: {err}"),
-        }
-    })?;
-    let digest: [u8; 32] = decoded.try_into().map_err(|_| {
-        TransparencySourceEntryAdapterError::InvalidAppealFinanceSettlementReceipt {
-            message: format!("{field} must be 32 bytes"),
-        }
-    })?;
-    if digest.iter().all(|byte| *byte == 0) {
-        return Err(
-            TransparencySourceEntryAdapterError::InvalidAppealFinanceSettlementReceipt {
-                message: format!("{field} must be non-zero"),
-            },
-        );
-    }
-    Ok(digest)
-}
-
 fn gar_enforcement_action_label(action: &GarEnforcementActionV1) -> &'static str {
     match action {
         GarEnforcementActionV1::PurgeStaticZone => "purge_static_zone",
@@ -4188,20 +4174,23 @@ mod tests {
             case_id: "case-42".to_string(),
             round_id: Some("round-1".to_string()),
             generated_at_unix_ms: 1_800_000_032_000,
+            finalized_block_height: 42,
+            finalized_block_hash: [0x43; 32],
             appeal_finance_config_version: "baseline-v1".to_string(),
+            appeal_finance_policy_digest: [0x44; 32],
             outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
             escrow_id_hex: "11".repeat(32),
             payer_account: "payer-account".to_string(),
             destination_account: "escrow-account".to_string(),
             release_authority_account: Some("release-authority".to_string()),
-            submitted_step: "treasury-release".to_string(),
+            submitted_step: "drawdown_non_refund".to_string(),
             required_authority: "release-authority".to_string(),
-            amount_xor: xor("25"),
+            amount_xor: xor("420"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
-            reconciliation_status: "pending".to_string(),
-            observed_lifecycle_status: "funded".to_string(),
-            observed_remaining_xor: xor("420"),
+            reconciliation_status: "settled".to_string(),
+            observed_lifecycle_status: "drawn_down".to_string(),
+            observed_remaining_xor: xor("0"),
             deposit_xor: xor("420"),
             refund_xor: xor("0"),
             treasury_xor: xor("25"),
@@ -5268,11 +5257,70 @@ mod tests {
             receipt_entry.kind,
             ModerationLedgerEntryKindV1::AppealOutcome
         );
-        assert_eq!(receipt_entry.policy_digest, Some([0x33; 32]));
-        assert_eq!(receipt_entry.subject, "case-42:treasury-release");
+        assert_eq!(receipt_entry.policy_digest, Some([0x44; 32]));
+        assert_eq!(receipt_entry.subject, "case-42:drawdown_non_refund");
+        assert_eq!(
+            receipt_entry.event_id,
+            format!(
+                "appeal-finance-settlement:{}:{}:{}",
+                hex::encode(receipt.receipt_id),
+                receipt.finalized_block_height,
+                hex::encode(receipt.finalized_block_hash)
+            )
+        );
+        assert!(receipt_entry.metadata.iter().any(|item| {
+            item.key == "appeal_finance_policy_digest_hex"
+                && item.value == hex::encode(receipt.appeal_finance_policy_digest)
+        }));
+        assert!(receipt_entry.metadata.iter().any(|item| {
+            item.key == "finalized_block_height"
+                && item.value == receipt.finalized_block_height.to_string()
+        }));
+        assert!(receipt_entry.metadata.iter().any(|item| {
+            item.key == "finalized_block_hash_hex"
+                && item.value == hex::encode(receipt.finalized_block_hash)
+        }));
         receipt_entry
             .validate()
             .expect("appeal settlement entry validates");
+
+        let mut tampered_receipt = receipt.clone();
+        tampered_receipt.appeal_finance_policy_digest[0] ^= 0x01;
+        let tampered_entry = appeal_finance_settlement_receipt_source_entry(&tampered_receipt)
+            .expect("non-zero tampered policy digest remains structurally valid");
+        assert_ne!(tampered_entry.policy_digest, receipt_entry.policy_digest);
+        assert_ne!(tampered_entry.payload_digest, receipt_entry.payload_digest);
+        assert_ne!(tampered_entry.summary_digest, receipt_entry.summary_digest);
+
+        let mut changed_height_receipt = receipt.clone();
+        changed_height_receipt.finalized_block_height += 1;
+        let changed_height_entry =
+            appeal_finance_settlement_receipt_source_entry(&changed_height_receipt)
+                .expect("changed finalized height remains structurally valid");
+        assert_ne!(changed_height_entry.event_id, receipt_entry.event_id);
+        assert_ne!(
+            changed_height_entry.payload_digest,
+            receipt_entry.payload_digest
+        );
+        assert_ne!(
+            changed_height_entry.summary_digest,
+            receipt_entry.summary_digest
+        );
+
+        let mut changed_hash_receipt = receipt;
+        changed_hash_receipt.finalized_block_hash[0] ^= 0x01;
+        let changed_hash_entry =
+            appeal_finance_settlement_receipt_source_entry(&changed_hash_receipt)
+                .expect("changed finalized hash remains structurally valid");
+        assert_ne!(changed_hash_entry.event_id, receipt_entry.event_id);
+        assert_ne!(
+            changed_hash_entry.payload_digest,
+            receipt_entry.payload_digest
+        );
+        assert_ne!(
+            changed_hash_entry.summary_digest,
+            receipt_entry.summary_digest
+        );
     }
 
     #[test]
@@ -5510,6 +5558,19 @@ mod tests {
             err,
             TransparencySourceEntryAdapterError::InvalidAppealFinanceReport { .. }
         ));
+
+        let mut zero_height = appeal_finance_settlement_receipt_fixture();
+        zero_height.finalized_block_height = 0;
+        let mut zero_hash = appeal_finance_settlement_receipt_fixture();
+        zero_hash.finalized_block_hash = [0; 32];
+        for receipt in [zero_height, zero_hash] {
+            let err = appeal_finance_settlement_receipt_source_entry(&receipt)
+                .expect_err("invalid finalized cursor rejected");
+            assert!(matches!(
+                err,
+                TransparencySourceEntryAdapterError::InvalidAppealFinanceSettlementReceipt { .. }
+            ));
+        }
     }
 
     #[test]

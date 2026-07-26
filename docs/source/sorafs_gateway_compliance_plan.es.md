@@ -6,8 +6,8 @@ direction: ltr
 source: docs/source/sorafs_gateway_compliance_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: ff8a8da56047edbb1b458ef4cce6170b0a009806bfb22b46294996837b07008a
-source_last_modified: "2026-07-25T15:25:57.855170+00:00"
+source_hash: 6a95f2f94ac01eca7c8f794bd171c0f7f0ef13c6a256f9e63275920c603166cf
+source_last_modified: "2026-07-26T06:11:49.401878+00:00"
 translation_last_reviewed: null
 ---
 

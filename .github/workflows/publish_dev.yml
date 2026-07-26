@@ -8,20 +8,31 @@ env:
   CARGO_TERM_COLOR: always
   ARTIFACTS_DIR: tmp/artifacts
   BIN_PATH: /usr/local/bin
+  IROHA_CI_IMAGE: ${{ vars.IROHA_CI_IMAGE }}
+  IROHA_RUST_BUILDER_IMAGE: ${{ vars.IROHA_RUST_BUILDER_IMAGE }}
+  IROHA_RUNTIME_IMAGE: ${{ vars.IROHA_RUNTIME_IMAGE }}
 
 jobs:
   dev_image:
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ vars.IROHA_CI_IMAGE }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate digest-pinned Docker base images
+        run: |
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_RUST_BUILDER_IMAGE" \
+            --runtime "$IROHA_RUNTIME_IMAGE"
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_CI_IMAGE" \
+            --runtime "$IROHA_CI_IMAGE"
       - name: Set up Docker Buildx
         id: buildx
         if: always()
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
-          version: latest
+          version: v0.34.1
           install: true
       - name: Login to DockerHub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
@@ -43,6 +54,9 @@ jobs:
             hyperledger/iroha:dev
             docker.soramitsu.co.jp/iroha2/iroha:dev
           labels: commit=${{ github.sha }}
+          build-args: |
+            "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
+            "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

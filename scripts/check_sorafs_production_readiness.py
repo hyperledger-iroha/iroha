@@ -78,6 +78,7 @@ from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GATEWAY_COMPLIANCE_REQUIRED_KINDS,
     KIND_BY_NAME as GATEWAY_COMPLIANCE_KIND_BY_NAME,
     POLICY_BOUND_KINDS as GATEWAY_COMPLIANCE_POLICY_BOUND_KINDS,
+    PREDECESSOR_BOUND_KINDS as GATEWAY_COMPLIANCE_PREDECESSOR_BOUND_KINDS,
     REQUIRED_METRICS as GATEWAY_COMPLIANCE_REQUIRED_METRICS,
 )
 from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
@@ -196,6 +197,10 @@ from sccp_release_common import verify_ed25519  # noqa: E402
 
 
 SUMMARY_SCHEMA = "sorafs.production_readiness.aggregate_gate.v1"
+GATEWAY_MODERATION_CATALOG_MISMATCH_ERROR = (
+    "moderation_panel evidence viewer catalog digests must match "
+    "gateway_compliance valid_catalog_digests"
+)
 FOUNDATIONAL_PREREQUISITE_SCHEMA = (
     "sorafs.production_readiness.foundational_prerequisites.v1"
 )
@@ -347,6 +352,7 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
             "metric_count_values",
             "metrics",
             "valid_catalog_digests",
+            "valid_catalog_history_bindings",
             "valid_policy_digests",
         }
     ),
@@ -642,6 +648,7 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
         "strings": frozenset(),
         "positive_ints": frozenset(),
         "hex": {
+            "catalog_digest_hex": 64,
             "case_digest_hex": 64,
             "roster_hash_hex": 64,
             "session_manifest_digest_hex": 64,
@@ -650,6 +657,16 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
             "legal_hold_receipt_digest_hex": 64,
             "transparency_report_digest_hex": 64,
             "audit_digest_hex": 64,
+        },
+    },
+    "valid_catalog_history_bindings": {
+        "strings": frozenset(),
+        "positive_ints": frozenset(
+            {"catalog_sequence", "predecessor_catalog_sequence"}
+        ),
+        "hex": {
+            "catalog_digest_hex": 64,
+            "predecessor_catalog_digest_hex": 64,
         },
     },
     "valid_multi_peer_runs": {
@@ -684,6 +701,10 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS = {
     "valid_billing_cycles": ("cycle_id",),
+    "valid_catalog_history_bindings": (
+        "catalog_digest_hex",
+        "catalog_sequence",
+    ),
     "valid_e2e_runs": ("case_digest_hex", "roster_hash_hex", "tally_digest_hex"),
     "valid_evidence_viewer_digest_sets": ("case_digest_hex", "roster_hash_hex"),
     "valid_multi_peer_runs": ("deployment_id", "environment", "generated_at_unix"),
@@ -691,6 +712,7 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS = {
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS = {
     "valid_billing_cycles": "billing_cycle",
+    "valid_catalog_history_bindings": "catalog_promotion",
     "valid_e2e_runs": "e2e_panel",
     "valid_evidence_viewer_digest_sets": "evidence_viewer",
     "valid_multi_peer_runs": "multi_peer_reconciliation",
@@ -698,6 +720,10 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS = {
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS = {
     ("appeal_finance", "valid_multi_peer_runs"): "multi_peer_reconciliation",
+    (
+        "gateway_compliance",
+        "valid_catalog_history_bindings",
+    ): "catalog_promotion",
     ("hedging_billing", "valid_billing_cycles"): "billing_cycle",
     ("moderation_panel", "valid_e2e_runs"): "e2e_panel",
     ("moderation_panel", "valid_evidence_viewer_digest_sets"): "evidence_viewer",
@@ -3639,6 +3665,36 @@ def bound_artifact_fingerprints_match_hex_binding_metadata(
             return
 
 
+def bound_artifact_fingerprints_match_object_list_metadata(
+    payload: dict[str, Any],
+    *,
+    kind_names: tuple[str, ...],
+    metadata_field: str,
+    error: str,
+    errors: list[str],
+) -> None:
+    """Require every bound artifact fingerprint to carry one complete metadata tuple."""
+
+    metadata_values = payload_free_object_list_metadata_identities(
+        metadata_field,
+        payload.get(metadata_field),
+    )
+    if metadata_values is None:
+        return
+    fingerprints = payload_free_summary_artifact_fingerprints(
+        payload,
+        kind_names=kind_names,
+    )
+    for fingerprint in fingerprints:
+        fingerprint_values = fingerprint_object_list_metadata_identities(
+            metadata_field,
+            [fingerprint],
+        )
+        if len(fingerprint_values) != 1 or not fingerprint_values <= metadata_values:
+            errors.append(error)
+            return
+
+
 def validate_moderation_panel_bound_artifact_metadata(
     payload: dict[str, Any],
     errors: list[str],
@@ -3909,6 +3965,16 @@ def validate_gateway_compliance_bound_artifact_metadata(
         error=(
             "gateway_compliance catalog-bound artifact fingerprints must match "
             "valid_catalog_digests"
+        ),
+        errors=errors,
+    )
+    bound_artifact_fingerprints_match_object_list_metadata(
+        payload,
+        kind_names=GATEWAY_COMPLIANCE_PREDECESSOR_BOUND_KINDS,
+        metadata_field="valid_catalog_history_bindings",
+        error=(
+            "gateway_compliance predecessor-bound artifact fingerprints must match "
+            "valid_catalog_history_bindings"
         ),
         errors=errors,
     )
@@ -5824,6 +5890,33 @@ def validate_foundational_lane_summary_digest_bindings(
         foundational_prerequisites["valid"] = False
 
 
+def validate_joint_gateway_moderation_catalog_binding(
+    valid_lane_payloads: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    """Bind individually valid moderation viewer evidence to the gateway catalog."""
+
+    gateway_payload = valid_lane_payloads.get("gateway_compliance")
+    moderation_payload = valid_lane_payloads.get("moderation_panel")
+    if gateway_payload is None or moderation_payload is None:
+        return
+    gateway_catalog_digests = payload_free_hex_list_metadata_values(
+        "valid_catalog_digests",
+        gateway_payload.get("valid_catalog_digests"),
+    )
+    viewer_digest_values = payload_free_object_list_hex_metadata_values(
+        "valid_evidence_viewer_digest_sets",
+        moderation_payload.get("valid_evidence_viewer_digest_sets"),
+    )
+    if gateway_catalog_digests is None or viewer_digest_values is None:
+        return
+    if (
+        viewer_digest_values.get("catalog_digest_hex", set())
+        != gateway_catalog_digests
+    ):
+        errors.append(GATEWAY_MODERATION_CATALOG_MISMATCH_ERROR)
+
+
 def build_summary(
     evidence_dirs: list[Path],
     evidence_files: list[Path],
@@ -5865,6 +5958,7 @@ def build_summary(
     unknown_schema_count = 0
     explicit_unrequired_count = 0
     observed_summary_sha256: dict[str, str] = {}
+    valid_lane_payloads: dict[str, dict[str, Any]] = {}
 
     for path in files:
         loaded = load_evidence_json_with_sha256_or_record_error(
@@ -5931,6 +6025,7 @@ def build_summary(
         if required[gate.name]["present"] is True:
             duplicate_summary_gates.add(gate.name)
             duplicate_summary_count += 1
+            valid_lane_payloads.pop(gate.name, None)
             required[gate.name]["valid"] = False
             duplicate_error = f"duplicate {gate.name} production readiness summary"
             row_errors = required[gate.name].setdefault("errors", [])
@@ -5950,6 +6045,8 @@ def build_summary(
                 gate_summary["valid"] = False
                 gate_summary["errors"].extend(row_output_errors)
                 validation_errors.extend(row_output_errors)
+            else:
+                valid_lane_payloads[gate.name] = payload
         required[gate.name] = gate_summary
         for error in validation_errors:
             errors.append(f"{gate.name}: {error}")
@@ -5962,6 +6059,10 @@ def build_summary(
         foundational_prerequisites,
         observed_summary_sha256,
         required_gates,
+        errors,
+    )
+    validate_joint_gateway_moderation_catalog_binding(
+        valid_lane_payloads,
         errors,
     )
 

@@ -6,8 +6,8 @@ direction: ltr
 source: docs/source/sorafs_por_validator_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 32aa76490ed02ff2fc27b51314464109c055c626add1a5adce02120d142c0db8
-source_last_modified: "2026-07-25T06:08:17.640079+00:00"
+source_hash: 31e5a6b36091440392987740e757f455fa73d5902fee8edfaf0b45d0d20820e5
+source_last_modified: "2026-07-25T22:08:01.393002+00:00"
 translation_last_reviewed: null
 ---
 

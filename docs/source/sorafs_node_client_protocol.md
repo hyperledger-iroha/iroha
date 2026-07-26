@@ -441,8 +441,10 @@ The `iroha` CLI wraps the REST endpoints for day-to-day operations:
 - At the HTTP boundary, report, slash, appeal, claim, heartbeat, complete, and
   fail command routes return `202 Accepted`; finalized status, task-list,
   single-task, and committed-event queries return `200 OK`.
-- `iroha app sorafs storage pin --manifest=manifest.to --payload=payload.bin`
-  submits a Norito manifest and payload to the storage façade for pinning.
+- `iroha app sorafs storage prepare --manifest=manifest.to --payload=payload.bin
+  --payload-out=provider.payload --files-out=provider.files.json` prepares
+  deterministic material for the provider-internal worker. It does not submit
+  bytes over HTTP or reserve provider capacity.
 - `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
   retention reports from the local manifest store for audit evidence.
 - GC eviction sweeps emit `GcAuditEventV1` payloads into the governance DAG, so
@@ -489,11 +491,12 @@ and telemetry stay in sync.【crates/iroha_torii/tests/sorafs_discovery.rs:989-1
    the manifest digest, chunk digest, content length, policy, fee asset, treasury,
    and fee amount. That fee metadata is a committed receipt; storage ingest does
    not reprice the record against later governance schedule or treasury changes.
-2. `POST /v1/sorafs/storage/pin` with a base64-encoded manifest (`manifest_b64`)
-   and payload (`payload_b64`). Torii recomputes the chunk plan and admits the
-   ingest only when it matches the approved paid registry record. A successful
-   pin returns `manifest_id_hex`, `payload_digest_hex`, and the canonical content
-   length.
+2. After the registration is finalized, the supervised provider worker
+   reconciles the exact finalized height/hash, approved manifest record,
+   configured provider identity, and committed replication assignment. It
+   derives a durable idempotency key from those committed fields before
+   ingesting provider-supplied bytes. V1 exposes no public storage-upload route;
+   HTTP requests cannot change storage/quota state or provider-keyed metadata.
 3. `POST /v1/sorafs/storage/fetch` using the returned manifest id, an offset,
    and a bounded length. The response echoes the request fields and streams the
    chunk data as `data_b64`.
@@ -509,6 +512,11 @@ and telemetry stay in sync.【crates/iroha_torii/tests/sorafs_discovery.rs:989-1
    `por_inflight` back to zero, bumps `fetch_bytes_per_sec` above zero (smoothing
    accounts for elapsed time), and increments `por_samples_success_total` by the
    sampled leaf count while leaving `por_samples_failed_total` untouched.
+
+Failed provider-internal delivery remains in the bounded durable outbox and
+moves to a payload-free dead letter after the governed attempt limit. Restart
+replays the same idempotency identity; a caller cannot select a different
+provider or overwrite another provider's metadata.
 
 This workflow doubles as the CLI recipe for validating stream budgets: any
 fetch that exceeds a provider’s advertised burst or alignment policy will fail
@@ -534,7 +542,8 @@ the canonical request payload:
   no greater than its configured default; request values cannot raise a
   gateway's ceiling.
 
-When stream tokens are enabled the handler responds with:
+When issuance is enabled in node TOML and startup has bound the configured
+runtime signer, the handler responds with:
 
 - HTTP `200 OK`.
 - Headers:
@@ -581,9 +590,12 @@ as 32 lowercase hexadecimal characters. A token has positive concurrency,
 request, and byte budgets, a maximum one-hour lifetime, and no more than 60
 seconds of positive issuance-clock skew. It is rejected at its exact expiry
 second. Nodes return HTTP `404` with
-`{"error": "stream token issuance is not enabled on this node"}` when the
-signing key is not configured, allowing operators to detect misconfigured
-gateways quickly.
+`{"error": "stream token issuance is not enabled on this node"}` only when
+issuance is disabled in node TOML. Enabled production startup fails closed
+unless a runtime-injected HSM/KMS signer reports the configured non-secret
+`signer_handle` and exact Ed25519 `signer_public_key_hex`. No signing-seed file,
+key path, or environment enablement is accepted; signer credentials and private
+key material remain runtime-only.
 
 Issuance-client and per-token quota state are bounded and prune only expired or
 idle windows. A full state table never evicts an active budget (which would

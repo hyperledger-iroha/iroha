@@ -320,6 +320,54 @@ else:
                 domain_tag=domain_tag,
             )
 
+        @staticmethod
+        def issue_replication_order(
+            order_id: str,
+            order_payload: str,
+            issued_epoch: int,
+            deadline_epoch: int,
+        ) -> Any:
+            """Build a canonical native ``IssueReplicationOrder`` instruction."""
+
+            from .sorafs_replication import build_issue_replication_order_instruction
+
+            return build_issue_replication_order_instruction(
+                order_id,
+                order_payload,
+                issued_epoch,
+                deadline_epoch,
+            )
+
+        @staticmethod
+        def complete_replication_order(
+            order_id: str,
+            provider_id: str,
+            completion_epoch: int,
+        ) -> Any:
+            """Build the provider-specific completion instruction."""
+
+            from .sorafs_replication import build_complete_replication_order_instruction
+
+            return build_complete_replication_order_instruction(
+                order_id,
+                provider_id,
+                completion_epoch,
+            )
+
+        @staticmethod
+        def expire_replication_order(
+            order_id: str,
+            expiration_epoch: int,
+        ) -> Any:
+            """Build a canonical native ``ExpireReplicationOrder`` instruction."""
+
+            from .sorafs_replication import build_expire_replication_order_instruction
+
+            return build_expire_replication_order_instruction(
+                order_id,
+                expiration_epoch,
+            )
+
     SignedTransactionEnvelope = _crypto.SignedTransactionEnvelope
     TransactionBuilder = _crypto.TransactionBuilder
 verify_signed_transaction_versioned = _crypto.verify_signed_transaction_versioned

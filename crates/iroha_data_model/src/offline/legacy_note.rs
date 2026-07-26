@@ -410,7 +410,7 @@ mod tests {
         );
         assert_eq!(
             offline_note_recursive_public_inputs_schema_hash(),
-            Hash::new(OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA).into()
+            <[u8; Hash::LENGTH]>::from(Hash::new(OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA))
         );
     }
 }

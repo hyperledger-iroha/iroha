@@ -1,74 +1,12 @@
 ---
-lang: ru
-direction: ltr
-source: docs/portal/docs/sorafs/deal-engine.ru.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+id: deal-engine
+title: SoraFS V1 Ledger Economics
+sidebar_label: Ledger Economics
+description: Canonical V1 orderbook, reserve/rent, and billing authority.
 ---
 
----
-идентификатор: механизм сделок
-заголовок: Движок сделок SoraFS
-Sidebar_label: Движки сделок
-описание: Обзор движка сделок SF-8, партнеров Torii и телеметрических контактов.
----
+# SoraFS V1 ledger-authoritative economics
 
-:::note Канонический источник
-:::
+The retired process-local agreement service is not a V1 surface. Provider and client custody, matching, usage accrual, and settlement are authoritative only through native orderbook and reserve/rent instructions, finalized typed queries and events, and the supervised hedging/billing projection. Clients submit signed transactions and reconcile committed ledger state.
 
-# Движок сделок SoraFS
-
-Дорожная карта SF-8 управляет движением сделок SoraFS, обеспечения
-определенный учет правил хранения и извлечения между
-клиентами и провайдерами. результат о результате Norito полезных нагрузок,
-доходы в `crates/sorafs_manifest/src/deal.rs`, покрывая условия сделки,
-блокировка облигаций, вероятностные микроплатежи и записи расчетов.
-
-Встроенный рабочий SoraFS (`sorafs_node::NodeHandle`) теперь создает
-экземпляр `DealEngine` для каждого узла процесса. Движок:
-
-- валидирует и регистрирует сделку через `DealTermsV1`;
-- начисляет расходы в XOR при отчетах об использовании репликации;
-- измеряет окно вероятностных микроплатежей с помощью детерминированного
-  выборка на основе BLAKE3; и
-- формирует снимки книги и расчеты полезной нагрузки, пригодные для публикации в управлении.
-
-Юнит-тесты раскрывают валидацию, выбор микроплатежей и расчетные потоки, чтобы
-операторы могут уверенно проверять API. Решения теперь выпускают полезные нагрузки управления
-`DealSettlementV1`, напрямую подключаясь к конвейеру SF-12, и обновляют серию
-ОпенТелеметрия `sorafs.node.deal_*`
-(И18НИ00000017Х, И18НИ00000018Х, И18НИ00000019Х,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) для дашбордов Torii и
-Обеспечение исполнения SLO. Следующие шаги фокусируются на разрезающей, инициируемой автоматизации.
-аудиторами, и согласования семантики сохраняются с политикой управления.
-
-Измерение использования также питает набор телеметрик `sorafs.node.micropayment_*`:
-И18НИ00000024Х, И18НИ00000025Х,
-И18НИ00000026Х, И18НИ00000027Х,
-`micropayment_outstanding_nano`, а также счетчики билетов
-(И18НИ00000029Х, И18НИ00000030Х,
-`micropayment_tickets_duplicate_total`). Эти итоги раскрывают вероятностный
-лотерейный поток, чтобы операторы могли коррелировать выигрыши микроплатежей и
-перенос кредитов с учетом результатов расчетов.
-
-## Интеграция Torii
-
-Torii обеспечивает выделенные конечные точки, чтобы провайдеры могли передавать использование и вести
-жизненные циклические сделки без специальной проводки:- `POST /v1/sorafs/deal/usage` принимает телеметрию `DealUsageReport` и возвращает
-  детерминированные результаты учета (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` завершает текущее окно, стримя
-  итоговый `DealSettlementRecord` вместе с base64-кодированным `DealSettlementV1`,
-  готовым к публикации в управлении DAG.
-- Лента Torii `/v1/events/sse` теперь транслирует записи `SorafsGatewayEvent::DealUsage`,
-  суммирующие каждое использование отправителя (эпоха, учитываемые ГиБ-часы, счетчики билетов,
-  детерминированные расходы), записи `SorafsGatewayEvent::DealSettlement`,
-  включающие канонические расчеты реестра моментальных снимков плюс дайджест BLAKE3/size/base64
-  управление требуется на диске и оповещения `SorafsGatewayEvent::ProofHealth` при превышении
-  порогов PDP/PoTR (провайдер, окно, состояние удара/перезарядки, штраф штрафа). Потребители могут
-  фильтровать провайдера, чтобы реагировать на новые телеметрии, расчеты или предупреждения о работоспособности без опроса.
-
-Конечные точки Оба участвуют в системе квот SoraFS через новое окно
-`torii.sorafs.quota.deal_telemetry`, включите операторами настройку допустимую
-Отправки для каждого деплоя.
+Pre-release local checkpoints and HTTP balance-mutation endpoints are intentionally unsupported. Development state created by the retired service must be discarded and reseeded.

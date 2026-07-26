@@ -67,8 +67,6 @@ const STREAM_ID_PRIVATE: &str =
     "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
 const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
-const TAIRA_STORAGE_PIN_MAX_EVENTS: u32 = 64;
-const TAIRA_STORAGE_PIN_WINDOW_SECS: u64 = 3_600;
 
 fn format_toml_integer_u64(value: u64) -> String {
     let digits = value.to_string();
@@ -470,19 +468,6 @@ submitters = [{telemetry_submitters}]
             )
         });
     let torii_max_content_len = format_toml_integer_u64(DEFAULT_TORII_MAX_CONTENT_LEN);
-    let sorafs_quota_overrides = if spec.slug == "iroha3-taira" {
-        format!(
-            r#"
-[sorafs.quota]
-storage_pin_max_events = {storage_pin_max_events}
-storage_pin_window_secs = {storage_pin_window_secs}
-"#,
-            storage_pin_max_events = TAIRA_STORAGE_PIN_MAX_EVENTS,
-            storage_pin_window_secs = TAIRA_STORAGE_PIN_WINDOW_SECS,
-        )
-    } else {
-        String::new()
-    };
     let sorafs_site_bindings = if spec.slug == "iroha3-taira" {
         r#"
 [sorafs.gateway.site_bindings]
@@ -569,7 +554,7 @@ max_content_len = {torii_max_content_len}
 [streaming]
 identity_public_key = "{stream_pub}"
 identity_private_key = "{stream_priv}"
-{sorafs_quota_overrides}{sorafs_site_bindings}
+{sorafs_site_bindings}
 
 [nexus]
 enabled = true
@@ -593,7 +578,6 @@ public_key = "{genesis_pk}"
         network_public_address = network_public_address,
         torii_address = torii_address,
         torii_max_content_len = torii_max_content_len,
-        sorafs_quota_overrides = sorafs_quota_overrides,
         sorafs_site_bindings = sorafs_site_bindings,
         taira_nexus_overrides = taira_nexus_overrides,
         taira_mcp_overrides = taira_mcp_overrides,
@@ -1008,9 +992,6 @@ mod tests {
         let genesis_key = deterministic_keypair("config-taira-quota-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
         let rendered = render_config(&PROFILES[1], &peers, genesis_key.public_key());
-        assert!(rendered.contains("[sorafs.quota]"));
-        assert!(rendered.contains("storage_pin_max_events = 64"));
-        assert!(rendered.contains("storage_pin_window_secs = 3600"));
         assert!(rendered.contains("[sorafs.gateway.site_bindings]"));
         assert!(rendered.contains("path = \"/config/sorafs_sites.json\""));
         assert!(rendered.contains("max_bytes = 1048576"));

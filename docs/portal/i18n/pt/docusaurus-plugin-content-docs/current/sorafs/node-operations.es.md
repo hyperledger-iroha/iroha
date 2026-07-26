@@ -95,7 +95,7 @@ Ambos os endpoints são servidos pelo trabalhador de armazenamento embebido, ass
 2. Envie o manifesto com codificação base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```O JSON da solicitação deve conter `manifest_b64` e `payload_b64`. Uma resposta exitosa retorna `manifest_id_hex` e o resumo da carga útil.
@@ -155,7 +155,7 @@ Ambos os endpoints são servidos pelo trabalhador de armazenamento embebido, ass
   que contém `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection` e `por_sampling_returns_verified_proofs`.
 - Os painéis devem ser seguidos:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` e `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` e `torii_sorafs_storage_fetch_inflight`
   - contadores de sucesso/queda de PoR expostos via `/v1/sorafs/capacity/state`
   - intenções de publicação de liquidação via `sorafs_node_deal_publish_total{result=success|failure}`
 

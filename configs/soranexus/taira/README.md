@@ -596,25 +596,14 @@ under `[sorafs.gateway.compliance]`. Catalog construction, acknowledgement,
 promotion, rollback, and appeal/hold precedence remain operator-controlled; no
 repository bootstrap file authorizes live Taira mutation.
 
-Taira's public edge also needs to accept the storage payload upload that
-precedes root serving. The current SoraFS storage pin API sends the full staged
-site in one JSON request (`payload_b64`), so the nginx host serving
-the chosen public Torii hostname must keep `client_max_body_size 1g;` from
-`taira-explorer.nginx.conf`. Without that, `yarn taira:publish` fails at
-`POST /v1/sorafs/storage/pin` with `413 Payload Too Large` before Torii sees
-the request. Torii must also run with `torii.max_content_len` high enough for
-the base64-expanded JSON body; the shipped Taira profile now pins that to
-`1_073_741_824`, and the local bootstrap overlay now rewrites the served
-`dist/taira-localnet/peer*.toml` files to keep that same cap live after every
-reset. The same overlay carries the Taira `[sumeragi.block]` transaction caps
-into each rendered peer config so fast-finality runs do not silently fall back
-to the generic 10k localnet block budget. Torii and the Rust client both reserve
-a 10 minute route/request budget for `POST /v1/sorafs/storage/pin`, because
-publish-sized base64 JSON envelopes can take longer than the generic 70 second
-Torii request window. Taira also overrides
-`[sorafs.quota] storage_pin_max_events = 64` so
-publish/retry loops on the public testnet do not immediately exhaust the
-generic `4/hour` storage-pin quota inherited from the global default.
+Taira's public edge does not accept SoraFS payload uploads in V1. Public
+publishers submit only the canonical caller-signed pin-registration
+transaction. After finality, each independently administered provider consumes
+its committed replication assignment through the durable provider outbox. The
+outbox binds the exact finalized height/hash, manifest digest, provider id, and
+replication-order id, so public traffic cannot mutate storage, reserve capacity,
+or overwrite provider-keyed metadata. Large-body and route-specific timeout or
+quota overrides are therefore not part of the Taira storage contract.
 
 After every Taira reset or `irohad` rebuild, verify the manifest-registration
 ingress before retrying `yarn taira:publish`:
@@ -702,9 +691,8 @@ intended flow is to bootstrap the default runtime canary config automatically.
 
 Expected result:
 
-- `POST /v1/sorafs/pin/register`, `POST /v1/sorafs/capacity/declare`, and
-  `POST /v1/sorafs/capacity/schedule` return `HTTP 400` for an empty JSON body,
-  not `HTTP 405`
+- `POST /v1/sorafs/pin/register` and `POST /v1/sorafs/capacity/declare`
+  reach their signed-transaction handlers instead of returning `HTTP 404/405`
 - the signed capacity canary lands and becomes visible in
   `GET /v1/sorafs/capacity/state`
 
@@ -1137,17 +1125,9 @@ From `../iroha2-block-explorer-web`:
     `/v1/sorafs/capacity/state`; do not add unchecked multi-validator failover
     to the canonical public origin.
     - `*.sorafs.taira.sora.org`
-    Keep those routes on the same convenience validator that receives
-    `POST /v1/sorafs/storage/pin`; otherwise the shared host will flap between
-    `200` and `404` depending on which validator answers the CID read.
-  - keep `client_max_body_size 1g;` intact on both TLS server blocks; the
-     native Hayahi runtime publish path uploads large JSON envelopes to
-     `/v1/sorafs/storage/pin` once the payload is base64-encoded.
-   - keep `torii.max_content_len = 1_073_741_824` in `config.toml`; otherwise
-     Torii rejects the storage-pin JSON body before the SoraFS handler sees it.
-   - keep the dedicated 10 minute route timeout for `/v1/sorafs/storage/pin`;
-     otherwise large Soracloud/SoraFS publishes can upload successfully through
-     nginx and still fail with Torii's outer `408 Request Timeout`.
+    Keep CID reads routed to admitted providers with the same finalized
+    assignment context; never reintroduce a public storage-upload route to
+    compensate for inconsistent provider hydration.
    - after every local reset, confirm the served `dist/taira-localnet/peer*.toml`
      copies still contain `max_content_len = 1073741824`; the local bootstrap
      script patches them from `configs/soranexus/taira/config.toml`, but a
@@ -1164,14 +1144,8 @@ From `../iroha2-block-explorer-web`:
      `(validator_count + authenticated_non_validator_sources + 1) *
      body_source_bytes` for larger legal rosters.
      Fast-finality caps are retired in v2.
-   - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
-     served peer configs; otherwise a handful of failed storage-pin probes can
-     exhaust the default `4 requests / 3600s` window before a real
-     `yarn taira:publish` retry.
-   - a publish-sized ingress smoke should clear the old 16 MiB limit:
-     `POST /v1/sorafs/storage/pin` with a `24_000_037` byte JSON body should
-     reach the handler and return a normal `400` (for example `invalid base64
-     in manifest_b64`), not `413`, `429`, or `502`.
+   - assert that an attempted direct SoraFS payload POST returns `404` and leaves
+     both the local manifest count and storage-byte reservation unchanged.
    - keep the dedicated `location = /v1/connect/ws` blocks intact; they forward
      the required websocket `Upgrade` / `Connection: upgrade` headers for
      Iroha Connect on `taira.sora.org`.

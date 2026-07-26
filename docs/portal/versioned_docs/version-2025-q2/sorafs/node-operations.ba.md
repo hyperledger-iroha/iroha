@@ -81,7 +81,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Манифестты base64 кодлауы менән тапшырығыҙ:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -141,7 +141,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   ```был `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, һәм `por_sampling_returns_verified_proofs` ҡаплай.
 - Приборҙар таҡталары күҙәтергә тейеш:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` һәм `torii_sorafs_storage_fetch_inflight`.
+  - `sorafs_provider_ingest_inflight` һәм `torii_sorafs_storage_fetch_inflight`.
   - `/v1/sorafs/capacity/state` аша үткән PoR уңыштары/уңышһыҙлыҡҡа осраған иҫәпләүселәр
   - Ҡасаба баҫтырып сығарыу тырышлыҡтары аша `sorafs_node_deal_publish_total{result=success|failure}`
 

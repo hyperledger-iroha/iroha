@@ -35,8 +35,13 @@ operator actions and must not be claimed from a local dry run.
 
 ## Private-key-free Ed25519 signing contract
 
-The bundle and image builders accept signing only through this complete option
-set:
+The bundle and image builders do not sign artifacts. They emit the candidate
+bytes, checksum sidecars, and unsigned per-build metadata consumed by the
+aggregate manifest. The retired per-artifact OpenSSL/PEM signature format and
+its builder CLI options are rejected.
+
+After all candidates and rollout evidence have been attached, the pipeline
+accepts this complete aggregate-signing option set:
 
 ```text
 --external-signer <reviewed-executable>
@@ -44,41 +49,30 @@ set:
 --trusted-signing-fingerprint <reviewed-lowercase-sha256>
 ```
 
-The pipeline also requires the aggregate verifier contract:
+It also requires the verifier contract:
 
 ```text
 --release-manifest-verifier <reviewed-sorafs-validate-executable>
 --trusted-release-manifest-verifier-sha256 <reviewed-lowercase-sha256>
 ```
 
-The external signer receives the artifact path and a new signature-output path.
-It must use the runtime PKCS#11/HSM session to write exactly 64 raw Ed25519
-signature bytes. Private keys, PINs, bearer tokens, and provider configuration
-remain outside the repository and artifact tree.
-
-The builders pin the SHA-256 fingerprint of the exact raw public-key bytes,
-reject unsafe or replaceable signing inputs, verify the detached Ed25519
-signature before and after installation, and emit the public key as generated
-Ed25519 SPKI PEM for independent verification. The per-artifact manifest records
-`signature_algorithm=ed25519`, `public_key_format=pem-spki-ed25519`, and
-`signer_fingerprint_sha256`.
-
-After all rollout evidence has been attached, the pipeline applies the same
-external-signer contract to the final aggregate `release_manifest.json`.
-`scripts/release_manifest_signing.py` writes
+The external signer receives an owner-private snapshot of the final canonical
+`release_manifest.json` and a new signature-output path. It must use the runtime
+PKCS#11/HSM session to write exactly 64 raw Ed25519 signature bytes. Private
+keys, PINs, bearer tokens, and provider configuration remain outside the
+repository and artifact tree. `scripts/release_manifest_signing.py` writes
 `release_manifest.json.sig` as exactly 64 raw signature bytes and
 `release_manifest.json.pub` as exactly 32 raw public-key bytes. It rejects
-malformed, unsafe, symlinked, or hardlinked inputs, pins the reviewed raw-key
-fingerprint, snapshots the exact reviewed verifier executable, checks its
-SHA-256 and identity, invokes `sorafs-validate release-manifest`, and rechecks
-the manifest, key, signature, and verifier identities after native execution.
-There is no OpenSSL, PEM, RSA, or in-process fallback for this aggregate
-contract. The publish-plan generator and validator reverify the aggregate
-signature and record its digest, `public_key_format=raw-ed25519-32`,
-fingerprint, verification mode, native-verifier path, and native-verifier
-SHA-256. Production generation and validation require the independently
-reviewed fingerprint and verifier path/digest again; neither value copied from
-the plan is a trust anchor.
+malformed or noncanonical signatures, incompatible keys, unsafe permissions,
+symlinks, hard links, and untrusted fingerprints; snapshots the exact reviewed
+signer, manifest, and verifier; checks verifier SHA-256 and identity; invokes
+`sorafs-validate release-manifest`; and rechecks every input after native
+execution. There is no OpenSSL, PEM, RSA, or in-process fallback. The
+publish-plan generator and validator reverify the aggregate signature and
+record its digest, `public_key_format=raw-ed25519-32`, fingerprint, verification
+mode, native-verifier path, and native-verifier SHA-256. Production generation
+and validation require the independently reviewed fingerprint and verifier
+path/digest again; neither value copied from the plan is a trust anchor.
 
 Unsigned local artifacts and plans are permitted only when
 `--development-allow-unsigned-publish-plan` (pipeline) or
@@ -91,7 +85,7 @@ evidence.
 | Capability | Local source state | Evidence required for promotion |
 |------------|--------------------|---------------------------------|
 | Dual-profile bundle/image build | Implemented by the two builders and pipeline | Hosted Linux build and smoke records |
-| Ed25519 signature validation | Implemented for artifacts and the final aggregate manifest with negative tests | HSM/PKCS#11 ceremony, reviewed fingerprint, rotation/revocation record |
+| Ed25519 signature validation | Implemented once for the final aggregate manifest with strict positive/negative tests | HSM/PKCS#11 ceremony, reviewed fingerprint, rotation/revocation record |
 | Checksums and manifests | Deterministic aggregate generation, signing, and publish-plan binding are implemented locally | Independent replay and signed publication inventory |
 | SBOM and vulnerability scan | Not supplied by this generic local pipeline | Hosted SBOM plus zero critical/high scanner result |
 | Provenance | Not supplied by this generic local pipeline | OIDC/cosign attestation and verification receipt |

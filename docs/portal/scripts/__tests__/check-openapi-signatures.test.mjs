@@ -6,7 +6,11 @@ import {join, dirname} from 'node:path';
 import {createHash} from 'node:crypto';
 
 import {checkOpenApiSignatures} from '../check-openapi-signatures.mjs';
-import {signPayload} from './helpers/openapi-signing.mjs';
+import {computeOpenApiBlake3Hex} from '../lib/openapi-manifest-v2.mjs';
+import {
+  attachOpenApiManifestSignature,
+  signPayload,
+} from './helpers/openapi-signing.mjs';
 
 function releaseSpecBuffer(route) {
   return Buffer.from(
@@ -39,7 +43,6 @@ test('checkOpenApiSignatures validates signed entries', async () => {
       path: 'torii.json',
       payload: latestSpec,
       sha256: latestSha,
-      blake3: 'fe'.repeat(32),
       signature: latestSignature,
     }),
   );
@@ -57,10 +60,9 @@ test('checkOpenApiSignatures validates signed entries', async () => {
   await writeJson(
     join(staticDir, 'versions', versionLabel, 'manifest.json'),
     buildManifest({
-      path: versionRelative,
+      path: 'torii.json',
       payload: versionSpec,
       sha256: versionSha,
-      blake3: 'c0'.repeat(32),
       signature: versionSignature,
     }),
   );
@@ -74,7 +76,6 @@ test('checkOpenApiSignatures validates signed entries', async () => {
         path: 'torii.json',
         payload: latestSpec,
         sha256: latestSha,
-        blake3: 'fe'.repeat(32),
         manifestPath: 'manifest.json',
         signature: latestSignature,
       }),
@@ -83,7 +84,6 @@ test('checkOpenApiSignatures validates signed entries', async () => {
         path: versionRelative,
         payload: versionSpec,
         sha256: versionSha,
-        blake3: 'c0'.repeat(32),
         manifestPath: `versions/${versionLabel}/manifest.json`,
         signature: versionSignature,
       }),
@@ -96,6 +96,65 @@ test('checkOpenApiSignatures validates signed entries', async () => {
   });
   assert.deepEqual(summary.checkedLabels.sort(), ['2025-q3', 'latest']);
   assert.deepEqual(summary.skippedLabels, []);
+});
+
+test('checkOpenApiSignatures rejects unknown versions-index fields', async () => {
+  for (const [name, versionsIndex] of [
+    [
+      'root',
+      {
+        versions: [],
+        generatedAt: new Date().toISOString(),
+        entries: [],
+        legacyEntries: [],
+      },
+    ],
+    [
+      'entry',
+      {
+        versions: [],
+        generatedAt: new Date().toISOString(),
+        entries: [{legacyPath: 'torii.json'}],
+      },
+    ],
+  ]) {
+    const tempRoot = await mkdtemp(
+      join(tmpdir(), `openapi-signatures-unknown-${name}-`),
+    );
+    const staticDir = join(tempRoot, 'static', 'openapi');
+    await mkdir(staticDir, {recursive: true});
+    await writeAllowedSigners(staticDir, []);
+    await writeJson(join(staticDir, 'versions.json'), versionsIndex);
+
+    await assert.rejects(
+      () =>
+        checkOpenApiSignatures({
+          staticDir,
+          versionsFile: join(staticDir, 'versions.json'),
+        }),
+      /unknown field/i,
+    );
+  }
+});
+
+test('checkOpenApiSignatures requires the complete versions-index root', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-missing-root-'));
+  const staticDir = join(tempRoot, 'static', 'openapi');
+  await mkdir(staticDir, {recursive: true});
+  await writeAllowedSigners(staticDir, []);
+  await writeJson(join(staticDir, 'versions.json'), {
+    versions: [],
+    entries: [],
+  });
+
+  await assert.rejects(
+    () =>
+      checkOpenApiSignatures({
+        staticDir,
+        versionsFile: join(staticDir, 'versions.json'),
+      }),
+    /missing field.*generatedAt/i,
+  );
 });
 
 test('checkOpenApiSignatures rejects a signed empty OpenAPI stub', async () => {
@@ -122,7 +181,6 @@ test('checkOpenApiSignatures rejects a signed empty OpenAPI stub', async () => {
       path: 'torii.json',
       payload: spec,
       sha256,
-      blake3: 'ab'.repeat(32),
       signature,
     }),
   );
@@ -135,7 +193,6 @@ test('checkOpenApiSignatures rejects a signed empty OpenAPI stub', async () => {
         path: 'torii.json',
         payload: spec,
         sha256,
-        blake3: 'ab'.repeat(32),
         manifestPath: 'manifest.json',
         signature,
       }),
@@ -378,7 +435,7 @@ test('checkOpenApiSignatures rejects signed metadata smuggled into unsigned labe
   await writeJson(
     join(staticDir, 'versions', 'current', 'manifest.json'),
     buildManifest({
-      path: 'versions/current/torii.json',
+      path: 'torii.json',
       payload: spec,
       sha256: sha,
       signature: forbiddenSignature,
@@ -473,11 +530,41 @@ test('checkOpenApiSignatures rejects unsupported allowed signer versions', async
   );
 });
 
-test('checkOpenApiSignatures rejects duplicate allowed signers', async () => {
+test('checkOpenApiSignatures rejects ambiguous allowed signer JSON', async () => {
+  for (const [name, contents, pattern] of [
+    [
+      'duplicate-member',
+      '{"version":1,"version":1,"allow":[]}',
+      /duplicate JSON member/i,
+    ],
+    [
+      'unknown-field',
+      '{"version":1,"allow":[],"legacy_allow":[]}',
+      /unknown field/i,
+    ],
+  ]) {
+    const tempRoot = await mkdtemp(
+      join(tmpdir(), `openapi-signatures-allowlist-${name}-`),
+    );
+    const staticDir = join(tempRoot, 'static', 'openapi');
+    await mkdir(staticDir, {recursive: true});
+    await writeFile(join(staticDir, 'allowed_signers.json'), contents);
+    await assert.rejects(
+      () =>
+        checkOpenApiSignatures({
+          staticDir,
+          versionsFile: join(staticDir, 'versions.json'),
+        }),
+      pattern,
+    );
+  }
+});
+
+test('checkOpenApiSignatures rejects noncanonical allowed signers', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-allowlist-duplicate-'));
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
-  const publicKey = '00'.repeat(32);
+  const publicKey = signPayload(Buffer.from('allowlist')).publicKeyHex;
   await writeJson(join(staticDir, 'allowed_signers.json'), {
     version: 1,
     allow: [
@@ -498,7 +585,7 @@ test('checkOpenApiSignatures rejects duplicate allowed signers', async () => {
         staticDir,
         versionsFile: join(staticDir, 'versions.json'),
       }),
-    /duplicates allowed signer/i,
+    /must be exactly ed25519|lowercase hexadecimal/i,
   );
 });
 
@@ -514,7 +601,9 @@ test('checkOpenApiSignatures rejects malformed versions lists', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), `openapi-signatures-versions-${name}-`));
     const staticDir = join(tempRoot, 'static', 'openapi');
     await mkdir(staticDir, {recursive: true});
-    await writeAllowedSigners(staticDir, ['00'.repeat(32)]);
+    await writeAllowedSigners(staticDir, [
+      signPayload(Buffer.from(`versions-${name}`)).publicKeyHex,
+    ]);
     const manifest = {
       generatedAt: new Date().toISOString(),
       entries: [],
@@ -539,7 +628,9 @@ test('checkOpenApiSignatures rejects non-object version entries', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-non-object-entry-'));
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
-  await writeAllowedSigners(staticDir, ['00'.repeat(32)]);
+  await writeAllowedSigners(staticDir, [
+    signPayload(Buffer.from('non-object-entry')).publicKeyHex,
+  ]);
   await writeJson(join(staticDir, 'versions.json'), {
     versions: [],
     generatedAt: new Date().toISOString(),
@@ -839,7 +930,6 @@ test('checkOpenApiSignatures rejects malformed blake3 metadata', async () => {
         path: 'torii.json',
         payload: spec,
         sha256: sha,
-        blake3: '00'.repeat(32),
         signature,
       }),
     );
@@ -876,7 +966,7 @@ test('checkOpenApiSignatures rejects malformed manifest signature metadata', asy
     [
       'bad-algorithm',
       {algorithm: 'ed448'},
-      /unsupported manifest signature algorithm/i,
+      /algorithm must be exactly ed25519/i,
     ],
     [
       'bad-public-key',
@@ -990,7 +1080,7 @@ test('checkOpenApiSignatures rejects allowed signed manifests on unsigned labels
   await writeJson(
     join(staticDir, 'versions', 'current', 'manifest.json'),
     buildManifest({
-      path: 'versions/current/torii.json',
+      path: 'torii.json',
       payload: spec,
       sha256: sha,
       signature,
@@ -1026,7 +1116,7 @@ test('checkOpenApiSignatures rejects allowed signed manifests on unsigned labels
 
 test('checkOpenApiSignatures rejects incomplete manifest generator metadata', async () => {
   for (const [name, patch, pattern] of [
-    ['version', {version: 2}, /manifest unsupported version/i],
+    ['version', {version: 1}, /unsupported version/i],
     ['generated', {generated_unix_ms: null}, /manifest missing generated_unix_ms/i],
     ['negative-generated', {generated_unix_ms: -1}, /manifest missing generated_unix_ms/i],
     ['fractional-generated', {generated_unix_ms: 1.5}, /manifest missing generated_unix_ms/i],
@@ -1067,7 +1157,7 @@ test('checkOpenApiSignatures rejects incomplete manifest generator metadata', as
     [
       'dirty-missing-digest',
       {generator_commit: null, generator_dirty: true},
-      /dirty provenance requires generator_source_sha256_hex/i,
+      /generator_source_sha256_hex/i,
     ],
     [
       'dirty-signed',
@@ -1144,7 +1234,7 @@ test('checkOpenApiSignatures rejects unsafe manifest artifact paths', async () =
     await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
     await writeAsset(join(staticDir, 'versions', 'current', 'torii.json'), spec);
     const manifest = buildManifest({
-      path: 'versions/current/torii.json',
+      path: 'torii.json',
       payload: spec,
       sha256: sha,
       signature,
@@ -1853,7 +1943,7 @@ test('checkOpenApiSignatures rejects malformed signature hex before verification
         staticDir,
         versionsFile: join(staticDir, 'versions.json'),
       }),
-    /signature is not valid hex/i,
+    /signature_hex must be exactly 128 lowercase hexadecimal/i,
   );
 });
 
@@ -1875,27 +1965,40 @@ async function writeJson(target, data) {
   await writeAsset(target, `${JSON.stringify(data, null, 2)}\n`);
 }
 
-function buildManifest({path: specPath, payload, sha256, blake3 = null, signature = signPayload(payload)}) {
+function buildManifest({path: specPath, payload, sha256, signature = signPayload(payload)}) {
   const buffer = Buffer.isBuffer(payload) ? payload : Buffer.from(payload, 'utf8');
   const artifact = {
     path: specPath,
     bytes: buffer.length,
     sha256_hex: sha256,
-    blake3_hex: blake3,
+    blake3_hex: computeOpenApiBlake3Hex(buffer),
+    signature: null,
   };
   if (signature) {
-    artifact.signature = {
-      algorithm: 'ed25519',
-      public_key_hex: signature.publicKeyHex,
-      signature_hex: signature.signatureHex,
-    };
+    artifact.signature =
+      signature.privateKeyHex
+        ? null
+        : {
+            algorithm: 'ed25519',
+            public_key_hex: signature.publicKeyHex,
+            signature_hex: signature.signatureHex,
+          };
   }
-  return {
-    version: 1,
+  const manifest = {
+    version: 2,
     generated_unix_ms: Date.now(),
     generator_commit: 'ab'.repeat(20),
+    generator_dirty: false,
     artifact,
   };
+  if (signature?.privateKeyHex) {
+    const attached = attachOpenApiManifestSignature(manifest, buffer, {
+      privateKeyHex: signature.privateKeyHex,
+    });
+    signature.publicKeyHex = attached.publicKeyHex;
+    signature.signatureHex = attached.signatureHex;
+  }
+  return manifest;
 }
 
 function buildVersionEntry({
@@ -1904,17 +2007,18 @@ function buildVersionEntry({
   payload,
   bytes = Buffer.isBuffer(payload) ? payload.length : Buffer.byteLength(payload),
   sha256,
-  blake3 = null,
+  blake3,
   manifestPath,
   signed = true,
   signature = signed ? signPayload(payload) : null,
 }) {
+  const buffer = Buffer.isBuffer(payload) ? payload : Buffer.from(payload, 'utf8');
   return {
     label,
     path,
     bytes,
     sha256,
-    blake3,
+    blake3: blake3 ?? computeOpenApiBlake3Hex(buffer),
     updatedAt: new Date().toISOString(),
     signed,
     manifestPath,

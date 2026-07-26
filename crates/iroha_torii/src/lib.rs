@@ -268,24 +268,20 @@ use iroha_core::{
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 use iroha_crypto::Signature;
 use iroha_crypto::{
-    ExposedPrivateKey, Hash, HashOf, KeyPair, SignatureOf,
+    ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, SignatureOf,
     blake2::{Blake2b512, digest::Digest},
 };
 use iroha_data_model::alias::{AliasRecord, AliasTarget};
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
     SharedDataEvent,
-    data::{
-        DataEvent,
-        sorafs::{SorafsDealSettlement, SorafsDealUsage, SorafsGatewayEvent},
-    },
+    data::{DataEvent, sorafs::SorafsGatewayEvent},
 };
 #[cfg(feature = "app_api")]
 use iroha_data_model::proof::ProofRecord;
 #[cfg(feature = "app_api")]
 use iroha_data_model::sorafs::capacity::ProviderId;
 #[cfg(feature = "app_api")]
-use iroha_data_model::sorafs::deal::DealUsageReport;
 use iroha_data_model::{
     ChainId,
     account::{
@@ -551,13 +547,13 @@ pub use routing::{
     EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
     KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
     MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsQueryRequestDto,
-    MultisigProposalsResolveRequestDto, PinAliasDto, ProofApiLimits, ProofFindByIdQueryDto,
-    ProofListQuery, RegisterPinManifestDto, RegisterPinManifestResponseDto, SetContractAliasDto,
-    SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto,
-    VkListQuery, ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs,
-    handle_get_contract_code_bytes, handle_get_proof, handle_get_vk, handle_list_proofs,
-    handle_list_vk, handle_post_asset_transfer, handle_post_contract_alias_set,
-    handle_post_contract_call, handle_post_contract_call_simulate, handle_post_contract_view,
+    MultisigProposalsResolveRequestDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
+    RegisterPinManifestResponseDto, SetContractAliasDto, SetContractAliasResponseDto,
+    SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
+    ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs, handle_get_contract_code_bytes,
+    handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk,
+    handle_post_asset_transfer, handle_post_contract_alias_set, handle_post_contract_call,
+    handle_post_contract_call_simulate, handle_post_contract_view,
     handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
     handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
     handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
@@ -2087,11 +2083,21 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_orderbook_transaction_signer: Option<Arc<dyn SoraFsOrderbookTransactionSigner>>,
     #[cfg(feature = "app_api")]
+    sorafs_reputation_committed_reader:
+        Option<Arc<dyn sorafs_node::reputation::runtime::ReputationCommittedReadApiV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_hedging_billing_runtime:
+        Option<Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingRuntimeApiV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_potr_runtime_signers: Option<Arc<sorafs::PotrRuntimeSignersV1>>,
+    #[cfg(feature = "app_api")]
     sorafs_moderation_orchestrator:
-        Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
+        Option<Arc<sorafs::moderation_runtime::ModerationOrchestratorRuntimeV1>>,
     #[cfg(feature = "app_api")]
     sorafs_moderation_orchestrator_worker:
         Option<iroha_config::parameters::actual::SorafsModerationOrchestrator>,
+    #[cfg(feature = "app_api")]
+    sorafs_evidence_viewer: Option<Arc<sorafs_node::evidence_viewer::EvidenceViewerServiceV1>>,
     #[cfg(feature = "app_api")]
     sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
@@ -2126,8 +2132,6 @@ struct AppState {
     #[cfg(all(test, feature = "app_api"))]
     sorafs_gateway_test_provider_id: Option<[u8; 32]>,
     #[cfg(feature = "app_api")]
-    sorafs_pin_policy: sorafs::PinSubmissionPolicy,
-    #[cfg(feature = "app_api")]
     sorafs_blinded_resolver: Option<Arc<sorafs::BlindedCidResolver>>,
     #[cfg(feature = "app_api")]
     stream_token_issuer: Option<Arc<sorafs::StreamTokenIssuer>>,
@@ -2139,6 +2143,8 @@ struct AppState {
     sorafs_chunk_range_overrides: DashMap<[u8; 32], bool>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
+    sorafs_appeal_finance_policy: Arc<sorafs::api::AppealFinanceRuntimePolicy>,
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
     #[cfg(feature = "app_api")]
@@ -3148,68 +3154,6 @@ impl AppState {
         let event = SharedDataEvent::from(data_event);
         if let Err(err) = self.events.send(EventBox::Data(event)) {
             iroha_logger::warn!(?err, "failed to broadcast SoraFS GAR violation event");
-        }
-    }
-
-    #[cfg(feature = "app_api")]
-    fn publish_deal_usage_event(
-        &self,
-        report: &DealUsageReport,
-        outcome: &sorafs_node::UsageOutcome,
-    ) {
-        use std::convert::TryFrom;
-
-        let payload = SorafsDealUsage {
-            deal_id: report.deal_id,
-            provider_id: outcome.provider_id,
-            client_id: outcome.client_id,
-            epoch: report.epoch,
-            storage_gib_hours: report.storage_gib_hours,
-            egress_bytes: report.egress_bytes,
-            deterministic_charge: outcome.deterministic_charge.clone().into_quantity(),
-            micropayment_credit_generated: outcome
-                .micropayment_credit_generated
-                .clone()
-                .into_quantity(),
-            micropayment_credit_applied: outcome
-                .micropayment_credit_applied
-                .clone()
-                .into_quantity(),
-            micropayment_credit_carry: outcome.micropayment_credit_carry.clone().into_quantity(),
-            outstanding: outcome.outstanding.clone().into_quantity(),
-            tickets_processed: u64::try_from(outcome.tickets_processed).unwrap_or(u64::MAX),
-            tickets_won: u64::try_from(outcome.tickets_won).unwrap_or(u64::MAX),
-            tickets_duplicate: u64::try_from(outcome.tickets_duplicate).unwrap_or(u64::MAX),
-        };
-        let event =
-            SharedDataEvent::from(DataEvent::Sorafs(SorafsGatewayEvent::DealUsage(payload)));
-        if let Err(err) = self.events.send(EventBox::Data(event)) {
-            iroha_logger::warn!(?err, "failed to broadcast SoraFS deal usage event");
-        }
-    }
-
-    #[cfg(feature = "app_api")]
-    fn publish_deal_settlement_event(
-        &self,
-        outcome: &sorafs_node::DealSettlementOutcome,
-        encoded: &[u8],
-        encoded_b64: &str,
-    ) {
-        use std::convert::TryFrom;
-
-        let mut digest = [0u8; 32];
-        digest.copy_from_slice(blake3_hash(encoded).as_bytes());
-        let payload = SorafsDealSettlement {
-            record: outcome.record.clone(),
-            governance_encoded_blake3: digest,
-            governance_encoded_len: u64::try_from(encoded.len()).unwrap_or(u64::MAX),
-            governance_encoded_b64: encoded_b64.to_owned(),
-        };
-        let event = SharedDataEvent::from(DataEvent::Sorafs(SorafsGatewayEvent::DealSettlement(
-            payload,
-        )));
-        if let Err(err) = self.events.send(EventBox::Data(event)) {
-            iroha_logger::warn!(?err, "failed to broadcast SoraFS deal settlement event");
         }
     }
 
@@ -6308,7 +6252,6 @@ async fn handler_method_not_allowed() -> Response {
 fn route_timeout_for_path(path: &str) -> Duration {
     match path {
         "/v1/zk/ivm/derive" | "/v1/zk/ivm/prove" => ZK_IVM_ROUTE_TIMEOUT,
-        "/v1/sorafs/storage/pin" => SORAFS_STORAGE_PIN_ROUTE_TIMEOUT,
         // Keep the outer HTTP timeout at least as large as the internal
         // read-fanout proxy budget so ingress does not emit a bare 408 while a
         // Nexus fanout request is still within its allowed route window.
@@ -6987,6 +6930,38 @@ mod strict_request_target_tests {
             counter.load(Ordering::SeqCst),
             1,
             "rejected aliases must not execute a SoraFS handler"
+        );
+
+        for retired_path in [
+            "/v1/sorafs/deal/fund-provider",
+            "/v1/sorafs/deal/fund-client",
+            "/v1/sorafs/deal/open",
+            "/v1/sorafs/deal/cancel",
+            "/v1/sorafs/deal/usage",
+            "/v1/sorafs/deal/settle",
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(retired_path)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from("{}"))
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "retired process-local deal path={retired_path}"
+            );
+        }
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "retired deal requests must not execute any SoraFS handler"
         );
 
         let response = router
@@ -42358,7 +42333,9 @@ async fn handler_post_sorafs_register_manifest(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<crate::routing::RegisterPinManifestDto>,
+    crate::utils::extractors::JsonOrNoritoVersioned(request): crate::utils::extractors::JsonOrNoritoVersioned<
+        SignedTransaction,
+    >,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let token_hdr = headers
@@ -42395,7 +42372,7 @@ async fn handler_post_sorafs_register_manifest(
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
-        crate::NoritoJson(request),
+        request,
     )
     .await
     {
@@ -42415,7 +42392,7 @@ async fn handler_post_sorafs_capacity_declare(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::RegisterCapacityDeclarationDto>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let token_hdr = headers
@@ -42452,9 +42429,8 @@ async fn handler_post_sorafs_capacity_declare(
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
-        app.sorafs_node.clone(),
         app.sorafs_limits.clone(),
-        request,
+        transaction,
     )
     .await
     {
@@ -42472,7 +42448,7 @@ async fn handler_post_sorafs_capacity_telemetry(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::RecordCapacityTelemetryDto>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let token_hdr = headers
@@ -42509,398 +42485,8 @@ async fn handler_post_sorafs_capacity_telemetry(
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
-        app.sorafs_node.clone(),
         app.sorafs_limits.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_capacity_dispute(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::RegisterCapacityDisputeDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/capacity/dispute",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_sorafs_register_capacity_dispute(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        app.sorafs_limits.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_capacity_schedule(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::ScheduleReplicationOrderDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/capacity/schedule",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_sorafs_schedule_replication_order(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_capacity_complete(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::CompleteReplicationOrderDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/capacity/complete",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_sorafs_complete_replication_order(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn enforce_sorafs_deal_request_limits(
-    app: &SharedAppState,
-    headers: &axum::http::HeaderMap,
-    remote_ip: std::net::IpAddr,
-    route: &'static str,
-) -> Result<(), Error> {
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|value| value.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token
-        && !app.api_tokens_set.is_empty()
-        && !token_hdr
-            .as_ref()
-            .is_some_and(|token| app.api_tokens_set.contains(token))
-    {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    let key = rate_limit_key(headers, Some(remote_ip), route, app.api_token_enforced());
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_deal_fund_provider(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<routing::FundProviderBondDto>,
-) -> Result<AxResponse, Error> {
-    let provider_id =
-        routing::parse_hex_array::<32>(&request.0.provider_id_hex, "provider_id_hex")?;
-    authenticate_deal_provider_id(&app, &headers, &provider_id).await?;
-    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/fund-provider")
-        .await?;
-
-    routing::handle_post_sorafs_fund_provider_bond(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        app.sorafs_limits.clone(),
-        request,
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_deal_fund_client(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<routing::FundClientCreditDto>,
-) -> Result<AxResponse, Error> {
-    let _authenticated_operator = authenticated_deal_operator_signer(&app, &headers)?;
-    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/fund-client")
-        .await?;
-
-    routing::handle_post_sorafs_fund_client_credit(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        app.sorafs_limits.clone(),
-        request,
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_deal_open(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<routing::OpenDealDto>,
-) -> Result<AxResponse, Error> {
-    let _authenticated_operator = authenticated_deal_operator_signer(&app, &headers)?;
-    let provider_id = *request.0.proposal.provider_id.as_bytes();
-    let _admitted_provider_key = admitted_deal_provider_key(&app, &provider_id).await?;
-    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/open").await?;
-
-    routing::handle_post_sorafs_open_deal(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        app.sorafs_limits.clone(),
-        request,
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_deal_usage(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<routing::RecordDealUsageDto>,
-) -> Result<AxResponse, Error> {
-    let deal_id = iroha_data_model::sorafs::deal::DealId::new(routing::parse_hex_array::<32>(
-        &request.0.deal_id_hex,
-        "deal_id_hex",
-    )?);
-    authenticate_deal_usage_provider(&app, &headers, deal_id).await?;
-    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/usage").await?;
-
-    let NoritoJson(dto) = request;
-    let result = routing::handle_post_sorafs_record_deal_usage(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        app.sorafs_limits.clone(),
-        NoritoJson(dto),
-    )
-    .await?;
-    app.publish_deal_usage_event(&result.report, &result.outcome);
-    Ok(result.response)
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_deal_cancel(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<routing::CancelDealDto>,
-) -> Result<AxResponse, Error> {
-    let _authenticated_operator = authenticated_deal_operator_signer(&app, &headers)?;
-    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/cancel")
-        .await?;
-
-    let result = routing::handle_post_sorafs_cancel_deal(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        app.sorafs_limits.clone(),
-        request,
-    )
-    .await?;
-    app.publish_deal_settlement_event(&result.outcome, &result.encoded, &result.encoded_b64);
-    Ok(result.response)
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_deal_settle(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<routing::SettleDealDto>,
-) -> Result<AxResponse, Error> {
-    let _authenticated_operator = authenticated_deal_operator_signer(&app, &headers)?;
-    enforce_sorafs_deal_request_limits(&app, &headers, remote.ip(), "v1/sorafs/deal/settle")
-        .await?;
-
-    let NoritoJson(dto) = request;
-    let result = routing::handle_post_sorafs_settle_deal(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        app.sorafs_limits.clone(),
-        NoritoJson(dto),
-    )
-    .await?;
-    app.publish_deal_settlement_event(&result.outcome, &result.encoded, &result.encoded_b64);
-    Ok(result.response)
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_capacity_uptime(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::RecordUptimeObservationDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/capacity/uptime",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_sorafs_record_uptime_observation(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        request,
+        transaction,
     )
     .await
     {
@@ -42935,50 +42521,6 @@ fn authenticated_por_operator_signer(
         .map_err(|error| Error::AppForbidden {
             code: "sorafs_por_operator_signature_invalid",
             message: format!("authenticated PoR request signer is invalid: {error}"),
-        })
-}
-
-#[cfg(feature = "app_api")]
-fn authenticated_deal_operator_signer(
-    app: &SharedAppState,
-    headers: &axum::http::HeaderMap,
-) -> Result<iroha_crypto::PublicKey, Error> {
-    if !app.operator_signatures.is_enabled() {
-        return Err(Error::AppForbidden {
-            code: "sorafs_deal_operator_signatures_required",
-            message: "SoraFS deal lifecycle mutations require operator request signatures"
-                .to_owned(),
-        });
-    }
-    headers
-        .get("x-iroha-operator-public-key")
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| Error::AppForbidden {
-            code: "sorafs_deal_operator_signature_missing",
-            message: "authenticated deal operator signer header is missing".to_owned(),
-        })?
-        .parse::<iroha_crypto::PublicKey>()
-        .map_err(|error| Error::AppForbidden {
-            code: "sorafs_deal_operator_signature_invalid",
-            message: format!("authenticated deal operator signer is invalid: {error}"),
-        })
-}
-
-#[cfg(feature = "app_api")]
-fn authenticated_deal_provider_signer(
-    headers: &axum::http::HeaderMap,
-) -> Result<iroha_crypto::PublicKey, Error> {
-    headers
-        .get("x-iroha-operator-public-key")
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| Error::AppForbidden {
-            code: "sorafs_deal_provider_signature_missing",
-            message: "authenticated deal provider signer header is missing".to_owned(),
-        })?
-        .parse::<iroha_crypto::PublicKey>()
-        .map_err(|error| Error::AppForbidden {
-            code: "sorafs_deal_provider_signature_invalid",
-            message: format!("authenticated deal provider signer is invalid: {error}"),
         })
 }
 
@@ -43023,105 +42565,6 @@ async fn admitted_por_provider_key(
             message: format!("PoR provider advert signature is invalid: {error}"),
         })?;
     Ok(advert.signature.public_key.clone())
-}
-
-#[cfg(feature = "app_api")]
-async fn admitted_deal_provider_key(
-    app: &SharedAppState,
-    provider_id: &[u8; 32],
-) -> Result<Vec<u8>, Error> {
-    let cache = app
-        .sorafs_cache
-        .as_ref()
-        .ok_or_else(|| Error::AppForbidden {
-            code: "sorafs_deal_provider_registry_unavailable",
-            message:
-                "SoraFS provider discovery/admission registry is required for deal lifecycle mutations"
-                    .to_owned(),
-        })?;
-    let guard = cache.read().await;
-    let advert = guard
-        .record_by_provider(provider_id)
-        .map(|record| record.advert())
-        .ok_or_else(|| Error::AppForbidden {
-            code: "sorafs_deal_provider_not_admitted",
-            message: format!(
-                "deal provider {} has no current admitted advert",
-                hex::encode(provider_id)
-            ),
-        })?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    advert
-        .validate_with_body(now)
-        .map_err(|error| Error::AppForbidden {
-            code: "sorafs_deal_provider_advert_stale",
-            message: format!("deal provider advert is not currently valid: {error}"),
-        })?;
-    advert
-        .verify_signature()
-        .map_err(|error| Error::AppForbidden {
-            code: "sorafs_deal_provider_advert_signature_invalid",
-            message: format!("deal provider advert signature is invalid: {error}"),
-        })?;
-    Ok(advert.signature.public_key.clone())
-}
-
-#[cfg(feature = "app_api")]
-async fn authenticate_deal_usage_provider(
-    app: &SharedAppState,
-    headers: &axum::http::HeaderMap,
-    deal_id: iroha_data_model::sorafs::deal::DealId,
-) -> Result<(), Error> {
-    let snapshot = app
-        .sorafs_node
-        .deal_snapshot(deal_id)
-        .ok_or_else(|| Error::AppForbidden {
-            code: "sorafs_deal_not_found",
-            message: format!(
-                "deal {} is not active on this node",
-                hex::encode(deal_id.as_bytes())
-            ),
-        })?;
-    authenticate_deal_provider_id(app, headers, snapshot.provider_id.as_bytes()).await
-}
-
-#[cfg(feature = "app_api")]
-async fn authenticate_deal_provider_id(
-    app: &SharedAppState,
-    headers: &axum::http::HeaderMap,
-    provider_id: &[u8; 32],
-) -> Result<(), Error> {
-    let signer = authenticated_deal_provider_signer(headers)?;
-    let admitted_key = admitted_deal_provider_key(app, provider_id).await?;
-    validate_deal_provider_signer(&signer, &admitted_key)
-}
-
-#[cfg(feature = "app_api")]
-fn validate_deal_provider_signer(
-    signer: &iroha_crypto::PublicKey,
-    admitted_key: &[u8],
-) -> Result<(), Error> {
-    let (algorithm, signer_bytes) = signer.try_to_bytes().map_err(|error| Error::AppForbidden {
-        code: "sorafs_deal_provider_signature_invalid",
-        message: format!("deal provider signer encoding is invalid: {error}"),
-    })?;
-    if algorithm != iroha_crypto::Algorithm::Ed25519 {
-        return Err(Error::AppForbidden {
-            code: "sorafs_deal_provider_signature_algorithm",
-            message: "deal provider signer must use Ed25519".to_owned(),
-        });
-    }
-    if signer_bytes != admitted_key {
-        return Err(Error::AppForbidden {
-            code: "sorafs_deal_provider_key_mismatch",
-            message: "authenticated deal provider signer does not match the admitted advert key"
-                .to_owned(),
-        });
-    }
-    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -43426,59 +42869,6 @@ async fn handler_get_sorafs_por_report(
         axum::http::HeaderValue::from_static("application/x-norito"),
     );
     Ok(resp)
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_capacity_failure(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::RecordReplicationFailureDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/capacity/failure",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_sorafs_record_replication_failure(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
 }
 
 async fn handler_iso_pacs008(
@@ -51468,7 +50858,6 @@ pub mod zk_attachments;
 pub mod zk_prover;
 
 const DEFAULT_ROUTE_TIMEOUT: Duration = Duration::from_mins(1);
-const SORAFS_STORAGE_PIN_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const ZK_IVM_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const HEADER_NORITO_RPC_ERROR: &str = "x-iroha-error-code";
 const NORITO_RPC_RETRY_AFTER_SECONDS: &str = "300";
@@ -51895,50 +51284,430 @@ fn validate_account_onboarding_readiness(
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct SoraFsAppealSettlementSubmitter {
-    signers: BTreeMap<AccountId, KeyPair>,
+    bindings: Vec<iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding>,
+    runtime_signers: Option<Arc<SoraFsAppealFinanceRuntimeSignersV1>>,
+    forwarder: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionForwarder,
     worker_scan_interval: Duration,
-    worker_max_retry_attempts: u32,
 }
 
 #[cfg(feature = "app_api")]
 impl SoraFsAppealSettlementSubmitter {
     fn from_config(
         config: &iroha_config::parameters::actual::SorafsAppealFinanceSettlement,
-    ) -> Option<Self> {
-        if config.submitter_signers.is_empty() {
-            return None;
-        }
+        storage_data_dir: &Path,
+        runtime_signers: Option<Arc<SoraFsAppealFinanceRuntimeSignersV1>>,
+        checkpoint_runtime: Arc<
+            dyn sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointRuntime,
+        >,
+    ) -> Self {
+        use sorafs_node::appeal_finance_transaction_forwarder::{
+            APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
+            APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
+            AppealFinanceCheckpointAuthenticationPolicyV1, AppealFinanceTransactionForwarder,
+            AppealFinanceTransactionForwarderPolicyV1,
+        };
 
-        let mut signers = BTreeMap::new();
-        for key_pair in &config.submitter_signers {
-            let account = AccountId::new(key_pair.public_key().clone());
-            if signers.insert(account.clone(), key_pair.clone()).is_some() {
-                panic!(
-                    "duplicate torii.sorafs.appeal_finance_settlement submitter for `{account}`"
-                );
-            }
+        let state_dir = storage_data_dir.join("appeal-finance-transaction-forwarder");
+        let policy = AppealFinanceTransactionForwarderPolicyV1 {
+            max_pending: config.worker_max_pending,
+            max_completed: config.worker_max_completed,
+            max_dead_letters: config.worker_max_dead_letters,
+            max_attempts: config.worker_max_retry_attempts,
+            max_transaction_bytes: APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
+            checkpoint_max_bytes: config.worker_checkpoint_max_bytes,
+        };
+        let checkpoint_identity = checkpoint_runtime.identity().unwrap_or_else(|_| {
+            panic!("SoraFS appeal-finance checkpoint HSM/KMS identity is unavailable")
+        });
+        let configured_public_key = PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &checkpoint_identity.public_key,
+        )
+        .unwrap_or_else(|_| {
+            panic!("SoraFS appeal-finance checkpoint HSM/KMS identity is not strict Ed25519")
+        });
+        if !config.submitter_signers.iter().any(|binding| {
+            binding.handle == checkpoint_identity.provider_handle
+                && binding.public_key == configured_public_key
+        }) {
+            panic!(
+                "SoraFS appeal-finance checkpoint HSM/KMS identity is not bound by configuration"
+            );
         }
-        Some(Self {
-            signers,
+        let authentication_policy = AppealFinanceCheckpointAuthenticationPolicyV1 {
+            version: APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
+            provider_handle: checkpoint_identity.provider_handle,
+            public_key: checkpoint_identity.public_key,
+        };
+        let forwarder = AppealFinanceTransactionForwarder::open(
+            &state_dir,
+            policy,
+            authentication_policy,
+            checkpoint_runtime,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to open durable SoraFS appeal-finance transaction forwarder at {}: {error}",
+                state_dir.display()
+            )
+        });
+        Self {
+            bindings: config.submitter_signers.clone(),
+            runtime_signers,
+            forwarder,
             worker_scan_interval: config.worker_scan_interval,
-            worker_max_retry_attempts: config.worker_max_retry_attempts,
-        })
+        }
     }
 
-    fn signer_for(&self, authority: &AccountId) -> Option<&KeyPair> {
-        self.signers.get(authority)
+    fn active_binding_for<'a>(
+        &'a self,
+        authority: &AccountId,
+        finalized_height: u64,
+    ) -> Result<
+        &'a iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding,
+        SoraFsAppealFinanceSignerSelectionError,
+    > {
+        let binding = self
+            .bindings
+            .iter()
+            .filter(|binding| {
+                &binding.authority == authority
+                    && binding.valid_from_block_height <= finalized_height
+                    && binding
+                        .revoked_at_block_height
+                        .is_none_or(|height| finalized_height < height)
+            })
+            .max_by_key(|binding| binding.valid_from_block_height);
+        let Some(binding) = binding else {
+            return Err(
+                if self.bindings.iter().any(|binding| {
+                    &binding.authority == authority
+                        && binding.valid_from_block_height > finalized_height
+                }) {
+                    SoraFsAppealFinanceSignerSelectionError::NotYetActive
+                } else {
+                    SoraFsAppealFinanceSignerSelectionError::NoActiveBinding
+                },
+            );
+        };
+        Ok(binding)
     }
 
-    fn signer_count(&self) -> usize {
-        self.signers.len()
+    fn signer_for(
+        &self,
+        authority: &AccountId,
+        finalized_height: u64,
+    ) -> Result<
+        Arc<dyn SoraFsAppealFinanceTransactionSigner>,
+        SoraFsAppealFinanceSignerSelectionError,
+    > {
+        let binding = self.active_binding_for(authority, finalized_height)?;
+        let provider = self
+            .runtime_signers
+            .as_ref()
+            .and_then(|registry| registry.get(&binding.handle))
+            .ok_or(SoraFsAppealFinanceSignerSelectionError::ProviderMissing)?;
+        if provider.public_key() != binding.public_key
+            || AccountId::new(provider.public_key()) != binding.authority
+        {
+            return Err(SoraFsAppealFinanceSignerSelectionError::IdentityMismatch);
+        }
+        Ok(provider)
+    }
+
+    fn signer_count(&self, finalized_height: u64) -> usize {
+        self.bindings
+            .iter()
+            .filter(|binding| {
+                binding.valid_from_block_height <= finalized_height
+                    && binding
+                        .revoked_at_block_height
+                        .is_none_or(|height| finalized_height < height)
+            })
+            .count()
     }
 
     fn worker_scan_interval(&self) -> Duration {
         self.worker_scan_interval
     }
+}
 
-    fn worker_max_retry_attempts(&self) -> u32 {
-        self.worker_max_retry_attempts
+/// Runtime-only signer for durable appeal-finance asset-lock transactions.
+///
+/// Implementations are expected to delegate to an independently administered
+/// PKCS#11/HSM/KMS service. They receive only a fully constructed fee-quoted
+/// payload and have no queue or outbox capability.
+#[cfg(feature = "app_api")]
+pub trait SoraFsAppealFinanceTransactionSigner: Send + Sync {
+    /// Stable opaque provider handle matching the non-secret configured binding.
+    fn handle(&self) -> &str;
+
+    /// Exact public key controlled by this provider.
+    fn public_key(&self) -> PublicKey;
+
+    /// Sign the exact transaction payload.
+    fn sign(
+        &self,
+        payload: TransactionPayload,
+    ) -> Result<SignedTransaction, SoraFsAppealFinanceSigningError>;
+}
+
+/// Payload-free appeal-finance signer failure.
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoraFsAppealFinanceSigningError {
+    /// HSM/KMS service is temporarily unavailable.
+    Unavailable,
+    /// Provider refused or failed the signing operation.
+    Refused,
+}
+
+/// Validated runtime registry of opaque appeal-finance signer providers.
+#[cfg(feature = "app_api")]
+#[derive(Clone, Default)]
+pub struct SoraFsAppealFinanceRuntimeSignersV1 {
+    signers: BTreeMap<String, Arc<dyn SoraFsAppealFinanceTransactionSigner>>,
+}
+
+#[cfg(feature = "app_api")]
+impl SoraFsAppealFinanceRuntimeSignersV1 {
+    /// Validate and construct one runtime signer registry.
+    pub fn new(
+        signers: Vec<Arc<dyn SoraFsAppealFinanceTransactionSigner>>,
+    ) -> Result<Self, SoraFsAppealFinanceRuntimeSignerRegistryError> {
+        let mut registry = BTreeMap::new();
+        for signer in signers {
+            let handle = signer.handle();
+            if handle.is_empty()
+                || handle.len() > 256
+                || !handle.is_ascii()
+                || handle
+                    .bytes()
+                    .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+            {
+                return Err(SoraFsAppealFinanceRuntimeSignerRegistryError::InvalidHandle);
+            }
+            let public_key = signer.public_key();
+            if !matches!(
+                public_key.try_algorithm(),
+                Ok(iroha_crypto::Algorithm::Ed25519)
+            ) {
+                return Err(SoraFsAppealFinanceRuntimeSignerRegistryError::InvalidPublicKey);
+            }
+            if registry.insert(handle.to_owned(), signer).is_some() {
+                return Err(SoraFsAppealFinanceRuntimeSignerRegistryError::DuplicateHandle);
+            }
+        }
+        Ok(Self { signers: registry })
+    }
+
+    fn get(&self, handle: &str) -> Option<Arc<dyn SoraFsAppealFinanceTransactionSigner>> {
+        self.signers.get(handle).cloned()
+    }
+}
+
+/// Appeal-finance runtime signer registry error.
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoraFsAppealFinanceRuntimeSignerRegistryError {
+    /// Handle is empty, unbounded, or noncanonical.
+    InvalidHandle,
+    /// Handle is duplicated.
+    DuplicateHandle,
+    /// Provider key is not Ed25519.
+    InvalidPublicKey,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SoraFsAppealFinanceSignerSelectionError {
+    NotYetActive,
+    NoActiveBinding,
+    ProviderMissing,
+    IdentityMismatch,
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod appeal_finance_runtime_signer_tests {
+    use super::*;
+    use iroha_data_model::transaction::TransactionBuilder;
+    use sorafs_node::appeal_finance_transaction_forwarder::{
+        APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1, AppealFinanceTransactionForwarder,
+        AppealFinanceTransactionForwarderPolicyV1,
+    };
+
+    struct TestSigner {
+        handle: String,
+        keypair: KeyPair,
+    }
+
+    impl SoraFsAppealFinanceTransactionSigner for TestSigner {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn public_key(&self) -> PublicKey {
+            self.keypair.public_key().clone()
+        }
+
+        fn sign(
+            &self,
+            payload: TransactionPayload,
+        ) -> Result<SignedTransaction, SoraFsAppealFinanceSigningError> {
+            TransactionBuilder::from_payload(payload)
+                .and_then(|builder| builder.try_sign(self.keypair.private_key()))
+                .map_err(|_| SoraFsAppealFinanceSigningError::Refused)
+        }
+    }
+
+    fn key(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("test Ed25519 key")
+    }
+
+    fn provider(handle: &str, keypair: KeyPair) -> Arc<dyn SoraFsAppealFinanceTransactionSigner> {
+        Arc::new(TestSigner {
+            handle: handle.to_owned(),
+            keypair,
+        })
+    }
+
+    fn submitter(
+        bindings: Vec<iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding>,
+        providers: Vec<Arc<dyn SoraFsAppealFinanceTransactionSigner>>,
+    ) -> SoraFsAppealSettlementSubmitter {
+        SoraFsAppealSettlementSubmitter {
+            bindings,
+            runtime_signers: Some(Arc::new(
+                SoraFsAppealFinanceRuntimeSignersV1::new(providers)
+                    .expect("valid runtime signer registry"),
+            )),
+            forwarder: AppealFinanceTransactionForwarder::in_memory(
+                AppealFinanceTransactionForwarderPolicyV1 {
+                    max_pending: 8,
+                    max_completed: 8,
+                    max_dead_letters: 8,
+                    max_attempts: 2,
+                    max_transaction_bytes: APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
+                    checkpoint_max_bytes: 8 * 1024 * 1024,
+                },
+            )
+            .expect("in-memory appeal-finance forwarder"),
+            worker_scan_interval: Duration::from_secs(1),
+        }
+    }
+
+    #[test]
+    fn registry_rejects_duplicate_opaque_handles() {
+        let result = SoraFsAppealFinanceRuntimeSignersV1::new(vec![
+            provider("hsm:appeal", key(1)),
+            provider("hsm:appeal", key(2)),
+        ]);
+        assert!(matches!(
+            result,
+            Err(SoraFsAppealFinanceRuntimeSignerRegistryError::DuplicateHandle)
+        ));
+    }
+
+    #[test]
+    fn selection_rejects_provider_key_substitution() {
+        let configured = key(3);
+        let authority = AccountId::new(configured.public_key().clone());
+        let submitter = submitter(
+            vec![
+                iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                    handle: "hsm:appeal".to_owned(),
+                    authority: authority.clone(),
+                    public_key: configured.public_key().clone(),
+                    valid_from_block_height: 1,
+                    revoked_at_block_height: None,
+                },
+            ],
+            vec![provider("hsm:appeal", key(4))],
+        );
+        assert!(matches!(
+            submitter.signer_for(&authority, 1),
+            Err(SoraFsAppealFinanceSignerSelectionError::IdentityMismatch)
+        ));
+    }
+
+    #[test]
+    fn active_binding_observation_does_not_require_runtime_signer_provider() {
+        let configured = key(4);
+        let authority = AccountId::new(configured.public_key().clone());
+        let submitter = submitter(
+            vec![
+                iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                    handle: "hsm:appeal-offline".to_owned(),
+                    authority: authority.clone(),
+                    public_key: configured.public_key().clone(),
+                    valid_from_block_height: 1,
+                    revoked_at_block_height: None,
+                },
+            ],
+            Vec::new(),
+        );
+        assert_eq!(
+            submitter
+                .active_binding_for(&authority, 1)
+                .expect("configured binding remains active")
+                .handle,
+            "hsm:appeal-offline"
+        );
+        assert!(matches!(
+            submitter.signer_for(&authority, 1),
+            Err(SoraFsAppealFinanceSignerSelectionError::ProviderMissing)
+        ));
+    }
+
+    #[test]
+    fn selection_obeys_rotation_and_revocation_boundaries() {
+        let configured = key(5);
+        let authority = AccountId::new(configured.public_key().clone());
+        let submitter = submitter(
+            vec![
+                iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                    handle: "hsm:appeal-old".to_owned(),
+                    authority: authority.clone(),
+                    public_key: configured.public_key().clone(),
+                    valid_from_block_height: 1,
+                    revoked_at_block_height: Some(10),
+                },
+                iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                    handle: "hsm:appeal-new".to_owned(),
+                    authority: authority.clone(),
+                    public_key: configured.public_key().clone(),
+                    valid_from_block_height: 10,
+                    revoked_at_block_height: Some(20),
+                },
+            ],
+            vec![
+                provider("hsm:appeal-old", configured.clone()),
+                provider("hsm:appeal-new", configured),
+            ],
+        );
+        assert!(matches!(
+            submitter.signer_for(&authority, 0),
+            Err(SoraFsAppealFinanceSignerSelectionError::NotYetActive)
+        ));
+        assert_eq!(
+            submitter
+                .signer_for(&authority, 9)
+                .expect("old signer active")
+                .handle(),
+            "hsm:appeal-old"
+        );
+        assert_eq!(
+            submitter
+                .signer_for(&authority, 10)
+                .expect("new signer active")
+                .handle(),
+            "hsm:appeal-new"
+        );
+        assert!(matches!(
+            submitter.signer_for(&authority, 20),
+            Err(SoraFsAppealFinanceSignerSelectionError::NoActiveBinding)
+        ));
     }
 }
 
@@ -52123,6 +51892,94 @@ impl SoraFsOrderbookTransactionSigner for KeyPair {
     }
 }
 
+#[cfg(feature = "app_api")]
+const SORAFS_EVIDENCE_VIEWER_MISSING_RUNTIME_DEPENDENCIES: &str = "missing_runtime_dependencies";
+#[cfg(feature = "app_api")]
+const SORAFS_EVIDENCE_VIEWER_UNEXPECTED_RUNTIME_DEPENDENCIES: &str =
+    "unexpected_runtime_dependencies";
+#[cfg(feature = "app_api")]
+const SORAFS_EVIDENCE_VIEWER_RUNTIME_IDENTITY_MISMATCH: &str = "runtime_identity_mismatch";
+#[cfg(feature = "app_api")]
+const SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED: &str = "initialization_failed";
+
+#[cfg(feature = "app_api")]
+fn sorafs_evidence_viewer_dependency_error(
+    policy_configured: bool,
+    webauthn_supplied: bool,
+    grants_supplied: bool,
+    receipt_signer_supplied: bool,
+    erasure_supplied: bool,
+) -> Option<&'static str> {
+    let supplied = [
+        webauthn_supplied,
+        grants_supplied,
+        receipt_signer_supplied,
+        erasure_supplied,
+    ];
+    if policy_configured {
+        (!supplied.iter().all(|present| *present))
+            .then_some(SORAFS_EVIDENCE_VIEWER_MISSING_RUNTIME_DEPENDENCIES)
+    } else {
+        supplied
+            .iter()
+            .any(|present| *present)
+            .then_some(SORAFS_EVIDENCE_VIEWER_UNEXPECTED_RUNTIME_DEPENDENCIES)
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod sorafs_evidence_viewer_startup_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_dependency_shape_is_fail_closed() {
+        for supplied_mask in 0_u8..16 {
+            let supplied = |bit| (supplied_mask & (1_u8 << bit)) != 0_u8;
+            let enabled_error = sorafs_evidence_viewer_dependency_error(
+                true,
+                supplied(0),
+                supplied(1),
+                supplied(2),
+                supplied(3),
+            );
+            assert_eq!(
+                enabled_error,
+                (supplied_mask != 0b1111)
+                    .then_some(SORAFS_EVIDENCE_VIEWER_MISSING_RUNTIME_DEPENDENCIES)
+            );
+
+            let disabled_error = sorafs_evidence_viewer_dependency_error(
+                false,
+                supplied(0),
+                supplied(1),
+                supplied(2),
+                supplied(3),
+            );
+            assert_eq!(
+                disabled_error,
+                (supplied_mask != 0)
+                    .then_some(SORAFS_EVIDENCE_VIEWER_UNEXPECTED_RUNTIME_DEPENDENCIES)
+            );
+        }
+    }
+
+    #[test]
+    fn startup_failure_is_typed_and_payload_free() {
+        let error = Error::SorafsEvidenceViewerStartup {
+            code: SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED,
+        };
+
+        assert_eq!(error.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        let envelope = error.into_envelope();
+        assert_eq!(envelope.code(), "sorafs_evidence_viewer_startup_error");
+        assert_eq!(
+            envelope.message(),
+            "SoraFS evidence-viewer runtime failed to start"
+        );
+        assert!(!envelope.message().contains("initialization_failed"));
+    }
+}
+
 /// Main network handler and the only entrypoint of the Iroha.
 pub struct Torii {
     chain_id: Arc<ChainId>,
@@ -52254,11 +52111,25 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_orderbook_transaction_signer: Option<Arc<dyn SoraFsOrderbookTransactionSigner>>,
     #[cfg(feature = "app_api")]
+    sorafs_reputation_committed_reader:
+        Option<Arc<dyn sorafs_node::reputation::runtime::ReputationCommittedReadApiV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_hedging_billing_runtime:
+        Option<Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingRuntimeApiV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_potr_runtime_signers: Option<Arc<sorafs::PotrRuntimeSignersV1>>,
+    #[cfg(feature = "app_api")]
     sorafs_moderation_orchestrator:
-        Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
+        Option<Arc<sorafs::moderation_runtime::ModerationOrchestratorRuntimeV1>>,
     #[cfg(feature = "app_api")]
     sorafs_moderation_orchestrator_worker:
         Option<iroha_config::parameters::actual::SorafsModerationOrchestrator>,
+    #[cfg(feature = "app_api")]
+    sorafs_moderation_startup_error: Option<&'static str>,
+    #[cfg(feature = "app_api")]
+    sorafs_evidence_viewer: Option<Arc<sorafs_node::evidence_viewer::EvidenceViewerServiceV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_evidence_viewer_startup_error: Option<&'static str>,
     #[cfg(feature = "app_api")]
     sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
@@ -52282,8 +52153,6 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_gateway_security: Option<GatewaySecurityComponents>,
     #[cfg(feature = "app_api")]
-    sorafs_pin_policy: sorafs::PinSubmissionPolicy,
-    #[cfg(feature = "app_api")]
     sorafs_admission: Option<Arc<sorafs::AdmissionRegistry>>,
     #[cfg(feature = "app_api")]
     sorafs_publish_discovery: iroha_config::parameters::actual::SorafsPublishDiscovery,
@@ -52291,6 +52160,8 @@ pub struct Torii {
     stream_token_issuer: Option<Arc<sorafs::StreamTokenIssuer>>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
+    sorafs_appeal_finance_policy: Arc<sorafs::api::AppealFinanceRuntimePolicy>,
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
     #[cfg(feature = "app_api")]
@@ -52310,6 +52181,8 @@ pub struct ToriiRuntimeDeps {
     soracloud_hf_config: Option<iroha_config::parameters::actual::SoracloudRuntimeHuggingFace>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     #[cfg(feature = "app_api")]
+    sorafs_stream_token_signer: Option<Arc<dyn sorafs::StreamTokenRuntimeSigner>>,
+    #[cfg(feature = "app_api")]
     sorafs_proof_outcome_signer: Option<Arc<dyn SoraFsProofOutcomeTransactionSigner>>,
     #[cfg(feature = "app_api")]
     sorafs_repair_transaction_signer: Option<Arc<dyn SoraFsRepairTransactionSigner>>,
@@ -52317,6 +52190,20 @@ pub struct ToriiRuntimeDeps {
     sorafs_reserve_transaction_signer: Option<Arc<dyn SoraFsReserveTransactionSigner>>,
     #[cfg(feature = "app_api")]
     sorafs_orderbook_transaction_signer: Option<Arc<dyn SoraFsOrderbookTransactionSigner>>,
+    #[cfg(feature = "app_api")]
+    sorafs_reputation_committed_reader:
+        Option<Arc<dyn sorafs_node::reputation::runtime::ReputationCommittedReadApiV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_hedging_billing_runtime:
+        Option<Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingRuntimeApiV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_appeal_finance_runtime_signers: Option<Arc<SoraFsAppealFinanceRuntimeSignersV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_appeal_finance_checkpoint_runtime: Option<
+        Arc<dyn sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointRuntime>,
+    >,
+    #[cfg(feature = "app_api")]
+    sorafs_potr_runtime_signer_roles: Option<Arc<sorafs::PotrRuntimeSignerRolesV1>>,
     #[cfg(feature = "app_api")]
     sorafs_moderation_transaction_signer:
         Option<Arc<dyn sorafs::moderation_runtime::ModerationSignedTransactionSignerV1>>,
@@ -52326,6 +52213,18 @@ pub struct ToriiRuntimeDeps {
     #[cfg(feature = "app_api")]
     sorafs_moderation_publication_handoff:
         Option<Arc<dyn sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_evidence_viewer_webauthn:
+        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_evidence_viewer_grants:
+        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_evidence_viewer_receipt_signer:
+        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_evidence_viewer_erasure:
+        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1>>,
     #[cfg(feature = "app_api")]
     sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
@@ -52355,6 +52254,8 @@ impl ToriiRuntimeDeps {
             soracloud_hf_config: None,
             sorafs_node: None,
             #[cfg(feature = "app_api")]
+            sorafs_stream_token_signer: None,
+            #[cfg(feature = "app_api")]
             sorafs_proof_outcome_signer: None,
             #[cfg(feature = "app_api")]
             sorafs_repair_transaction_signer: None,
@@ -52363,11 +52264,29 @@ impl ToriiRuntimeDeps {
             #[cfg(feature = "app_api")]
             sorafs_orderbook_transaction_signer: None,
             #[cfg(feature = "app_api")]
+            sorafs_reputation_committed_reader: None,
+            #[cfg(feature = "app_api")]
+            sorafs_hedging_billing_runtime: None,
+            #[cfg(feature = "app_api")]
+            sorafs_appeal_finance_runtime_signers: None,
+            #[cfg(feature = "app_api")]
+            sorafs_appeal_finance_checkpoint_runtime: None,
+            #[cfg(feature = "app_api")]
+            sorafs_potr_runtime_signer_roles: None,
+            #[cfg(feature = "app_api")]
             sorafs_moderation_transaction_signer: None,
             #[cfg(feature = "app_api")]
             sorafs_moderation_settlement_handoff: None,
             #[cfg(feature = "app_api")]
             sorafs_moderation_publication_handoff: None,
+            #[cfg(feature = "app_api")]
+            sorafs_evidence_viewer_webauthn: None,
+            #[cfg(feature = "app_api")]
+            sorafs_evidence_viewer_grants: None,
+            #[cfg(feature = "app_api")]
+            sorafs_evidence_viewer_receipt_signer: None,
+            #[cfg(feature = "app_api")]
+            sorafs_evidence_viewer_erasure: None,
             #[cfg(feature = "app_api")]
             sorafs_pop_credentials: None,
             #[cfg(feature = "app_api")]
@@ -52407,6 +52326,17 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_sorafs_node(mut self, sorafs_node: sorafs_node::NodeHandle) -> Self {
         self.sorafs_node = Some(sorafs_node);
+        self
+    }
+
+    /// Attach the runtime-only HSM/KMS signer used for stream-token issuance.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_stream_token_signer(
+        mut self,
+        signer: Arc<dyn sorafs::StreamTokenRuntimeSigner>,
+    ) -> Self {
+        self.sorafs_stream_token_signer = Some(signer);
         self
     }
 
@@ -52454,6 +52384,75 @@ impl ToriiRuntimeDeps {
         self
     }
 
+    /// Attach the supervised finalized reputation read boundary.
+    ///
+    /// Torii receives only this object-safe committed projection API. Runtime
+    /// signer state, publisher credentials, and mutable projector state remain
+    /// owned by the supervised node runtime.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_reputation_committed_reader(
+        mut self,
+        reader: Arc<dyn sorafs_node::reputation::runtime::ReputationCommittedReadApiV1>,
+    ) -> Self {
+        self.sorafs_reputation_committed_reader = Some(reader);
+        self
+    }
+
+    /// Attach the supervised finalized-ledger hedging/billing read boundary.
+    ///
+    /// Torii receives only this object-safe projection API; raw service state,
+    /// signer providers, publisher credentials, and hedge execution remain
+    /// owned by the supervised node runtime.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_hedging_billing_runtime(
+        mut self,
+        runtime: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingRuntimeApiV1>,
+    ) -> Self {
+        self.sorafs_hedging_billing_runtime = Some(runtime);
+        self
+    }
+
+    /// Attach independently administered runtime-only appeal-finance signers.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_appeal_finance_runtime_signers(
+        mut self,
+        signers: Arc<SoraFsAppealFinanceRuntimeSignersV1>,
+    ) -> Self {
+        self.sorafs_appeal_finance_runtime_signers = Some(signers);
+        self
+    }
+
+    /// Attach the runtime-only HSM/KMS signer and monotonic sealed head used
+    /// to authenticate appeal-finance forwarder checkpoints.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_appeal_finance_checkpoint_runtime(
+        mut self,
+        runtime: Arc<
+            dyn sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointRuntime,
+        >,
+    ) -> Self {
+        self.sorafs_appeal_finance_checkpoint_runtime = Some(runtime);
+        self
+    }
+
+    /// Attach independently administered PoTR gateway/provider signer roles.
+    ///
+    /// Torii constructs the admission reader itself after its authoritative
+    /// finalized state and council-verified admission material are available.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_potr_runtime_signer_roles(
+        mut self,
+        roles: Arc<sorafs::PotrRuntimeSignerRolesV1>,
+    ) -> Self {
+        self.sorafs_potr_runtime_signer_roles = Some(roles);
+        self
+    }
+
     /// Attach the runtime-only HSM service for exact Torii-built moderation payloads.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -52484,6 +52483,54 @@ impl ToriiRuntimeDeps {
         boundary: Arc<dyn sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>,
     ) -> Self {
         self.sorafs_moderation_publication_handoff = Some(boundary);
+        self
+    }
+
+    /// Attach the runtime-only WebAuthn challenge and verification boundary
+    /// used by the case-bound evidence viewer.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_webauthn(
+        mut self,
+        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>,
+    ) -> Self {
+        self.sorafs_evidence_viewer_webauthn = Some(boundary);
+        self
+    }
+
+    /// Attach the runtime-only rotating-grant boundary used by the evidence
+    /// viewer.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_grants(
+        mut self,
+        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1>,
+    ) -> Self {
+        self.sorafs_evidence_viewer_grants = Some(boundary);
+        self
+    }
+
+    /// Attach the runtime-only Ed25519 receipt signer used by the evidence
+    /// viewer.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_receipt_signer(
+        mut self,
+        signer: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1>,
+    ) -> Self {
+        self.sorafs_evidence_viewer_receipt_signer = Some(signer);
+        self
+    }
+
+    /// Attach the runtime-only irreversible object-erasure boundary used by the
+    /// evidence viewer.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_erasure(
+        mut self,
+        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1>,
+    ) -> Self {
+        self.sorafs_evidence_viewer_erasure = Some(boundary);
         self
     }
 
@@ -53464,18 +53511,6 @@ impl Torii {
             catalog_post(handler_post_sorafs_capacity_telemetry),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_SCHEDULE_POST,
-            catalog_post(handler_post_sorafs_capacity_schedule),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_COMPLETE_POST,
-            catalog_post(handler_post_sorafs_capacity_complete),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_UPTIME_POST,
-            catalog_post(handler_post_sorafs_capacity_uptime),
-        );
-        builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_POR_PROOF_POST,
             catalog_post(handler_post_sorafs_capacity_por_proof)
                 .authenticated_operator(app_state.clone()),
@@ -53504,10 +53539,6 @@ impl Torii {
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_POR_VRF_POST,
             catalog_post(handler_post_sorafs_por_vrf),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_FAILURE_POST,
-            catalog_post(handler_post_sorafs_capacity_failure),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_ORDERS_POST,
@@ -53830,13 +53861,88 @@ impl Torii {
         catalog_get(sorafs::api::handle_get_sorafs_moderation_quarantine_object),
     );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_VIEWER_SESSIONS_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_viewer_session),
-    );
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_SESSION_CHALLENGE_POST,
+            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_session_challenge)
+                .layer(DefaultBodyLimit::max(128 * 1024))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_VIEWER_ACCESS_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_viewer_access),
-    );
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_SESSION_POST,
+            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_session)
+                .layer(DefaultBodyLimit::max(128 * 1024))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_MANIFEST_BY_SESSION_ID_HEX_GET,
+            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_manifest)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_SEGMENT_BY_SESSION_ID_HEX_GET,
+            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_segment)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_LOG_BY_SESSION_ID_HEX_POST,
+            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_log)
+                .layer(DefaultBodyLimit::max(128 * 1024))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_AUDIT_GET,
+            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_audit)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_STATUS_GET,
+            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_status)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_LEGAL_HOLD_POST,
+            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_legal_hold)
+                .layer(DefaultBodyLimit::max(128 * 1024))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_LEGAL_HOLD_BY_HOLD_ID_HEX_RELEASE_POST,
+            catalog_post(
+                sorafs::evidence_viewer_api::handle_post_evidence_legal_hold_release,
+            )
+            .layer(DefaultBodyLimit::max(128 * 1024))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_RETENTION_GET,
+            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_retention)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_RETENTION_POST,
+            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_retention)
+                .layer(DefaultBodyLimit::max(128 * 1024))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_ERASURE_POST,
+            catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_erasure)
+                .layer(DefaultBodyLimit::max(128 * 1024))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_VIEWER_GET,
+            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_viewer).unauthenticated(),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_VIEWER_CSS_GET,
+            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_viewer_css)
+                .unauthenticated(),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::EVIDENCE_VIEWER_JS_GET,
+            catalog_get(sorafs::evidence_viewer_api::handle_get_evidence_viewer_js)
+                .unauthenticated(),
+        );
         builder.route(
         &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_POST,
         catalog_post(sorafs::api::handle_post_sorafs_moderation_viewer_audit_report),
@@ -55017,6 +55123,43 @@ impl Torii {
             CAPACITY_STATE,
             sorafs::api::handle_get_sorafs_capacity_state
         );
+        builder.route(
+            &route_catalog::sorafs::BILLING_STATUS,
+            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_status)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::sorafs::BILLING_STATEMENTS,
+            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_statements)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::sorafs::BILLING_STATEMENT,
+            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_statement)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::sorafs::BILLING_STATEMENT_ACKNOWLEDGEMENTS,
+            catalog_post(
+                sorafs::hedging_billing_api::handle_post_sorafs_billing_statement_acknowledgement,
+            )
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::sorafs::BILLING_RECONCILIATION,
+            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_billing_reconciliation)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::sorafs::HEDGING_EXPOSURE,
+            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_hedging_exposure)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::sorafs::HEDGING_INTENTS,
+            catalog_get(sorafs::hedging_billing_api::handle_get_sorafs_hedging_intents)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         capacity_get!(
             GOVERNANCE_DAG_DASHBOARD,
             sorafs::api::handle_get_sorafs_governance_dag_dashboard
@@ -55153,10 +55296,6 @@ impl Torii {
             REPUTATION_LATEST_GET,
             sorafs::api::handle_get_sorafs_reputation_latest
         );
-        capacity_post!(
-            REPUTATION_LATEST_POST,
-            sorafs::api::handle_post_sorafs_reputation_snapshot
-        );
         capacity_get!(
             REPUTATION_SNAPSHOT,
             sorafs::api::handle_get_sorafs_reputation_snapshot
@@ -55200,7 +55339,6 @@ impl Torii {
             sorafs::api::handle_get_sorafs_storage_manifest
         );
         capacity_get!(STORAGE_PLAN, sorafs::api::handle_get_sorafs_storage_plan);
-        capacity_post!(STORAGE_PIN, sorafs::api::handle_post_sorafs_storage_pin);
         capacity_post!(STORAGE_FETCH, sorafs::api::handle_post_sorafs_storage_fetch);
         capacity_post!(STORAGE_TOKEN, sorafs::api::handle_post_sorafs_storage_token);
         capacity_get!(
@@ -55324,68 +55462,6 @@ impl Torii {
             POP_VERIFY,
             sorafs::pop_api::handle_post_pop_verify,
             sorafs::pop_api::POP_PROOF_REQUEST_MAX_BYTES_V1
-        );
-        let app_state = builder.state().clone();
-        builder.route(
-            &route_catalog::sorafs::DEAL_USAGE,
-            catalog_post(handler_post_sorafs_deal_usage)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_identity_bound(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sorafs::DEAL_SETTLE,
-            catalog_post(handler_post_sorafs_deal_settle)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sorafs::DEAL_FUND_PROVIDER,
-            catalog_post(handler_post_sorafs_deal_fund_provider)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_identity_bound(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sorafs::DEAL_FUND_CLIENT,
-            catalog_post(handler_post_sorafs_deal_fund_client)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sorafs::DEAL_OPEN,
-            catalog_post(handler_post_sorafs_deal_open)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sorafs::DEAL_CANCEL,
-            catalog_post(handler_post_sorafs_deal_cancel)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_operator(app_state),
-        );
-        builder.route(
-            &route_catalog::sorafs::ECONOMICS_PRICING_MANIFEST,
-            catalog_post(sorafs::api::handle_post_sorafs_economics_pricing_manifest)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit)),
-        );
-        builder.route(
-            &route_catalog::sorafs::ECONOMICS_HEDGING_FEED,
-            catalog_post(sorafs::api::handle_post_sorafs_economics_hedging_feed)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit)),
-        );
-        builder.route(
-            &route_catalog::sorafs::ECONOMICS_STATUS,
-            catalog_get(sorafs::api::handle_get_sorafs_economics_status)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit)),
-        );
-        builder.route(
-            &route_catalog::sorafs::ECONOMICS_ACTIVE_PRICING,
-            catalog_get(sorafs::api::handle_get_sorafs_economics_active_pricing)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit)),
-        );
-        builder.route(
-            &route_catalog::sorafs::ECONOMICS_HEDGING_REFERENCE,
-            catalog_get(sorafs::api::handle_get_sorafs_economics_hedging_reference)
-                .layer(DefaultBodyLimit::max(sorafs_body_limit)),
         );
         builder.route(
             &route_catalog::sorafs::SITE_MANIFEST,
@@ -55712,6 +55788,8 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
+        let shared_sorafs_stream_token_signer = runtime_deps.sorafs_stream_token_signer.clone();
+        #[cfg(feature = "app_api")]
         let shared_sorafs_proof_outcome_signer = runtime_deps.sorafs_proof_outcome_signer.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_repair_transaction_signer =
@@ -55723,6 +55801,22 @@ impl Torii {
         let shared_sorafs_orderbook_transaction_signer =
             runtime_deps.sorafs_orderbook_transaction_signer.clone();
         #[cfg(feature = "app_api")]
+        let shared_sorafs_reputation_committed_reader =
+            runtime_deps.sorafs_reputation_committed_reader.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_hedging_billing_runtime =
+            runtime_deps.sorafs_hedging_billing_runtime.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_appeal_finance_runtime_signers =
+            runtime_deps.sorafs_appeal_finance_runtime_signers.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_appeal_finance_checkpoint_runtime = runtime_deps
+            .sorafs_appeal_finance_checkpoint_runtime
+            .clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_potr_runtime_signer_roles =
+            runtime_deps.sorafs_potr_runtime_signer_roles.clone();
+        #[cfg(feature = "app_api")]
         let shared_sorafs_moderation_transaction_signer =
             runtime_deps.sorafs_moderation_transaction_signer.clone();
         #[cfg(feature = "app_api")]
@@ -55731,6 +55825,18 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let shared_sorafs_moderation_publication_handoff =
             runtime_deps.sorafs_moderation_publication_handoff.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_evidence_viewer_webauthn =
+            runtime_deps.sorafs_evidence_viewer_webauthn.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_evidence_viewer_grants =
+            runtime_deps.sorafs_evidence_viewer_grants.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_evidence_viewer_receipt_signer =
+            runtime_deps.sorafs_evidence_viewer_receipt_signer.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_evidence_viewer_erasure =
+            runtime_deps.sorafs_evidence_viewer_erasure.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_pop_credentials = runtime_deps.sorafs_pop_credentials.clone();
         #[cfg(feature = "app_api")]
@@ -56093,6 +56199,27 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let sorafs_admission = load_sorafs_admission(&config);
         #[cfg(feature = "app_api")]
+        let sorafs_potr_runtime_signers = require_sorafs_potr_finalized_reader_inputs(
+            shared_sorafs_potr_runtime_signer_roles,
+            sorafs_admission.clone(),
+        )
+        .unwrap_or_else(|_| {
+            panic!(
+                "PoTR runtime signer roles require a council-verified SoraFS provider admission registry"
+            )
+        })
+        .map(|(roles, admission_registry)| {
+            Arc::new(
+                roles
+                    .bind_finalized_reader(Arc::clone(&state), admission_registry)
+                    .unwrap_or_else(|_| {
+                        panic!(
+                            "failed to bind PoTR runtime signer roles to authoritative finalized state"
+                        )
+                    }),
+            )
+        });
+        #[cfg(feature = "app_api")]
         let sorafs_cache =
             shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()));
         #[cfg(feature = "app_api")]
@@ -56206,13 +56333,86 @@ impl Torii {
             }
         };
         #[cfg(feature = "app_api")]
-        let sorafs_moderation_orchestrator = match (
+        let sorafs_evidence_viewer_dependency_error = sorafs_evidence_viewer_dependency_error(
+            config.sorafs_storage.evidence_viewer.is_some(),
+            shared_sorafs_evidence_viewer_webauthn.is_some(),
+            shared_sorafs_evidence_viewer_grants.is_some(),
+            shared_sorafs_evidence_viewer_receipt_signer.is_some(),
+            shared_sorafs_evidence_viewer_erasure.is_some(),
+        );
+        #[cfg(feature = "app_api")]
+        let (sorafs_evidence_viewer, sorafs_evidence_viewer_startup_error) = match (
+            config.sorafs_storage.evidence_viewer.as_ref(),
+            shared_sorafs_evidence_viewer_webauthn,
+            shared_sorafs_evidence_viewer_grants,
+            shared_sorafs_evidence_viewer_receipt_signer,
+            shared_sorafs_evidence_viewer_erasure,
+        ) {
+            (None, None, None, None, None) => (None, None),
+            (Some(policy), Some(webauthn), Some(grants), Some(receipt_signer), Some(erasure)) => {
+                if webauthn.handle() != policy.webauthn_handle
+                    || grants.handle() != policy.grant_handle
+                    || erasure.handle() != policy.erasure_handle
+                    || receipt_signer.handle() != policy.receipt_signer_handle
+                    || receipt_signer.public_key() != policy.receipt_signer_public_key
+                {
+                    (None, Some(SORAFS_EVIDENCE_VIEWER_RUNTIME_IDENTITY_MISMATCH))
+                } else {
+                    let millis = |duration: std::time::Duration| {
+                        u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+                    };
+                    let service_config = sorafs_node::evidence_viewer::EvidenceViewerConfigV1 {
+                        checkpoint_path: policy.checkpoint_path.clone(),
+                        checkpoint_max_bytes: policy.checkpoint_max_bytes.0,
+                        session_ttl_ms: millis(policy.session_ttl),
+                        grant_ttl_ms: millis(policy.grant_ttl),
+                        challenge_ttl_ms: millis(policy.challenge_ttl),
+                        max_range_bytes: policy.max_range_bytes.0,
+                        max_challenges: policy.max_challenges,
+                        max_sessions: policy.max_sessions,
+                        max_receipts: policy.max_receipts,
+                        max_idempotency_records: policy.max_idempotency_records,
+                        retention_after_expiry_ms: millis(policy.retention_after_expiry),
+                        webauthn_rp_id: policy.webauthn_rp_id.clone(),
+                        webauthn_allowed_origins: policy.webauthn_allowed_origins.clone(),
+                        webauthn_handle: policy.webauthn_handle.clone(),
+                        grant_handle: policy.grant_handle.clone(),
+                        erasure_handle: policy.erasure_handle.clone(),
+                        receipt_signer_handle: policy.receipt_signer_handle.clone(),
+                        receipt_signer_public_key: policy.receipt_signer_public_key,
+                    };
+                    let service_deps =
+                        sorafs_node::evidence_viewer::EvidenceViewerRuntimeDepsV1 {
+                            authorization_reader: Arc::new(
+                                sorafs::evidence_viewer_runtime::ToriiEvidenceViewerFinalizedAuthorizationReaderV1::new(
+                                    Arc::clone(&state),
+                                ),
+                            ),
+                            webauthn,
+                            grants,
+                            receipt_signer,
+                            erasure,
+                        };
+                    match sorafs_node::evidence_viewer::EvidenceViewerServiceV1::open(
+                        service_config,
+                        service_deps,
+                        sorafs_node.clone(),
+                    ) {
+                        Ok(service) => (Some(Arc::new(service)), None),
+                        Err(_) => (None, Some(SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED)),
+                    }
+                }
+            }
+            _ => (None, sorafs_evidence_viewer_dependency_error),
+        };
+        #[cfg(feature = "app_api")]
+        let (sorafs_moderation_orchestrator, sorafs_moderation_startup_error) = match (
             config.sorafs_storage.moderation_orchestrator.as_ref(),
             shared_sorafs_moderation_transaction_signer,
             shared_sorafs_moderation_settlement_handoff,
             shared_sorafs_moderation_publication_handoff,
         ) {
-            (None, None, None, None) => None,
+            (None, None, None, None) => (None, None),
             (
                 Some(config),
                 Some(transaction_signer),
@@ -56275,25 +56475,26 @@ impl Torii {
                     settlement_sink,
                     publication_sink,
                 };
-                let runtime = sorafs_node::moderation_orchestrator::ModerationOrchestratorV1::open(
+                match sorafs_node::moderation_orchestrator::ModerationOrchestratorV1::open(
                     orchestrator_config,
                     deps,
-                )
-                .unwrap_or_else(|error| {
-                    panic!("failed to initialise SoraFS moderation orchestrator: {error}")
-                });
-                Some(Arc::new(runtime))
+                ) {
+                    Ok(orchestrator) => (
+                        Some(Arc::new(
+                            sorafs::moderation_runtime::ModerationOrchestratorRuntimeV1::new(
+                                Arc::new(orchestrator),
+                                sorafs::moderation_runtime::moderation_projection_freshness_limit(
+                                    config.worker_interval,
+                                ),
+                            ),
+                        )),
+                        None,
+                    ),
+                    Err(_) => (None, Some("initialization_failed")),
+                }
             }
-            (Some(_), _, _, _) => {
-                panic!(
-                    "torii.sorafs.storage.moderation_orchestrator is enabled but its runtime-only transaction signer and durable settlement/publication boundaries were not all injected"
-                )
-            }
-            (None, _, _, _) => {
-                panic!(
-                    "SoraFS moderation runtime boundaries were injected without enabling torii.sorafs.storage.moderation_orchestrator"
-                )
-            }
+            (Some(_), _, _, _) => (None, Some("missing_runtime_dependencies")),
+            (None, _, _, _) => (None, Some("unexpected_runtime_dependencies")),
         };
         #[cfg(feature = "app_api")]
         let sorafs_pop_credentials = match (
@@ -56360,16 +56561,14 @@ impl Torii {
             None
         };
         #[cfg(feature = "app_api")]
-        let sorafs_pin_policy =
-            sorafs::PinSubmissionPolicy::from_config(&config.sorafs_storage.pin)
-                .unwrap_or_else(|err| panic!("invalid SoraFS storage pin policy: {err}"));
-        #[cfg(feature = "app_api")]
-        let stream_token_issuer =
-            match sorafs::StreamTokenIssuer::from_config(&config.sorafs_storage.stream_tokens) {
-                Ok(Some(issuer)) => Some(Arc::new(issuer)),
-                Ok(None) => None,
-                Err(err) => panic!("invalid SoraFS stream token configuration: {err}"),
-            };
+        let stream_token_issuer = match sorafs::StreamTokenIssuer::from_config(
+            &config.sorafs_storage.stream_tokens,
+            shared_sorafs_stream_token_signer,
+        ) {
+            Ok(Some(issuer)) => Some(Arc::new(issuer)),
+            Ok(None) => None,
+            Err(err) => panic!("invalid SoraFS stream token configuration: {err}"),
+        };
         #[cfg(feature = "app_api")]
         let (por_coordinator, por_runtime) =
             build_por_components(&config, &chain_id, &sorafs_node, sorafs_admission.clone());
@@ -56438,8 +56637,32 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
         #[cfg(feature = "app_api")]
-        let sorafs_appeal_settlement_submitter =
-            SoraFsAppealSettlementSubmitter::from_config(&config.sorafs_appeal_finance_settlement);
+        let sorafs_appeal_finance_policy = Arc::new(
+            sorafs::api::AppealFinanceRuntimePolicy::from_config(
+                &config.sorafs_appeal_finance_settlement,
+            )
+            .unwrap_or_else(|err| panic!("invalid SoraFS appeal-finance policy: {err}")),
+        );
+        #[cfg(feature = "app_api")]
+        let sorafs_appeal_settlement_submitter = (config.sorafs_storage.enabled
+            && !config
+                .sorafs_appeal_finance_settlement
+                .submitter_signers
+                .is_empty())
+        .then(|| {
+            let checkpoint_runtime = shared_sorafs_appeal_finance_checkpoint_runtime
+                .unwrap_or_else(|| {
+                    panic!(
+                        "SoraFS appeal-finance submitters require a runtime checkpoint HSM/KMS provider"
+                    )
+                });
+            SoraFsAppealSettlementSubmitter::from_config(
+                &config.sorafs_appeal_finance_settlement,
+                &config.sorafs_storage.data_dir,
+                shared_sorafs_appeal_finance_runtime_signers,
+                checkpoint_runtime,
+            )
+        });
         #[cfg(feature = "app_api")]
         let offline_commands = config
             .kagemusha_commands
@@ -56620,7 +56843,19 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_orderbook_transaction_signer: shared_sorafs_orderbook_transaction_signer,
             #[cfg(feature = "app_api")]
+            sorafs_reputation_committed_reader: shared_sorafs_reputation_committed_reader,
+            #[cfg(feature = "app_api")]
+            sorafs_hedging_billing_runtime: shared_sorafs_hedging_billing_runtime,
+            #[cfg(feature = "app_api")]
+            sorafs_potr_runtime_signers,
+            #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_startup_error,
+            #[cfg(feature = "app_api")]
+            sorafs_evidence_viewer,
+            #[cfg(feature = "app_api")]
+            sorafs_evidence_viewer_startup_error,
             #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator_worker: config
                 .sorafs_storage
@@ -56651,8 +56886,6 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_gateway_security,
             #[cfg(feature = "app_api")]
-            sorafs_pin_policy,
-            #[cfg(feature = "app_api")]
             sorafs_admission,
             #[cfg(feature = "app_api")]
             sorafs_publish_discovery,
@@ -56660,6 +56893,8 @@ impl Torii {
             stream_token_issuer,
             #[cfg(feature = "app_api")]
             account_faucet,
+            #[cfg(feature = "app_api")]
+            sorafs_appeal_finance_policy,
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter,
             #[cfg(feature = "app_api")]
@@ -57063,7 +57298,13 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_orderbook_transaction_signer: self.sorafs_orderbook_transaction_signer.clone(),
             #[cfg(feature = "app_api")]
+            sorafs_reputation_committed_reader: self.sorafs_reputation_committed_reader.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_hedging_billing_runtime: self.sorafs_hedging_billing_runtime.clone(),
+            #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator: self.sorafs_moderation_orchestrator.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_evidence_viewer: self.sorafs_evidence_viewer.clone(),
             #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator_worker: self
                 .sorafs_moderation_orchestrator_worker
@@ -57109,13 +57350,13 @@ impl Torii {
             #[cfg(all(test, feature = "app_api"))]
             sorafs_gateway_test_provider_id: None,
             #[cfg(feature = "app_api")]
-            sorafs_pin_policy: self.sorafs_pin_policy.clone(),
-            #[cfg(feature = "app_api")]
             sorafs_blinded_resolver: gateway_components
                 .as_ref()
                 .and_then(|components| components.blinded_resolver.clone()),
             #[cfg(feature = "app_api")]
             stream_token_issuer: self.stream_token_issuer.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_potr_runtime_signers: self.sorafs_potr_runtime_signers.clone(),
             #[cfg(feature = "app_api")]
             stream_token_concurrency: sorafs::StreamTokenConcurrencyTracker::default(),
             #[cfg(feature = "app_api")]
@@ -57124,6 +57365,8 @@ impl Torii {
             sorafs_chunk_range_overrides: DashMap::new(),
             #[cfg(feature = "app_api")]
             account_faucet: self.account_faucet.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_appeal_finance_policy: self.sorafs_appeal_finance_policy.clone(),
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter: self.sorafs_appeal_settlement_submitter.clone(),
             #[cfg(feature = "app_api")]
@@ -57459,6 +57702,14 @@ impl Torii {
         self,
         shutdown_signal: ShutdownSignal,
     ) -> core::result::Result<(), Report<Error>> {
+        #[cfg(feature = "app_api")]
+        if let Some(code) = self.sorafs_moderation_startup_error {
+            return Err(Report::new(Error::SorafsModerationStartup { code }));
+        }
+        #[cfg(feature = "app_api")]
+        if let Some(code) = self.sorafs_evidence_viewer_startup_error {
+            return Err(Report::new(Error::SorafsEvidenceViewerStartup { code }));
+        }
         let torii_address = self.address.value().clone();
         iroha_logger::info!(addr = %torii_address, "starting Torii HTTP server");
 
@@ -57636,6 +57887,14 @@ impl Torii {
         let (api_router, app_state) = self.create_api_router_with_state();
         #[cfg(feature = "app_api")]
         {
+            sorafs::api::spawn_sorafs_capacity_reconciler_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            );
+            sorafs::api::spawn_sorafs_appeal_finance_forwarder_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            );
             sorafs::api::spawn_sorafs_proof_outcome_forwarder_worker(
                 app_state.clone(),
                 shutdown_signal.clone(),
@@ -57654,10 +57913,6 @@ impl Torii {
             );
             sorafs::api::spawn_sorafs_moderation_orchestrator_worker(
                 app_state.clone(),
-                shutdown_signal.clone(),
-            );
-            sorafs::api::spawn_sorafs_moderation_evidence_viewer_audit_scheduler(
-                app_state,
                 shutdown_signal.clone(),
             );
         }
@@ -57824,6 +58079,24 @@ fn build_sorafs_cache(
         iroha_logger::info!(known = known_capabilities, "SoraFS discovery API enabled");
     }
     cache
+}
+
+#[cfg(feature = "app_api")]
+fn require_sorafs_potr_finalized_reader_inputs(
+    roles: Option<Arc<sorafs::PotrRuntimeSignerRolesV1>>,
+    admission: Option<Arc<sorafs::AdmissionRegistry>>,
+) -> Result<
+    Option<(
+        Arc<sorafs::PotrRuntimeSignerRolesV1>,
+        Arc<sorafs::AdmissionRegistry>,
+    )>,
+    sorafs::PotrRuntimeSignerConfigError,
+> {
+    match (roles, admission) {
+        (None, _) => Ok(None),
+        (Some(roles), Some(admission)) => Ok(Some((roles, admission))),
+        (Some(_), None) => Err(sorafs::PotrRuntimeSignerConfigError::MissingAdmissionRegistry),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -58148,6 +58421,29 @@ mod gateway_runtime_config_tests {
         }
     }
 
+    #[derive(Debug)]
+    struct TestStreamTokenRuntimeSigner {
+        public_key: [u8; 32],
+    }
+
+    impl sorafs::StreamTokenRuntimeSigner for TestStreamTokenRuntimeSigner {
+        fn handle(&self) -> &str {
+            "pkcs11:prod/stream-token/v1"
+        }
+
+        fn public_key(&self) -> [u8; 32] {
+            self.public_key
+        }
+
+        fn sign(
+            &self,
+            _signing_payload: &[u8],
+        ) -> Result<[u8; ed25519_dalek::SIGNATURE_LENGTH], sorafs::StreamTokenSigningError>
+        {
+            Err(sorafs::StreamTokenSigningError::Refused)
+        }
+    }
+
     fn compliance_signer(
         signer_id: &str,
         signing_key_byte: u8,
@@ -58345,11 +58641,25 @@ mod gateway_runtime_config_tests {
         let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
         let compliance_transport: Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport> =
             Arc::new(TestComplianceFeedTransport);
+        let stream_token_signer: Arc<dyn sorafs::StreamTokenRuntimeSigner> =
+            Arc::new(TestStreamTokenRuntimeSigner {
+                public_key: SigningKey::from_bytes(&[0x54; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            });
 
         let dependencies = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
+            .with_sorafs_stream_token_signer(Arc::clone(&stream_token_signer))
             .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
             .with_sorafs_gateway_compliance_feed_transport(Arc::clone(&compliance_transport));
 
+        assert!(Arc::ptr_eq(
+            dependencies
+                .sorafs_stream_token_signer
+                .as_ref()
+                .expect("stream-token signer retained"),
+            &stream_token_signer
+        ));
         assert!(Arc::ptr_eq(
             dependencies
                 .sorafs_gateway_acme_client
@@ -58448,9 +58758,7 @@ fn build_sorafs_quota_config(
     sorafs::SorafsQuotaConfig {
         capacity_declaration: convert_window(&config.capacity_declaration),
         capacity_telemetry: convert_window(&config.capacity_telemetry),
-        deal_telemetry: convert_window(&config.deal_telemetry),
         capacity_dispute: convert_window(&config.capacity_dispute),
-        storage_pin: convert_window(&config.storage_pin),
         por_submission: convert_window(&config.por_submission),
     }
 }
@@ -58517,8 +58825,8 @@ fn build_por_components(
     assert_por_runtime_ready(por_cfg);
 
     let snapshot_path = por_cfg
-        .governance_dag_dir
-        .join("por_coordinator_snapshot.norito");
+        .state_dir
+        .join(iroha_config::parameters::defaults::sorafs::por::COORDINATOR_STATE_FILE);
     let coordinator_result = sorafs::PorCoordinator::with_persistence(&snapshot_path);
     let coordinator = match coordinator_result {
         Ok(coord) => Arc::new(coord),
@@ -58568,16 +58876,12 @@ fn build_por_components(
         )
         .unwrap_or_else(|err| panic!("invalid torii.sorafs_por provider VRF state: {err}")),
     );
-    let publisher = Arc::new(
-        sorafs::FilesystemGovernancePublisher::try_new(por_cfg.governance_dag_dir.clone())
-            .unwrap_or_else(|err| panic!("invalid PoR governance publisher path: {err}")),
-    );
     let runtime = sorafs::PorCoordinatorRuntime::new(
         Arc::new(sorafs_node.clone()),
         coordinator.clone(),
         randomness,
         vrf_provider.clone(),
-        publisher,
+        Arc::new(sorafs_node.clone()),
         por_cfg.epoch_interval_secs,
         por_cfg.response_window_secs,
         por_cfg.vrf_submission_deadline_secs,
@@ -58752,6 +59056,18 @@ pub enum Error {
     AcceptTransaction(#[from] iroha_core::tx::AcceptTransactionFail),
     /// Failed to get or set configuration
     Config(#[source] eyre::Report),
+    /// SoraFS moderation runtime startup failed `{code}`
+    #[cfg(feature = "app_api")]
+    SorafsModerationStartup {
+        /// Stable payload-free startup failure code.
+        code: &'static str,
+    },
+    /// SoraFS evidence-viewer runtime startup failed `{code}`
+    #[cfg(feature = "app_api")]
+    SorafsEvidenceViewerStartup {
+        /// Stable payload-free startup failure code.
+        code: &'static str,
+    },
     /// Failed to serialize response payload for `{context}`: {source}
     SerializationFailure {
         /// Logical context for the serialization failure.
@@ -60930,12 +61246,6 @@ pub(crate) mod tests_runtime_handlers {
         let sorafs_gateway_config = iroha_config::parameters::actual::SorafsGateway::default();
         #[cfg(feature = "app_api")]
         let sorafs_site_bindings = None;
-        #[cfg(feature = "app_api")]
-        let sorafs_pin_policy = sorafs::PinSubmissionPolicy::from_config(
-            &iroha_config::parameters::actual::SorafsStoragePin::default(),
-        )
-        .expect("default SoraFS pin policy should be valid");
-
         let telemetry = routing::MaybeTelemetry::for_tests().map_gate(TelemetryProfile::Full);
         let telemetry_profile = telemetry.profile();
         let iso_bridge = iso
@@ -61172,7 +61482,15 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(feature = "app_api")]
             sorafs_orderbook_transaction_signer: None,
             #[cfg(feature = "app_api")]
+            sorafs_reputation_committed_reader: None,
+            #[cfg(feature = "app_api")]
+            sorafs_hedging_billing_runtime: None,
+            #[cfg(feature = "app_api")]
+            sorafs_potr_runtime_signers: None,
+            #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator: None,
+            #[cfg(feature = "app_api")]
+            sorafs_evidence_viewer: None,
             #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator_worker: None,
             #[cfg(feature = "app_api")]
@@ -61212,8 +61530,6 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(all(test, feature = "app_api"))]
             sorafs_gateway_test_provider_id: Some([0x45; 32]),
             #[cfg(feature = "app_api")]
-            sorafs_pin_policy: sorafs_pin_policy.clone(),
-            #[cfg(feature = "app_api")]
             sorafs_blinded_resolver: None,
             #[cfg(feature = "app_api")]
             stream_token_issuer,
@@ -61225,6 +61541,13 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_chunk_range_overrides: DashMap::new(),
             #[cfg(feature = "app_api")]
             account_faucet: None,
+            #[cfg(feature = "app_api")]
+            sorafs_appeal_finance_policy: Arc::new(
+                sorafs::api::AppealFinanceRuntimePolicy::from_config(
+                    &iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default(),
+                )
+                .expect("baseline SoraFS appeal-finance policy"),
+            ),
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter: None,
             #[cfg(feature = "app_api")]
@@ -63986,11 +64309,6 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             super::route_timeout_for_path("/v1/accounts/example/permissions") >= fanout_budget,
             "outer HTTP timeout must not expire before the read-fanout proxy budget"
-        );
-        assert_eq!(
-            super::route_timeout_for_path("/v1/sorafs/storage/pin"),
-            SORAFS_STORAGE_PIN_ROUTE_TIMEOUT,
-            "SoraFS storage-pin uploads need a publish-sized HTTP route budget"
         );
         assert_eq!(
             super::route_timeout_for_path("/v1/zk/ivm/derive"),
@@ -83264,6 +83582,93 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
+    async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
+        use axum::{
+            body::Body,
+            extract::ConnectInfo,
+            http::{Method, Request, StatusCode},
+        };
+        use tower::ServiceExt as _;
+
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+        let storage_dir = tempfile::tempdir().expect("storage tempdir");
+        let sorafs_node = sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .enabled(true)
+                .data_dir(storage_dir.path().join("storage"))
+                .build(),
+        );
+        let storage = sorafs_node.storage().expect("enabled storage");
+        assert_eq!(storage.manifest_count(), 0);
+        assert_eq!(state.view().world().pin_manifests().len(), 0);
+
+        let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
+            .with_sorafs_node(sorafs_node);
+        let torii = Torii::new_with_handle(
+            ChainId::from("sorafs-retired-storage-pin-router-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state.clone(),
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            runtime_deps,
+        );
+
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/sorafs/storage/pin")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"manifest_b64":"AA==","payload_b64":"AA=="}"#,
+            ))
+            .expect("retired-route probe");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+
+        let response = torii
+            .api_router_for_tests()
+            .oneshot(request)
+            .await
+            .expect("retired-route response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            storage.manifest_count(),
+            0,
+            "an HTTP request must not mutate provider-local storage"
+        );
+        assert_eq!(
+            state.view().world().pin_manifests().len(),
+            0,
+            "an HTTP request must not create pre-commit pin-registry state"
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
     async fn contracts_aliases_route_is_mounted_in_api_router() {
         use axum::{
             body::Body,
@@ -83390,7 +83795,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn retired_por_mutation_routes_are_absent() {
+    async fn retired_sorafs_mutation_routes_are_absent() {
         use axum::{
             body::Body,
             extract::ConnectInfo,
@@ -83434,6 +83839,11 @@ pub(crate) mod tests_runtime_handlers {
         let router = torii.api_router_for_tests();
 
         for path in [
+            "/v1/sorafs/capacity/dispute",
+            "/v1/sorafs/capacity/schedule",
+            "/v1/sorafs/capacity/complete",
+            "/v1/sorafs/capacity/uptime",
+            "/v1/sorafs/capacity/failure",
             "/v1/sorafs/por/trigger",
             "/v1/sorafs/capacity/por-challenge",
             "/v1/sorafs/capacity/por",
@@ -84040,6 +84450,28 @@ impl Error {
                 iroha_logger::error!(?err, "Failed to process configuration request");
                 ErrorEnvelope::new("config_error", "configuration request failed")
             }
+            #[cfg(feature = "app_api")]
+            Self::SorafsModerationStartup { code } => {
+                iroha_logger::error!(
+                    error_class = code,
+                    "SoraFS moderation runtime failed to start"
+                );
+                ErrorEnvelope::new(
+                    "sorafs_moderation_startup_error",
+                    "SoraFS moderation runtime failed to start",
+                )
+            }
+            #[cfg(feature = "app_api")]
+            Self::SorafsEvidenceViewerStartup { code } => {
+                iroha_logger::error!(
+                    error_class = code,
+                    "SoraFS evidence-viewer runtime failed to start"
+                );
+                ErrorEnvelope::new(
+                    "sorafs_evidence_viewer_startup_error",
+                    "SoraFS evidence-viewer runtime failed to start",
+                )
+            }
             Self::SerializationFailure { context, source } => {
                 iroha_logger::error!(
                     %context,
@@ -84143,6 +84575,10 @@ impl Error {
             AppNotFound { .. } => StatusCode::NOT_FOUND,
             AppConflict { .. } => StatusCode::CONFLICT,
             AppServiceUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            #[cfg(feature = "app_api")]
+            SorafsModerationStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            #[cfg(feature = "app_api")]
+            SorafsEvidenceViewerStartup { .. } => StatusCode::SERVICE_UNAVAILABLE,
             LaneLifecycle { .. } => StatusCode::BAD_REQUEST,
             Config(_) | StatusSegmentNotFound(_) => StatusCode::NOT_FOUND,
             SerializationFailure { .. } => StatusCode::INTERNAL_SERVER_ERROR,
@@ -84581,48 +85017,6 @@ mod tests {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("failing zk job-id RNG")
         }
-    }
-
-    #[test]
-    fn deal_provider_identity_binding_rejects_key_and_algorithm_substitution() {
-        let admitted = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
-            0xA4,
-            "derive admitted deal provider fixture key",
-        );
-        let substituted = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
-            0xA5,
-            "derive substituted deal provider fixture key",
-        );
-        let (_, admitted_bytes) = admitted
-            .public_key()
-            .try_to_bytes()
-            .expect("encode admitted provider key");
-
-        validate_deal_provider_signer(admitted.public_key(), admitted_bytes)
-            .expect("exact admitted Ed25519 provider key accepted");
-        let mismatch = validate_deal_provider_signer(substituted.public_key(), admitted_bytes)
-            .expect_err("substituted provider key rejected");
-        assert!(matches!(
-            mismatch,
-            Error::AppForbidden {
-                code: "sorafs_deal_provider_key_mismatch",
-                ..
-            }
-        ));
-
-        let wrong_algorithm =
-            KeyPair::try_from_seed(vec![0xA6; 32], iroha_crypto::Algorithm::Secp256k1)
-                .expect("derive wrong-algorithm provider fixture key");
-        let algorithm_error =
-            validate_deal_provider_signer(wrong_algorithm.public_key(), admitted_bytes)
-                .expect_err("non-Ed25519 provider key rejected");
-        assert!(matches!(
-            algorithm_error,
-            Error::AppForbidden {
-                code: "sorafs_deal_provider_signature_algorithm",
-                ..
-            }
-        ));
     }
 
     impl rand::rand_core::TryRngCore for FailingZkJobIdRng {

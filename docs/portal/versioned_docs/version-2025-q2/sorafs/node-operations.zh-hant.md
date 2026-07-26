@@ -81,7 +81,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. 使用base64編碼提交清單：
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -141,7 +141,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   ```其中涵蓋 `pin_fetch_roundtrip`、`pin_survives_restart`、`pin_quota_rejection` 和 `por_sampling_returns_verified_proofs`。
 - 儀表板應跟踪：
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` 和 `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` 和 `torii_sorafs_storage_fetch_inflight`
   - PoR 成功/失敗計數器通過 `/v1/sorafs/capacity/state` 出現
   - 通過 `sorafs_node_deal_publish_total{result=success|failure}` 發布和解嘗試
 

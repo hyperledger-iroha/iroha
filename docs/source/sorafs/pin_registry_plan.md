@@ -54,15 +54,16 @@ Status:
 | Task | Owner(s) | Notes |
 |------|----------|-------|
 | Registry storage and smart-contract state. | Core Infra / Smart Contract Team | Implemented in Iroha world state (`pin_manifests`, `manifest_aliases`, `replication_orders`) with deterministic Norito payload hashing and integer-only policy arithmetic. |
-| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. Core execution also validates aliases, council envelopes, governance permissions, canonical replication payloads, completion, and deadline-bound expiration; there is no separate local `bind_alias` backlog. |
-| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage; alias uniqueness/retention and replication issue/complete bookkeeping are covered by unit tests. |
+| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. A completion names one assigned provider and must be signed by that provider's current registered owner; relayers are not trusted completion authorities. Exact provider replay is idempotent, and the order becomes terminal only after its canonical redundancy target is reached. Core execution also validates aliases, council envelopes, governance permissions, canonical replication payloads, and deadline-bound expiration; there is no separate local `bind_alias` backlog. |
+| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage. Replication records retain the ordered provider-scoped completion evidence; partial completion stays pending, late completion is rejected, and only an incomplete order may expire after its inclusive deadline. |
 | Governed parameters: load `ManifestPolicyV1` from config/governance state. | Governance Council | Runtime config maps pin-policy constraints into the shared validator. Live policy-change ceremonies are rollout governance evidence, not missing local contract code. |
 | Registry telemetry and audit surface. | Observability | Torii exports registry metrics and attested REST snapshots. Additional signed event archives can be layered over those snapshots if governance requires them. |
 
 Coverage:
 - Unit tests cover registration, approval, retirement, alias binding, replication
-  order issue/complete, permissions, duplicate rejection, and side-effect-free
-  failure paths.
+  order issue, provider-owner completion, partial and target completion,
+  conflicting/surplus replay, owner rotation, deadline expiration, permissions,
+  duplicate rejection, and side-effect-free failure paths.
 - Successor tests cover self references, unknown/pending/retired predecessors,
   cycle closure, and malformed existing predecessor cycles.
 - `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin

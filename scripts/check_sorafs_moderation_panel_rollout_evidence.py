@@ -674,6 +674,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_context_reviewed",
     "case_digest_hex",
     "roster_hash_hex",
+    "catalog_digest_hex",
     "tally_digest_hex",
     "policy_digest_hex",
     "session_manifest_digest_hex",
@@ -703,6 +704,7 @@ E2E_RUN_DETAIL_FIELDS: tuple[str, ...] = (
 EVIDENCE_VIEWER_DIGEST_SET_FIELDS: tuple[str, ...] = (
     "case_digest_hex",
     "roster_hash_hex",
+    "catalog_digest_hex",
     "session_manifest_digest_hex",
     "watermark_metadata_digest_hex",
     "access_log_digest_hex",
@@ -710,6 +712,26 @@ EVIDENCE_VIEWER_DIGEST_SET_FIELDS: tuple[str, ...] = (
     "transparency_report_digest_hex",
     "audit_digest_hex",
 )
+
+
+def evidence_fingerprint_source(
+    kind_name: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Flatten validated nested fields into a payload-free fingerprint source."""
+
+    if kind_name != "evidence_viewer":
+        return payload
+    claim = payload.get("gateway_compliance_denial_enforced")
+    if not isinstance(claim, dict):
+        return payload
+    catalog_digest = claim.get("catalog_digest_hex")
+    if not isinstance(catalog_digest, str) or re.fullmatch(
+        rf"[0-9a-f]{{{HEX64_LEN}}}",
+        catalog_digest,
+    ) is None:
+        return payload
+    return payload | {"catalog_digest_hex": catalog_digest}
 
 
 def require_exact_fields(
@@ -1681,7 +1703,7 @@ def build_summary(
         artifact = build_evidence_artifact(
             archive_artifact_path_label(path, evidence_dirs),
             digest,
-            payload,
+            evidence_fingerprint_source(kind_name, payload),
             validation_errors,
             FINGERPRINT_FIELDS,
         )

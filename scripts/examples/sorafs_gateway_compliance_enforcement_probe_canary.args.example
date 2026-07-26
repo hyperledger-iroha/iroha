@@ -1,5 +1,9 @@
-# Canonicalize real HTTP 451 gateway-compliance probes. No claim is synthesized.
+# Exercise HTTP 451 canonicalization with an explicit non-production fixture.
 --kind enforcement_probe
---probe-artifact /runtime/sorafs/gateway-compliance/probes/enforcement.json
+--probe-artifact scripts/examples/fixtures/gateway_compliance/enforcement_probe.json
 --out artifacts/sorafs_gateway/enforcement-probe-canary.json
---now-unix 1800100000
+--deployment-id sorafs-gateway-release-42
+--environment production
+--generated-at-unix 1800699940
+--now-unix 1800700000
+--non-production-fixture

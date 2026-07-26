@@ -267,6 +267,12 @@ isi! {
         pub escrow_id: crate::escrow::EscrowId,
         /// Amount to release to the lock destination.
         pub amount: iroha_primitives::numeric::Quantity,
+        /// Exact authoritative remaining amount observed before this drawdown.
+        ///
+        /// The ledger rejects the instruction if another transaction changed
+        /// the lock first. This optimistic precondition makes independently
+        /// submitted retries economically exactly-once.
+        pub expected_remaining_amount: iroha_primitives::numeric::Quantity,
     }
 }
 
@@ -276,10 +282,12 @@ impl DrawdownAssetLock {
     pub fn new(
         escrow_id: crate::escrow::EscrowId,
         amount: impl Into<iroha_primitives::numeric::Quantity>,
+        expected_remaining_amount: impl Into<iroha_primitives::numeric::Quantity>,
     ) -> Self {
         Self {
             escrow_id,
             amount: amount.into(),
+            expected_remaining_amount: expected_remaining_amount.into(),
         }
     }
 }
@@ -289,14 +297,26 @@ isi! {
     pub struct CancelAssetLock {
         /// Lock to cancel.
         pub escrow_id: crate::escrow::EscrowId,
+        /// Exact authoritative remaining amount observed before cancellation.
+        ///
+        /// The ledger rejects the instruction if another transaction changed
+        /// the lock first, preventing a stale cancellation from refunding a
+        /// different amount than the signer authorized.
+        pub expected_remaining_amount: iroha_primitives::numeric::Quantity,
     }
 }
 
 impl CancelAssetLock {
-    /// Construct a generic asset lock cancellation instruction.
+    /// Construct a generic asset lock cancellation with an exact remaining-amount precondition.
     #[must_use]
-    pub const fn new(escrow_id: crate::escrow::EscrowId) -> Self {
-        Self { escrow_id }
+    pub fn new(
+        escrow_id: crate::escrow::EscrowId,
+        expected_remaining_amount: impl Into<iroha_primitives::numeric::Quantity>,
+    ) -> Self {
+        Self {
+            escrow_id,
+            expected_remaining_amount: expected_remaining_amount.into(),
+        }
     }
 }
 
@@ -696,10 +716,12 @@ impl_escrow_decode_from_slice!(OpenAssetLock {
 impl_escrow_decode_from_slice!(DrawdownAssetLock {
     escrow_id: crate::escrow::EscrowId,
     amount: iroha_primitives::numeric::Quantity,
+    expected_remaining_amount: iroha_primitives::numeric::Quantity,
 });
 
 impl_escrow_decode_from_slice!(CancelAssetLock {
     escrow_id: crate::escrow::EscrowId,
+    expected_remaining_amount: iroha_primitives::numeric::Quantity,
 });
 
 impl_escrow_decode_from_slice!(ExpireAssetLock {
@@ -924,10 +946,13 @@ mod tests {
         assert_eq!(lock_with_options.expires_at_ms, Some(12_345));
         assert_eq!(lock_with_options.evidence_hashes, evidence.clone());
         assert_eq!(
-            DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64)).amount,
+            DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64), Quantity::from(20_u64),)
+                .amount,
             Quantity::from(5_u64)
         );
-        assert_eq!(CancelAssetLock::new(escrow_id).escrow_id, escrow_id);
+        let cancel = CancelAssetLock::new(escrow_id, Quantity::from(20_u64));
+        assert_eq!(cancel.escrow_id, escrow_id);
+        assert_eq!(cancel.expected_remaining_amount, Quantity::from(20_u64));
         assert_eq!(ExpireAssetLock::new(escrow_id).escrow_id, escrow_id);
 
         let proof = proof_attachment();
@@ -1043,8 +1068,12 @@ mod tests {
             Some(12_345),
             evidence.clone(),
         ));
-        assert_slice_roundtrip(DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64)));
-        assert_slice_roundtrip(CancelAssetLock::new(escrow_id));
+        assert_slice_roundtrip(DrawdownAssetLock::new(
+            escrow_id,
+            Quantity::from(5_u64),
+            Quantity::from(20_u64),
+        ));
+        assert_slice_roundtrip(CancelAssetLock::new(escrow_id, Quantity::from(20_u64)));
         assert_slice_roundtrip(ExpireAssetLock::new(escrow_id));
         assert_slice_roundtrip(OpenAnonymousAssetEscrow::with_evidence_hashes(
             escrow_id,
@@ -1084,6 +1113,76 @@ mod tests {
             Some([0x77; 32]),
             evidence,
         ));
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn cancel_asset_lock_v1_fixtures_enforce_the_two_field_hard_cut() {
+        let fixture_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/sorafs_manifest/appeal_finance");
+        let read = |relative: &str| {
+            std::fs::read(fixture_root.join(relative)).unwrap_or_else(|error| {
+                panic!("read CancelAssetLock fixture `{relative}`: {error}")
+            })
+        };
+
+        let canonical_json = read("cancel_asset_lock_v1.json");
+        let canonical_from_json: CancelAssetLock = norito::json::from_slice(&canonical_json)
+            .expect("canonical CancelAssetLock JSON must decode");
+        assert_eq!(
+            canonical_from_json.expected_remaining_amount,
+            Quantity::from(20_u64)
+        );
+        assert_eq!(
+            format!(
+                "{}\n",
+                norito::json::to_json_pretty(&canonical_from_json)
+                    .expect("serialize canonical CancelAssetLock JSON")
+            )
+            .as_bytes(),
+            canonical_json
+        );
+
+        let canonical_norito = read("cancel_asset_lock_v1.to");
+        let canonical_from_norito: CancelAssetLock = norito::decode_from_bytes(&canonical_norito)
+            .expect("canonical CancelAssetLock Norito must decode");
+        assert_eq!(canonical_from_norito, canonical_from_json);
+        assert_eq!(
+            norito::to_bytes(&canonical_from_norito)
+                .expect("serialize canonical CancelAssetLock Norito"),
+            canonical_norito
+        );
+
+        for path in [
+            "negative/cancel_asset_lock_legacy_missing_expected_v1.json",
+            "negative/cancel_asset_lock_noncanonical_quantity_v1.json",
+        ] {
+            assert!(
+                norito::json::from_slice::<CancelAssetLock>(&read(path)).is_err(),
+                "noncanonical CancelAssetLock JSON fixture `{path}` must be rejected"
+            );
+        }
+        for path in [
+            "negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+            "negative/cancel_asset_lock_trailing_bytes_v1.to",
+        ] {
+            assert!(
+                norito::decode_from_bytes::<CancelAssetLock>(&read(path)).is_err(),
+                "noncanonical CancelAssetLock Norito fixture `{path}` must be rejected"
+            );
+        }
+
+        let zero_json: CancelAssetLock =
+            norito::json::from_slice(&read("negative/cancel_asset_lock_zero_expected_v1.json"))
+                .expect("zero expected amount remains structurally valid JSON");
+        let zero_norito: CancelAssetLock =
+            norito::decode_from_bytes(&read("negative/cancel_asset_lock_zero_expected_v1.to"))
+                .expect("zero expected amount remains structurally valid Norito");
+        assert_eq!(zero_json, zero_norito);
+        assert!(
+            zero_norito.expected_remaining_amount.is_zero(),
+            "the native execution boundary, not the codec, rejects zero"
+        );
     }
 
     #[test]
@@ -1152,9 +1251,12 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64)),
+            DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64), Quantity::from(20_u64)),
         );
-        assert_registry_decodes(&registry, CancelAssetLock::new(escrow_id));
+        assert_registry_decodes(
+            &registry,
+            CancelAssetLock::new(escrow_id, Quantity::from(20_u64)),
+        );
         assert_registry_decodes(&registry, ExpireAssetLock::new(escrow_id));
         assert_registry_decodes(
             &registry,

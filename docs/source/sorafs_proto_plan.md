@@ -116,7 +116,7 @@ Committed fixtures live under:
 - `fixtures/sorafs_manifest/governance/`
 - `fixtures/sorafs_manifest/ci_sample/`
 
-Use the active generators and stubs:
+Use the active fixture generators:
 
 ```sh
 cargo run --locked -p sorafs_car --features manifest --bin provider_admission_fixtures

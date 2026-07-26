@@ -61,10 +61,8 @@ the table without a governance override published in `iroha_config`.
 
 ## Configuration
 
-The defaults above ship via the configuration stack as
-`[sorafs.alias_cache]` in `iroha_config` (user view) and
-`torii.sorafs_alias_cache` in the runtime snapshot. Both surfaces expose the
-same fields and propagate directly into `AliasCachePolicy` and
+The defaults above ship through the sole operator-facing configuration surface,
+`[sorafs.alias_cache]`. The parsed policy propagates directly into `AliasCachePolicy` and
 `AliasCacheEnforcement` so gateways and SDKs honour identical guardrails.
 
 | Key | Default | Notes |

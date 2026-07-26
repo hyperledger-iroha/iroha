@@ -17,12 +17,35 @@ fi
 do_check() {
     local cmd="$1"
     local target="$2"
+    local output_dir
+    local output_name
+    local staged_output
+
+    output_dir="$(dirname "$target")"
+    output_name="$(basename "$target")"
+    staged_output="$(mktemp "${output_dir}/.${output_name}.XXXXXX")"
+
+    if ! eval "$cmd" > "$staged_output"; then
+        echo "[FAIL] generator command failed"
+        echo "  $cmd"
+        rm -f -- "$staged_output"
+        exit_code=1
+        return
+    fi
+    if [[ ! -s "$staged_output" ]]; then
+        echo "[FAIL] generator produced empty output"
+        echo "  $cmd"
+        rm -f -- "$staged_output"
+        exit_code=1
+        return
+    fi
 
     if [[ "$update" -eq 1 ]]; then
-        eval "$cmd" > "$target"
+        chmod 0644 "$staged_output"
+        mv -f -- "$staged_output" "$target"
         echo "[UPDATED] $target"
     else
-        if ! diff <(eval "$cmd") "$target" > /dev/null; then
+        if ! diff "$staged_output" "$target" > /dev/null; then
             echo "[DIFF] $target is out of date"
             echo "Run with \"--update\" to regenerate automatically, or run manually:"
             echo "  $cmd > $target"
@@ -30,6 +53,7 @@ do_check() {
         else
             echo "[OK] $target is up to date"
         fi
+        rm -f -- "$staged_output"
     fi
 }
 
@@ -54,7 +78,7 @@ do_check_swarm() {
 }
 
 cmd_genesis="${bin_kagami[@]} genesis generate --ivm-dir . --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
-cmd_schema="${bin_kagami[@]} schema"
+cmd_schema="${bin_kagami[@]} advanced schema"
 cmd_iroha_help="${bin_iroha[@]} tools markdown-help"
 cmd_kagami_help="${bin_kagami[@]} advanced markdown-help"
 

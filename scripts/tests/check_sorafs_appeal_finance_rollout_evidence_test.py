@@ -168,7 +168,7 @@ def settlement_execution() -> dict:
             "escalated",
         ],
         "reconciliation_statuses": [
-            "pending_client_submission",
+            "pending_forwarder_submission",
             "awaiting_refund_cancel",
             "settled",
             "mismatch",

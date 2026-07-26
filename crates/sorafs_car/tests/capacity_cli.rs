@@ -125,143 +125,32 @@ fn capacity_declaration_cli_produces_canonical_outputs() {
 }
 
 #[test]
-fn capacity_declaration_cli_writes_request_payload() {
+fn capacity_declaration_cli_rejects_retired_request_and_key_options() {
     let temp = tempdir().expect("tempdir");
-    let spec_path = temp.path().join("declaration_spec.json");
-    fs::write(&spec_path, SPEC_JSON.trim_start().as_bytes()).expect("write spec");
+    let spec_path = write_spec(&temp, "declaration_spec.json", SPEC_JSON);
 
-    let request_out = temp.path().join("declaration_request.json");
-    let authority_str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-    let private_key_str = "ed25519:deadbeefcafebabe";
-
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
-    cmd.arg("capacity")
-        .arg("declaration")
-        .arg(format!("--spec={}", spec_path.display()))
-        .arg(format!("--request-out={}", request_out.display()))
-        .arg(format!("--authority={authority_str}"))
-        .arg(format!("--private-key={private_key_str}"))
-        .arg("--quiet");
-    cmd.assert().success();
-
-    let request_bytes = fs::read(&request_out).expect("read request");
-    let request_value: Value = json::from_slice(&request_bytes).expect("parse request json");
-    let request_obj = request_value.as_object().expect("request must be object");
-    assert_eq!(
-        request_obj.get("authority").and_then(Value::as_str),
-        Some(authority_str)
-    );
-    assert_eq!(
-        request_obj.get("private_key").and_then(Value::as_str),
-        Some(private_key_str)
-    );
-    let declaration_b64 = request_obj
-        .get("declaration_b64")
-        .and_then(Value::as_str)
-        .expect("declaration_b64 present");
-    assert!(!declaration_b64.is_empty());
-    assert_eq!(
-        request_obj.get("registered_epoch").and_then(Value::as_u64),
-        Some(1700000000)
-    );
-    let metadata = request_obj
-        .get("metadata")
-        .and_then(Value::as_array)
-        .expect("metadata array");
-    assert_eq!(metadata.len(), 1);
-    let entry = metadata[0].as_object().expect("metadata entry object");
-    assert_eq!(entry.get("key").and_then(Value::as_str), Some("region"));
-    assert_eq!(entry.get("value").and_then(Value::as_str), Some("global"));
-}
-
-#[test]
-fn capacity_declaration_cli_reads_private_key_from_file() {
-    let temp = tempdir().expect("tempdir");
-    let spec_path = temp.path().join("declaration_spec.json");
-    fs::write(&spec_path, SPEC_JSON.trim_start().as_bytes()).expect("write spec");
-
-    let request_out = temp.path().join("declaration_request.json");
-    let private_key_path = temp.path().join("capacity-private-key.txt");
-    let authority_str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-    let private_key_str = "ed25519:filedeadbeefcafebabe";
-    fs::write(&private_key_path, format!("  {private_key_str}\n")).expect("write key");
-
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
-    cmd.arg("capacity")
-        .arg("declaration")
-        .arg(format!("--spec={}", spec_path.display()))
-        .arg(format!("--request-out={}", request_out.display()))
-        .arg(format!("--authority={authority_str}"))
-        .arg(format!("--private-key-file={}", private_key_path.display()))
-        .arg("--quiet");
-    cmd.assert().success();
-
-    let request_bytes = fs::read(&request_out).expect("read request");
-    let request_value: Value = json::from_slice(&request_bytes).expect("parse request json");
-    let request_obj = request_value.as_object().expect("request must be object");
-    assert_eq!(
-        request_obj.get("private_key").and_then(Value::as_str),
-        Some(private_key_str)
-    );
-}
-
-#[test]
-fn capacity_declaration_cli_rejects_ambiguous_private_key_sources() {
-    let temp = tempdir().expect("tempdir");
-    let spec_path = temp.path().join("declaration_spec.json");
-    fs::write(&spec_path, SPEC_JSON.trim_start().as_bytes()).expect("write spec");
-
-    let request_out = temp.path().join("declaration_request.json");
-    let private_key_path = temp.path().join("capacity-private-key.txt");
-    fs::write(&private_key_path, "ed25519:filekey").expect("write key");
-
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
-    let output = cmd
-        .arg("capacity")
-        .arg("declaration")
-        .arg(format!("--spec={}", spec_path.display()))
-        .arg(format!("--request-out={}", request_out.display()))
-        .arg("--authority=authority@capacity")
-        .arg("--private-key=ed25519:argvkey")
-        .arg(format!("--private-key-file={}", private_key_path.display()))
-        .arg("--quiet")
-        .output()
-        .expect("run command");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--private-key and --private-key-file are mutually exclusive"),
-        "unexpected stderr: {stderr}"
-    );
-}
-
-#[test]
-fn capacity_declaration_cli_rejects_empty_private_key_file() {
-    let temp = tempdir().expect("tempdir");
-    let spec_path = temp.path().join("declaration_spec.json");
-    fs::write(&spec_path, SPEC_JSON.trim_start().as_bytes()).expect("write spec");
-
-    let request_out = temp.path().join("declaration_request.json");
-    let private_key_path = temp.path().join("capacity-private-key.txt");
-    fs::write(&private_key_path, "\n\t ").expect("write empty key");
-
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
-    let output = cmd
-        .arg("capacity")
-        .arg("declaration")
-        .arg(format!("--spec={}", spec_path.display()))
-        .arg(format!("--request-out={}", request_out.display()))
-        .arg("--authority=authority@capacity")
-        .arg(format!("--private-key-file={}", private_key_path.display()))
-        .arg("--quiet")
-        .output()
-        .expect("run command");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("must not be empty"),
-        "unexpected stderr: {stderr}"
-    );
+    for option in [
+        "--request-out=request.json",
+        "--authority=authority@capacity",
+        "--private-key=ed25519:retired",
+        "--private-key-file=retired.key",
+    ] {
+        let output = run_capacity_command([
+            "declaration".to_owned(),
+            format!("--spec={}", spec_path.display()),
+            option.to_owned(),
+            "--quiet".to_owned(),
+        ]);
+        assert!(
+            !output.status.success(),
+            "retired option {option} unexpectedly succeeded"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unknown capacity option"),
+            "unexpected stderr for {option}: {stderr}"
+        );
+    }
 }
 
 #[test]
@@ -472,82 +361,6 @@ fn capacity_telemetry_cli_produces_canonical_outputs() {
 }
 
 #[test]
-fn capacity_telemetry_cli_writes_request_payload() {
-    let temp = tempdir().expect("tempdir");
-    let spec_path = temp.path().join("telemetry_spec.json");
-    fs::write(&spec_path, TELEMETRY_JSON.trim_start().as_bytes()).expect("write spec");
-
-    let request_out = temp.path().join("telemetry_request.json");
-    let authority_str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
-    let private_key_str = "ed25519:bobcafedeadfeed";
-
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
-    cmd.arg("capacity")
-        .arg("telemetry")
-        .arg(format!("--spec={}", spec_path.display()))
-        .arg(format!("--request-out={}", request_out.display()))
-        .arg(format!("--authority={authority_str}"))
-        .arg(format!("--private-key={private_key_str}"))
-        .arg("--quiet");
-    cmd.assert().success();
-
-    let request_bytes = fs::read(&request_out).expect("read request");
-    let request_value: Value = json::from_slice(&request_bytes).expect("parse request json");
-    let request_obj = request_value.as_object().expect("request must be object");
-
-    assert_eq!(
-        request_obj.get("authority").and_then(Value::as_str),
-        Some(authority_str)
-    );
-    assert_eq!(
-        request_obj.get("private_key").and_then(Value::as_str),
-        Some(private_key_str)
-    );
-    assert_eq!(
-        request_obj.get("provider_id_hex").and_then(Value::as_str),
-        Some("3333333333333333333333333333333333333333333333333333333333333333")
-    );
-    assert_eq!(
-        request_obj
-            .get("window_start_epoch")
-            .and_then(Value::as_u64),
-        Some(1_700_000_000)
-    );
-    assert_eq!(
-        request_obj.get("window_end_epoch").and_then(Value::as_u64),
-        Some(1_700_000_360)
-    );
-    assert_eq!(
-        request_obj.get("declared_gib").and_then(Value::as_u64),
-        Some(400)
-    );
-    assert_eq!(
-        request_obj.get("effective_gib").and_then(Value::as_u64),
-        Some(380)
-    );
-    assert_eq!(
-        request_obj.get("utilised_gib").and_then(Value::as_u64),
-        Some(360)
-    );
-    assert_eq!(
-        request_obj.get("orders_issued").and_then(Value::as_u64),
-        Some(11)
-    );
-    assert_eq!(
-        request_obj.get("orders_completed").and_then(Value::as_u64),
-        Some(10)
-    );
-    assert_eq!(
-        request_obj.get("uptime_bps").and_then(Value::as_u64),
-        Some(9_950)
-    );
-    assert_eq!(
-        request_obj.get("por_success_bps").and_then(Value::as_u64),
-        Some(9_900)
-    );
-}
-
-#[test]
 fn capacity_replication_order_cli_produces_canonical_outputs() {
     let temp = tempdir().expect("tempdir");
     let spec_path = temp.path().join("replication_spec.json");
@@ -612,82 +425,29 @@ fn capacity_replication_order_cli_produces_canonical_outputs() {
 }
 
 #[test]
-fn capacity_replication_order_cli_writes_request_payload() {
+fn capacity_cli_rejects_retired_request_output_and_complete_subcommand() {
     let temp = tempdir().expect("tempdir");
-    let spec_path = temp.path().join("replication_spec.json");
-    fs::write(&spec_path, REPLICATION_JSON.trim_start().as_bytes()).expect("write spec");
-
-    let request_out = temp.path().join("replication_request.json");
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
-    cmd.arg("capacity")
-        .arg("replication-order")
-        .arg(format!("--spec={}", spec_path.display()))
-        .arg(format!("--request-out={}", request_out.display()))
-        .arg("--quiet");
-    cmd.assert().success();
-
-    let request_bytes = fs::read(&request_out).expect("read request");
-    let request_value: Value = json::from_slice(&request_bytes).expect("parse request json");
-    let request_obj = request_value.as_object().expect("request object");
-    let order_b64 = request_obj
-        .get("order_b64")
-        .and_then(Value::as_str)
-        .expect("order_b64 present");
-    assert!(!order_b64.is_empty());
-}
-
-#[test]
-fn capacity_complete_cli_writes_request_payload() {
-    let temp = tempdir().expect("tempdir");
-    let request_out = temp.path().join("complete_request.json");
-
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
-    cmd.arg("capacity")
-        .arg("complete")
-        .arg("--order-id=4444444444444444444444444444444444444444444444444444444444444444")
-        .arg(format!("--request-out={}", request_out.display()))
-        .arg("--quiet");
-    cmd.assert().success();
-
-    let request_bytes = fs::read(&request_out).expect("read request");
-    let request_value: Value = json::from_slice(&request_bytes).expect("parse request json");
-    let request_obj = request_value.as_object().expect("request object");
-    assert_eq!(
-        request_obj.get("order_id_hex").and_then(Value::as_str),
-        Some("4444444444444444444444444444444444444444444444444444444444444444")
+    let spec_path = write_spec(&temp, "replication_spec.json", REPLICATION_JSON);
+    let output = run_capacity_command([
+        "replication-order".to_owned(),
+        format!("--spec={}", spec_path.display()),
+        "--request-out=request.json".to_owned(),
+        "--quiet".to_owned(),
+    ]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unknown capacity option"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-}
 
-#[test]
-fn capacity_complete_cli_rejects_noncanonical_order_id() {
-    for (value, expected) in [
-        (
-            "0x4444444444444444444444444444444444444444444444444444444444444444",
-            "prefix",
-        ),
-        (
-            "444444444444444444444444444444444444444444444444444444444444444A",
-            "lowercase hex",
-        ),
-        (
-            "4444444444444444444444444444444444444444444444444444444444444444 ",
-            "whitespace",
-        ),
-        (
-            "0000000000000000000000000000000000000000000000000000000000000000",
-            "all zero",
-        ),
-    ] {
-        let temp = tempdir().expect("tempdir");
-        let request_out = temp.path().join("complete_request.json");
-        let output = run_capacity_command([
-            "complete".to_owned(),
-            format!("--order-id={value}"),
-            format!("--request-out={}", request_out.display()),
-            "--quiet".to_owned(),
-        ]);
-        assert_capacity_failure(output, expected, &request_out);
-    }
+    let output = run_capacity_command(["complete".to_owned()]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unknown capacity subcommand `complete`"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -763,58 +523,6 @@ fn capacity_dispute_cli_produces_canonical_outputs() {
             .unwrap(),
         base64_trimmed
     );
-}
-
-#[test]
-fn capacity_dispute_cli_writes_request_payload() {
-    let temp = tempdir().expect("tempdir");
-    let spec_path = temp.path().join("dispute_spec.json");
-    fs::write(&spec_path, DISPUTE_JSON.trim_start().as_bytes()).expect("write spec");
-
-    let request_out = temp.path().join("dispute_request.json");
-    let authority_str = "council@governance";
-    let private_key_str = "ed25519:cafefeed0001";
-
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
-    cmd.arg("capacity")
-        .arg("dispute")
-        .arg(format!("--spec={}", spec_path.display()))
-        .arg(format!("--request-out={}", request_out.display()))
-        .arg(format!("--authority={authority_str}"))
-        .arg(format!("--private-key={private_key_str}"))
-        .arg("--quiet");
-    cmd.assert().success();
-
-    let request_bytes = fs::read(&request_out).expect("read request");
-    let request_value: Value = json::from_slice(&request_bytes).expect("parse request json");
-    let request_obj = request_value.as_object().expect("request must be object");
-    assert_eq!(
-        request_obj.get("authority").and_then(Value::as_str),
-        Some(authority_str)
-    );
-    assert_eq!(
-        request_obj.get("private_key").and_then(Value::as_str),
-        Some(private_key_str)
-    );
-    assert_eq!(
-        request_obj.get("provider_id_hex").and_then(Value::as_str),
-        Some("2222222222222222222222222222222222222222222222222222222222222222")
-    );
-    assert_eq!(
-        request_obj
-            .get("complainant_id_hex")
-            .and_then(Value::as_str),
-        Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
-    );
-    assert_eq!(
-        request_obj.get("kind").and_then(Value::as_str),
-        Some("replication_shortfall")
-    );
-    let dispute_b64 = request_obj
-        .get("dispute_b64")
-        .and_then(Value::as_str)
-        .expect("dispute_b64 present");
-    assert!(!dispute_b64.is_empty());
 }
 
 const TELEMETRY_JSON: &str = r#"

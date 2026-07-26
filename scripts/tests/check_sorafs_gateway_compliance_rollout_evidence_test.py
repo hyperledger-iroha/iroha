@@ -122,6 +122,7 @@ def controller_runtime() -> dict:
     payload.update(
         {
             "predecessor_catalog_digest_hex": PREDECESSOR_DIGEST,
+            "predecessor_catalog_sequence": 7,
             "controller_instance_id": "gateway-compliance-controller-primary",
             "iroha_config_bound": True,
             "config_source": "iroha_config",
@@ -152,6 +153,7 @@ def moderation_toggle() -> dict:
     payload.update(
         {
             "control_api_url": "https://gateway-control.invalid/v1/sorafs/gateway/compliance",
+            "control_api_status_code": 200,
             "control_count": len(controls),
             "approved_control_count": len(controls),
             "controls": controls,
@@ -173,6 +175,7 @@ def gateway_reload() -> dict:
     payload.update(
         {
             "predecessor_catalog_digest_hex": PREDECESSOR_DIGEST,
+            "predecessor_catalog_sequence": 7,
             "reload_ack_count": 2,
             "gateway_acknowledgements": acknowledgements(),
             "max_reload_latency_ms": 1_000,
@@ -208,8 +211,6 @@ def enforcement_probe() -> dict:
     ]
     payload.update(
         {
-            "denial_sources_observed": ["baseline", "legal_safety_hold"],
-            "denial_source_count": 2,
             "fail_closed_missing_catalog": True,
             "fail_closed_expired_catalog": True,
             "rate_limit_enforced": True,
@@ -235,8 +236,6 @@ def honey_audit() -> dict:
         {
             "probe_count": len(probes),
             "probes": probes,
-            "attack_count": len(MODULE.REQUIRED_HONEY_ATTACKS),
-            "attacks_observed": list(MODULE.REQUIRED_HONEY_ATTACKS),
         }
     )
     return payload
@@ -326,6 +325,17 @@ BUILDERS = {
 }
 
 
+def test_exported_inventory_constants_are_explicit_and_closed() -> None:
+    assert MODULE.REQUIRED_DENIAL_SOURCES == ("baseline", "legal_safety_hold")
+    assert MODULE.REQUIRED_ENFORCEMENT_ROUTES == ("manifest", "cid", "provider")
+    assert set(MODULE.CATALOG_BOUND_KINDS) <= set(BUILDERS)
+    assert MODULE.PREDECESSOR_BOUND_KINDS == (
+        "controller_runtime",
+        "gateway_reload",
+    )
+    assert set(MODULE.POLICY_BOUND_KINDS) <= set(BUILDERS)
+
+
 def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
@@ -374,14 +384,61 @@ def artifact_errors(summary: dict, kind: str) -> list[str]:
     return summary["required"][kind]["artifacts"][0]["errors"]
 
 
+def test_moderation_control_api_status_must_be_successful(tmp_path: Path) -> None:
+    payload = moderation_toggle()
+    payload["control_api_status_code"] = 500
+    code, summary = run_one(tmp_path, "moderation_toggle", payload)
+    assert code == 1
+    assert "control_api_status_code must be a 2xx status" in artifact_errors(
+        summary, "moderation_toggle"
+    )
+
+
+def test_observability_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    payload = observability()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    code, summary = run_one(tmp_path, "observability", payload)
+    assert code == 1
+    assert "metric_count must match unique metrics count" in artifact_errors(
+        summary, "observability"
+    )
+
+
 def test_complete_canonical_evidence_is_ready(tmp_path: Path) -> None:
     write_all(tmp_path)
     code, summary = run_gate(tmp_path)
     assert code == 0
     assert summary["status"] == "ready"
     assert summary["valid_catalog_digests"] == [CATALOG_DIGEST]
+    assert summary["valid_catalog_history_bindings"] == [
+        {
+            "catalog_digest_hex": CATALOG_DIGEST,
+            "catalog_sequence": 8,
+            "predecessor_catalog_digest_hex": PREDECESSOR_DIGEST,
+            "predecessor_catalog_sequence": 7,
+        }
+    ]
     assert "valid_bundle_digests" not in summary
     assert summary["recognized_artifact_count"] == len(BUILDERS)
+
+
+def test_catalog_history_fields_are_fingerprinted_atomically(tmp_path: Path) -> None:
+    write_all(tmp_path)
+    code, summary = run_gate(tmp_path)
+    assert code == 0
+    expected = {
+        "catalog_digest_hex": CATALOG_DIGEST,
+        "catalog_sequence": 8,
+        "predecessor_catalog_digest_hex": PREDECESSOR_DIGEST,
+        "predecessor_catalog_sequence": 7,
+    }
+    for kind in ("catalog_promotion", *MODULE.PREDECESSOR_BOUND_KINDS):
+        fingerprint = summary["required"][kind]["artifacts"][0]["fingerprint"]
+        assert {
+            field: fingerprint[field]
+            for field in MODULE.CATALOG_HISTORY_FINGERPRINT_FIELDS
+        } == expected
 
 
 @pytest.mark.parametrize("kind,builder", BUILDERS.items())
@@ -418,6 +475,41 @@ def test_removed_fields_fail_closed(
         "removed gateway-compliance V1 field" in error
         or "contains unknown fields" in error
         for error in artifact_errors(summary, "enforcement_probe")
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,builder,field,value",
+    [
+        (
+            "enforcement_probe",
+            enforcement_probe,
+            "denial_sources_observed",
+            ["baseline", "legal_safety_hold"],
+        ),
+        ("enforcement_probe", enforcement_probe, "denial_source_count", 2),
+        (
+            "honey_audit",
+            honey_audit,
+            "attacks_observed",
+            list(MODULE.REQUIRED_HONEY_ATTACKS),
+        ),
+        ("honey_audit", honey_audit, "attack_count", 4),
+    ],
+)
+def test_redundant_declared_coverage_fields_are_rejected(
+    tmp_path: Path,
+    kind: str,
+    builder,
+    field: str,
+    value: object,
+) -> None:
+    payload = builder()
+    payload[field] = value
+    code, summary = run_one(tmp_path, kind, payload)
+    assert code == 1
+    assert any(
+        "contains unknown fields" in error for error in artifact_errors(summary, kind)
     )
 
 
@@ -469,6 +561,52 @@ def test_unknown_denial_source_fails_closed(tmp_path: Path) -> None:
     assert "routes[0].source is not recognized" in artifact_errors(
         summary, "enforcement_probe"
     )
+
+
+def test_denial_source_coverage_is_derived_from_routes(tmp_path: Path) -> None:
+    payload = enforcement_probe()
+    for route in payload["routes"]:
+        route["source"] = "baseline"
+    code, summary = run_one(tmp_path, "enforcement_probe", payload)
+    assert code == 1
+    assert (
+        "routes must cover exactly the required denial sources"
+        in artifact_errors(summary, "enforcement_probe")
+    )
+
+
+def test_attack_coverage_is_derived_from_honey_probes(tmp_path: Path) -> None:
+    payload = honey_audit()
+    for probe in payload["probes"]:
+        probe["attack"] = "stale_catalog"
+    code, summary = run_one(tmp_path, "honey_audit", payload)
+    assert code == 1
+    assert (
+        "probes must cover exactly the required honey attacks"
+        in artifact_errors(summary, "honey_audit")
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,builder,inventory,field,value",
+    [
+        ("enforcement_probe", enforcement_probe, "routes", "source", []),
+        ("honey_audit", honey_audit, "probes", "attack", {}),
+    ],
+)
+def test_derived_coverage_rejects_non_string_record_values_without_crashing(
+    tmp_path: Path,
+    kind: str,
+    builder,
+    inventory: str,
+    field: str,
+    value: object,
+) -> None:
+    payload = builder()
+    payload[inventory][0][field] = value
+    code, summary = run_one(tmp_path, kind, payload)
+    assert code == 1
+    assert artifact_errors(summary, kind)
 
 
 def test_split_gateway_catalog_fails_closed(tmp_path: Path) -> None:
@@ -645,6 +783,73 @@ def test_catalog_anchor_mismatch_fails_closed(tmp_path: Path) -> None:
         in error
         for error in summary["errors"]
     )
+
+
+@pytest.mark.parametrize(
+    "kind,builder",
+    [
+        ("controller_runtime", controller_runtime),
+        ("gateway_reload", gateway_reload),
+    ],
+)
+def test_predecessor_bound_evidence_requires_predecessor_sequence(
+    tmp_path: Path, kind: str, builder
+) -> None:
+    payload = builder()
+    del payload["predecessor_catalog_sequence"]
+    code, summary = run_one(tmp_path, kind, payload)
+    assert code == 1
+    assert any(
+        "predecessor_catalog_sequence" in error
+        for error in artifact_errors(summary, kind)
+    )
+
+
+def test_foreign_predecessor_history_invalidates_downstream_artifacts(
+    tmp_path: Path,
+) -> None:
+    write_all(tmp_path)
+    foreign_predecessor = "56" * 32
+    controller = controller_runtime()
+    controller["predecessor_catalog_digest_hex"] = foreign_predecessor
+    reload = gateway_reload()
+    reload["predecessor_catalog_digest_hex"] = foreign_predecessor
+    reload["rollback_catalog_digest_hex"] = foreign_predecessor
+    write_json(tmp_path / "controller_runtime.json", controller)
+    write_json(tmp_path / "gateway_reload.json", reload)
+
+    code, summary = run_gate(tmp_path)
+    assert code == 1
+    for kind in MODULE.PREDECESSOR_BOUND_KINDS:
+        artifact = summary["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert (
+            f"{kind} catalog history must match a valid "
+            "catalog_promotion catalog history"
+        ) in artifact["errors"]
+
+
+@pytest.mark.parametrize(
+    "kind,builder",
+    [
+        ("controller_runtime", controller_runtime),
+        ("gateway_reload", gateway_reload),
+    ],
+)
+def test_foreign_contiguous_catalog_sequence_is_history_mismatch(
+    tmp_path: Path, kind: str, builder
+) -> None:
+    payload = builder()
+    payload["catalog_sequence"] = 9
+    payload["predecessor_catalog_sequence"] = 8
+    code, summary = run_one(tmp_path, kind, payload)
+    assert code == 1
+    artifact = summary["required"][kind]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        f"{kind} catalog history must match a valid "
+        "catalog_promotion catalog history"
+    ) in artifact["errors"]
 
 
 def test_legacy_schema_is_not_recognized(tmp_path: Path) -> None:

@@ -95,7 +95,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Соберите манифест в base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```Требуемый JSON-файл содержит содержимое `manifest_b64` и `payload_b64`. Ответ на повторный вызов `manifest_id_hex` и дайджест полезной нагрузки.
@@ -155,7 +155,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   которые сочетаются `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection` и `por_sampling_returns_verified_proofs`.
 - Приборные панели doivent suivre:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` и `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` и `torii_sorafs_storage_fetch_inflight`
   - les compteurs de succès/échec PoR разоблачает через `/v1/sorafs/capacity/state`
   - предварительные публикации об урегулировании через `sorafs_node_deal_publish_total{result=success|failure}`
 

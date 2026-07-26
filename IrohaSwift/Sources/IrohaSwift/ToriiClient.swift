@@ -8956,352 +8956,22 @@ public struct NativeDaProofSummaryGenerator: DaProofSummaryGenerating {
     }
 }
 
-public struct ToriiSoraFsPinAlias: Codable, Sendable, Equatable {
-    public var namespace: String?
-    public var name: String?
-    public var proofBase64: String?
-
-    public init(namespace: String? = nil,
-                name: String? = nil,
-                proofBase64: String? = nil) {
-        self.namespace = namespace
-        self.name = name
-        self.proofBase64 = proofBase64
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case namespace
-        case name
-        case proofBase64 = "proof_base64"
-    }
-
-    func normalized(field: String = "alias") throws -> ToriiSoraFsPinAlias {
-        ToriiSoraFsPinAlias(
-            namespace: try ToriiSoraFsPinValidation.requiredAliasSegment(
-                namespace,
-                field: "\(field).namespace"
-            ),
-            name: try ToriiSoraFsPinValidation.requiredAliasSegment(
-                name,
-                field: "\(field).name"
-            ),
-            proofBase64: try ToriiSoraFsPinValidation.requiredBase64(
-                proofBase64,
-                field: "\(field).proof_base64",
-                maximumDecodedBytes: ToriiSoraFsPinValidation.maximumAliasProofBytes
-            )
-        )
-    }
-}
-
-public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
-    public var authority: String?
-    public var privateKey: String?
-    public var manifestPayload: String?
-    public var submittedEpoch: UInt64?
-    public var alias: ToriiSoraFsPinAlias?
-    public var successorOfHex: String?
-
-    public init(authority: String? = nil,
-                privateKey: String? = nil,
-                manifestPayload: String? = nil,
-                submittedEpoch: UInt64? = nil,
-                alias: ToriiSoraFsPinAlias? = nil,
-                successorOfHex: String? = nil) {
-        self.authority = authority
-        self.privateKey = privateKey
-        self.manifestPayload = manifestPayload
-        self.submittedEpoch = submittedEpoch
-        self.alias = alias
-        self.successorOfHex = successorOfHex
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case privateKey = "private_key"
-        case manifestPayload = "manifest_payload"
-        case submittedEpoch = "submitted_epoch"
-        case alias
-        case successorOfHex = "successor_of_hex"
-    }
-
-    func normalized() throws -> ToriiSoraFsPinRegisterRequest {
-        return ToriiSoraFsPinRegisterRequest(
-            authority: try ToriiSoraFsPinValidation.requiredAccountId(
-                authority,
-                field: "authority"
-            ),
-            privateKey: try ToriiSoraFsPinValidation.requiredExactString(
-                privateKey,
-                field: "private_key"
-            ),
-            manifestPayload: try ToriiSoraFsPinValidation.requiredManifestPayload(
-                manifestPayload
-            ),
-            submittedEpoch: try ToriiSoraFsPinValidation.requiredUInt64(
-                submittedEpoch,
-                field: "submitted_epoch",
-                allowZero: true
-            ),
-            alias: try alias?.normalized(),
-            successorOfHex: try ToriiSoraFsPinValidation.optionalSuccessorDigest(
-                successorOfHex
-            )
-        )
-    }
-}
-
-fileprivate struct ToriiSoraFsPinRegisterWireRequest: Encodable, Sendable, Equatable {
-    var authority: String
-    var privateKey: String
-    var manifestPayload: String
-    var submittedEpoch: UInt64
-    var alias: ToriiSoraFsPinAlias?
-    var successorOfHex: String?
-
-    init(_ request: ToriiSoraFsPinRegisterRequest) throws {
-        guard let authority = request.authority,
-              let privateKey = request.privateKey,
-              let manifestPayload = request.manifestPayload,
-              let submittedEpoch = request.submittedEpoch else {
-            throw ToriiClientError.invalidPayload("normalized SoraFS pin request is incomplete.")
-        }
-
-        self.authority = authority
-        self.privateKey = privateKey
-        self.manifestPayload = manifestPayload
-        self.submittedEpoch = submittedEpoch
-        self.alias = request.alias
-        self.successorOfHex = request.successorOfHex
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case privateKey = "private_key"
-        case manifestPayload = "manifest_payload"
-        case submittedEpoch = "submitted_epoch"
-        case alias
-        case successorOfHex = "successor_of_hex"
-    }
-}
 
 public struct ToriiSoraFsPinRegisterResponse: Codable, Sendable, Equatable {
-    public var manifestDigestHex: String?
-    public var chunkerHandle: String?
-    public var submittedEpoch: UInt64?
-    public var contentLength: UInt64?
-    public var pinFeeNano: UInt64?
-    public var pinFeeAssetId: String?
-    public var pinFeeTreasuryAccountId: String?
-    public var alias: ToriiSoraFsPinAlias?
-    public var successorOfHex: String?
+    public let status: String
+    public let txHashHex: String
+    public let manifestDigestHex: String
 
-    public init(manifestDigestHex: String? = nil,
-                chunkerHandle: String? = nil,
-                submittedEpoch: UInt64? = nil,
-                contentLength: UInt64? = nil,
-                pinFeeNano: UInt64? = nil,
-                pinFeeAssetId: String? = nil,
-                pinFeeTreasuryAccountId: String? = nil,
-                alias: ToriiSoraFsPinAlias? = nil,
-                successorOfHex: String? = nil) {
+    public init(status: String, txHashHex: String, manifestDigestHex: String) {
+        self.status = status
+        self.txHashHex = txHashHex
         self.manifestDigestHex = manifestDigestHex
-        self.chunkerHandle = chunkerHandle
-        self.submittedEpoch = submittedEpoch
-        self.contentLength = contentLength
-        self.pinFeeNano = pinFeeNano
-        self.pinFeeAssetId = pinFeeAssetId
-        self.pinFeeTreasuryAccountId = pinFeeTreasuryAccountId
-        self.alias = alias
-        self.successorOfHex = successorOfHex
     }
 
     private enum CodingKeys: String, CodingKey {
+        case status
+        case txHashHex = "tx_hash_hex"
         case manifestDigestHex = "manifest_digest_hex"
-        case chunkerHandle = "chunker_handle"
-        case submittedEpoch = "submitted_epoch"
-        case contentLength = "content_length"
-        case pinFeeNano = "pin_fee_nano"
-        case pinFeeAssetId = "pin_fee_asset_id"
-        case pinFeeTreasuryAccountId = "pin_fee_treasury_account_id"
-        case alias
-        case successorOfHex = "successor_of_hex"
-    }
-
-    func normalized() throws -> ToriiSoraFsPinRegisterResponse {
-        ToriiSoraFsPinRegisterResponse(
-            manifestDigestHex: try ToriiSoraFsPinValidation.digest(manifestDigestHex,
-                                                                   field: "manifest_digest_hex"),
-            chunkerHandle: try ToriiSoraFsPinValidation.requiredString(chunkerHandle,
-                                                                       field: "chunker_handle"),
-            submittedEpoch: try ToriiSoraFsPinValidation.requiredUInt64(
-                submittedEpoch,
-                field: "submitted_epoch",
-                allowZero: true
-            ),
-            contentLength: try ToriiSoraFsPinValidation.requiredUInt64(
-                contentLength,
-                field: "content_length",
-                allowZero: true
-            ),
-            pinFeeNano: try ToriiSoraFsPinValidation.requiredUInt64(
-                pinFeeNano,
-                field: "pin_fee_nano",
-                allowZero: true
-            ),
-            pinFeeAssetId: try ToriiSoraFsPinValidation.requiredString(pinFeeAssetId,
-                                                                       field: "pin_fee_asset_id"),
-            pinFeeTreasuryAccountId: try ToriiSoraFsPinValidation.requiredString(
-                pinFeeTreasuryAccountId,
-                field: "pin_fee_treasury_account_id"
-            ),
-            alias: try alias?.normalized(),
-            successorOfHex: try ToriiSoraFsPinValidation.optionalDigest(successorOfHex,
-                                                                        field: "successor_of_hex")
-        )
-    }
-}
-
-fileprivate enum ToriiSoraFsPinValidation {
-    static let maximumManifestBytes = 512 * 1024
-    static let maximumAliasProofBytes = 1024 * 1024
-    private static let maximumAliasSegmentBytes = 128
-
-    static func requiredString(_ value: String?, field: String) throws -> String {
-        guard let value else {
-            throw ToriiClientError.invalidPayload("\(field) must be provided.")
-        }
-        return try ToriiRequestValidation.normalizedNonEmpty(value, field: field)
-    }
-
-    static func requiredExactString(_ value: String?, field: String) throws -> String {
-        guard let value else {
-            throw ToriiClientError.invalidPayload("\(field) must be provided.")
-        }
-        guard !value.isEmpty,
-              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.contains(where: \.isWhitespace),
-              !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
-        else {
-            throw ToriiClientError.invalidPayload(
-                "\(field) must be exact non-empty text without whitespace or control characters."
-            )
-        }
-        return value
-    }
-
-    static func requiredAccountId(_ value: String?, field: String) throws -> String {
-        let exact = try requiredExactString(value, field: field)
-        guard !exact.contains("@"),
-              let address = try? AccountAddress.parseEncoded(
-                  exact,
-                  expectedPrefix: AccountId.defaultNetworkPrefix
-              ),
-              let canonical = try? address.toI105(
-                  networkPrefix: AccountId.defaultNetworkPrefix
-              ),
-              canonical == exact
-        else {
-            throw ToriiClientError.invalidPayload(
-                "\(field) must be an exact canonical I105 account identifier."
-            )
-        }
-        return exact
-    }
-
-    static func requiredUInt64(_ value: UInt64?, field: String, allowZero: Bool) throws -> UInt64 {
-        guard let value else {
-            throw ToriiClientError.invalidPayload("\(field) must be provided.")
-        }
-        guard allowZero || value > 0 else {
-            throw ToriiClientError.invalidPayload("\(field) must be positive.")
-        }
-        return value
-    }
-
-    static func digest(_ value: String?, field: String) throws -> String {
-        guard let value else {
-            throw ToriiClientError.invalidPayload("\(field) must be provided.")
-        }
-        return try ToriiRequestValidation.normalized32ByteHex(value, field: field)
-    }
-
-    static func optionalDigest(_ value: String?, field: String) throws -> String? {
-        guard let value else {
-            return nil
-        }
-        let exact = try requiredExactString(value, field: field)
-        let normalized = try ToriiRequestValidation.normalized32ByteHex(exact, field: field)
-        guard normalized != String(repeating: "0", count: 64) else {
-            throw ToriiClientError.invalidPayload("\(field) must not be zero.")
-        }
-        return normalized
-    }
-
-    static func optionalSuccessorDigest(_ value: String?) throws -> String? {
-        guard let normalized = try optionalDigest(value, field: "successor_of_hex") else {
-            return nil
-        }
-        guard normalized != String(repeating: "0", count: 64) else {
-            throw ToriiClientError.invalidPayload("successor_of_hex must not be zero.")
-        }
-        return normalized
-    }
-
-    static func requiredManifestPayload(_ value: String?) throws -> String {
-        try requiredBase64(
-            value,
-            field: "manifest_payload",
-            maximumDecodedBytes: maximumManifestBytes
-        )
-    }
-
-    static func requiredAliasSegment(_ value: String?, field: String) throws -> String {
-        guard let value,
-              !value.isEmpty,
-              value.utf8.count <= maximumAliasSegmentBytes,
-              value.unicodeScalars.allSatisfy({ scalar in
-                  switch scalar.value {
-                  case 0x61...0x7A, 0x30...0x39, 0x2E, 0x2D, 0x5F:
-                      return true
-                  default:
-                      return false
-                  }
-              }) else {
-            throw ToriiClientError.invalidPayload(
-                "\(field) must contain 1...\(maximumAliasSegmentBytes) lowercase ASCII letters, digits, '.', '-', or '_'."
-            )
-        }
-        return value
-    }
-
-    static func requiredBase64(
-        _ value: String?,
-        field: String,
-        maximumDecodedBytes: Int
-    ) throws -> String {
-        guard let value else {
-            throw ToriiClientError.invalidPayload("\(field) must be provided.")
-        }
-        let maximumEncodedBytes = ((maximumDecodedBytes + 2) / 3) * 4
-        guard !value.isEmpty, value.utf8.count <= maximumEncodedBytes else {
-            throw ToriiClientError.invalidPayload(
-                "\(field) must encode 1...\(maximumDecodedBytes) bytes."
-            )
-        }
-        guard !value.contains(where: { $0.isWhitespace }) else {
-            throw ToriiClientError.invalidPayload("\(field) must be canonical base64 without whitespace.")
-        }
-        guard let decoded = Data(base64Encoded: value), !decoded.isEmpty else {
-            throw ToriiClientError.invalidPayload("\(field) must be valid non-empty base64.")
-        }
-        guard decoded.count <= maximumDecodedBytes,
-              decoded.base64EncodedString() == value else {
-            throw ToriiClientError.invalidPayload(
-                "\(field) must be canonical padded base64 encoding of 1...\(maximumDecodedBytes) bytes."
-            )
-        }
-        return value
     }
 }
 
@@ -25054,9 +24724,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func registerSoraFsPinManifest(_ requestBody: ToriiSoraFsPinRegisterRequest,
+    public func registerSoraFsPinManifest(_ transaction: SignedTransactionEnvelope,
                                           completion: @escaping (Result<ToriiSoraFsPinRegisterResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.registerSoraFsPinManifest(requestBody) }
+        runTask(completion) { try await self.registerSoraFsPinManifest(transaction) }
     }
 
     @discardableResult
@@ -26898,18 +26568,46 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiUaidManifestsResponse.self, from: data)
     }
 
-    public func registerSoraFsPinManifest(_ requestBody: ToriiSoraFsPinRegisterRequest) async throws -> ToriiSoraFsPinRegisterResponse {
-        let normalized = try requestBody.normalized()
-        let body = try JSONEncoder().encode(ToriiSoraFsPinRegisterWireRequest(normalized))
-        let request = try makeRequest(path: "/v1/sorafs/pin/register",
-                                      method: .post,
-                                      body: body,
-                                      headers: [
-                                          "Content-Type": "application/json",
-                                          "Accept": "application/json",
-                                      ])
-        let data = try await data(for: request, acceptedStatus: 200..<201)
-        return try decodeJSON(ToriiSoraFsPinRegisterResponse.self, from: data).normalized()
+    public func registerSoraFsPinManifest(_ transaction: SignedTransactionEnvelope) async throws -> ToriiSoraFsPinRegisterResponse {
+        guard !transaction.norito.isEmpty else {
+            throw ToriiClientError.invalidPayload(
+                "SoraFS pin registration requires a non-empty signed transaction."
+            )
+        }
+        let request = try makeRequest(
+            path: "/v1/sorafs/pin/register",
+            method: .post,
+            body: transaction.norito,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/json",
+            ]
+        )
+        let data = try await data(for: request, acceptedStatus: 202..<203)
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard let record = object as? [String: Any],
+              Set(record.keys) == Set(["status", "tx_hash_hex", "manifest_digest_hex"]) else {
+            throw ToriiClientError.invalidPayload(
+                "SoraFS pin registration response must contain only status, tx_hash_hex, and manifest_digest_hex."
+            )
+        }
+        let response = try decodeJSON(ToriiSoraFsPinRegisterResponse.self, from: data)
+        guard response.status == "submitted" else {
+            throw ToriiClientError.invalidPayload(
+                "SoraFS pin registration response status must be submitted."
+            )
+        }
+        return ToriiSoraFsPinRegisterResponse(
+            status: response.status,
+            txHashHex: try ToriiRequestValidation.exactLowercase32ByteHex(
+                response.txHashHex,
+                field: "tx_hash_hex"
+            ),
+            manifestDigestHex: try ToriiRequestValidation.exactLowercase32ByteHex(
+                response.manifestDigestHex,
+                field: "manifest_digest_hex"
+            )
+        )
     }
 
     public func getVpnProfile() async throws -> ToriiVpnProfile {

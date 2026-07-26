@@ -4394,12 +4394,15 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
     .execute(&pin_fixture_alice(), &mut tx)
     .map_err(|err| format!("failed to issue replication order: {err}"))?;
 
-    CompleteReplicationOrder {
-        order_id,
-        completion_epoch: 25,
+    for provider_id in providers {
+        CompleteReplicationOrder {
+            order_id,
+            provider_id,
+            completion_epoch: 25,
+        }
+        .execute(&pin_fixture_alice(), &mut tx)
+        .map_err(|err| format!("failed to complete provider replication assignment: {err}"))?;
     }
-    .execute(&pin_fixture_alice(), &mut tx)
-    .map_err(|err| format!("failed to complete replication order: {err}"))?;
 
     tx.apply();
     block
@@ -4824,6 +4827,30 @@ fn pin_fixture_order_snapshot(order: &ReplicationOrderRecord) -> Result<json::Ma
     order_obj.insert(
         "status_epoch".into(),
         status_epoch.map_or(Value::Null, Value::from),
+    );
+    let provider_completions = order
+        .provider_completions
+        .iter()
+        .map(|completion| {
+            let mut map = json::Map::new();
+            map.insert(
+                "provider_id_hex".into(),
+                Value::String(hex::encode(completion.provider_id.as_bytes())),
+            );
+            map.insert(
+                "completed_by".into(),
+                Value::String(completion.completed_by.to_string()),
+            );
+            map.insert(
+                "completion_epoch".into(),
+                Value::from(completion.completion_epoch),
+            );
+            Value::Object(map)
+        })
+        .collect();
+    order_obj.insert(
+        "provider_completions".into(),
+        Value::Array(provider_completions),
     );
     order_obj.insert(
         "target_replicas".into(),

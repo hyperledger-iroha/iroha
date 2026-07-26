@@ -30,7 +30,7 @@ teams rehearse the automation stack ahead of the 2025‑03‑03 kickoff.
 # 3. Inputs & Prerequisites
 
 - Deterministic host spec (`docs/source/soradns/deterministic_hosts.md`) and the
-  resolver attestation scaffolding (`docs/source/soradns/resolver_attestation_directory.md`).
+  resolver attestation contract (`docs/source/soradns/resolver_attestation_directory.md`).
 - Gateway artefacts: profile, deployment handbook, TLS automation, direct-mode
   guidance, and self-cert workflow (see `docs/source/sorafs_gateway_*` docs).
 - Tooling: `cargo xtask` helpers (`soradns-directory-release`,

@@ -533,7 +533,7 @@ internal static class ToriiContractManifestJson
         EnsureOnly(root, context, "name", "fields");
         var name = RequiredExactString(root, "name", $"{context}.name");
         var fields = RequiredStringList(root, "fields", $"{context}.fields");
-        if (!IsCanonicalTypeDeclarationIdentifier(name)
+        if (!IsCanonicalSchemaStructIdentifier(name)
             || fields.Count == 0
             || fields.Any(field => !IsCanonicalBoundaryIdentifier(field)))
         {
@@ -793,7 +793,7 @@ internal static class ToriiContractManifestJson
             case ToriiEntrypointValueTypeNodeKindV1.Struct:
                 var product = node.StructValue!;
                 if (product.Fields.Count == 0
-                    || !IsCanonicalTypeDeclarationIdentifier(product.Name)
+                    || !IsCanonicalSchemaStructIdentifier(product.Name)
                     || product.Fields.Any(field => !IsCanonicalBoundaryIdentifier(field)))
                 {
                     throw new JsonException($"{context} contains a noncanonical struct node.");
@@ -1322,7 +1322,7 @@ internal static class ToriiContractManifestJson
 
     private static JsonObject BuildStructNode(ToriiEntrypointStructTypeNodeV1 value, string context)
     {
-        if (!IsCanonicalTypeDeclarationIdentifier(value.Name)
+        if (!IsCanonicalSchemaStructIdentifier(value.Name)
             || value.Fields.Count == 0
             || value.Fields.Any(field => !IsCanonicalBoundaryIdentifier(field)))
         {
@@ -1843,6 +1843,13 @@ internal static class ToriiContractManifestJson
     {
         return IsCanonicalDeclarationIdentifier(value)
             && !RetiredNumericTypeNames.Contains(value);
+    }
+
+    private static bool IsCanonicalSchemaStructIdentifier(string value)
+    {
+        return IsCanonicalTypeDeclarationIdentifier(value)
+            || value == "QueryPage"
+            || IsCoreQueryViewName(value);
     }
 
     private static bool IsCanonicalEntrypointName(string value)

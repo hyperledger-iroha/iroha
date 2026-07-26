@@ -19,12 +19,23 @@ on:
 
 env:
   TAG_BASE: experimental-xx
+  IROHA_CROSS_XX_IMAGE: ${{ vars.IROHA_CROSS_XX_IMAGE }}
+  IROHA_CROSS_RUST_IMAGE: ${{ vars.IROHA_CROSS_RUST_IMAGE }}
+  IROHA_CROSS_RUNTIME_IMAGE: ${{ vars.IROHA_CROSS_RUNTIME_IMAGE }}
 
 jobs:
   image:
     runs-on: [self-hosted, Linux, iroha2]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate digest-pinned cross-build base images
+        run: |
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_CROSS_XX_IMAGE" \
+            --runtime "$IROHA_CROSS_RUNTIME_IMAGE"
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_CROSS_RUST_IMAGE" \
+            --runtime "$IROHA_CROSS_RUNTIME_IMAGE"
       - name: Login to DockerHub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
@@ -35,7 +46,7 @@ jobs:
         if: always()
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
-          version: latest
+          version: v0.34.1
           install: true
 
       - name: Build and push default image
@@ -48,6 +59,10 @@ jobs:
           tags: |
             hyperledger/iroha:${{ env.TAG_BASE }}-${{ github.sha }}
           labels: commit=${{ github.sha }}
+          build-args: |
+            "IROHA_CROSS_XX_IMAGE=${{ env.IROHA_CROSS_XX_IMAGE }}"
+            "IROHA_CROSS_RUST_IMAGE=${{ env.IROHA_CROSS_RUST_IMAGE }}"
+            "IROHA_CROSS_RUNTIME_IMAGE=${{ env.IROHA_CROSS_RUNTIME_IMAGE }}"
           context: .
 
       - name: Build and push profiling image
@@ -61,6 +76,9 @@ jobs:
             hyperledger/iroha:${{ env.TAG_BASE }}-profiling-${{ github.sha }}
           labels: commit=${{ github.sha }}
           build-args: |
+            "IROHA_CROSS_XX_IMAGE=${{ env.IROHA_CROSS_XX_IMAGE }}"
+            "IROHA_CROSS_RUST_IMAGE=${{ env.IROHA_CROSS_RUST_IMAGE }}"
+            "IROHA_CROSS_RUNTIME_IMAGE=${{ env.IROHA_CROSS_RUNTIME_IMAGE }}"
             "PROFILE=profiling"
             "RUSTFLAGS=-C force-frame-pointers=on"
             "FEATURES=profiling"

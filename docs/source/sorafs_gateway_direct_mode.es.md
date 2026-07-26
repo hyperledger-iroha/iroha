@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_direct_mode.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 574c7677144946ea5a8d4957933fe817e2be65061690d9f3e053bd28f85b900f
+source_hash: 4b300b43e15582f88834678d1c2d43b61a71f0de05be978133c80b98752cc767
 source_last_modified: "2025-11-02T07:24:32.542935+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
@@ -49,14 +49,14 @@ Governance cuando necesites metadata canonica de capacidades, o pasa
 
 Alimenta el plan JSON al subcomando `enable` para producir un snippet de
 configuracion. El snippet apunta a la nueva tabla
-`torii.sorafs_gateway.direct_mode` junto a los knobs estandar del gateway:
+`sorafs.gateway.direct_mode` junto a los knobs estandar del gateway:
 
 ```bash
 iroha app sorafs gateway direct-mode enable --plan direct-mode-plan.json
 ```
 
 Aplica el snippet a tu configuracion de Torii (`config.toml`). Los campos bajo
-`torii.sorafs_gateway.direct_mode` mapean 1:1 con el output del plan:
+`sorafs.gateway.direct_mode` mapean 1:1 con el output del plan:
 
 - `provider_id_hex`, `chain_id`
 - `canonical_host`, `vanity_host`
@@ -64,8 +64,8 @@ Aplica el snippet a tu configuracion de Torii (`config.toml`). Los campos bajo
 - `manifest_digest_hex`
 
 Mientras el override de modo directo este activo,
-`torii.sorafs_gateway.require_manifest_envelope` y `enforce_admission` se
-inhabilitan explicitamente para coincidir con el output del snippet.
+`sorafs.gateway.require_manifest_envelope`, `enforce_admission` y
+`enforce_capabilities` permanecen habilitados.
 
 ## Rollback
 

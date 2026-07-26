@@ -109,12 +109,14 @@ pub(crate) trait HttpEngine: Send + Sync {
 
 /// Errors surfaced by HTTP engines.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) enum HttpError {
     Transport(reqwest::Error),
     Body(reqwest::Error),
-    ResponseTooLarge { limit: usize },
-    Stub(String),
+    ResponseTooLarge {
+        limit: usize,
+    },
+    #[cfg(test)]
+    TestEngine(String),
 }
 
 struct ReqwestEngine {
@@ -531,7 +533,8 @@ impl GatewayFetcherInner {
                     provider: provider_alias.clone(),
                     limit,
                 },
-                HttpError::Stub(message) => GatewayFetchError::Stub {
+                #[cfg(test)]
+                HttpError::TestEngine(message) => GatewayFetchError::TestEngine {
                     provider: provider_alias.clone(),
                     message,
                 },
@@ -623,7 +626,8 @@ impl GatewayFetcherInner {
                         HttpError::ResponseTooLarge { limit } => {
                             format!("response exceeded {limit}-byte limit")
                         }
-                        HttpError::Stub(message) => message,
+                        #[cfg(test)]
+                        HttpError::TestEngine(message) => message,
                     };
                     last_error = Some(GatewayManifestError::Request {
                         provider: alias.clone(),
@@ -1832,8 +1836,9 @@ pub enum GatewayFetchError {
         status: StatusCode,
         body: Option<String>,
     },
-    #[error("provider `{provider}` stub error: {message}")]
-    Stub { provider: String, message: String },
+    #[cfg(test)]
+    #[error("provider `{provider}` test-engine error: {message}")]
+    TestEngine { provider: String, message: String },
 }
 
 impl From<GatewayFetchError> for AttemptFailure {
@@ -2548,7 +2553,11 @@ mod tests {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
-            hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
+            hex::encode(
+                plan.try_chunk_fetch_specs().expect("valid CAR plan")[0]
+                    .digest
+                    .as_slice()
+            )
         );
         let mut responses = HashMap::new();
         responses.insert(
@@ -2556,7 +2565,9 @@ mod tests {
             HttpResponse {
                 status: StatusCode::OK,
                 headers: HeaderMap::new(),
-                body: payload[0..plan.chunk_fetch_specs()[0].length as usize].to_vec(),
+                body: payload
+                    [0..plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].length as usize]
+                    .to_vec(),
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
@@ -2588,10 +2599,13 @@ mod tests {
             .execute_plan(&plan, FetchOptions::default())
             .await
             .expect("fetch outcome");
-        assert_eq!(outcome.chunks.len(), plan.chunk_fetch_specs().len());
+        assert_eq!(
+            outcome.chunks.len(),
+            plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
+        );
         assert_eq!(
             outcome.chunks[0],
-            payload[0..plan.chunk_fetch_specs()[0].length as usize]
+            payload[0..plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].length as usize]
         );
 
         let requests = engine.recorded();
@@ -2651,7 +2665,7 @@ mod tests {
 
         let request = FetchRequest {
             provider: Arc::new(context.providers()[0].clone()),
-            spec: plan.chunk_fetch_specs()[0].clone(),
+            spec: plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone(),
             attempt: 1,
         };
         assert!(matches!(
@@ -2675,7 +2689,11 @@ mod tests {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
-            hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
+            hex::encode(
+                plan.try_chunk_fetch_specs().expect("valid CAR plan")[0]
+                    .digest
+                    .as_slice()
+            )
         );
         let mut responses = HashMap::new();
         responses.insert(
@@ -2683,7 +2701,9 @@ mod tests {
             HttpResponse {
                 status: StatusCode::OK,
                 headers: HeaderMap::new(),
-                body: payload[0..plan.chunk_fetch_specs()[0].length as usize].to_vec(),
+                body: payload
+                    [0..plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].length as usize]
+                    .to_vec(),
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
@@ -2758,7 +2778,11 @@ mod tests {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
-            hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
+            hex::encode(
+                plan.try_chunk_fetch_specs().expect("valid CAR plan")[0]
+                    .digest
+                    .as_slice()
+            )
         );
         let mut responses = HashMap::new();
         responses.insert(
@@ -2794,7 +2818,7 @@ mod tests {
                 .expect("context");
         let fetcher = context.fetcher();
         let provider: FetchProvider = context.providers()[0].clone();
-        let spec: ChunkFetchSpec = plan.chunk_fetch_specs()[0].clone();
+        let spec: ChunkFetchSpec = plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone();
 
         let request = FetchRequest {
             provider: Arc::new(provider),
@@ -2834,7 +2858,11 @@ mod tests {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
-            hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
+            hex::encode(
+                plan.try_chunk_fetch_specs().expect("valid CAR plan")[0]
+                    .digest
+                    .as_slice()
+            )
         );
         let mut responses = HashMap::new();
         responses.insert(
@@ -2874,7 +2902,7 @@ mod tests {
                 .expect("context");
         let request = FetchRequest {
             provider: Arc::new(context.providers()[0].clone()),
-            spec: plan.chunk_fetch_specs()[0].clone(),
+            spec: plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone(),
             attempt: 1,
         };
 
@@ -2910,7 +2938,11 @@ mod tests {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
-            hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
+            hex::encode(
+                plan.try_chunk_fetch_specs().expect("valid CAR plan")[0]
+                    .digest
+                    .as_slice()
+            )
         );
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -2923,7 +2955,9 @@ mod tests {
             HttpResponse {
                 status: StatusCode::OK,
                 headers,
-                body: payload[0..plan.chunk_fetch_specs()[0].length as usize].to_vec(),
+                body: payload
+                    [0..plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].length as usize]
+                    .to_vec(),
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
@@ -2952,7 +2986,7 @@ mod tests {
                 .expect("context");
         let request = FetchRequest {
             provider: Arc::new(context.providers()[0].clone()),
-            spec: plan.chunk_fetch_specs()[0].clone(),
+            spec: plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone(),
             attempt: 1,
         };
 
@@ -2991,7 +3025,11 @@ mod tests {
         let chunker_handle = chunker_handle();
         let token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 1);
         let token_b64 = encode_token_b64(&token);
-        let chunk_digest_hex = hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice());
+        let chunk_digest_hex = hex::encode(
+            plan.try_chunk_fetch_specs().expect("valid CAR plan")[0]
+                .digest
+                .as_slice(),
+        );
 
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -3039,7 +3077,7 @@ mod tests {
             .expect("context");
         let request = FetchRequest {
             provider: Arc::new(context.providers()[0].clone()),
-            spec: plan.chunk_fetch_specs()[0].clone(),
+            spec: plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone(),
             attempt: 1,
         };
 
@@ -3255,8 +3293,10 @@ mod tests {
             });
 
             let maybe = self.responses.get(&path).cloned();
-            let error_message = format!("no stubbed response for {path}");
-            Box::pin(async move { maybe.ok_or_else(|| HttpError::Stub(error_message.clone())) })
+            let error_message = format!("no test response for {path}");
+            Box::pin(
+                async move { maybe.ok_or_else(|| HttpError::TestEngine(error_message.clone())) },
+            )
         }
     }
 

@@ -67,7 +67,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. གཞི་རྟེན་༦༤ ཨིན་ཀོ་ཌིང་དང་གཅིག་ཁར་ གསལ་སྟོན་འདི་ཕུལ་ནི།
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -147,7 +147,7 @@ GC CLI འདི་ ཤེས་བཞིན་དུ་ ལྷག་རྐྱ�
   དེ་ཡང་ `pin_fetch_roundtrip`, I18NI000000041X, I18NI000000042X, དང་ `por_sampling_returns_verified_proofs` ཚུ་ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
 - ཌེཤ་བོརཌི་ཚུ་གིས་ བརྟག་ཞིབ་འབད་དགོ།
   - I18NI0000044X
-  - `torii_sorafs_storage_pin_queue_depth` དང་ I18NI0000046X
+  - `sorafs_provider_ingest_inflight` དང་ I18NI0000046X
   - པོ་ཨར་ མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་ གྱངས་ཁ་ཚུ་ I18NI000000047X བརྒྱུད་དེ་ ཐོན་ཡོདཔ།
   - གཞིས་ཆགས་དཔར་བསྐྲུན་འབད་ནི་ དཔའ་བཅམ་མི་ཚུ་ I18NI0000048X བརྒྱུད་དེ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
 

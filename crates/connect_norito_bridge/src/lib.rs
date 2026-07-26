@@ -127,6 +127,9 @@ const SORAFS_REFERENCE_PDP_KIND_PROOF: u32 = 3;
 
 /// Payload/label descriptor used by the SoraFS governance head-chain C ABI.
 pub type ConnectNoritoSorafsReferenceInput = sorafs_reference_ffi::SorafsReferenceFfiInput;
+/// Typed payload descriptor used by the SoraFS fixture-bundle C ABI.
+pub type ConnectNoritoSorafsReferenceBundlePayload =
+    sorafs_reference_ffi::SorafsReferenceFfiBundlePayload;
 /// Maximum governance DAG block descriptors accepted by the bridge.
 pub const CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1: u32 = 64;
 /// Exact byte length of every first-release Governance DAG CID.
@@ -135,6 +138,10 @@ pub const CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1: u32 = 32;
 pub const CONNECT_NORITO_SORAFS_REFERENCE_MAX_INPUT_BYTES_V1: u32 = 67108864;
 /// Maximum UTF-8 SoraFS reference label bytes accepted by the bridge.
 pub const CONNECT_NORITO_SORAFS_REFERENCE_MAX_LABEL_BYTES_V1: u32 = 1024;
+/// Maximum payload count accepted by the SoraFS fixture-bundle bridge.
+pub const CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_PAYLOADS_V1: u32 = 64;
+/// Maximum aggregate payload and label bytes accepted by a fixture-bundle call.
+pub const CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_TOTAL_BYTES_V1: u32 = 67108864;
 
 const _: () = assert!(
     CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1
@@ -151,6 +158,14 @@ const _: () = assert!(
 const _: () = assert!(
     CONNECT_NORITO_SORAFS_REFERENCE_MAX_LABEL_BYTES_V1
         == sorafs_reference_ffi::SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1
+);
+const _: () = assert!(
+    CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_PAYLOADS_V1
+        == sorafs_reference_ffi::SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS_V1
+);
+const _: () = assert!(
+    CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_TOTAL_BYTES_V1
+        == sorafs_reference_ffi::SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES_V1
 );
 
 const ERR_NULL_PTR: c_int = -1;
@@ -33269,6 +33284,77 @@ fn java_sorafs_reference_validate_hedging_payload_json(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_sorafs_reference_validate_governance_log_node_json(
+    env: &mut jni::JNIEnv<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    expected_node_cid: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let maximum_input = CONNECT_NORITO_SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 as usize;
+        let maximum_label = CONNECT_NORITO_SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 as usize;
+        let cid_bytes = CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize;
+        let payload_bytes =
+            read_java_sorafs_reference_byte_array(env, &payload, "noritoBytes", maximum_input)?;
+        let label_bytes =
+            read_java_sorafs_reference_byte_array(env, &label, "label", maximum_label)?;
+        let expected_node_cid_bytes = read_java_sorafs_reference_byte_array(
+            env,
+            &expected_node_cid,
+            "expectedNodeCid",
+            cid_bytes,
+        )?;
+        if expected_node_cid_bytes.len() != cid_bytes {
+            return Err(format!(
+                "expectedNodeCid must contain exactly {cid_bytes} bytes"
+            ));
+        }
+        let aggregate_bytes = payload_bytes
+            .len()
+            .checked_add(label_bytes.len())
+            .and_then(|total| total.checked_add(expected_node_cid_bytes.len()))
+            .ok_or_else(|| "governance log-node aggregate input length overflowed".to_owned())?;
+        if aggregate_bytes > maximum_input {
+            return Err(format!(
+                "governance log-node inputs must total at most {maximum_input} bytes"
+            ));
+        }
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_governance_json(
+                payload_bytes.as_ptr(),
+                payload_bytes.len(),
+                label_bytes.as_ptr(),
+                label_bytes.len(),
+                expected_node_cid_bytes.as_ptr(),
+                expected_node_cid_bytes.len(),
+                generated_at,
+            )
+        };
+        unsafe {
+            java_sorafs_reference_buffer_to_array(
+                env,
+                buffer,
+                "SoraFS governance log-node validation",
+            )
+        }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_sorafs_reference_validate_governance_dag_block_json(
     env: &mut jni::JNIEnv<'_>,
     payload: jni::objects::JByteArray<'_>,
@@ -33415,6 +33501,93 @@ fn java_sorafs_reference_validate_governance_dag_head_chain_json(
                 buffer,
                 "SoraFS governance DAG head-chain validation",
             )
+        }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_validate_fixture_bundle_json(
+    env: &mut jni::JNIEnv<'_>,
+    kinds: jni::objects::JByteArray<'_>,
+    payloads: jni::objects::JObjectArray<'_>,
+    labels: jni::objects::JObjectArray<'_>,
+    now: jni::sys::jlong,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let maximum_payloads = CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_PAYLOADS_V1 as usize;
+        let maximum_bytes = CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_TOTAL_BYTES_V1 as usize;
+        let maximum_label = CONNECT_NORITO_SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 as usize;
+        let kind_bytes =
+            read_java_sorafs_reference_byte_array(env, &kinds, "kinds", maximum_payloads)?;
+        if kind_bytes.is_empty() {
+            return Err(format!("kinds must contain 1..{maximum_payloads} entries"));
+        }
+        let payload_bytes = read_java_sorafs_reference_byte_array_vector(
+            env,
+            &payloads,
+            "payloads",
+            Some(kind_bytes.len()),
+            maximum_payloads,
+            maximum_bytes,
+        )?;
+        let label_bytes = read_java_sorafs_reference_byte_array_vector(
+            env,
+            &labels,
+            "labels",
+            Some(kind_bytes.len()),
+            maximum_payloads,
+            maximum_label,
+        )?;
+        let mut aggregate_bytes = 0usize;
+        let mut descriptors = Vec::with_capacity(kind_bytes.len());
+        for ((kind, payload), label) in kind_bytes
+            .iter()
+            .copied()
+            .zip(&payload_bytes)
+            .zip(&label_bytes)
+        {
+            aggregate_bytes = aggregate_bytes
+                .checked_add(payload.len())
+                .and_then(|total| total.checked_add(label.len()))
+                .ok_or_else(|| "fixture-bundle aggregate input length overflowed".to_owned())?;
+            if aggregate_bytes > maximum_bytes {
+                return Err(format!(
+                    "fixture-bundle inputs must total at most {maximum_bytes} bytes"
+                ));
+            }
+            descriptors.push(sorafs_reference_ffi::SorafsReferenceFfiBundlePayload {
+                kind: u32::from(kind),
+                bytes_ptr: payload.as_ptr(),
+                bytes_len: payload.len(),
+                label_ptr: label.as_ptr(),
+                label_len: label.len(),
+            });
+        }
+        let now = java_sorafs_reference_generated_at(now)?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_bundle_json(
+                descriptors.as_ptr(),
+                descriptors.len(),
+                now,
+                generated_at,
+            )
+        };
+        unsafe {
+            java_sorafs_reference_buffer_to_array(env, buffer, "SoraFS fixture-bundle validation")
         }
     })();
     match result {
@@ -41257,6 +41430,36 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasGovernanceLogNodeSymbols(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::JNI_TRUE
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeHasFixtureBundleSymbols(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::JNI_TRUE
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -41314,6 +41517,58 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
         kind,
         payload,
         label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateFixtureBundleJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kinds: jni::objects::JByteArray<'_>,
+    payloads: jni::objects::JObjectArray<'_>,
+    labels: jni::objects::JObjectArray<'_>,
+    now: jni::sys::jlong,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_fixture_bundle_json(
+        &mut env,
+        kinds,
+        payloads,
+        labels,
+        now,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateGovernanceLogNodeJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    expected_node_cid: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_governance_log_node_json(
+        &mut env,
+        payload,
+        label,
+        expected_node_cid,
         generated_at,
     )
 }
@@ -41664,6 +41919,36 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasGovernanceLogNodeSymbols(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::JNI_TRUE
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeHasFixtureBundleSymbols(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::JNI_TRUE
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateOrderbookPayloadJson(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -41721,6 +42006,58 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
         kind,
         payload,
         label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateFixtureBundleJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kinds: jni::objects::JByteArray<'_>,
+    payloads: jni::objects::JObjectArray<'_>,
+    labels: jni::objects::JObjectArray<'_>,
+    now: jni::sys::jlong,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_fixture_bundle_json(
+        &mut env,
+        kinds,
+        payloads,
+        labels,
+        now,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateGovernanceLogNodeJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    expected_node_cid: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_governance_log_node_json(
+        &mut env,
+        payload,
+        label,
+        expected_node_cid,
         generated_at,
     )
 }
@@ -46302,6 +46639,71 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_hedging_json(
         )
     };
     unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
+}
+
+/// Validate a bounded heterogeneous SoraFS fixture bundle and all supported
+/// manifest, provider, challenge, proof, repair, and orderbook cross-links.
+///
+/// The returned `ValidationOutcomeV1` JSON allocation must be released with
+/// [`connect_norito_free`].
+///
+/// # Safety
+/// Every non-null descriptor and nested pointer must remain valid for its
+/// corresponding length until this function returns. Output pointers must be
+/// valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_bundle_json(
+    payloads_ptr: *const ConnectNoritoSorafsReferenceBundlePayload,
+    payloads_len: usize,
+    now: u64,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut usize,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_bundle_json(
+            payloads_ptr,
+            payloads_len,
+            now,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer_usize(buffer, out_json_ptr, out_json_len) }
+}
+
+/// Validate one canonical SoraFS governance log node against its expected CID.
+///
+/// The expected node CID is required and must contain exactly 32 bytes. The
+/// returned `ValidationOutcomeV1` JSON allocation must be released with
+/// [`connect_norito_free`].
+///
+/// # Safety
+/// Every non-null input pointer must remain valid for its corresponding length
+/// until this function returns. Output pointers must be valid for writes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_governance_json(
+    bytes_ptr: *const c_uchar,
+    bytes_len: usize,
+    label_ptr: *const c_uchar,
+    label_len: usize,
+    expected_node_cid_ptr: *const c_uchar,
+    expected_node_cid_len: usize,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut usize,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_governance_json(
+            bytes_ptr,
+            bytes_len,
+            label_ptr,
+            label_len,
+            expected_node_cid_ptr,
+            expected_node_cid_len,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer_usize(buffer, out_json_ptr, out_json_len) }
 }
 
 /// Validate one canonical SoraFS governance DAG block.
@@ -54800,7 +55202,7 @@ mod sorafs_tests {
             .expect("chunk_count present");
         assert_eq!(
             chunk_count as usize,
-            plan.chunk_fetch_specs().len(),
+            plan.try_chunk_fetch_specs().expect("valid CAR plan").len(),
             "chunk count matches plan"
         );
 
@@ -54829,7 +55231,10 @@ mod sorafs_tests {
             .get("chunk_receipts")
             .and_then(JsonValue::as_array)
             .expect("chunk receipts");
-        assert_eq!(receipts.len(), plan.chunk_fetch_specs().len());
+        assert_eq!(
+            receipts.len(),
+            plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
+        );
         assert!(receipts.iter().all(|entry| {
             entry
                 .get("provider")
@@ -55045,6 +55450,57 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn sorafs_reference_bundle_validator_via_bridge_ffi() {
+        let order = repo_fixture("fixtures/sorafs_manifest/replication_order/order_v1.to");
+        let proof = repo_fixture("fixtures/sorafs_manifest/por/proof_v1.to");
+        let order_label = b"replication-order.to";
+        let proof_label = b"por-proof.to";
+        let payloads = [
+            ConnectNoritoSorafsReferenceBundlePayload {
+                kind: sorafs_reference_ffi::SORAFS_REFERENCE_BUNDLE_KIND_REPLICATION_ORDER,
+                bytes_ptr: order.as_ptr(),
+                bytes_len: order.len(),
+                label_ptr: order_label.as_ptr(),
+                label_len: order_label.len(),
+            },
+            ConnectNoritoSorafsReferenceBundlePayload {
+                kind: sorafs_reference_ffi::SORAFS_REFERENCE_BUNDLE_KIND_POR_PROOF,
+                bytes_ptr: proof.as_ptr(),
+                bytes_len: proof.len(),
+                label_ptr: proof_label.as_ptr(),
+                label_len: proof_label.len(),
+            },
+        ];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len = 0usize;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_validate_bundle_json(
+                payloads.as_ptr(),
+                payloads.len(),
+                1_700_000_001,
+                126,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, 0, "bridge fixture-bundle validator call");
+        let outcome = unsafe { take_bridge_json_usize(out_ptr, out_len) };
+        assert_eq!(
+            outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+        assert_eq!(
+            outcome.get("code").and_then(JsonValue::as_str),
+            Some("SFS-OK-000")
+        );
+        assert_eq!(
+            outcome.get("generated_at").and_then(JsonValue::as_u64),
+            Some(126)
+        );
+    }
+
+    #[test]
     fn sorafs_reference_governance_dag_block_validator_via_bridge_ffi() {
         let payload = [0xA5];
         let label = b"governance-block.to";
@@ -55077,6 +55533,45 @@ mod sorafs_tests {
         assert_eq!(
             outcome.get("generated_at").and_then(JsonValue::as_u64),
             Some(124)
+        );
+    }
+
+    #[test]
+    fn sorafs_reference_governance_log_node_validator_via_bridge_ffi() {
+        let payload = repo_fixture("fixtures/sorafs_manifest/moderation/governance_node_v1.to");
+        let expected_node_cid =
+            hex::decode("9a2dc9a930494cbc70f0e4cab25df893fb607e83f1fa52520ed62dabca918d5a")
+                .expect("fixture node CID");
+        let label = b"moderation/governance_node_v1.to";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len = 0usize;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_validate_governance_json(
+                payload.as_ptr(),
+                payload.len(),
+                label.as_ptr(),
+                label.len(),
+                expected_node_cid.as_ptr(),
+                expected_node_cid.len(),
+                1_700_001_234,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, 0, "bridge governance log-node validator call");
+        let outcome = unsafe { take_bridge_json_usize(out_ptr, out_len) };
+        assert_eq!(
+            outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+        assert_eq!(
+            outcome.get("code").and_then(JsonValue::as_str),
+            Some("SFS-OK-000")
+        );
+        assert_eq!(
+            outcome.get("generated_at").and_then(JsonValue::as_u64),
+            Some(1_700_001_234)
         );
     }
 

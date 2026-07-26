@@ -198,4 +198,48 @@ public abstract record class TransactionInstruction
         return new ExecuteTriggerInstruction(triggerId, args);
     }
 
+    public static IssueReplicationOrderInstruction IssueReplicationOrder(
+        string orderId,
+        ReadOnlySpan<byte> orderPayload,
+        ulong issuedEpoch,
+        ulong deadlineEpoch)
+    {
+        return new IssueReplicationOrderInstruction(
+            orderId,
+            orderPayload,
+            issuedEpoch,
+            deadlineEpoch);
+    }
+
+    public static IssueReplicationOrderInstruction IssueReplicationOrder(
+        string orderId,
+        string orderPayloadBase64,
+        ulong issuedEpoch,
+        ulong deadlineEpoch)
+    {
+        return new IssueReplicationOrderInstruction(
+            orderId,
+            orderPayloadBase64,
+            issuedEpoch,
+            deadlineEpoch);
+    }
+
+    public static CompleteReplicationOrderInstruction CompleteReplicationOrder(
+        string orderId,
+        string providerId,
+        ulong completionEpoch)
+    {
+        return new CompleteReplicationOrderInstruction(
+            orderId,
+            providerId,
+            completionEpoch);
+    }
+
+    public static ExpireReplicationOrderInstruction ExpireReplicationOrder(
+        string orderId,
+        ulong expirationEpoch)
+    {
+        return new ExpireReplicationOrderInstruction(orderId, expirationEpoch);
+    }
+
 }

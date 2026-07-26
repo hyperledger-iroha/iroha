@@ -91,7 +91,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. قم بإظهار البيان في base64 :
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -151,7 +151,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   الذي يغطي `pin_fetch_roundtrip`، `pin_survives_restart`، `pin_quota_rejection` و`por_sampling_returns_verified_proofs`.
 - لوحات المعلومات يجب أن تكون SUIVRE :
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` و`torii_sorafs_storage_fetch_inflight`
   - يتم عرض أجهزة قياس النجاح/فحص PoR عبر `/v1/sorafs/capacity/state`
   - les Tentatives de Publishing de التسوية عبر `sorafs_node_deal_publish_total{result=success|failure}`
 

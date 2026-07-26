@@ -487,7 +487,7 @@ def check_scripts():
     require_contains("ci/check_sorafs_pin_register_jvm_sdk.sh", "is_java_21_home()", "JVM SDK JDK 21 resolver")
     require_contains("ci/check_sorafs_pin_register_jvm_sdk.sh", 'version[[:space:]]+\\"21(\\.|\\")', "JVM SDK JDK 21 version matcher")
     require_contains("ci/check_sorafs_pin_register_jvm_sdk.sh", "java -version", "JVM SDK Java version evidence")
-    require_contains("ci/check_sorafs_pin_register_swift_sdk.sh", "testRegisterSoraFsPinManifestRejectsMalformedInputsBeforeRequest", "Swift fail-closed test contract")
+    require_contains("ci/check_sorafs_pin_register_swift_sdk.sh", "testRegisterSoraFsPinManifestPostsOnlySignedNoritoAndReturnsAdmission", "Swift signed-transport test contract")
     require_contains("ci/check_sorafs_pin_register_swift_sdk.sh", 'SWIFTC_BIN="${SORAFS_PIN_REGISTER_SWIFTC_BIN:-swiftc}"', "Swift SDK swiftc override variable")
     require_contains("ci/check_sorafs_pin_register_swift_sdk.sh", '"${SWIFTC_BIN}" --version', "Swift SDK swiftc version evidence")
     require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", "RegisterSoraFsPinManifestAsync", "C# paid-pin test filter")
@@ -507,461 +507,262 @@ def check_rust_wire_contract():
     )
     require_exact_fields(
         rust_named_field_names(client_args),
-        [
-            "authority",
-            "private_key",
-            "manifest_payload",
-            "submitted_epoch",
-            "alias",
-            "successor_of",
-        ],
+        ["manifest_payload", "submitted_epoch", "alias", "successor_of"],
         "Rust client SorafsPinRegisterArgs",
     )
-    require_exact_fields(
-        rust_public_field_names(client_args),
-        rust_named_field_names(client_args),
-        "Rust client SorafsPinRegisterArgs public surface",
-    )
     require(
-        re.search(r"(?m)^\s+pub manifest_payload:\s*&'a \[u8\],\s*$", client_args)
-        is not None,
-        "Rust client manifest_payload must be exact borrowed canonical bytes",
+        "authority" not in client_args and "private_key" not in client_args,
+        "Rust pin-register arguments must not transport signing material",
     )
-
-    client_validator = require_regex_slice(
-        client_path,
-        r"^    fn validate_sorafs_pin_register_manifest_payload\b.*?^    \}",
-        "Rust client canonical manifest_payload validator",
-    )
-    client_builder = require_regex_slice(
-        client_path,
-        r"^    fn build_sorafs_pin_register_payload\b.*?^    \}",
-        "Rust client pin-register builder",
-    )
-    require_ordered_fragments(
-        client_validator,
-        [
-            (
-                "manifest_payload.is_empty() || manifest_payload.len() > "
-                "sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES",
-                "manifest byte-length validation",
-            ),
-            (
-                "sorafs_manifest::decode_manifest_v1_canonical(manifest_payload)",
-                "canonical ManifestV1 decode",
-            ),
-        ],
-        "Rust client canonical manifest_payload validator",
-    )
-    require(
-        compact_source(client_validator).count(
-            "sorafs_manifest::decode_manifest_v1_canonical(manifest_payload)"
-        )
-        == 1,
-        "Rust client manifest_payload validator must directly decode the sole canonical byte source exactly once",
-    )
-    require_ordered_fragments(
-        client_builder,
-        [
-            (
-                "Self::validate_sorafs_pin_register_manifest_payload(manifest_payload)?;",
-                "canonical manifest validation",
-            ),
-            (
-                "base64::engine::general_purpose::STANDARD.encode(manifest_payload)",
-                "direct canonical manifest base64 encoding",
-            ),
-        ],
-        "Rust client pin-register builder",
-    )
-    require(
-        not rust_function_is_declared(
-            client_source, "post_sorafs_pin_register_with_manifest_digest"
-        ),
-        "Rust client must not retain the retired digest-override registration API",
-    )
-    for retired_helper in (
-        "sorafs_pin_register_manifest_bytes",
-        "validate_sorafs_pin_register_manifest_match",
+    for needle, label in (
+        ("quote_and_sign_transaction_payload(payload)?", "local quote and signing"),
+        ('.header("Content-Type", APPLICATION_NORITO)', "Norito content type"),
+        (".body(transaction.encode_versioned())", "versioned signed body"),
+        ("resp.status() != StatusCode::ACCEPTED", "HTTP 202 admission"),
+        ("InstructionBox::from(instruction)", "typed instruction assembly"),
     ):
-        require(
-            not rust_function_is_declared(client_source, retired_helper),
-            f"Rust client must not retain retired dual-source helper {retired_helper}",
-        )
-    wire_keys = re.findall(
-        r'map\.insert\(\s*"([a-z0-9_]+)"\.into\(\)',
-        client_builder,
-        flags=re.MULTILINE | re.DOTALL,
-    )
-    require_exact_fields(
-        wire_keys,
-        [
-            "authority",
-            "private_key",
-            "manifest_payload",
-            "submitted_epoch",
-            "alias",
-            "successor_of_hex",
-        ],
-        "Rust client pin-register wire payload",
-    )
-    require_exact_fields(
-        re.findall(r'"([a-z][a-z0-9_]*)"', client_builder),
-        wire_keys,
-        "Rust client pin-register literal wire-key surface",
-    )
-    require_contains(
-        client_path,
-        "build_register_manifest_payload_rejects_noncanonical_legacy_manifest_bytes",
-        "Rust noncanonical ManifestV1 adversarial test",
-    )
-    require_contains(
-        client_path,
-        "build_register_manifest_payload_rejects_oversized_manifest_before_decode",
-        "Rust pre-decode manifest bound test",
-    )
+        require(needle in client_source, f"Rust pin-register client missing {label}")
 
     torii_path = "crates/iroha_torii/src/routing.rs"
     torii_source = read(torii_path)
-    torii_dto = require_regex_slice(
+    require(
+        "pub struct RegisterPinManifestDto" not in torii_source,
+        "Torii must not retain the secret-bearing pin request DTO",
+    )
+    response = require_regex_slice(
         torii_path,
-        r"^pub struct RegisterPinManifestDto\s*\{.*?^\}",
-        "Torii RegisterPinManifestDto",
+        r"^pub struct RegisterPinManifestResponseDto\s*\{.*?^\}",
+        "Torii pin-register admission response",
     )
     require_exact_fields(
-        rust_named_field_names(torii_dto),
-        [
-            "authority",
-            "private_key",
-            "manifest_payload",
-            "submitted_epoch",
-            "alias",
-            "successor_of_hex",
-        ],
-        "Torii RegisterPinManifestDto",
+        rust_named_field_names(response),
+        ["status", "tx_hash_hex", "manifest_digest_hex"],
+        "Torii pin-register admission response",
     )
-    require_exact_fields(
-        rust_public_field_names(torii_dto),
-        rust_named_field_names(torii_dto),
-        "Torii RegisterPinManifestDto public surface",
-    )
-    require(
-        re.search(r"(?m)^\s+pub manifest_payload:\s*String,\s*$", torii_dto)
-        is not None,
-        "Torii RegisterPinManifestDto.manifest_payload must be canonical base64 text",
-    )
-    require(
-        re.search(
-            r"#\[norito\(deny_unknown_fields\)\](?:\s*///[^\n]*)*\s*"
-            r"pub struct RegisterPinManifestDto\s*\{",
-            torii_source,
-        )
-        is not None,
-        "Torii RegisterPinManifestDto must reject unknown and retired fields",
-    )
-
-    torii_handler = require_regex_slice(
+    handler = require_regex_slice(
         torii_path,
         r"^pub async fn handle_post_sorafs_register_manifest\b.*?^\}",
-        "Torii pin-register handler",
-    )
-    require(
-        "decode_sorafs_pin_manifest_payload(&req.manifest_payload" in torii_handler,
-        "Torii pin-register handler must derive manifest state only from req.manifest_payload",
-    )
-    torii_decoder = require_regex_slice(
-        torii_path,
-        r"^fn decode_sorafs_pin_manifest_payload\b.*?^\}",
-        "Torii canonical manifest_payload decoder",
-    )
-    require(
-        "constSORAFS_PIN_MANIFEST_MAX_BASE64_BYTES:usize="
-        "sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES.div_ceil(3)*4;"
-        in compact_source(torii_source),
-        "Torii encoded manifest bound must be derived from MAX_MANIFEST_ENCODED_BYTES",
-    )
-    require_ordered_fragments(
-        torii_decoder,
-        [
-            (
-                "manifest_payload.is_empty() || "
-                "manifest_payload.len() > SORAFS_PIN_MANIFEST_MAX_BASE64_BYTES",
-                "encoded-size validation before allocation",
-            ),
-            (
-                "base64::engine::general_purpose::STANDARD"
-                ".decode(manifest_payload.as_bytes())",
-                "base64 decode",
-            ),
-            (
-                "manifest_bytes.is_empty() || "
-                "manifest_bytes.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES",
-                "decoded-size validation",
-            ),
-            (
-                "base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) "
-                "!= manifest_payload",
-                "canonical padded-base64 round trip",
-            ),
-            (
-                "sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)",
-                "canonical ManifestV1 decode",
-            ),
-            ("validate_manifest(&manifest, constraints)", "manifest policy validation"),
-        ],
-        "Torii canonical manifest_payload decoder",
-    )
-    require(
-        compact_source(torii_decoder).count(
-            "sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)"
-        )
-        == 1,
-        "Torii manifest_payload decoder must directly decode the sole canonical byte source exactly once",
-    )
-    for retired_helper in (
-        "validate_manifest_payload_matches_request",
-        "manifest_policy_from_dto",
-    ):
-        require(
-            not rust_function_is_declared(torii_source, retired_helper),
-            f"Torii pin-register path retains retired matching helper {retired_helper}",
-        )
-    require_contains(
-        torii_path,
-        "register_manifest_json_rejects_every_retired_summary_field",
-        "Torii retired summary-field adversarial test",
-    )
-    require_contains(
-        torii_path,
-        "register_manifest_rejects_oversized_manifest_before_base64_decode",
-        "Torii pre-decode manifest bound test",
-    )
-
-    route_tests_path = "crates/iroha_torii/tests/sorafs_discovery.rs"
-    require_contains(
-        route_tests_path,
-        "sorafs_pin_register_route_decodes_exact_canonical_manifest_payload",
-        "Torii route canonical-manifest test",
-    )
-    require_contains(
-        route_tests_path,
-        "sorafs_pin_register_route_rejects_retired_request_fields",
-        "Torii route retired-field adversarial test",
-    )
-    require_contains(
-        route_tests_path,
-        "sorafs_pin_register_rejects_malformed_manifest_payload_base64",
-        "Torii route malformed-base64 adversarial test",
-    )
-    route_retired_test = require_regex_slice(
-        route_tests_path,
-        r"^async fn sorafs_pin_register_route_rejects_retired_request_fields\b.*?^\}",
-        "Torii route retired request-field test",
-    )
-    for retired_field in (
-        "manifest_b64",
-        "manifest_digest_hex",
-        "chunker_profile_id",
-        "pin_policy",
-        "chunk_digest_sha3_256_hex",
-        "content_length",
-        "fee_payment",
-        "gas_asset_id",
-    ):
-        require(
-            f'"{retired_field}"' in route_retired_test,
-            f"Torii route retired-field test missing {retired_field} adversarial vector",
-        )
-
-    openapi_path = "crates/iroha_torii/src/openapi.rs"
-    openapi_route = require_regex_slice(
-        openapi_path,
-        (
-            r"^\s+paths\.insert\(\s*"
-            r'"/v1/sorafs/pin/register"\.to_owned\(\),.*?'
-            r"(?=^\s+paths\.insert\()"
-        ),
-        "typed SoraFS pin-register OpenAPI operation",
+        "Torii signed pin-register handler",
     )
     for needle, label in (
-        (
-            "`manifest_payload` is the sole metadata source",
-            "manifest-authoritative operation description",
-        ),
-        (
-            "#/components/schemas/SorafsPinRegisterRequestV1",
-            "typed request schema",
-        ),
-        (
-            "#/components/schemas/SorafsPinRegisterResponseV1",
-            "typed response schema",
-        ),
+        ("transaction: SignedTransaction", "signed transaction input"),
+        ("validate_sorafs_pin_register_transaction", "signed transaction validation"),
+        ("handle_transaction_with_metrics(", "original queue submission"),
+        ('status: "submitted".to_owned()', "submitted status"),
+        ("StatusCode::ACCEPTED", "HTTP 202 response"),
     ):
-        require(
-            needle in openapi_route,
-            f"Torii pin-register OpenAPI operation missing {label}",
-        )
-    openapi_schemas = require_regex_slice(
-        openapi_path,
-        r"^fn insert_sorafs_pin_register_schemas\b.*?^\}",
-        "SoraFS pin-register OpenAPI schemas",
+        require(needle in handler, f"Torii pin-register handler missing {label}")
+    validator = require_regex_slice(
+        torii_path,
+        r"^fn validate_sorafs_pin_register_transaction\b.*?^\}",
+        "Torii pin-register transaction validator",
+    )
+    require(
+        "validate_single_signed_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest>"
+        in compact_source(validator),
+        "Torii must accept exactly one typed RegisterPinManifest",
+    )
+    shared = require_regex_slice(
+        torii_path,
+        r"^fn validate_single_signed_instruction\b.*?^\}",
+        "Torii signed instruction validator",
     )
     for needle, label in (
-        (
-            '"required": ["authority", "private_key", "manifest_payload", '
-            '"submitted_epoch"]',
-            "exact required request fields",
-        ),
-        ('"additionalProperties": false', "closed object schemas"),
-        (
-            "sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES",
-            "manifest payload size source",
-        ),
-        (
-            '"decodedType": "sorafs_manifest::ManifestV1"',
-            "canonical decoded type",
-        ),
-        (
-            '"requireByteIdenticalCanonicalReencode": true',
-            "canonical byte-identical re-encode requirement",
-        ),
-        ('"requireValidatedManifest": true', "manifest validation requirement"),
+        ("transaction.chain() != chain_id", "chain validation"),
+        ("transaction.verify_signature()", "signature validation"),
+        ("let [instruction] = instructions.as_ref()", "exact instruction count"),
+        ("downcast_ref::<T>()", "exact instruction type"),
     ):
-        require(
-            needle in openapi_schemas,
-            f"Torii pin-register OpenAPI schemas missing {label}",
-        )
-    require_contains(
-        openapi_path,
-        "sorafs_pin_register_openapi_is_closed_and_manifest_authoritative",
-        "strict typed pin-register OpenAPI contract test",
+        require(needle in shared, f"Torii signed instruction validator missing {label}")
+
+    route_tests = read("crates/iroha_torii/tests/sorafs_discovery.rs")
+    for needle, label in (
+        ("sorafs_pin_register_route_accepts_caller_signed_transaction", "signed JSON test"),
+        ("sorafs_pin_register_route_accepts_versioned_norito_transaction", "signed Norito test"),
+        ("sorafs_pin_register_rejects_secret_bearing_legacy_body", "secret rejection"),
+        ("sorafs_pin_register_rejects_wrong_shape_chain_and_signature", "validation rejection"),
+        ("admission response must not claim a fee, custody result, or finalized pin status", "admission claim guard"),
+    ):
+        require(needle in route_tests, f"Torii route tests missing {label}")
+
+    openapi = read("crates/iroha_torii/src/openapi.rs")
+    for needle, label in (
+        ("#/components/schemas/VersionedSignedTransactionJson", "signed request schema"),
+        ("#/components/schemas/SorafsPinRegisterResponseV1", "admission response schema"),
+        ('"enum": ["submitted"]', "submitted-only status"),
+        ("Submitted never means committed or finalized", "admission semantics"),
+        ("sorafs_pin_register_openapi_is_caller_signed_transaction_transport", "OpenAPI guard"),
+    ):
+        require(needle in openapi, f"Torii pin-register OpenAPI missing {label}")
+    require(
+        '"SorafsPinRegisterRequestV1".to_owned()' not in openapi,
+        "OpenAPI must not retain the secret-bearing request schema",
     )
 
 
 def check_javascript_contract():
-    for path in ("javascript/iroha_js/src/toriiClient.js", "javascript/iroha_js/dist/toriiClient.js"):
-        require_contains(path, "async registerSorafsPinManifest(input = {})", "register API")
-        require_contains(path, '"/v1/sorafs/pin/register"', "paid-pin endpoint")
-        require_contains(path, "buildSorafsPinRegisterPayload", "request normalization")
-        require_contains(path, "normalizeSorafsPinRegisterResponse", "typed response normalization")
-        require_contains(path, '"manifest_payload"', "canonical manifest payload field")
-        require_contains(path, "SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 * 1024", "manifest payload bound")
-        require_contains(path, "normalizeSorafsPinRegisterAliasSegment", "canonical alias segment validation")
-        require_contains(path, "successor_of_hex must not be zero", "inert successor rejection")
-    require_contains("javascript/iroha_js/index.d.ts", "registerSorafsPinManifest(", "TypeScript register declaration")
-    require_contains("javascript/iroha_js/index.d.ts", "registerSorafsPinManifestTyped(", "TypeScript typed register declaration")
-    require_contains("javascript/iroha_js/index.d.ts", "private_key: string;", "TypeScript canonical private key input")
-    require_contains("javascript/iroha_js/index.d.ts", "manifest_payload: string;", "TypeScript canonical manifest payload input")
-    require_contains("javascript/iroha_js/index.d.ts", "submitted_epoch: NumericLike;", "TypeScript canonical epoch input")
-    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects all unknown and retired fields before fetch", "unknown-field adversarial test")
-    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects malformed and oversized aliases before fetch", "alias object adversarial test")
-    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects non-canonical and malformed manifests before fetch", "manifest payload adversarial test")
-    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifest rejects malformed and zero successor digests before fetch", "successor adversarial test")
-    require_contains("javascript/iroha_js/test/toriiClient.test.js", "registerSorafsPinManifestTyped rejects ambiguous response aliases", "response alias adversarial test")
+    for path in (
+        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/dist/toriiClient.js",
+    ):
+        source = read(path)
+        match = re.search(
+            r"async registerSorafsPinManifest\(signedTransaction, options = \{\}\).*?(?=\n  /\*\*)",
+            source,
+            flags=re.DOTALL,
+        )
+        require(match is not None, f"{path} signed register API is missing")
+        method = match.group(0)
+        for needle, label in (
+            ("toVersionedTransactionPayload", "versioned transaction wrapping"),
+            ('"Content-Type": APPLICATION_NORITO', "Norito content type"),
+            ("Accept: APPLICATION_JSON", "JSON response negotiation"),
+            ("_expectStatus(response, [202])", "HTTP 202 admission"),
+        ):
+            require(needle in method, f"{path} pin-register method missing {label}")
+        require(
+            "private_key" not in method and "manifest_payload" not in method,
+            f"{path} pin-register method must transport only signed bytes",
+        )
+        require(
+            "function buildSorafsPinRegisterPayload" not in source,
+            f"{path} retains the secret-bearing request builder",
+        )
+
+    for path in (
+        "javascript/iroha_js/src/transaction.js",
+        "javascript/iroha_js/dist/transaction.js",
+    ):
+        require_contains(path, "buildRegisterPinManifestInstruction", "local typed instruction builder")
+        require_contains(path, "buildRegisterPinManifestTransaction", "local quote-and-sign builder")
+        require_contains(path, "instructions: [instruction]", "exactly-one instruction assembly")
+        require_contains(path, "quoteAndSignTransaction", "local signing")
+
+    dts = read("javascript/iroha_js/index.d.ts")
+    require("interface SorafsPinRegisterRequest" not in dts, "TypeScript secret request DTO remains")
+    for needle, label in (
+        ("registerSorafsPinManifest(", "signed register declaration"),
+        ("signedTransaction: Buffer | ArrayBuffer | ArrayBufferView", "signed input"),
+        ("buildRegisterPinManifestInstruction", "typed instruction declaration"),
+        ("buildRegisterPinManifestTransaction", "local signed builder declaration"),
+        ('status: "submitted";', "submitted admission response"),
+    ):
+        require(needle in dts, f"TypeScript declarations missing {label}")
+
+    tests = read("javascript/iroha_js/test/toriiClient.test.js")
+    for needle, label in (
+        ("posts only a versioned signed transaction", "signed transport test"),
+        ("rejects legacy secret-bearing request objects", "secret rejection test"),
+        ("rejects pre-finality fee or custody claims", "admission response guard"),
+    ):
+        require(needle in tests, f"JavaScript tests missing {label}")
 
 
 def check_python_contract():
-    require_contains("python/iroha_python/src/iroha_python/__init__.py", "SorafsPinRegisterResponse", "public typed response export")
-    for path in ("python/iroha_python/src/iroha_python/client.py",):
-        require_contains(path, "def register_sorafs_pin_manifest(", "register API")
-        require_contains(path, '"/v1/sorafs/pin/register"', "paid-pin endpoint")
-        require_contains(path, "_normalize_sorafs_pin_register_request", "request normalization")
-        require_contains(path, "SorafsPinRegisterResponse.from_payload", "typed response normalization")
-        require_contains(path, '"manifest_payload"', "canonical manifest payload field")
-        require_contains(path, "contains unsupported fields", "unknown-field rejection")
-        require_contains(path, "_SORAFS_MAX_MANIFEST_ENCODED_BYTES = 512 * 1024", "manifest payload bound")
-        require_contains(path, "_SORAFS_MAX_ALIAS_PROOF_BYTES = 1024 * 1024", "alias proof bound")
-        require_contains(path, "successor_of_hex must not be zero", "inert successor rejection")
-    normalizer = require_regex_slice(
-        "python/iroha_python/src/iroha_python/client.py",
-        r"^def _normalize_sorafs_pin_register_request\b.*?(?=^def )",
-        "Python pin-register request normalizer",
+    client_path = "python/iroha_python/src/iroha_python/client.py"
+    source = read(client_path)
+    method = require_regex_slice(
+        client_path,
+        r"^    def register_sorafs_pin_manifest\b.*?(?=^    def )",
+        "Python signed pin-register method",
     )
-    allowed_match = re.search(
-        r"allowed_fields\s*=\s*\{(.*?)^\s*\}",
-        normalizer,
-        flags=re.MULTILINE | re.DOTALL,
+    for needle, label in (
+        ('transaction: "SignedTransactionEnvelope"', "signed envelope input"),
+        ("transaction.signed_transaction_versioned", "versioned signed bytes"),
+        ('"Content-Type": "application/x-norito"', "Norito content type"),
+        ('"Accept": "application/json"', "JSON response negotiation"),
+        ("self._expect_status(response, (202,))", "HTTP 202 admission"),
+    ):
+        require(needle in method, f"Python pin-register method missing {label}")
+    require(
+        "private_key" not in method and "manifest_payload" not in method,
+        "Python pin-register method must transport only signed bytes",
     )
     require(
-        allowed_match is not None,
-        "Python pin-register normalizer must declare an exact allowed_fields set",
+        "_normalize_sorafs_pin_register_request" not in source,
+        "Python secret-bearing request normalizer remains",
     )
-    allowed_fields = re.findall(r'"([a-z0-9_]+)"', allowed_match.group(1))
-    require_exact_fields(
-        allowed_fields,
-        [
-            "authority",
-            "private_key",
-            "manifest_payload",
-            "submitted_epoch",
-            "alias",
-            "successor_of_hex",
-        ],
-        "Python pin-register request normalizer",
+    require_contains(
+        "python/iroha_python/src/iroha_python/__init__.py",
+        "SorafsPinRegisterResponse",
+        "Python admission response export",
     )
-    require(
-        '"fee_payment"' not in normalizer,
-        "Python pin-register normalizer must reject retired fee_payment",
-    )
-    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_rejects_retired_and_unknown_fields", "retired request-field adversarial test")
-    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", '"fee_payment",', "retired fee_payment adversarial vector")
-    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_rejects_alias_object_with_flat_alias_fields", "alias object adversarial test")
-    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_rejects_invalid_inputs_before_request", "invalid input adversarial test")
-    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", '"manifest_payload": b"manifest-norito"', "manifest bytes request test")
-    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", 'body["manifest_payload"]', "canonical manifest payload assertion")
-    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_typed_rejects_duplicate_response_aliases", "response alias adversarial test")
+    tests = read("python/iroha_python/tests/client_sorafs_pin_register_test.py")
+    require("test_pin_register_posts_only_versioned_signed_transaction" in tests, "Python signed transport test missing")
+    require("test_pin_register_rejects_pre_finality_fee_claim" in tests, "Python admission response guard missing")
 
 
 def check_swift_contract():
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "public func registerSoraFsPinManifest(_ requestBody: ToriiSoraFsPinRegisterRequest) async throws -> ToriiSoraFsPinRegisterResponse", "Swift async API")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", 'path: "/v1/sorafs/pin/register"', "Swift endpoint")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "requestBody.normalized()", "Swift request normalization")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "public var manifestPayload: String?", "Swift manifest payload input")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", 'case manifestPayload = "manifest_payload"', "Swift canonical manifest payload coding key")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "requiredManifestPayload(", "Swift manifest payload normalization")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "maximumManifestBytes = 512 * 1024", "Swift manifest payload bound")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "maximumAliasProofBytes = 1024 * 1024", "Swift alias proof bound")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "requiredAliasSegment(", "Swift canonical alias segment validation")
-    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "testRegisterSoraFsPinManifestRejectsMalformedInputsBeforeRequest", "Swift malformed input test")
-    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "testRegisterSoraFsPinManifestAcceptsMaximumManifestAndOmitsOptionalFields", "Swift manifest boundary test")
-    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", 'root["manifest_payload"]', "Swift canonical manifest payload assertion")
-    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", 'String(repeating: "a", count: 129)', "Swift oversized alias segment adversarial test")
-    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "oversizedAliasProof", "Swift oversized alias proof adversarial test")
-    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "XCTAssertFalse(didSendRequest)", "Swift no-request assertion")
-    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "testRegisterSoraFsPinManifestRejectsMalformedResponse", "Swift malformed response test")
-    swift_source = read("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift")
-    request_match = re.search(
-        r"public struct ToriiSoraFsPinRegisterRequest:[\s\S]*?(?=fileprivate struct ToriiSoraFsPinRegisterWireRequest)",
-        swift_source,
+    path = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    source = read(path)
+    method = require_regex_slice(
+        path,
+        r"^    public func registerSoraFsPinManifest\(_ transaction: SignedTransactionEnvelope\) async throws.*?(?=^    public func getVpnProfile)",
+        "Swift signed pin-register method",
     )
-    require(request_match is not None, "Swift pin-register request declaration is missing")
-    retired = re.search(
-        r"manifestBase64|manifestBytes|manifest_b64|chunkerProfile|chunker_profile|pinPolicy|pin_policy|contentLength|content_length|chunkDigest|chunk_digest",
-        request_match.group(0),
+    for needle, label in (
+        ("body: transaction.norito", "signed Norito body"),
+        ('"Content-Type": "application/x-norito"', "Norito content type"),
+        ('"Accept": "application/json"', "JSON negotiation"),
+        ("acceptedStatus: 202..<203", "HTTP 202 admission"),
+        ('Set(["status", "tx_hash_hex", "manifest_digest_hex"])', "closed response"),
+    ):
+        require(needle in method, f"Swift pin-register method missing {label}")
+    require(
+        "ToriiSoraFsPinRegisterRequest" not in source,
+        "Swift secret-bearing pin request DTO remains",
     )
-    require(retired is None, "Swift pin-register request exposes retired out-of-band fields")
+    tests = read("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift")
+    require("testRegisterSoraFsPinManifestPostsOnlySignedNoritoAndReturnsAdmission" in tests, "Swift signed transport test missing")
+    require("testRegisterSoraFsPinManifestRejectsPreFinalityFeeClaims" in tests, "Swift admission response guard missing")
 
 
 def check_csharp_contract():
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "RegisterSoraFsPinManifestAsync", "C# API")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", '"/v1/sorafs/pin/register"', "C# endpoint")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "NormalizeSoraFsPinRegisterRequest", "C# request normalization")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "NormalizeRequiredSoraFsManifestPayload", "C# manifest payload normalization")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "SoraFsManifestPayloadMaxBytes = 512 * 1024", "C# manifest payload bound")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "SoraFsAliasProofMaxBytes = 1024 * 1024", "C# alias proof bound")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "Convert.ToBase64String(manifestBytes)", "C# manifest bytes normalization")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs", "Provide either ManifestPayloadBase64 or ManifestBytes, not both.", "C# manifest payload alias conflict")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs", "public string? ManifestPayloadBase64", "C# manifest base64 input")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs", "public byte[]? ManifestBytes", "C# manifest bytes input")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs", '[JsonPropertyName("manifest_payload")]', "C# canonical manifest payload coding key")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs", "ToriiSoraFsPinRegisterResponse", "C# response model")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiJsonSerializerContext.cs", "ToriiSoraFsPinRegisterWireRequest", "C# wire request JSON context")
-    require_contains("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiJsonSerializerContext.cs", "ToriiSoraFsPinRegisterResponse", "C# source-generated JSON context")
-    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "RegisterSoraFsPinManifestAsyncRejectsMalformedInputsBeforeRequest", "C# malformed input test")
-    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "RegisterSoraFsPinManifestAsyncAcceptsCanonicalManifestPayloadBase64", "C# manifest base64 request test")
-    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", 'GetProperty("manifest_payload")', "C# canonical manifest payload assertion")
-    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "Assert.Null(handler.LastRequest)", "C# no-request assertion")
-    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "RegisterSoraFsPinManifestAsyncRejectsMalformedDigestResponse", "C# malformed response test")
+    client_path = "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs"
+    source = read(client_path)
+    method = require_regex_slice(
+        client_path,
+        r"^    public async Task<ToriiSoraFsPinRegisterResponse> RegisterSoraFsPinManifestAsync\b.*?(?=^    public Task<HttpResponseMessage> OpenSoraFsCidContentAsync)",
+        "C# signed pin-register method",
+    )
+    for needle, label in (
+        ("SignedTransactionEnvelope transaction", "signed envelope input"),
+        ("transaction.NoritoBytes", "signed Norito body"),
+        ('"application/x-norito"', "Norito content type"),
+        ('accept: "application/json"', "JSON negotiation"),
+        ("HttpStatusCode.Accepted", "HTTP 202 admission"),
+        ('fields.SetEquals(["status", "tx_hash_hex", "manifest_digest_hex"])', "closed response"),
+    ):
+        require(needle in method, f"C# pin-register method missing {label}")
+    require(
+        "NormalizeSoraFsPinRegisterRequest" not in source,
+        "C# secret-bearing request normalizer remains",
+    )
+    models = read("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs")
+    require(
+        "ToriiSoraFsPinRegisterRequest" not in models
+        and "ToriiSoraFsPinRegisterWireRequest" not in models
+        and "ToriiSoraFsPinAlias" not in models,
+        "C# secret-bearing pin request DTOs remain",
+    )
+    response = re.search(
+        r"public sealed record class ToriiSoraFsPinRegisterResponse.*?^\}",
+        models,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    require(response is not None, "C# admission response model is missing")
+    for retired in ("PinFee", "Custody", "ChunkerHandle", "SuccessorOf"):
+        require(retired not in response.group(0), f"C# response retains retired field {retired}")
+    require_contains(
+        "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiJsonSerializerContext.cs",
+        "ToriiSoraFsPinRegisterResponse",
+        "C# admission response JSON context",
+    )
+    tests = read("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs")
+    require("RegisterSoraFsPinManifestAsyncPostsOnlySignedNoritoAndReturnsAdmission" in tests, "C# signed transport test missing")
+    require("RegisterSoraFsPinManifestAsyncRejectsNonAdmissionFields" in tests, "C# response guard missing")
+    require('[InlineData("private_key")]' in tests, "C# secret response rejection guard missing")
+
 
 
 def check_jvm_contract():

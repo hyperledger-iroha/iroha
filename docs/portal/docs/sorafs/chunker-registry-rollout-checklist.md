@@ -59,10 +59,10 @@ charter has been ratified.
 Refer to the [staging manifest playbook](./staging-manifest-playbook) for a
 detailed walkthrough of these steps.
 
-1. Deploy Torii with `torii.sorafs` discovery enabled and admission
+1. Deploy Torii with `sorafs.discovery` enabled and admission
    enforcement turned on (`enforce_admission = true`).
 2. Push the approved provider admission envelopes to the staging registry
-   directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`.
+   directory referenced by `sorafs.discovery.admission.envelopes_dir`.
 3. Verify provider adverts propagate via the discovery API:
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .

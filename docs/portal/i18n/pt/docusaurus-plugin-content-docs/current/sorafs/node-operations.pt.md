@@ -95,7 +95,7 @@ Ambos os endpoints são servidos pelo trabalhador de armazenamento embutido, por
 2. Envie o manifesto com codificação base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -155,7 +155,7 @@ Ambos os endpoints são servidos pelo trabalhador de armazenamento embutido, por
   que cobrem `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection` e `por_sampling_returns_verified_proofs`.
 - Dashboards devem acompanhar:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  -`torii_sorafs_storage_pin_queue_depth` e `torii_sorafs_storage_fetch_inflight`
+  -`sorafs_provider_ingest_inflight` e `torii_sorafs_storage_fetch_inflight`
   - contadores de sucesso/falha PoR expostos via `/v1/sorafs/capacity/state`
   - Tentativa de publicação de liquidação via `sorafs_node_deal_publish_total{result=success|failure}`
 

@@ -18,19 +18,37 @@ atomically with the canonical dispute record, and
 `ResolveSorafsCapacityDispute` atomically updates that record and appends the
 exact revision-two `Resolved` event.
 
-This is source implementation, not a readiness claim. The existing local
-Torii snapshot publication/read APIs still serve the `sorafs_node` snapshot
-checkpoint; they are not the production committed-journal projection.
-Dedicated authenticated Torii journal command/query routes, SDK builders,
-committed producers for the remaining proof/repair/orderbook/reserve sources,
-the durable finalized-cursor ingest/outbox service, supervised deployment, and
-production evidence remain open. The integrated Rust build, lint, and test
-matrix for the journal changes is also pending.
+This is source implementation, not a readiness claim. The deterministic
+multi-feed projector in `crates/sorafs_node/src/reputation.rs` is exported into
+the crate graph. It consumes the existing finalized proof, unified reputation
+journal, repair, orderbook, reserve-event, and reserve-provider projections;
+persists five canonical restart-safe physical feed cursors; derives
+byte-identical unsigned material; and retains a bounded idempotent
+retry/dead-letter/acknowledgement outbox without signing keys. Torii's
+local-authoritative snapshot POST and the matching CLI publication command are
+removed. Latest, provider, weights, and event reads now consume only the fresh
+committed-derived projection after signed snapshot validation and authenticated
+Governance DAG readback. Snapshot-id reads resolve the exact authenticated
+snapshot from the durable immutable suffix capped at 1,024 entries and the
+publication-checkpoint byte ceiling; unknown or evicted ids return `404`.
+
+Strict non-secret `iroha_config` policy construction and the supervised
+finalized-query/threshold-signing/publication worker are implemented. The
+current-head `State` adapter was removed because it cannot satisfy an immutable
+historical exact-anchor query: enabling the runtime now requires a
+deployment-injected `ReputationFinalizedQueryV1`. The queue-backed journal
+submitter signs and enqueues PoR and counted stream-token append transactions,
+while the committed publication projection is exposed to Torii only after a
+fresh successful reconciliation and authenticated Governance DAG readback.
+Production immutable historical-query, threshold-signer, authenticated DAG
+publication/readback/head-inclusion, PoR-terminal-owner, and
+stream-token-owner adapters remain open. The integrated Rust build, lint, and
+test matrix for these changes is also pending.
 
 The existing snapshot foundation includes canonical Norito/JSON schemas,
 fixed-point scoring, trust-edge iteration, degradation flags, Merkle proofs,
-Governance DAG payload validation, local Torii publication/read APIs, CLI
-verification and publication helpers, SDK convenience clients, and
+Governance DAG payload validation, read-only Torii handlers, CLI verification
+and read helpers, SDK convenience clients, and
 observability assets. `scripts/build_sorafs_reputation_canary.py` builds
 individual payload-free SFM-3 canary artifacts for publish/latest snapshots,
 provider proofs, events, proof verification, metrics, transport, and
@@ -57,10 +75,10 @@ Checked-in response-file examples cover provider and metrics canaries.
 ## Target Architecture
 | Component | Responsibility | Notes |
 |-----------|----------------|-------|
-| Metrics ingest pipeline (`reputation_ingest`) | Consumes fixed-view pages from `FindSorafsReputationJournalEvents` and, once wired, the remaining typed committed proof/repair/orderbook/reserve sources. | Persists only rebuildable projections plus a durable finalized cursor/outbox. PoR, stream-token, and capacity-dispute journal producers exist in native core; the broader producer and service wiring remains open. |
+| Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration, the queue-backed journal submitter, exact historical-query injection boundary, and supervised scheduling/reconciliation are wired; the production historical adapter, integrated validation, and reviewed deployment evidence remain open. |
 | Scoring engine (`reputation_engine`) | Aggregates metrics, runs scoring algorithm (EigenTrust-style), applies policy penalties, generates snapshots. | Runs hourly; writes outputs to database + object storage. |
-| Snapshot publisher (`reputation_publisher`) | Builds Merkle tree, updates Governance DAG, pushes snapshots to IPFS/S3, broadcasts Torii events. | Weekly full snapshot + daily incremental diff. |
-| API gateway (`sorafs_reputation_api`) | Exposes REST/GraphQL endpoints, WebSocket updates, CLI hooks. | Deployed regionally; uses caching with ETag. |
+| Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open. |
+| API gateway (`sorafs_reputation_api`) | Exposes read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist. |
 | CLI/SDK modules | `sorafs reputation` commands; SDK helper functions for verification and weighting. | Integrates with orchestrator, indexer, orderbook, incentives. |
 
 ### Data Flow
@@ -68,23 +86,26 @@ Checked-in response-file examples cover provider and metrics canaries.
 2. Governed authorities submit source-bound native transactions. V1 core
    currently admits PoR terminals, stream-token validation outcomes, and
    capacity-dispute `Opened`/`Resolved` transitions.
-3. `reputation_ingest` reads `FindSorafsReputationJournalEvents` at one
-   finalized cursor, advances only through the globally contiguous sequence,
-   and reconciles its durable cursor/outbox after restart.
+3. `reputation_ingest` reads all five physical finalized feeds, advances only
+   through their exact contiguous sequences (with PoR/dispute/token sharing one
+   journal cursor), and reconciles crash-staged projection state after restart.
 4. The service normalises committed entries and the additional typed domain
    events into rebuildable metric projections (`raw_por`, `raw_pdp`,
    `raw_potr`, `raw_latency`, `raw_disputes`, `raw_tokens`).
 5. `reputation_engine` processes those projections, calculates rolling
    windows, applies weights/penalties, and runs the deterministic trust
    iteration.
-6. The publisher builds the Merkle tree, stores the signed snapshot in
-   S3/IPFS, and records its root in the Governance DAG
-   (`ReputationSnapshotNode`).
+6. The projector durably enqueues exact unsigned material. An external
+   threshold signer binds the governed policy, publishes the canonical signed
+   result, and acknowledges the outbox item.
 7. Public APIs and SDKs serve committed-derived scores with cryptographic
    proofs; downstream systems consume them for routing and incentives.
 
 ## Data Sources & Normalisation
-- **PoR/PDP/PoTR**: success ratios computed over rolling 24h, 72h, 7d windows. Success defined as `verified` verdicts / total challenges. Native PoR-terminal journal admission is implemented; PDP/PoTR producer wiring remains open.
+- **PoR/PDP/PoTR**: success ratios are derived from the native PoR journal and
+  finalized proof-outcome feed. The queue-backed governed PoR and counted
+  stream-token transaction submitter is present; the actual PoR/token owners
+  still need to invoke its durable callbacks.
 - **Latency**: P95 latency from PoTR receipts (hot/warm tiers). Normalise to `[0,1]` by mapping 0 ms→1.0, 90 s→0 (hot) / 5 min→0 (warm).
 - **Disputes**: count governance disputes resolved against provider per 1k
   orders. Native capacity-dispute `Opened` and `Resolved` journal transitions
@@ -92,13 +113,13 @@ Checked-in response-file examples cover provider and metrics canaries.
 - **Token violations**: rate of throttle breaches and unauthorized access
   attempts. Native stream-token validation admission is implemented; the
   regional gateway transaction forwarder remains open.
-- **Repair escalations**: number of PDP/PoR repair escalations not resolved
-  within SLA. The finalized repair-event producer remains open.
-- **Orderbook and settlement**: committed trades, settlement failures, and
-  channel outcomes. The journal/service producer remains open.
+- **Repair escalations**: projected from the existing finalized native repair
+  event feed.
+- **Orderbook and settlement**: projected from the existing finalized native
+  orderbook event feed.
 - **Stake & Reserve status**: Reserve+Rent lifecycle stage
-  (Active/Warning/Grace/Delinquent/Default) influences multipliers. The
-  finalized reserve-event producer remains open.
+  (Active/Warning/Grace/Delinquent/Default) is resolved from the same-anchor
+  finalized reserve event and complete provider-account projections.
 - Native journal entries and query pages use canonical Norito. A local
   database, telemetry exporter, or Governance DAG mirror may cache or project
   them, but cannot replace the committed journal as input authority.
@@ -236,37 +257,26 @@ They are not an independent authoritative event journal.
 - `sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID
   --proof=PATH] [--summary-out=PATH]` validates canonical Norito snapshots and
   optional provider Merkle proofs, then emits a JSON summary for operator logs.
-- `sorafs_cli reputation publish --torii-url=URL --snapshot=SIGNED_ENVELOPE.to`,
-  `sorafs_cli reputation snapshot --torii-url=URL`, and
-  `sorafs_cli reputation fetch --torii-url=URL --provider-id=ID
-  [--format=table|json]` provide the local Torii publication and consumption
-  workflow around the implemented endpoints. `sorafs_cli reputation watch
+- `sorafs_cli reputation snapshot --torii-url=URL` and `sorafs_cli reputation
+  fetch --torii-url=URL --provider-id=ID [--format=table|json]` provide the
+  read-only Torii consumption workflow. `sorafs_cli reputation watch
   --torii-url=URL [--since=N] [--limit=N]` polls the implemented reputation
-  event list and advances by `next_since`.
-- `sorafs_node::NodeHandle::publish_signed_reputation_snapshot` loads the
-  configured external `ReputationSnapshotTrustPolicyV1`, verifies threshold
-  signatures, policy/freshness bounds, complete replayable scoring evidence,
-  and exact predecessor/time transition, then atomically checkpoints the full
-  envelope, original admission time, event, and signed governance outbox
-  payload. Exact envelope sizes and pending outbox copies are charged against
-  the configured checkpoint ceiling before state mutation. Restart re-verifies
-  the envelope against the configured policy and its original admission time.
-  The filesystem publisher writes immutable
-  `reputation/snapshots/<snapshot_id>/` `.to`/`.json` artifacts plus
-  `reputation/latest.to` and `reputation/latest.json` pointers with BLAKE3
-  sidecars. This is the existing local snapshot publication store, not the
-  authoritative input journal and not yet a committed-ledger Torii projection.
+  event list and advances by `next_since`. There is deliberately no
+  `reputation publish` command or Torii POST fallback.
 - `crates/sorafs_node/src/reputation.rs` contains a deterministic
   `ReputationIngestService` that joins proof, journal, repair, orderbook, reserve,
-  and provider pages at one finalized height/hash/timestamp and derives unsigned
-  signing material. The module is not currently exported from
-  `sorafs_node::lib`, configured, or supervised, so neither its implementation
-  nor its tests are in the crate graph. Before production use it also needs
-  public restart-safe per-feed query cursors and a durable unsigned-material
-  outbox with acknowledgement and committed-publication reconciliation.
-- Torii exposes the local reputation surface at
-  `POST /v1/sorafs/reputation/latest`,
-  `GET /v1/sorafs/reputation/latest`, and
+  and provider pages at one finalized height/hash/timestamp. It is exported,
+  exposes restart-safe cursors for the five physical feeds, derives canonical
+  unsigned signing material, and persists a bounded idempotent outbox with
+  retry, dead-letter, exact signed-envelope binding, acknowledgement, canonical
+  corruption checks, full public trust-policy/quorum/revocation/freshness
+  verification, and payload-free status/metrics. Standard-daemon config,
+  trust-policy injection, state-backed query scheduling, queue-backed journal
+  submission/finality reconciliation, supervision, and payload-free status are
+  wired. External threshold-signing and authenticated Governance DAG adapters,
+  the committed read projection, integrated Rust validation, and reviewed
+  deployment evidence remain open.
+- Torii exposes only read handlers at `GET /v1/sorafs/reputation/latest` and
   `GET /v1/sorafs/reputation/providers/{provider_id}`. The provider endpoint
   returns the latest provider record with a Merkle proof. Historical lookup and
   configuration discovery are available through
@@ -286,9 +296,10 @@ They are not an independent authoritative event journal.
   accepts the same `reputation_score_bps` field and rejects values outside
   `0..=10000`.
 - `scripts/check_sorafs_reputation_rollout_evidence.py` verifies the production
-  evidence bundle before routing/incentive enforcement. The gate accepts the
-  existing `sorafs_cli reputation publish|snapshot|fetch|watch|verify` JSON
-  artifacts plus deployed metrics, SSE/WebSocket transport, and
+  evidence bundle before routing/incentive enforcement. The gate accepts an
+  externally produced threshold-signing/publication artifact plus the
+  read-only `sorafs_cli reputation snapshot|fetch|watch|verify` JSON artifacts,
+  deployed metrics, SSE/WebSocket transport, and
   routing/incentive consumption evidence; it requires one fresh publish/latest
   snapshot anchor and requires provider, event, proof replay, metrics,
   transport, and routing/incentive consumption artifacts to bind to that
@@ -344,17 +355,19 @@ They are not an independent authoritative event journal.
   report ready.
   It supports shell-style `@ARGFILE` inputs for direct replay of reviewed
   evidence directories and explicit artifacts.
-- `scripts/run_sorafs_reputation_rollout_evidence.py` collects the deployed
-  rollout bundle with bounded `sorafs_cli reputation publish|snapshot|fetch|watch|verify`
-  commands, supports shell-style `@ARGFILE` response files, checks provider
-  proof coverage before touching a live Torii endpoint, and then runs the
-  evidence gate. Its `--dry-run` output includes the checker-backed
+- `scripts/run_sorafs_reputation_rollout_evidence.py` requires reviewed
+  payload-free external publication evidence, then collects the deployed
+  read-only bundle with bounded `sorafs_cli reputation
+  snapshot|fetch|watch|verify` commands. It supports shell-style `@ARGFILE`
+  response files, checks provider proof coverage before touching a live Torii
+  endpoint, and then runs the evidence gate. Its `--dry-run` output includes
+  the checker-backed
   `evidence_contract` map for publish/latest, provider, events, verify,
   metrics, transport, and consumption artifacts, and the runner validates the
   schema-closed collection plan, external evidence map, evidence contract, and
   command steps before dry-run output or live collection.
-  `scripts/examples/sorafs_reputation_rollout_evidence.args.example` provides
-  a payload-free operator template.
+  `scripts/examples/sorafs_reputation_rollout_collection.args.example`
+  provides a payload-free operator template.
 - Operator workflow notes live in
   `docs/source/sorafs/reputation_operator.md`.
 
@@ -364,24 +377,54 @@ They are not an independent authoritative event journal.
     PoR-terminal and stream-token append instructions, capacity-dispute
     `Opened` integration, `ResolveSorafsCapacityDispute`, typed committed
     events, and `FindSorafsReputationJournalEvents`.
-  - Remaining: dedicated authenticated Torii transaction/query routes,
-    finalized projection endpoints, OpenAPI entries, and matching SDK
-    instruction/query builders. Until that work lands, the local snapshot
-    routes below must not be described as the committed-journal API.
+  - Generic authenticated signed-transaction and typed-query transport plus
+    committed read projections are present. Dedicated authenticated SDK
+    journal transaction/query builders remain open; no local snapshot route is
+    an authoritative journal mutation API.
+- Standard-daemon runtime:
+  - Implemented: strict non-secret `iroha_config` construction for the release
+    window, governed weights, resource bounds, checkpoint roots, external
+    adapter identities, and Governance DAG publisher identity.
+  - Implemented: `IrohaRuntimeDeps` injection plus supervised
+    startup/shutdown, restart-safe checkpoint opening, payload-free
+    readiness/status, and bounded Prometheus metrics for the committed
+    projector/publication reconciler. Missing, null/test-marked, or
+    identity-substituted finalized-query, threshold-signer, and Governance DAG
+    adapters fail startup.
+  - Implemented: `QueuedReputationJournalTransactionSubmitterV1` signs and
+    submits typed PoR/token append transactions through the normal queue.
+    `IrohaRuntimeDeps` accepts an identity-pinned immutable historical
+    `ReputationFinalizedQueryV1`; the unsound current-head state adapter and
+    fallback were removed. Missing exact historical capability now fails
+    startup instead of fabricating a fixed view.
+  - Open under `V1-BLOCK-REPUTATION-RUNTIME-01`: deployment-owned
+    immutable historical finalized-query,
+    `ReputationThresholdSignerClientV1` and
+    `ReputationGovernanceDagClientV1` adapters; concrete PoR-terminal and
+    stream-token callback-owner wiring; current DAG head/inclusion proof;
+    integrated Rust validation; and reviewed four-peer rotation, recovery,
+    retry, and failover evidence remain outstanding. No ledger page,
+    credential, signature, or acknowledgement may be synthesized as a
+    fallback.
 - REST endpoints:
-  - Implemented locally: `POST /v1/sorafs/reputation/latest` accepts a canonical
-    `SignedReputationSnapshotV1`. It fails closed without a configured trust
-    policy, rejects invalid/stale/future/non-chaining envelopes, persists the
-    full signatures and scoring evidence, and caches the embedded snapshot as
-    latest for read APIs.
+  - Removed: the local-authoritative `POST /v1/sorafs/reputation/latest`
+    descriptor, router mount, handler, and OpenAPI operation. Signed publication
+    must come from the verified projector outbox/external threshold-signing
+    flow.
   - Implemented locally: `GET /v1/sorafs/reputation/latest` returns latest
     snapshot metadata plus a `limit`-bounded provider-score array while
-    preserving the total `provider_count`.
+    preserving the total `provider_count`. Latest/provider/weights/event
+    handlers read only the ready committed publication projection. Torii
+    returns unavailable before the supervised runtime is fresh and fully
+    reconciled.
   - Implemented locally: `GET /v1/sorafs/reputation/providers/{provider_id}`
     returns the provider entry with Merkle proof.
   - Implemented locally: `GET /v1/sorafs/reputation/snapshots/{snapshot_id_hex}`
-    returns a previously accepted snapshot by 16-byte id with the same
-    `limit`-bounded provider-score readback.
+    resolves the requested 16-byte id against the durable immutable suffix of
+    authenticated committed snapshots and returns that exact snapshot with the
+    same `limit`-bounded provider-score readback. The suffix is capped at 1,024
+    entries and by the publication checkpoint byte ceiling; unknown or evicted
+    ids return `404` rather than falling back to the latest snapshot.
   - Implemented locally: `GET /v1/sorafs/reputation/weights` returns the
     weights and smoothing parameters from the latest snapshot.
   - Implemented locally: `GET /v1/sorafs/reputation/events` returns sequenced
@@ -391,10 +434,9 @@ They are not an independent authoritative event journal.
     `304 Not Modified`.
   - Implemented locally: `GET /v1/sorafs/reputation/events/stream` provides
     live server-sent events for reputation snapshot publications.
-  - Implemented locally: accepted snapshots export Prometheus gauges/counters,
-    and the repository ships Grafana/alert assets for deployed publisher
-    health. Remaining rollout: deploy the ingest/publisher service and capture
-    live run evidence.
+  - The repository ships reputation Prometheus/Grafana contracts. Remaining
+    rollout: connect them to the supervised committed projector/publisher and
+    capture live run evidence.
 - Implemented locally: WebSocket `/v1/sorafs/reputation/events/ws` emits `reputation_snapshot`
   JSON text frames for the optional `since`/`limit` backlog and for live
   snapshot publications. Lag notifications use `event = "lagged"` frames so
@@ -418,9 +460,6 @@ They are not an independent authoritative event journal.
     --provider-id=ID [--format=table|json] [--summary-out=PATH]`.
   - Implemented locally as `sorafs_cli reputation snapshot --torii-url=URL
     [--output=PATH] [--summary-out=PATH]`.
-  - Implemented locally as `sorafs_cli reputation publish --torii-url=URL
-    --snapshot=SIGNED_ENVELOPE.to [--summary-out=PATH]`; the CLI performs a
-    bounded, canonical envelope decode before sending JSON.
   - Implemented locally as `sorafs_cli reputation verify --snapshot=PATH
     [--provider-id=ID --proof=PATH] [--summary-out=PATH]`.
   - Implemented locally as `sorafs_cli reputation watch --torii-url=URL
@@ -487,15 +526,20 @@ They are not an independent authoritative event journal.
 - Benchmark tests for EigenTrust iteration (target < 2 s for 5k providers).
 
 ## Rollout Plan
-1. Complete source validation for the native journal, then add authenticated
-   Torii transaction/query projections, OpenAPI entries, and SDK builders.
-2. Connect governed PoR and regional stream-token recorders and add committed
-   PDP/PoTR, repair, orderbook/settlement, and reserve/rent producers.
-3. Build the durable finalized-cursor ingest/reconciliation service. Its local
-   database is rebuildable, its outbox is retry-safe, and it emits
-   deterministic signing material while threshold signing remains external.
-4. Integrate the scoring engine, snapshot publisher, APIs, CLI, and SDKs; run
-   four-peer end-to-end tests with orchestrator/indexer consumers.
+1. Complete integrated source validation, then add the remaining authenticated
+   journal transaction/query SDK builders.
+2. Supply and exercise the immutable historical finalized-query adapter plus
+   the queue-backed governed PoR/regional counted stream-token transaction
+   submitter; wire the actual PoR and token owners to the durable callbacks.
+   The projector already consumes the committed proof, unified journal,
+   repair, orderbook, and reserve query families.
+3. Supply external threshold signer and authenticated Governance DAG
+   publication/readback/head-inclusion adapters to the already-supervised
+   runtime. Reconcile canonical publication acknowledgements without
+   introducing a local signing-key fallback.
+4. Integrate the regional publisher/API and SDK reads against the committed
+   projection, exercise exact retained snapshot-id lookup and bounded eviction,
+   and run four-peer end-to-end tests with orchestrator/indexer consumers.
 5. Staging bake: run for 2 weeks, comparing manual calculations to engine outputs.
 6. Governance approval for initial weights (`ReputationConfigV1`) and publication schedule.
 7. Production rollout:
@@ -517,9 +561,14 @@ Completed local foundations:
   telemetry remains penalty/alert input and cannot mutate the dispute map.
 - Canonical reputation schemas, scoring, penalties, smoothing, trust-edge
   iteration, snapshot validation, Merkle roots, and provider proofs.
-- Governance DAG payload validation and local filesystem publisher artifacts.
-- Torii latest, provider, snapshot, weights, events, SSE, and WebSocket surfaces.
-- CLI `reputation verify`, `publish`, `snapshot`, `fetch`, and `watch`.
+- Governance DAG payload validation and the keyless finalized multi-feed
+  projector/outbox contract.
+- Read-only Torii latest, provider, snapshot, weights, events, SSE, and
+  WebSocket handlers consume the fresh committed projection; snapshot-id reads
+  return the exact retained authenticated snapshot and reject unknown or
+  evicted ids.
+- CLI `reputation verify`, `snapshot`, `fetch`, and `watch`; the obsolete local
+  publication command is retired.
 - The rollout evidence gate now emits aggregate-compatible required-kind
   metadata, evidence counts, required-row `present`/`artifact_count` fields,
   threshold metadata, and reviewed deployment-context fingerprints so the final
@@ -574,18 +623,20 @@ Completed local foundations:
   Aggregate promotion also requires `valid_reputation_weight_digests` to match
   publish/latest artifact fingerprints and rechecks every publish/latest
   artifact against that metadata before final promotion can report ready.
-- Rollout evidence collection harness that publishes, reads back, watches, proof
-  replays, and verifies the deployed reputation evidence bundle from one
-  response-file driven operator command.
+- Rollout evidence collection harness that requires reviewed external
+  publication evidence, then reads back, watches, proof-replays, and verifies
+  the deployed reputation evidence bundle from one response-file driven
+  operator command.
 
 Remaining production gates:
 
-- Complete integrated source validation; expose authenticated Torii/OpenAPI and
-  SDK journal transaction/query surfaces; connect every governed committed
-  producer; and deploy the durable finalized-cursor
-  ingest/reconciliation/outbox service plus externally signed publisher. The
-  existing local `/v1/sorafs/reputation/*` snapshot checkpoint is not a
-  substitute.
+- Complete integrated source validation; expose dedicated authenticated SDK
+  journal transaction/query builders; validate the wired fixed-view
+  active-policy query and durable queue-backed PoR/countable-token submission
+  and finality reconciler; replace the retained local GET/event model with
+  committed-derived reads; deploy external threshold-signing and authenticated
+  Governance DAG publication/readback adapters; and complete reviewed
+  four-peer rotation, retry/failover, and recovery evidence.
 - Capture live run evidence for snapshot freshness, ingest lag, low-score
   handling, SSE/WebSocket event delivery, and routing/incentive consumption,
   then publish a `ready` summary from

@@ -16,9 +16,7 @@ use std::{
 use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr, bail, eyre};
 use iroha::{
-    client::{
-        Client, SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions, SorafsStorageFileEntry,
-    },
+    client::{Client, SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions},
     config::{Config, LoadPath},
 };
 use iroha_data_model::{
@@ -781,9 +779,6 @@ struct PublishArgs {
     /// Optional Musubi source archive plan output path
     #[arg(long)]
     source_plan_out: Option<PathBuf>,
-    /// Upload the generated manifest and payload through Torii's `SoraFS` storage pin endpoint.
-    #[arg(long)]
-    upload: bool,
     /// Lockfile used to pin resolved dependency versions in the release record
     #[arg(long, default_value = DEFAULT_LOCKFILE)]
     lockfile: PathBuf,
@@ -879,30 +874,12 @@ impl PublishArgs {
         if !self.dry_run {
             let fee_payment = self.client.fee_payment()?;
             let (client, account) = self.client.load()?;
-            if self.upload {
-                let files = generated_sorafs
-                    .source_plan
-                    .files
-                    .iter()
-                    .map(|file| SorafsStorageFileEntry {
-                        path: file.path.as_slice(),
-                        size: file.size,
-                    })
-                    .collect::<Vec<_>>();
-                client
-                    .post_sorafs_storage_pin(
-                        &generated_sorafs.manifest_bytes,
-                        &generated_sorafs.payload,
-                        Some(&files),
-                    )
-                    .wrap_err("failed to upload Musubi source archive through SoraFS storage pin endpoint")?;
-                println!("sorafs_storage_pin_uploaded = true");
-            }
             let pin_hash = client.submit_blocking(
                 RegisterPinManifest::new(generated_sorafs.manifest_bytes.clone(), 0, None, None),
                 fee_payment.clone(),
             )?;
             println!("sorafs_pin_transaction_hash = {pin_hash}");
+            println!("sorafs_provider_ingest = finalized_ledger_outbox");
             let release = release_from_manifest(
                 &manifest,
                 lockfile.as_ref(),

@@ -22,6 +22,7 @@ import sccp_release_common as RELEASE_CRYPTO  # noqa: E402
 NOW_UNIX = 1_800_800_000
 GENERATED_AT = NOW_UNIX - 120
 SHA256 = "ab" * 32
+PREDECESSOR_CATALOG_SHA256 = "ac" * 32
 SNAPSHOT_ID = "cd" * 16
 DEPLOYMENT_ID = "sorafs-mainnet-2026-06"
 ENVIRONMENT = "production"
@@ -348,6 +349,21 @@ def default_gate_metadata(
             }
         )
         add_hex_list("valid_catalog_digests", "catalog_digest_hex")
+        metadata["valid_catalog_history_bindings"] = [
+            {
+                "catalog_digest_hex": SHA256,
+                "catalog_sequence": 2,
+                "predecessor_catalog_digest_hex": PREDECESSOR_CATALOG_SHA256,
+                "predecessor_catalog_sequence": 1,
+            }
+        ]
+        fingerprints.update(
+            {
+                "catalog_sequence": 2,
+                "predecessor_catalog_digest_hex": PREDECESSOR_CATALOG_SHA256,
+                "predecessor_catalog_sequence": 1,
+            }
+        )
         add_policy()
     elif gate_name == "gateway_load":
         metadata["metric_count_values"] = [len(MODULE.GATEWAY_LOAD_REQUIRED_METRICS)]
@@ -444,6 +460,7 @@ def default_gate_metadata(
         ]
         metadata["valid_evidence_viewer_digest_sets"] = [
             {
+                "catalog_digest_hex": SHA256,
                 "case_digest_hex": SHA256,
                 "roster_hash_hex": SHA256,
                 "session_manifest_digest_hex": SHA256,
@@ -468,6 +485,7 @@ def default_gate_metadata(
         fingerprints.update({"roster_hash_hex": SHA256, "tally_digest_hex": SHA256})
         fingerprints.update(
             {
+                "catalog_digest_hex": SHA256,
                 "session_manifest_digest_hex": SHA256,
                 "watermark_metadata_digest_hex": SHA256,
                 "access_log_digest_hex": SHA256,
@@ -6916,6 +6934,73 @@ def test_gateway_compliance_policy_metadata_for_gate_passes(tmp_path: Path) -> N
     assert run_gate(tmp_path, "--require-gate", "gateway_compliance") == 0
 
 
+def test_gateway_catalog_history_metadata_must_match_promotion_fingerprint(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_compliance")
+    payload["valid_catalog_history_bindings"][0][
+        "predecessor_catalog_digest_hex"
+    ] = "cd" * 32
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_compliance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_compliance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_catalog_history_bindings entries must match recognized artifact "
+        "fingerprints"
+    ) in errors
+
+
+def test_gateway_predecessor_bound_artifacts_must_match_full_history_tuple(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        ("controller_runtime", "predecessor_catalog_digest_hex", "cd" * 32),
+        ("gateway_reload", "predecessor_catalog_sequence", 7),
+    )
+    for index, (kind_name, fingerprint_field, forged_value) in enumerate(cases):
+        root = tmp_path / f"{index}_{kind_name}_{fingerprint_field}"
+        root.mkdir()
+        payload = gate_summary("gateway_compliance")
+        add_fingerprint_metadata(
+            payload,
+            kind_name=kind_name,
+            **{fingerprint_field: forged_value},
+        )
+        summary = root / "summary.json"
+        write_json(root / "gateway_compliance.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                "gateway_compliance",
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(
+            json.loads(summary.read_text(encoding="utf-8"))["errors"]
+        )
+        assert (
+            "gateway_compliance predecessor-bound artifact fingerprints must "
+            "match valid_catalog_history_bindings"
+        ) in errors
+
+
 def test_gateway_compliance_legacy_bundle_anchor_is_rejected(
     tmp_path: Path,
 ) -> None:
@@ -11690,6 +11775,117 @@ def test_evidence_viewer_digest_set_metadata_requires_every_digest(
         "valid_evidence_viewer_digest_sets[0].access_log_digest_hex "
         "must be 64 lowercase hex characters"
     ) in errors
+
+
+def test_evidence_viewer_digest_set_requires_catalog_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    del payload["valid_evidence_viewer_digest_sets"][0]["catalog_digest_hex"]
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_evidence_viewer_digest_sets[0].catalog_digest_hex "
+        "must be 64 lowercase hex characters"
+    ) in errors
+
+
+def test_evidence_viewer_catalog_digest_must_match_artifact_fingerprint(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    payload["valid_evidence_viewer_digest_sets"][0][
+        "catalog_digest_hex"
+    ] = "cd" * 32
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_evidence_viewer_digest_sets.catalog_digest_hex must match "
+        "recognized artifact fingerprints"
+    ) in errors
+
+
+def test_joint_gateway_moderation_catalog_binding_passes(tmp_path: Path) -> None:
+    write_gate(tmp_path, "gateway_compliance")
+    write_gate(tmp_path, "moderation_panel")
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_compliance",
+            "--require-gate",
+            "moderation_panel",
+        )
+        == 0
+    )
+
+
+def test_joint_gateway_moderation_rejects_individually_valid_foreign_catalog(
+    tmp_path: Path,
+) -> None:
+    moderation = gate_summary("moderation_panel")
+    foreign_catalog_digest = "cd" * 32
+    moderation["valid_evidence_viewer_digest_sets"][0][
+        "catalog_digest_hex"
+    ] = foreign_catalog_digest
+    add_fingerprint_metadata(
+        moderation,
+        kind_name="evidence_viewer",
+        catalog_digest_hex=foreign_catalog_digest,
+    )
+    write_json(tmp_path / "moderation_panel.json", moderation)
+
+    assert run_gate(tmp_path, "--require-gate", "moderation_panel") == 0
+
+    write_gate(tmp_path, "gateway_compliance")
+    summary = tmp_path / "summary.json"
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_compliance",
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["required"]["gateway_compliance"]["valid"] is True
+    assert result["required"]["moderation_panel"]["valid"] is True
+    assert result["errors"].count(
+        MODULE.GATEWAY_MODERATION_CATALOG_MISMATCH_ERROR
+    ) == 1
+    assert foreign_catalog_digest not in "\n".join(result["errors"])
 
 
 def test_object_list_metadata_entries_must_not_duplicate(tmp_path: Path) -> None:

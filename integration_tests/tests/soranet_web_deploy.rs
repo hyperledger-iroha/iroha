@@ -1,27 +1,13 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Deploy a static HTML page to `SoraFS` storage, verify fetch, and derive public
-//! DNS settings (including delegation placeholders) for a regular internet zone
-//! pointing at the `SoraDNS` gateway.
+//! Build a static HTML manifest and derive public DNS settings (including
+//! delegation placeholders) for a regular internet zone pointing at the
+//! `SoraDNS` gateway. Provider storage ingest is exercised by the internal
+//! finalized-ledger outbox suites, not by a public upload route.
 
 use std::collections::HashMap;
 
-use base64::Engine as _;
 use eyre::{Result, eyre};
-use integration_tests::sandbox::start_network_async_or_skip;
-use iroha::{
-    client::{Client, SorafsPinRegisterArgs},
-    data_model::{
-        isi::{Grant, InstructionBox, Mint, Register},
-        prelude::*,
-    },
-};
-use iroha_executor_data_model::permission::sorafs::CanRegisterSorafsPin;
-use iroha_primitives::numeric::Quantity;
 use iroha_primitives::soradns::{GatewayHostBindings, derive_gateway_hosts};
-use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-use norito::json::{self, Value};
-use reqwest::{Client as HttpClient, Url};
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::{
     DagCodecId, ManifestBuilder, ManifestV1, PinPolicy, StorageClass, chunker_registry,
@@ -184,107 +170,6 @@ fn build_manifest_and_plan(payload: &[u8]) -> Result<(ManifestV1, CarBuildPlan)>
     Ok((manifest, plan))
 }
 
-fn with_sorafs_pin_fee_bootstrap(mut builder: NetworkBuilder) -> NetworkBuilder {
-    for instruction in sorafs_pin_fee_bootstrap_instructions() {
-        builder = builder.with_genesis_instruction(instruction);
-    }
-    builder.with_genesis_instruction(Grant::account_permission(
-        Permission::from(CanRegisterSorafsPin),
-        ALICE_ID.clone(),
-    ))
-}
-
-fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
-    let fee_asset_id: AssetDefinitionId =
-        iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
-            .parse()
-            .expect("default SoraFS pin fee asset id");
-    let treasury =
-        iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id();
-    let fee_name = fee_asset_id
-        .try_name()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "xor".to_owned());
-    let fee_definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(fee_name);
-    let seed_amount = Quantity::from(10_000_000_000_000_u128);
-
-    vec![
-        Register::account(Account::new(treasury)).into(),
-        Register::asset_definition(fee_definition).into(),
-        Mint::asset_quantity(seed_amount, AssetId::new(fee_asset_id, ALICE_ID.clone())).into(),
-    ]
-}
-
-fn register_paid_pin_manifest(client: &Client, manifest: &ManifestV1) -> Result<()> {
-    let manifest_payload = manifest.encode()?;
-    client.post_sorafs_pin_register(SorafsPinRegisterArgs {
-        authority: &ALICE_ID,
-        private_key: ALICE_KEYPAIR.private_key(),
-        manifest_payload: &manifest_payload,
-        submitted_epoch: 1,
-        alias: None,
-        successor_of: None,
-    })?;
-    Ok(())
-}
-
-fn require_string(value: &Value, key: &str) -> Result<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| eyre!("expected string field `{key}` in response"))
-}
-
-fn require_u64(value: &Value, key: &str) -> Result<u64> {
-    value
-        .get(key)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| eyre!("expected u64 field `{key}` in response"))
-}
-
-fn manifest_envelope_header(manifest_id_hex: &str) -> Result<String> {
-    let envelope = norito::json!({
-        "manifest_digest_hex": manifest_id_hex,
-        "source": "integration-test",
-    });
-    let bytes = json::to_vec(&envelope)?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
-}
-
-async fn fetch_payload(
-    http: &HttpClient,
-    torii_url: &Url,
-    manifest_id_hex: &str,
-    length: u64,
-) -> Result<Vec<u8>> {
-    let fetch_url = torii_url.join("/v1/sorafs/storage/fetch")?;
-    let manifest_envelope = manifest_envelope_header(manifest_id_hex)?;
-    let request = norito::json!({
-        "manifest_id_hex": manifest_id_hex,
-        "offset": 0u64,
-        "length": length,
-    });
-    let request_body = json::to_string(&request)?;
-    let response = http
-        .post(fetch_url)
-        .header("Content-Type", "application/json")
-        .header("X-SoraFS-Manifest-Envelope", manifest_envelope)
-        .body(request_body)
-        .send()
-        .await?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(eyre!("storage fetch failed: {} {body}", status));
-    }
-    let bytes = response.bytes().await?;
-    let value: Value = json::from_slice(&bytes)?;
-    let data_b64 = require_string(&value, "data_b64")?;
-    let payload = base64::engine::general_purpose::STANDARD.decode(data_b64.as_bytes())?;
-    Ok(payload)
-}
-
 #[test]
 fn public_dns_settings_include_delegation_placeholders() {
     let bindings = derive_gateway_hosts("sora-nexus.sora").expect("derive hosts");
@@ -335,75 +220,17 @@ fn public_dns_settings_include_delegation_placeholders() {
     assert_eq!(ds_records[0].values, vec![ds_placeholder_value()]);
 }
 
-#[tokio::test]
-async fn soranet_webpage_deploy_and_dns_settings() -> Result<()> {
-    let builder =
-        with_sorafs_pin_fee_bootstrap(NetworkBuilder::new().with_min_peers(4).with_config_layer(
-            |layer| {
-                layer.write(["sorafs", "storage", "enabled"], true);
-            },
-        ));
-    let Some(network) =
-        start_network_async_or_skip(builder, stringify!(soranet_webpage_deploy_and_dns_settings))
-            .await?
-    else {
-        return Ok(());
-    };
-    network.ensure_blocks(1).await?;
-
+#[test]
+fn soranet_webpage_manifest_and_dns_settings() -> Result<()> {
     let html = format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>{WELCOME_TEXT}</body></html>"
     );
     let payload = html.as_bytes().to_vec();
     let (manifest, plan) = build_manifest_and_plan(&payload)?;
-    let manifest_bytes = manifest.encode()?;
 
-    let client = network.client();
-    register_paid_pin_manifest(&client, &manifest)?;
-    network.ensure_blocks(2).await?;
-    let response = client.post_sorafs_storage_pin(&manifest_bytes, &payload, None)?;
-    assert!(
-        response.status().is_success(),
-        "storage pin rejected: {} {}",
-        response.status(),
-        String::from_utf8_lossy(response.body())
-    );
-    let body = response.body();
-    let value: Value = json::from_slice(body)?;
-    let manifest_id_hex = require_string(&value, "manifest_id_hex")?;
-    let payload_digest_hex = require_string(&value, "payload_digest_hex")?;
-    let content_length = require_u64(&value, "content_length")?;
-
-    let expected_manifest_id = hex::encode(&manifest.root_cid);
-    let expected_payload_digest = hex::encode(plan.payload_digest.as_bytes());
-    assert_eq!(
-        manifest_id_hex, expected_manifest_id,
-        "manifest_id_hex should match root CID"
-    );
-    assert_eq!(
-        payload_digest_hex, expected_payload_digest,
-        "payload_digest_hex should match payload digest"
-    );
-    assert_eq!(
-        content_length,
-        payload.len() as u64,
-        "content_length should match payload length"
-    );
-
-    let http = HttpClient::new();
-    let fetched = fetch_payload(
-        &http,
-        &client.torii_url,
-        &manifest_id_hex,
-        payload.len() as u64,
-    )
-    .await?;
-    assert_eq!(fetched, payload, "fetched payload mismatch");
-    let fetched_str = String::from_utf8(fetched)?;
-    assert!(
-        fetched_str.contains(WELCOME_TEXT),
-        "payload should contain the welcome string"
-    );
+    assert_eq!(manifest.content_length, payload.len() as u64);
+    assert_eq!(plan.content_length, payload.len() as u64);
+    assert!(!manifest.root_cid.is_empty());
 
     let fqdn = "sora-nexus.sora";
     let zone = "sora";
@@ -444,6 +271,5 @@ async fn soranet_webpage_deploy_and_dns_settings() -> Result<()> {
         "canonical host is managed under gw.sora.id, not the public zone"
     );
 
-    network.shutdown().await;
     Ok(())
 }

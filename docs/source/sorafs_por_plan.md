@@ -28,7 +28,7 @@ drand signatures, rejects rollback and equivocation, and only returns a round
 after the configured endpoint quorum agrees. Provider VRF submissions are
 signature-checked, bound to provider/manifest/epoch/drand inputs, persisted
 with replay state, and supplied to the coordinator through the verified feed.
-`torii.sorafs_por.enabled = true` fails startup when this configuration is
+`sorafs.por.enabled = true` fails startup when this configuration is
 missing or internally inconsistent; `randomness_seed_hex` is never accepted as
 authenticated drand. Remaining SF-9a work is live multi-provider drand/VRF/
 auditor evidence and any production governance archive handoff required by the
@@ -171,7 +171,8 @@ trusted-threshold auditor verdicts at `/v1/sorafs/capacity/por-verdict`.
 No external challenge-submission route is mounted. The verified coordinator
 scheduler is the only permitted production challenge
 authority, and PoR automation enablement fails closed until its external
-drand/VRF inputs are implemented. Coordinator status surfaces are under
+drand/VRF inputs and the embedded node's runtime-signed Governance DAG
+publisher are ready. Coordinator status surfaces are under
 `/v1/sorafs/por/*`.
 
 ## Coordinator Workflow
@@ -185,7 +186,11 @@ drand/VRF inputs are implemented. Coordinator status surfaces are under
    - Persist pending challenge (see Persistence).
 3. **Challenge dispatch**
    - Publish scheduler-originated `PorChallengeV1` to providers; public REST mutation is not an authority boundary.
-   - Write event to Governance DAG (`governance/sorafs/por/challenges/<epoch_id>/<manifest_...>.json`).
+   - Construct a validated `PorChallengePublicationV1` containing the canonical
+     challenge and its exact bounded duplicate-sample count, then enqueue its
+     header-bearing Norito bytes through the embedded node's durable Governance
+     DAG outbox. The node writes the signed DAG block/head; no independent raw
+     JSON publisher is an authority.
    - Response deadline = `epoch_start + 15 minutes`.
 4. **Proof handling**
    - Providers submit `PorProofV1` through authenticated `POST /v1/sorafs/capacity/por-proof`.
@@ -228,11 +233,16 @@ drand/VRF inputs are implemented. Coordinator status surfaces are under
   outcomes with PoR scheduler and ingestion health.
 
 ## Persistence
-Current local persistence is `PorCoordinator::with_persistence`, which snapshots
-coordinator state to a Norito file such as `por_coordinator_snapshot.norito`
-under the configured storage directory. The SQL shape below remains the
-production warehouse/archive target for operators that need long-retention
-analytics outside the node snapshot.
+`sorafs.por.state_dir` is the single private PoR state root. The coordinator
+snapshot (`por-coordinator.to`), verified drand high-water
+(`drand-high-water.to`), and authenticated provider-VRF replay state
+(`provider-vrf-state.to`) are derived beneath it. The obsolete
+`governance_dir`, `governance_dag_dir`, and independently configurable drand or
+VRF state paths are rejected; this directory never serves as a competing
+Governance DAG sink. `PorCoordinator::with_persistence` writes the canonical
+Norito coordinator snapshot there. The SQL shape below remains the production
+warehouse/archive target for operators that need long-retention analytics
+outside the node snapshot.
 
 ```sql
 CREATE TABLE sorafs_por_history (
@@ -274,9 +284,10 @@ CREATE TABLE sorafs_vrf_history (
 - **Coordinator runtime wiring:** `PorCoordinatorRuntime` (see
   `crates/iroha_torii/src/sorafs/por.rs`) exposes `run_once_at`, `run_once`, and
   `spawn`, and Torii constructs it only from the verified drand and durable
-  provider-VRF adapters. `torii.sorafs_por.enabled = true` is rejected at
+  provider-VRF adapters. `sorafs.por.enabled = true` is rejected at
   startup unless pinned drand chain/endpoints/quorum/state and provider-VRF
-  state are configured consistently. The legacy optional
+  state are configured consistently and the embedded node has a fully bound
+  runtime Ed25519 Governance DAG signer/publisher. The legacy optional
   `randomness_seed_hex` is deterministic test material and cannot satisfy this
   readiness gate; defaults keep automation disabled.
 - **Storage hooks:** The runtime uses `sorafs_node::NodeHandle` as its `PorStorage`, plans
@@ -285,9 +296,12 @@ CREATE TABLE sorafs_vrf_history (
   endpoint (`GET /v1/sorafs/por/ingestion/{manifest_digest_hex}?limit=N`) reports
   backlog depth, oldest epoch/deadline, and last success/failure timestamps with
   `limit`-bounded provider status entries and total provider counts.
-- **Governance events:** Published challenges and weekly reports are materialised by
-  `FilesystemGovernancePublisher` under the configured governance DAG directory. Status,
-  export, and report endpoints expose the coordinator history as canonical Norito payloads.
+- **Governance events:** Validated `PorChallengePublicationV1` envelopes and
+  `PorWeeklyReportV1` reports share the embedded node's durable outbox and
+  runtime-signed canonical Governance DAG chain. Startup fails when that
+  publisher is absent; publication failures remain queued for ordered retry.
+  Status, export, and report endpoints expose coordinator history as canonical
+  Norito payloads.
 - **Alerts:** `dashboards/alerts/sorafs_por_rules.yml` covers scheduler failures, forced
   challenges, ingestion backlog, and duplicate sample spikes.
 
@@ -405,9 +419,11 @@ final promotion can report ready.
 ## Rollout Status
 Implemented locally:
 - `sorafs_manifest::por` challenge, proof, status, provider summary, slashing
-  event, and weekly-report payloads.
+  event, versioned challenge-publication envelope, and validated weekly-report
+  payloads.
 - `PorCoordinator`, `PorCoordinatorRuntime`, optional Norito snapshot
-  persistence, filesystem governance publishing, and Torii startup wiring.
+  persistence, durable node Governance DAG outbox publication, and fail-closed
+  Torii startup wiring.
 - Authenticated capacity PoR proof/verdict submission routes plus `/v1/sorafs/por/status`,
   `/v1/sorafs/por/export`, `/v1/sorafs/por/report/{iso_week}`, and
   `/v1/sorafs/por/ingestion/{manifest_digest_hex}`.

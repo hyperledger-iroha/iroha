@@ -91,7 +91,7 @@ Ambos puntos finales son servidos por el trabajador de almacenamiento embebido, 
 2. Envía el manifiesto con codificación base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -151,7 +151,7 @@ Ambos puntos finales son servidos por el trabajador de almacenamiento embebido, 
   que cubren `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection` y `por_sampling_returns_verified_proofs`.
 - Los tableros deben seguir:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` y `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` y `torii_sorafs_storage_fetch_inflight`
   - contadores de éxito/fallo de PoR expuestos vía `/v1/sorafs/capacity/state`
   - intentos de publicación de liquidación vía `sorafs_node_deal_publish_total{result=success|failure}`
 

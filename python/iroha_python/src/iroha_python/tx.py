@@ -848,23 +848,36 @@ class TransactionDraft:
         self,
         escrow_id: str,
         amount: QuantityLike,
+        expected_remaining_amount: QuantityLike,
     ) -> TransactionDraft:
-        """Append a `DrawdownAssetLock` instruction."""
+        """Append a compare-and-draw `DrawdownAssetLock` instruction."""
 
         self.add_instruction(
             Instruction.drawdown_asset_lock(
                 _require_non_empty_string(escrow_id, "escrow_id"),
                 _normalize_positive_quantity(amount, "amount"),
+                _normalize_positive_quantity(
+                    expected_remaining_amount,
+                    "expected_remaining_amount",
+                ),
             )
         )
         return self
 
-    def cancel_asset_lock(self, escrow_id: str) -> TransactionDraft:
-        """Append a `CancelAssetLock` instruction."""
+    def cancel_asset_lock(
+        self,
+        escrow_id: str,
+        expected_remaining_amount: QuantityLike,
+    ) -> TransactionDraft:
+        """Append a compare-and-cancel `CancelAssetLock` instruction."""
 
         self.add_instruction(
             Instruction.cancel_asset_lock(
-                _require_non_empty_string(escrow_id, "escrow_id")
+                _require_non_empty_string(escrow_id, "escrow_id"),
+                _normalize_positive_quantity(
+                    expected_remaining_amount,
+                    "expected_remaining_amount",
+                ),
             )
         )
         return self

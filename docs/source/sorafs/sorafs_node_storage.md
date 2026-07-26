@@ -85,6 +85,7 @@ por_sample_interval_secs = 600
 pdp_sample_window = 64
 pdp_tree_memory_limit_bytes = "512 MiB"
 reputation_trust_policy_path = "/etc/iroha/sorafs-reputation-trust-policy.to"
+hedging_feed_trust_policy_path = "/etc/iroha/sorafs-hedging-feed-trust-policy.to"
 moderation_screening_enabled = false
 moderation_screening_authority_bundle_path = "/etc/iroha/sorafs-screening-authority.to"
 moderation_screening_authority_bundle_digest_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -96,6 +97,23 @@ state_entry_limit = 65_536
 checkpoint_max_bytes = "64 MiB"
 proof_outcome_forwarder_interval_ms = 1_000
 proof_outcome_max_attempts = 8
+
+[sorafs.storage.reputation_runtime]
+enabled = false
+state_dir = "/var/lib/iroha/sorafs/reputation"
+window_start_height = 1
+window_end_height = 100_000
+finalized_query_handle = "ledger.finalized.primary"
+threshold_signer_handle = "hsm.reputation.threshold"
+governance_dag_handle = "governance.dag.publisher"
+governance_publisher_peer_id = "12D3KooWReviewedPublisher"
+governance_publisher_public_key_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+poll_interval_ms = 1_000
+page_items = 64
+max_pages_per_batch = 4_096
+
+[sorafs.storage.hedging_billing_runtime]
+enabled = false
 
 adverts:
   stake_pointer = "stake.pool.v1:0x1234"
@@ -138,6 +156,34 @@ adverts:
   symlinked, hard-linked, writable-by-other, oversized, noncanonical, or invalid
   policy files. Signed reputation admission is unavailable when the path is
   absent; there is no unsigned publication fallback.
+- `reputation_runtime`: opt-in committed finalized-ledger projector and
+  external publication reconciler. Enabling it requires storage, an absolute
+  trust-policy path and private state directory, a non-zero finalized release
+  window, weights totaling exactly 10,000 basis points, bounded query/checkpoint
+  settings, and production opaque handles for all three runtime-only adapters.
+  Handles containing null/mock/test/development components are rejected, and
+  no file or environment credential field exists. `irohad` also verifies each
+  injected adapter reports the configured identity before opening checkpoints.
+  Overall readiness remains false under
+  `V1-BLOCK-REPUTATION-RUNTIME-01` until the active journal-policy reader and
+  durable PoR/token native transaction submit/reconcile worker are shipped.
+- `hedging_billing_runtime`: opt-in finalized-ledger billing projector,
+  statement-delivery reconciler, and deterministic hedge-intent generator.
+  Enabling it requires storage, absolute private state and canonical public
+  service-policy paths, the exact lowercase non-zero service-policy digest, an
+  absolute `hedging_feed_trust_policy_path`, bounded poll/work settings, and
+  production opaque handles for the finalized query, consensus verifier,
+  statement HSM/KMS signer, immutable publisher, acknowledgement authority,
+  and sealed epoch-witness store. The standard launcher supplies none of these
+  adapters; an embedding must inject all six through `IrohaRuntimeDeps`.
+  Startup authenticates every adapter identity and readiness state, requires
+  typed finalized period-close support, and fails before opening private state
+  on substitution. Configuration accepts no credentials or key material, and
+  the V1 worker exposes no automatic hedge-execution adapter. Payload-free
+  supervision is exported through the
+  `sorafs_hedging_billing_runtime_{live,ready,dependencies_ready}` gauges,
+  bounded delivery-state gauges, and
+  `sorafs_hedging_billing_runtime_ticks_total{result}`.
 - `moderation_screening_enabled`: enables authenticated moderation screening
   admission. This requires storage plus both authority-bundle settings below;
   startup fails instead of accepting unsigned or process-local authority. It
@@ -200,10 +246,11 @@ from one finalized state view. Before it claims or signs a ready delivery, it
 also requires the runtime signer's account to hold the exact
 provider-scoped `CanRecordSorafsProofOutcome` permission, directly or through
 a role, in finalized state. A missing or differently scoped grant defers the
-delivery without consuming a retry. The standard `irohad` launcher adapts its
-runtime-only common node key at this boundary; reference deployments can inject
-a PKCS#11/HSM implementation of `SoraFsProofOutcomeTransactionSigner` without
-giving that signer transaction-queue access.
+delivery without consuming a retry. The standard `irohad` launcher supplies no
+signer and never adapts its validator node key at this boundary. Reference
+deployments must inject a governed PKCS#11/HSM implementation of
+`SoraFsProofOutcomeTransactionSigner` through `IrohaRuntimeDeps` without giving
+that signer transaction-queue access.
 - `adverts`: structure used by the provider advert generator to fill
   `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
   node uses defaults from the governance registry.
@@ -214,8 +261,10 @@ Config plumbing:
   loaded from the node config file.
 - `iroha_core` and `iroha_torii` thread the storage config into the gateway
   builder and chunk store at startup.
-- Dev/test env overrides exist (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), but
-  production deployments should rely on the config file.
+- The retired `SORAFS_*` environment aliases and local pin bearer/rate-limit
+  branch are not part of the V1 schema. Tests that need alternate values supply
+  an explicit in-memory `iroha_config`; production behavior comes only from the
+  reviewed configuration and injected runtime-only security providers.
 
 ### CLI Utilities
 

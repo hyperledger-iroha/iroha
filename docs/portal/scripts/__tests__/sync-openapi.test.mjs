@@ -5,8 +5,9 @@ import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 
+import {computeOpenApiBlake3Hex} from '../lib/openapi-manifest-v2.mjs';
 import {defaultRepoRoot, parseArgs, syncOpenApi} from '../sync-openapi.mjs';
-import {signPayload} from './helpers/openapi-signing.mjs';
+import {attachOpenApiManifestSignature} from './helpers/openapi-signing.mjs';
 
 function releaseSpec(marker) {
   return JSON.stringify(
@@ -131,6 +132,44 @@ test('syncOpenApi rejects an empty generated stub before tracked writes', async 
   await assert.rejects(() => access(join(versionsDir, 'current')));
 });
 
+test('syncOpenApi rejects unknown fields in the previous versions index', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-unknown-index-'));
+  const outputDir = join(tempRoot, 'static', 'openapi');
+  const versionsDir = join(outputDir, 'versions');
+  const freshSpec = releaseSpec('fresh');
+
+  await writeCanonicalManifest(outputDir, freshSpec, {signature: null});
+  await writeAllowedSigners(outputDir, []);
+  await writeFile(
+    join(outputDir, 'versions.json'),
+    JSON.stringify(
+      {
+        versions: [],
+        generatedAt: '2025-01-01T00:00:00.000Z',
+        entries: [],
+        legacyEntries: [],
+      },
+      null,
+      2,
+    ),
+    'utf8',
+  );
+
+  await assert.rejects(
+    () =>
+      syncOpenApi(
+        {
+          version: 'current',
+          latest: true,
+          mirrors: [],
+          requireSigned: false,
+        },
+        testContext(tempRoot, outputDir, versionsDir, freshSpec),
+      ),
+    /unknown field/i,
+  );
+});
+
 test('syncOpenApi mirrors specs into multiple version directories', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
@@ -142,25 +181,22 @@ test('syncOpenApi mirrors specs into multiple version directories', async () => 
   await mkdir(manifestDir, {recursive: true});
   const specBytes = Buffer.from(fakeSpec, 'utf8');
   const sha256 = createHash('sha256').update(specBytes).digest('hex');
-  const signedPayload = signPayload(specBytes);
-  const canonicalSignature = {
-    algorithm: 'ed25519',
-    public_key_hex: signedPayload.publicKeyHex,
-    signature_hex: signedPayload.signatureHex,
-  };
+  const canonicalSignature = signatureFor(fakeSpec);
   const canonicalManifest = {
-    version: 1,
+    version: 2,
     generated_unix_ms: 123,
     generator_commit: 'ab'.repeat(20),
+    generator_dirty: false,
     artifact: {
       path: 'torii.json',
       bytes: specBytes.length,
       sha256_hex: sha256,
-      blake3_hex: 'de'.repeat(32),
+      blake3_hex: computeOpenApiBlake3Hex(specBytes),
       signature: canonicalSignature,
     },
   };
   await writeFile(join(manifestDir, 'manifest.json'), JSON.stringify(canonicalManifest, null, 2), 'utf8');
+  const canonicalManifestBytes = await readFile(join(manifestDir, 'manifest.json'));
   await writeAllowedSigners(outputDir, [canonicalSignature.public_key_hex]);
 
   await syncOpenApi(
@@ -204,7 +240,7 @@ test('syncOpenApi mirrors specs into multiple version directories', async () => 
   assert.equal(latestEntry.manifestPath, 'manifest.json');
   assert.equal(latestEntry.signatureAlgorithm, 'ed25519');
   assert.equal(latestEntry.signed, true);
-  assert.equal(latestEntry.blake3, 'de'.repeat(32));
+  assert.equal(latestEntry.blake3, computeOpenApiBlake3Hex(specBytes));
   assert.equal(latestEntry.signaturePublicKeyHex, canonicalSignature.public_key_hex);
   assert.equal(latestEntry.signatureHex, canonicalSignature.signature_hex);
 
@@ -215,13 +251,18 @@ test('syncOpenApi mirrors specs into multiple version directories', async () => 
   const versionManifest = JSON.parse(
     await readFile(join(versionsDir, '2025-q4', 'manifest.json'), 'utf8')
   );
-  assert.equal(versionManifest.artifact.path, 'versions/2025-q4/torii.json');
+  assert.equal(versionManifest.artifact.path, 'torii.json');
   assert.equal(versionManifest.artifact.sha256_hex.toLowerCase(), sha256.toLowerCase());
+  assert.deepEqual(
+    await readFile(join(versionsDir, '2025-q4', 'manifest.json')),
+    canonicalManifestBytes,
+    'version publication must copy the signed manifest byte-for-byte',
+  );
 
   const mirrorManifest = JSON.parse(
     await readFile(join(versionsDir, 'current', 'manifest.json'), 'utf8')
   );
-  assert.equal(mirrorManifest.artifact.path, 'versions/current/torii.json');
+  assert.equal(mirrorManifest.artifact.path, 'torii.json');
 });
 
 test('syncOpenApi rejects unsigned publications by default', async () => {
@@ -291,7 +332,7 @@ test('syncOpenApi allows unsigned manifests only when opted-in', async () => {
   assert.equal(await pathExists(manifestPath), true);
   const versionManifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   assert.equal(versionManifest.artifact.signature, null);
-  assert.equal(versionManifest.artifact.path, 'versions/2025-q4/torii.json');
+  assert.equal(versionManifest.artifact.path, 'torii.json');
   const versionsManifest = JSON.parse(
     await readFile(join(outputDir, 'versions.json'), 'utf8')
   );
@@ -487,14 +528,27 @@ test('syncOpenApi validates every historical entry before any tracked write', as
   await writeFile(join(outputDir, 'torii.json'), oldSpec, 'utf8');
   await mkdir(currentDir, {recursive: true});
   await writeFile(join(currentDir, 'torii.json'), oldSpec, 'utf8');
-  await writeManifestForSpec(join(currentDir, 'manifest.json'), oldSpec, 'versions/current/torii.json');
+  await writeManifestForSpec(join(currentDir, 'manifest.json'), oldSpec, 'torii.json');
   await mkdir(invalidHistoricalSpec, {recursive: true});
+  const oldSpecBytes = Buffer.from(oldSpec, 'utf8');
   await writeFile(
     join(outputDir, 'versions.json'),
     JSON.stringify({
       versions: ['current'],
       generatedAt: '2025-01-01T00:00:00.000Z',
-      entries: [{label: 'current', updatedAt: '2025-01-01T00:00:00.000Z'}],
+      entries: [{
+        label: 'current',
+        path: 'versions/current/torii.json',
+        bytes: oldSpecBytes.length,
+        sha256: createHash('sha256').update(oldSpecBytes).digest('hex'),
+        blake3: computeOpenApiBlake3Hex(oldSpecBytes),
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        signed: false,
+        manifestPath: 'versions/current/manifest.json',
+        signatureAlgorithm: null,
+        signaturePublicKeyHex: null,
+        signatureHex: null,
+      }],
     }, null, 2),
     'utf8',
   );
@@ -514,7 +568,7 @@ test('syncOpenApi validates every historical entry before any tracked write', as
         {version: 'current', latest: true, mirrors: [], requireSigned: false},
         testContext(tempRoot, outputDir, versionsDir, freshSpec),
       ),
-    /EISDIR|illegal operation on a directory/i,
+    /EISDIR|illegal operation on a directory|must be a regular file/i,
   );
 
   const after = await Promise.all(trackedPaths.map((path) => readFile(path)));
@@ -565,7 +619,7 @@ test('syncOpenApi index is independent of source mtimes and preserves historical
   await writeFile(join(outputDir, 'torii.json'), spec, 'utf8');
   await mkdir(currentDir, {recursive: true});
   await writeFile(join(currentDir, 'torii.json'), spec, 'utf8');
-  await writeManifestForSpec(join(currentDir, 'manifest.json'), spec, 'versions/current/torii.json');
+  await writeManifestForSpec(join(currentDir, 'manifest.json'), spec, 'torii.json');
   await mkdir(historicalDir, {recursive: true});
   await writeFile(join(historicalDir, 'torii.json'), historicalSpec, 'utf8');
 
@@ -585,7 +639,7 @@ test('syncOpenApi index is independent of source mtimes and preserves historical
       entries: [
         {
           label: 'latest', path: 'torii.json', bytes: Buffer.byteLength(spec),
-          sha256: specSha, blake3: 'de'.repeat(32), updatedAt: generatedAt,
+          sha256: specSha, blake3: computeOpenApiBlake3Hex(spec), updatedAt: generatedAt,
           ...unsignedFields, manifestPath: 'manifest.json',
         },
         {
@@ -596,7 +650,7 @@ test('syncOpenApi index is independent of source mtimes and preserves historical
         },
         {
           label: 'current', path: 'versions/current/torii.json', bytes: Buffer.byteLength(spec),
-          sha256: specSha, blake3: 'de'.repeat(32), updatedAt: generatedAt,
+          sha256: specSha, blake3: computeOpenApiBlake3Hex(spec), updatedAt: generatedAt,
           ...unsignedFields, manifestPath: 'versions/current/manifest.json',
         },
       ],
@@ -704,7 +758,7 @@ test('syncOpenApi replaces the mutable current manifest from the validated canon
   assert.equal(entry?.signatureAlgorithm, null);
   assert.equal(entry?.signaturePublicKeyHex, null);
   assert.equal(entry?.signatureHex, null);
-  assert.equal(entry?.blake3, 'de'.repeat(32));
+  assert.equal(entry?.blake3, computeOpenApiBlake3Hex(freshSpec));
   const copiedManifest = JSON.parse(
     await readFile(join(versionDir, 'manifest.json'), 'utf8'),
   );
@@ -718,14 +772,15 @@ async function writeCanonicalManifest(outputDir, spec, {signature}) {
   await mkdir(outputDir, {recursive: true});
   const specBytes = Buffer.from(spec, 'utf8');
   const manifest = {
-    version: 1,
+    version: 2,
     generated_unix_ms: 123,
     generator_commit: 'ab'.repeat(20),
+    generator_dirty: false,
     artifact: {
       path: 'torii.json',
       bytes: specBytes.length,
       sha256_hex: createHash('sha256').update(specBytes).digest('hex'),
-      blake3_hex: 'de'.repeat(32),
+      blake3_hex: computeOpenApiBlake3Hex(specBytes),
       signature,
     },
   };
@@ -740,14 +795,15 @@ async function writeManifestForSpec(target, spec, artifactPath) {
   await writeFile(
     target,
     JSON.stringify({
-      version: 1,
+      version: 2,
       generated_unix_ms: 123,
       generator_commit: 'ab'.repeat(20),
+      generator_dirty: false,
       artifact: {
         path: artifactPath,
         bytes: specBytes.length,
         sha256_hex: createHash('sha256').update(specBytes).digest('hex'),
-        blake3_hex: 'de'.repeat(32),
+        blake3_hex: computeOpenApiBlake3Hex(specBytes),
         signature: null,
       },
     }, null, 2),
@@ -768,12 +824,22 @@ function testContext(tempRoot, outputDir, versionsDir, generatedSpec) {
 }
 
 function signatureFor(spec, options) {
-  const signedPayload = signPayload(Buffer.from(spec, 'utf8'), options);
-  return {
-    algorithm: 'ed25519',
-    public_key_hex: signedPayload.publicKeyHex,
-    signature_hex: signedPayload.signatureHex,
+  const specBytes = Buffer.from(spec, 'utf8');
+  const manifest = {
+    version: 2,
+    generated_unix_ms: 123,
+    generator_commit: 'ab'.repeat(20),
+    generator_dirty: false,
+    artifact: {
+      path: 'torii.json',
+      bytes: specBytes.length,
+      sha256_hex: createHash('sha256').update(specBytes).digest('hex'),
+      blake3_hex: computeOpenApiBlake3Hex(specBytes),
+      signature: null,
+    },
   };
+  attachOpenApiManifestSignature(manifest, specBytes, options);
+  return manifest.artifact.signature;
 }
 
 async function writeAllowedSigners(outputDir, publicKeys) {

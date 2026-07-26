@@ -76,10 +76,6 @@ budget_bytes = 44141730227814
 components = ["kura", "wsv_cold", "sorafs", "soranet_spool", "soravpn_spool"]
 filesystem_id = "dev:16777232"
 
-[sorafs.quota]
-storage_pin_max_events = 64
-storage_pin_window_secs = 3600
-
 [sorafs.gateway.site_bindings]
 path = "/config/sorafs_sites.json"
 max_bytes = 1048576

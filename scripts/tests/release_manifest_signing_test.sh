@@ -7,32 +7,70 @@ tmp_dir="$(cd "$tmp_dir_raw" && pwd -P)"
 trap 'rm -rf -- "$tmp_dir"' EXIT
 
 manifest="$tmp_dir/release_manifest.json"
+artifact_dir="$tmp_dir/artifacts"
 public_raw="$tmp_dir/public.raw"
 signer="$tmp_dir/external-signer"
 verifier="$tmp_dir/sorafs-validate"
 signature="$tmp_dir/release_manifest.json.sig"
 public_output="$tmp_dir/release_manifest.json.pub"
 
-printf '%s\n' \
-  '{' \
-  '  "arch": "x86_64",' \
-  '  "artifacts": [],' \
-  '  "commit": "abcdef0",' \
-  '  "version": "1.0.0"' \
-  '}' \
-  > "$manifest"
+mkdir -m 0755 "$artifact_dir"
+printf 'iroha2\n' > "$artifact_dir/iroha2.tar.zst"
+printf 'iroha3\n' > "$artifact_dir/iroha3.tar.zst"
+printf 'shared\n' > "$artifact_dir/shared.tar.zst"
+python3 - "$repo_root/scripts" "$artifact_dir" "$manifest" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
 
-python3 - "$public_raw" "$signer" "$verifier" <<'PY'
+sys.path.insert(0, sys.argv[1])
+from release_artifact_contract import canonical_json_bytes
+
+artifact_dir = Path(sys.argv[2])
+manifest_path = Path(sys.argv[3])
+rows = []
+checksums = []
+for profile in ("iroha2", "iroha3", "shared"):
+    name = f"{profile}.tar.zst"
+    payload = (artifact_dir / name).read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    checksums.append(f"{digest}  {name}\n")
+    rows.append(
+        {
+            "profile": profile,
+            "target": "x86_64-unknown-linux-gnu",
+            "kind": "bundle",
+            "format": "tar.zst",
+            "path": name,
+            "sha256": digest,
+            "size": len(payload),
+        }
+    )
+(artifact_dir / "SHA256SUMS").write_text("".join(checksums), encoding="ascii")
+manifest_path.write_bytes(
+    canonical_json_bytes(
+        {
+            "schema": "iroha.release_manifest",
+            "schema_version": 1,
+            "version": "1.0.0",
+            "commit": "a" * 40,
+            "source_date_epoch": 0,
+            "built_at": "1970-01-01T00:00:00Z",
+            "os": "linux",
+            "arch": "x86_64",
+            "artifacts": rows,
+        }
+    )
+)
+PY
+
+python3 - "$public_raw" "$signer" "$verifier" "$manifest" <<'PY'
 import os
 import sys
 from pathlib import Path
 
-public_path, signer_path, verifier_path = map(Path, sys.argv[1:])
-manifest = bytes.fromhex(
-    "7b0a20202261726368223a20227838365f3634222c0a2020226172746966616374"
-    "73223a205b5d2c0a202022636f6d6d6974223a202261626364656630222c0a2020"
-    "2276657273696f6e223a2022312e302e30220a7d0a"
-)
+public_path, signer_path, verifier_path, manifest_path = map(Path, sys.argv[1:])
+manifest = manifest_path.read_bytes()
 public_key = bytes.fromhex(
     "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
 )
@@ -112,6 +150,7 @@ python3 "$repo_root/scripts/release_manifest_signing.py" verify \
   --trusted-release-manifest-verifier-sha256 "$verifier_digest" \
   >/dev/null
 
+mkdir -m 0755 "$tmp_dir/signed-plan"
 python3 "$repo_root/scripts/publish_plan.py" generate \
   --manifest "$manifest" \
   --manifest-signature "$signature" \
@@ -119,17 +158,43 @@ python3 "$repo_root/scripts/publish_plan.py" generate \
   --trusted-signing-fingerprint "$fingerprint" \
   --release-manifest-verifier "$verifier" \
   --trusted-release-manifest-verifier-sha256 "$verifier_digest" \
-  --artifacts-dir "$tmp_dir" \
+  --artifacts-dir "$artifact_dir" \
   --target 'sorafs://release-test' \
-  --output-dir "$tmp_dir/signed-plan"
+  --output-dir "$tmp_dir/signed-plan" \
+  >/dev/null
+if python3 "$repo_root/scripts/publish_plan.py" generate \
+  --manifest "$manifest" \
+  --manifest-signature "$signature" \
+  --manifest-public-key "$public_output" \
+  --trusted-signing-fingerprint "$fingerprint" \
+  --release-manifest-verifier "$verifier" \
+  --trusted-release-manifest-verifier-sha256 "$verifier_digest" \
+  --artifacts-dir "$artifact_dir" \
+  --target 'sorafs://release-test' \
+  --output-dir "$tmp_dir/signed-plan" \
+  >/dev/null 2>&1
+then
+  echo "publish plan unexpectedly replaced pre-existing output paths" >&2
+  exit 1
+fi
 if python3 "$repo_root/scripts/publish_plan.py" validate \
   --plan "$tmp_dir/signed-plan/publish_plan.json" \
+  --manifest "$manifest" \
+  --manifest-signature "$signature" \
+  --manifest-public-key "$public_output" \
+  --artifacts-dir "$artifact_dir" \
+  --target 'sorafs://release-test' \
   >/dev/null 2>&1; then
   echo "signed plan validated without independent trust inputs" >&2
   exit 1
 fi
 python3 "$repo_root/scripts/publish_plan.py" validate \
   --plan "$tmp_dir/signed-plan/publish_plan.json" \
+  --manifest "$manifest" \
+  --manifest-signature "$signature" \
+  --manifest-public-key "$public_output" \
+  --artifacts-dir "$artifact_dir" \
+  --target 'sorafs://release-test' \
   --trusted-signing-fingerprint "$fingerprint" \
   --release-manifest-verifier "$verifier" \
   --trusted-release-manifest-verifier-sha256 "$verifier_digest" \
@@ -137,7 +202,7 @@ python3 "$repo_root/scripts/publish_plan.py" validate \
 
 if python3 "$repo_root/scripts/publish_plan.py" generate \
   --manifest "$manifest" \
-  --artifacts-dir "$tmp_dir" \
+  --artifacts-dir "$artifact_dir" \
   --target 'sorafs://release-test' \
   --output-dir "$tmp_dir/unsigned-production-plan" \
   >/dev/null 2>&1; then
@@ -145,20 +210,27 @@ if python3 "$repo_root/scripts/publish_plan.py" generate \
   exit 1
 fi
 
+mkdir -m 0755 "$tmp_dir/development-plan"
 python3 "$repo_root/scripts/publish_plan.py" generate \
   --manifest "$manifest" \
-  --artifacts-dir "$tmp_dir" \
+  --artifacts-dir "$artifact_dir" \
   --target 'sorafs://release-test' \
   --development-allow-unsigned-manifest \
   --output-dir "$tmp_dir/development-plan"
 if python3 "$repo_root/scripts/publish_plan.py" validate \
   --plan "$tmp_dir/development-plan/publish_plan.json" \
+  --manifest "$manifest" \
+  --artifacts-dir "$artifact_dir" \
+  --target 'sorafs://release-test' \
   >/dev/null 2>&1; then
   echo "development unsigned plan validated without the explicit escape hatch" >&2
   exit 1
 fi
 python3 "$repo_root/scripts/publish_plan.py" validate \
   --plan "$tmp_dir/development-plan/publish_plan.json" \
+  --manifest "$manifest" \
+  --artifacts-dir "$artifact_dir" \
+  --target 'sorafs://release-test' \
   --development-allow-unsigned-manifest \
   >/dev/null
 

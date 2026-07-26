@@ -38,7 +38,9 @@ impl StreamTokenBodyV1 {
         norito::to_bytes(self)
     }
 
-    fn signature_message(&self) -> Result<Vec<u8>, norito::Error> {
+    /// Build the exact domain-separated payload that an external Ed25519
+    /// signer must sign.
+    pub fn signing_payload_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         let body = self.to_canonical_bytes()?;
         let mut message = Vec::with_capacity(STREAM_TOKEN_SIGNATURE_DOMAIN_V1.len() + body.len());
         message.extend_from_slice(STREAM_TOKEN_SIGNATURE_DOMAIN_V1);
@@ -57,7 +59,7 @@ pub struct StreamTokenV1 {
 impl StreamTokenV1 {
     /// Sign the provided body with the Ed25519 signing key.
     pub fn sign(body: StreamTokenBodyV1, secret: &SigningKey) -> Result<Self, StreamTokenError> {
-        let message = body.signature_message()?;
+        let message = body.signing_payload_bytes()?;
         let signature = secret.sign(&message);
         Ok(Self {
             body,
@@ -65,18 +67,22 @@ impl StreamTokenV1 {
         })
     }
 
-    /// Sign with a raw Ed25519 seed after rejecting the reserved all-zero key.
+    /// Assemble a token from a raw Ed25519 signature produced by an external
+    /// signer and verify it before release.
     ///
-    /// This keeps SDK/FFI callers on the same checked signing boundary without
-    /// requiring them to depend directly on the Dalek implementation type.
-    pub fn sign_with_seed(
+    /// The external signer must sign [`StreamTokenBodyV1::signing_payload_bytes`]
+    /// using pure Ed25519 and return the canonical 64-byte `R || S` signature.
+    pub fn from_external_signature(
         body: StreamTokenBodyV1,
-        secret_seed: [u8; 32],
+        signature: [u8; ed25519_dalek::SIGNATURE_LENGTH],
+        verifier: &VerifyingKey,
     ) -> Result<Self, StreamTokenError> {
-        if secret_seed.iter().all(|byte| *byte == 0) {
-            return Err(StreamTokenError::InvalidSigningKey);
-        }
-        Self::sign(body, &SigningKey::from_bytes(&secret_seed))
+        let token = Self {
+            body,
+            signature: signature.to_vec(),
+        };
+        token.verify(verifier)?;
+        Ok(token)
     }
 
     /// Verify the token signature using the supplied verifying key.
@@ -91,7 +97,7 @@ impl StreamTokenV1 {
             .map_err(|_| StreamTokenError::InvalidSignatureFormat)?;
         let sig = crate::checked_ed25519_signature_from_bytes(&signature_bytes)
             .map_err(|_| StreamTokenError::InvalidSignatureFormat)?;
-        let message = self.body.signature_message()?;
+        let message = self.body.signing_payload_bytes()?;
         verifier
             .verify_strict(&message, &sig)
             .map_err(StreamTokenError::SignatureInvalid)
@@ -110,9 +116,6 @@ pub enum StreamTokenError {
     /// Failed to serialise or deserialise the Norito payload.
     #[error("norito serialisation error: {0}")]
     Norito(#[from] norito::Error),
-    /// The supplied signing seed is the reserved all-zero value.
-    #[error("invalid stream-token signing key")]
-    InvalidSigningKey,
     /// Signature bytes were malformed.
     #[error("invalid signature encoding")]
     InvalidSignatureFormat,
@@ -166,14 +169,6 @@ mod tests {
     }
 
     #[test]
-    fn checked_seed_signing_rejects_all_zero_key() {
-        assert!(matches!(
-            StreamTokenV1::sign_with_seed(sample_body(), [0; 32]),
-            Err(StreamTokenError::InvalidSigningKey)
-        ));
-    }
-
-    #[test]
     fn wire_limit_expands_within_base64_header_limit() {
         let maximum_canonical_base64_len = STREAM_TOKEN_MAX_WIRE_BYTES_V1.div_ceil(3) * 4;
         assert!(maximum_canonical_base64_len <= STREAM_TOKEN_MAX_BASE64_BYTES_V1);
@@ -207,6 +202,86 @@ mod tests {
         assert!(matches!(
             token.verify(&signing.verifying_key()),
             Err(StreamTokenError::SignatureInvalid(_))
+        ));
+    }
+
+    #[test]
+    fn external_signature_roundtrip_verifies_exact_payload() {
+        let signing = SigningKey::from_bytes(&[0x26; 32]);
+        let body = sample_body();
+        let payload = body.signing_payload_bytes().expect("signing payload");
+        let signature = signing.sign(&payload).to_bytes();
+
+        let token = StreamTokenV1::from_external_signature(
+            body.clone(),
+            signature,
+            &signing.verifying_key(),
+        )
+        .expect("assemble verified external signature");
+
+        assert_eq!(token.body, body);
+        token
+            .verify(&signing.verifying_key())
+            .expect("external token verifies");
+    }
+
+    #[test]
+    fn external_signature_rejects_wrong_key_body_substitution_and_body_only_signing() {
+        let signing = SigningKey::from_bytes(&[0x27; 32]);
+        let wrong = SigningKey::from_bytes(&[0x28; 32]);
+        let body = sample_body();
+        let signature = signing
+            .sign(&body.signing_payload_bytes().expect("signing payload"))
+            .to_bytes();
+
+        assert!(matches!(
+            StreamTokenV1::from_external_signature(body.clone(), signature, &wrong.verifying_key()),
+            Err(StreamTokenError::SignatureInvalid(_))
+        ));
+
+        let mut substituted = body.clone();
+        substituted.max_streams += 1;
+        assert!(matches!(
+            StreamTokenV1::from_external_signature(
+                substituted,
+                signature,
+                &signing.verifying_key()
+            ),
+            Err(StreamTokenError::SignatureInvalid(_))
+        ));
+
+        let body_only_signature = signing
+            .sign(&body.to_canonical_bytes().expect("canonical body"))
+            .to_bytes();
+        assert!(matches!(
+            StreamTokenV1::from_external_signature(
+                body,
+                body_only_signature,
+                &signing.verifying_key()
+            ),
+            Err(StreamTokenError::SignatureInvalid(_))
+        ));
+    }
+
+    #[test]
+    fn external_signature_rejects_malformed_r() {
+        let signing = SigningKey::from_bytes(&[0x29; 32]);
+        let mut signature = signing
+            .sign(
+                &sample_body()
+                    .signing_payload_bytes()
+                    .expect("signing payload"),
+            )
+            .to_bytes();
+        signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&SMALL_ORDER_R);
+
+        assert!(matches!(
+            StreamTokenV1::from_external_signature(
+                sample_body(),
+                signature,
+                &signing.verifying_key()
+            ),
+            Err(StreamTokenError::InvalidSignatureFormat)
         ));
     }
 

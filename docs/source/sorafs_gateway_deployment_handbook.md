@@ -16,37 +16,51 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 
 | Requirement | Notes |
 |-------------|-------|
-| Torii build ≥ `2026-02-18` | Must include stream-token enforcement and `torii.sorafs_gateway` config surface. |
+| Torii build ≥ `2026-02-18` | Must include stream-token enforcement and the `sorafs.gateway` config surface. |
 | GAR admission artefacts | Gateway admission envelope + manifest signed via governance tooling. |
-| Stream token signing key | Stored at `sorafs_gateway_secrets/token_signing_sk`; distribute its Ed25519 public key through authenticated provider inventory. Rotate as described in §5.4. |
+| Stream token runtime signer | Non-exportable Ed25519 key in the approved HSM/KMS, a runtime-injected signer adapter, and a reviewed non-secret handle/public-key binding. Distribute the public key through authenticated provider inventory and rotate as described in §5.4. |
 | Observability stack | Prometheus + Grafana dashboards (`grafana_sorafs_gateway_*`) shipped in `docs/source/`. |
 | Smoke tooling | Latest `sorafs-fetch` CLI (`cargo run -p sorafs_fetch -- --help`) with the gateway options described below. |
 
 ## 3. Configuration Checklist
 
-1. Populate `torii.sorafs_gateway` in the node config:
+1. Populate `sorafs.gateway` in the node config:
    ```toml
-   [torii.sorafs_gateway]
-   enable = true
+   [sorafs.gateway]
    require_manifest_envelope = true
    enforce_admission = true
-   direct_mode.default_mapping = "vanity"
-   stream_tokens.signing_key_path = "/etc/iroha/sorafs_gateway_secrets/token_signing_sk"
-   stream_tokens.default_ttl_secs = 900
-   stream_tokens.default_max_streams = 8
+   enforce_capabilities = true
+
+   [sorafs.storage]
+   enabled = true
+
+   [sorafs.storage.stream_tokens]
+   enabled = true
+   signer_handle = "pkcs11:prod/stream-token/v4"
+   signer_public_key_hex = "<64-lowercase-hex-characters>"
+   key_version = 4
+   default_ttl_secs = 900
+   default_max_streams = 8
    ```
 2. Ensure TLS automation controller is active (`tls_automation` section) so the `X-Sora-TLS-State` header is populated.
 3. Configure observability exporters (Prometheus scrape of `torii_metrics` endpoint). Dashboards referenced in §4 expect metric names `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_stream_token_denials_total{reason=…}`, etc.
 
-The signing-key path must name one regular, non-symlink, single-link file. On
-Unix it must be owned by the process effective user and grant no group or other
-permissions (`0400` or `0600` are the recommended modes). The file is read with
-`O_NOFOLLOW`, bounded to 64 bytes, and must contain either exactly 32 raw seed
-bytes or exactly 64 lowercase hexadecimal characters without whitespace.
-Startup fails closed for wrong ownership, permissive permissions, all-zero
-material, path replacement during the read, hard links, or non-canonical key
-text. Configure positive token defaults only: zero no longer means unlimited,
-TTL is capped at one hour, and request overrides may only reduce these defaults.
+The TOML `enabled` value is the only production activation control; do not use
+an environment override. The deployment launcher must inject the HSM/KMS signer
+adapter whose reported non-secret handle and 32-byte Ed25519 public key exactly
+match `signer_handle` and `signer_public_key_hex`. Startup fails closed when the
+adapter is absent, either value is missing or invalid, or the binding differs.
+The signing key remains non-exportable, and adapter credentials, sessions, PINs,
+and tokens are runtime-only secrets that must not enter configuration, disk
+files, logs, or readiness evidence.
+
+For every issuance, Torii sends the canonical domain-separated Norito payload to
+the adapter, accepts only the raw 64-byte Ed25519 signature, and verifies it
+strictly against the configured public key before returning a token. Treat an
+unavailable or refusing signer and every malformed, weak-key, wrong-key, or
+non-verifying output as a fail-closed issuance error. Configure positive token
+defaults only: zero does not mean unlimited, TTL is capped at one hour, and
+request overrides may only reduce these defaults.
 
 ### 3.1 CID cache hydration and origin isolation
 
@@ -122,7 +136,7 @@ range of at most 8 MiB and receive `206` plus `Content-Range`.
 | Step | Description | Acceptance criteria |
 |------|-------------|---------------------|
 | 1 | Deploy new gateway instances (green) alongside existing blue pool. | healthz + `/v1/sorafs/storage/status` pass. |
-| 2 | Register green hosts via admission registry update; publish governance envelope. | `torii.sorafs_gateway.direct_mode.plan` dry-run shows expected vanity mapping. |
+| 2 | Register green hosts via admission registry update; publish governance envelope. | `iroha app sorafs gateway direct-mode plan` dry-run shows the expected vanity mapping. |
 | 3 | Shift a small traffic slice (5%) using orchestration tokens targeted at `stage-gw`. | Dashboard `grafana_sorafs_gateway_load_tests.json` shows ≤1% refusal. |
 | 4 | Expand to 50% once telemetry remains within SLOs for 30 minutes. | `torii_sorafs_stream_token_denials_total` slope near zero; `scripts/sorafs_direct_mode_smoke.sh` passes against staging gateway endpoints. |
 | 5 | Drain blue instances, revoke their stream tokens, and remove from admission registry. | `sorafs_gateway_token_revocations_total` increments and old hosts stop serving traffic. |
@@ -170,7 +184,7 @@ Recommended alerts:
 
 | Incident | Detection | Immediate Action | Follow-up |
 |----------|-----------|------------------|-----------|
-| Stream token exhaustion | Alert: `rate_limited` denials | Issue a token with `max_streams` no greater than the configured ceiling; adjust orchestrator concurrency. | Review client budget; update `torii.sorafs_gateway.stream_tokens.default_max_streams` through the controlled configuration rollout if the ceiling is too low. |
+| Stream token exhaustion | Alert: `rate_limited` denials | Issue a token with `max_streams` no greater than the configured ceiling; adjust orchestrator concurrency. | Review client budget; update `sorafs.storage.stream_tokens.default_max_streams` through the controlled configuration rollout if the ceiling is too low. |
 | GAR mismatch / provider not admitted | Refusal metric spikes | Verify admission registry sync; run `iroha_cli app sorafs direct-mode status`. | Re-sign manifest/envelope; document in governance log. |
 | TLS automation failure | `X-Sora-TLS-State` transitions to `degraded`, the active chain approaches expiry, or the public handshake fails | Withdraw the affected gateway from admission and traffic; do not continue on a stored-certificate fallback. Recover only through the deployment's audited runtime ACME adapter and controller boundary. | Re-admit only after a CA-valid chain, controller success state, external handshake probe, and self-cert evidence all pass; file the certificate timeline in the incident report. |
 | Governed compliance denial | `torii_sorafs_gateway_compliance_serving_decisions_total{disposition="deny"}` | Inspect only the bounded `subject_kind` and `source` dimensions, confirm catalog sequence/expiry, and notify governance. | Reconcile the signed catalog or accepted appeal; retain payload-free audit evidence. |
@@ -188,24 +202,30 @@ Recommended alerts:
 
 ### 5.4 Key Rotation
 
-1. Generate a fresh non-zero Ed25519 seed in the approved KMS/HSM workflow and
-   install it at the configured `sorafs.storage.stream_tokens.signing_key_path`.
-   Increment `key_version` before issuing tokens from the new key.
-2. Publish the new 32-byte public key in the authenticated provider deployment
-   inventory and bind it to the same admitted provider ID. The token endpoint's
+1. Create a fresh Ed25519 key inside the approved HSM/KMS and keep it
+   non-exportable. Assign it a new non-secret signer handle; do not copy a seed
+   into a file, environment variable, configuration value, or deployment
+   artefact.
+2. In one reviewed rollout, inject the adapter bound to that handle and update
+   `signer_handle`, `signer_public_key_hex`, and `key_version`. Restart the
+   issuer and require the exact startup handle/public-key binding to pass.
+3. Issue a probe token and require strict verification of the HSM/KMS signature
+   against the newly configured public key before publishing that key in the
+   authenticated provider deployment inventory. The endpoint's
    `X-SoraFS-Verifying-Key` header is useful for comparison but is not a trust
    anchor by itself.
-3. Stage a new provider descriptor containing the new `gateway-key` and a token
+4. Stage a new provider descriptor containing the new `gateway-key` and a token
    signed by that key. A descriptor pins exactly one key; never pair a new key
-   with an old token or silently fall back to a key carried beside a failed
+   with an old token or silently fall back to a key returned beside a failed
    token.
-4. Switch consumers atomically after the inventory update is visible. If an
+5. Switch consumers atomically after the inventory update is visible. If an
    overlap window is required, use separately named old/new descriptors so each
    token remains bound to its own pinned key, then remove the old descriptor no
    later than its final token expiry.
-5. Revoke and destroy the old secret, retain the public-key fingerprint,
-   `token_pk_version`, activation time, final expiry, and change approval in the
-   audit evidence, and run negative probes proving old-key tokens are rejected.
+6. Revoke and destroy the old HSM/KMS key. Retain only its non-secret handle,
+   public-key fingerprint, `token_pk_version`, activation time, final expiry,
+   change approval, and negative probes proving old-key, cross-key, and
+   wrong-handle tokens are rejected.
 
 ### 5.5 WAF Policy Pack
 

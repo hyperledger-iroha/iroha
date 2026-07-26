@@ -8,7 +8,7 @@ a Norito-encoded manifest suitable for pinning in the SoraFS registry.
      chunker) to derive chunk offsets, lengths, and BLAKE3 digests.
    - The plan exposes the payload digest and chunk metadata that downstream
      tooling can reuse for CAR assembly and Proof-of-Replication scheduling.
-   - Alternatively, the prototype `sorafs_car::ChunkStore` ingests bytes and
+   - Alternatively, the canonical `sorafs_car::ChunkStore` ingests bytes and
      records deterministic chunk metadata for later CAR construction.
      The store now derives the 64 KiB / 4 KiB PoR sampling tree (domain-tagged,
      chunk-aligned) so schedulers can request Merkle proofs without re-reading
@@ -155,7 +155,7 @@ manifest-builder report also embeds the ordered array under
 `chunk_fetch_specs`; that field is not a standalone interchange format.
 Both the `chunking` section and `manifest` object expose `profile_aliases`
 
-When re-running the stub (for example in CI or a release pipeline) you can pass
+When re-running the builder (for example in CI or a release pipeline) you can pass
 `--plan=chunk_fetch_plan.json` or `--plan=-` to import the previously generated
 envelope. The CLI verifies its whole-payload binding and each chunk’s index,
 offset, length, and BLAKE3 digest against the freshly derived CAR plan before

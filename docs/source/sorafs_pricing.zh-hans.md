@@ -13,7 +13,7 @@ summary: Default pricing tiers, collateral policy, and credit settlement rules f
 
 # SoraFS Pricing Schedule
 
-This document captures the launch configuration for the SoraFS deal engine (roadmap item SF-8a).
+This document captures the launch configuration for the ledger-authoritative SoraFS orderbook, reserve/rent, and hedging-billing services (roadmap item SF-8a).
 It describes the default pricing schedule pushed by governance, how collateral is derived, and
 how provider credit balances are monitored. All values are encoded on-chain via
 `PricingScheduleRecord` and can be updated atomically using the `SetPricingSchedule` instruction.
@@ -36,7 +36,7 @@ Capacity declarations may override the tier by adding the metadata entry `sorafs
 this entry into the `CapacityDeclarationRecord` and rejects mismatched out-of-band overrides.
 Telemetry rejects unknown values and falls back to the schedule
 default when the metadata is absent. Capacity telemetry submissions also include an `egress_bytes`
-counter so the deal engine can apply the corresponding egress fees alongside storage charges.
+counter so the ledger-authoritative economics services can apply the corresponding egress fees alongside storage charges.
 
 ### Storage charge calculation
 
@@ -77,8 +77,8 @@ encoded in `CreditPolicy`:
 - Low balance alert threshold: 20 % of the expected settlement fee (2 000 bps).
 
 When telemetry is recorded the expected settlement charge for the next window is computed from the
-pricing schedule and stored in both the fee ledger and the provider credit record. The deal engine
-tracks `low_balance_since_epoch` when balances fall under the threshold so operators can top up
+pricing schedule and stored in both the fee ledger and the provider credit record. The ledger-authoritative economics services
+track `low_balance_since_epoch` when balances fall under the threshold so operators can top up
 credit before settlement failure.
 
 ## Provider Credit Ledger Fields
@@ -129,7 +129,7 @@ Governance (or authorised operations tooling) manages the schedule and credit ac
 following instructions:
 
 - `SetPricingSchedule` replaces the on-chain `PricingScheduleRecord` after validation. The new
-  schedule applies to the next telemetry window processed by the deal engine.
+  schedule applies to the next telemetry window processed by the ledger-authoritative economics services.
 - `RecordCapacityTelemetry` consumes provider telemetry, calculates storage fees using the current
   schedule, applies uptime/PoR multipliers, updates the fee ledger, and debits provider credit
   accounts when present.

@@ -20,16 +20,29 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 
    [sorafs.storage.stream_tokens]
    enabled = true
-   signing_key_path = "/etc/iroha/sorafs_gateway_secrets/token_signing_sk"
-   key_version = 1
+   signer_handle = "pkcs11:prod/stream-token/v4"
+   signer_public_key_hex = "<64-lowercase-hex-characters>"
+   key_version = 4
    default_ttl_secs = 900
    default_max_streams = 32
    default_rate_limit_bytes = 104857600
    default_requests_per_minute = 60
    ```
-2. Point gateway at admission registry (`sorafs_manifest::provider_admission`).
-3. Configure telemetry exporter (Prometheus/OpenTelemetry).
-4. Set up log aggregation for token issuance/revocation events.
+2. Inject the runtime HSM/KMS signer adapter for the configured non-secret
+   handle. The Ed25519 private key must remain non-exportable; its credentials,
+   session, and PIN are runtime-only and must never be committed or written to
+   TOML, signing-key files, logs, or readiness artefacts. The TOML `enabled`
+   value is the only production activation control; an environment variable
+   cannot enable issuance.
+3. Require startup to bind the adapter's reported handle and public key exactly
+   to `signer_handle` and `signer_public_key_hex`. For every issuance, require
+   strict verification of the raw 64-byte signature against that configured
+   public key before releasing the token. Missing or mismatched bindings,
+   unavailable/refusing signers, and malformed or non-verifying output fail
+   closed.
+4. Point gateway at admission registry (`sorafs_manifest::provider_admission`).
+5. Configure telemetry exporter (Prometheus/OpenTelemetry).
+6. Set up payload-free log aggregation for token issuance/revocation outcomes.
 
 ## 3. Operational Procedures
 
@@ -74,6 +87,8 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 - Run SF-5a self-cert kit before and after major upgrades.
 - Update fixtures when governance publishes new dataset.
 - Review observability dashboards weekly, ensure alert routing functioning.
+- Reconcile the configured signer handle, public-key fingerprint, and
+  `key_version` with the approved HSM/KMS inventory after every deployment.
 
 ## 6. Automation & Incident Playbooks
 
@@ -116,7 +131,24 @@ Recommended automation pattern:
 3. Run the job after every admission update to ensure new manifests receive
    fresh tokens before operators open the gateway to orchestrators.
 
-### 6.2 Incident playbook integration
+### 6.2 Signing-key rotation
+
+1. Create the replacement Ed25519 key inside the approved HSM/KMS without
+   exporting it, and assign a new non-secret signer handle.
+2. In one controlled rollout, inject the replacement adapter and update
+   `signer_handle`, `signer_public_key_hex`, and `key_version`.
+3. Restart the issuer, require exact startup binding, and issue a probe token.
+   Strictly verify the returned signature against the new configured public key
+   before publishing that key through authenticated provider inventory.
+4. Deploy a matching `gateway-key` and token atomically. If an overlap is
+   necessary, use separately named old/new descriptors; there is no implicit
+   multi-key acceptance or file/env fallback.
+5. Remove the old descriptor by its final token expiry, revoke the old HSM/KMS
+   key, and retain only payload-free evidence: non-secret handles, public-key
+   fingerprints, versions, approval, activation/expiry times, and negative
+   old-key/cross-key/wrong-handle probes.
+
+### 6.3 Incident playbook integration
 
 Token rotation ties into the existing incident playbooks maintained under
 `docs/source/sorafs_gateway_tls_automation.md` (TLS/ECH) and `docs/source/sorafs_gateway_capability_tests.md`

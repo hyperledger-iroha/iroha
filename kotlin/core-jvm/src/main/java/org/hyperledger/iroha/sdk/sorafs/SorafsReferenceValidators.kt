@@ -26,6 +26,44 @@ enum class SorafsPdpPayloadKind(
     PROOF(3, "proof.to"),
 }
 
+/** Payload kind accepted by heterogeneous SoraFS fixture-bundle validation. */
+enum class SorafsFixtureBundlePayloadKind(
+    @JvmField val bridgeCode: Int,
+    @JvmField val defaultLabel: String,
+) {
+    PROVIDER_ADVERT(1, "provider-advert.to"),
+    PROVIDER_ADMISSION_ENVELOPE(2, "provider-admission-envelope.to"),
+    REPLICATION_ORDER(3, "replication-order.to"),
+    POR_CHALLENGE(4, "por-challenge.to"),
+    POR_PROOF(5, "por-proof.to"),
+    POTR_RECEIPT(6, "potr-receipt.to"),
+    REPAIR_EVIDENCE(7, "repair-evidence.to"),
+    REPAIR_REPORT(8, "repair-report.to"),
+    REPAIR_TASK_RECORD(9, "repair-task-record.to"),
+    REPAIR_SLASH_PROPOSAL(10, "repair-slash-proposal.to"),
+    REPAIR_TASK_EVENT(11, "repair-task-event.to"),
+    ORDERBOOK_ORDER_REQUEST(12, "orderbook-order-request.to"),
+    ORDERBOOK_ORDER_CANCEL(13, "orderbook-order-cancel.to"),
+    ORDERBOOK_TRADE_EVENT(14, "orderbook-trade-event.to"),
+    ORDERBOOK_SETTLEMENT_CHANNEL(15, "orderbook-settlement-channel.to"),
+    ORDERBOOK_SETTLEMENT_RECEIPT(16, "orderbook-settlement-receipt.to"),
+    PDP_COMMITMENT(17, "pdp-commitment.to"),
+    PDP_CHALLENGE(18, "pdp-challenge.to"),
+    PDP_PROOF(19, "pdp-proof.to"),
+}
+
+/** Immutable typed input for heterogeneous fixture-bundle validation. */
+class SorafsFixtureBundlePayloadInput(
+    @JvmField val kind: SorafsFixtureBundlePayloadKind,
+    noritoBytes: ByteArray,
+    @JvmField val label: String? = null,
+) {
+    private val payload = noritoBytes.copyOf()
+
+    /** Return a detached copy of the canonical Norito payload bytes. */
+    fun noritoBytes(): ByteArray = payload.copyOf()
+}
+
 /** PoP payload kind accepted by the Rust-backed SoraFS reference validator. */
 enum class SorafsPopPayloadKind(
     @JvmField val bridgeCode: Int,
@@ -87,6 +125,8 @@ class SorafsReferenceValidators private constructor() {
         const val REFERENCE_MAX_INPUT_BYTES_V1: Int = 67_108_864
         /** Maximum UTF-8 bytes accepted for one diagnostic input label. */
         const val REFERENCE_MAX_LABEL_BYTES_V1: Int = 1_024
+        /** Maximum payload count accepted by one fixture-bundle call. */
+        const val FIXTURE_BUNDLE_MAX_PAYLOADS_V1: Int = 64
         private val nativeAvailable: Boolean = loadLibrary()
 
         @JvmStatic
@@ -97,6 +137,14 @@ class SorafsReferenceValidators private constructor() {
 
         internal fun isGovernanceDagBridgeSupported(version: Int, hasSymbols: Boolean): Boolean =
             isBridgeAbiSupported(version) && hasSymbols
+
+        internal fun isFixtureBundleBridgeSupported(version: Int, hasSymbols: Boolean): Boolean =
+            isBridgeAbiSupported(version) && hasSymbols
+
+        internal fun isGovernanceLogNodeBridgeSupported(
+            version: Int,
+            hasSymbols: Boolean,
+        ): Boolean = isBridgeAbiSupported(version) && hasSymbols
 
         @JvmStatic
         @JvmOverloads
@@ -164,6 +212,88 @@ class SorafsReferenceValidators private constructor() {
                     generatedAtUnix,
                 ),
                 "SoraFS hedging validation",
+            )
+        }
+
+        /** Validate a bounded heterogeneous fixture bundle and canonical cross-links. */
+        @JvmStatic
+        @JvmOverloads
+        fun validateFixtureBundleJson(
+            payloads: List<SorafsFixtureBundlePayloadInput>,
+            nowUnix: Long = currentEpochSeconds(),
+            generatedAtUnix: Long = nowUnix,
+        ): String {
+            require(payloads.size in 1..FIXTURE_BUNDLE_MAX_PAYLOADS_V1) {
+                "payloads must contain 1..$FIXTURE_BUNDLE_MAX_PAYLOADS_V1 entries"
+            }
+            requireGeneratedAt(nowUnix)
+            requireGeneratedAt(generatedAtUnix)
+            val kinds = ByteArray(payloads.size)
+            val nativePayloads = Array(payloads.size) { ByteArray(0) }
+            val labels = Array(payloads.size) { ByteArray(0) }
+            var aggregateBytes = 0L
+            payloads.forEachIndexed { index, input ->
+                kinds[index] = input.kind.bridgeCode.toByte()
+                nativePayloads[index] =
+                    boundedReferencePayload(input.noritoBytes(), "payloads[$index].noritoBytes")
+                labels[index] = labelBytes(input.label, input.kind.defaultLabel)
+                aggregateBytes += nativePayloads[index].size.toLong() + labels[index].size.toLong()
+                require(aggregateBytes <= REFERENCE_MAX_INPUT_BYTES_V1.toLong()) {
+                    "fixture-bundle inputs exceed $REFERENCE_MAX_INPUT_BYTES_V1 aggregate bytes"
+                }
+            }
+            requireNative()
+            return requireJsonOutput(
+                nativeValidateFixtureBundleJson(
+                    kinds,
+                    nativePayloads,
+                    labels,
+                    nowUnix,
+                    generatedAtUnix,
+                ),
+                "SoraFS fixture-bundle validation",
+            )
+        }
+
+        /** Validate one canonical signed `GovernanceLogNodeV1` against its expected node CID. */
+        @JvmStatic
+        fun validateGovernanceLogNodeJson(
+            noritoBytes: ByteArray,
+            expectedNodeCid: ByteArray,
+        ): String =
+            validateGovernanceLogNodeJson(
+                noritoBytes,
+                null,
+                expectedNodeCid,
+                currentEpochSeconds(),
+            )
+
+        /** Validate one canonical signed `GovernanceLogNodeV1` against its expected node CID. */
+        @JvmStatic
+        @JvmOverloads
+        fun validateGovernanceLogNodeJson(
+            noritoBytes: ByteArray,
+            label: String?,
+            expectedNodeCid: ByteArray,
+            generatedAtUnix: Long = currentEpochSeconds(),
+        ): String {
+            requireGeneratedAt(generatedAtUnix)
+            val payload = boundedReferencePayload(noritoBytes, "noritoBytes")
+            val labelBytes = labelBytes(label, "governance.to")
+            require(expectedNodeCid.size == GOVERNANCE_DAG_CID_BYTES_V1) {
+                "expectedNodeCid must contain exactly $GOVERNANCE_DAG_CID_BYTES_V1 bytes"
+            }
+            val expectedCid = expectedNodeCid.copyOf()
+            requireAggregateReferenceBytes(payload.size, labelBytes.size, expectedCid.size)
+            requireNative()
+            return requireJsonOutput(
+                nativeValidateGovernanceLogNodeJson(
+                    payload,
+                    labelBytes,
+                    expectedCid,
+                    generatedAtUnix,
+                ),
+                "SoraFS governance log node validation",
             )
         }
 
@@ -653,6 +783,9 @@ class SorafsReferenceValidators private constructor() {
 
         private fun labelBytes(label: String?, fallback: String): ByteArray {
             val value = label ?: fallback
+            require(!hasUnpairedSurrogate(value)) {
+                "label must be valid Unicode text"
+            }
             require(value.isNotBlank()) { "label must not be blank" }
             require(value.trim() == value) { "label must not contain surrounding whitespace" }
             require(value.none(Char::isISOControl)) {
@@ -663,6 +796,28 @@ class SorafsReferenceValidators private constructor() {
                 "label must be at most $REFERENCE_MAX_LABEL_BYTES_V1 UTF-8 bytes"
             }
             return bytes
+        }
+
+        private fun hasUnpairedSurrogate(value: String): Boolean {
+            var index = 0
+            while (index < value.length) {
+                val character = value[index]
+                when {
+                    Character.isHighSurrogate(character) -> {
+                        if (
+                            index + 1 >= value.length ||
+                            !Character.isLowSurrogate(value[index + 1])
+                        ) {
+                            return true
+                        }
+                        index += 2
+                    }
+
+                    Character.isLowSurrogate(character) -> return true
+                    else -> index += 1
+                }
+            }
+            return false
         }
 
         private fun boundedReferencePayload(payload: ByteArray, field: String): ByteArray {
@@ -696,10 +851,19 @@ class SorafsReferenceValidators private constructor() {
         private fun loadLibrary(): Boolean =
             try {
                 System.loadLibrary(LIBRARY_NAME)
+                val abiVersion = nativeBridgeAbiVersion()
                 isGovernanceDagBridgeSupported(
-                    nativeBridgeAbiVersion(),
+                    abiVersion,
                     nativeHasGovernanceDagSymbols(),
-                )
+                ) &&
+                    isFixtureBundleBridgeSupported(
+                        abiVersion,
+                        nativeHasFixtureBundleSymbols(),
+                    ) &&
+                    isGovernanceLogNodeBridgeSupported(
+                        abiVersion,
+                        nativeHasGovernanceLogNodeSymbols(),
+                    )
             } catch (_: UnsatisfiedLinkError) {
                 false
             } catch (_: SecurityException) {
@@ -711,6 +875,12 @@ class SorafsReferenceValidators private constructor() {
 
         @JvmStatic
         private external fun nativeHasGovernanceDagSymbols(): Boolean
+
+        @JvmStatic
+        private external fun nativeHasFixtureBundleSymbols(): Boolean
+
+        @JvmStatic
+        private external fun nativeHasGovernanceLogNodeSymbols(): Boolean
 
         @JvmStatic
         private external fun nativeValidateOrderbookPayloadJson(
@@ -733,6 +903,23 @@ class SorafsReferenceValidators private constructor() {
             kind: Int,
             payload: ByteArray,
             label: ByteArray,
+            generatedAtUnix: Long,
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeValidateFixtureBundleJson(
+            kinds: ByteArray,
+            payloads: Array<ByteArray>,
+            labels: Array<ByteArray>,
+            nowUnix: Long,
+            generatedAtUnix: Long,
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeValidateGovernanceLogNodeJson(
+            payload: ByteArray,
+            label: ByteArray,
+            expectedNodeCid: ByteArray,
             generatedAtUnix: Long,
         ): ByteArray?
 

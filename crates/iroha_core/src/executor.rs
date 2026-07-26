@@ -197,8 +197,9 @@ fn validate_builtin_initial_query_permission(
 ) -> Result<(), ValidationFail> {
     // Mirror the query visitors supplied by the default executor while a chain
     // still runs the native Initial executor. Standard Iroha queries are public;
-    // only authoritative SoraFS finance state, complete moderation snapshots,
-    // and per-juror eligibility records carry additional confidentiality rules.
+    // only authoritative SoraFS finance state, the governed reputation
+    // authority policy, complete moderation snapshots, and per-juror
+    // eligibility records carry additional confidentiality rules.
     if latest_block.is_none_or(BlockHeader::is_genesis) {
         return Ok(());
     }
@@ -248,6 +249,25 @@ fn validate_builtin_initial_query_permission(
             } else {
                 Err(ValidationFail::NotPermitted(
                     "Can't read authoritative SoraFS reserve state".to_owned(),
+                ))
+            }
+        }
+        SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(_) => {
+            let can_manage_reputation_policy: Permission =
+                executor_permission::sorafs::CanManageSorafsReputationJournalPolicy.into();
+            let can_record_reputation: Permission =
+                executor_permission::sorafs::CanRecordSorafsReputationJournal.into();
+            let can_resolve_dispute: Permission =
+                executor_permission::sorafs::CanResolveSorafsCapacityDispute.into();
+            if authority_has_permission(world, authority, &can_manage_reputation_policy)?
+                || authority_has_permission(world, authority, &can_record_reputation)?
+                || authority_has_permission(world, authority, &can_resolve_dispute)?
+            {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "Can't read the active authoritative SoraFS reputation-journal authority policy"
+                        .to_owned(),
                 ))
             }
         }
@@ -20105,7 +20125,8 @@ seiyaku IdentityRequired {
     fn initial_executor_mirrors_default_private_query_permissions() {
         use iroha_data_model::query::sorafs::prelude::{
             FindSorafsModerationEvents, FindSorafsModerationJurorEligibility,
-            FindSorafsModerationSnapshot, FindSorafsOrderbookPolicy, FindSorafsReserveEvents,
+            FindSorafsModerationSnapshot, FindSorafsOrderbookPolicy,
+            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReserveEvents,
         };
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -20123,6 +20144,8 @@ seiyaku IdentityRequired {
         let orderbook = QueryRequest::Singular(FindSorafsOrderbookPolicy.into());
         let reserve_events =
             QueryRequest::Singular(FindSorafsReserveEvents::new(None, None, 16).into());
+        let reputation_policy =
+            QueryRequest::Singular(FindSorafsReputationJournalAuthorityPolicy.into());
         let own_eligibility = QueryRequest::Singular(
             FindSorafsModerationJurorEligibility::new(
                 "case-1".to_owned(),
@@ -20171,6 +20194,18 @@ seiyaku IdentityRequired {
             )
             .expect_err("reserve committed events must remain governance-readable");
         assert!(matches!(reserve_error, ValidationFail::NotPermitted(_)));
+        let reputation_policy_error = executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &reputation_policy,
+            )
+            .expect_err("reputation authority policy must remain operator-readable");
+        assert!(matches!(
+            reputation_policy_error,
+            ValidationFail::NotPermitted(_)
+        ));
         executor
             .validate_query_with_world_parts(
                 &state_transaction.world,
@@ -20211,6 +20246,11 @@ seiyaku IdentityRequired {
             BTreeSet::from([
                 Permission::from(executor_permission::sorafs::CanSetSorafsPricing),
                 Permission::from(executor_permission::sorafs::CanSetSorafsReservePolicy),
+                Permission::from(
+                    executor_permission::sorafs::CanManageSorafsReputationJournalPolicy,
+                ),
+                Permission::from(executor_permission::sorafs::CanRecordSorafsReputationJournal),
+                Permission::from(executor_permission::sorafs::CanResolveSorafsCapacityDispute),
                 Permission::from(executor_permission::sorafs::CanManageSorafsModeration),
             ]),
         );
@@ -20230,6 +20270,14 @@ seiyaku IdentityRequired {
                 &reserve_events,
             )
             .expect("reserve governors must be able to read committed reserve events");
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &reputation_policy,
+            )
+            .expect("reputation policy managers must be able to read the active authority policy");
         executor
             .validate_query_with_world_parts(
                 &state_transaction.world,

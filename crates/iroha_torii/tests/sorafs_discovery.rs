@@ -45,20 +45,19 @@ use iroha_data_model::{
     ChainId, IntoKeyValue, Registrable,
     block::BlockHeader,
     isi::sorafs::RegisterPinManifest,
-    metadata::Metadata,
     name::Name,
     prelude as dm,
     sorafs::pin_registry::{
-        ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
-        ManifestDigest as RegistryManifestDigest, ManifestRootCid, PinFeePayment,
-        PinManifestRecord, PinPolicy as RegistryPinPolicy, StorageClass as RegistryStorageClass,
+        ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
+        ManifestDigest as RegistryManifestDigest, PinPolicy as RegistryPinPolicy,
+        StorageClass as RegistryStorageClass,
     },
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::Child;
 use iroha_primitives::json::Json;
 use iroha_torii::{
-    MaybeTelemetry, OnlinePeersProvider, RegisterPinManifestDto, Torii,
+    MaybeTelemetry, OnlinePeersProvider, Torii,
     sorafs::{
         AdmissionCheckError, AdmissionRegistry, AliasCachePolicyExt,
         api::StorageStateResponseDto,
@@ -70,18 +69,15 @@ use iroha_torii::{
     },
     test_utils::{AuthorityCreds, drain_queue_and_apply_all, random_authority},
 };
+use iroha_version::codec::EncodeVersioned;
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, to_bytes};
-use sorafs_car::{
-    CarBuildPlan, ChunkStore, compute_chunk_plan_digest_sha3, compute_por_root,
-    por_json::proof_from_value,
-};
 use sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1;
 use sorafs_manifest::{
-    AdvertEndpoint, AdvertValidationError, AvailabilityTier, BLAKE3_256_MULTIHASH_CODE,
-    CapabilityTlv, CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
-    EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointKind,
-    EndpointMetadata, EndpointMetadataKey, MANIFEST_DAG_CODEC, ManifestBuilder, ManifestV1,
+    AdvertEndpoint, AdvertValidationError, AvailabilityTier, CapabilityTlv, CapabilityType,
+    CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1, EndpointAdmissionV1,
+    EndpointAttestationKind, EndpointAttestationV1, EndpointKind, EndpointMetadata,
+    EndpointMetadataKey, MANIFEST_DAG_CODEC, ManifestBuilder, ManifestV1,
     PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProfileId,
     ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
     ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic,
@@ -1668,7 +1664,9 @@ struct ManifestSetup {
 }
 
 struct ManifestRequestFixture {
-    request: RegisterPinManifestDto,
+    transaction: SignedTransaction,
+    authority: AuthorityCreds,
+    manifest_payload: Vec<u8>,
     manifest_digest_hex: String,
 }
 
@@ -1767,9 +1765,13 @@ fn manifest_request_authority_fixture_uses_checked_ed25519_key_generation() {
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
 
-fn manifest_request_fixture<F>(submitted_epoch: u64, tweak: F) -> ManifestRequestFixture
+fn manifest_request_fixture<F>(
+    chain_id: &ChainId,
+    submitted_epoch: u64,
+    tweak_manifest: F,
+) -> ManifestRequestFixture
 where
-    F: FnOnce(&mut RegisterPinManifestDto),
+    F: FnOnce(&mut ManifestV1),
 {
     let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
     let manifest_policy = PinPolicy {
@@ -1777,7 +1779,7 @@ where
         storage_class: ManifestStorageClass::Hot,
         retention_epoch: 48,
     };
-    let manifest = ManifestBuilder::new()
+    let mut manifest = ManifestBuilder::new()
         .root_cid(sorafs_manifest::canonical_manifest_root_cid([0x10; 32]))
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_registry(ProfileId(descriptor.id.0))
@@ -1789,39 +1791,32 @@ where
         .pin_policy(manifest_policy)
         .build()
         .expect("manifest must build");
+    tweak_manifest(&mut manifest);
+    let manifest_payload = manifest.encode().expect("encode canonical manifest");
     let manifest_digest = manifest.digest().expect("manifest digest");
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
     let key_pair = checked_manifest_request_authority_fixture();
-    let authority = dm::AccountId::new(key_pair.public_key().clone());
-    let mut request = RegisterPinManifestDto {
-        authority,
+    let account = dm::AccountId::new(key_pair.public_key().clone());
+    let authority = AuthorityCreds {
+        account: account.clone(),
         private_key: dm::ExposedPrivateKey(key_pair.private_key().clone()),
-        manifest_payload: BASE64_STANDARD
-            .encode(manifest.encode().expect("encode canonical manifest")),
-        submitted_epoch,
-        alias: None,
-        successor_of_hex: None,
     };
-    tweak(&mut request);
+    let instruction =
+        RegisterPinManifest::new(manifest_payload.clone(), submitted_epoch, None, None);
+    let transaction = TransactionBuilder::new(
+        chain_id.clone(),
+        account,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction])
+    .sign(key_pair.private_key());
+
     ManifestRequestFixture {
-        request,
+        transaction,
+        authority,
+        manifest_payload,
         manifest_digest_hex,
     }
-}
-
-fn mutate_manifest_request_payload(
-    request: &mut RegisterPinManifestDto,
-    tweak: impl FnOnce(&mut ManifestV1),
-) {
-    let bytes = BASE64_STANDARD
-        .decode(request.manifest_payload.as_bytes())
-        .expect("decode manifest fixture payload");
-    let mut manifest = sorafs_manifest::decode_manifest_v1_canonical(&bytes)
-        .expect("decode canonical manifest fixture");
-    tweak(&mut manifest);
-    manifest.governance.council_signatures.clear();
-    request.manifest_payload =
-        BASE64_STANDARD.encode(manifest.encode().expect("encode mutated manifest fixture"));
 }
 
 fn assert_sorafs_pin_error(body: &[u8], expected_code: &str, expected_message: &str) {
@@ -1970,103 +1965,6 @@ fn create_successor_manifest(
         Some(predecessor.manifest_digest),
         Some(status_timestamp_unix),
     )
-}
-
-fn registry_storage_class_from_manifest(class: ManifestStorageClass) -> RegistryStorageClass {
-    match class {
-        ManifestStorageClass::Hot => RegistryStorageClass::Hot,
-        ManifestStorageClass::Warm => RegistryStorageClass::Warm,
-        ManifestStorageClass::Cold => RegistryStorageClass::Cold,
-    }
-}
-
-fn chunker_handle_for_manifest(manifest: &ManifestV1) -> ChunkerProfileHandle {
-    ChunkerProfileHandle {
-        profile_id: manifest.chunking.profile_id.0,
-        namespace: manifest.chunking.namespace.clone(),
-        name: manifest.chunking.name.clone(),
-        semver: manifest.chunking.semver.clone(),
-        multihash_code: manifest.chunking.multihash_code,
-    }
-}
-
-fn seed_paid_pin_record_for_storage_manifest(
-    harness: &ToriiHarness,
-    manifest: &ManifestV1,
-    payload: &[u8],
-    next_height: &mut u64,
-) {
-    let authority = random_authority();
-    ensure_authority_registered(harness, &authority, next_height);
-
-    let plan =
-        CarBuildPlan::single_file_with_profile(payload, sorafs_chunker::ChunkProfile::DEFAULT)
-            .expect("derive storage pin chunk plan");
-    let manifest_digest_value = manifest
-        .digest()
-        .expect("compute manifest digest for paid pin seed");
-    let manifest_digest = RegistryManifestDigest::new(*manifest_digest_value.as_bytes());
-    let policy = RegistryPinPolicy {
-        min_replicas: manifest.pin_policy.min_replicas,
-        storage_class: registry_storage_class_from_manifest(manifest.pin_policy.storage_class),
-        retention_epoch: manifest.pin_policy.retention_epoch,
-    };
-    let amount = harness
-        .state
-        .view()
-        .world()
-        .sorafs_pricing()
-        .public_pin_fee(
-            policy.storage_class,
-            plan.content_length,
-            policy.min_replicas,
-            5,
-            policy.retention_epoch,
-        )
-        .expect("discovery fixture pin fee");
-    let mut record = PinManifestRecord::new(
-        manifest_digest,
-        ManifestRootCid::try_from_slice(&manifest.root_cid).expect("canonical manifest root CID"),
-        chunker_handle_for_manifest(manifest),
-        compute_chunk_plan_digest_sha3(&plan.chunks),
-        manifest.por_root,
-        plan.content_length,
-        policy,
-        authority.account.clone(),
-        5,
-        None,
-        None,
-        Metadata::default(),
-    );
-    record.record_pin_fee_payment(PinFeePayment {
-        paid_by: authority.account.clone(),
-        fee_asset_id: harness.state.gov.sorafs_pin_fee_asset_id.clone(),
-        treasury_account_id: harness.state.gov.sorafs_pin_fee_treasury_account.clone(),
-        amount,
-    });
-    record.approve(5, None);
-
-    let prev_hash = harness
-        .state
-        .view()
-        .latest_block()
-        .map(|block| block.hash());
-    let header = BlockHeader::new(
-        NonZeroU64::new(*next_height).expect("block height fits into NonZeroU64"),
-        prev_hash,
-        None,
-        None,
-        *next_height,
-        0,
-    );
-    let mut block = harness.state.block(header);
-    let mut tx = block.transaction();
-    tx.world_mut_for_testing()
-        .pin_manifests_mut_for_testing()
-        .insert(manifest_digest, record);
-    tx.apply();
-    block.commit().expect("commit paid pin registry seed block");
-    *next_height += 1;
 }
 
 fn ensure_authority_registered(
@@ -2521,437 +2419,96 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)]
-async fn sorafs_storage_endpoints_round_trip() {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping storage round-trip (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
-        return;
-    }
+async fn retired_storage_ingest_route_is_not_mounted() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
-    cfg.torii.sorafs_storage.max_parallel_fetches = 1;
-    cfg.torii.sorafs_storage.max_pins = 8;
-    cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
-    cfg.torii.sorafs_gateway.enforce_capabilities = false;
-    cfg.torii.sorafs_gateway.enforce_admission = false;
-    cfg.torii.sorafs_gateway.require_manifest_envelope = false;
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let expected_capacity = cfg.torii.sorafs_storage.max_capacity_bytes.0;
 
     let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let payload = b"torii sorafs storage round-trip payload";
-    let plan =
-        CarBuildPlan::single_file_with_profile(payload, sorafs_chunker::ChunkProfile::DEFAULT)
-            .expect("derive storage manifest chunk plan");
-    let manifest = ManifestBuilder::new()
-        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
-            *blake3::hash(payload).as_bytes(),
-        ))
-        .dag_codec(DagCodecId(0x71))
-        .chunking_from_profile(
-            sorafs_chunker::ChunkProfile::DEFAULT,
-            BLAKE3_256_MULTIHASH_CODE,
-        )
-        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-        .por_root(compute_por_root(payload, &plan).expect("derive canonical fixture PoR root"))
-        .content_length(payload.len() as u64)
-        .car_digest(blake3::hash(payload).into())
-        .car_size(payload.len() as u64)
-        .pin_policy(PinPolicy {
-            min_replicas: 1,
-            storage_class: ManifestStorageClass::Hot,
-            retention_epoch: 42,
-        })
-        .build()
-        .expect("manifest");
-    let manifest_digest = manifest.digest().expect("manifest digest");
-    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let mut next_height = 1;
-    seed_paid_pin_record_for_storage_manifest(&harness, &manifest, payload, &mut next_height);
-
-    let manifest_b64 = base64::engine::general_purpose::STANDARD
-        .encode(to_bytes(&manifest).expect("encode manifest"));
-    let payload_b64 = base64::engine::general_purpose::STANDARD.encode(payload);
-
-    let pin_body = {
-        let mut map = json::Map::new();
-        map.insert(
-            "manifest_b64".to_owned(),
-            json::Value::from(manifest_b64.clone()),
-        );
-        map.insert(
-            "payload_b64".to_owned(),
-            json::Value::from(payload_b64.clone()),
-        );
-        json::Value::Object(map)
-    };
-    let pin_request = Request::builder()
-        .method("POST")
-        .uri("/v1/sorafs/storage/pin")
-        .header("content-type", "application/json")
-        .body(Body::from(
-            json::to_vec(&pin_body).expect("serialize pin request"),
-        ))
-        .expect("pin request");
-    let mut pin_request = pin_request;
-    pin_request
-        .extensions_mut()
-        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
-            [127, 0, 0, 1],
-            0,
-        ))));
-    let pin_response = app
-        .clone()
-        .oneshot(pin_request)
-        .await
-        .expect("pin response");
-    let pin_status = pin_response.status();
-    let pin_bytes = BodyExt::collect(pin_response.into_body())
-        .await
-        .expect("collect pin body")
-        .to_bytes();
-    assert!(
-        pin_status == StatusCode::OK,
-        "pin request failed: {pin_status} body={}",
-        String::from_utf8_lossy(&pin_bytes)
-    );
-    let pin_value: json::Value = json::from_slice(&pin_bytes).expect("decode pin response");
-    let manifest_id = pin_value
-        .get("manifest_id_hex")
-        .and_then(json::Value::as_str)
-        .expect("manifest id")
-        .to_string();
-    assert_eq!(
-        pin_value
-            .get("content_length")
-            .and_then(json::Value::as_u64)
-            .expect("content length"),
-        payload.len() as u64
-    );
-
-    let fetch_body = {
-        let mut map = json::Map::new();
-        map.insert(
-            "manifest_id_hex".to_owned(),
-            json::Value::from(manifest_id.clone()),
-        );
-        map.insert("offset".to_owned(), json::Value::from(0u64));
-        map.insert("length".to_owned(), json::Value::from(payload.len() as u64));
-        json::Value::Object(map)
-    };
-    let fetch_request = Request::builder()
-        .method("POST")
-        .uri("/v1/sorafs/storage/fetch")
-        .header("content-type", "application/json")
-        .header("x-sorafs-manifest-envelope", "dummy-envelope")
-        .body(Body::from(
-            json::to_vec(&fetch_body).expect("serialize fetch request"),
-        ))
-        .expect("fetch request");
-    let mut fetch_request = fetch_request;
-    fetch_request
-        .extensions_mut()
-        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
-            [127, 0, 0, 1],
-            0,
-        ))));
-    let fetch_response = app
-        .clone()
-        .oneshot(fetch_request)
-        .await
-        .expect("fetch response");
-    let fetch_status = fetch_response.status();
-    let fetch_bytes = BodyExt::collect(fetch_response.into_body())
-        .await
-        .expect("collect fetch body")
-        .to_bytes();
-    assert!(
-        fetch_status == StatusCode::OK,
-        "fetch request failed: {fetch_status} body={}",
-        String::from_utf8_lossy(&fetch_bytes)
-    );
-    let fetch_value: json::Value = json::from_slice(&fetch_bytes).expect("decode fetch response");
-    let fetched_payload = fetch_value
-        .get("data_b64")
-        .and_then(json::Value::as_str)
-        .map(|data| {
-            base64::engine::general_purpose::STANDARD
-                .decode(data.as_bytes())
-                .expect("decode fetch payload")
-        })
-        .expect("fetch payload");
-    assert_eq!(fetched_payload.as_slice(), payload);
-
-    let retired_sample_response = app
+    let response = harness
+        .app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/sorafs/storage/por-sample")
+                .uri("/v1/sorafs/storage/pin")
                 .header("content-type", "application/json")
-                .body(Body::from("{}"))
-                .expect("retired PoR sample request"),
+                .body(Body::from(
+                    r#"{"manifest_b64":"AA==","payload_b64":"AA=="}"#,
+                ))
+                .expect("retired ingest request"),
         )
         .await
-        .expect("retired PoR sample response");
-    assert_eq!(
-        retired_sample_response.status(),
-        StatusCode::NOT_FOUND,
-        "the unauthenticated local PoR sampling route must not be mounted"
-    );
+        .expect("retired ingest response");
 
-    let mut chunk_store = ChunkStore::new();
-    chunk_store.ingest_bytes(payload).expect("ingest payload");
-    let expected_root = *chunk_store.por_tree().root();
-
-    let proof_body = {
-        let mut map = json::Map::new();
-        map.insert(
-            "manifest_digest_hex".to_owned(),
-            json::Value::from(manifest_digest_hex.clone()),
-        );
-        map.insert(
-            "provider_id_hex".to_owned(),
-            json::Value::from("22".repeat(32)),
-        );
-        map.insert("proof_kind".to_owned(), json::Value::from("por"));
-        map.insert("sample_count".to_owned(), json::Value::from(2u32));
-        map.insert("sample_seed".to_owned(), json::Value::from(7u64));
-        map.insert(
-            "nonce_b64".to_owned(),
-            json::Value::from(BASE64_STANDARD.encode([0x44u8; 16])),
-        );
-        map.insert("tier".to_owned(), json::Value::from("hot"));
-        json::Value::Object(map)
-    };
-
-    let proof_request = Request::builder()
-        .method("POST")
-        .uri("/v1/sorafs/proof/stream")
-        .header("content-type", "application/json")
-        .body(Body::from(
-            json::to_vec(&proof_body).expect("serialize proof stream request"),
-        ))
-        .expect("proof request");
-    let proof_response = app
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let state_response = harness
+        .app
         .clone()
-        .oneshot(proof_request)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/sorafs/storage/state")
+                .body(Body::empty())
+                .expect("storage state request"),
+        )
         .await
-        .expect("proof response");
-    assert_eq!(proof_response.status(), StatusCode::OK);
-    let proof_bytes = BodyExt::collect(proof_response.into_body())
-        .await
-        .expect("collect proof stream body")
-        .to_bytes();
-    let proof_text =
-        String::from_utf8(proof_bytes.to_vec()).expect("proof stream response is UTF-8");
-    let mut proof_items = 0usize;
-    for line in proof_text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        proof_items += 1;
-        let value: json::Value = json::from_str(line).expect("parse proof stream item");
-        assert_eq!(
-            value
-                .get("manifest_digest_hex")
-                .and_then(json::Value::as_str),
-            Some(manifest_digest_hex.as_str()),
-            "manifest digest echoed in stream item"
-        );
-        assert_eq!(
-            value.get("proof_kind").and_then(json::Value::as_str),
-            Some("por")
-        );
-        let proof_value = value
-            .get("proof")
-            .unwrap_or_else(|| panic!("stream item must include proof field: {value:?}"));
-        let proof =
-            proof_from_value(proof_value).expect("convert JSON proof into PorProof structure");
-        assert!(
-            proof.verify(&expected_root),
-            "streamed proof should verify against computed PoR root"
-        );
-    }
-    assert!(proof_items > 0, "proof stream should return items");
-
-    let state_request = Request::builder()
-        .method("GET")
-        .uri("/v1/sorafs/storage/state")
-        .body(Body::empty())
-        .expect("state request");
-    let state_response = app.oneshot(state_request).await.expect("state response");
-    assert_eq!(state_response.status(), StatusCode::OK);
+        .expect("storage state response");
     let state_bytes = BodyExt::collect(state_response.into_body())
         .await
-        .expect("collect state body")
+        .expect("collect storage state")
         .to_bytes();
     let state: StorageStateResponseDto =
-        json::from_slice(&state_bytes).expect("decode state response");
-
-    assert_eq!(state.bytes_used, payload.len() as u64);
-    assert_eq!(state.bytes_capacity, expected_capacity);
-    assert_eq!(state.pin_queue_depth, 0);
-    assert_eq!(state.fetch_inflight, 0);
-    assert!(state.fetch_bytes_per_sec > 0);
-    assert_eq!(state.por_inflight, 0);
-    assert!(
-        state.por_samples_success_total >= proof_items as u64,
-        "expected scheduler to record at least {proof_items} successful proof-stream samples"
-    );
-    assert_eq!(state.por_samples_failed_total, 0);
-    assert_eq!(state.fetch_utilisation_bps, 0);
-    assert_eq!(state.pin_queue_utilisation_bps, 0);
-    assert_eq!(state.por_utilisation_bps, 0);
+        json::from_slice(&state_bytes).expect("decode storage state");
+    assert_eq!(state.bytes_used, 0);
+    assert_eq!(state.provider_ingest_inflight, 0);
 }
 
-#[tokio::test]
-async fn sorafs_storage_pin_uses_configured_torii_body_limit() {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping storage pin body-limit regression (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
-        return;
-    }
-
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.max_content_len = Bytes(8_000_000);
-    cfg.torii.sorafs_storage.enabled = true;
-    cfg.torii.sorafs_storage.max_parallel_fetches = 1;
-    cfg.torii.sorafs_storage.max_pins = 8;
-    cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(8_000_000);
-    cfg.torii.sorafs_gateway.enforce_capabilities = false;
-    cfg.torii.sorafs_gateway.enforce_admission = false;
-    cfg.torii.sorafs_gateway.require_manifest_envelope = false;
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-
-    let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    // This payload expands past Axum's default body cap once base64-encoded, so
-    // the request only succeeds when the route honors `torii.max_content_len`.
-    let payload = vec![0x5Au8; 2_200_000];
-    let plan =
-        CarBuildPlan::single_file_with_profile(&payload, sorafs_chunker::ChunkProfile::DEFAULT)
-            .expect("derive large storage manifest chunk plan");
-    let manifest = ManifestBuilder::new()
-        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
-            *blake3::hash(&payload).as_bytes(),
-        ))
-        .dag_codec(DagCodecId(0x71))
-        .chunking_from_profile(
-            sorafs_chunker::ChunkProfile::DEFAULT,
-            BLAKE3_256_MULTIHASH_CODE,
-        )
-        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-        .por_root(
-            compute_por_root(&payload, &plan).expect("derive canonical large-fixture PoR root"),
-        )
-        .content_length(payload.len() as u64)
-        .car_digest(blake3::hash(&payload).into())
-        .car_size(payload.len() as u64)
-        .pin_policy(PinPolicy {
-            min_replicas: 1,
-            storage_class: ManifestStorageClass::Hot,
-            retention_epoch: 42,
-        })
-        .build()
-        .expect("manifest");
-    let mut next_height = 1;
-    seed_paid_pin_record_for_storage_manifest(&harness, &manifest, &payload, &mut next_height);
-
-    let pin_body = {
-        let mut map = json::Map::new();
-        map.insert(
-            "manifest_b64".to_owned(),
-            json::Value::from(
-                BASE64_STANDARD.encode(to_bytes(&manifest).expect("encode manifest")),
-            ),
-        );
-        map.insert(
-            "payload_b64".to_owned(),
-            json::Value::from(BASE64_STANDARD.encode(&payload)),
-        );
-        json::Value::Object(map)
-    };
-    let pin_request = Request::builder()
+fn pin_register_http_request(body: Vec<u8>, content_type: &'static str) -> Request<Body> {
+    let mut request = Request::builder()
         .method("POST")
-        .uri("/v1/sorafs/storage/pin")
-        .header("content-type", "application/json")
-        .body(Body::from(
-            json::to_vec(&pin_body).expect("serialize pin request"),
-        ))
-        .expect("pin request");
-    let mut pin_request = pin_request;
-    pin_request
+        .uri("/v1/sorafs/pin/register")
+        .header("content-type", content_type)
+        .body(Body::from(body))
+        .expect("build pin-register request");
+    request
         .extensions_mut()
         .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
             [127, 0, 0, 1],
             0,
         ))));
+    request
+}
 
-    let pin_response = app
+#[tokio::test]
+async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.transport.norito_rpc.enabled = true;
+    cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
+    cfg.torii.sorafs_storage.enabled = true;
+    let temp_dir = tempdir().expect("storage temp dir");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
+    let harness = build_torii_harness(&cfg);
+    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 7, |_| {});
+    let mut next_height = 1;
+    ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
+
+    let submitted_hash = fixture.transaction.hash();
+    let body = norito::json::to_vec(&fixture.transaction).expect("serialize signed transaction");
+    let response = harness
+        .app
         .clone()
-        .oneshot(pin_request)
+        .oneshot(pin_register_http_request(body, "application/json"))
         .await
-        .expect("pin response");
-    let pin_status = pin_response.status();
-    let pin_bytes = BodyExt::collect(pin_response.into_body())
-        .await
-        .expect("collect pin body")
-        .to_bytes();
-    assert!(
-        pin_status == StatusCode::OK,
-        "pin request failed: {pin_status} body={}",
-        String::from_utf8_lossy(&pin_bytes)
-    );
-}
-
-#[tokio::test]
-async fn sorafs_pin_register_route_accepts_manifest() {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.transport.norito_rpc.enabled = true;
-    cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
-    cfg.torii.sorafs_storage.enabled = true;
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let fixture = manifest_request_fixture(7, |_| {});
-    let mut next_height = 1;
-    ensure_authority_registered(
-        &harness,
-        &AuthorityCreds {
-            account: fixture.request.authority.clone(),
-            private_key: fixture.request.private_key.clone(),
-        },
-        &mut next_height,
-    );
-
-    let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/v1/sorafs/pin/register")
-        .header("content-type", "application/json")
-        .body(Body::from(payload))
-        .expect("build request");
-    request
-        .extensions_mut()
-        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
-            [127, 0, 0, 1],
-            0,
-        ))));
-    let response = app.clone().oneshot(request).await.expect("router responds");
+        .expect("router responds");
     let status = response.status();
     let bytes = BodyExt::collect(response.into_body())
         .await
         .expect("collect response body")
         .to_bytes();
     assert!(
-        status == StatusCode::OK,
+        status == StatusCode::ACCEPTED,
         "pin register route failed: {status} body={}",
         String::from_utf8_lossy(&bytes)
     );
@@ -2960,18 +2517,39 @@ async fn sorafs_pin_register_route_accepts_manifest() {
         value
             .get("manifest_digest_hex")
             .and_then(json::Value::as_str),
-        Some(fixture.manifest_digest_hex.as_str()),
-        "response should echo manifest digest"
+        Some(fixture.manifest_digest_hex.as_str())
     );
     assert_eq!(
-        value.get("submitted_epoch").and_then(json::Value::as_u64),
-        Some(7),
-        "response should include submitted epoch"
+        value.get("tx_hash_hex").and_then(json::Value::as_str),
+        Some(hex::encode(submitted_hash.as_ref()).as_str())
+    );
+    assert_eq!(
+        value.get("status").and_then(json::Value::as_str),
+        Some("submitted")
+    );
+    assert_eq!(
+        value.as_object().map(|object| object.len()),
+        Some(3),
+        "admission response must not claim a fee, custody result, or finalized pin status"
+    );
+    let queued = {
+        let state_view = harness.state.view();
+        harness
+            .queue
+            .all_transactions(&state_view)
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        queued
+            .iter()
+            .filter_map(AcceptedTransaction::external)
+            .any(|transaction| transaction.hash() == submitted_hash),
+        "the dedicated route must queue the original caller-signed transaction unchanged"
     );
 }
 
 #[tokio::test]
-async fn sorafs_pin_register_route_decodes_exact_canonical_manifest_payload() {
+async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
@@ -2979,102 +2557,49 @@ async fn sorafs_pin_register_route_decodes_exact_canonical_manifest_payload() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
-    let expected_chunker_handle = format!(
-        "{}.{}@{}",
-        descriptor.namespace, descriptor.name, descriptor.semver
-    );
-    let fixture = manifest_request_fixture(9, |_| {});
-    let manifest_bytes = BASE64_STANDARD
-        .decode(fixture.request.manifest_payload.as_bytes())
-        .expect("fixture manifest payload must be canonical padded base64");
-    let manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
-        .expect("fixture manifest payload must use the canonical ManifestV1 encoding");
-    assert_eq!(
-        manifest.encode().expect("re-encode canonical manifest"),
-        manifest_bytes,
-        "canonical ManifestV1 decode must preserve the exact submitted bytes"
-    );
+    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 8, |_| {});
     let mut next_height = 1;
-    ensure_authority_registered(
-        &harness,
-        &AuthorityCreds {
-            account: fixture.request.authority.clone(),
-            private_key: fixture.request.private_key.clone(),
-        },
-        &mut next_height,
-    );
+    ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
 
-    let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/v1/sorafs/pin/register")
-        .header("content-type", "application/json")
-        .body(Body::from(payload))
-        .expect("build request");
-    request
-        .extensions_mut()
-        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
-            [127, 0, 0, 1],
-            0,
-        ))));
-    let response = app.clone().oneshot(request).await.expect("router responds");
-    let status = response.status();
-    let bytes = BodyExt::collect(response.into_body())
+    let response = harness
+        .app
+        .clone()
+        .oneshot(pin_register_http_request(
+            fixture.transaction.encode_versioned(),
+            "application/x-norito",
+        ))
         .await
-        .expect("collect response body")
+        .expect("router responds");
+    let status = response.status();
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .expect("collect body")
         .to_bytes();
     assert!(
-        status == StatusCode::OK,
-        "pin register route failed: {status} body={}",
-        String::from_utf8_lossy(&bytes)
-    );
-    let value: json::Value = json::from_slice(&bytes).expect("decode response");
-    assert_eq!(
-        value
-            .get("manifest_digest_hex")
-            .and_then(json::Value::as_str),
-        Some(fixture.manifest_digest_hex.as_str()),
-        "response should normalize the manifest digest hex"
-    );
-    assert_eq!(
-        value.get("chunker_handle").and_then(json::Value::as_str),
-        Some(expected_chunker_handle.as_str()),
-        "response should include canonical chunker handle"
-    );
-    assert_eq!(
-        value.get("submitted_epoch").and_then(json::Value::as_u64),
-        Some(9),
-        "response should include submitted epoch"
+        status == StatusCode::ACCEPTED,
+        "pin register Norito transaction failed: {status} body={}",
+        String::from_utf8_lossy(&body)
     );
 }
 
 #[tokio::test]
-async fn sorafs_pin_register_rejects_unknown_chunker_in_canonical_manifest() {
+async fn sorafs_pin_register_validates_signed_manifest_bytes() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let mut fixture = manifest_request_fixture(9, |_| {});
-    mutate_manifest_request_payload(&mut fixture.request, |manifest| {
+    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 9, |manifest| {
         manifest.chunking.name = "bogus".into();
     });
 
-    let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/sorafs/pin/register")
-                .header("content-type", "application/json")
-                .body(Body::from(payload))
-                .expect("build request"),
-        )
+    let response = harness
+        .app
+        .clone()
+        .oneshot(pin_register_http_request(
+            norito::json::to_vec(&fixture.transaction).expect("serialize signed transaction"),
+            "application/json",
+        ))
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -3090,375 +2615,131 @@ async fn sorafs_pin_register_rejects_unknown_chunker_in_canonical_manifest() {
 }
 
 #[tokio::test]
-async fn sorafs_pin_register_rejects_invalid_pin_policy() {
+async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let mut fixture = manifest_request_fixture(9, |_| {});
-    mutate_manifest_request_payload(&mut fixture.request, |manifest| {
-        manifest.pin_policy.min_replicas = 0;
+    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 6, |_| {});
+    let legacy = norito::json!({
+        "authority": (fixture.authority.account.to_string()),
+        "private_key": "[redacted]",
+        "manifest_payload": (BASE64_STANDARD.encode(&fixture.manifest_payload)),
+        "submitted_epoch": 6_u64
     });
 
-    let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/sorafs/pin/register")
-                .header("content-type", "application/json")
-                .body(Body::from(payload))
-                .expect("build request"),
-        )
+    let response = harness
+        .app
+        .clone()
+        .oneshot(pin_register_http_request(
+            norito::json::to_vec(&legacy).expect("serialize retired body"),
+            "application/json",
+        ))
+        .await
+        .expect("router responds");
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "the removed secret-bearing DTO must fail closed"
+    );
+}
+
+#[tokio::test]
+async fn sorafs_pin_register_rejects_wrong_shape_chain_and_signature() {
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.sorafs_storage.enabled = true;
+    let temp_dir = tempdir().expect("storage temp dir");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
+    let harness = build_torii_harness(&cfg);
+
+    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 6, |_| {});
+    let two_instructions = TransactionBuilder::new(
+        harness.chain_id.as_ref().clone(),
+        fixture.authority.account.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        RegisterPinManifest::new(fixture.manifest_payload.clone(), 6, None, None),
+        RegisterPinManifest::new(fixture.manifest_payload.clone(), 6, None, None),
+    ])
+    .sign(&fixture.authority.private_key.0);
+    let response = harness
+        .app
+        .clone()
+        .oneshot(pin_register_http_request(
+            norito::json::to_vec(&two_instructions).expect("serialize two-instruction transaction"),
+            "application/json",
+        ))
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = BodyExt::collect(response.into_body())
         .await
-        .expect("collect body")
+        .expect("collect shape error")
         .to_bytes();
     assert_sorafs_pin_error(
         &body,
-        "sorafs_pin_manifest_payload_invalid",
-        "pin policy requires at least",
+        "sorafs_pin_transaction_instruction_count_invalid",
+        "exactly one RegisterPinManifest",
     );
-}
 
-#[tokio::test]
-async fn sorafs_pin_register_rejects_invalid_alias_proof() {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let fixture = manifest_request_fixture(9, |req| {
-        req.alias = Some(iroha_torii::PinAliasDto {
-            namespace: "sora".into(),
-            name: "bad-proof".into(),
-            proof_base64: "%not_base64%".into(),
-        });
-    });
-
-    let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/sorafs/pin/register")
-                .header("content-type", "application/json")
-                .body(Body::from(payload))
-                .expect("build request"),
-        )
+    let wrong_chain: ChainId = "wrong-chain".parse().expect("chain id");
+    let wrong_chain_fixture = manifest_request_fixture(&wrong_chain, 6, |_| {});
+    let response = harness
+        .app
+        .clone()
+        .oneshot(pin_register_http_request(
+            norito::json::to_vec(&wrong_chain_fixture.transaction)
+                .expect("serialize wrong-chain transaction"),
+            "application/json",
+        ))
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    assert_sorafs_pin_error(
-        &body,
-        "sorafs_pin_alias_proof_base64_invalid",
-        "invalid base64",
-    );
-}
 
-#[tokio::test]
-async fn sorafs_pin_register_rejects_invalid_json_body() {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/sorafs/pin/register")
-                .header("content-type", "application/json")
-                .body(Body::from("{"))
-                .expect("build request"),
-        )
+    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 6, |_| {});
+    let tamper_key = checked_manifest_request_authority_fixture();
+    let tampered = fixture
+        .transaction
+        .with_authority(dm::AccountId::new(tamper_key.public_key().clone()));
+    let response = harness
+        .app
+        .clone()
+        .oneshot(pin_register_http_request(
+            norito::json::to_vec(&tampered).expect("serialize tampered transaction"),
+            "application/json",
+        ))
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let message = String::from_utf8_lossy(&body);
-    assert!(
-        message.contains("invalid JSON body"),
-        "error message should mention JSON decoding failure: {message}"
-    );
 }
 
 #[tokio::test]
-async fn sorafs_pin_register_route_rejects_retired_request_fields() {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-    let fixture = manifest_request_fixture(6, |_| {});
-    let canonical =
-        norito::json::to_value(&fixture.request).expect("serialize canonical request value");
-
-    for retired in [
-        "manifest_b64",
-        "manifest_digest_hex",
-        "chunker_profile_id",
-        "pin_policy",
-        "chunk_digest_sha3_256_hex",
-        "content_length",
-        "fee_payment",
-        "gas_asset_id",
-    ] {
-        let mut request_value = canonical.clone();
-        request_value
-            .as_object_mut()
-            .expect("request value is an object")
-            .insert(retired.to_owned(), json::Value::Null);
-        let payload = norito::json::to_vec(&request_value).expect("encode adversarial request");
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/sorafs/pin/register")
-                    .header("content-type", "application/json")
-                    .body(Body::from(payload))
-                    .expect("build request"),
-            )
-            .await
-            .expect("router responds");
-        assert_eq!(
-            response.status(),
-            StatusCode::BAD_REQUEST,
-            "retired field `{retired}` must fail closed"
-        );
-        let body = BodyExt::collect(response.into_body())
-            .await
-            .expect("collect response")
-            .to_bytes();
-        let message = String::from_utf8_lossy(&body);
-        assert!(
-            message.contains("unknown field") && message.contains(retired),
-            "retired field `{retired}` must be identified: {message}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn sorafs_pin_register_accepts_norito_payload() {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping pin register Norito payload (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
-        return;
-    }
+async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
+    let app = build_torii_harness(&cfg).app;
 
-    let fixture = manifest_request_fixture(8, |_| {});
-    let mut next_height = 1;
-    ensure_authority_registered(
-        &harness,
-        &AuthorityCreds {
-            account: fixture.request.authority.clone(),
-            private_key: fixture.request.private_key.clone(),
-        },
-        &mut next_height,
-    );
-    let norito_payload =
-        norito::to_bytes(&fixture.request).expect("encode pin manifest request as Norito");
-
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/v1/sorafs/pin/register")
-        .header("content-type", "application/x-norito")
-        .body(Body::from(norito_payload))
-        .expect("build request");
-    request
-        .extensions_mut()
-        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
-            [127, 0, 0, 1],
-            0,
-        ))));
-    let response = app.clone().oneshot(request).await.expect("router responds");
-    let status = response.status();
-    let body = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    assert!(
-        status == StatusCode::OK,
-        "pin register norito payload failed: {status} body={}",
-        String::from_utf8_lossy(&body)
-    );
-}
-
-#[tokio::test]
-async fn sorafs_pin_register_rejects_invalid_norito_body() {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.transport.norito_rpc.enabled = true;
-    cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
-    cfg.torii.sorafs_storage.enabled = true;
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/v1/sorafs/pin/register")
-        .header("content-type", "application/x-norito")
-        .body(Body::from(vec![0xFF, 0x00, 0x01, 0x02]))
-        .expect("build request");
-    request
-        .extensions_mut()
-        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
-            [127, 0, 0, 1],
-            0,
-        ))));
-    let response = app.oneshot(request).await.expect("router responds");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    let message = String::from_utf8_lossy(&body);
-    assert!(
-        message.contains("invalid Norito body"),
-        "error message should mention Norito decoding failure: {message}"
-    );
-}
-
-#[tokio::test]
-async fn sorafs_pin_register_rejects_malformed_successor_hex() {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let fixture = manifest_request_fixture(6, |req| {
-        req.successor_of_hex = Some("zz-invalid-hex".into());
-    });
-
-    let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
-    let response = app
+    let invalid_json = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/sorafs/pin/register")
-                .header("content-type", "application/json")
-                .body(Body::from(payload))
-                .expect("build request"),
-        )
+        .oneshot(pin_register_http_request(b"{".to_vec(), "application/json"))
         .await
         .expect("router responds");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    assert_sorafs_pin_error(
-        &body,
-        "sorafs_pin_successor_digest_invalid",
-        "successor_of_hex",
-    );
-}
+    assert_eq!(invalid_json.status(), StatusCode::BAD_REQUEST);
 
-#[tokio::test]
-async fn sorafs_pin_register_rejects_malformed_manifest_payload_base64() {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let fixture = manifest_request_fixture(6, |req| {
-        req.manifest_payload = "%not-base64%".into();
-    });
-
-    let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/sorafs/pin/register")
-                .header("content-type", "application/json")
-                .body(Body::from(payload))
-                .expect("build request"),
-        )
+    let invalid_norito = app
+        .oneshot(pin_register_http_request(
+            vec![0xFF, 0x00, 0x01, 0x02],
+            "application/x-norito",
+        ))
         .await
         .expect("router responds");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    assert_sorafs_pin_error(
-        &body,
-        "sorafs_pin_manifest_payload_base64_invalid",
-        "manifest_payload",
-    );
-}
-
-#[tokio::test]
-async fn sorafs_pin_register_rejects_inert_embedded_chunk_digest() {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
-    let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
-    let harness = build_torii_harness(&cfg);
-    let app = harness.app.clone();
-
-    let mut fixture = manifest_request_fixture(6, |_| {});
-    mutate_manifest_request_payload(&mut fixture.request, |manifest| {
-        manifest.chunk_digest_sha3_256 = [0; 32];
-    });
-
-    let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/sorafs/pin/register")
-                .header("content-type", "application/json")
-                .body(Body::from(payload))
-                .expect("build request"),
-        )
-        .await
-        .expect("router responds");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = BodyExt::collect(response.into_body())
-        .await
-        .expect("collect body")
-        .to_bytes();
-    assert_sorafs_pin_error(
-        &body,
-        "sorafs_pin_manifest_payload_invalid",
-        "chunk-plan SHA3-256 digest must not be zero",
-    );
+    assert_eq!(invalid_norito.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

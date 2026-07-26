@@ -40,6 +40,10 @@ from sorafs_checker_preflight import (  # noqa: E402
 from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
+from sorafs_evidence_validation import (  # noqa: E402
+    require_rollout_deployment_id,
+    require_rollout_environment,
+)
 from sorafs_path_identity import (  # noqa: E402
     error_diagnostic_label,
     path_diagnostic_label,
@@ -53,6 +57,13 @@ from sorafs_response_args import (  # noqa: E402
 
 
 CANARY_KINDS = tuple(KIND_BY_NAME)
+SINGLETON_OPTIONS = frozenset(
+    {
+        "--kind",
+        "--probe-artifact",
+        "--non-production-fixture",
+    }
+)
 
 
 def validate_output_path(path: Path, errors: list[str]) -> None:
@@ -139,8 +150,31 @@ def validate_inputs(
     errors: list[str] = []
     validate_output_path(args.out, errors)
     validate_distinct_paths(args, errors)
+    require_rollout_deployment_id(
+        {"--deployment-id": args.deployment_id},
+        errors,
+        field="--deployment-id",
+    )
+    require_rollout_environment(
+        {"--environment": args.environment},
+        errors,
+        field="--environment",
+    )
     if payload is None:
         return errors
+    if payload.get("deployment_id") != args.deployment_id:
+        errors.append(
+            "--deployment-id must exactly match the observed probe deployment_id"
+        )
+    if payload.get("environment") != args.environment:
+        errors.append(
+            "--environment must exactly match the observed probe environment"
+        )
+    if payload.get("generated_at_unix") != args.generated_at_unix:
+        errors.append(
+            "--generated-at-unix must exactly match the observed probe "
+            "generated_at_unix"
+        )
     kind, validation_errors = validate_evidence_payload(
         payload,
         validation_options(args),
@@ -150,6 +184,21 @@ def validate_inputs(
     if kind != args.kind:
         errors.append(f"--probe-artifact must validate as {args.kind}")
     return errors
+
+
+def require_unique_singleton_options(expanded_args: list[str]) -> None:
+    """Reject ambiguous repeated scalar options after response-file expansion."""
+
+    counts = {option: 0 for option in SINGLETON_OPTIONS}
+    for argument in expanded_args:
+        option = argument.split("=", 1)[0]
+        if option in counts:
+            counts[option] += 1
+    duplicates = sorted(option for option, count in counts.items() if count > 1)
+    if duplicates:
+        raise ValueError(
+            "scalar options must not be repeated: " + ", ".join(duplicates)
+        )
 
 
 def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
@@ -206,6 +255,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--kind", choices=CANARY_KINDS, required=True)
     parser.add_argument("--probe-artifact", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--deployment-id", required=True)
+    parser.add_argument("--environment", required=True)
+    parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
     parser.add_argument("--now-unix", type=positive_int_arg, required=True)
     parser.add_argument(
         "--non-production-fixture",
@@ -216,10 +268,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     try:
-        expanded = expand_response_args(
-            sys.argv[1:] if argv is None else argv, parser
-        )
-        return parser.parse_args(expanded)
+        raw_args = sys.argv[1:] if argv is None else argv
+        expanded_args = expand_response_args(raw_args, parser)
+        require_unique_singleton_options(expanded_args)
+        return parser.parse_args(expanded_args)
     except ValueError as error:
         emit_checker_exception(error)
         raise SystemExit(2) from error

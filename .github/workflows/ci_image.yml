@@ -2,16 +2,20 @@ name: Build iroha2-ci image
 
 on:
   workflow_dispatch:
-    inputs:
-      IROHA2_CI_DOCKERFILE:
-        required: true
-        default: Dockerfile.build
+
+env:
+  IROHA_CI_BUILDER_IMAGE: ${{ vars.IROHA_CI_BUILDER_IMAGE }}
 
 jobs:
   dockerhub:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate digest-pinned CI base image
+        run: |
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_CI_BUILDER_IMAGE" \
+            --runtime "$IROHA_CI_BUILDER_IMAGE"
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -22,6 +26,8 @@ jobs:
           push: true
           tags: hyperledger/iroha2-ci:nightly-2025-05-08
           labels: commit=${{ github.sha }}
-          file: ${{ github.event.inputs.IROHA2_CI_DOCKERFILE }}
+          file: Dockerfile.build
+          build-args: |
+            "IROHA_CI_BUILDER_IMAGE=${{ env.IROHA_CI_BUILDER_IMAGE }}"
           # This context specification is required
           context: .

@@ -17,7 +17,10 @@ import {
   proxyRequest,
   verifySpecDigest,
 } from '../tryit-proxy-lib.mjs';
-import {signPayload} from './helpers/openapi-signing.mjs';
+import {
+  buildOpenApiManifest,
+  signPayload,
+} from './helpers/openapi-signing.mjs';
 
 test('parseListenAddress supports host:port and port only', () => {
   assert.deepEqual(parseListenAddress('127.0.0.1:8080'), {host: '127.0.0.1', port: 8080});
@@ -413,20 +416,9 @@ test('verifySpecDigest succeeds when manifest matches', async () => {
   const body = Buffer.from(JSON.stringify({openapi: '3.1.0'}), 'utf8');
   await writeFile(specPath, body);
   const digest = createHash('sha256').update(body).digest('hex');
-  const signature = signPayload(body);
   await writeFile(
     manifestPath,
-    JSON.stringify({
-      artifact: {
-        sha256_hex: digest,
-        bytes: Buffer.byteLength(body),
-        signature: {
-          algorithm: 'ed25519',
-          public_key_hex: signature.publicKeyHex,
-          signature_hex: signature.signatureHex,
-        },
-      },
-    }),
+    JSON.stringify(buildOpenApiManifest({artifactBytes: body})),
   );
 
   const result = await verifySpecDigest({specPath, manifestPath});
@@ -440,25 +432,16 @@ test('verifySpecDigest rejects mismatched digests', async () => {
   const manifestPath = path.join(dir, 'manifest.json');
   const body = Buffer.from('{"openapi":"3.1.0","info":{"title":"demo"}}', 'utf8');
   await writeFile(specPath, body);
-  const signature = signPayload(body);
+  const manifest = buildOpenApiManifest({artifactBytes: body});
+  manifest.artifact.sha256_hex = 'deadbeef';
   await writeFile(
     manifestPath,
-    JSON.stringify({
-      artifact: {
-        sha256_hex: 'deadbeef',
-        bytes: Buffer.byteLength(body),
-        signature: {
-          algorithm: 'ed25519',
-          public_key_hex: signature.publicKeyHex,
-          signature_hex: signature.signatureHex,
-        },
-      },
-    }),
+    JSON.stringify(manifest),
   );
 
   await assert.rejects(
     verifySpecDigest({specPath, manifestPath}),
-    /OpenAPI spec digest mismatch/,
+    /artifact\.sha256_hex/i,
   );
 });
 
@@ -471,12 +454,9 @@ test('verifySpecDigest rejects missing signatures', async () => {
   const digest = createHash('sha256').update(body).digest('hex');
   await writeFile(
     manifestPath,
-    JSON.stringify({
-      artifact: {
-        sha256_hex: digest,
-        bytes: body.length,
-      },
-    }),
+    JSON.stringify(
+      buildOpenApiManifest({artifactBytes: body, signed: false}),
+    ),
   );
 
   await assert.rejects(
@@ -492,20 +472,11 @@ test('verifySpecDigest rejects invalid signatures', async () => {
   const body = Buffer.from('{"openapi":"3.1.0","info":{"title":"demo"}}', 'utf8');
   await writeFile(specPath, body);
   const digest = createHash('sha256').update(body).digest('hex');
-  const signature = signPayload(body);
+  const manifest = buildOpenApiManifest({artifactBytes: body});
+  manifest.artifact.signature.signature_hex = '00'.repeat(64);
   await writeFile(
     manifestPath,
-    JSON.stringify({
-      artifact: {
-        sha256_hex: digest,
-        bytes: body.length,
-        signature: {
-          algorithm: 'ed25519',
-          public_key_hex: signature.publicKeyHex,
-          signature_hex: '00'.repeat(signature.signatureHex.length / 2),
-        },
-      },
-    }),
+    JSON.stringify(manifest),
   );
 
   await assert.rejects(

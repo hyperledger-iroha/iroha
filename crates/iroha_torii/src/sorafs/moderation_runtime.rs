@@ -6,7 +6,14 @@
 //! [`State::query_view`] and cross-checked through the native committed-event
 //! query.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    cmp,
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use iroha_core::{
     queue::Queue,
@@ -15,7 +22,9 @@ use iroha_core::{
         State, StateQueryView, StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly,
     },
 };
-use iroha_crypto::{Hash, HashOf, KeyPair};
+#[cfg(test)]
+use iroha_crypto::KeyPair;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -33,8 +42,10 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 use sorafs_node::moderation_orchestrator::{
-    MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1, MODERATION_TRANSACTION_TTL_MS_V1,
-    ModerationFinalizedSnapshotReaderV1, ModerationHandoffFailureV1, ModerationSignedTransactionV1,
+    MODERATION_EXTERNAL_WORK_LEASE_MS_V1, MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1,
+    MODERATION_TRANSACTION_TTL_MS_V1, ModerationFinalizedCursorV1,
+    ModerationFinalizedSnapshotReaderV1, ModerationHandoffFailureV1,
+    ModerationOrchestratorDurableHealthV1, ModerationOrchestratorV1, ModerationSignedTransactionV1,
     ModerationSnapshotReadErrorV1, ModerationSubmissionFailureV1, ModerationSubmissionLookupV1,
     ModerationTerminalHandoffKindV1, ModerationTerminalHandoffSinkV1, ModerationTerminalHandoffV1,
     ModerationTransactionReceiptV1, ModerationTransactionRequestV1,
@@ -46,6 +57,233 @@ const DEFAULT_MODERATION_EVENT_PAGE_SIZE_V1: u32 = 256;
 const MODERATION_TRANSACTION_TTL_V1: Duration =
     Duration::from_millis(MODERATION_TRANSACTION_TTL_MS_V1);
 const MODERATION_TRANSACTION_PAYLOAD_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
+
+/// Fail-closed reason that prevents serving a cached moderation projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModerationProjectionReadErrorV1 {
+    /// No supervised reconciliation has completed since process start.
+    Cold,
+    /// The last successful reconciliation exceeded its monotonic freshness budget.
+    Stale,
+    /// A runtime dependency failed during the latest worker pass.
+    DependencyFailed,
+    /// A synchronous worker pass exceeded its deadline and is still fenced.
+    DeadlineExceeded,
+    /// Durable submission, handoff, or notification work is dead-lettered.
+    DeadLetters,
+    /// The worker observed a regressing or equivocal cache update.
+    InvalidProjection,
+    /// The supervised worker has stopped.
+    WorkerStopped,
+    /// A local cache or health lock was poisoned.
+    Poisoned,
+}
+
+#[derive(Debug)]
+struct ModerationProjectionHealthStateV1 {
+    last_success_at: Option<Instant>,
+    last_cursor: Option<ModerationFinalizedCursorV1>,
+    failure: Option<ModerationProjectionReadErrorV1>,
+    worker_stopped: bool,
+}
+
+/// Bounded read cache and monotonic liveness state for finalized moderation.
+///
+/// Only the supervised maintenance worker may publish into this cache. Request
+/// handlers clone an `Arc` and never invoke the ledger reader, signer, ingress,
+/// lookup, or downstream handoff boundaries.
+#[derive(Debug)]
+struct ModerationFinalizedProjectionCacheV1 {
+    freshness_limit: Duration,
+    in_flight: AtomicBool,
+    health: Mutex<ModerationProjectionHealthStateV1>,
+    snapshot: RwLock<Option<Arc<ModerationFinalizedLedgerSnapshotV1>>>,
+}
+
+impl ModerationFinalizedProjectionCacheV1 {
+    fn new(freshness_limit: Duration) -> Self {
+        Self {
+            freshness_limit,
+            in_flight: AtomicBool::new(false),
+            health: Mutex::new(ModerationProjectionHealthStateV1 {
+                last_success_at: None,
+                last_cursor: None,
+                failure: None,
+                worker_stopped: false,
+            }),
+            snapshot: RwLock::new(None),
+        }
+    }
+
+    fn begin_maintenance(&self) -> bool {
+        self.in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    fn mark_deadline_exceeded(&self) {
+        if !self.in_flight.load(Ordering::Acquire) {
+            return;
+        }
+        if let Ok(mut health) = self.health.lock() {
+            health.failure = Some(ModerationProjectionReadErrorV1::DeadlineExceeded);
+        }
+    }
+
+    fn finish_failure(&self, failure: ModerationProjectionReadErrorV1) {
+        if let Ok(mut health) = self.health.lock() {
+            health.failure = Some(failure);
+        }
+        self.in_flight.store(false, Ordering::Release);
+    }
+
+    fn finish_success(
+        &self,
+        snapshot: ModerationFinalizedLedgerSnapshotV1,
+        durable_health: ModerationOrchestratorDurableHealthV1,
+    ) -> Result<(), ModerationProjectionReadErrorV1> {
+        let cursor = snapshot.anchor();
+        let mut health = self.health.lock().map_err(|_| {
+            self.in_flight.store(false, Ordering::Release);
+            ModerationProjectionReadErrorV1::Poisoned
+        })?;
+        let invalid_cursor = durable_health.finalized_cursor != Some(cursor)
+            || health.last_cursor.is_some_and(|previous| {
+                cursor.height < previous.height
+                    || (cursor.height == previous.height
+                        && cursor.block_hash != previous.block_hash)
+            });
+        if invalid_cursor {
+            health.failure = Some(ModerationProjectionReadErrorV1::InvalidProjection);
+            self.in_flight.store(false, Ordering::Release);
+            return Err(ModerationProjectionReadErrorV1::InvalidProjection);
+        }
+        if durable_health.has_dead_letters() {
+            health.failure = Some(ModerationProjectionReadErrorV1::DeadLetters);
+            self.in_flight.store(false, Ordering::Release);
+            return Err(ModerationProjectionReadErrorV1::DeadLetters);
+        }
+        let mut cached = self.snapshot.write().map_err(|_| {
+            health.failure = Some(ModerationProjectionReadErrorV1::Poisoned);
+            self.in_flight.store(false, Ordering::Release);
+            ModerationProjectionReadErrorV1::Poisoned
+        })?;
+        *cached = Some(Arc::new(snapshot));
+        health.last_success_at = Some(Instant::now());
+        health.last_cursor = Some(cursor);
+        health.failure = None;
+        health.worker_stopped = false;
+        self.in_flight.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    fn mark_worker_stopped(&self) {
+        if let Ok(mut health) = self.health.lock() {
+            health.failure = Some(ModerationProjectionReadErrorV1::WorkerStopped);
+            health.worker_stopped = true;
+        }
+    }
+
+    fn snapshot(
+        &self,
+    ) -> Result<Arc<ModerationFinalizedLedgerSnapshotV1>, ModerationProjectionReadErrorV1> {
+        let health = self
+            .health
+            .lock()
+            .map_err(|_| ModerationProjectionReadErrorV1::Poisoned)?;
+        if health.worker_stopped {
+            return Err(ModerationProjectionReadErrorV1::WorkerStopped);
+        }
+        if let Some(failure) = health.failure {
+            return Err(failure);
+        }
+        let Some(last_success_at) = health.last_success_at else {
+            return Err(ModerationProjectionReadErrorV1::Cold);
+        };
+        if last_success_at.elapsed() >= self.freshness_limit {
+            return Err(ModerationProjectionReadErrorV1::Stale);
+        }
+        self.snapshot
+            .read()
+            .map_err(|_| ModerationProjectionReadErrorV1::Poisoned)?
+            .clone()
+            .ok_or(ModerationProjectionReadErrorV1::Cold)
+    }
+}
+
+/// Supervised Torii owner for one finalized moderation orchestrator.
+#[derive(Debug)]
+pub(crate) struct ModerationOrchestratorRuntimeV1 {
+    orchestrator: Arc<ModerationOrchestratorV1>,
+    projection: ModerationFinalizedProjectionCacheV1,
+}
+
+impl ModerationOrchestratorRuntimeV1 {
+    pub(crate) fn new(
+        orchestrator: Arc<ModerationOrchestratorV1>,
+        freshness_limit: Duration,
+    ) -> Self {
+        Self {
+            orchestrator,
+            projection: ModerationFinalizedProjectionCacheV1::new(freshness_limit),
+        }
+    }
+
+    pub(crate) fn orchestrator(&self) -> Arc<ModerationOrchestratorV1> {
+        Arc::clone(&self.orchestrator)
+    }
+
+    pub(crate) fn begin_maintenance(&self) -> bool {
+        self.projection.begin_maintenance()
+    }
+
+    pub(crate) fn mark_deadline_exceeded(&self) {
+        self.projection.mark_deadline_exceeded();
+    }
+
+    pub(crate) fn finish_failure(&self) {
+        self.projection
+            .finish_failure(ModerationProjectionReadErrorV1::DependencyFailed);
+    }
+
+    pub(crate) fn finish_success(
+        &self,
+        snapshot: ModerationFinalizedLedgerSnapshotV1,
+        durable_health: ModerationOrchestratorDurableHealthV1,
+    ) -> Result<(), ModerationProjectionReadErrorV1> {
+        self.projection.finish_success(snapshot, durable_health)
+    }
+
+    pub(crate) fn mark_worker_stopped(&self) {
+        self.projection.mark_worker_stopped();
+    }
+
+    pub(crate) fn snapshot(
+        &self,
+    ) -> Result<Arc<ModerationFinalizedLedgerSnapshotV1>, ModerationProjectionReadErrorV1> {
+        self.projection.snapshot()
+    }
+}
+
+/// Derive the synchronous worker deadline from governed cadence and the exact
+/// external-work lease. No request thread observes this timeout.
+#[must_use]
+pub(crate) fn moderation_worker_deadline(worker_interval: Duration) -> Duration {
+    cmp::max(
+        worker_interval,
+        Duration::from_millis(MODERATION_EXTERNAL_WORK_LEASE_MS_V1),
+    )
+}
+
+/// Derive the monotonic projection freshness budget from governed cadence.
+#[must_use]
+pub(crate) fn moderation_projection_freshness_limit(worker_interval: Duration) -> Duration {
+    let deadline = moderation_worker_deadline(worker_interval);
+    deadline
+        .checked_add(worker_interval)
+        .and_then(|value| value.checked_add(worker_interval))
+        .unwrap_or(Duration::MAX)
+}
 
 /// Fixed runtime signing failures that are safe to surface to the orchestrator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +314,7 @@ pub trait ModerationSignedTransactionSignerV1: Send + Sync {
     ) -> Result<SignedTransaction, ModerationSigningFailureV1>;
 }
 
+#[cfg(test)]
 impl ModerationSignedTransactionSignerV1 for KeyPair {
     fn sign(
         &self,
@@ -1098,9 +1337,10 @@ mod tests {
     use std::{
         collections::{BTreeMap, VecDeque},
         sync::{
-            Mutex,
+            Barrier, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
+        thread,
     };
 
     use iroha_crypto::{Algorithm, KeyPair, Signature};
@@ -1122,6 +1362,162 @@ mod tests {
 
     fn account(key_pair: &KeyPair) -> AccountId {
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn cached_snapshot(
+        finalized_height: u64,
+        finalized_block_hash: [u8; 32],
+    ) -> ModerationFinalizedLedgerSnapshotV1 {
+        ModerationFinalizedLedgerSnapshotV1 {
+            version: MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
+            finalized_height,
+            finalized_block_hash,
+            finalized_at_unix_ms: finalized_height.saturating_mul(1_000),
+            policy: None,
+            status: None,
+            appeals: Vec::new(),
+            cases: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    fn cached_health(
+        snapshot: &ModerationFinalizedLedgerSnapshotV1,
+    ) -> ModerationOrchestratorDurableHealthV1 {
+        ModerationOrchestratorDurableHealthV1 {
+            finalized_cursor: Some(snapshot.anchor()),
+            pending_submissions: 0,
+            pending_handoffs: 0,
+            pending_panel_notifications: 0,
+            durable_dead_letters: 0,
+            panel_notification_dead_letters: 0,
+        }
+    }
+
+    #[test]
+    fn hung_maintenance_is_unready_and_cannot_overlap_after_deadline() {
+        let cache = ModerationFinalizedProjectionCacheV1::new(Duration::from_secs(60));
+        assert!(cache.begin_maintenance());
+        cache.mark_deadline_exceeded();
+        assert!(!cache.begin_maintenance());
+        assert_eq!(
+            cache.snapshot(),
+            Err(ModerationProjectionReadErrorV1::DeadlineExceeded)
+        );
+
+        cache.finish_failure(ModerationProjectionReadErrorV1::DependencyFailed);
+        assert!(cache.begin_maintenance());
+    }
+
+    #[test]
+    fn cached_projection_fails_closed_after_monotonic_freshness_expires() {
+        let cache = ModerationFinalizedProjectionCacheV1::new(Duration::ZERO);
+        let snapshot = cached_snapshot(7, [0x71; 32]);
+        assert!(cache.begin_maintenance());
+        cache
+            .finish_success(snapshot.clone(), cached_health(&snapshot))
+            .expect("install finalized projection");
+        assert_eq!(
+            cache.snapshot(),
+            Err(ModerationProjectionReadErrorV1::Stale)
+        );
+    }
+
+    #[test]
+    fn concurrent_cached_reads_never_start_maintenance_or_mutate_projection() {
+        const READERS: usize = 16;
+        const READS_PER_THREAD: usize = 128;
+
+        let cache = Arc::new(ModerationFinalizedProjectionCacheV1::new(
+            Duration::from_secs(60),
+        ));
+        let snapshot = cached_snapshot(9, [0x91; 32]);
+        assert!(cache.begin_maintenance());
+        cache
+            .finish_success(snapshot.clone(), cached_health(&snapshot))
+            .expect("install finalized projection");
+        let barrier = Arc::new(Barrier::new(READERS));
+        let readers = (0..READERS)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..READS_PER_THREAD {
+                        let snapshot = cache.snapshot().expect("fresh cached projection");
+                        assert_eq!(snapshot.finalized_height, 9);
+                        assert_eq!(snapshot.finalized_block_hash, [0x91; 32]);
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for reader in readers {
+            reader.join().expect("cached projection reader");
+        }
+        assert!(!cache.in_flight.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn durable_dead_letter_blocks_projection_readiness() {
+        let cache = ModerationFinalizedProjectionCacheV1::new(Duration::from_secs(60));
+        let snapshot = cached_snapshot(11, [0xB1; 32]);
+        let mut health = cached_health(&snapshot);
+        health.panel_notification_dead_letters = 1;
+        assert!(cache.begin_maintenance());
+        assert_eq!(
+            cache.finish_success(snapshot, health),
+            Err(ModerationProjectionReadErrorV1::DeadLetters)
+        );
+        assert_eq!(
+            cache.snapshot(),
+            Err(ModerationProjectionReadErrorV1::DeadLetters)
+        );
+    }
+
+    #[test]
+    fn cache_rejects_finalized_cursor_regression_and_equivocation() {
+        for invalid in [
+            cached_snapshot(12, [0xC2; 32]),
+            cached_snapshot(13, [0xD3; 32]),
+        ] {
+            let cache = ModerationFinalizedProjectionCacheV1::new(Duration::from_secs(60));
+            let initial = cached_snapshot(13, [0xC3; 32]);
+            assert!(cache.begin_maintenance());
+            cache
+                .finish_success(initial.clone(), cached_health(&initial))
+                .expect("install initial cursor");
+            assert!(cache.begin_maintenance());
+            assert_eq!(
+                cache.finish_success(invalid.clone(), cached_health(&invalid)),
+                Err(ModerationProjectionReadErrorV1::InvalidProjection)
+            );
+            assert_eq!(
+                cache.snapshot(),
+                Err(ModerationProjectionReadErrorV1::InvalidProjection)
+            );
+        }
+    }
+
+    #[test]
+    fn worker_deadline_and_freshness_are_bounded_by_cadence_and_external_lease() {
+        let cadence = Duration::from_secs(1);
+        assert_eq!(
+            moderation_worker_deadline(cadence),
+            Duration::from_millis(MODERATION_EXTERNAL_WORK_LEASE_MS_V1)
+        );
+        assert_eq!(
+            moderation_projection_freshness_limit(cadence),
+            Duration::from_millis(MODERATION_EXTERNAL_WORK_LEASE_MS_V1)
+                .checked_add(Duration::from_secs(2))
+                .expect("test duration")
+        );
+
+        let slow_cadence = Duration::from_secs(60);
+        assert_eq!(moderation_worker_deadline(slow_cadence), slow_cadence);
+        assert_eq!(
+            moderation_projection_freshness_limit(slow_cadence),
+            Duration::from_secs(180)
+        );
     }
 
     fn action() -> ModerationNativeActionV1 {

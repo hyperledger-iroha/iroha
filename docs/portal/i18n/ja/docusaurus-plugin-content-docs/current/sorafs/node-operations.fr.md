@@ -116,7 +116,7 @@ CLI スモークテストとゲートウェイのプローブは同期したま�
 2. base64 エンコードで manifest を送信します:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -186,7 +186,7 @@ CLI スモークテストとゲートウェイのプローブは同期したま�
   `por_sampling_returns_verified_proofs` をカバーします。
 - ダッシュボードは以下を追跡します:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` と `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` と `torii_sorafs_storage_fetch_inflight`
   - `/v1/sorafs/capacity/state` で公開される PoR 成功/失敗カウンタ
   - `sorafs_node_deal_publish_total{result=success|failure}` による settlement 公開試行
 

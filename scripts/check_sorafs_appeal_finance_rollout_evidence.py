@@ -210,7 +210,7 @@ REQUIRED_OUTCOMES = (
     "escalated",
 )
 REQUIRED_RECONCILIATION_STATUSES = (
-    "pending_client_submission",
+    "pending_forwarder_submission",
     "awaiting_refund_cancel",
     "settled",
     "mismatch",

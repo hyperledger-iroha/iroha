@@ -7,6 +7,7 @@ use std::{
 
 use iroha_config::parameters::actual;
 use iroha_data_model::sorafs::{
+    capacity::ProviderId,
     orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
     transparency::{
         MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
@@ -17,6 +18,7 @@ use iroha_data_model::sorafs::{
 use crate::{
     metering::SmoothingConfig,
     pdp_provider::{PDP_PROVIDER_POLICY_VERSION_V1, PdpProviderProtocolPolicyV1},
+    provider_ingest_outbox::ProviderIngestOutboxPolicyV1,
     transparency::{
         PrivacyAggregateCycleConfig, PrivacyAggregateMetricSchemaV1, PrivacyAggregatePopulationV1,
         PrivacyAggregateScheduleConfig, PrivacyCompositionBudgetPolicyV1,
@@ -27,6 +29,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct StorageConfig {
     enabled: bool,
+    provider_id: Option<ProviderId>,
     data_dir: PathBuf,
     max_capacity_bytes: iroha_config::base::util::Bytes<u64>,
     max_parallel_fetches: usize,
@@ -38,22 +41,22 @@ pub struct StorageConfig {
     moderation_screening_authority_bundle_path: Option<PathBuf>,
     moderation_screening_authority_bundle_digest: Option<[u8; 32]>,
     pdp_provider: PdpProviderProtocolPolicyV1,
+    provider_ingest_outbox_policy: Option<ProviderIngestOutboxPolicyV1>,
     runtime_retention: RuntimeRetentionPolicy,
     alias: Option<String>,
     adverts: AdvertOverrides,
     metering_smoothing: MeteringSmoothingConfig,
-    stream_token_signing_key_path: Option<PathBuf>,
     orderbook_worker: OrderbookWorkerPolicy,
     reserve_worker: ReserveWorkerPolicy,
     reputation_trust_policy_path: Option<PathBuf>,
-    pricing_trust_policy_path: Option<PathBuf>,
     hedging_feed_trust_policy_path: Option<PathBuf>,
     privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
     privacy_aggregate_policy: Option<PrivacyAggregatePolicyConfig>,
     evidence_viewer_audit_schedule: Option<PrivacyAggregateScheduleConfig>,
     governance_dir: Option<PathBuf>,
     governance_dag_publisher_peer_id: Option<String>,
-    governance_dag_signing_key_path: Option<PathBuf>,
+    governance_dag_signer_handle: Option<String>,
+    governance_dag_publisher_public_key_hex: Option<String>,
     penalty: PenaltySettings,
 }
 
@@ -68,6 +71,12 @@ impl StorageConfig {
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// Exact on-chain provider identity projected into this storage worker.
+    #[must_use]
+    pub fn provider_id(&self) -> Option<ProviderId> {
+        self.provider_id
     }
 
     /// Directory where chunk data and metadata are stored.
@@ -136,6 +145,12 @@ impl StorageConfig {
         self.pdp_provider
     }
 
+    /// Dedicated durable outbox policy when supervised provider ingest is enabled.
+    #[must_use]
+    pub fn provider_ingest_outbox_policy(&self) -> Option<ProviderIngestOutboxPolicyV1> {
+        self.provider_ingest_outbox_policy
+    }
+
     /// Safety ceilings for auxiliary runtime state and replay histories.
     #[must_use]
     pub fn runtime_retention(&self) -> RuntimeRetentionPolicy {
@@ -160,12 +175,6 @@ impl StorageConfig {
         &self.metering_smoothing
     }
 
-    /// Optional filesystem path to the gateway signing key (Ed25519).
-    #[must_use]
-    pub fn stream_token_signing_key_path(&self) -> Option<&PathBuf> {
-        self.stream_token_signing_key_path.as_ref()
-    }
-
     /// Operational policy for durable native orderbook transaction forwarding.
     #[must_use]
     pub fn orderbook_worker_policy(&self) -> OrderbookWorkerPolicy {
@@ -184,13 +193,7 @@ impl StorageConfig {
         self.reputation_trust_policy_path.as_ref()
     }
 
-    /// Canonical external trust-policy file used for governed pricing admission.
-    #[must_use]
-    pub fn pricing_trust_policy_path(&self) -> Option<&PathBuf> {
-        self.pricing_trust_policy_path.as_ref()
-    }
-
-    /// Canonical external trust-policy file used for signed hedging-feed admission.
+    /// Canonical external trust-policy file reused by the committed billing runtime.
     #[must_use]
     pub fn hedging_feed_trust_policy_path(&self) -> Option<&PathBuf> {
         self.hedging_feed_trust_policy_path.as_ref()
@@ -226,10 +229,16 @@ impl StorageConfig {
         self.governance_dag_publisher_peer_id.as_ref()
     }
 
-    /// Optional Ed25519 signing-key path for signed runtime Governance DAG blocks.
+    /// Opaque runtime HSM/KMS handle for signed runtime Governance DAG blocks.
     #[must_use]
-    pub fn governance_dag_signing_key_path(&self) -> Option<&PathBuf> {
-        self.governance_dag_signing_key_path.as_ref()
+    pub fn governance_dag_signer_handle(&self) -> Option<&String> {
+        self.governance_dag_signer_handle.as_ref()
+    }
+
+    /// Canonical Ed25519 public key bound to the runtime Governance DAG signer.
+    #[must_use]
+    pub fn governance_dag_publisher_public_key_hex(&self) -> Option<&String> {
+        self.governance_dag_publisher_public_key_hex.as_ref()
     }
 
     /// Penalty policy applied to PoR failures.
@@ -267,6 +276,7 @@ impl StorageConfig {
     ) -> Self {
         Self {
             enabled: storage.enabled,
+            provider_id: storage.provider_id,
             data_dir: storage.data_dir.clone(),
             max_capacity_bytes: storage.max_capacity_bytes,
             max_parallel_fetches: storage.max_parallel_fetches,
@@ -294,22 +304,37 @@ impl StorageConfig {
                 max_future_skew_secs: storage.pdp_provider.max_future_skew_secs,
                 terminal_retention_secs: storage.pdp_provider.terminal_retention_secs,
             },
+            provider_ingest_outbox_policy: storage.provider_ingest_runtime.as_ref().map(
+                |runtime| ProviderIngestOutboxPolicyV1 {
+                    max_active_entries: runtime.outbox.max_active_entries,
+                    max_terminal_entries: runtime.outbox.max_terminal_entries,
+                    max_attempts: runtime.outbox.max_attempts,
+                    checkpoint_max_bytes: runtime.outbox.checkpoint_max_bytes.0,
+                    source_lease_ttl_ms: runtime.outbox.source_lease_ttl_ms,
+                    retry_base_delay_ms: runtime.outbox.retry_base_delay_ms,
+                    retry_max_delay_ms: runtime.outbox.retry_max_delay_ms,
+                    terminal_retention_blocks: runtime.outbox.terminal_retention_blocks,
+                    max_signed_transaction_bytes: runtime.outbox.max_signed_transaction_bytes.0,
+                    max_status_page_size: runtime.outbox.max_status_page_size,
+                },
+            ),
             runtime_retention: RuntimeRetentionPolicy::from(storage.runtime),
             alias: storage.alias.clone(),
             adverts: AdvertOverrides::from(&storage.adverts),
             metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
-            stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
             orderbook_worker: OrderbookWorkerPolicy::from(storage.orderbook_worker),
             reserve_worker: ReserveWorkerPolicy::from(storage.reserve_worker),
             reputation_trust_policy_path: storage.reputation_trust_policy_path.clone(),
-            pricing_trust_policy_path: storage.pricing_trust_policy_path.clone(),
             hedging_feed_trust_policy_path: storage.hedging_feed_trust_policy_path.clone(),
             privacy_aggregate_schedule: storage.privacy_aggregates.clone().into_schedule_config(),
             privacy_aggregate_policy: storage.privacy_aggregates.clone().into_policy_config(),
             evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
             governance_dir: storage.governance_dag_dir.clone(),
             governance_dag_publisher_peer_id: storage.governance_dag_publisher_peer_id.clone(),
-            governance_dag_signing_key_path: storage.governance_dag_signing_key_path.clone(),
+            governance_dag_signer_handle: storage.governance_dag_signer_handle.clone(),
+            governance_dag_publisher_public_key_hex: storage
+                .governance_dag_publisher_public_key_hex
+                .clone(),
             penalty: PenaltySettings::from_policy(penalty),
         }
     }
@@ -338,6 +363,13 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.inner.enabled = enabled;
+        self
+    }
+
+    /// Bind this worker to one exact on-chain provider identity.
+    #[must_use]
+    pub fn provider_id(mut self, provider_id: Option<ProviderId>) -> Self {
+        self.inner.provider_id = provider_id;
         self
     }
 
@@ -424,6 +456,16 @@ impl StorageConfigBuilder {
         self
     }
 
+    /// Enable provider ingest with the exact dedicated durable outbox policy.
+    #[must_use]
+    pub fn provider_ingest_outbox_policy(
+        mut self,
+        policy: Option<ProviderIngestOutboxPolicyV1>,
+    ) -> Self {
+        self.inner.provider_ingest_outbox_policy = policy;
+        self
+    }
+
     /// Override auxiliary runtime retention and checkpoint safety ceilings.
     #[must_use]
     pub fn runtime_retention(mut self, policy: RuntimeRetentionPolicy) -> Self {
@@ -442,13 +484,6 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn adverts(mut self, adverts: AdvertOverrides) -> Self {
         self.inner.adverts = adverts;
-        self
-    }
-
-    /// Override the gateway signing key path used for stream tokens and PoR proofs.
-    #[must_use]
-    pub fn stream_token_signing_key_path(mut self, path: Option<PathBuf>) -> Self {
-        self.inner.stream_token_signing_key_path = path;
         self
     }
 
@@ -473,14 +508,7 @@ impl StorageConfigBuilder {
         self
     }
 
-    /// Set the canonical external governed-pricing trust-policy file.
-    #[must_use]
-    pub fn pricing_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
-        self.inner.pricing_trust_policy_path = path;
-        self
-    }
-
-    /// Set the canonical external signed hedging-feed trust-policy file.
+    /// Set the canonical external hedging-feed trust-policy file used by billing.
     #[must_use]
     pub fn hedging_feed_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
         self.inner.hedging_feed_trust_policy_path = path;
@@ -538,10 +566,20 @@ impl StorageConfigBuilder {
         self
     }
 
-    /// Override the signed runtime Governance DAG signing key path.
+    /// Override the opaque runtime Governance DAG signer handle.
     #[must_use]
-    pub fn governance_dag_signing_key_path(mut self, path: Option<PathBuf>) -> Self {
-        self.inner.governance_dag_signing_key_path = path;
+    pub fn governance_dag_signer_handle<S: Into<Option<String>>>(mut self, handle: S) -> Self {
+        self.inner.governance_dag_signer_handle = handle.into();
+        self
+    }
+
+    /// Override the Ed25519 public key bound to the runtime Governance DAG signer.
+    #[must_use]
+    pub fn governance_dag_publisher_public_key_hex<S: Into<Option<String>>>(
+        mut self,
+        public_key_hex: S,
+    ) -> Self {
+        self.inner.governance_dag_publisher_public_key_hex = public_key_hex.into();
         self
     }
 
@@ -1682,7 +1720,6 @@ mod tests {
         };
         actual.reputation_trust_policy_path =
             Some(PathBuf::from("/tmp/sorafs-reputation-policy.to"));
-        actual.pricing_trust_policy_path = Some(PathBuf::from("/tmp/sorafs-pricing-policy.to"));
         actual.hedging_feed_trust_policy_path =
             Some(PathBuf::from("/tmp/sorafs-hedging-policy.to"));
         actual.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
@@ -1776,10 +1813,6 @@ mod tests {
         assert_eq!(
             cfg.reputation_trust_policy_path(),
             Some(&PathBuf::from("/tmp/sorafs-reputation-policy.to"))
-        );
-        assert_eq!(
-            cfg.pricing_trust_policy_path(),
-            Some(&PathBuf::from("/tmp/sorafs-pricing-policy.to"))
         );
         assert_eq!(
             cfg.hedging_feed_trust_policy_path(),

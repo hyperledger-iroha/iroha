@@ -19,6 +19,16 @@ export IROHA_TEST_ALLOW_REENTRANT_BUILD=1
 # Run ten fresh, deterministic 12-peer networks. The launcher validates every
 # seed transcript as exactly one scheduled/passing test and publishes a
 # 10/10, zero-retry completion record.
-scripts/run_nexus_cross_dataspace_atomic_swap.sh --capture --no-skip-build
+cross_dataspace_args=(--capture --no-skip-build)
+if [[ -n "${NEXUS_CROSS_DATASPACE_EVIDENCE_DIR:-}" ]]; then
+  if [[ "$NEXUS_CROSS_DATASPACE_EVIDENCE_DIR" != /* ]]; then
+    echo "NEXUS_CROSS_DATASPACE_EVIDENCE_DIR must be absolute" >&2
+    exit 1
+  fi
+  cross_dataspace_args+=(
+    --evidence-dir "$NEXUS_CROSS_DATASPACE_EVIDENCE_DIR"
+  )
+fi
+scripts/run_nexus_cross_dataspace_atomic_swap.sh "${cross_dataspace_args[@]}"
 
 echo "[nexus] strict 10/10 cross-dataspace localnet seed matrix passed"
