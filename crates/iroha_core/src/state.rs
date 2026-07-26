@@ -119700,6 +119700,9 @@ seiyaku IdentitylessRawCallback {
             state_block.world.smart_contract_state.get(&key),
             Some(&expected_payload)
         );
+        // `StateBlock` owns exclusive MV storage transactions. Release this
+        // overlay before opening an independent one for the conflict case.
+        drop(state_block);
 
         let mut conflicting_block = state.block(carrier.header());
         let conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
