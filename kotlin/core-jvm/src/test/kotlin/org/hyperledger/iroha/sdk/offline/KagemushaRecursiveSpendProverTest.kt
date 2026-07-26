@@ -1341,7 +1341,7 @@ class KagemushaRecursiveSpendProverTest {
     fun scaledAmountsAreExactAndNeverRound() {
         val amount = KagemushaScaledAmount.fromDecimal("10.75", 9)
         assertEquals("10750000000", amount.atomicUnits)
-        assertEquals("10.750000000", amount.scaledNumericDecimal)
+        assertEquals("10.750000000", amount.fixedScaleDecimal)
         assertEquals("10.75", amount.displayDecimal)
         assertEquals(
             "10750000000",
@@ -1354,7 +1354,7 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertEquals(
             "0.000000001",
-            KagemushaScaledAmount.fromAtomicUnits("1", 9).scaledNumericDecimal,
+            KagemushaScaledAmount.fromAtomicUnits("1", 9).fixedScaleDecimal,
         )
         assertEquals(
             KagemushaScaledAmount.MAXIMUM_ATOMIC_UNITS,

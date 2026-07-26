@@ -50912,7 +50912,7 @@ struct AccountOnboardingSigner {
 #[derive(Clone)]
 struct AccountOnboardingAutoRenewDefaults {
     term_years: u8,
-    max_amount: iroha_primitives::numeric::Numeric,
+    max_amount: iroha_primitives::numeric::Quantity,
     renew_before_expiry_ms: u64,
     retry_backoff_ms: u64,
     max_failures: u32,

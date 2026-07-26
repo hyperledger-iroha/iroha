@@ -551,10 +551,10 @@ fn reward_provider(
 
     state_transaction
         .world
-        .withdraw_numeric_asset(&pool_asset, amount.as_numeric())?;
+        .withdraw_numeric_asset(&pool_asset, &amount)?;
     state_transaction
         .world
-        .deposit_numeric_asset(&provider_asset, amount.as_numeric())?;
+        .deposit_numeric_asset(&provider_asset, &amount)?;
 
     with_provider_stats_mut(&mut state_transaction.world, feed_id, provider, |stats| {
         stats.inliers = stats.inliers.saturating_add(1);
@@ -576,7 +576,7 @@ fn reward_provider(
     {
         state_transaction
             .telemetry
-            .observe_oracle_reward(feed_id, amount.as_numeric());
+            .observe_oracle_reward(feed_id, &amount);
     }
 
     Ok(())
@@ -604,10 +604,10 @@ fn slash_provider(
 
     state_transaction
         .world
-        .withdraw_numeric_asset(&provider_asset, amount.as_numeric())?;
+        .withdraw_numeric_asset(&provider_asset, amount)?;
     state_transaction
         .world
-        .deposit_numeric_asset(&receiver_asset, amount.as_numeric())?;
+        .deposit_numeric_asset(&receiver_asset, amount)?;
 
     with_provider_stats_mut(&mut state_transaction.world, feed_id, provider, |stats| {
         match kind {
@@ -641,7 +641,7 @@ fn slash_provider(
     {
         state_transaction
             .telemetry
-            .observe_oracle_penalty(feed_id, amount.as_numeric(), kind);
+            .observe_oracle_penalty(feed_id, amount, kind);
     }
 
     Ok(())
@@ -1616,10 +1616,10 @@ impl Execute for OpenOracleDispute {
 
         state_transaction
             .world
-            .withdraw_numeric_asset(&challenger_asset, bond_amount.as_numeric())?;
+            .withdraw_numeric_asset(&challenger_asset, &bond_amount)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&escrow_asset, bond_amount.as_numeric())?;
+            .deposit_numeric_asset(&escrow_asset, &bond_amount)?;
 
         let dispute = OracleDispute {
             id: dispute_id,
@@ -1752,10 +1752,10 @@ fn move_from_escrow(
 ) -> Result<(), Error> {
     state_transaction
         .world
-        .withdraw_numeric_asset(&assets.escrow, amount.as_numeric())?;
+        .withdraw_numeric_asset(&assets.escrow, amount)?;
     state_transaction
         .world
-        .deposit_numeric_asset(destination, amount.as_numeric())
+        .deposit_numeric_asset(destination, amount)
 }
 
 impl Execute for ResolveOracleDispute {

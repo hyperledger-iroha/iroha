@@ -69,6 +69,11 @@ pub fn sha256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
 /// The reader is rejected after at most one buffer beyond `max_bytes`. This makes
 /// the helper suitable for hashing attacker-influenced persisted artifacts while
 /// retaining a hard input-size bound.
+///
+/// # Errors
+///
+/// Returns the reader's I/O error, or [`std::io::ErrorKind::InvalidData`] when
+/// the observed byte count overflows or exceeds `max_bytes`.
 #[cfg(not(feature = "ffi_import"))]
 pub fn sha256_reader_bounded(
     mut reader: impl std::io::Read,
@@ -78,7 +83,7 @@ pub fn sha256_reader_bounded(
 
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
-    let mut buffer = [0_u8; BUFFER_BYTES];
+    let mut buffer = vec![0_u8; BUFFER_BYTES];
     loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {

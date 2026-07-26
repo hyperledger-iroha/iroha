@@ -5,12 +5,12 @@ final class KagemushaScaledAmountTests: XCTestCase {
     func testDecimalConversionUsesExactAssetScale() throws {
         let amount = try KagemushaScaledAmount(decimal: "10.75", scale: 9)
         XCTAssertEqual(amount.atomicUnits, "10750000000")
-        XCTAssertEqual(amount.scaledNumericDecimal, "10.750000000")
+        XCTAssertEqual(amount.fixedScaleDecimal, "10.750000000")
         XCTAssertEqual(amount.displayDecimal, "10.75")
 
         let minimum = try KagemushaScaledAmount(decimal: "0.000000001", scale: 9)
         XCTAssertEqual(minimum.atomicUnits, "1")
-        XCTAssertEqual(minimum.scaledNumericDecimal, "0.000000001")
+        XCTAssertEqual(minimum.fixedScaleDecimal, "0.000000001")
     }
 
     func testAtomicConversionPreservesU128Maximum() throws {

@@ -114,7 +114,7 @@ Iroha እኩዮች ከቁርጠኝነት የመነጨ የታዘዘ ቶፖሎጂ�
 የ`iroha_data_model` ሳጥን ሁሉንም የመመዝገቢያ ዕቃዎችን፣ መመሪያዎችን፣ መጠይቆችን እና ክስተቶችን ይገልጻል። ዋና ዋና ዜናዎች
 
 - **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
-  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Asset quantities support fixed-point
   operations; NFTs carry arbitrary structured metadata.
 
 - ** ሚናዎች እና ፈቃዶች *** የ Norito የተቆጠሩ ቶከኖችን በቀጥታ ወደ አስፈፃሚ ቼኮች ካርታ ይጠቀሙ።

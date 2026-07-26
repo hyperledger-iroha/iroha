@@ -844,9 +844,7 @@ pub fn bid_order_escrow_requirement_v1(
 ) -> Result<XorQuantity, OrderbookValidationError> {
     bid.validate()?;
     if bid.side != OrderSideV1::Bid {
-        return Err(OrderbookValidationError::BidEscrowRequiresBid {
-            side: bid.side,
-        });
+        return Err(OrderbookValidationError::BidEscrowRequiresBid { side: bid.side });
     }
     validate_fee_bps(governed_max_maker_fee_bps)?;
     validate_fee_bps(governed_max_taker_fee_bps)?;
@@ -855,10 +853,8 @@ pub fn bid_order_escrow_requirement_v1(
         .price_per_gib
         .checked_mul_u64(bid.quantity_gib)
         .map_err(OrderbookValidationError::Amount)?;
-    let bid_as_maker_bps =
-        u32::from(bid.maker_fee_bps) + u32::from(governed_max_taker_fee_bps);
-    let bid_as_taker_bps =
-        u32::from(bid.taker_fee_bps) + u32::from(governed_max_maker_fee_bps);
+    let bid_as_maker_bps = u32::from(bid.maker_fee_bps) + u32::from(governed_max_taker_fee_bps);
+    let bid_as_taker_bps = u32::from(bid.taker_fee_bps) + u32::from(governed_max_maker_fee_bps);
     let maximum_fee = gross
         .checked_mul_basis_points_u32(bid_as_maker_bps.max(bid_as_taker_bps))
         .map_err(OrderbookValidationError::Amount)?;
@@ -1355,10 +1351,6 @@ fn validate_fee_bps(fee_bps: u16) -> Result<(), OrderbookValidationError> {
         return Err(OrderbookValidationError::InvalidFeeBps { fee_bps });
     }
     Ok(())
-}
-
-fn ranges_overlap(lhs_start: u64, lhs_end: u64, rhs_start: u64, rhs_end: u64) -> bool {
-    lhs_start < rhs_end && rhs_start < lhs_end
 }
 
 /// Failure to decode an attacker-controlled orderbook archive canonically.
@@ -2972,13 +2964,8 @@ mod tests {
     #[test]
     fn deterministic_settlement_split_preserves_zero_fee_channels() {
         let total = XorQuantity::try_from_micro(101).expect("channel total");
-        let split = deterministic_settlement_split_v1(
-            &total,
-            &XorQuantity::zero(),
-            3,
-            10,
-        )
-        .expect("zero-fee split");
+        let split = deterministic_settlement_split_v1(&total, &XorQuantity::zero(), 3, 10)
+            .expect("zero-fee split");
 
         assert_eq!(split.fee_amount, XorQuantity::zero());
         assert_eq!(split.provider_credit, split.xor_debited);
@@ -3040,9 +3027,7 @@ mod tests {
             total_provider_credit = total_provider_credit
                 .checked_add(&split.provider_credit)
                 .expect("sum provider credits");
-            total_fees = total_fees
-                .checked_add(&split.fee_amount)
-                .expect("sum fees");
+            total_fees = total_fees.checked_add(&split.fee_amount).expect("sum fees");
             channel =
                 apply_settlement_receipt_v1(&channel, &receipt).expect("apply sequential receipt");
         }
@@ -3190,5 +3175,4 @@ mod tests {
         encoded.push(0);
         assert!(decode_order_request_v1(&encoded).is_err());
     }
-
 }

@@ -3360,13 +3360,12 @@ mod tests {
 
         let json = norito::json::to_json(&anchor).unwrap();
         assert!(matches_exact_anchor_schema(&json));
-        let protocol_version_field =
-            format!("\"protocol_version\":{}", SUMERAGI_V2_PROTOCOL_VERSION);
+        let protocol_version_field = format!("\"protocol_version\":{SUMERAGI_V2_PROTOCOL_VERSION}");
         for confused in [
             json.replace(&protocol_version_field, "\"protocol_version\":true"),
             json.replace(
                 &protocol_version_field,
-                &format!("\"protocol_version\":\"{}\"", SUMERAGI_V2_PROTOCOL_VERSION),
+                &format!("\"protocol_version\":\"{SUMERAGI_V2_PROTOCOL_VERSION}\""),
             ),
             json.replace("\"checkpoint_height\":5", "\"checkpoint_height\":true"),
         ] {

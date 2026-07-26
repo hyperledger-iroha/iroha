@@ -1015,6 +1015,91 @@ mod tests {
         .is_ok()
     }
 
+    fn assert_statement_mutation_rejected(
+        fixture: &Fixture,
+        name: &str,
+        mutate: impl FnOnce(&mut SccpSolanaAgaveSourceProofV1),
+    ) {
+        let mut proof = fixture.proof.clone();
+        mutate(&mut proof);
+        assert!(!verify(fixture, &proof), "accepted mutated {name}");
+    }
+
+    fn assert_finality_statement_roles_are_proof_bound(fixture: &Fixture) {
+        assert_statement_mutation_rejected(fixture, "rooted slot", |proof| {
+            proof.statement.rooted_slot += 1;
+        });
+        assert_statement_mutation_rejected(fixture, "rooted bank", |proof| {
+            proof.statement.rooted_bank_hash[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "stake snapshot", |proof| {
+            proof.statement.finality_stake_snapshot_hash[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "vote state", |proof| {
+            proof.statement.finality_vote_state_hash[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "replay transcript", |proof| {
+            proof.statement.finality_replay_transcript_hash[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "transaction signature", |proof| {
+            proof.statement.transaction_signature[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "transaction index", |proof| {
+            proof.statement.transaction_index += 1;
+        });
+        assert_statement_mutation_rejected(fixture, "instruction index", |proof| {
+            proof.statement.instruction_index += 1;
+        });
+    }
+
+    fn assert_economic_statement_roles_are_proof_bound(fixture: &Fixture) {
+        assert_statement_mutation_rejected(fixture, "sender", |proof| {
+            proof.statement.sender[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "mint", |proof| {
+            proof.statement.mint[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "token account", |proof| {
+            proof.statement.source_token_account[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "burn receipt account", |proof| {
+            proof.statement.burn_receipt_account[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "burn receipt hash", |proof| {
+            proof.statement.burn_receipt_hash[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "amount", |proof| {
+            proof.statement.amount += 1;
+        });
+        assert_statement_mutation_rejected(fixture, "recipient", |proof| {
+            proof.statement.recipient[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "nonce", |proof| {
+            proof.statement.nonce += 1;
+        });
+        assert_statement_mutation_rejected(fixture, "route revision", |proof| {
+            proof.statement.route_revision += 1;
+        });
+        assert_statement_mutation_rejected(fixture, "route configuration", |proof| {
+            proof.statement.route_configuration_hash[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "lane", |proof| {
+            proof.statement.lane_hash[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "source identity", |proof| {
+            proof.statement.source_identity_hash[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "message id", |proof| {
+            proof.statement.message_id[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "payload hash", |proof| {
+            proof.statement.payload_hash[0] ^= 1;
+        });
+        assert_statement_mutation_rejected(fixture, "event digest", |proof| {
+            proof.statement.source_event_digest[0] ^= 1;
+        });
+    }
+
     #[test]
     fn exact_source_proof_verifies_and_roundtrips() {
         let fixture = fixture();
@@ -1163,127 +1248,8 @@ mod tests {
     #[test]
     fn every_public_and_economic_statement_role_is_proof_bound() {
         let fixture = fixture();
-        let base = &fixture.proof;
-        let mut mutations: Vec<(&str, SccpSolanaAgaveSourceProofV1)> = Vec::new();
-        macro_rules! mutate {
-            ($name:literal, $body:expr) => {{
-                let mut proof = base.clone();
-                $body(&mut proof);
-                mutations.push(($name, proof));
-            }};
-        }
-        mutate!("rooted slot", |proof: &mut SccpSolanaAgaveSourceProofV1| {
-            proof.statement.rooted_slot += 1;
-        });
-        mutate!("rooted bank", |proof: &mut SccpSolanaAgaveSourceProofV1| {
-            proof.statement.rooted_bank_hash[0] ^= 1;
-        });
-        mutate!(
-            "stake snapshot",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.finality_stake_snapshot_hash[0] ^= 1;
-            }
-        );
-        mutate!("vote state", |proof: &mut SccpSolanaAgaveSourceProofV1| {
-            proof.statement.finality_vote_state_hash[0] ^= 1;
-        });
-        mutate!(
-            "replay transcript",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.finality_replay_transcript_hash[0] ^= 1;
-            }
-        );
-        mutate!(
-            "transaction signature",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.transaction_signature[0] ^= 1;
-            }
-        );
-        mutate!(
-            "transaction index",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.transaction_index += 1;
-            }
-        );
-        mutate!(
-            "instruction index",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.instruction_index += 1;
-            }
-        );
-        mutate!("sender", |proof: &mut SccpSolanaAgaveSourceProofV1| {
-            proof.statement.sender[0] ^= 1;
-        });
-        mutate!("mint", |proof: &mut SccpSolanaAgaveSourceProofV1| {
-            proof.statement.mint[0] ^= 1;
-        });
-        mutate!(
-            "token account",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.source_token_account[0] ^= 1;
-            }
-        );
-        mutate!(
-            "burn receipt account",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.burn_receipt_account[0] ^= 1;
-            }
-        );
-        mutate!(
-            "burn receipt hash",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.burn_receipt_hash[0] ^= 1;
-            }
-        );
-        mutate!("amount", |proof: &mut SccpSolanaAgaveSourceProofV1| {
-            proof.statement.amount += 1;
-        });
-        mutate!("recipient", |proof: &mut SccpSolanaAgaveSourceProofV1| {
-            proof.statement.recipient[0] ^= 1;
-        });
-        mutate!("nonce", |proof: &mut SccpSolanaAgaveSourceProofV1| {
-            proof.statement.nonce += 1;
-        });
-        mutate!(
-            "route revision",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.route_revision += 1;
-            }
-        );
-        mutate!(
-            "route configuration",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.route_configuration_hash[0] ^= 1;
-            }
-        );
-        mutate!("lane", |proof: &mut SccpSolanaAgaveSourceProofV1| {
-            proof.statement.lane_hash[0] ^= 1;
-        });
-        mutate!(
-            "source identity",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.source_identity_hash[0] ^= 1;
-            }
-        );
-        mutate!("message id", |proof: &mut SccpSolanaAgaveSourceProofV1| {
-            proof.statement.message_id[0] ^= 1;
-        });
-        mutate!(
-            "payload hash",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.payload_hash[0] ^= 1;
-            }
-        );
-        mutate!(
-            "event digest",
-            |proof: &mut SccpSolanaAgaveSourceProofV1| {
-                proof.statement.source_event_digest[0] ^= 1;
-            }
-        );
-
-        for (name, proof) in mutations {
-            assert!(!verify(&fixture, &proof), "accepted mutated {name}");
-        }
+        assert_finality_statement_roles_are_proof_bound(&fixture);
+        assert_economic_statement_roles_are_proof_bound(&fixture);
     }
 
     #[test]

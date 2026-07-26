@@ -30,7 +30,14 @@ pub enum ChunkRole {
 /// Chunk commitment record produced during manifest generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct ChunkCommitment {
     /// Zero-based chunk index.
     pub index: u32,
@@ -100,7 +107,14 @@ impl ChunkCommitment {
 /// Canonical Norito manifest emitted after chunking a DA blob.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct DaManifestV1 {
     /// Manifest format version. Currently always 1.
     pub version: u16,

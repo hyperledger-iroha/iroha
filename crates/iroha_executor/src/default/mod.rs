@@ -57,10 +57,9 @@ use iroha_smart_contract::data_model::{
         SetLaneRelayEmergencyValidators, SetPricingSchedule, SetSorafsModerationPolicy,
         SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
         SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
-        SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
-        SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsRepairAppeal,
-        SubmitSorafsRepairTask, SubmitSorafsReserveAppeal, UnregisterProviderOwner,
-        UpsertProviderCredit,
+        SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, SubmitSorafsModerationReveal,
+        SubmitSorafsOrderbookOrder, SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
+        SubmitSorafsReserveAppeal, UnregisterProviderOwner, UpsertProviderCredit,
         alias_setup::{
             CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
             RebindAccountAlias, RenewAliasLease,
@@ -141,11 +140,11 @@ pub use sorafs::{
     visit_find_sorafs_pop_registry_status, visit_find_sorafs_pop_revocation_by_nonce_commitment,
     visit_find_sorafs_pop_revocation_publication_by_version, visit_find_sorafs_repair_events,
     visit_find_sorafs_repair_status, visit_find_sorafs_repair_task, visit_find_sorafs_repair_tasks,
-    visit_find_sorafs_reputation_journal_events,
-    visit_find_sorafs_reserve_appeal_by_id, visit_find_sorafs_reserve_appeals,
-    visit_find_sorafs_reserve_events, visit_find_sorafs_reserve_movement_by_id,
-    visit_find_sorafs_reserve_movements, visit_find_sorafs_reserve_policy,
-    visit_find_sorafs_reserve_provider_by_id, visit_find_sorafs_reserve_providers,
+    visit_find_sorafs_reputation_journal_events, visit_find_sorafs_reserve_appeal_by_id,
+    visit_find_sorafs_reserve_appeals, visit_find_sorafs_reserve_events,
+    visit_find_sorafs_reserve_movement_by_id, visit_find_sorafs_reserve_movements,
+    visit_find_sorafs_reserve_policy, visit_find_sorafs_reserve_provider_by_id,
+    visit_find_sorafs_reserve_providers,
 };
 /// Re-export staking visitor helpers used by the default executor.
 pub use staking::{
@@ -1143,9 +1142,7 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_resolve_capacity_dispute(executor, isi);
             return;
         }
-        if let Some(isi) =
-            any.downcast_ref::<SetSorafsReputationJournalAuthorityPolicy>()
-        {
+        if let Some(isi) = any.downcast_ref::<SetSorafsReputationJournalAuthorityPolicy>() {
             sorafs::visit_set_reputation_journal_authority_policy(executor, isi);
             return;
         }
@@ -1153,9 +1150,7 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_append_por_reputation_journal_entry(executor, isi);
             return;
         }
-        if let Some(isi) =
-            any.downcast_ref::<AppendSorafsStreamTokenReputationJournalEntry>()
-        {
+        if let Some(isi) = any.downcast_ref::<AppendSorafsStreamTokenReputationJournalEntry>() {
             sorafs::visit_append_stream_token_reputation_journal_entry(executor, isi);
             return;
         }
@@ -1890,9 +1885,9 @@ pub mod sorafs {
         FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
         FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
         FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
-        FindSorafsRepairTasks, FindSorafsReputationJournalEvents,
-        FindSorafsReserveAppealById, FindSorafsReserveEvents, FindSorafsReserveMovementById,
-        FindSorafsReservePolicy, FindSorafsReserveProviderById,
+        FindSorafsRepairTasks, FindSorafsReputationJournalEvents, FindSorafsReserveAppealById,
+        FindSorafsReserveEvents, FindSorafsReserveMovementById, FindSorafsReservePolicy,
+        FindSorafsReserveProviderById,
     };
 
     /// Authoritative repair tasks are public operational state.
@@ -4000,11 +3995,10 @@ pub mod asset {
         );
     }
 
-    fn execute_mint_asset<V, Q>(executor: &mut V, isi: &Mint<Q, Asset>)
+    fn execute_mint_asset<V>(executor: &mut V, isi: &Mint<Quantity, Asset>)
     where
         V: Execute + Visit + ?Sized,
-        Q: Into<Numeric>,
-        Mint<Q, Asset>: BuiltInInstruction + NoritoSerialize,
+        Mint<Quantity, Asset>: BuiltInInstruction + NoritoSerialize,
     {
         let asset_id = isi.destination();
         if executor.context().curr_block.is_genesis() {
@@ -4048,11 +4042,10 @@ pub mod asset {
         execute_mint_asset(executor, isi);
     }
 
-    fn execute_burn_asset<V, Q>(executor: &mut V, isi: &Burn<Q, Asset>)
+    fn execute_burn_asset<V>(executor: &mut V, isi: &Burn<Quantity, Asset>)
     where
         V: Execute + Visit + ?Sized,
-        Q: Into<Numeric>,
-        Burn<Q, Asset>: BuiltInInstruction + NoritoSerialize,
+        Burn<Quantity, Asset>: BuiltInInstruction + NoritoSerialize,
     {
         let asset_id = isi.destination();
         if executor.context().curr_block.is_genesis() {
@@ -5674,11 +5667,10 @@ mod sorafs_permission_tests {
         block::BlockHeader,
         isi::sorafs::{
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
-            AppendSorafsPorReputationJournalEntry,
-            AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest,
-            BindManifestAlias, CommitSorafsPopCredentialBatch, CompleteReplicationOrder,
-            ExpireReplicationOrder, FinalizeSorafsModerationSortition, IssueReplicationOrder,
-            PublishSorafsPopRevocationList, RecordCapacityTelemetry,
+            AppendSorafsPorReputationJournalEntry, AppendSorafsStreamTokenReputationJournalEntry,
+            ApprovePinManifest, BindManifestAlias, CommitSorafsPopCredentialBatch,
+            CompleteReplicationOrder, ExpireReplicationOrder, FinalizeSorafsModerationSortition,
+            IssueReplicationOrder, PublishSorafsPopRevocationList, RecordCapacityTelemetry,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
             RegisterProviderOwner, RegisterSorafsModerationJurorEligibility,
             ResolveSorafsCapacityDispute, RetirePinManifest, SetPricingSchedule,
@@ -5716,8 +5708,8 @@ mod sorafs_permission_tests {
             pop_registry::{POP_ISSUER_POLICY_VERSION_V1, PopIssuerPolicyV1},
             pricing::{PricingScheduleRecord, ProviderCreditRecord},
             reputation::{
-                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, PorTerminalOutcomeV1,
-                PorTerminalStatusV1, ReputationJournalAuthorityPolicyV1,
+                PorTerminalOutcomeV1, PorTerminalStatusV1,
+                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, ReputationJournalAuthorityPolicyV1,
                 ReputationJournalEntryV1, ReputationJournalFinalizedCursorV1,
                 ReputationJournalPayloadV1, StreamTokenValidationOutcomeV1,
                 StreamTokenValidationStatusV1,
@@ -6036,16 +6028,14 @@ mod sorafs_permission_tests {
             authority_account_id(),
             1_700_000_000_000,
             None,
-            ReputationJournalPayloadV1::StreamTokenValidation(
-                StreamTokenValidationOutcomeV1 {
-                    validation_id: [0x41; 32],
-                    request_digest: [0x42; 32],
-                    token_body_digest: Some([0x43; 32]),
-                    token_key_version: Some(1),
-                    validated_at_unix_ms: 1_700_000_000_000,
-                    status: StreamTokenValidationStatusV1::Accepted,
-                },
-            ),
+            ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
+                validation_id: [0x41; 32],
+                request_digest: [0x42; 32],
+                token_body_digest: Some([0x43; 32]),
+                token_key_version: Some(1),
+                validated_at_unix_ms: 1_700_000_000_000,
+                status: StreamTokenValidationStatusV1::Accepted,
+            }),
         )
         .expect("canonical reputation fixture")
     }

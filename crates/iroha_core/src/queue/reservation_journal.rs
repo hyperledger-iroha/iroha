@@ -1012,7 +1012,7 @@ pub(super) struct LaneQueueReservationJournal {
     terminal_frames: u64,
     poisoned: bool,
     #[cfg(test)]
-    next_append_fault: Option<ReservationJournalAppendFault>,
+    next_append_fault: Option<(usize, ReservationJournalAppendFault)>,
     #[cfg(test)]
     next_compaction_fault: Option<ReservationJournalCompactionFault>,
 }
@@ -1255,7 +1255,17 @@ impl LaneQueueReservationJournal {
         self.verify_cached_storage_at_len(self.known_len)?;
 
         #[cfg(test)]
-        let injected_fault = self.next_append_fault.take();
+        let injected_fault = match self.next_append_fault {
+            Some((0, fault)) => {
+                self.next_append_fault = None;
+                Some(fault)
+            }
+            Some((remaining, fault)) => {
+                self.next_append_fault = Some((remaining.saturating_sub(1), fault));
+                None
+            }
+            None => None,
+        };
         #[cfg(test)]
         let inject_partial = matches!(
             injected_fault,
@@ -1326,7 +1336,17 @@ impl LaneQueueReservationJournal {
     /// Inject one ambiguous append boundary for queue-level fail-closed tests.
     #[cfg(test)]
     pub(super) fn inject_next_append_fault(&mut self, fault: ReservationJournalAppendFault) {
-        self.next_append_fault = Some(fault);
+        self.inject_append_fault_after(0, fault);
+    }
+
+    /// Inject one ambiguous append boundary after `successful_appends_before_fault` appends.
+    #[cfg(test)]
+    pub(super) fn inject_append_fault_after(
+        &mut self,
+        successful_appends_before_fault: usize,
+        fault: ReservationJournalAppendFault,
+    ) {
+        self.next_append_fault = Some((successful_appends_before_fault, fault));
     }
 
     /// Inject one ambiguous compaction boundary for queue-level fail-closed tests.
@@ -2440,6 +2460,7 @@ fn release_barriers_overlap(
         .any(|key| barrier_contains_signed_hash(right, key))
 }
 
+#[cfg(test)]
 fn encode_frame(frame: &LaneQueueReservationJournalFrameV5) -> io::Result<Vec<u8>> {
     encode_frame_with_limit(frame, u64::from(u32::MAX))
 }
@@ -2499,6 +2520,7 @@ fn bootstrap_frame() -> LaneQueueReservationJournalFrameV5 {
     }
 }
 
+#[cfg(test)]
 fn minimum_bootstrap_frame_bytes() -> io::Result<u64> {
     u64::try_from(encode_frame(&bootstrap_frame())?.len())
         .map_err(|_| invalid_input("lane reservation bootstrap frame exceeds u64"))
@@ -2524,6 +2546,7 @@ fn frame_checksum(version: &[u8; 2], len: &[u8; 4], len_guard: &[u8; 4], payload
     ])
 }
 
+#[cfg(test)]
 fn encode_compacted_journal(
     snapshot: Option<&LaneQueueReservationJournalFrameV5>,
 ) -> io::Result<Vec<u8>> {
@@ -3349,13 +3372,6 @@ fn lock_regular_journal(path: &Path, file: &File) -> io::Result<()> {
     Ok(())
 }
 
-fn open_regular_read_write(path: &Path) -> io::Result<File> {
-    validate_regular_path(path)?;
-    let file = OpenOptions::new().read(true).write(true).open(path)?;
-    verify_open_regular_path(path, &file)?;
-    Ok(file)
-}
-
 fn open_regular_read(path: &Path) -> io::Result<File> {
     validate_regular_path(path)?;
     let file = File::open(path)?;
@@ -3428,12 +3444,15 @@ mod tests {
 
     fn record(seed: u8, incarnation_seed: u8) -> LaneQueueReservationRecordV5 {
         let route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(7));
+        let entrypoint_hash = typed_hash::<TransactionEntrypoint>(&[seed, 2]);
         LaneQueueReservationRecordV5 {
             version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
             key: LaneQueueReservationKeyV2 {
                 version: LaneQueueReservationKeyV2::VERSION,
-                signed_transaction_hash: typed_hash::<SignedTransaction>(&[seed, 1]),
-                entrypoint_hash: typed_hash::<TransactionEntrypoint>(&[seed, 2]),
+                signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(
+                    entrypoint_hash,
+                )),
+                entrypoint_hash,
                 queue_plan_admission_binding_hash: Hash::new([seed, 9]),
                 routing_plan_digest: Hash::new([seed, 3]),
                 coordinator_leg: RouteLeg::new(route, RouteLegRole::Coordinator),
@@ -3458,15 +3477,12 @@ mod tests {
         let mut record = record(1, 1);
         let index = u64::try_from(index).expect("fixture index fits u64");
         let identity = index.saturating_add(1).to_le_bytes();
-        record.key.signed_transaction_hash =
-            HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
-                b"indexed-reservation-signed",
-                &identity,
-            ]));
         record.key.entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
             b"indexed-reservation-entrypoint",
             &identity,
         ]));
+        record.key.signed_transaction_hash =
+            HashOf::from_untyped_unchecked(Hash::from(record.key.entrypoint_hash));
         record.key.queue_plan_admission_binding_hash =
             Hash::new_from_chunks(&[b"indexed-reservation-admission", &identity]);
         record.key.routing_plan_digest =
@@ -4366,6 +4382,38 @@ mod tests {
     }
 
     #[test]
+    fn v5_envelope_rejects_mismatched_reservation_identity_without_rewrite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("v5-mismatched-reservation-identity.norito");
+        let mut mismatched = record(1, 1);
+        mismatched.key.signed_transaction_hash =
+            typed_hash::<SignedTransaction>(b"mismatched-signed-transaction");
+        let frame = encode_frame(&LaneQueueReservationJournalFrameV5::PutBatch(vec![
+            mismatched,
+        ]))
+        .expect("encode mismatched reservation identity");
+        let mut journal_bytes = encode_frame(&bootstrap_frame()).expect("encode V5 bootstrap");
+        journal_bytes.extend_from_slice(&frame);
+        fs::write(&path, &journal_bytes).expect("write mismatched reservation identity");
+
+        let error = LaneQueueReservationJournal::open(&path, u64::MAX)
+            .err()
+            .expect("mismatched reservation identity must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("does not match its entrypoint compatibility hash"),
+            "unexpected mismatched-identity rejection: {error}",
+        );
+        assert_eq!(
+            fs::read(&path).expect("retain mismatched reservation evidence"),
+            journal_bytes,
+            "mismatched reservation evidence must not be rewritten",
+        );
+    }
+
+    #[test]
     fn v5_release_batch_replay_is_atomic_idempotent_and_exact() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("v5-release-batch.norito");
@@ -4477,6 +4525,35 @@ mod tests {
             )
             .is_err(),
             "participant legs must never become full-transaction reservations"
+        );
+    }
+
+    #[test]
+    fn reservation_record_rejects_mismatched_primary_hashes_atomically() {
+        let existing = record(1, 1);
+        let mut records = vec![existing.clone()];
+        let mut committed = vec![existing.key];
+
+        let mut mismatched = record(2, 1);
+        mismatched.key.signed_transaction_hash =
+            typed_hash::<SignedTransaction>(b"mismatched-signed-transaction");
+
+        let records_before = records.clone();
+        let committed_before = committed.clone();
+        let error = apply_unprotected_frame(
+            &mut records,
+            &mut committed,
+            LaneQueueReservationJournalFrameV5::PutBatch(vec![mismatched]),
+        )
+        .expect_err("malformed reservation identity must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            records, records_before,
+            "failed validation must not mutate live reservations",
+        );
+        assert_eq!(
+            committed, committed_before,
+            "failed validation must not mutate commit barriers",
         );
     }
 
@@ -5057,14 +5134,22 @@ mod tests {
             .put_batch(vec![record.clone()])
             .expect("write live record");
         let tmp = path.with_extension("reservation-compact.tmp");
-        File::create(&tmp).expect("create colliding temp");
+        fs::write(&tmp, b"sentinel").expect("create colliding temp");
         assert!(
             journal
                 .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[])
                 .is_err(),
             "compaction must never truncate a predictable preexisting temp path"
         );
-        assert_eq!(journal.path, path);
+        assert_eq!(
+            journal.path,
+            fs::canonicalize(&path).expect("canonical journal path")
+        );
+        assert_eq!(
+            fs::read(&tmp).expect("read colliding temp"),
+            b"sentinel",
+            "rejected compaction must not alter the preexisting temp file"
+        );
     }
 
     #[cfg(unix)]

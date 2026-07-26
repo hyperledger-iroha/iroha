@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T10:20:35.513444+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ Terminologia
 
 ### B. Definir uma ABI determinística de VM/host para valores digitados
 - Use Norito no lado da VM para argumentos estruturados:
-  - Passe ponteiros (em x10..x13, etc.) para regiões de memória da VM contendo valores codificados em Norito para tipos como `AccountId`, `AssetDefinitionId`, `Numeric`, `Metadata`.
+  - Passe ponteiros (em x10..x13, etc.) para regiões de memória da VM contendo valores codificados em Norito para tipos como `AccountId`, `AssetDefinitionId`, `Quantity`, `Metadata`.
   - Host lê bytes através de auxiliares de memória `IVM` e decodifica com Norito (`iroha_data_model` já deriva `Encode/Decode`).
 - Adicione auxiliares mínimos no codegen Kotodama para serializar IDs literais em pools de código/constantes ou para preparar quadros de chamada na memória.
-- Os valores são `Numeric` e são passados ​​como ponteiros NoritoBytes; outros tipos complexos também passam por ponteiro.
+- As quantidades de ativos usam o TLV de pointer-ABI dedicado `QuantityValueV1` (`PointerType::Quantity = 0x0010`), não um ponteiro `NoritoBytes` genérico; os demais valores complexos usam os tipos de ponteiro que lhes foram atribuídos.
 - Documente isso em `crates/ivm/docs/calling_convention.md` e adicione exemplos.### C. Alinhar nomenclatura e cobertura de syscall com ISI/modelo de dados
 - Renomeie syscalls relacionados a NFT para maior clareza: os nomes canônicos agora seguem o padrão `SYSCALL_NFT_*` (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA`, etc.).
 - Publicar uma tabela de mapeamento (doc + comentários de código) de cada syscall para a semântica principal do ISI, incluindo:

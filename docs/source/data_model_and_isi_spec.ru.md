@@ -107,7 +107,7 @@ translator: machine-google-reviewed
 Типы: `Mint<O, D: Identifiable>` и `Burn<O, D: Identifiable>`, в упаковке как `MintBox`/`BurnBox`.
 
 - Актив (числовой) mint/burn: корректирует балансы и определения `total_quantity`.
-  - Предварительные условия: значение `Numeric` должно соответствовать `AssetDefinition.spec()`; мята разрешена `mintable`:
+  - Предварительные условия: значение `Quantity` должно соответствовать `AssetDefinition.spec()`; мята разрешена `mintable`:
     - `Infinitely`: разрешено всегда.
     - `Once`: разрешено ровно один раз; первый монетный двор меняет `mintable` на `Not` и выдает `AssetDefinitionEvent::MintabilityChanged`, а также подробный `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` для проверки.
     - `Limited(n)`: разрешает дополнительные операции монетного двора `n`. Каждый успешный монетный двор уменьшает счетчик; когда оно достигает нуля, определение меняется на `Not` и генерирует те же события `MintabilityChanged`, что и выше.

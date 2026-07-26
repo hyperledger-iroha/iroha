@@ -841,9 +841,9 @@ isi! {
 impl crate::seal::Instruction for SetSorafsReputationJournalAuthorityPolicy {}
 
 isi! {
-    /// Commit one terminal native PoR projection to the global reputation journal.
+    /// Commit one terminal native `PoR` projection to the global reputation journal.
     pub struct AppendSorafsPorReputationJournalEntry {
-        /// Canonical policy-bound, content-addressed PoR journal entry.
+        /// Canonical policy-bound, content-addressed `PoR` journal entry.
         pub entry: ReputationJournalEntryV1,
     }
 }
@@ -1533,7 +1533,7 @@ impl SetSorafsReputationJournalAuthorityPolicy {
 }
 
 impl AppendSorafsPorReputationJournalEntry {
-    /// Construct a canonical PoR reputation-journal append.
+    /// Construct a canonical `PoR` reputation-journal append.
     #[must_use]
     pub fn new(entry: ReputationJournalEntryV1) -> Self {
         Self { entry }
@@ -2174,8 +2174,7 @@ mod tests {
 
     fn reputation_policy() -> ReputationJournalAuthorityPolicyV1 {
         ReputationJournalAuthorityPolicyV1 {
-            version:
-                crate::sorafs::reputation::REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+            version: crate::sorafs::reputation::REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
             por_recorder_authority: owner(),
@@ -2221,16 +2220,14 @@ mod tests {
             owner(),
             1_700_000_002_000,
             None,
-            ReputationJournalPayloadV1::StreamTokenValidation(
-                StreamTokenValidationOutcomeV1 {
-                    validation_id: [0x84; 32],
-                    request_digest: [0x85; 32],
-                    token_body_digest: Some([0x86; 32]),
-                    token_key_version: Some(1),
-                    validated_at_unix_ms: 1_700_000_002_000,
-                    status: StreamTokenValidationStatusV1::Accepted,
-                },
-            ),
+            ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
+                validation_id: [0x84; 32],
+                request_digest: [0x85; 32],
+                token_body_digest: Some([0x86; 32]),
+                token_key_version: Some(1),
+                validated_at_unix_ms: 1_700_000_002_000,
+                status: StreamTokenValidationStatusV1::Accepted,
+            }),
         )
         .expect("canonical stream-token reputation entry")
     }

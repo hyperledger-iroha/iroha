@@ -41,7 +41,14 @@ pub const DEFI_ORACLE_DOMAIN_COVER_POLICY: u32 = 4;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct DefiOracleAttestationKey {
     /// `DeFi` oracle domain (`1=perps_market`, `2=options_series`,
     /// `3=options_shout`, `4=cover_policy`).
@@ -88,7 +95,14 @@ impl DefiOracleAttestationKey {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct DefiOracleAttestationSource {
     /// Source feed identifier.
     pub feed_id: FeedId,
@@ -111,7 +125,14 @@ pub struct DefiOracleAttestationSource {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct DefiOracleAttestation {
     /// Domain and subject id this attestation is valid for.
     pub key: DefiOracleAttestationKey,
@@ -142,7 +163,14 @@ pub struct DefiOracleAttestation {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct FeedId(pub Name);
 
 impl FeedId {
@@ -175,7 +203,14 @@ impl FromStr for FeedId {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct FeedConfigVersion(pub u32);
 
 impl From<u32> for FeedConfigVersion {
@@ -360,6 +395,14 @@ impl OracleChangeStatus {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct OracleChangeId(pub Hash);
 
@@ -793,6 +836,14 @@ impl ConnectorResponse {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct KeyedHash {
     /// Identifier for the pepper/secret used to compute the hash.
@@ -1334,6 +1385,14 @@ pub struct OracleReward {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct OracleProviderKey {
     /// Feed identifier.
     pub feed_id: FeedId,
@@ -1447,6 +1506,14 @@ pub struct OracleProviderStatsRecord {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct OracleDisputeId(pub u64);
 

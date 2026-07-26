@@ -453,7 +453,14 @@ impl core::fmt::Display for PvpIsi {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[repr(u8)]
 pub enum SettlementKind {
     /// Delivery-versus-payment trade.
@@ -468,7 +475,14 @@ pub enum SettlementKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[repr(u8)]
 pub enum SettlementLegRole {
     /// Asset leg in a delivery-versus-payment trade.
@@ -489,7 +503,14 @@ pub enum SettlementLegRole {
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct SettlementLegSnapshot {
     /// Logical role of the leg (delivery, payment, primary, counter).
     pub role: SettlementLegRole,
@@ -503,7 +524,14 @@ pub struct SettlementLegSnapshot {
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct SettlementSuccessRecord {
     /// Whether the first leg remained committed after execution.
     pub first_committed: bool,
@@ -516,7 +544,14 @@ pub struct SettlementSuccessRecord {
 /// Snapshot of a failed settlement attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct SettlementFailureRecord {
     /// Stable failure classification.
     pub reason: String,
@@ -526,7 +561,14 @@ pub struct SettlementFailureRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "detail"))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub enum SettlementOutcomeRecord {
     /// Settlement completed successfully.
     Success(SettlementSuccessRecord),
@@ -548,7 +590,14 @@ impl SettlementOutcomeRecord {
 /// binds those legs to the exact governed policy revision and rate that the signer approved.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct FxCorridorSettlementDetails {
     /// Stable corridor policy identifier.
     pub policy_id: Name,
@@ -583,7 +632,14 @@ pub struct FxCorridorSettlementDetails {
 /// Ledger entry persisted for auditing and reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct SettlementLedgerEntry {
     /// Unique identifier shared across the settlement lifecycle.
     pub settlement_id: SettlementId,
@@ -612,7 +668,14 @@ pub struct SettlementLedgerEntry {
 /// Auditing trail for a settlement identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct SettlementLedger {
     /// Chronological sequence of settlement attempts tied to the identifier.
     pub entries: Vec<SettlementLedgerEntry>,

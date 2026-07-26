@@ -1445,14 +1445,12 @@ mod tests {
     #[test]
     fn verify_transcripts_accepts_mixed_scale_balances() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].amount =
-            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
+        let half = "0.5".parse::<Quantity>().expect("canonical quantity");
+        transcript.deltas[0].amount = half.clone();
         transcript.deltas[0].from_balance_before = Quantity::from(1_u64);
-        transcript.deltas[0].from_balance_after =
-            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
+        transcript.deltas[0].from_balance_after = half.clone();
         transcript.deltas[0].to_balance_before = Quantity::from(0_u64);
-        transcript.deltas[0].to_balance_after =
-            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
+        transcript.deltas[0].to_balance_after = half;
         transcript.poseidon_preimage_digest = Some(compute_poseidon_digest(
             &transcript.deltas[0],
             &transcript.batch_hash,

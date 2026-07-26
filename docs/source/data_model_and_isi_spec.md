@@ -110,8 +110,8 @@ Types: `Register<T: Registered>` and `Unregister<T: Identifiable>`, with sum typ
 ### Mint / Burn
 Types: `Mint<O, D: Identifiable>` and `Burn<O, D: Identifiable>`, boxed as `MintBox`/`BurnBox`.
 
-- Asset (Numeric) mint/burn: adjusts balances and definition’s `total_quantity`.
-  - Preconditions: `Numeric` value must satisfy `AssetDefinition.spec()`; mint allowed by `mintable`:
+- Asset (Quantity) mint/burn: adjusts balances and definition’s `total_quantity`.
+  - Preconditions: `Quantity` value must satisfy `AssetDefinition.spec()`; mint allowed by `mintable`:
     - `Infinitely`: always allowed.
     - `Once`: allowed exactly once; the first mint flips `mintable` to `Not` and emits `AssetDefinitionEvent::MintabilityChanged`, plus a detailed `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` for auditability.
     - `Limited(n)`: allows `n` additional mint operations. Each successful mint decrements the counter; when it reaches zero the definition flips to `Not` and emits the same `MintabilityChanged` events as above.
@@ -128,7 +128,7 @@ Types: `Mint<O, D: Identifiable>` and `Burn<O, D: Identifiable>`, boxed as `Mint
 ### Transfer
 Types: `Transfer<S: Identifiable, O, D: Identifiable>`, boxed as `TransferBox`.
 
-- Asset (Numeric): subtract from source `AssetId`, add to destination `AssetId` (same definition, different account). Delete zeroed source asset.
+- Asset (Quantity): subtract from source `AssetId`, add to destination `AssetId` (same definition, different account). Delete zeroed source asset.
   - Preconditions: source asset exists; value satisfies `spec`.
   - Events: `AssetEvent::Removed` (source), `AssetEvent::Added` (destination).
   - Errors: `FindError::Asset`, `TypeError::AssetNumericSpec`, `MathError::NotEnoughQuantity/Overflow`. Code: `core/.../isi/asset.rs`.
@@ -190,7 +190,7 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
 
 ## Invariants and Notes (from tests and guards)
 - Genesis protections: cannot register the `genesis` domain or accounts in `genesis` domain; `genesis` account cannot be registered. Code/tests: `core/.../isi/world.rs`, `core/.../smartcontracts/isi/mod.rs`.
-- Numeric assets must satisfy their `NumericSpec` on mint/transfer/burn; spec mismatch yields `TypeError::AssetNumericSpec`.
+- Asset quantities must satisfy their `NumericSpec` on mint/transfer/burn; spec mismatch yields `TypeError::AssetNumericSpec`.
 - Mintability: `Once` allows a single mint and then flips to `Not`; `Limited(n)` allows exactly `n` mints before flipping to `Not`. Attempts to forbid minting on `Infinitely` cause `MintabilityError::ForbidMintOnMintable`, and configuring `Limited(0)` yields `MintabilityError::InvalidMintabilityTokens`.
 - Metadata operations are key‑exact; removing a non‑existent key is an error.
 - Trigger filters can be non‑mintable; then `Register<Trigger>` only permits `Exactly(1)` repeats.

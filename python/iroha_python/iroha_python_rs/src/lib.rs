@@ -4817,9 +4817,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
     } else {
         let provider_id = sorafs_fixed32_from_bytes_py(provider_id, "provider_id")?;
         if provider_id == [0; 32] {
-            return Err(PyValueError::new_err(
-                "provider_id must not be all zero",
-            ));
+            return Err(PyValueError::new_err("provider_id must not be all zero"));
         }
         Some(provider_id)
     };

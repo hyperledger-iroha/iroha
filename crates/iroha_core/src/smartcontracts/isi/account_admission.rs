@@ -23,10 +23,7 @@ use iroha_data_model::{
     name::Name,
     prelude::*,
 };
-use iroha_primitives::{
-    json::Json,
-    numeric::{Numeric, Quantity},
-};
+use iroha_primitives::{json::Json, numeric::Quantity};
 
 use crate::{
     role::RoleIdWithOwner,
@@ -173,7 +170,7 @@ fn apply_implicit_creation_fee(
 
     state_transaction
         .world
-        .withdraw_numeric_asset(&payer_asset_id, fee.amount.as_numeric())?;
+        .withdraw_numeric_asset(&payer_asset_id, &fee.amount)?;
 
     match &fee.destination {
         ImplicitAccountFeeDestination::Burn => {
@@ -192,7 +189,7 @@ fn apply_implicit_creation_fee(
                     ))?;
             state_transaction
                 .world
-                .deposit_numeric_asset(&sink_asset_id, fee.amount.as_numeric())?;
+                .deposit_numeric_asset(&sink_asset_id, &fee.amount)?;
         }
     }
 
@@ -293,7 +290,7 @@ fn implicit_account_event_domain() -> DomainId {
 pub(super) fn ensure_receiving_account(
     authority: &AccountId,
     destination: &AccountId,
-    value_hint: Option<(&AssetDefinitionId, &Numeric)>,
+    value_hint: Option<(&AssetDefinitionId, &Quantity)>,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<bool, InstructionExecutionError> {
     if state_transaction.world.account(destination).is_ok() {
@@ -308,17 +305,12 @@ pub(super) fn ensure_receiving_account(
 
     if let Some((asset_def_id, amount)) = value_hint {
         if let Some(required) = policy.min_initial_amount_for(asset_def_id) {
-            if amount < required.as_numeric() {
-                let provided = Quantity::from_canonical_numeric(amount.clone()).map_err(|_| {
-                    InstructionExecutionError::InvariantViolation(
-                        "implicit-account receipt amount must be a non-negative quantity".into(),
-                    )
-                })?;
+            if amount < required {
                 return Err(AccountAdmissionError::MinInitialAmountUnsatisfied(
                     AccountAdmissionMinInitialAmountUnsatisfied {
                         asset_definition: asset_def_id.clone(),
                         required: required.clone(),
-                        provided,
+                        provided: amount.clone(),
                     },
                 )
                 .into());

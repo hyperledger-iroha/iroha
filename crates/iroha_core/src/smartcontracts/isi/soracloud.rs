@@ -12360,11 +12360,9 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         source_record.repo_id = repo_id.clone();
         source_record.resolved_revision = resolved_revision.clone();
         let resource_profile = resolve_hf_resource_profile(&mut source_record, resource_profile)?;
-        let canonical_compute_cap = hf_shared_lease_max_compute_reservation_fee_v1(
-            &resource_profile,
-            lease_term_ms,
-        )
-        .map_err(|err| invalid_parameter(err.to_string()))?;
+        let canonical_compute_cap =
+            hf_shared_lease_max_compute_reservation_fee_v1(&resource_profile, lease_term_ms)
+                .map_err(|err| invalid_parameter(err.to_string()))?;
         if max_compute_reservation_fee != canonical_compute_cap {
             return Err(invalid_parameter(format!(
                 "max_compute_reservation_fee must equal the canonical V1 cap `{canonical_compute_cap}` for the reviewed resource profile and lease term"
@@ -42902,11 +42900,8 @@ mod tests {
     }
 
     fn sample_hf_compute_reservation_cap(lease_term_ms: u64) -> Quantity {
-        hf_shared_lease_max_compute_reservation_fee_v1(
-            &sample_hf_resource_profile(),
-            lease_term_ms,
-        )
-        .expect("sample HF compute reservation cap")
+        hf_shared_lease_max_compute_reservation_fee_v1(&sample_hf_resource_profile(), lease_term_ms)
+            .expect("sample HF compute reservation cap")
     }
 
     #[test]
@@ -42940,17 +42935,14 @@ mod tests {
         ];
 
         for profile in profiles {
-            let cap =
-                hf_shared_lease_max_compute_reservation_fee_v1(&profile, u64::MAX)
-                    .expect("canonical compute cap");
+            let cap = hf_shared_lease_max_compute_reservation_fee_v1(&profile, u64::MAX)
+                .expect("canonical compute cap");
             for policy in hf_host_class_policies() {
                 let per_host = hf_host_class_reservation_fee(policy.host_class, &profile)
                     .expect("V1 host class tariff");
-                let total = (0..hf_adaptive_target_host_count(&profile)).try_fold(
-                    Quantity::zero(),
-                    |total, _| total.checked_add(&per_host),
-                )
-                .expect("placement tariff total");
+                let total = (0..hf_adaptive_target_host_count(&profile))
+                    .try_fold(Quantity::zero(), |total, _| total.checked_add(&per_host))
+                    .expect("placement tariff total");
                 assert!(
                     total <= cap,
                     "{total} for {} exceeds canonical cap {cap}",
@@ -44277,14 +44269,8 @@ mod tests {
         let expected_total = base_fee
             .checked_add(&member.last_compute_charge)
             .expect("new-window total charge");
-        assert_eq!(
-            member.last_compute_charge,
-            placement.total_reservation_fee
-        );
-        assert!(
-            member.last_compute_charge
-                <= sample_hf_compute_reservation_cap(lease_term_ms)
-        );
+        assert_eq!(member.last_compute_charge, placement.total_reservation_fee);
+        assert!(member.last_compute_charge <= sample_hf_compute_reservation_cap(lease_term_ms));
         assert_eq!(audit_event.charged, expected_total);
         Ok(())
     }
@@ -44786,10 +44772,7 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect_err("noncanonical compute cap must fail");
 
-        assert!(
-            error.to_string().contains("canonical V1 cap"),
-            "unexpected error: {error}"
-        );
+        assert_invalid_parameter_contains(error, "canonical V1 cap");
         assert_eq!(stx.world.soracloud_hf_sources.len(), source_count_before);
         assert_eq!(
             stx.world.soracloud_hf_shared_lease_pools.len(),
@@ -45026,10 +45009,7 @@ mod tests {
         assert_eq!(bob_member.total_compute_paid, expected_compute_join_fee);
         assert_eq!(bob_member.last_charge, expected_storage_join_fee);
         assert_eq!(bob_member.last_compute_charge, expected_compute_join_fee);
-        assert!(
-            bob_member.last_compute_charge
-                <= sample_hf_compute_reservation_cap(lease_term_ms)
-        );
+        assert!(bob_member.last_compute_charge <= sample_hf_compute_reservation_cap(lease_term_ms));
         assert_eq!(
             alice_balance,
             initial_balance

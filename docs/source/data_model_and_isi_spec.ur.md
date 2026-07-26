@@ -107,7 +107,7 @@ IDs میں `Display`/`FromStr` راؤنڈ ٹرپ کے ساتھ مستحکم سٹ
 اقسام: `Mint<O, D: Identifiable>` اور `Burn<O, D: Identifiable>`، `MintBox`/`BurnBox` کے بطور باکسڈ۔
 
 - اثاثہ (عددی) ٹکسال/برن: بیلنس اور تعریف کے `total_quantity` کو ایڈجسٹ کرتا ہے۔
-  - پیشگی شرائط: `Numeric` قدر `AssetDefinition.spec()` کو پورا کرے؛ ٹکسال `mintable` کی طرف سے اجازت دی گئی:
+  - پیشگی شرائط: `Quantity` قدر `AssetDefinition.spec()` کو پورا کرے؛ ٹکسال `mintable` کی طرف سے اجازت دی گئی:
     - `Infinitely`: ہمیشہ اجازت ہے۔
     - `Once`: بالکل ایک بار اجازت دی گئی۔ پہلا ٹکسال `mintable` سے `Not` پر پلٹتا ہے اور `AssetDefinitionEvent::MintabilityChanged` کا اخراج کرتا ہے، نیز آڈیٹیبلٹی کے لیے ایک تفصیلی `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }`۔
     - `Limited(n)`: `n` اضافی ٹکسال آپریشن کی اجازت دیتا ہے۔ ہر کامیاب ٹکسال کاؤنٹر کو کم کرتا ہے۔ جب یہ صفر تک پہنچ جاتا ہے تو تعریف `Not` پر پلٹ جاتی ہے اور اوپر والے `MintabilityChanged` واقعات کو خارج کرتی ہے۔

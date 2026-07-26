@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   - ٹیسٹ اور فکسچر کو پہلے عالمگیر `AccountId` کو سیڈ کرنا چاہیے، پھر اکاؤنٹ کی شناخت میں ڈومین کے مفروضوں کو انکوڈنگ کرنے کے بجائے عرفی لیز، عرفی اجازتیں، اور کسی بھی ڈومین کی ملکیت والی ریاست کو الگ سے شامل کرنا چاہیے۔
   - عوامی واحد اکاؤنٹ کی تلاش اب عرفی ناموں پر مرکوز ہے (`FindAliasesByAccountId`)؛ اکاؤنٹ کی شناخت خود ڈومین لیس رہتی ہے۔### اثاثہ کی تعریفیں اور اثاثے۔
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` متنی طور پر ایک غیر سابقہ بیس 58 ایڈریس کے طور پر ورژننگ اور چیکسم کے ساتھ بے نقاب۔
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`۔
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`۔
   - `name` کو انسان کا سامنا کرنے والا ڈسپلے متن درکار ہے اور اس میں `#`/`@` شامل نہیں ہونا چاہیے۔
   - `alias` اختیاری ہے اور ان میں سے ایک ہونا چاہیے:
     - `<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`۔
   - بلڈرز: `AssetDefinition::new(id, spec)` یا سہولت `numeric(id)`؛ `name` درکار ہے اور `.with_name(...)` کے ذریعے سیٹ ہونا ضروری ہے۔
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`۔
-- `Asset { id, value: Numeric }` اسٹوریج کے موافق `AssetEntry`/`AssetValue` کے ساتھ۔- `AssetBalanceScope`: `Global` غیر محدود بیلنس کے لیے اور `Dataspace(DataSpaceId)` ڈیٹا اسپیس سے محدود بیلنس کے لیے۔
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` خلاصہ APIs کے لیے بے نقاب۔
+- `Asset { id, value: Quantity }` اسٹوریج کے موافق `AssetEntry`/`AssetValue` کے ساتھ۔- `AssetBalanceScope`: `Global` غیر محدود بیلنس کے لیے اور `Dataspace(DataSpaceId)` ڈیٹا اسپیس سے محدود بیلنس کے لیے۔
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` خلاصہ APIs کے لیے بے نقاب۔
 
 ### NFTs
 - `NftId { domain: DomainId, name: Name }`۔
@@ -182,7 +182,7 @@ translator: machine-google-reviewed
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

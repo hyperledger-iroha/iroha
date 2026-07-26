@@ -364,19 +364,16 @@ fn transfer_numeric_asset_for_escrow(
         state_transaction,
         source_id,
         destination_id,
-        amount.as_numeric(),
+        amount,
         source_policy,
     )?;
-    let control_update = prepare_outbound_asset_transfer_control_update(
-        state_transaction,
-        &source_id,
-        amount.as_numeric(),
-    )?;
+    let control_update =
+        prepare_outbound_asset_transfer_control_update(state_transaction, &source_id, amount)?;
     let delta = apply_resolved_numeric_asset_transfer_delta(
         state_transaction,
         &source_id,
         &destination_id,
-        amount.as_numeric(),
+        amount,
     )?;
     if let Some(record) = control_update {
         update_control_record(state_transaction, source_id.account(), record)?;
@@ -1080,7 +1077,7 @@ pub(crate) fn settle_orderbook_asset_lock(
     let control_update = prepare_outbound_asset_transfer_control_update(
         state_transaction,
         &event_source_id,
-        total.as_numeric(),
+        &total,
     )?;
     let mut plans = Vec::with_capacity(allocations.len());
     for (destination, amount) in allocations {
@@ -1089,7 +1086,7 @@ pub(crate) fn settle_orderbook_asset_lock(
             state_transaction,
             &event_source_id,
             &event_destination_id,
-            amount.as_numeric(),
+            &amount,
             NumericAssetTransferSourcePolicy::NativeEscrowCustody,
         )?;
         plans.push((
@@ -1141,7 +1138,7 @@ pub(crate) fn settle_orderbook_asset_lock(
             state_transaction,
             &source_id,
             &destination_id,
-            amount.as_numeric(),
+            &amount,
         )?;
         deltas.push(delta);
         #[allow(clippy::float_arithmetic)]
@@ -3181,7 +3178,7 @@ mod tests {
     ) {
         state_transaction
             .world
-            .deposit_numeric_asset(custody_asset, amount.as_numeric())
+            .deposit_numeric_asset(custody_asset, &amount)
             .expect("deposit closed custody dust");
     }
 

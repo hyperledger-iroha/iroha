@@ -3725,18 +3725,22 @@ impl<'a> CstAstLowerer<'a> {
 
                 let (base, base_token) = self.expect_ident_token()?;
                 if let Some(replacement) = retired_numeric_type_replacement(&base) {
-                    let replacement = replacement.map_or_else(
+                    let replacement_message = replacement.map_or_else(
                         || {
                             "use `int`, `decimal`, or `quantity` according to the value's domain"
                                 .to_owned()
                         },
                         |replacement| format!("use `{replacement}`"),
                     );
-                    return Err(self.coded_error(
+                    let mut error = self.coded_error(
                         base_token,
                         "E_RETIRED_NUMERIC_TYPE",
-                        format!("numeric type `{base}` is not part of Kotodama V1; {replacement}"),
-                    ));
+                        format!(
+                            "numeric type `{base}` is not part of Kotodama V1; {replacement_message}"
+                        ),
+                    );
+                    error.fix = replacement.map(str::to_owned);
+                    return Err(error);
                 }
                 self.record_type_use(base.clone(), base_token.range);
                 if self.peek(TokenKind::Less) {

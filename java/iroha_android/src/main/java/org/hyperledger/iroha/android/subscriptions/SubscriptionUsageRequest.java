@@ -4,20 +4,22 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Request payload for subscription usage recording. */
 public final class SubscriptionUsageRequest {
 
   private final String authority;
   private final String unitKey;
-  private final String delta;
+  private final NumericV1.QuantityValue delta;
   private final String usageTriggerId;
 
   private SubscriptionUsageRequest(final Builder builder) {
     this.authority = requireNonBlank(builder.authority, "authority");
     this.unitKey = requireNonBlank(builder.unitKey, "unit_key");
-    this.delta = requireNumericLiteral(builder.delta, "delta");
+    this.delta = Objects.requireNonNull(builder.delta, "delta");
     this.usageTriggerId = normalizeOptional(builder.usageTriggerId);
   }
 
@@ -29,7 +31,7 @@ public final class SubscriptionUsageRequest {
     return unitKey;
   }
 
-  public String delta() {
+  public NumericV1.QuantityValue delta() {
     return delta;
   }
 
@@ -41,7 +43,7 @@ public final class SubscriptionUsageRequest {
     final Map<String, Object> json = new LinkedHashMap<>();
     json.put("authority", authority);
     json.put("unit_key", unitKey);
-    json.put("delta", delta);
+    json.put("delta", NumericV1.encodeQuantityJson(delta));
     if (usageTriggerId != null) {
       json.put("usage_trigger_id", usageTriggerId);
     }
@@ -59,7 +61,7 @@ public final class SubscriptionUsageRequest {
   public static final class Builder {
     private String authority;
     private String unitKey;
-    private String delta;
+    private NumericV1.QuantityValue delta;
     private String usageTriggerId;
 
     private Builder() {}
@@ -74,7 +76,7 @@ public final class SubscriptionUsageRequest {
       return this;
     }
 
-    public Builder delta(final String delta) {
+    public Builder delta(final NumericV1.QuantityValue delta) {
       this.delta = delta;
       return this;
     }
@@ -94,41 +96,6 @@ public final class SubscriptionUsageRequest {
       throw new IllegalStateException(field + " is required");
     }
     return value.trim();
-  }
-
-  private static String requireNumericLiteral(final String value, final String field) {
-    final String trimmed = requireNonBlank(value, field);
-    int index = 0;
-    final char first = trimmed.charAt(0);
-    if (first == '+' || first == '-') {
-      if (first == '-') {
-        throw new IllegalArgumentException(field + " must be non-negative");
-      }
-      index = 1;
-    }
-    if (index >= trimmed.length()) {
-      throw new IllegalArgumentException(field + " must be numeric");
-    }
-    boolean seenDot = false;
-    boolean seenDigit = false;
-    for (int i = index; i < trimmed.length(); i++) {
-      final char ch = trimmed.charAt(i);
-      if (ch == '.') {
-        if (seenDot) {
-          throw new IllegalArgumentException(field + " must be numeric");
-        }
-        seenDot = true;
-        continue;
-      }
-      if (ch < '0' || ch > '9') {
-        throw new IllegalArgumentException(field + " must be numeric");
-      }
-      seenDigit = true;
-    }
-    if (!seenDigit) {
-      throw new IllegalArgumentException(field + " must be numeric");
-    }
-    return trimmed;
   }
 
   private static String normalizeOptional(final String value) {

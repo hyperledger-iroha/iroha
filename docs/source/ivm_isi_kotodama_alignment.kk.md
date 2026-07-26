@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T19:17:13.238594+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ translator: machine-google-reviewed
 
 ### B. Терілген мәндер үшін детерминирленген VM/хост ABI анықтаңыз
 - Құрылымдық дәлелдер үшін VM жағында Norito пайдаланыңыз:
-  - `AccountId`, `AssetDefinitionId`, `Numeric`, Kotodama.
+  - `AccountId`, `AssetDefinitionId`, `Quantity`, Kotodama.
   - Хост `IVM` жад көмекшілері арқылы байттарды оқиды және Norito көмегімен декодтайды (`iroha_data_model` `Encode/Decode` шығарады).
 - Литералды идентификаторларды кодқа/тұрақты пулдарға сериялау немесе жадтағы шақыру кадрларын дайындау үшін Kotodama кодогенінде минималды көмекшілерді қосыңыз.
-- Сомалар `Numeric` және NoritoBytes көрсеткіштері ретінде беріледі; басқа күрделі типтер де көрсеткіш арқылы өтеді.
+- Актив мөлшерлері жалпы `NoritoBytes` көрсеткішін емес, арнайы `QuantityValueV1` pointer-ABI TLV-ін (`PointerType::Quantity = 0x0010`) пайдаланады; басқа күрделі мәндер өздеріне тағайындалған көрсеткіш түрлерін пайдаланады.
 - Мұны `crates/ivm/docs/calling_convention.md` ішінде құжаттап, мысалдар қосыңыз.### C. Жүйелік қоңырау атын және қамтуды ISI/деректер үлгісімен туралаңыз
 - Түсінікті болу үшін NFT-қа қатысты жүйелік қоңыраулардың атын өзгертіңіз: канондық атаулар енді `SYSCALL_NFT_*` үлгісіне сәйкес келеді (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA`, т.б.).
 - Әрбір жүйеден негізгі ISI семантикасына салыстыру кестесін (құжат + код түсініктемелері) жариялаңыз, соның ішінде:

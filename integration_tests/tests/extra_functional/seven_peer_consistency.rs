@@ -125,11 +125,10 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     )
     .wrap_err("seven_peer_consistency status fetch failed")?;
     // Mint on one peer and wait until the network advances a few blocks
-    let quantity = numeric!(500);
+    let quantity = Quantity::from(500_u32);
     if let Err(err) = submitter_client.submit_blocking(
         Mint::asset_quantity(
-            Quantity::try_from_numeric(quantity.clone())
-                .expect("mint quantity must be non-negative"),
+            quantity.clone(),
             AssetId::new(asset_definition_id.clone(), account_id.clone()),
         ),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -142,7 +141,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     loop {
         let err_detail = match submitter_client.query_single(FindAssetById::new(asset_id.clone())) {
             Ok(asset) => {
-                if asset.value().as_numeric() == &quantity {
+                if asset.value() == &quantity {
                     None
                 } else {
                     Some(format!(
@@ -186,7 +185,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             let client = peer.client();
             match client.query_single(FindAssetById::new(asset_id.clone())) {
                 Ok(asset) => {
-                    if asset.value().as_numeric() != &quantity {
+                    if asset.value() != &quantity {
                         pending.push(format!(
                             "{}: mismatched balance (got {}, expected {})",
                             peer.id(),

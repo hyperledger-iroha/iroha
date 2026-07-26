@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sdk/android/generated/instructions.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 301d6d415aa3471d8df56e49e7b608ad8d27b4a5f9087ff7a8a6d555007f5e37
+source_hash: 88e6789ab71164c460f570e82656cc7ecc2f8007e5d0996a72d81f9d3bbb773a
 source_last_modified: "2026-01-22T06:58:49.756391+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -16,16 +16,16 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha.burn`
 
-> Schema summary: enum variants: Asset (Burn<Numeric, Asset>), TriggerRepetitions (Burn<u32, Trigger>).
+> Schema summary: enum variants: Asset (Burn<Quantity, Asset>), TriggerRepetitions (Burn<u32, Trigger>).
 
 - Rust type: `iroha_data_model::isi::mint_burn::BurnBox`
-- Schema hash: `b8a981b5d11aaa54b8a981b5d11aaa54`
+- Schema hash: `361f279124a0aad61978c80ff1c9ce0a`
 
 **Layout:** `enum`
 
 | Tag | Discriminant | Payload |
 |-----|--------------|---------|
-| `Asset` | 0 | `Burn<Numeric, Asset>` |
+| `Asset` | 0 | `Burn<Quantity, Asset>` |
 | `TriggerRepetitions` | 1 | `Burn<u32, Trigger>` |
 
 ## `iroha.custom`
@@ -33,7 +33,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: payload: Json.
 
 - Rust type: `iroha_data_model::isi::transparent::CustomInstruction`
-- Schema hash: `89e9c7d440cf16b689e9c7d440cf16b6`
+- Schema hash: `6b86902a75600648d186d52cd662b229`
 
 **Layout:** `struct`
 
@@ -46,7 +46,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: trigger: TriggerId, args: Json.
 
 - Rust type: `iroha_data_model::isi::transparent::ExecuteTrigger`
-- Schema hash: `f92cdee1227ffa12f92cdee1227ffa12`
+- Schema hash: `d8988afd2c1dee721564dd8d57841eff`
 
 **Layout:** `struct`
 
@@ -60,7 +60,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: enum variants: Permission (Grant<Permission, Account>), Role (Grant<RoleId, Account>), RolePermission (Grant<Permission, Role>).
 
 - Rust type: `iroha_data_model::isi::GrantBox`
-- Schema hash: `21d628458e22661321d628458e226613`
+- Schema hash: `0ff2ef6b29cba22cc60985135bec47de`
 
 **Layout:** `enum`
 
@@ -75,7 +75,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: level: Level, msg: String.
 
 - Rust type: `iroha_data_model::isi::transparent::Log`
-- Schema hash: `9a26c3b474fedb119a26c3b474fedb11`
+- Schema hash: `8e55c03b421e22131dbca44b0bdeb957`
 
 **Layout:** `struct`
 
@@ -86,16 +86,16 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha.mint`
 
-> Schema summary: enum variants: Asset (Mint<Numeric, Asset>), TriggerRepetitions (Mint<u32, Trigger>).
+> Schema summary: enum variants: Asset (Mint<Quantity, Asset>), TriggerRepetitions (Mint<u32, Trigger>).
 
 - Rust type: `iroha_data_model::isi::mint_burn::MintBox`
-- Schema hash: `a77313c153163964a77313c153163964`
+- Schema hash: `ec0b538ed0e5b46ed163e0aedb335e73`
 
 **Layout:** `enum`
 
 | Tag | Discriminant | Payload |
 |-----|--------------|---------|
-| `Asset` | 0 | `Mint<Numeric, Asset>` |
+| `Asset` | 0 | `Mint<Quantity, Asset>` |
 | `TriggerRepetitions` | 1 | `Mint<u32, Trigger>` |
 
 ## `iroha.register`
@@ -103,7 +103,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: enum variants: Peer (RegisterPeerWithPop), Domain (Register<Domain>), Account (Register<Account>), AssetDefinition (Register<AssetDefinition>), Nft (Register<Nft>), Role (Register<Role>), Trigger (Register<Trigger>).
 
 - Rust type: `iroha_data_model::isi::register::RegisterBox`
-- Schema hash: `5321ba5d245cb6f65321ba5d245cb6f6`
+- Schema hash: `2e9fa44b44ac5295a0b34e05edcb4133`
 
 **Layout:** `enum`
 
@@ -122,7 +122,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: enum variants: Domain (RemoveKeyValue<Domain>), Account (RemoveKeyValue<Account>), AssetDefinition (RemoveKeyValue<AssetDefinition>), Nft (RemoveKeyValue<Nft>), Trigger (RemoveKeyValue<Trigger>).
 
 - Rust type: `iroha_data_model::isi::RemoveKeyValueBox`
-- Schema hash: `17a266cdeca147f517a266cdeca147f5`
+- Schema hash: `c2940a83246a650a774cc48c8294f754`
 
 **Layout:** `enum`
 
@@ -134,51 +134,27 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | `Nft` | 3 | `RemoveKeyValue<Nft>` |
 | `Trigger` | 4 | `RemoveKeyValue<Trigger>` |
 
-## `iroha.repo.initiate`
+## `iroha.repo`
 
-> Schema summary: struct fields: agreement_id: RepoAgreementId, initiator: AccountId, counterparty: AccountId, custodian: Option<AccountId>, cash_leg: RepoCashLeg, collateral_leg: RepoCollateralLeg, rate_bps: u16, maturity_timestamp_ms: u64, governance: RepoGovernance.
+> Schema summary: enum variants: Initiate (RepoIsi), Reverse (ReverseRepoIsi), MarginCall (RepoMarginCallIsi).
 
-- Rust type: `iroha_data_model::isi::repo::RepoIsi`
-- Schema hash: `699ebd9e4662c508699ebd9e4662c508`
+- Rust type: `iroha_data_model::isi::repo::RepoInstructionBox`
+- Schema hash: `f98148ca4133dadc0b9046058646c979`
 
-**Layout:** `struct`
+**Layout:** `enum`
 
-| Field | Type |
-|-------|------|
-| `agreement_id` | `RepoAgreementId` |
-| `initiator` | `AccountId` |
-| `counterparty` | `AccountId` |
-| `custodian` | `Option<AccountId>` |
-| `cash_leg` | `RepoCashLeg` |
-| `collateral_leg` | `RepoCollateralLeg` |
-| `rate_bps` | `u16` |
-| `maturity_timestamp_ms` | `u64` |
-| `governance` | `RepoGovernance` |
-
-## `iroha.repo.reverse`
-
-> Schema summary: struct fields: agreement_id: RepoAgreementId, initiator: AccountId, counterparty: AccountId, cash_leg: RepoCashLeg, collateral_leg: RepoCollateralLeg, settlement_timestamp_ms: u64.
-
-- Rust type: `iroha_data_model::isi::repo::ReverseRepoIsi`
-- Schema hash: `db8564a6098daa97db8564a6098daa97`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `agreement_id` | `RepoAgreementId` |
-| `initiator` | `AccountId` |
-| `counterparty` | `AccountId` |
-| `cash_leg` | `RepoCashLeg` |
-| `collateral_leg` | `RepoCollateralLeg` |
-| `settlement_timestamp_ms` | `u64` |
+| Tag | Discriminant | Payload |
+|-----|--------------|---------|
+| `Initiate` | 0 | `RepoIsi` |
+| `Reverse` | 1 | `ReverseRepoIsi` |
+| `MarginCall` | 2 | `RepoMarginCallIsi` |
 
 ## `iroha.revoke`
 
 > Schema summary: enum variants: Permission (Revoke<Permission, Account>), Role (Revoke<RoleId, Account>), RolePermission (Revoke<Permission, Role>).
 
 - Rust type: `iroha_data_model::isi::RevokeBox`
-- Schema hash: `8103f6c9994ea6308103f6c9994ea630`
+- Schema hash: `3bca4b895d20bf1081e15d823ad0cff9`
 
 **Layout:** `enum`
 
@@ -193,7 +169,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: id: RuntimeUpgradeId.
 
 - Rust type: `iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade`
-- Schema hash: `c8dbd3041daa7149c8dbd3041daa7149`
+- Schema hash: `dd0f2fac36ae80eba91c5a521bd012db`
 
 **Layout:** `struct`
 
@@ -206,7 +182,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: id: RuntimeUpgradeId.
 
 - Rust type: `iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade`
-- Schema hash: `dffda7aec9caf96ddffda7aec9caf96d`
+- Schema hash: `d563aa37d8f4b53d9de7e5330ff76f94`
 
 **Layout:** `struct`
 
@@ -219,7 +195,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: manifest_bytes: Vec<u8>.
 
 - Rust type: `iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade`
-- Schema hash: `21d69a2ac8ea67f021d69a2ac8ea67f0`
+- Schema hash: `d3f95f8f392d31da0c3b1528c13b2d08`
 
 **Layout:** `struct`
 
@@ -232,7 +208,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: enum variants: Domain (SetKeyValue<Domain>), Account (SetKeyValue<Account>), AssetDefinition (SetKeyValue<AssetDefinition>), Nft (SetKeyValue<Nft>), Trigger (SetKeyValue<Trigger>).
 
 - Rust type: `iroha_data_model::isi::SetKeyValueBox`
-- Schema hash: `9b074cea7d8371cf9b074cea7d8371cf`
+- Schema hash: `7f532bc72c105d3cd63dda90e00df899`
 
 **Layout:** `enum`
 
@@ -249,7 +225,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: tuple fields: _0: Parameter.
 
 - Rust type: `iroha_data_model::isi::transparent::SetParameter`
-- Schema hash: `77acf9687667a5f177acf9687667a5f1`
+- Schema hash: `e0fff3487fdca11cf277d9bdd4338343`
 
 **Layout:** `tuple`
 
@@ -257,46 +233,28 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 |-------|------|
 | `0` | `Parameter` |
 
-## `iroha.settlement.dvp`
+## `iroha.settlement`
 
-> Schema summary: struct fields: settlement_id: SettlementId, delivery_leg: SettlementLeg, payment_leg: SettlementLeg, plan: SettlementPlan, metadata: Metadata.
+> Schema summary: enum variants: Dvp (DvpIsi), Pvp (PvpIsi), SetFxCorridorPolicy (SetFxCorridorPolicy), SettleFxCorridor (SettleFxCorridor).
 
-- Rust type: `iroha_data_model::isi::settlement::DvpIsi`
-- Schema hash: `e44952e42c0ea191e44952e42c0ea191`
+- Rust type: `iroha_data_model::isi::settlement::SettlementInstructionBox`
+- Schema hash: `a1f5f5f5e7b87acd6bcc319e8635a3a3`
 
-**Layout:** `struct`
+**Layout:** `enum`
 
-| Field | Type |
-|-------|------|
-| `settlement_id` | `SettlementId` |
-| `delivery_leg` | `SettlementLeg` |
-| `payment_leg` | `SettlementLeg` |
-| `plan` | `SettlementPlan` |
-| `metadata` | `Metadata` |
-
-## `iroha.settlement.pvp`
-
-> Schema summary: struct fields: settlement_id: SettlementId, primary_leg: SettlementLeg, counter_leg: SettlementLeg, plan: SettlementPlan, metadata: Metadata.
-
-- Rust type: `iroha_data_model::isi::settlement::PvpIsi`
-- Schema hash: `000d52b7bd46a0e1000d52b7bd46a0e1`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `settlement_id` | `SettlementId` |
-| `primary_leg` | `SettlementLeg` |
-| `counter_leg` | `SettlementLeg` |
-| `plan` | `SettlementPlan` |
-| `metadata` | `Metadata` |
+| Tag | Discriminant | Payload |
+|-----|--------------|---------|
+| `Dvp` | 0 | `DvpIsi` |
+| `Pvp` | 1 | `PvpIsi` |
+| `SetFxCorridorPolicy` | 2 | `SetFxCorridorPolicy` |
+| `SettleFxCorridor` | 3 | `SettleFxCorridor` |
 
 ## `iroha.transfer`
 
-> Schema summary: enum variants: Domain (Transfer<Account, DomainId, Account>), AssetDefinition (Transfer<Account, AssetDefinitionId, Account>), Asset (Transfer<Asset, Numeric, Account>), Nft (Transfer<Account, NftId, Account>).
+> Schema summary: enum variants: Domain (Transfer<Account, DomainId, Account>), AssetDefinition (Transfer<Account, AssetDefinitionId, Account>), Asset (Transfer<Asset, Quantity, Account>), Nft (Transfer<Account, NftId, Account>).
 
 - Rust type: `iroha_data_model::isi::transfer::TransferBox`
-- Schema hash: `ffb7ba8dc1b0c984ffb7ba8dc1b0c984`
+- Schema hash: `a4174c78d6341f8f98fc2adae8ed67b9`
 
 **Layout:** `enum`
 
@@ -304,7 +262,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 |-----|--------------|---------|
 | `Domain` | 0 | `Transfer<Account, DomainId, Account>` |
 | `AssetDefinition` | 1 | `Transfer<Account, AssetDefinitionId, Account>` |
-| `Asset` | 2 | `Transfer<Asset, Numeric, Account>` |
+| `Asset` | 2 | `Transfer<Asset, Quantity, Account>` |
 | `Nft` | 3 | `Transfer<Account, NftId, Account>` |
 
 ## `iroha.transfer_batch`
@@ -312,7 +270,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: entries: Vec<TransferAssetBatchEntry>.
 
 - Rust type: `iroha_data_model::isi::transfer::TransferAssetBatch`
-- Schema hash: `b267543a7f746edfb267543a7f746edf`
+- Schema hash: `d76a8b607909812061b62dff5922a7cc`
 
 **Layout:** `struct`
 
@@ -325,7 +283,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: enum variants: Peer (Unregister<Peer>), Domain (Unregister<Domain>), Account (Unregister<Account>), AssetDefinition (Unregister<AssetDefinition>), Nft (Unregister<Nft>), Role (Unregister<Role>), Trigger (Unregister<Trigger>).
 
 - Rust type: `iroha_data_model::isi::register::UnregisterBox`
-- Schema hash: `fa527ae77f909394fa527ae77f909394`
+- Schema hash: `42c6839dfa39c0ac8218a781820d6eae`
 
 **Layout:** `enum`
 
@@ -344,7 +302,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: executor: Executor.
 
 - Rust type: `iroha_data_model::isi::transparent::Upgrade`
-- Schema hash: `84e4bd4fa6cb5b1e84e4bd4fa6cb5b1e`
+- Schema hash: `78c95dde0cb1ef2399178b15fbaed21f`
 
 **Layout:** `struct`
 
@@ -354,10 +312,10 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha_data_model::isi::governance::CastPlainBallot`
 
-> Schema summary: struct fields: referendum_id: String, owner: AccountId, amount: u128, duration_blocks: u64, direction: u8.
+> Schema summary: struct fields: referendum_id: String, owner: AccountId, amount: Quantity, duration_blocks: u64, direction: u8.
 
 - Rust type: `iroha_data_model::isi::governance::CastPlainBallot`
-- Schema hash: `9969f69b4a99a0749969f69b4a99a074`
+- Schema hash: `62b23313103064bc2c9d528ac3548949`
 
 **Layout:** `struct`
 
@@ -365,7 +323,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 |-------|------|
 | `referendum_id` | `String` |
 | `owner` | `AccountId` |
-| `amount` | `u128` |
+| `amount` | `Quantity` |
 | `duration_blocks` | `u64` |
 | `direction` | `u8` |
 
@@ -374,7 +332,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: election_id: String, proof_b64: String, public_inputs_json: String.
 
 - Rust type: `iroha_data_model::isi::governance::CastZkBallot`
-- Schema hash: `58d9049c2c73912958d9049c2c739129`
+- Schema hash: `abae0adf4d6ffedaa63d36522d4684c2`
 
 **Layout:** `struct`
 
@@ -389,7 +347,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: referendum_id: Array<u8, 32>, preimage_hash: Array<u8, 32>, at_window: AtWindow.
 
 - Rust type: `iroha_data_model::isi::governance::EnactReferendum`
-- Schema hash: `564da81425d228de564da81425d228de`
+- Schema hash: `ceaa89089eba40dcb61010a1e395a259`
 
 **Layout:** `struct`
 
@@ -404,7 +362,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: referendum_id: String, proposal_id: Array<u8, 32>.
 
 - Rust type: `iroha_data_model::isi::governance::FinalizeReferendum`
-- Schema hash: `316f68c14913465e316f68c14913465e`
+- Schema hash: `9e8394eeb97d215a830a600e16d4c1aa`
 
 **Layout:** `struct`
 
@@ -415,10 +373,10 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha_data_model::isi::governance::PersistCouncilForEpoch`
 
-> Schema summary: struct fields: epoch: u64, members: Vec<AccountId>, candidates_count: u32, derived_by: CouncilDerivationKind.
+> Schema summary: struct fields: epoch: u64, members: Vec<AccountId>, alternates: Vec<AccountId>, verified: u32, candidates_count: u32, derived_by: CouncilDerivationKind.
 
 - Rust type: `iroha_data_model::isi::governance::PersistCouncilForEpoch`
-- Schema hash: `25f004fc72a647fa25f004fc72a647fa`
+- Schema hash: `e883e2ba76ced91134fc5d7faab8caa2`
 
 **Layout:** `struct`
 
@@ -426,47 +384,53 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 |-------|------|
 | `epoch` | `u64` |
 | `members` | `Vec<AccountId>` |
+| `alternates` | `Vec<AccountId>` |
+| `verified` | `u32` |
 | `candidates_count` | `u32` |
 | `derived_by` | `CouncilDerivationKind` |
 
 ## `iroha_data_model::isi::governance::ProposeDeployContract`
 
-> Schema summary: struct fields: namespace: String, contract_id: String, code_hash_hex: String, abi_hash_hex: String, abi_version: String, window: Option<AtWindow>, mode: Option<VotingMode>.
+> Schema summary: struct fields: contract_address: ContractAddress, code_hash_hex: String, abi_hash_hex: String, abi_version: String, window: Option<AtWindow>, mode: Option<VotingMode>, manifest_provenance: Option<ManifestProvenance>.
 
 - Rust type: `iroha_data_model::isi::governance::ProposeDeployContract`
-- Schema hash: `d92fab6392e8299fd92fab6392e8299f`
+- Schema hash: `926530a822dece971cc0fb5ab36850c0`
 
 **Layout:** `struct`
 
 | Field | Type |
 |-------|------|
-| `namespace` | `String` |
-| `contract_id` | `String` |
+| `contract_address` | `ContractAddress` |
 | `code_hash_hex` | `String` |
 | `abi_hash_hex` | `String` |
 | `abi_version` | `String` |
 | `window` | `Option<AtWindow>` |
 | `mode` | `Option<VotingMode>` |
+| `manifest_provenance` | `Option<ManifestProvenance>` |
 
 ## `iroha_data_model::isi::kaigi::CreateKaigi`
 
-> Schema summary: struct fields: call: NewKaigi.
+> Schema summary: struct fields: call: NewKaigi, commitment: Option<KaigiParticipantCommitment>, nullifier: Option<KaigiParticipantNullifier>, roster_root: Option<Hash>, proof: Option<Vec<u8>>.
 
 - Rust type: `iroha_data_model::isi::kaigi::CreateKaigi`
-- Schema hash: `24ee2ad1d6a56d3524ee2ad1d6a56d35`
+- Schema hash: `8c6eea2a5201bee243ea19cb08e50a08`
 
 **Layout:** `struct`
 
 | Field | Type |
 |-------|------|
 | `call` | `NewKaigi` |
+| `commitment` | `Option<KaigiParticipantCommitment>` |
+| `nullifier` | `Option<KaigiParticipantNullifier>` |
+| `roster_root` | `Option<Hash>` |
+| `proof` | `Option<Vec<u8>>` |
 
 ## `iroha_data_model::isi::kaigi::EndKaigi`
 
-> Schema summary: struct fields: call_id: KaigiId, ended_at_ms: Option<u64>.
+> Schema summary: struct fields: call_id: KaigiId, ended_at_ms: Option<u64>, commitment: Option<KaigiParticipantCommitment>, nullifier: Option<KaigiParticipantNullifier>, roster_root: Option<Hash>, proof: Option<Vec<u8>>.
 
 - Rust type: `iroha_data_model::isi::kaigi::EndKaigi`
-- Schema hash: `85befda0409d3c0485befda0409d3c04`
+- Schema hash: `c32489d53f4f0e463df6504dddce9b7b`
 
 **Layout:** `struct`
 
@@ -474,13 +438,17 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 |-------|------|
 | `call_id` | `KaigiId` |
 | `ended_at_ms` | `Option<u64>` |
+| `commitment` | `Option<KaigiParticipantCommitment>` |
+| `nullifier` | `Option<KaigiParticipantNullifier>` |
+| `roster_root` | `Option<Hash>` |
+| `proof` | `Option<Vec<u8>>` |
 
 ## `iroha_data_model::isi::kaigi::JoinKaigi`
 
 > Schema summary: struct fields: call_id: KaigiId, participant: AccountId, commitment: Option<KaigiParticipantCommitment>, nullifier: Option<KaigiParticipantNullifier>, roster_root: Option<Hash>, proof: Option<Vec<u8>>.
 
 - Rust type: `iroha_data_model::isi::kaigi::JoinKaigi`
-- Schema hash: `5077ea3be6f706825077ea3be6f70682`
+- Schema hash: `783156d69daed85cb5bc75b90f8a5657`
 
 **Layout:** `struct`
 
@@ -498,7 +466,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: call_id: KaigiId, participant: AccountId, commitment: Option<KaigiParticipantCommitment>, nullifier: Option<KaigiParticipantNullifier>, roster_root: Option<Hash>, proof: Option<Vec<u8>>.
 
 - Rust type: `iroha_data_model::isi::kaigi::LeaveKaigi`
-- Schema hash: `d74b8812a0a2681cd74b8812a0a2681c`
+- Schema hash: `be5cc959979a332405d134b7993b5fde`
 
 **Layout:** `struct`
 
@@ -516,7 +484,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: call_id: KaigiId, duration_ms: u64, billed_gas: u64, usage_commitment: Option<Hash>, proof: Option<Vec<u8>>.
 
 - Rust type: `iroha_data_model::isi::kaigi::RecordKaigiUsage`
-- Schema hash: `e20fb919a4056c21e20fb919a4056c21`
+- Schema hash: `af1e75920a73e5cbca28e61607f591ff`
 
 **Layout:** `struct`
 
@@ -533,7 +501,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: relay: KaigiRelayRegistration.
 
 - Rust type: `iroha_data_model::isi::kaigi::RegisterKaigiRelay`
-- Schema hash: `b40e80079720b8a2b40e80079720b8a2`
+- Schema hash: `b2a46ddb766ca24558c44bd0e7d07660`
 
 **Layout:** `struct`
 
@@ -546,7 +514,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: call_id: KaigiId, relay_manifest: Option<KaigiRelayManifest>.
 
 - Rust type: `iroha_data_model::isi::kaigi::SetKaigiRelayManifest`
-- Schema hash: `726dd6413d1d2b01726dd6413d1d2b01`
+- Schema hash: `18892cb3a3e8da2e425239969e583cd6`
 
 **Layout:** `struct`
 
@@ -555,18 +523,31 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | `call_id` | `KaigiId` |
 | `relay_manifest` | `Option<KaigiRelayManifest>` |
 
-## `iroha_data_model::isi::mint_burn::Burn<iroha_primitives::numeric::Numeric, iroha_data_model::asset::value::model::Asset>`
+## `iroha_data_model::isi::ministry::SubmitAgendaProposal`
 
-> Schema summary: struct fields: object: Numeric, destination: AssetId.
+> Schema summary: struct fields: proposal: AgendaProposalV1.
 
-- Rust type: `iroha_data_model::isi::mint_burn::Burn<iroha_primitives::numeric::Numeric, iroha_data_model::asset::value::model::Asset>`
-- Schema hash: `9534672edb4e0a2b9534672edb4e0a2b`
+- Rust type: `iroha_data_model::isi::ministry::SubmitAgendaProposal`
+- Schema hash: `fea837e878a1a962db096737ec821aaf`
 
 **Layout:** `struct`
 
 | Field | Type |
 |-------|------|
-| `object` | `Numeric` |
+| `proposal` | `AgendaProposalV1` |
+
+## `iroha_data_model::isi::mint_burn::Burn<iroha_primitives::numeric::Quantity, iroha_data_model::asset::value::model::Asset>`
+
+> Schema summary: struct fields: object: Quantity, destination: AssetId.
+
+- Rust type: `iroha_data_model::isi::mint_burn::Burn<iroha_primitives::numeric::Quantity, iroha_data_model::asset::value::model::Asset>`
+- Schema hash: `def28b8ac0a7011dabf5d6aca44fd42f`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `object` | `Quantity` |
 | `destination` | `AssetId` |
 
 ## `iroha_data_model::isi::mint_burn::Burn<u32, iroha_data_model::trigger::model::model::Trigger>`
@@ -574,7 +555,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: u32, destination: TriggerId.
 
 - Rust type: `iroha_data_model::isi::mint_burn::Burn<u32, iroha_data_model::trigger::model::model::Trigger>`
-- Schema hash: `4169ed08d250db844169ed08d250db84`
+- Schema hash: `b072a05868b3a8513fbf72578cbd6791`
 
 **Layout:** `struct`
 
@@ -583,18 +564,18 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | `object` | `u32` |
 | `destination` | `TriggerId` |
 
-## `iroha_data_model::isi::mint_burn::Mint<iroha_primitives::numeric::Numeric, iroha_data_model::asset::value::model::Asset>`
+## `iroha_data_model::isi::mint_burn::Mint<iroha_primitives::numeric::Quantity, iroha_data_model::asset::value::model::Asset>`
 
-> Schema summary: struct fields: object: Numeric, destination: AssetId.
+> Schema summary: struct fields: object: Quantity, destination: AssetId.
 
-- Rust type: `iroha_data_model::isi::mint_burn::Mint<iroha_primitives::numeric::Numeric, iroha_data_model::asset::value::model::Asset>`
-- Schema hash: `44d10ee70609795a44d10ee70609795a`
+- Rust type: `iroha_data_model::isi::mint_burn::Mint<iroha_primitives::numeric::Quantity, iroha_data_model::asset::value::model::Asset>`
+- Schema hash: `e1ae8c60db986034448368a72482b9a8`
 
 **Layout:** `struct`
 
 | Field | Type |
 |-------|------|
-| `object` | `Numeric` |
+| `object` | `Quantity` |
 | `destination` | `AssetId` |
 
 ## `iroha_data_model::isi::mint_burn::Mint<u32, iroha_data_model::trigger::model::model::Trigger>`
@@ -602,7 +583,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: u32, destination: TriggerId.
 
 - Rust type: `iroha_data_model::isi::mint_burn::Mint<u32, iroha_data_model::trigger::model::model::Trigger>`
-- Schema hash: `3a9c22c89cf530303a9c22c89cf53030`
+- Schema hash: `9dc6d32a057256dc62129bf7117c825e`
 
 **Layout:** `struct`
 
@@ -616,7 +597,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: NewAccount.
 
 - Rust type: `iroha_data_model::isi::register::Register<iroha_data_model::account::model::Account>`
-- Schema hash: `6b56657dd89f07e76b56657dd89f07e7`
+- Schema hash: `3f3af7606739421205efb1c7c7f30949`
 
 **Layout:** `struct`
 
@@ -629,7 +610,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: NewAssetDefinition.
 
 - Rust type: `iroha_data_model::isi::register::Register<iroha_data_model::asset::definition::model::AssetDefinition>`
-- Schema hash: `2f8ffa740d701cd52f8ffa740d701cd5`
+- Schema hash: `564a1394c20ccf1d02a9ba2147287a5f`
 
 **Layout:** `struct`
 
@@ -642,7 +623,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: NewDomain.
 
 - Rust type: `iroha_data_model::isi::register::Register<iroha_data_model::domain::model::Domain>`
-- Schema hash: `cd47fd557a3668b5cd47fd557a3668b5`
+- Schema hash: `22930817cc1f8d4ac41f62017085de82`
 
 **Layout:** `struct`
 
@@ -655,7 +636,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: NewNft.
 
 - Rust type: `iroha_data_model::isi::register::Register<iroha_data_model::nft::model::Nft>`
-- Schema hash: `2be70a0e3acb18442be70a0e3acb1844`
+- Schema hash: `18d9bb39182910b1d20bfa59acc491d2`
 
 **Layout:** `struct`
 
@@ -668,7 +649,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: NewRole.
 
 - Rust type: `iroha_data_model::isi::register::Register<iroha_data_model::role::model::Role>`
-- Schema hash: `d1e6da9e715220c3d1e6da9e715220c3`
+- Schema hash: `c6f709139c4be58789b348def3cb86ac`
 
 **Layout:** `struct`
 
@@ -681,7 +662,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: Trigger.
 
 - Rust type: `iroha_data_model::isi::register::Register<iroha_data_model::trigger::model::model::Trigger>`
-- Schema hash: `b858d433d86c147fb858d433d86c147f`
+- Schema hash: `14c9dce57703112aa22be88fca5c7647`
 
 **Layout:** `struct`
 
@@ -691,10 +672,10 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha_data_model::isi::register::RegisterPeerWithPop`
 
-> Schema summary: struct fields: peer: PeerId, pop: Vec<u8>.
+> Schema summary: struct fields: peer: PeerId, pop: Vec<u8>, activation_at: Option<u64>, expiry_at: Option<u64>, hsm: Option<HsmBinding>.
 
 - Rust type: `iroha_data_model::isi::register::RegisterPeerWithPop`
-- Schema hash: `a13876e96b8c55ada13876e96b8c55ad`
+- Schema hash: `5bce06b486a498769cabef7046aa4b60`
 
 **Layout:** `struct`
 
@@ -702,13 +683,16 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 |-------|------|
 | `peer` | `PeerId` |
 | `pop` | `Vec<u8>` |
+| `activation_at` | `Option<u64>` |
+| `expiry_at` | `Option<u64>` |
+| `hsm` | `Option<HsmBinding>` |
 
 ## `iroha_data_model::isi::register::Unregister<iroha_data_model::account::model::Account>`
 
 > Schema summary: struct fields: object: AccountId.
 
 - Rust type: `iroha_data_model::isi::register::Unregister<iroha_data_model::account::model::Account>`
-- Schema hash: `cad12f4762d46f3bcad12f4762d46f3b`
+- Schema hash: `a7833e55477579c8f9ab1b632fb8c67c`
 
 **Layout:** `struct`
 
@@ -721,7 +705,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: AssetDefinitionId.
 
 - Rust type: `iroha_data_model::isi::register::Unregister<iroha_data_model::asset::definition::model::AssetDefinition>`
-- Schema hash: `2289f3cda79c46c52289f3cda79c46c5`
+- Schema hash: `1867ecb14d321c44e6258e80d9386095`
 
 **Layout:** `struct`
 
@@ -734,7 +718,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: DomainId.
 
 - Rust type: `iroha_data_model::isi::register::Unregister<iroha_data_model::domain::model::Domain>`
-- Schema hash: `04be33ece13b5ab104be33ece13b5ab1`
+- Schema hash: `415a9559710c3f9a750fef2e1597b548`
 
 **Layout:** `struct`
 
@@ -747,7 +731,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: NftId.
 
 - Rust type: `iroha_data_model::isi::register::Unregister<iroha_data_model::nft::model::Nft>`
-- Schema hash: `aafcaf361e054c16aafcaf361e054c16`
+- Schema hash: `1f6141e9b60b61347b01feb27afe3fc3`
 
 **Layout:** `struct`
 
@@ -760,7 +744,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: PeerId.
 
 - Rust type: `iroha_data_model::isi::register::Unregister<iroha_data_model::peer::model::Peer>`
-- Schema hash: `68e6d48351e58d7168e6d48351e58d71`
+- Schema hash: `db66b397a842db8e8bf242f5d5975d3d`
 
 **Layout:** `struct`
 
@@ -773,7 +757,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: RoleId.
 
 - Rust type: `iroha_data_model::isi::register::Unregister<iroha_data_model::role::model::Role>`
-- Schema hash: `a8a58d646177b9aaa8a58d646177b9aa`
+- Schema hash: `7deed2a68ad7badf726a78a41960818b`
 
 **Layout:** `struct`
 
@@ -786,7 +770,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: object: TriggerId.
 
 - Rust type: `iroha_data_model::isi::register::Unregister<iroha_data_model::trigger::model::model::Trigger>`
-- Schema hash: `d791bbaad100b369d791bbaad100b369`
+- Schema hash: `304c6094698804326e24ccd5ae83b4de`
 
 **Layout:** `struct`
 
@@ -794,48 +778,91 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 |-------|------|
 | `object` | `TriggerId` |
 
-## `iroha_data_model::isi::repo::RepoInstructionBox`
+## `iroha_data_model::isi::repo::RepoIsi`
 
-> Schema summary: enum variants: Initiate (RepoIsi), Reverse (ReverseRepoIsi), MarginCall (RepoMarginCallIsi).
+> Schema summary: struct fields: agreement_id: RepoAgreementId, initiator: AccountId, counterparty: AccountId, custodian: Option<AccountId>, cash_leg: RepoCashLeg, collateral_leg: RepoCollateralLeg, rate_bps: u16, maturity_timestamp_ms: u64, governance: RepoGovernance.
 
-- Rust type: `iroha_data_model::isi::repo::RepoInstructionBox`
-- Schema hash: `97c88af835840b2d97c88af835840b2d`
-
-**Layout:** `enum`
-
-| Tag | Discriminant | Payload |
-|-----|--------------|---------|
-| `Initiate` | 0 | `RepoIsi` |
-| `Reverse` | 1 | `ReverseRepoIsi` |
-| `MarginCall` | 2 | `RepoMarginCallIsi` |
-
-## `iroha_data_model::isi::settlement::SettlementInstructionBox`
-
-> Schema summary: enum variants: Dvp (DvpIsi), Pvp (PvpIsi).
-
-- Rust type: `iroha_data_model::isi::settlement::SettlementInstructionBox`
-- Schema hash: `0bf625b40d139d700bf625b40d139d70`
-
-**Layout:** `enum`
-
-| Tag | Discriminant | Payload |
-|-----|--------------|---------|
-| `Dvp` | 0 | `DvpIsi` |
-| `Pvp` | 1 | `PvpIsi` |
-
-## `iroha_data_model::isi::smart_contract_code::ActivateContractInstance`
-
-> Schema summary: struct fields: namespace: String, contract_id: String, code_hash: Hash.
-
-- Rust type: `iroha_data_model::isi::smart_contract_code::ActivateContractInstance`
-- Schema hash: `829e0d2a934213bf829e0d2a934213bf`
+- Rust type: `iroha_data_model::isi::repo::RepoIsi`
+- Schema hash: `c41ed8a16bddb247d065e7c02cded0a6`
 
 **Layout:** `struct`
 
 | Field | Type |
 |-------|------|
-| `namespace` | `String` |
-| `contract_id` | `String` |
+| `agreement_id` | `RepoAgreementId` |
+| `initiator` | `AccountId` |
+| `counterparty` | `AccountId` |
+| `custodian` | `Option<AccountId>` |
+| `cash_leg` | `RepoCashLeg` |
+| `collateral_leg` | `RepoCollateralLeg` |
+| `rate_bps` | `u16` |
+| `maturity_timestamp_ms` | `u64` |
+| `governance` | `RepoGovernance` |
+
+## `iroha_data_model::isi::repo::ReverseRepoIsi`
+
+> Schema summary: struct fields: agreement_id: RepoAgreementId, initiator: AccountId, counterparty: AccountId, cash_leg: RepoCashLeg, collateral_leg: RepoCollateralLeg, settlement_timestamp_ms: u64.
+
+- Rust type: `iroha_data_model::isi::repo::ReverseRepoIsi`
+- Schema hash: `eaaee02ec8bf5e55318885b656065fbb`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `agreement_id` | `RepoAgreementId` |
+| `initiator` | `AccountId` |
+| `counterparty` | `AccountId` |
+| `cash_leg` | `RepoCashLeg` |
+| `collateral_leg` | `RepoCollateralLeg` |
+| `settlement_timestamp_ms` | `u64` |
+
+## `iroha_data_model::isi::settlement::DvpIsi`
+
+> Schema summary: struct fields: settlement_id: SettlementId, delivery_leg: SettlementLeg, payment_leg: SettlementLeg, plan: SettlementPlan, metadata: Metadata.
+
+- Rust type: `iroha_data_model::isi::settlement::DvpIsi`
+- Schema hash: `4f22f5d2f0d3e17b8768416ea8a918e2`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `settlement_id` | `SettlementId` |
+| `delivery_leg` | `SettlementLeg` |
+| `payment_leg` | `SettlementLeg` |
+| `plan` | `SettlementPlan` |
+| `metadata` | `Metadata` |
+
+## `iroha_data_model::isi::settlement::PvpIsi`
+
+> Schema summary: struct fields: settlement_id: SettlementId, primary_leg: SettlementLeg, counter_leg: SettlementLeg, plan: SettlementPlan, metadata: Metadata.
+
+- Rust type: `iroha_data_model::isi::settlement::PvpIsi`
+- Schema hash: `d7b3745676b57f9567790e5bd669a56e`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `settlement_id` | `SettlementId` |
+| `primary_leg` | `SettlementLeg` |
+| `counter_leg` | `SettlementLeg` |
+| `plan` | `SettlementPlan` |
+| `metadata` | `Metadata` |
+
+## `iroha_data_model::isi::smart_contract_code::ActivateContractInstance`
+
+> Schema summary: struct fields: contract_address: ContractAddress, code_hash: Hash.
+
+- Rust type: `iroha_data_model::isi::smart_contract_code::ActivateContractInstance`
+- Schema hash: `8ec0cf8ad0470dd7d021321f1cec8d47`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `contract_address` | `ContractAddress` |
 | `code_hash` | `Hash` |
 
 **Smart-contract notes:**
@@ -843,27 +870,54 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 - Requires manifests and bytecode to exist for the supplied `code_hash`; activation binds `(namespace, contract_id)` to that digest.
 - Protected namespaces continue to enforce governance approval, so Android SDKs should surface deterministic errors when admission fails.
 
-## `iroha_data_model::isi::smart_contract_code::DeactivateContractInstance`
+## `iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload`
 
-> Schema summary: struct fields: namespace: String, contract_id: String, reason: Option<String>.
+> Schema summary: struct fields: code_hash: Hash.
 
-- Rust type: `iroha_data_model::isi::smart_contract_code::DeactivateContractInstance`
-- Schema hash: `351293113eec3144351293113eec3144`
+- Rust type: `iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload`
+- Schema hash: `ea496a080ec700168bae4fae3e679d2b`
 
 **Layout:** `struct`
 
 | Field | Type |
 |-------|------|
-| `namespace` | `String` |
-| `contract_id` | `String` |
+| `code_hash` | `Hash` |
+
+## `iroha_data_model::isi::smart_contract_code::DeactivateContractInstance`
+
+> Schema summary: struct fields: contract_address: ContractAddress, reason: Option<String>.
+
+- Rust type: `iroha_data_model::isi::smart_contract_code::DeactivateContractInstance`
+- Schema hash: `6667e876e3d9c279d0d2fe4fbdba34bf`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `contract_address` | `ContractAddress` |
 | `reason` | `Option<String>` |
+
+## `iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload`
+
+> Schema summary: struct fields: code_hash: Hash, total_size: u64, chunk_count: u32.
+
+- Rust type: `iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload`
+- Schema hash: `0406dbcf58c0c157bdc2c690d3faba54`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `code_hash` | `Hash` |
+| `total_size` | `u64` |
+| `chunk_count` | `u32` |
 
 ## `iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes`
 
 > Schema summary: struct fields: code_hash: Hash, code: Vec<u8>.
 
 - Rust type: `iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes`
-- Schema hash: `458b53cef6502236458b53cef6502236`
+- Schema hash: `a78be8fe926a797ea6c73e651427118c`
 
 **Layout:** `struct`
 
@@ -882,7 +936,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 > Schema summary: struct fields: manifest: ContractManifest.
 
 - Rust type: `iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode`
-- Schema hash: `63eec8b1a5dfcb1263eec8b1a5dfcb12`
+- Schema hash: `fa62c9f0a5a3f8b756eef62b689e2a32`
 
 **Layout:** `struct`
 
@@ -901,7 +955,7 @@ Optional metadata attached to smart-contract deployments; hash fields must match
 | `code_hash` | `Option<Hash>` | Domain-separated canonical hash of the complete deployable `.to` artifact, including its execution header, `CNTR`, literals, and code. |
 | `abi_hash` | `Option<Hash>` | Hash of the syscall/pointer ABI surface for the supplied `abi_version` (see `docs/source/ivm_header.md`). |
 | `compiler_fingerprint` | `Option<String>` | Compiler + toolchain note recorded for provenance. |
-| `features_bitmap` | `Option<u64>` | Compiler-derived, hash-covered V1 execution capabilities (ZK and VECTOR); never host SIMD, Metal, or CUDA availability.. |
+| `features_bitmap` | `Option<u64>` | Compiler-derived, hash-covered V1 execution capabilities (ZK and VECTOR); never host SIMD, Metal, or CUDA availability. |
 | `access_set_hints` | `Option<AccessSetHints>` | Advisory read/write key hints for the scheduler. |
 | `entrypoints` | `Option<Vec<EntrypointDescriptor>>` | Optional entrypoint descriptors advertised by the compiler. |
 
@@ -911,7 +965,7 @@ Declarative read/write key hints stored inside smart-contract manifests.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `read_keys` | `Vec<String>` | Canonical keys (e.g., `account:<i105-account-id>`) the contract expects to read. |
+| `read_keys` | `Vec<String>` | Canonical keys (e.g., `account:sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D`) the contract expects to read. |
 | `write_keys` | `Vec<String>` | Keys that the contract expects to write during execution. |
 
 #### EntrypointDescriptor fields
@@ -925,18 +979,9 @@ Metadata emitted per Kotodama entrypoint.
 | `permission` | `Option<String>` | Optional dispatcher permission required before invocation. |
 | `read_keys` | `Vec<String>` | Advisory read set scoped to the entrypoint. |
 | `write_keys` | `Vec<String>` | Advisory write set scoped to the entrypoint. |
-| `access_hints_complete` | `Option<bool>` | Whether access-set hints were emitted (wildcards are used when coverage is conservative). |
-| `access_hints_skipped` | `Vec<String>` | Reserved; currently empty because opaque access emits wildcard hints instead of skipping. |
+| `access_hints_complete` | `Option<bool>` | Whether access-set hints are complete or explicitly provided. |
+| `access_hints_skipped` | `Vec<String>` | Reasons access hints were skipped for this entrypoint. |
 | `triggers` | `Vec<TriggerDescriptor>` | Trigger declarations that call this entrypoint. |
-
-#### TriggerCallback fields
-
-Entrypoint callback target referenced by a trigger declaration.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `namespace` | `Option<String>` | Optional contract namespace for cross-contract callbacks. |
-| `entrypoint` | `String` | Entrypoint name to invoke. |
 
 #### TriggerDescriptor fields
 
@@ -951,6 +996,15 @@ Declarative trigger metadata attached to an entrypoint.
 | `metadata` | `Metadata` | Trigger metadata payload (JSON map). |
 | `callback` | `TriggerCallback` | Callback target for this trigger. |
 
+#### TriggerCallback fields
+
+Entrypoint callback target referenced by a trigger declaration.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `namespace` | `Option<String>` | Optional contract namespace for cross-contract callbacks. |
+| `entrypoint` | `String` | Entrypoint name to invoke. |
+
 **Smart-contract notes:**
 
 - Nodes recompute `manifest.code_hash` from the `.to` artifact and reject mismatches; `manifest.abi_hash` must equal the canonical ABI digest for the declared version.
@@ -961,7 +1015,7 @@ Declarative trigger metadata attached to an entrypoint.
 > Schema summary: struct fields: code_hash: Hash, reason: Option<String>.
 
 - Rust type: `iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes`
-- Schema hash: `645fa1f41c603c82645fa1f41c603c82`
+- Schema hash: `86da3d62bcefa84711d95e3fea332689`
 
 **Layout:** `struct`
 
@@ -974,12 +1028,29 @@ Declarative trigger metadata attached to an entrypoint.
 
 - Removal succeeds only when no manifest or active instance references the target `code_hash`; provide an audit reason when automating removals.
 
+## `iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk`
+
+> Schema summary: struct fields: code_hash: Hash, total_size: u64, chunk_index: u32, chunk_count: u32, chunk: Vec<u8>.
+
+- Rust type: `iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk`
+- Schema hash: `41ca98d8d78d9d8113909941490f8612`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `code_hash` | `Hash` |
+| `total_size` | `u64` |
+| `chunk_index` | `u32` |
+| `chunk_count` | `u32` |
+| `chunk` | `Vec<u8>` |
+
 ## `iroha_data_model::isi::sorafs::ApprovePinManifest`
 
 > Schema summary: struct fields: digest: ManifestDigest, approved_epoch: u64, council_envelope: Option<Vec<u8>>, council_envelope_digest: Option<Array<u8, 32>>.
 
 - Rust type: `iroha_data_model::isi::sorafs::ApprovePinManifest`
-- Schema hash: `1f1c7d3046f69a091f1c7d3046f69a09`
+- Schema hash: `1583c5673581a22cad86e51ca49aa514`
 
 **Layout:** `struct`
 
@@ -995,7 +1066,7 @@ Declarative trigger metadata attached to an entrypoint.
 > Schema summary: struct fields: digest: ManifestDigest, binding: ManifestAliasBinding, bound_epoch: u64, expiry_epoch: u64.
 
 - Rust type: `iroha_data_model::isi::sorafs::BindManifestAlias`
-- Schema hash: `10689fa9cfd6fa3c10689fa9cfd6fa3c`
+- Schema hash: `6baf2f7a3e4df7bf5dab7231c7690fe0`
 
 **Layout:** `struct`
 
@@ -1014,16 +1085,16 @@ Alias binding payload approved alongside a manifest.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | `String` | Alias label (e.g., `docs`). |
-| `namespace` | `String` | Alias namespace (e.g., `sora`). |
-| `proof` | `Vec<u8>` | Norito-encoded alias proof bytes (base64 in JSON). |
+| `name` | `String` | Canonical ASCII alias label matching `[a-z0-9._-]{1,128}`. |
+| `namespace` | `String` | Canonical ASCII alias namespace matching `[a-z0-9._-]{1,128}`. |
+| `proof` | `Vec<u8>` | Non-empty canonical Norito alias proof bytes (canonical padded base64 in JSON; decoded size at most 1 MiB). |
 
 ## `iroha_data_model::isi::sorafs::CompleteReplicationOrder`
 
 > Schema summary: struct fields: order_id: ReplicationOrderId, completion_epoch: u64.
 
 - Rust type: `iroha_data_model::isi::sorafs::CompleteReplicationOrder`
-- Schema hash: `2349156305687aa92349156305687aa9`
+- Schema hash: `b12e141f6fa82d6538e77613bc8f848c`
 
 **Layout:** `struct`
 
@@ -1037,7 +1108,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: order_id: ReplicationOrderId, order_payload: Vec<u8>, issued_epoch: u64, deadline_epoch: u64.
 
 - Rust type: `iroha_data_model::isi::sorafs::IssueReplicationOrder`
-- Schema hash: `833ba5f3cc34fac9833ba5f3cc34fac9`
+- Schema hash: `c4b340f0b6d646e6865d4a23087f5e2c`
 
 **Layout:** `struct`
 
@@ -1053,7 +1124,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: record: CapacityTelemetryRecord.
 
 - Rust type: `iroha_data_model::isi::sorafs::RecordCapacityTelemetry`
-- Schema hash: `9ad5ce8c8a5d93339ad5ce8c8a5d9333`
+- Schema hash: `7378859e6a3f4607c1246f65cc6c896b`
 
 **Layout:** `struct`
 
@@ -1066,7 +1137,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: record: CapacityDeclarationRecord.
 
 - Rust type: `iroha_data_model::isi::sorafs::RegisterCapacityDeclaration`
-- Schema hash: `ada4966279095dc6ada4966279095dc6`
+- Schema hash: `9c77b1011c33673c919ac9d0a4ba0808`
 
 **Layout:** `struct`
 
@@ -1079,7 +1150,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: record: CapacityDisputeRecord.
 
 - Rust type: `iroha_data_model::isi::sorafs::RegisterCapacityDispute`
-- Schema hash: `29c330490cf2e64c29c330490cf2e64c`
+- Schema hash: `7940e0ccdc6836d8e62b8b0cd27117f7`
 
 **Layout:** `struct`
 
@@ -1120,7 +1191,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: digest: ManifestDigest, retired_epoch: u64, reason: Option<String>.
 
 - Rust type: `iroha_data_model::isi::sorafs::RetirePinManifest`
-- Schema hash: `191ef654cefea496191ef654cefea496`
+- Schema hash: `6da0ff52a6d999ecbd39aef38443f1a3`
 
 **Layout:** `struct`
 
@@ -1135,7 +1206,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: source: AccountId, object: AssetDefinitionId, destination: AccountId.
 
 - Rust type: `iroha_data_model::isi::transfer::Transfer<iroha_data_model::account::model::Account, iroha_data_model::asset::id::model::AssetDefinitionId, iroha_data_model::account::model::Account>`
-- Schema hash: `f80edc9082e78aa0f80edc9082e78aa0`
+- Schema hash: `ddb2872f7c8834f2284a164bb5fcbab5`
 
 **Layout:** `struct`
 
@@ -1150,7 +1221,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: source: AccountId, object: DomainId, destination: AccountId.
 
 - Rust type: `iroha_data_model::isi::transfer::Transfer<iroha_data_model::account::model::Account, iroha_data_model::domain::model::DomainId, iroha_data_model::account::model::Account>`
-- Schema hash: `469a5e8db6b4add3469a5e8db6b4add3`
+- Schema hash: `6b65c37dafee48c7e94110bba6c8e64a`
 
 **Layout:** `struct`
 
@@ -1165,7 +1236,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: source: AccountId, object: NftId, destination: AccountId.
 
 - Rust type: `iroha_data_model::isi::transfer::Transfer<iroha_data_model::account::model::Account, iroha_data_model::nft::model::NftId, iroha_data_model::account::model::Account>`
-- Schema hash: `0054af4882eabfde0054af4882eabfde`
+- Schema hash: `309e39e79cd4ec83cea16f0b7553976e`
 
 **Layout:** `struct`
 
@@ -1175,19 +1246,19 @@ Alias binding payload approved alongside a manifest.
 | `object` | `NftId` |
 | `destination` | `AccountId` |
 
-## `iroha_data_model::isi::transfer::Transfer<iroha_data_model::asset::value::model::Asset, iroha_primitives::numeric::Numeric, iroha_data_model::account::model::Account>`
+## `iroha_data_model::isi::transfer::Transfer<iroha_data_model::asset::value::model::Asset, iroha_primitives::numeric::Quantity, iroha_data_model::account::model::Account>`
 
-> Schema summary: struct fields: source: AssetId, object: Numeric, destination: AccountId.
+> Schema summary: struct fields: source: AssetId, object: Quantity, destination: AccountId.
 
-- Rust type: `iroha_data_model::isi::transfer::Transfer<iroha_data_model::asset::value::model::Asset, iroha_primitives::numeric::Numeric, iroha_data_model::account::model::Account>`
-- Schema hash: `536fd0ff0010e42e536fd0ff0010e42e`
+- Rust type: `iroha_data_model::isi::transfer::Transfer<iroha_data_model::asset::value::model::Asset, iroha_primitives::numeric::Quantity, iroha_data_model::account::model::Account>`
+- Schema hash: `5e9403daad4734a27229e906de7b98e5`
 
 **Layout:** `struct`
 
 | Field | Type |
 |-------|------|
 | `source` | `AssetId` |
-| `object` | `Numeric` |
+| `object` | `Quantity` |
 | `destination` | `AccountId` |
 
 ## `iroha_data_model::isi::transparent::Grant<iroha_data_model::permission::model::Permission, iroha_data_model::account::model::Account>`
@@ -1195,7 +1266,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: Permission, destination: AccountId.
 
 - Rust type: `iroha_data_model::isi::transparent::Grant<iroha_data_model::permission::model::Permission, iroha_data_model::account::model::Account>`
-- Schema hash: `e24e6ea7302d74c6e24e6ea7302d74c6`
+- Schema hash: `f478f05aab0d807e8728b4f2e88313f7`
 
 **Layout:** `struct`
 
@@ -1209,7 +1280,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: Permission, destination: RoleId.
 
 - Rust type: `iroha_data_model::isi::transparent::Grant<iroha_data_model::permission::model::Permission, iroha_data_model::role::model::Role>`
-- Schema hash: `00171a937a9fbab900171a937a9fbab9`
+- Schema hash: `15a05cbd5e571e90e9241aa013dc5bb8`
 
 **Layout:** `struct`
 
@@ -1223,7 +1294,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: RoleId, destination: AccountId.
 
 - Rust type: `iroha_data_model::isi::transparent::Grant<iroha_data_model::role::model::RoleId, iroha_data_model::account::model::Account>`
-- Schema hash: `dd43425d69ea0f4bdd43425d69ea0f4b`
+- Schema hash: `1ec104a10801ceaaec02b66ffc0e426f`
 
 **Layout:** `struct`
 
@@ -1237,7 +1308,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: asset: AssetId, key: Name.
 
 - Rust type: `iroha_data_model::isi::transparent::RemoveAssetKeyValue`
-- Schema hash: `54d0c35a5448897054d0c35a54488970`
+- Schema hash: `8f0008f715ed9794ded9ae3a990243bf`
 
 **Layout:** `struct`
 
@@ -1251,7 +1322,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: AccountId, key: Name.
 
 - Rust type: `iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::account::model::Account>`
-- Schema hash: `41b4f18a5c13aac741b4f18a5c13aac7`
+- Schema hash: `a48cc024ac906c0825f083042b2ab2d2`
 
 **Layout:** `struct`
 
@@ -1265,7 +1336,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: AssetDefinitionId, key: Name.
 
 - Rust type: `iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::asset::definition::model::AssetDefinition>`
-- Schema hash: `2d603db6b8906a512d603db6b8906a51`
+- Schema hash: `af4faf5b2ed7882e4ef8694fc36f0a2d`
 
 **Layout:** `struct`
 
@@ -1279,7 +1350,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: DomainId, key: Name.
 
 - Rust type: `iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::domain::model::Domain>`
-- Schema hash: `8b39ae185f2ddfd58b39ae185f2ddfd5`
+- Schema hash: `9d27745fa683d3c5bcd199c1cfc02a92`
 
 **Layout:** `struct`
 
@@ -1293,7 +1364,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: NftId, key: Name.
 
 - Rust type: `iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::nft::model::Nft>`
-- Schema hash: `b165d2b1afc3d451b165d2b1afc3d451`
+- Schema hash: `54ef4ccf56060a7150f795cf5555de0a`
 
 **Layout:** `struct`
 
@@ -1307,7 +1378,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: TriggerId, key: Name.
 
 - Rust type: `iroha_data_model::isi::transparent::RemoveKeyValue<iroha_data_model::trigger::model::model::Trigger>`
-- Schema hash: `76cc1312388ff5f476cc1312388ff5f4`
+- Schema hash: `6185028dbdb06fb81f400eb1c4ccd7af`
 
 **Layout:** `struct`
 
@@ -1321,7 +1392,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: Permission, destination: AccountId.
 
 - Rust type: `iroha_data_model::isi::transparent::Revoke<iroha_data_model::permission::model::Permission, iroha_data_model::account::model::Account>`
-- Schema hash: `d287e2bae269216fd287e2bae269216f`
+- Schema hash: `b4e8890d3eb58a26f9198f2a4a145613`
 
 **Layout:** `struct`
 
@@ -1335,7 +1406,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: Permission, destination: RoleId.
 
 - Rust type: `iroha_data_model::isi::transparent::Revoke<iroha_data_model::permission::model::Permission, iroha_data_model::role::model::Role>`
-- Schema hash: `f0f39a5e39833ec4f0f39a5e39833ec4`
+- Schema hash: `86966505240988489c9478d4a28a510c`
 
 **Layout:** `struct`
 
@@ -1349,7 +1420,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: RoleId, destination: AccountId.
 
 - Rust type: `iroha_data_model::isi::transparent::Revoke<iroha_data_model::role::model::RoleId, iroha_data_model::account::model::Account>`
-- Schema hash: `0dd7682c101736a70dd7682c101736a7`
+- Schema hash: `e01c253454d61fd40263c86368206826`
 
 **Layout:** `struct`
 
@@ -1363,7 +1434,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: asset: AssetId, key: Name, value: Json.
 
 - Rust type: `iroha_data_model::isi::transparent::SetAssetKeyValue`
-- Schema hash: `0c83c004f3f0d49e0c83c004f3f0d49e`
+- Schema hash: `5955e7b3e0166d3234997cb5738f5973`
 
 **Layout:** `struct`
 
@@ -1378,7 +1449,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: AccountId, key: Name, value: Json.
 
 - Rust type: `iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::account::model::Account>`
-- Schema hash: `c98da31b994c99ebc98da31b994c99eb`
+- Schema hash: `ea9055ae2139aeef47c0133bff86fb17`
 
 **Layout:** `struct`
 
@@ -1393,7 +1464,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: AssetDefinitionId, key: Name, value: Json.
 
 - Rust type: `iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::asset::definition::model::AssetDefinition>`
-- Schema hash: `d5cb0dd28822d32dd5cb0dd28822d32d`
+- Schema hash: `2d6525268e249afd12d66568c6f58e1c`
 
 **Layout:** `struct`
 
@@ -1408,7 +1479,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: DomainId, key: Name, value: Json.
 
 - Rust type: `iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::domain::model::Domain>`
-- Schema hash: `73a94c454ce16ea973a94c454ce16ea9`
+- Schema hash: `230bb03ff6dae83646a190708c57aae3`
 
 **Layout:** `struct`
 
@@ -1423,7 +1494,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: NftId, key: Name, value: Json.
 
 - Rust type: `iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::nft::model::Nft>`
-- Schema hash: `f9f1ae25ec03f114f9f1ae25ec03f114`
+- Schema hash: `eff1db23399ed115ee6c4eeb1e22a4ef`
 
 **Layout:** `struct`
 
@@ -1438,7 +1509,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: object: TriggerId, key: Name, value: Json.
 
 - Rust type: `iroha_data_model::isi::transparent::SetKeyValue<iroha_data_model::trigger::model::model::Trigger>`
-- Schema hash: `9ecea8a7710a9f179ecea8a7710a9f17`
+- Schema hash: `0b4c7498c135d5a9770cd3232c5294be`
 
 **Layout:** `struct`
 
@@ -1448,25 +1519,12 @@ Alias binding payload approved alongside a manifest.
 | `key` | `Name` |
 | `value` | `Json` |
 
-## `iroha_data_model::isi::verifying_keys::DeprecateVerifyingKey`
-
-> Schema summary: struct fields: id: VerifyingKeyId.
-
-- Rust type: `iroha_data_model::isi::verifying_keys::DeprecateVerifyingKey`
-- Schema hash: `0f5e19a35e92629a0f5e19a35e92629a`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `id` | `VerifyingKeyId` |
-
 ## `iroha_data_model::isi::verifying_keys::RegisterVerifyingKey`
 
 > Schema summary: struct fields: id: VerifyingKeyId, record: VerifyingKeyRecord.
 
 - Rust type: `iroha_data_model::isi::verifying_keys::RegisterVerifyingKey`
-- Schema hash: `f5a10c0b9ecc0d38f5a10c0b9ecc0d38`
+- Schema hash: `61c13e70ede9a90bacef2fcfb6457446`
 
 **Layout:** `struct`
 
@@ -1480,7 +1538,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: id: VerifyingKeyId, record: VerifyingKeyRecord.
 
 - Rust type: `iroha_data_model::isi::verifying_keys::UpdateVerifyingKey`
-- Schema hash: `d577b404ffad6d50d577b404ffad6d50`
+- Schema hash: `8b6f2a4b41a57ca1e852170e0e984e85`
 
 **Layout:** `struct`
 
@@ -1494,7 +1552,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: election_id: String, options: u32, eligible_root: Array<u8, 32>, start_ts: u64, end_ts: u64, vk_ballot: VerifyingKeyId, vk_tally: VerifyingKeyId, domain_tag: String.
 
 - Rust type: `iroha_data_model::isi::zk::CreateElection`
-- Schema hash: `6612c94b6f84c9cb6612c94b6f84c9cb`
+- Schema hash: `443beea278f19d1d954f0c02b5f1d8cc`
 
 **Layout:** `struct`
 
@@ -1514,7 +1572,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: election_id: String, tally: Vec<u64>, tally_proof: ProofAttachment.
 
 - Rust type: `iroha_data_model::isi::zk::FinalizeElection`
-- Schema hash: `9cd931a79ced1cb69cd931a79ced1cb6`
+- Schema hash: `7382acea8661a36bc48f571339b0a6c4`
 
 **Layout:** `struct`
 
@@ -1529,7 +1587,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: asset: AssetDefinitionId, mode: ZkAssetMode, allow_shield: bool, allow_unshield: bool, vk_transfer: Option<VerifyingKeyId>, vk_unshield: Option<VerifyingKeyId>, vk_shield: Option<VerifyingKeyId>.
 
 - Rust type: `iroha_data_model::isi::zk::RegisterZkAsset`
-- Schema hash: `5d14a5ea7a6d1c255d14a5ea7a6d1c25`
+- Schema hash: `5fc0b16cf5cb3dd02292dc01fdcb8179`
 
 **Layout:** `struct`
 
@@ -1545,10 +1603,10 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha_data_model::isi::zk::Shield`
 
-> Schema summary: struct fields: asset: AssetDefinitionId, from: AccountId, amount: u128, note_commitment: Array<u8, 32>, enc_payload: ConfidentialEncryptedPayload.
+> Schema summary: struct fields: asset: AssetDefinitionId, from: AccountId, amount: Quantity, note_commitment: Array<u8, 32>, enc_payload: ConfidentialEncryptedPayload.
 
 - Rust type: `iroha_data_model::isi::zk::Shield`
-- Schema hash: `644a69b3e27c574b644a69b3e27c574b`
+- Schema hash: `f6640dce7cdf2a695403dd2f3f71d93e`
 
 **Layout:** `struct`
 
@@ -1556,7 +1614,7 @@ Alias binding payload approved alongside a manifest.
 |-------|------|
 | `asset` | `AssetDefinitionId` |
 | `from` | `AccountId` |
-| `amount` | `u128` |
+| `amount` | `Quantity` |
 | `note_commitment` | `Array<u8, 32>` |
 | `enc_payload` | `ConfidentialEncryptedPayload` |
 
@@ -1565,7 +1623,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: election_id: String, ciphertext: Vec<u8>, ballot_proof: ProofAttachment, nullifier: Array<u8, 32>.
 
 - Rust type: `iroha_data_model::isi::zk::SubmitBallot`
-- Schema hash: `4319232398af7d414319232398af7d41`
+- Schema hash: `0b16f818b658db7b9f4383a76eeb5545`
 
 **Layout:** `struct`
 
@@ -1578,10 +1636,10 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha_data_model::isi::zk::Unshield`
 
-> Schema summary: struct fields: asset: AssetDefinitionId, to: AccountId, public_amount: u128, inputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
+> Schema summary: struct fields: asset: AssetDefinitionId, to: AccountId, public_amount: Quantity, inputs: Vec<Array<u8, 32>>, outputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
 
 - Rust type: `iroha_data_model::isi::zk::Unshield`
-- Schema hash: `eb6a8611ac89d632eb6a8611ac89d632`
+- Schema hash: `1cb55ecc7fd92625b2bee33e491a4a0c`
 
 **Layout:** `struct`
 
@@ -1589,8 +1647,9 @@ Alias binding payload approved alongside a manifest.
 |-------|------|
 | `asset` | `AssetDefinitionId` |
 | `to` | `AccountId` |
-| `public_amount` | `u128` |
+| `public_amount` | `Quantity` |
 | `inputs` | `Vec<Array<u8, 32>>` |
+| `outputs` | `Vec<Array<u8, 32>>` |
 | `proof` | `ProofAttachment` |
 | `root_hint` | `Option<Array<u8, 32>>` |
 
@@ -1599,7 +1658,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: attachment: ProofAttachment.
 
 - Rust type: `iroha_data_model::isi::zk::VerifyProof`
-- Schema hash: `861294eecde91c3b861294eecde91c3b`
+- Schema hash: `0b5d0ae55f342299f394799e85f61ae8`
 
 **Layout:** `struct`
 
@@ -1612,7 +1671,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: asset: AssetDefinitionId, inputs: Vec<Array<u8, 32>>, outputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
 
 - Rust type: `iroha_data_model::isi::zk::ZkTransfer`
-- Schema hash: `a54e2391aea3a8b6a54e2391aea3a8b6`
+- Schema hash: `47144daf134fc01da511d50f913c7b80`
 
 **Layout:** `struct`
 
@@ -1629,7 +1688,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: asset: AssetDefinitionId, transition_id: Hash.
 
 - Rust type: `iroha_data_model::isi::zk::CancelConfidentialPolicyTransition`
-- Schema hash: `c8b4798fe99aba33c8b4798fe99aba33`
+- Schema hash: `e5fc69bf877b653b726e5330d56df3db`
 
 **Layout:** `struct`
 
@@ -1643,7 +1702,7 @@ Alias binding payload approved alongside a manifest.
 > Schema summary: struct fields: asset: AssetDefinitionId, new_mode: ConfidentialPolicyMode, effective_height: u64, transition_id: Hash, conversion_window: Option<u64>.
 
 - Rust type: `iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition`
-- Schema hash: `836fd710eab04142836fd710eab04142`
+- Schema hash: `d8441660d1f34a2d89f567969956a495`
 
 **Layout:** `struct`
 

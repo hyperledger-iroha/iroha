@@ -1012,7 +1012,7 @@ pub enum Instr {
         offset: Temp,
         limit: Temp,
     },
-    /// Host balance query: r10 = &AccountId, r11 = &AssetDefinitionId; returns &QuantityV1.
+    /// Host balance query: r10 = &AccountId, r11 = &AssetDefinitionId; returns a Quantity pointer.
     GetAccountBalance {
         dest: Temp,
         account: Temp,

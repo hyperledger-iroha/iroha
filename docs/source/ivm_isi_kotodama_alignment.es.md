@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T10:20:35.513444+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ Terminología
 
 ### B. Definir una ABI determinista de VM/host para valores escritos
 - Utilice Norito en el lado de la VM para argumentos estructurados:
-  - Pasar punteros (en x10..x13, etc.) a regiones de memoria de VM que contienen valores codificados con Norito para tipos como `AccountId`, `AssetDefinitionId`, `Numeric`, `Metadata`.
+  - Pasar punteros (en x10..x13, etc.) a regiones de memoria de VM que contienen valores codificados con Norito para tipos como `AccountId`, `AssetDefinitionId`, `Quantity`, `Metadata`.
   - El host lee bytes a través de los ayudantes de memoria `IVM` y los decodifica con Norito (`iroha_data_model` ya deriva `Encode/Decode`).
 - Agregue ayudas mínimas en el codegen Kotodama para serializar ID literales en grupos de códigos/constantes o para preparar marcos de llamadas en la memoria.
-- Las cantidades son `Numeric` y se pasan como punteros de NoritoBytes; otros tipos complejos también pasan por puntero.
+- Las cantidades de activos usan el TLV de pointer-ABI dedicado `QuantityValueV1` (`PointerType::Quantity = 0x0010`), no un puntero `NoritoBytes` genérico; los demás valores complejos usan sus tipos de puntero asignados.
 - Documente esto en `crates/ivm/docs/calling_convention.md` y agregue ejemplos.### C. Alinear el nombre y la cobertura de las llamadas al sistema con ISI/modelo de datos
 - Cambie el nombre de las llamadas al sistema relacionadas con NFT para mayor claridad: los nombres canónicos ahora siguen el patrón `SYSCALL_NFT_*` (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA`, etc.).
 - Publicar una tabla de mapeo (doc + comentarios de código) de cada llamada al sistema a la semántica central de ISI, que incluye:

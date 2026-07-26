@@ -345,6 +345,7 @@ def run_manifest_builder(
     cmd = [
         cargo_bin,
         "run",
+        "--locked",
         "--quiet",
         "-p",
         "sorafs_car",

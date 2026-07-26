@@ -187,7 +187,7 @@ mod expression {
     use iroha_data_model::{
         asset::{AssetDefinitionId, AssetId},
         isi::InstructionBox,
-        prelude::Numeric,
+        prelude::Quantity,
     };
     use iroha_schema::{IntoSchema, TypeId};
     use norito::{
@@ -227,9 +227,9 @@ mod expression {
         }
     }
 
-    /// Represents all possible queries returning a numerical result.
+    /// Represents all possible queries returning an asset quantity.
     #[derive(Debug, Clone, IntoSchema)]
-    pub enum NumericQuery {
+    pub enum QuantityQuery {
         FindAssetQuantityById(AssetId),
         FindTotalAssetQuantityByAssetDefinitionId(AssetDefinitionId),
     }
@@ -242,21 +242,21 @@ mod expression {
         /// Greater expression.
         Greater(Greater),
         /// Query to Iroha state.
-        Query(NumericQuery),
+        Query(QuantityQuery),
     }
 
     /// Returns whether the `left` expression is greater than the `right`.
     #[derive(Debug, JsonDeserialize, JsonSerialize, IntoSchema)]
     pub struct Greater {
-        pub left: EvaluatesTo<Numeric>,
-        pub right: EvaluatesTo<Numeric>,
+        pub left: EvaluatesTo<Quantity>,
+        pub right: EvaluatesTo<Quantity>,
     }
 
     impl Greater {
         /// Construct new [`Greater`] expression
         pub fn new(
-            left: impl Into<EvaluatesTo<Numeric>>,
-            right: impl Into<EvaluatesTo<Numeric>>,
+            left: impl Into<EvaluatesTo<Quantity>>,
+            right: impl Into<EvaluatesTo<Quantity>>,
         ) -> Self {
             Self {
                 left: left.into(),
@@ -276,7 +276,7 @@ mod expression {
     #[derive(Debug, Clone, IntoSchema)]
     pub enum Value {
         Bool(bool),
-        Numeric(Numeric),
+        Quantity(Quantity),
         InstructionBox(InstructionBox),
     }
 
@@ -286,9 +286,9 @@ mod expression {
         }
     }
 
-    impl From<Numeric> for EvaluatesTo<Numeric> {
-        fn from(value: Numeric) -> Self {
-            let value = Value::Numeric(value);
+    impl From<Quantity> for EvaluatesTo<Quantity> {
+        fn from(value: Quantity) -> Self {
+            let value = Value::Quantity(value);
             let expression = Expression::Raw(value);
             EvaluatesTo::new_unchecked(expression)
         }
@@ -313,13 +313,13 @@ mod expression {
         }
     }
 
-    impl TryFrom<Value> for Numeric {
+    impl TryFrom<Value> for Quantity {
         type Error = String;
 
         fn try_from(value: Value) -> Result<Self, Self::Error> {
             match value {
-                Value::Numeric(value) => Ok(value),
-                _ => Err("Expected Numeric".to_string()),
+                Value::Quantity(value) => Ok(value),
+                _ => Err("Expected Quantity".to_string()),
             }
         }
     }
@@ -357,7 +357,7 @@ mod expression {
         }
     }
 
-    impl json::JsonSerialize for NumericQuery {
+    impl json::JsonSerialize for QuantityQuery {
         fn json_serialize(&self, out: &mut String) {
             out.push('{');
             match self {
@@ -376,7 +376,7 @@ mod expression {
         }
     }
 
-    impl json::JsonDeserialize for NumericQuery {
+    impl json::JsonDeserialize for QuantityQuery {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             let mut visitor = json::MapVisitor::new(parser)?;
             let mut variant: Option<Self> = None;
@@ -409,7 +409,7 @@ mod expression {
 
             visitor.finish()?;
 
-            variant.ok_or_else(|| json::Error::missing_field("NumericQuery"))
+            variant.ok_or_else(|| json::Error::missing_field("QuantityQuery"))
         }
     }
 
@@ -466,7 +466,7 @@ mod expression {
                             visitor.skip_value()?;
                             return Err(json::Error::duplicate_field(key_str.to_owned()));
                         }
-                        let value = visitor.parse_value::<NumericQuery>()?;
+                        let value = visitor.parse_value::<QuantityQuery>()?;
                         variant = Some(Self::Query(value));
                     }
                     _ => {
@@ -491,8 +491,8 @@ mod expression {
                     out.push(':');
                     json::JsonSerialize::json_serialize(value, out);
                 }
-                Self::Numeric(value) => {
-                    json::write_json_string("Numeric", out);
+                Self::Quantity(value) => {
+                    json::write_json_string("Quantity", out);
                     out.push(':');
                     json::JsonSerialize::json_serialize(value, out);
                 }
@@ -522,13 +522,13 @@ mod expression {
                         let value = visitor.parse_value::<bool>()?;
                         variant = Some(Self::Bool(value));
                     }
-                    "Numeric" => {
+                    "Quantity" => {
                         if variant.is_some() {
                             visitor.skip_value()?;
                             return Err(json::Error::duplicate_field(key_str.to_owned()));
                         }
-                        let value = visitor.parse_value::<Numeric>()?;
-                        variant = Some(Self::Numeric(value));
+                        let value = visitor.parse_value::<Quantity>()?;
+                        variant = Some(Self::Quantity(value));
                     }
                     "InstructionBox" => {
                         if variant.is_some() {
@@ -558,7 +558,7 @@ mod evaluate {
     use iroha_data_model::{ValidationFail, isi::error::InstructionExecutionError};
 
     use crate::complex_isi::{
-        NumericQuery,
+        QuantityQuery,
         expression::{EvaluatesTo, Expression, Greater, Value},
     };
 
@@ -574,7 +574,7 @@ mod evaluate {
     #[allow(clippy::result_large_err)]
     pub trait Context {
         /// Execute query against the current state of `Iroha`
-        fn query(&self, query: &NumericQuery) -> Result<Value, ValidationFail>;
+        fn query(&self, query: &QuantityQuery) -> Result<Value, ValidationFail>;
     }
 
     impl<V: TryFrom<Value>> Evaluate for EvaluatesTo<V>
@@ -613,7 +613,7 @@ mod evaluate {
         }
     }
 
-    impl Evaluate for NumericQuery {
+    impl Evaluate for QuantityQuery {
         type Value = Value;
 
         fn evaluate(&self, context: &impl Context) -> Result<Self::Value, ValidationFail> {

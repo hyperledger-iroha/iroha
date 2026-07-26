@@ -16,7 +16,7 @@ Every request binds the chain id, asset definition, authoritative asset scale,
 and an unsigned `u128` atomic-unit amount. The scale is read from the live asset
 definition. Decimal conversion is exact: excess precision, negative values,
 zero payments, and overflow are rejected. Top-up debit, note conservation, and
-redemption credit use the same scaled `Numeric` value.
+redemption credit use the same scaled `Quantity` value.
 
 A spend consumes one or two canonically ordered parent notes and creates one
 recipient output plus optional sender change. The transition proves, and every
@@ -127,7 +127,7 @@ Core validates the finalized top-up provenance, current recursive proof,
 active recursive StepEq, recursive StepEp, and unshield verifier records,
 nullifier freshness, exact scale, unshield public inputs, and optional change
 branch before mutating balances. It
-then consumes the branch nullifier, credits the exact public `Numeric`, appends
+then consumes the branch nullifier, credits the exact public `Quantity`, appends
 the change commitment when present, and persists an idempotent receipt. A wallet
 keeps the source note and pending request until finality; retries reuse the same
 operation id and bytes.

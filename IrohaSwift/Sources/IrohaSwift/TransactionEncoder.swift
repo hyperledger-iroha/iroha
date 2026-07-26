@@ -1264,6 +1264,9 @@ struct SwiftTransactionEncoder {
             accountIds: [.init(field: "owner", value: request.owner)]
         )
         let owner = ids.accountIds["owner"] ?? request.owner
+        let amount = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(request.amount)
+            .canonicalString
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeGovernanceCastPlainBallot(
@@ -1273,7 +1276,7 @@ struct SwiftTransactionEncoder {
                 ttlMs: request.ttlMs,
                 referendumId: request.referendumId,
                 owner: owner,
-                amount: request.amount,
+                amount: amount,
                 durationBlocks: request.durationBlocks,
                 direction: request.direction.rawValue,
                 feePaymentJSON: try request.feePayment.canonicalJSONData(),
@@ -1354,6 +1357,22 @@ struct SwiftTransactionEncoder {
             throw TransactionInputError.invalidZkBallotPublicInputs(
                 "lock hints must include owner, amount, duration_blocks"
             )
+        }
+        if hasAmount {
+            guard case let .string(amount)? = normalized["amount"] else {
+                throw TransactionInputError.invalidZkBallotPublicInputs(
+                    "amount must be a canonical non-negative Kotodama V1 Quantity string"
+                )
+            }
+            do {
+                normalized["amount"] = .string(
+                    try KotodamaNumericV1Codec.decodeQuantityJSON(amount).canonicalString
+                )
+            } catch {
+                throw TransactionInputError.invalidZkBallotPublicInputs(
+                    "amount must be a canonical non-negative Kotodama V1 Quantity string"
+                )
+            }
         }
         try ensureZkBallotOwnerCanonical(normalized)
         let encoder = JSONEncoder()

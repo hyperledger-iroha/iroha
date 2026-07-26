@@ -7,7 +7,7 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 
-/** Input for the V1 numeric asset transfer flow. */
+/** Input for the V1 Quantity asset transfer flow. */
 public final class NexusTransferInput {
 
   private final String sourceAssetId;

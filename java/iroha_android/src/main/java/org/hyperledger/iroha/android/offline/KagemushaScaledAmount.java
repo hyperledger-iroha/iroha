@@ -95,8 +95,13 @@ public final class KagemushaScaledAmount {
     return scale;
   }
 
-  /** Canonical Iroha Numeric spelling at the authoritative asset scale. */
-  public String scaledNumericDecimal() {
+  /**
+   * Exact fixed-scale decimal at the authoritative asset scale.
+   *
+   * <p>This projection is proof-side evidence; use {@link #displayDecimal()} for the
+   * canonical public Quantity spelling.
+   */
+  public String fixedScaleDecimal() {
     if (scale == 0) {
       return atomicUnits;
     }
@@ -108,9 +113,9 @@ public final class KagemushaScaledAmount {
     return padded.substring(0, split) + "." + padded.substring(split);
   }
 
-  /** Minimal user-facing decimal spelling without insignificant zeroes. */
+  /** Canonical public Quantity spelling without insignificant zeroes. */
   public String displayDecimal() {
-    final String numeric = scaledNumericDecimal();
+    final String numeric = fixedScaleDecimal();
     if (scale == 0) {
       return numeric;
     }

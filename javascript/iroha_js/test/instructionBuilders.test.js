@@ -349,6 +349,31 @@ function encodeAndDecode(instruction) {
   }
 }
 
+function withPureJsInstructionCodec(body) {
+  const hadBinding = Object.prototype.hasOwnProperty.call(
+    globalThis,
+    "__IROHA_NORITO_BINDING__",
+  );
+  const previous = globalThis.__IROHA_NORITO_BINDING__;
+  globalThis.__IROHA_NORITO_BINDING__ = {
+    noritoEncodeInstruction() {
+      throw new Error("unsupported instruction");
+    },
+    noritoDecodeInstruction() {
+      throw new Error("unsupported instruction");
+    },
+  };
+  try {
+    return body();
+  } finally {
+    if (hadBinding) {
+      globalThis.__IROHA_NORITO_BINDING__ = previous;
+    } else {
+      delete globalThis.__IROHA_NORITO_BINDING__;
+    }
+  }
+}
+
 function crc16(tag, body) {
   let crc = 0xffff;
   const processByte = (byte) => {
@@ -478,7 +503,18 @@ test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
     },
   );
 
-  for (const quantity of [42, "+1", "01", "1.0", "1.2300", " 1", "1 ", "0.0"]) {
+  for (const quantity of [
+    42,
+    "+1",
+    "01",
+    "1.0",
+    "1.2300",
+    "1amt",
+    "1qty",
+    " 1",
+    "1 ",
+    "0.0",
+  ]) {
     assert.throws(
       () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity }),
       (error) => {
@@ -1832,7 +1868,7 @@ test("buildCastPlainBallotInstruction maps direction labels", () => {
   const instruction = buildCastPlainBallotInstruction({
     referendumId: "ref-2",
     owner: ACCOUNT_ID,
-    amount: "1000",
+    amount: "18446744073709551616.25",
     durationBlocks: 50,
     direction: "nay",
   });
@@ -1840,7 +1876,7 @@ test("buildCastPlainBallotInstruction maps direction labels", () => {
     CastPlainBallot: {
       referendum_id: "ref-2",
       owner: ACCOUNT_ID_CANONICAL,
-      amount: "1000",
+      amount: "18446744073709551616.25",
       duration_blocks: 50,
       direction: 1,
     },
@@ -1848,6 +1884,96 @@ test("buildCastPlainBallotInstruction maps direction labels", () => {
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
+});
+
+test("buildCastPlainBallotInstruction rejects lossy and noncanonical Quantity inputs", () => {
+  const overflowing = "9".repeat(155);
+  for (const amount of [
+    1,
+    "+1",
+    "01",
+    "1.0",
+    "1.2300",
+    "1amt",
+    "1qty",
+    " 1",
+    "1 ",
+    "-1",
+    overflowing,
+  ]) {
+    assert.throws(
+      () =>
+        buildCastPlainBallotInstruction({
+          referendumId: "ref-2",
+          owner: ACCOUNT_ID,
+          amount,
+          durationBlocks: 50,
+          direction: "nay",
+        }),
+      /canonical|JavaScript numbers are not lossless quantity inputs/u,
+      `amount ${String(amount)} must be rejected`,
+    );
+  }
+});
+
+baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quantity", () => {
+  const instruction = {
+    CastPlainBallot: {
+      referendum_id: "ref-quantity",
+      owner: ACCOUNT_ID_CANONICAL,
+      amount: "18446744073709551616.25",
+      duration_blocks: 50,
+      direction: 1,
+    },
+  };
+  withPureJsInstructionCodec(() => {
+    const encoded = noritoEncodeInstruction(instruction);
+    const wireFieldLength = Number(encoded.readBigUInt64LE(40));
+    const innerFieldOffset = 40 + 8 + wireFieldLength;
+    const innerFieldPayloadOffset = innerFieldOffset + 8;
+    const innerFrameOffset = innerFieldPayloadOffset + 8;
+    const innerSchemaHash = encoded.subarray(
+      innerFrameOffset + 6,
+      innerFrameOffset + 22,
+    );
+    const expectedSchemaHash = createHash("sha256")
+      .update(
+        "norito:v1:type-name\0iroha_data_model::isi::governance::CastPlainBallot",
+        "utf8",
+      )
+      .digest()
+      .subarray(0, 16);
+    assert.equal(expectedSchemaHash.toString("hex"), "62b23313103064bc2c9d528ac3548949");
+    assert.deepEqual(innerSchemaHash, expectedSchemaHash);
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+
+    for (const amount of [
+      1,
+      "+1",
+      "01",
+      "1.0",
+      "1.2300",
+      "1amt",
+      "1qty",
+      " 1",
+      "1 ",
+      "-1",
+      (1n << 511n).toString(),
+      "9".repeat(155),
+    ]) {
+      assert.throws(
+        () =>
+          noritoEncodeInstruction({
+            CastPlainBallot: {
+              ...instruction.CastPlainBallot,
+              amount,
+            },
+          }),
+        /canonical|JavaScript numbers are rejected|mantissa|negative/u,
+        `amount ${String(amount).slice(0, 32)} must be rejected`,
+      );
+    }
+  });
 });
 
 test("buildEnactReferendumInstruction normalizes hashes and window defaults", () => {
@@ -2362,6 +2488,9 @@ descriptorTest("ZK-ACE builders reject malformed proof and replay inputs", () =>
     "-1",
     "+1",
     "1.0",
+    "1.5",
+    "1amt",
+    "1qty",
     "1e3",
     0,
     -1,

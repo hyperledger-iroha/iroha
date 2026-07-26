@@ -114,7 +114,7 @@ Iroha 对等点维护从提交状态派生的有序拓扑。每轮共识都会�
 `iroha_data_model` 包定义了所有账本对象、指令、查询和事件。亮点：
 
 - **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
-  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Asset quantities support fixed-point
   operations; NFTs carry arbitrary structured metadata.
 
 - **角色和权限** 使用直接映射到执行程序检查的 Norito 枚举令牌。

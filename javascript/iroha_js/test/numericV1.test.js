@@ -52,8 +52,17 @@ test("numeric V1 canonical construction and endpoint rejection", () => {
   for (const alternate of ["+1", "01", "-0", "1.0", "1e0"]) {
     assert.throws(() => NumericV1.decodeIntJson(alternate), { code: "invalid_text" });
   }
-  assert.throws(() => NumericV1.decodeQuantityJson("1.0"), { code: "invalid_text" });
+  for (const alternate of ["1.0", "1amt", "1qty"]) {
+    assert.throws(() => NumericV1.decodeQuantityJson(alternate), { code: "invalid_text" });
+  }
   assert.throws(() => NumericV1.decodeQuantityJson("-1"), { code: "negative_quantity" });
+  assert.equal(
+    NumericV1.decodeQuantityJson(NumericV1.INT_MAX.toString()).toString(),
+    NumericV1.INT_MAX.toString(),
+  );
+  assert.throws(() => new KotodamaQuantity(1n << 511n, 0), {
+    code: "mantissa_overflow",
+  });
   assert.throws(() => NumericV1.decodeIntJson(1), { code: "invalid_text" });
   assert.throws(() => NumericV1.decodeIntJson(1n), { code: "invalid_text" });
   assert.throws(() => NumericV1.decodeIntJson(Object("1")), { code: "invalid_text" });
@@ -103,6 +112,20 @@ test("numeric V1 frames and pointer envelopes roundtrip all domains", () => {
   assert.throws(
     () => NumericV1.decodeDecimalEnvelope(NumericV1.encodeIntEnvelope(1n)),
     { code: "wrong_type" },
+  );
+});
+
+test("numeric V1 Quantity encoders accept lossless bigint inputs", () => {
+  assert.equal(NumericV1.encodeQuantityJson(42n), "42");
+  assert.equal(
+    NumericV1.decodeQuantityFrame(NumericV1.encodeQuantityFrame(42n)).toString(),
+    "42",
+  );
+  assert.equal(
+    NumericV1.decodeQuantityEnvelope(
+      NumericV1.encodeQuantityEnvelope(42n),
+    ).toString(),
+    "42",
   );
 });
 

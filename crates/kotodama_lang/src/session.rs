@@ -1651,6 +1651,18 @@ mod tests {
             ("List<int, 4>", "List<int, 8>")
         );
 
+        let retired_amount = "seiyaku C { fn quantity_value(Amount value) -> quantity { value } }";
+        let retired_amount_error = reject(retired_amount);
+        let retired_amount_diagnostic = diagnostic(&retired_amount_error, "E_RETIRED_NUMERIC_TYPE");
+        assert_eq!(
+            primary_text(retired_amount, retired_amount_diagnostic),
+            "Amount"
+        );
+        assert_eq!(
+            fix_text(retired_amount, retired_amount_diagnostic),
+            ("Amount", "quantity")
+        );
+
         for (retired_suffix, spelling, replacement) in [
             (
                 "seiyaku C { fn quantity_value() -> quantity { 1.25amt } }",

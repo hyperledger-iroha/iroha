@@ -108,10 +108,15 @@ pub enum FfiTypeKindAttribute {
     Local,
 }
 
-impl syn::parse::Parse for FfiTypeKindAttribute {
+struct SpannedFfiTypeKindAttribute {
+    kind: FfiTypeKindAttribute,
+    span: Span,
+}
+
+impl syn::parse::Parse for SpannedFfiTypeKindAttribute {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         input.call(SpannedFfiTypeToken::parse).and_then(|token| {
-            Ok(match token.token {
+            let kind = match token.token {
                 FfiTypeToken::Opaque => FfiTypeKindAttribute::Opaque,
                 FfiTypeToken::UnsafeRobust => FfiTypeKindAttribute::UnsafeRobust,
                 FfiTypeToken::Local => FfiTypeKindAttribute::Local,
@@ -121,6 +126,11 @@ impl syn::parse::Parse for FfiTypeKindAttribute {
                         format!("`{other}` cannot be used on a type"),
                     ));
                 }
+            };
+
+            Ok(Self {
+                kind,
+                span: token.span,
             })
         })
     }
@@ -152,11 +162,17 @@ const FFI_TYPE_ATTR: &str = "ffi_type";
 
 pub struct FfiTypeAttr {
     pub kind: Option<FfiTypeKindAttribute>,
+    kind_span: Option<Span>,
 }
 
 impl FromAttributes for FfiTypeAttr {
     fn from_attributes(attrs: &[Attribute]) -> darling::Result<Self> {
-        parse_single_list_attr_opt(FFI_TYPE_ATTR, attrs).map(|kind| Self { kind })
+        parse_single_list_attr_opt::<SpannedFfiTypeKindAttribute>(FFI_TYPE_ATTR, attrs).map(
+            |parsed| Self {
+                kind: parsed.as_ref().map(|parsed| parsed.kind),
+                kind_span: parsed.map(|parsed| parsed.span),
+            },
+        )
     }
 }
 
@@ -253,11 +269,30 @@ impl FromField for FfiTypeField {
     }
 }
 
+fn validate_robust_attribute(emitter: &mut Emitter, input: &FfiTypeInput) -> bool {
+    if input.ffi_type_attr.kind != Some(FfiTypeKindAttribute::UnsafeRobust)
+        || input.repr_attr.kind.as_deref().copied() == Some(ReprKind::Transparent)
+    {
+        return true;
+    }
+
+    emit!(
+        emitter,
+        input.ffi_type_attr.kind_span.unwrap_or(input.span),
+        "`#[ffi_type(unsafe {{robust}})]` is only valid on `#[repr(transparent)]` types"
+    );
+    false
+}
+
 pub fn derive_ffi_type(emitter: &mut Emitter, input: &syn::DeriveInput) -> TokenStream {
     let Some(mut input) = emitter.handle(darling_result(FfiTypeInput::from_derive_input(input)))
     else {
         return quote!();
     };
+
+    if !validate_robust_attribute(emitter, &input) {
+        return quote!();
+    }
 
     let name = &input.ident;
     if let darling::ast::Data::Enum(variants) = &input.data

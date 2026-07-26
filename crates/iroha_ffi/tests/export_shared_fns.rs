@@ -5,11 +5,11 @@ use std::{cmp::Ordering, mem::MaybeUninit};
 
 use iroha_ffi::{FfiConvert, FfiOutPtrRead, FfiReturn, FfiType, Handle, def_ffi_fns, ffi_export};
 
-iroha_ffi::handles! {FfiStruct1, FfiStruct2}
+iroha_ffi::handles! {FfiStruct1, FfiStruct2, PanickingClone}
 
 def_ffi_fns! {
     Drop: {FfiStruct1, FfiStruct2},
-    Clone: {FfiStruct1, FfiStruct2},
+    Clone: {FfiStruct1, FfiStruct2, PanickingClone},
     Eq: {FfiStruct1, FfiStruct2},
     Ord: {FfiStruct1, FfiStruct2}
 }
@@ -28,12 +28,45 @@ pub struct FfiStruct2 {
     name: String,
 }
 
+#[derive(FfiType)]
+/// Opaque handle whose `Clone` implementation supplies an adversarial panic payload.
+pub struct PanickingClone(std::cell::Cell<()>);
+
+struct PanickingDropPanicPayload;
+
+impl Drop for PanickingDropPanicPayload {
+    fn drop(&mut self) {
+        panic!("expected shared-helper panic payload destructor panic");
+    }
+}
+
+impl Clone for PanickingClone {
+    fn clone(&self) -> Self {
+        std::panic::panic_any(PanickingDropPanicPayload);
+    }
+}
+
 #[ffi_export]
 impl FfiStruct1 {
     /// New
     pub fn new(name: String) -> Self {
         Self { name }
     }
+}
+
+#[test]
+fn shared_clone_panicking_payload_drop_is_contained() {
+    let value = PanickingClone(std::cell::Cell::new(()));
+    let value_ptr = FfiConvert::into_ffi(&value, &mut ());
+    let mut cloned = MaybeUninit::<*mut PanickingClone>::new(core::ptr::null_mut());
+
+    assert_eq!(FfiReturn::UnrecoverableError, unsafe {
+        __clone(
+            PanickingClone::ID.into_ffi(&mut ()),
+            value_ptr.cast(),
+            cloned.as_mut_ptr().cast(),
+        )
+    });
 }
 
 #[test]

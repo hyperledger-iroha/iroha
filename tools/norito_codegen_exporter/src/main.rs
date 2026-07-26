@@ -44,10 +44,10 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::Unregister<dm::Role>);
         $macro!(iroha_data_model::isi::Unregister<dm::Trigger>);
         $macro!(iroha_data_model::isi::UnregisterBox);
-        $macro!(iroha_data_model::isi::Mint<dm::Numeric, dm::Asset>);
+        $macro!(iroha_data_model::isi::Mint<dm::Quantity, dm::Asset>);
         $macro!(iroha_data_model::isi::Mint<u32, dm::Trigger>);
         $macro!(iroha_data_model::isi::MintBox);
-        $macro!(iroha_data_model::isi::Burn<dm::Numeric, dm::Asset>);
+        $macro!(iroha_data_model::isi::Burn<dm::Quantity, dm::Asset>);
         $macro!(iroha_data_model::isi::Burn<u32, dm::Trigger>);
         $macro!(iroha_data_model::isi::BurnBox);
         $macro!(iroha_data_model::isi::Transfer<dm::Account, dm::DomainId, dm::Account>);
@@ -899,6 +899,38 @@ mod tests {
                 _ => false,
             }),
             "expected `value: u32` field in layout"
+        );
+    }
+
+    #[test]
+    fn asset_quantity_instructions_use_the_live_nominal_type() {
+        let specs = gather_instruction_specs(&instruction_registry::default(), None);
+        for expected in [
+            std::any::type_name::<iroha_data_model::isi::Mint<dm::Quantity, dm::Asset>>(),
+            std::any::type_name::<iroha_data_model::isi::Burn<dm::Quantity, dm::Asset>>(),
+            std::any::type_name::<
+                iroha_data_model::isi::Transfer<dm::Asset, dm::Quantity, dm::Account>,
+            >(),
+        ] {
+            assert!(
+                specs.iter().any(|spec| spec.type_name == expected),
+                "missing live Quantity instruction `{expected}`"
+            );
+        }
+        assert!(
+            specs.iter().all(|spec| {
+                !spec
+                    .type_name
+                    .contains("Mint<iroha_primitives::numeric::Numeric")
+                    && !spec
+                        .type_name
+                        .contains("Burn<iroha_primitives::numeric::Numeric")
+                    && !spec.type_name.contains(
+                        "Transfer<iroha_data_model::asset::value::model::Asset, \
+                         iroha_primitives::numeric::Numeric",
+                    )
+            }),
+            "retired Numeric asset instruction leaked into the exported manifest"
         );
     }
 

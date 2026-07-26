@@ -26,7 +26,7 @@ use iroha::{
         domain::DomainId,
         prelude::{
             AssetDefinition, AssetDefinitionId, AssetId, FindAssetById, Grant, InstructionBox,
-            Json, Level, Log, Mint, Numeric, Permission, Register, Transfer,
+            Json, Level, Log, Mint, Permission, Quantity, Register, Transfer,
         },
         transaction::SignedTransaction,
     },
@@ -909,14 +909,14 @@ async fn wait_for_peer_non_empty(
     }
 }
 
-fn numeric_balance(client: &Client, id: AssetId) -> Result<Numeric> {
+fn quantity_balance(client: &Client, id: AssetId) -> Result<Quantity> {
     let asset = client
         .query_single(FindAssetById::new(id))
         .wrap_err("query asset balance")?;
-    Ok(asset.value().as_numeric().clone())
+    Ok(asset.value().clone())
 }
 
-fn numeric_balance_any(clients: &[Client], id: AssetId) -> Result<Numeric> {
+fn quantity_balance_any(clients: &[Client], id: AssetId) -> Result<Quantity> {
     let mut fatal_last_err = None;
     let mut transient_last_err = None;
 
@@ -924,7 +924,7 @@ fn numeric_balance_any(clients: &[Client], id: AssetId) -> Result<Numeric> {
         transient_last_err = None;
 
         for client in clients {
-            match numeric_balance(client, id.clone()) {
+            match quantity_balance(client, id.clone()) {
                 Ok(value) => return Ok(value),
                 Err(err) if is_transient_client_error(&err) => transient_last_err = Some(err),
                 Err(err) => fatal_last_err = Some(err),
@@ -945,19 +945,19 @@ fn numeric_balance_any(clients: &[Client], id: AssetId) -> Result<Numeric> {
         .unwrap_or_else(|| eyre!("no client available for balance query")))
 }
 
-async fn wait_for_numeric_balance(
+async fn wait_for_quantity_balance(
     client: &Client,
     id: AssetId,
-    expected: Numeric,
+    expected: Quantity,
     context: &str,
 ) -> Result<()> {
     const ATTEMPTS: usize = 30;
     const DELAY: Duration = Duration::from_millis(200);
-    let mut last_value: Option<Numeric> = None;
+    let mut last_value: Option<Quantity> = None;
     let mut last_err: Option<Report> = None;
 
     for _ in 0..ATTEMPTS {
-        match numeric_balance(client, id.clone()) {
+        match quantity_balance(client, id.clone()) {
             Ok(value) if value == expected => return Ok(()),
             Ok(value) => {
                 last_value = Some(value);
@@ -980,16 +980,16 @@ async fn wait_for_numeric_balance(
     }
 }
 
-async fn wait_for_numeric_balance_quorum(
+async fn wait_for_quantity_balance_quorum(
     clients: &[Client],
     id: AssetId,
-    expected: Numeric,
+    expected: Quantity,
     quorum: usize,
     context: &str,
 ) -> Result<()> {
     const ATTEMPTS: usize = 60;
     const DELAY: Duration = Duration::from_millis(200);
-    let mut last_values: Vec<Numeric> = Vec::new();
+    let mut last_values: Vec<Quantity> = Vec::new();
     let mut last_errors: Vec<String> = Vec::new();
 
     for _ in 0..ATTEMPTS {
@@ -998,7 +998,7 @@ async fn wait_for_numeric_balance_quorum(
         let mut errors = Vec::new();
 
         for client in clients {
-            match numeric_balance(client, id.clone()) {
+            match quantity_balance(client, id.clone()) {
                 Ok(value) => {
                     if value == expected {
                         matches = matches.saturating_add(1);
@@ -1749,22 +1749,22 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
         .await?;
     }
 
-    let source_public = numeric_balance_any(
+    let source_public = quantity_balance_any(
         &peer_clients,
         AssetId::new(public_asset_def.clone(), source.clone()),
     )?;
-    let recipient_public = numeric_balance_any(
+    let recipient_public = quantity_balance_any(
         &peer_clients,
         AssetId::new(public_asset_def, recipient.clone()),
     )?;
-    let source_shielded_public = numeric_balance_any(
+    let source_shielded_public = quantity_balance_any(
         &peer_clients,
         AssetId::new(shielded_asset_def, source.clone()),
     )?;
 
-    assert_eq!(source_public, Numeric::from(400_u32));
-    assert_eq!(recipient_public, Numeric::from(250_u32));
-    assert_eq!(source_shielded_public, Numeric::from(200_u32));
+    assert_eq!(source_public, Quantity::from(400_u32));
+    assert_eq!(recipient_public, Quantity::from(250_u32));
+    assert_eq!(source_shielded_public, Quantity::from(200_u32));
 
     Ok(())
 }
@@ -1920,17 +1920,17 @@ async fn confidential_public_two_three_hop_sequences_allow_multiple_unshields_lo
     )
     .await?;
 
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(330_u32),
+        Quantity::from(330_u32),
         "wait source balance after double-unshield flow",
     )
     .await?;
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def, recipient.clone()),
-        Numeric::from(320_u32),
+        Quantity::from(320_u32),
         "wait recipient balance after double-unshield flow",
     )
     .await?;
@@ -1989,11 +1989,11 @@ async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
     )
     .await?;
 
-    let before_shield = numeric_balance_any(
+    let before_shield = quantity_balance_any(
         &peer_clients,
         AssetId::new(shielded_asset_def.clone(), source.clone()),
     )?;
-    assert_eq!(before_shield, Numeric::from(700_u32));
+    assert_eq!(before_shield, Quantity::from(700_u32));
 
     submit_and_wait_non_empty_block(
         &network,
@@ -2036,8 +2036,8 @@ async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
     }
 
     let after_three_hops =
-        numeric_balance_any(&peer_clients, AssetId::new(shielded_asset_def, source))?;
-    assert_eq!(after_three_hops, Numeric::from(200_u32));
+        quantity_balance_any(&peer_clients, AssetId::new(shielded_asset_def, source))?;
+    assert_eq!(after_three_hops, Quantity::from(200_u32));
 
     Ok(())
 }
@@ -2169,17 +2169,17 @@ async fn confidential_shielded_asset_three_hop_then_unshield_and_transfer_localn
     )
     .await?;
 
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(400_u32),
+        Quantity::from(400_u32),
         "wait source balance after shielded-asset unshield flow",
     )
     .await?;
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def, recipient.clone()),
-        Numeric::from(120_u32),
+        Quantity::from(120_u32),
         "wait recipient balance after shielded-asset unshield flow",
     )
     .await?;
@@ -2448,17 +2448,17 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
         non_empty_target,
     )?;
 
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(500_u32),
+        Quantity::from(500_u32),
         "wait source balance after dual-restart stress",
     )
     .await?;
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def, recipient.clone()),
-        Numeric::from(200_u32),
+        Quantity::from(200_u32),
         "wait recipient balance after dual-restart stress",
     )
     .await?;
@@ -2653,18 +2653,18 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
     .await?;
 
     let quorum = peer_clients.len().saturating_sub(1).max(1);
-    wait_for_numeric_balance_quorum(
+    wait_for_quantity_balance_quorum(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(500_u32),
+        Quantity::from(500_u32),
         quorum,
         "wait source balance after combined downtime+timeout flow",
     )
     .await?;
-    wait_for_numeric_balance_quorum(
+    wait_for_quantity_balance_quorum(
         &peer_clients,
         AssetId::new(asset_def, recipient.clone()),
-        Numeric::from(120_u32),
+        Quantity::from(120_u32),
         quorum,
         "wait recipient balance after combined downtime+timeout flow",
     )
@@ -2793,10 +2793,10 @@ async fn confidential_unshield_rejects_corrupted_proof_bytes_localnet() -> Resul
         return Ok(());
     }
 
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def, source),
-        Numeric::from(150_u32),
+        Quantity::from(150_u32),
         "wait balance after corrupted-proof-bytes rejection",
     )
     .await?;
@@ -2924,10 +2924,10 @@ async fn confidential_unshield_rejects_corrupted_vk_bytes_localnet() -> Result<(
         return Ok(());
     }
 
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def, source),
-        Numeric::from(150_u32),
+        Quantity::from(150_u32),
         "wait balance after corrupted-vk-bytes rejection",
     )
     .await?;
@@ -3055,10 +3055,10 @@ async fn confidential_unshield_rejects_wrong_statement_hint_localnet() -> Result
         return Ok(());
     }
 
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def, source),
-        Numeric::from(150_u32),
+        Quantity::from(150_u32),
         "wait balance after wrong-statement rejection",
     )
     .await?;
@@ -3134,7 +3134,7 @@ async fn confidential_zknative_asset_three_hop_localnet() -> Result<()> {
     }
 
     let transparent_balance =
-        numeric_balance_any(&peer_clients, AssetId::new(zknative_asset_def, source));
+        quantity_balance_any(&peer_clients, AssetId::new(zknative_asset_def, source));
     assert!(
         transparent_balance.is_err(),
         "zknative asset unexpectedly exposes a transparent balance"
@@ -3202,10 +3202,10 @@ async fn confidential_zknative_transparent_mint_creates_public_balance_localnet(
     .await?;
 
     let quorum = peer_clients.len().saturating_sub(1).max(1);
-    wait_for_numeric_balance_quorum(
+    wait_for_quantity_balance_quorum(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(10_u32),
+        Quantity::from(10_u32),
         quorum,
         "wait zknative transparent balance after mint",
     )
@@ -3274,10 +3274,10 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
     .await?;
 
     let quorum = peer_clients.len().saturating_sub(1).max(1);
-    wait_for_numeric_balance_quorum(
+    wait_for_quantity_balance_quorum(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(25_u32),
+        Quantity::from(25_u32),
         quorum,
         "wait zknative source balance before transfer",
     )
@@ -3328,20 +3328,20 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
         return Ok(());
     }
 
-    wait_for_numeric_balance_quorum(
+    wait_for_quantity_balance_quorum(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(25_u32),
+        Quantity::from(25_u32),
         quorum,
         "wait zknative source balance after denied transparent transfer",
     )
     .await?;
     if let Ok(value) =
-        numeric_balance_any(&peer_clients, AssetId::new(asset_def, recipient.clone()))
+        quantity_balance_any(&peer_clients, AssetId::new(asset_def, recipient.clone()))
     {
         assert_eq!(
             value,
-            Numeric::from(0_u32),
+            Quantity::zero(),
             "recipient should remain empty after denied zknative transparent transfer"
         );
     }
@@ -3417,10 +3417,10 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
     .await?;
 
     let quorum = peer_clients.len().saturating_sub(1).max(1);
-    wait_for_numeric_balance_quorum(
+    wait_for_quantity_balance_quorum(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(100_u32),
+        Quantity::from(100_u32),
         quorum,
         "wait source balance after shield before disabled unshield",
     )
@@ -3467,10 +3467,10 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
         return Ok(());
     }
 
-    wait_for_numeric_balance_quorum(
+    wait_for_quantity_balance_quorum(
         &peer_clients,
         AssetId::new(asset_def, source),
-        Numeric::from(100_u32),
+        Quantity::from(100_u32),
         quorum,
         "wait source balance after denied unshield",
     )
@@ -3527,11 +3527,11 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
     )
     .await?;
 
-    let before_balance = numeric_balance_any(
+    let before_balance = quantity_balance_any(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
     )?;
-    assert_eq!(before_balance, Numeric::from(300_u32));
+    assert_eq!(before_balance, Quantity::from(300_u32));
 
     let denied_shield_tx = tx_builder_client.build_transaction_from_items(
         vec![InstructionBox::from(
@@ -3573,8 +3573,8 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
         return Ok(());
     }
 
-    let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
-    assert_eq!(after_balance, Numeric::from(300_u32));
+    let after_balance = quantity_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
+    assert_eq!(after_balance, Quantity::from(300_u32));
 
     Ok(())
 }
@@ -3619,11 +3619,11 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
     )
     .await?;
 
-    let before_balance = numeric_balance_any(
+    let before_balance = quantity_balance_any(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
     )?;
-    assert_eq!(before_balance, Numeric::from(300_u32));
+    assert_eq!(before_balance, Quantity::from(300_u32));
 
     let denied_shield_tx = tx_builder_client.build_transaction_from_items(
         vec![InstructionBox::from(
@@ -3671,8 +3671,8 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
         return Ok(());
     }
 
-    let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
-    assert_eq!(after_balance, Numeric::from(300_u32));
+    let after_balance = quantity_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
+    assert_eq!(after_balance, Quantity::from(300_u32));
 
     Ok(())
 }
@@ -3746,10 +3746,10 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
     )
     .await?;
 
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(150_u32),
+        Quantity::from(150_u32),
         "wait stale-root precondition after shield",
     )
     .await?;
@@ -3795,10 +3795,10 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
         return Ok(());
     }
 
-    wait_for_numeric_balance(
+    wait_for_quantity_balance(
         &tx_builder_client,
         AssetId::new(asset_def, source),
-        Numeric::from(150_u32),
+        Quantity::from(150_u32),
         "wait stale-root balance after denied unshield",
     )
     .await?;
@@ -3846,11 +3846,11 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
     )
     .await?;
 
-    let before_balance = numeric_balance_any(
+    let before_balance = quantity_balance_any(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
     )?;
-    assert_eq!(before_balance, Numeric::from(300_u32));
+    assert_eq!(before_balance, Quantity::from(300_u32));
 
     let denied_unshield_tx = tx_builder_client.build_transaction_from_items(
         vec![InstructionBox::from(
@@ -3899,8 +3899,8 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
         return Ok(());
     }
 
-    let after_balance = numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
-    assert_eq!(after_balance, Numeric::from(300_u32));
+    let after_balance = quantity_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
+    assert_eq!(after_balance, Quantity::from(300_u32));
 
     Ok(())
 }
@@ -3995,10 +3995,10 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
     .await?;
 
     let balance_quorum = peer_clients.len().saturating_sub(1).max(1);
-    wait_for_numeric_balance_quorum(
+    wait_for_quantity_balance_quorum(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
-        Numeric::from(320_u32),
+        Quantity::from(320_u32),
         balance_quorum,
         "wait balance after first unshield in duplicate-nullifier scenario",
     )
@@ -4051,10 +4051,10 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
         return Ok(());
     }
 
-    wait_for_numeric_balance_quorum(
+    wait_for_quantity_balance_quorum(
         &peer_clients,
         AssetId::new(asset_def, source),
-        Numeric::from(320_u32),
+        Quantity::from(320_u32),
         balance_quorum,
         "wait balance after duplicate-nullifier attempt",
     )
@@ -4112,11 +4112,11 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
     )
     .await?;
 
-    let initial_balance = numeric_balance_any(
+    let initial_balance = quantity_balance_any(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
     )?;
-    assert_eq!(initial_balance, Numeric::from(300_u32));
+    assert_eq!(initial_balance, Quantity::from(300_u32));
 
     let denied_shield_tx = tx_builder_client.build_transaction_from_items(
         vec![InstructionBox::from(
@@ -4163,11 +4163,11 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
         return Ok(());
     }
 
-    let after_denied_shield = numeric_balance_any(
+    let after_denied_shield = quantity_balance_any(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
     )?;
-    assert_eq!(after_denied_shield, Numeric::from(300_u32));
+    assert_eq!(after_denied_shield, Quantity::from(300_u32));
 
     let denied_unshield_tx = tx_builder_client.build_transaction_from_items(
         vec![InstructionBox::from(
@@ -4216,8 +4216,8 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
     }
 
     let after_denied_unshield =
-        numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
-    assert_eq!(after_denied_unshield, Numeric::from(300_u32));
+        quantity_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
+    assert_eq!(after_denied_unshield, Quantity::from(300_u32));
 
     Ok(())
 }
@@ -4271,11 +4271,11 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
     )
     .await?;
 
-    let before_balance = numeric_balance_any(
+    let before_balance = quantity_balance_any(
         &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
     )?;
-    assert_eq!(before_balance, Numeric::from(300_u32));
+    assert_eq!(before_balance, Quantity::from(300_u32));
 
     let denied_transfer_tx = tx_builder_client.build_transaction_from_items(
         vec![InstructionBox::from(
@@ -4324,8 +4324,8 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
     }
 
     let after_denied_transfer =
-        numeric_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
-    assert_eq!(after_denied_transfer, Numeric::from(300_u32));
+        quantity_balance_any(&peer_clients, AssetId::new(asset_def, source))?;
+    assert_eq!(after_denied_transfer, Quantity::from(300_u32));
 
     Ok(())
 }

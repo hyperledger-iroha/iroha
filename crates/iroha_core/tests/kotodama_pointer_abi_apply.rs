@@ -316,10 +316,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
         AssetId::of(asset_def.clone(), authority.clone())
     );
     assert_eq!(transfer.destination, authority);
-    assert_eq!(
-        transfer.object.as_numeric(),
-        Quantity::from(1_u32).as_numeric()
-    );
+    assert_eq!(transfer.object, Quantity::from(1_u32));
     tx.apply();
     block.commit().expect("commit block");
 

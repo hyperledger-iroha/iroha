@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T10:20:35.513444+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ Terminologie
 
 ### B. Définir une ABI VM/hôte déterministe pour les valeurs saisies
 - Utilisez Norito côté VM pour les arguments structurés :
-  - Transmettez des pointeurs (en x10..x13, etc.) vers les régions de mémoire de la machine virtuelle contenant des valeurs codées en Norito pour des types tels que `AccountId`, `AssetDefinitionId`, `Numeric`, `Metadata`.
+  - Transmettez des pointeurs (en x10..x13, etc.) vers les régions de mémoire de la machine virtuelle contenant des valeurs codées en Norito pour des types tels que `AccountId`, `AssetDefinitionId`, `Quantity`, `Metadata`.
   - L'hôte lit les octets via les assistants de mémoire `IVM` et décode avec Norito (`iroha_data_model` dérive déjà `Encode/Decode`).
 - Ajoutez un minimum d'aides dans le codegen Kotodama pour sérialiser les identifiants littéraux dans des pools de code/constants ou pour préparer des trames d'appel en mémoire.
-- Les montants sont `Numeric` et sont transmis sous forme de pointeurs NoritoBytes ; d'autres types complexes passent également par un pointeur.
+- Les quantités d'actifs utilisent le TLV pointer-ABI dédié `QuantityValueV1` (`PointerType::Quantity = 0x0010`), et non un pointeur `NoritoBytes` générique ; les autres valeurs complexes utilisent les types de pointeur qui leur sont attribués.
 - Documentez cela dans `crates/ivm/docs/calling_convention.md` et ajoutez des exemples.### C. Aligner la dénomination et la couverture des appels système avec ISI/Data Model
 - Renommez les appels système liés à NFT pour plus de clarté : les noms canoniques suivent désormais le modèle `SYSCALL_NFT_*` (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA`, etc.).
 - Publier une table de mappage (doc + commentaires de code) de chaque appel système vers la sémantique principale d'ISI, comprenant :

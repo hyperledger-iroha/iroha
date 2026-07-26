@@ -1,11 +1,12 @@
 //! Golden test for the ABI syscall list ordering and contents.
-//! If you intentionally add/remove syscalls, update this list accordingly.
+//! The canonical list below is owned by `gen_syscalls_doc`.
 
 #[test]
 fn abi_syscall_list_matches_golden() {
     use ivm::syscalls as S;
 
     // Keep the ordering sorted by canonical syscall number.
+    // BEGIN GENERATED ABI V1 SYSCALL LIST
     let golden: &[u32] = &[
         S::SYSCALL_DEBUG_PRINT,
         S::SYSCALL_EXIT,
@@ -251,6 +252,7 @@ fn abi_syscall_list_matches_golden() {
         S::SYSCALL_ACCOUNT_RECOVERY_CANCEL,
         S::SYSCALL_ACCOUNT_RECOVERY_FINALIZE,
     ];
+    // END GENERATED ABI V1 SYSCALL LIST
 
     let actual = ivm::syscalls::abi_syscall_list();
     assert_strictly_increasing(actual);

@@ -2,7 +2,7 @@
 //!
 //! The first-release reputation projector consumes this payload-free journal
 //! for the three source families that are not represented by the existing
-//! proof, repair, orderbook, and reserve ledgers: terminal PoR outcomes,
+//! proof, repair, orderbook, and reserve ledgers: terminal `PoR` outcomes,
 //! provider-dispute transitions, and stream-token validation outcomes.
 //!
 //! Source identifiers are domain separated from their native identifiers.
@@ -39,7 +39,7 @@ pub const REPUTATION_JOURNAL_MAX_TEXT_BYTES_V1: usize = 2_048;
 /// Domain separator for governed recorder-policy digests.
 pub const REPUTATION_JOURNAL_AUTHORITY_POLICY_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.reputation.journal.authority-policy.v1";
-/// Domain separator for globally unique PoR source identifiers.
+/// Domain separator for globally unique `PoR` source identifiers.
 pub const REPUTATION_JOURNAL_POR_SOURCE_ID_DOMAIN_V1: &[u8] =
     b"sorafs.reputation.journal.source.por.v1";
 /// Domain separator for globally unique provider-dispute source identifiers.
@@ -68,7 +68,7 @@ impl ReputationJournalSourceIdV1 {
     /// Reserved inert identity.
     pub const ZERO: Self = Self([0; 32]);
 
-    /// Derive the globally namespaced source for a native PoR challenge.
+    /// Derive the globally namespaced source for a native `PoR` challenge.
     #[must_use]
     pub fn for_por_challenge(challenge_id: [u8; 32]) -> Self {
         source_id(REPUTATION_JOURNAL_POR_SOURCE_ID_DOMAIN_V1, challenge_id)
@@ -156,7 +156,7 @@ pub struct ReputationJournalAuthorityPolicyV1 {
         norito(with = "crate::json_helpers::fixed_bytes::option")
     )]
     pub predecessor_policy_digest: Option<[u8; 32]>,
-    /// Exact governed authority allowed to record PoR terminals.
+    /// Exact governed authority allowed to record `PoR` terminals.
     pub por_recorder_authority: AccountId,
     /// Exact governed authority allowed to record dispute transitions.
     pub dispute_recorder_authority: AccountId,
@@ -271,7 +271,7 @@ impl ReputationJournalAuthorityPolicyRecordV1 {
     }
 }
 
-/// Stable provider-attributable PoR failure classification.
+/// Stable provider-attributable `PoR` failure classification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -298,7 +298,7 @@ impl PorTerminalFailureKindV1 {
     }
 }
 
-/// PoR terminal that cannot safely affect provider reputation.
+/// `PoR` terminal that cannot safely affect provider reputation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -315,7 +315,7 @@ pub enum PorTerminalExcludedKindV1 {
     AdmissionInactive,
 }
 
-/// Final, immutable PoR classification.
+/// Final, immutable `PoR` classification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -335,26 +335,26 @@ pub enum PorTerminalStatusV1 {
 }
 
 impl PorTerminalStatusV1 {
-    /// Whether this event increments the provider PoR-observation counter.
+    /// Whether this event increments the provider `PoR` observation counter.
     #[must_use]
     pub const fn counts_for_provider(self) -> bool {
         !matches!(self, Self::Excluded(_))
     }
 
-    /// Whether this terminal is a successful original PoR observation.
+    /// Whether this terminal is a successful original `PoR` observation.
     #[must_use]
     pub const fn is_success(self) -> bool {
         matches!(self, Self::Verified)
     }
 
-    /// Whether this terminal increments the provider PoR-failure counter.
+    /// Whether this terminal increments the provider `PoR` failure counter.
     #[must_use]
     pub const fn is_failure(self) -> bool {
         matches!(self, Self::Failed(_))
     }
 }
 
-/// Payload-free terminal PoR projection.
+/// Payload-free terminal `PoR` projection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1110,6 +1110,11 @@ pub struct ReputationJournalFinalizedCursorV1 {
 
 impl ReputationJournalFinalizedCursorV1 {
     /// Validate a non-inert finalized identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the height, block hash, or finalized
+    /// timestamp is inert or otherwise reserved.
     pub fn validate(self) -> Result<(), ReputationJournalValidationError> {
         if self.height == 0
             || self.block_hash == [0; 32]
@@ -1142,6 +1147,11 @@ pub struct ReputationJournalFinalizedEventCursorV1 {
 
 impl ReputationJournalFinalizedEventCursorV1 {
     /// Validate a non-inert event cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the sequence, block height, or block hash is
+    /// inert.
     pub fn validate(self) -> Result<(), ReputationJournalValidationError> {
         if self.sequence == 0 || self.block_height == 0 || self.block_hash == [0; 32] {
             return Err(ReputationJournalValidationError::InvalidEventCursor);
@@ -1191,9 +1201,9 @@ impl ReputationJournalFinalizedEventV1 {
         if self.block_height > finalized_cursor.height {
             return Err(ReputationJournalValidationError::EventBeyondFinality);
         }
-        if self.block_height == finalized_cursor.height
-            && self.block_hash != finalized_cursor.block_hash
-        {
+        let is_at_finalized_height = self.block_height == finalized_cursor.height;
+        let matches_finalized_hash = self.block_hash == finalized_cursor.block_hash;
+        if is_at_finalized_height && !matches_finalized_hash {
             return Err(ReputationJournalValidationError::FinalizedBlockHashMismatch);
         }
         if self.entry.recorded_at_unix_ms > finalized_cursor.finalized_at_unix_ms {
@@ -1235,6 +1245,11 @@ impl ReputationJournalFinalizedEventPageV1 {
     ///
     /// Passing the request cursor detects stale, overlapping, or skipped
     /// continuations rather than trusting only the response's `next_after`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for malformed finality, event ordering or
+    /// identity, source equivocation, cursor discontinuity, or page bounds.
     pub fn validate_after(
         &self,
         requested_after: Option<ReputationJournalFinalizedEventCursorV1>,
@@ -1386,16 +1401,16 @@ pub enum ReputationJournalValidationError {
     /// Source decision time must equal the committing block time.
     #[error("reputation journal source decision time must equal recorded_at_unix_ms")]
     RecordedTimestampMismatch,
-    /// PoR epoch or drand identity is inert.
+    /// `PoR` epoch or drand identity is inert.
     #[error("PoR epoch and drand round must be non-zero")]
     InvalidPorRandomnessIdentity,
-    /// PoR response time lies outside issue/decision bounds.
+    /// `PoR` response time lies outside issue/decision bounds.
     #[error("PoR response timestamp lies outside the issue/decision interval")]
     InvalidPorResponseTimestamp,
-    /// PoR sample counters or optional digests are impossible.
+    /// `PoR` sample counters or optional digests are impossible.
     #[error("PoR sample counters or optional identifiers are inconsistent")]
     InvalidPorCounters,
-    /// PoR status does not match its proof, timing, latency, or repair fields.
+    /// `PoR` status does not match its proof, timing, latency, or repair fields.
     #[error("PoR terminal status is inconsistent with its evidence fields")]
     ImpossiblePorStatus,
     /// Stream-token status does not match decoded token material.
@@ -2057,7 +2072,7 @@ mod tests {
             policy.token_recorder_authority.clone(),
             RECORDED_AT,
             None,
-            ReputationJournalPayloadV1::StreamTokenValidation(accepted.clone()),
+            ReputationJournalPayloadV1::StreamTokenValidation(accepted),
         )
         .expect("accepted token entry");
         entry

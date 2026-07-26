@@ -40,7 +40,7 @@ import org.hyperledger.iroha.android.address.AccountIdLiteral;
  *
  * <ul>
  *   <li>source: AssetId (the asset to transfer from)
- *   <li>object: Numeric (amount to transfer)
+ *   <li>object: Quantity (amount to transfer)
  *   <li>destination: AccountId (recipient account)
  * </ul>
  */
@@ -175,8 +175,8 @@ public final class TransferWirePayloadEncoder {
    */
   private static byte[] encodeTransferBox(
       String assetIdStr, String amount, String destinationAccountIdStr) {
-    // Parse amount into mantissa and scale
-    NumericValue numeric = parseNumericAmount(amount);
+    // Parse quantity into mantissa and scale
+    QuantityValue quantity = parseQuantityAmount(amount);
 
     // Parse string IDs into proper struct types
     AssetId assetId = AssetId.parse(assetIdStr);
@@ -185,7 +185,7 @@ public final class TransferWirePayloadEncoder {
     // Create the inner payload (Transfer struct contents)
     TypeAdapter<TransferAssetPayload> payloadAdapter = new TransferAssetPayloadAdapter();
     TransferAssetPayload payload =
-        new TransferAssetPayload(assetId, numeric, destinationAccountId);
+        new TransferAssetPayload(assetId, quantity, destinationAccountId);
 
     // Encode with Norito framing (header + checksum)
     return NoritoCodec.encode(payload, SCHEMA_PATH, payloadAdapter);
@@ -196,17 +196,17 @@ public final class TransferWirePayloadEncoder {
    *
    * <p>Example: "10.5" -> mantissa=105, scale=1
    */
-  private static NumericValue parseNumericAmount(String amount) {
+  private static QuantityValue parseQuantityAmount(String amount) {
     final NumericV1.QuantityValue quantity = NumericV1.QuantityValue.parseCanonical(amount);
-    return new NumericValue(quantity.mantissa(), quantity.scale());
+    return new QuantityValue(quantity.mantissa(), quantity.scale());
   }
 
-  /** Represents a Numeric value with mantissa and scale. */
-  private static final class NumericValue {
+  /** Represents a nominal Quantity value with mantissa and scale. */
+  private static final class QuantityValue {
     private final BigInteger mantissa;
     private final int scale;
 
-    NumericValue(BigInteger mantissa, int scale) {
+    QuantityValue(BigInteger mantissa, int scale) {
       this.mantissa = Objects.requireNonNull(mantissa);
       this.scale = scale;
       final NumericV1.QuantityValue canonical = NumericV1.QuantityValue.of(mantissa, scale);
@@ -231,10 +231,10 @@ public final class TransferWirePayloadEncoder {
   /** Transfer payload for Asset transfers. */
   private static final class TransferAssetPayload {
     private final AssetId source;
-    private final NumericValue amount;
+    private final QuantityValue amount;
     private final AccountId destination;
 
-    TransferAssetPayload(AssetId source, NumericValue amount, AccountId destination) {
+    TransferAssetPayload(AssetId source, QuantityValue amount, AccountId destination) {
       this.source = Objects.requireNonNull(source);
       this.amount = Objects.requireNonNull(amount);
       this.destination = Objects.requireNonNull(destination);
@@ -244,7 +244,7 @@ public final class TransferWirePayloadEncoder {
       return source;
     }
 
-    NumericValue amount() {
+    QuantityValue amount() {
       return amount;
     }
 
@@ -529,17 +529,17 @@ public final class TransferWirePayloadEncoder {
     }
 
     /**
-     * Encode Transfer<Asset, Numeric, Account> struct fields with canonical length prefixes.
+     * Encode Transfer<Asset, Quantity, Account> struct fields with canonical length prefixes.
      *
      * <p>In norito non-packed mode, each struct field is prefixed with a u64 (little-endian) length.
      */
     private void encodeTransferStruct(NoritoEncoder encoder, TransferAssetPayload value) {
       // Transfer struct fields in order with canonical length prefixes:
       // - source: AssetId (struct)
-      // - object: Numeric
+      // - object: Quantity
       // - destination: AccountId (struct)
       encodeFieldWithLength(encoder, ASSET_ID_ADAPTER, value.source());
-      encodeFieldWithLength(encoder, new NumericAdapter(), value.amount());
+      encodeFieldWithLength(encoder, new QuantityAdapter(), value.amount());
       encodeFieldWithLength(encoder, ACCOUNT_ID_ADAPTER, value.destination());
     }
 
@@ -575,7 +575,8 @@ public final class TransferWirePayloadEncoder {
 
     private TransferAssetPayload decodeTransferStruct(NoritoDecoder decoder) {
       final AssetId source = decodeSizedTypedField(decoder, ASSET_ID_ADAPTER, "source");
-      final NumericValue amount = decodeSizedTypedField(decoder, new NumericAdapter(), "amount");
+      final QuantityValue amount =
+          decodeSizedTypedField(decoder, new QuantityAdapter(), "amount");
       final AccountId destination = decodeSizedTypedField(decoder, ACCOUNT_ID_ADAPTER, "destination");
       return new TransferAssetPayload(source, amount, destination);
     }
@@ -850,17 +851,17 @@ public final class TransferWirePayloadEncoder {
   }
 
   /**
-   * Adapter for encoding Numeric values (mantissa + scale).
+   * Adapter for encoding Quantity values (mantissa + scale).
    *
-   * <p>Numeric is a struct with two fields that need canonical length prefixes:
+   * <p>Quantity is a struct with two fields that need canonical length prefixes:
    * - mantissa: BigInt
    * - scale: u32
    */
-  private static final class NumericAdapter implements TypeAdapter<NumericValue> {
+  private static final class QuantityAdapter implements TypeAdapter<QuantityValue> {
 
     @Override
-    public void encode(NoritoEncoder encoder, NumericValue value) {
-      // Numeric struct fields with canonical length prefixes:
+    public void encode(NoritoEncoder encoder, QuantityValue value) {
+      // Quantity struct fields with canonical length prefixes:
       // 1. mantissa: BigInt
       // 2. scale: u32
       encodeFieldBigInt(encoder, value.mantissa());
@@ -868,13 +869,13 @@ public final class TransferWirePayloadEncoder {
     }
 
     @Override
-    public NumericValue decode(NoritoDecoder decoder) {
+    public QuantityValue decode(NoritoDecoder decoder) {
       final BigInteger mantissa = decodeFieldBigInt(decoder);
       final int scale = Math.toIntExact(decodeFieldU32(decoder));
       if (scale < 0 || scale > 28) {
-        throw new IllegalArgumentException("Numeric scale exceeds Iroha limit of 28: " + scale);
+        throw new IllegalArgumentException("Quantity scale exceeds Iroha limit of 28: " + scale);
       }
-      return new NumericValue(mantissa, scale);
+      return new QuantityValue(mantissa, scale);
     }
 
     /**
@@ -908,33 +909,33 @@ public final class TransferWirePayloadEncoder {
     }
 
     private BigInteger decodeFieldBigInt(NoritoDecoder decoder) {
-      final byte[] payload = decodeSizedRawField(decoder, "numeric mantissa");
+      final byte[] payload = decodeSizedRawField(decoder, "quantity mantissa");
       final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
-      final int byteLength = checkedLength(child.readUInt(32), "numeric mantissa byte length");
+      final int byteLength = checkedLength(child.readUInt(32), "quantity mantissa byte length");
       final byte[] twosComplement = child.readBytes(byteLength);
       if (child.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after numeric mantissa payload");
+        throw new IllegalArgumentException("Trailing bytes after quantity mantissa payload");
       }
       final BigInteger value = decodeBigInt(twosComplement);
       if (!Arrays.equals(toTwosComplementLittleEndian(value), twosComplement)) {
-        throw new IllegalArgumentException("Numeric mantissa is not canonical");
+        throw new IllegalArgumentException("Quantity mantissa is not canonical");
       }
       if (value.bitLength() >= 512) {
         throw new IllegalArgumentException(
-            "Numeric mantissa exceeds Iroha limit of 512 bits: " + value.bitLength());
+            "Quantity mantissa exceeds Iroha limit of 512 bits: " + value.bitLength());
       }
       return value;
     }
 
     private long decodeFieldU32(NoritoDecoder decoder) {
-      final byte[] payload = decodeSizedRawField(decoder, "numeric scale");
+      final byte[] payload = decodeSizedRawField(decoder, "quantity scale");
       if (payload.length != 4) {
-        throw new IllegalArgumentException("numeric scale payload must be 4 bytes");
+        throw new IllegalArgumentException("quantity scale payload must be 4 bytes");
       }
       final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
       final long value = UINT32_ADAPTER.decode(child);
       if (child.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after numeric scale payload");
+        throw new IllegalArgumentException("Trailing bytes after quantity scale payload");
       }
       return value;
     }

@@ -674,7 +674,14 @@ impl Default for OracleEventFilter {
 
 /// Filter for oracle feed aggregation events.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct OracleEventFilter {
     /// Optional feed identifier matcher.
     pub(super) feed_matcher: Option<crate::oracle::FeedId>,

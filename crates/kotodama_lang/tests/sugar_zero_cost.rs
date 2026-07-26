@@ -1,6 +1,8 @@
-//! Executable-equivalence tests for expression-oriented Kotodama V1 sugar.
+//! IR and executable-equivalence tests for expression-oriented Kotodama V1 sugar.
 
-use kotodama_lang::{compiler::Compiler, metadata::ProgramMetadata};
+use kotodama_lang::{
+    compiler::Compiler, ir, metadata::ProgramMetadata, parser::parse, semantic::analyze,
+};
 
 fn executable_code(source: &str) -> Vec<u8> {
     let artifact = Compiler::new()
@@ -16,6 +18,33 @@ fn assert_executable_equivalent(sugar: &str, explicit: &str, description: &str) 
         executable_code(explicit),
         "{description} must be erased before executable code generation"
     );
+}
+
+fn assert_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
+    let lower = |source| {
+        let parsed = parse(source).expect("parse Kotodama V1 source for IR comparison");
+        let typed = analyze(&parsed).expect("analyze Kotodama V1 source for IR comparison");
+        ir::lower(&typed).expect("lower Kotodama V1 source for IR comparison")
+    };
+    let sugar = lower(sugar);
+    let explicit = lower(explicit);
+    assert_eq!(
+        sugar.functions.len(),
+        explicit.functions.len(),
+        "{description} must produce the same IR function set"
+    );
+    for (sugar, explicit) in sugar.functions.iter().zip(&explicit.functions) {
+        assert_eq!(sugar.name, explicit.name, "{description}: function name");
+        assert_eq!(
+            sugar.params, explicit.params,
+            "{description}: function parameters"
+        );
+        assert_eq!(sugar.entry, explicit.entry, "{description}: entry block");
+        assert_eq!(
+            sugar.blocks, explicit.blocks,
+            "{description} must be erased during IR lowering"
+        );
+    }
 }
 
 #[test]
@@ -109,6 +138,7 @@ fn if_block_expression_matches_the_existing_ternary() {
         }
     "#;
 
+    assert_ir_equivalent(block, ternary, "expression-valued if block");
     assert_executable_equivalent(block, ternary, "expression-valued if block");
 }
 
@@ -132,6 +162,7 @@ fn if_let_matches_the_exhaustive_match_form() {
         }
     "#;
 
+    assert_ir_equivalent(if_let, exhaustive, "if let expression");
     assert_executable_equivalent(if_let, exhaustive, "if let expression");
 }
 

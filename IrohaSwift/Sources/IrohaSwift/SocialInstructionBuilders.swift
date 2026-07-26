@@ -154,7 +154,7 @@ public enum SocialInstructionBuilders {
     ///
     /// - Parameters:
     ///   - binding: Keyed hash binding used by the soracles-based Twitter follow feed.
-    ///   - amount: Decimal string representing the `Numeric` amount to send.
+    ///   - amount: Canonical decimal string representing the `Quantity` to send.
     /// - Returns: `NoritoJSON` encoding of `{ "SendToTwitter": { "binding_hash": { ... }, "amount": "<amount>" } }`.
     public static func sendToTwitter(binding: SocialKeyedHash, amount: String) throws -> NoritoJSON {
         let canonicalAmount: String

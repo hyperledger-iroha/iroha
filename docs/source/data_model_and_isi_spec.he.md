@@ -107,7 +107,7 @@ translator: machine-google-reviewed
 סוגים: `Mint<O, D: Identifiable>` ו-`Burn<O, D: Identifiable>`, באריזה כ-`MintBox`/`BurnBox`.
 
 - נכס (נומרי) מנטה/צריבה: מתאים יתרות והגדרות `total_quantity`.
-  - תנאים מוקדמים: ערך `Numeric` חייב לעמוד ב-`AssetDefinition.spec()`; הטבעה מותרת על ידי `mintable`:
+  - תנאים מוקדמים: ערך `Quantity` חייב לעמוד ב-`AssetDefinition.spec()`; הטבעה מותרת על ידי `mintable`:
     - `Infinitely`: מותר תמיד.
     - `Once`: מותר פעם אחת בדיוק; המנטה הראשונה הופכת את `mintable` ל-`Not` ופולטת `AssetDefinitionEvent::MintabilityChanged`, בתוספת `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` מפורטת לביקורת.
     - `Limited(n)`: מאפשר `n` פעולות מנטה נוספות. כל מנטה מוצלחת מורידה את הדלפק; כאשר הוא מגיע לאפס, ההגדרה מתהפכת ל-`Not` ופולטת את אותם אירועי `MintabilityChanged` כמו לעיל.

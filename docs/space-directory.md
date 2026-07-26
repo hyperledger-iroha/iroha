@@ -177,7 +177,7 @@ Key rules:
 - **Deny wins.** Place explicit denies after matching allow entries so operators
   can reason about precedence.
 - **Deterministic amounts.** Keep `max_amount` as a decimal string to avoid
-  float ambiguities when `Numeric` parses the value.
+  float ambiguities when `Quantity` parses the value.
 - **Scheduler-backed expiry.** The core runtime now expires manifests
   automatically once the block height reaches `expiry_epoch`, emitting
   `SpaceDirectoryEvent::ManifestExpired`, bumping

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T19:17:13.238594+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ Terminologiya
 
 ### B. Yazılan dəyərlər üçün deterministik VM/host ABI müəyyən edin
 - Strukturlaşdırılmış arqumentlər üçün VM tərəfində Norito istifadə edin:
-  - `AccountId`, `AssetDefinitionId`, `Numeric`, I101NI20.
+  - `AccountId`, `AssetDefinitionId`, `Quantity`, I101NI20.
   - Host `IVM` yaddaş köməkçiləri vasitəsilə baytları oxuyur və Norito ilə deşifr edir (`iroha_data_model` artıq `Encode/Decode` əldə edir).
 - Hərfi identifikatorları kod/sabit hovuzlara seriyalaşdırmaq və ya yaddaşda zəng çərçivələrini hazırlamaq üçün Kotodama kodgenində minimal köməkçilər əlavə edin.
-- Məbləğlər `Numeric`-dir və NoritoBytes göstəriciləri kimi ötürülür; digər mürəkkəb növlər də göstərici ilə keçir.
+- Aktiv miqdarları ümumi `NoritoBytes` göstəricisi deyil, xüsusi `QuantityValueV1` pointer-ABI TLV-si (`PointerType::Quantity = 0x0010`) ilə ötürülür; digər mürəkkəb dəyərlər özlərinə təyin edilmiş göstərici növlərindən istifadə edir.
 - Bunu `crates/ivm/docs/calling_convention.md`-də sənədləşdirin və nümunələr əlavə edin.### C. Syscall adlandırma və əhatə dairəsini ISI/Data Model ilə uyğunlaşdırın
 - Aydınlıq üçün NFT ilə əlaqəli sistem zənglərinin adını dəyişin: kanonik adlar indi `SYSCALL_NFT_*` nümunəsinə əməl edir (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA` və s.).
 - Hər bir sistem zəngindən əsas ISI semantikasına xəritəçəkmə cədvəlini (sənəd + kod şərhləri) dərc edin, o cümlədən:

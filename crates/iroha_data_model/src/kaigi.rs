@@ -57,7 +57,14 @@ fn compute_roster_root_from(commitments: &[KaigiParticipantCommitment]) -> Hash 
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[norito(reuse_archived)]
 #[display("{domain_id}:{call_name}")]
 pub struct KaigiId {
@@ -93,7 +100,14 @@ impl KaigiId {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "state"))]
 #[norito(reuse_archived)]
 pub enum KaigiPrivacyMode {
@@ -119,7 +133,14 @@ pub enum KaigiPrivacyMode {
     JsonDeserialize,
     Default,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[cfg_attr(feature = "json", norito(tag = "policy", content = "state"))]
 #[norito(reuse_archived)]
 pub enum KaigiRoomPolicy {
@@ -144,7 +165,14 @@ pub enum KaigiRoomPolicy {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 pub struct KaigiParticipantCommitment {
     /// Hash commitment to the participant identity.
     pub commitment: Hash,
@@ -166,7 +194,14 @@ pub struct KaigiParticipantCommitment {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[norito(reuse_archived)]
 #[allow(missing_copy_implementations)]
 pub struct KaigiParticipantNullifier {
@@ -190,7 +225,14 @@ pub struct KaigiParticipantNullifier {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[norito(reuse_archived)]
 pub struct KaigiRelayHop {
     /// Account offering relay services.
@@ -216,7 +258,14 @@ pub struct KaigiRelayHop {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[norito(reuse_archived)]
 pub struct KaigiRelayManifest {
     /// Relay hops to traverse for control/data packets.
@@ -239,7 +288,14 @@ pub struct KaigiRelayManifest {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[norito(reuse_archived)]
 pub struct KaigiRelayRegistration {
     /// Account advertising relay capabilities.
@@ -266,7 +322,14 @@ pub struct KaigiRelayRegistration {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "state"))]
 #[norito(reuse_archived)]
 pub enum KaigiRelayHealthStatus {
@@ -314,7 +377,14 @@ impl KaigiRelayHealthStatus {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[norito(reuse_archived)]
 pub struct KaigiRelayFeedback {
     /// Relay being reported on.
@@ -346,7 +416,14 @@ pub struct KaigiRelayFeedback {
     JsonDeserialize,
     Default,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[norito(reuse_archived)]
 pub struct KaigiRelayAllowlist {
     /// Set of relay accounts authorised by governance.
@@ -378,7 +455,14 @@ impl KaigiRelayAllowlist {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[norito(reuse_archived)]
 pub struct NewKaigi {
     /// Identifier of the call.
@@ -456,7 +540,14 @@ impl NewKaigi {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "state"))]
 #[norito(reuse_archived)]
 pub enum KaigiStatus {
@@ -480,7 +571,14 @@ pub enum KaigiStatus {
     JsonSerialize,
     JsonDeserialize,
 )]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[norito(reuse_archived)]
 pub struct KaigiRecord {
     /// Identifier of the call.

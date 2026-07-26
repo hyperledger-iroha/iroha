@@ -4820,7 +4820,15 @@ impl Kura {
                     &entry,
                     &frontier_read.frontier.artifact,
                     None,
-                )?;
+                )
+                .map_err(|error| match error {
+                    Error::IO(source, _) if source.kind() == ErrorKind::WouldBlock => self
+                        .geometry_error(
+                            ErrorKind::WouldBlock,
+                            "lane retirement certified lane block durability attestation failed",
+                        ),
+                    error => error,
+                })?;
                 self.confirm_latest_certified_lane_block_frontier_read_locked(
                     &entry,
                     &frontier_read.snapshot,
@@ -16136,7 +16144,7 @@ mod tests {
         assert_geometry_io_error(
             &error,
             ErrorKind::WouldBlock,
-            "lane retirement scan found an in-flight sidecar",
+            "lane retirement scan found an in-flight autonomous sidecar",
         );
         assert!(!data_path.exists());
         assert!(!index_path.exists());

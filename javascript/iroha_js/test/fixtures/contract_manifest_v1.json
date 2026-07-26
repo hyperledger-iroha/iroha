@@ -15,7 +15,10 @@
     "entrypoints": [
       {
         "name": "run",
-        "kind": { "kind": "Kotoage", "value": null },
+        "kind": {
+          "kind": "Kotoage",
+          "value": null
+        },
         "params": [],
         "argument_schema": null,
         "return_type": null,
@@ -28,11 +31,16 @@
         "triggers": [
           {
             "id": "wake",
-            "repeats": { "Indefinitely": null },
+            "repeats": {
+              "Indefinitely": null
+            },
             "filter": "TlJUMAAAl9+YQQ4oJZjALRf6FAto0QAKAAAAAAAAANzCjydU9+jNAgIAAAAFBAAAAAA=",
             "authority": null,
             "metadata": {},
-            "callback": { "namespace": null, "entrypoint": "run" }
+            "callback": {
+              "namespace": null,
+              "entrypoint": "run"
+            }
           }
         ]
       }

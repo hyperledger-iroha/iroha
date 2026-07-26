@@ -8912,6 +8912,10 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
+        #[expect(
+            clippy::too_many_lines,
+            reason = "the shutdown test deliberately keeps one linear timeline so every ownership transfer across the old dispatch generation remains visible"
+        )]
         async fn dispatch_worker_shutdown_drains_reliable_old_generation_to_actor() {
             let source_budget = SharedByteBudget::new(1, 0).expect("source owner");
             let source_lease = source_budget.try_reserve(1, false).expect("source lease");
@@ -9781,10 +9785,14 @@ mod run {
                 .expect("test aggregate geometry must fit");
             let (handle, mut receivers) =
                 test_outbound_mailbox_with_budgets::<RoutedMsg>(1, &budgets);
-            let mut flush = match handle.post_recover_with_flush_ack(message) {
-                Ok(flush) => flush,
-                Err(_) => panic!("recoverable post must enter the peer mailbox"),
-            };
+            let mut flush = handle
+                .post_recover_with_flush_ack(message)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "recoverable post must enter the peer mailbox: {:?}",
+                        error.kind()
+                    )
+                });
             assert_eq!(
                 flush.try_recv(),
                 Err(oneshot::error::TryRecvError::Empty),
@@ -9864,6 +9872,10 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
+        #[expect(
+            clippy::too_many_lines,
+            reason = "the adversarial replacement test keeps the write, failed flush witness, teardown, retry, and replacement acknowledgement in one auditable timeline"
+        )]
         async fn full_write_without_flush_ack_closes_actor_witness_and_retries_on_replacement() {
             let message = RoutedMsg::Consensus(12);
             let charge = routed_post_charge(&message);
@@ -9879,10 +9891,14 @@ mod run {
             // The actor retains the semantic item until its writer confirms a
             // flush. This clone is the exact retry it owns across replacement.
             let actor_retry = message.clone();
-            let mut original_ack = match original.post_recover_with_flush_ack(message) {
-                Ok(ack) => ack,
-                Err(_) => panic!("original writer must accept the recoverable post"),
-            };
+            let mut original_ack = original
+                .post_recover_with_flush_ack(message)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "original writer must accept the recoverable post: {:?}",
+                        error.kind()
+                    )
+                });
             let retained = original_receivers
                 .hi_consensus
                 .recv()
@@ -9946,10 +9962,14 @@ mod run {
             );
             assert_eq!(budgets.retained_high_total(), 0);
 
-            let replacement_ack = match replacement.post_recover_with_flush_ack(actor_retry) {
-                Ok(ack) => ack,
-                Err(_) => panic!("replacement writer must accept the actor retry"),
-            };
+            let replacement_ack = replacement
+                .post_recover_with_flush_ack(actor_retry)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "replacement writer must accept the actor retry: {:?}",
+                        error.kind()
+                    )
+                });
             let retained = replacement_receivers
                 .hi_consensus
                 .recv()
@@ -10741,7 +10761,7 @@ mod run {
                 };
                 turns.push(turn);
                 match turn {
-                    "reopen" => continue,
+                    "reopen" => {}
                     "safety" => break,
                     "stream" => panic!("all reliable stream operations must remain pending"),
                     "datagram" => panic!("ready datagrams must not cancel the budget checkpoint"),

@@ -107,7 +107,7 @@ Növlər: `Register<T: Registered>` və `Unregister<T: Identifiable>`, cəmi nö
 Növlər: `Mint<O, D: Identifiable>` və `Burn<O, D: Identifiable>`, qutuda `MintBox`/`BurnBox`.
 
 - Aktiv (Rəqəm) nanə/yandır: balansları və tərifin `total_quantity`-ni tənzimləyir.
-  - İlkin şərtlər: `Numeric` dəyəri `AssetDefinition.spec()` tələblərinə cavab verməlidir; `mintable` tərəfindən icazə verilən nanə:
+  - İlkin şərtlər: `Quantity` dəyəri `AssetDefinition.spec()` tələblərinə cavab verməlidir; `mintable` tərəfindən icazə verilən nanə:
     - `Infinitely`: həmişə icazə verilir.
     - `Once`: bir dəfə icazə verilir; ilk nanə `mintable`-i `Not`-ə çevirir və `AssetDefinitionEvent::MintabilityChanged`, üstəgəl audit üçün ətraflı `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` buraxır.
     - `Limited(n)`: `n` əlavə nanə əməliyyatlarına imkan verir. Hər bir uğurlu nanə sayğacı azaldır; sıfıra çatdıqda tərif `Not`-ə çevrilir və yuxarıdakı kimi eyni `MintabilityChanged` hadisələrini yayır.

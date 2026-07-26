@@ -64,6 +64,9 @@ export {
 } from "./instructionBuilders.js";
 
 export {
+  encodeAccountIdNoritoValue,
+  encodeAssetDefinitionIdNoritoValue,
+  encodeQuantityNoritoValue,
   noritoDecodeBlockProofs,
   noritoDecodeInstruction,
   inspectSubscriptionTriggerAction,

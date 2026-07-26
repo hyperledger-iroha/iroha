@@ -37,6 +37,7 @@ trap cleanup EXIT
 run_xtask() {
   local -a args=("$@")
   NORITO_SKIP_BINDINGS_SYNC=1 cargo run \
+    --locked \
     -p xtask \
     --bin xtask \
     -- \
@@ -48,9 +49,9 @@ GENERATED_SPEC="${TMP_DIR}/torii.json"
 print_refresh_help() {
   cat >&2 <<'EOF'
 Refresh the canonical manifest before syncing snapshots:
-  development: cargo run -p xtask --bin xtask -- openapi --unsigned-manifest
+  development: cargo run --locked -p xtask --bin xtask -- openapi --unsigned-manifest
                (cd docs/portal && npm run sync-openapi -- --allow-unsigned)
-  release:     cargo run -p xtask --bin xtask -- openapi --sign <key>
+  release:     cargo run --locked -p xtask --bin xtask -- openapi --sign <key>
                (cd docs/portal && npm run sync-openapi -- --allowed-signers=<operator-allowlist-path>)
 An operator signature envelope may be supplied instead of --sign for the release path.
 For an operator release, set OPENAPI_REQUIRE_SIGNED=1 and

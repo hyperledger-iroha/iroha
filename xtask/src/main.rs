@@ -8,7 +8,7 @@ use std::{
     error::Error,
     ffi::OsStr,
     fmt::Write as FmtWrite,
-    fs,
+    fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
     process,
@@ -9969,7 +9969,10 @@ fn validate_release_openapi_bytes(spec_bytes: &[u8]) -> Result<(), Box<dyn Error
     validate_release_openapi_spec(&spec)
 }
 
-#[derive(Serialize, Deserialize)]
+const MAX_JSON_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OpenApiManifest {
     version: u32,
     generated_unix_ms: u64,
@@ -9988,7 +9991,8 @@ struct OpenApiGeneratorProvenance {
     source_sha256_hex: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OpenApiArtifact {
     path: String,
     bytes: u64,
@@ -9997,7 +10001,8 @@ struct OpenApiArtifact {
     signature: Option<SignatureEnvelope>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SignatureEnvelope {
     algorithm: String,
     public_key_hex: String,
@@ -10095,9 +10100,9 @@ fn write_openapi_manifest_from_bytes(
     let blake3_hex = blake3::hash(spec_bytes).to_hex().to_string();
     let size_bytes = spec_bytes.len() as u64;
 
-    let manifest = OpenApiManifest {
+    let mut manifest = OpenApiManifest {
         version: 1,
-        generated_unix_ms: unix_ms_now(),
+        generated_unix_ms: 0,
         generator_commit: provenance.commit.clone(),
         generator_dirty: provenance.dirty,
         generator_source_sha256_hex: provenance.source_sha256_hex.clone(),
@@ -10109,6 +10114,7 @@ fn write_openapi_manifest_from_bytes(
             signature,
         },
     };
+    manifest.generated_unix_ms = openapi_generated_unix_ms(manifest_path, &manifest)?;
 
     if let Some(parent) = manifest_path.parent() {
         fs::create_dir_all(parent)?;
@@ -10117,6 +10123,52 @@ fn write_openapi_manifest_from_bytes(
     fs::write(manifest_path, manifest_json.as_bytes())?;
     println!("wrote {}", manifest_path.display());
     Ok(())
+}
+
+fn openapi_generated_unix_ms(
+    manifest_path: &Path,
+    expected: &OpenApiManifest,
+) -> Result<u64, Box<dyn Error>> {
+    let existing_bytes = match fs::read(manifest_path) {
+        Ok(bytes) => Some(bytes),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(format!(
+                "failed to read existing OpenAPI manifest {}: {err}",
+                manifest_path.display()
+            )
+            .into());
+        }
+    };
+    let existing = existing_bytes
+        .as_deref()
+        .and_then(|bytes| serde_json::from_slice::<OpenApiManifest>(bytes).ok());
+    let existing_timestamp = existing.as_ref().and_then(|manifest| {
+        (manifest.generated_unix_ms <= MAX_JSON_SAFE_INTEGER).then_some(manifest.generated_unix_ms)
+    });
+
+    if let (Some(existing), Some(existing_timestamp)) = (existing.as_ref(), existing_timestamp) {
+        let mut expected_at_existing_timestamp = expected.clone();
+        expected_at_existing_timestamp.generated_unix_ms = existing_timestamp;
+        if existing == &expected_at_existing_timestamp {
+            return Ok(existing_timestamp);
+        }
+    }
+
+    let now = unix_ms_now();
+    if now > MAX_JSON_SAFE_INTEGER {
+        return Err(
+            format!("current Unix timestamp {now} exceeds the JSON safe-integer limit").into(),
+        );
+    }
+    if existing_timestamp == Some(now) {
+        return Ok(if now < MAX_JSON_SAFE_INTEGER {
+            now + 1
+        } else {
+            now - 1
+        });
+    }
+    Ok(now)
 }
 
 fn verify_openapi_manifest(
@@ -11243,6 +11295,150 @@ mod openapi_tests {
         assert!(
             message.contains("missing signature"),
             "expected missing signature message, got {message}"
+        );
+    }
+
+    #[test]
+    fn unchanged_unsigned_openapi_manifest_write_is_byte_idempotent() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        write_release_openapi_fixture(&spec_path);
+        let manifest_path = tmp.path().join("manifest.json");
+        let provenance = clean_generator_provenance();
+
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &provenance)
+            .expect("write unsigned manifest");
+        let mut manifest: OpenApiManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
+                .expect("parse unsigned manifest");
+        manifest.generated_unix_ms = 123;
+        let expected_bytes =
+            serde_json::to_vec_pretty(&manifest).expect("serialize stable manifest");
+        fs::write(&manifest_path, &expected_bytes).expect("set stable timestamp");
+
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &provenance)
+            .expect("rewrite unchanged unsigned manifest");
+
+        assert_eq!(
+            fs::read(&manifest_path).expect("read rewritten manifest"),
+            expected_bytes,
+            "an unchanged writer pass must be a byte-level no-op"
+        );
+    }
+
+    #[test]
+    fn changed_openapi_content_or_provenance_refreshes_timestamp() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        write_release_openapi_fixture(&spec_path);
+        let manifest_path = tmp.path().join("manifest.json");
+        let clean = clean_generator_provenance();
+
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean)
+            .expect("write unsigned manifest");
+        let mut manifest: OpenApiManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
+                .expect("parse unsigned manifest");
+        let original_sha256 = manifest.artifact.sha256_hex.clone();
+        manifest.generated_unix_ms = 1;
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("serialize fixed-time manifest"),
+        )
+        .expect("write fixed-time manifest");
+
+        fs::write(&spec_path, ALTERED_RELEASE_OPENAPI_FIXTURE).expect("alter OpenAPI fixture");
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean)
+            .expect("rewrite content-changed manifest");
+        manifest = serde_json::from_slice(
+            &fs::read(&manifest_path).expect("read content-changed manifest"),
+        )
+        .expect("parse content-changed manifest");
+        assert_ne!(manifest.generated_unix_ms, 1);
+        assert_ne!(manifest.artifact.sha256_hex, original_sha256);
+
+        manifest.generated_unix_ms = 1;
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("serialize fixed-time manifest"),
+        )
+        .expect("rewrite fixed-time manifest");
+        let dirty = OpenApiGeneratorProvenance {
+            commit: None,
+            dirty: true,
+            source_sha256_hex: Some("ab".repeat(32)),
+        };
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &dirty)
+            .expect("rewrite provenance-changed manifest");
+        manifest = serde_json::from_slice(
+            &fs::read(&manifest_path).expect("read provenance-changed manifest"),
+        )
+        .expect("parse provenance-changed manifest");
+        assert_ne!(manifest.generated_unix_ms, 1);
+        assert!(manifest.generator_dirty);
+        assert_eq!(manifest.generator_commit, None);
+        assert_eq!(
+            manifest.generator_source_sha256_hex,
+            dirty.source_sha256_hex
+        );
+    }
+
+    #[test]
+    fn invalid_existing_openapi_timestamp_is_not_reused() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        write_release_openapi_fixture(&spec_path);
+        let manifest_path = tmp.path().join("manifest.json");
+        let provenance = clean_generator_provenance();
+
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &provenance)
+            .expect("write unsigned manifest");
+        let mut manifest: OpenApiManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
+                .expect("parse unsigned manifest");
+        manifest.generated_unix_ms = MAX_JSON_SAFE_INTEGER + 1;
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("serialize unsafe-time manifest"),
+        )
+        .expect("write unsafe-time manifest");
+
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &provenance)
+            .expect("replace unsafe existing timestamp");
+        let rewritten: OpenApiManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("read rewritten manifest"))
+                .expect("parse rewritten manifest");
+        assert!(rewritten.generated_unix_ms <= MAX_JSON_SAFE_INTEGER);
+        assert_ne!(rewritten.generated_unix_ms, MAX_JSON_SAFE_INTEGER + 1);
+    }
+
+    #[test]
+    fn openapi_manifest_rejects_unknown_fields() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("spec.json");
+        write_release_openapi_fixture(&spec_path);
+        let manifest_path = tmp.path().join("manifest.json");
+
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
+            .expect("write unsigned manifest");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).expect("read unsigned manifest"))
+                .expect("parse unsigned manifest");
+        manifest
+            .as_object_mut()
+            .expect("manifest must be an object")
+            .insert("unexpected".to_owned(), serde_json::json!(true));
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("serialize malformed manifest"),
+        )
+        .expect("write malformed manifest");
+
+        let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+            .expect_err("unknown manifest fields must fail closed");
+        assert!(
+            err.to_string().contains("unknown field"),
+            "unexpected unknown-field error: {err}"
         );
     }
 

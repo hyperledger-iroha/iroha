@@ -114,7 +114,7 @@ Iroha үе тэнгийнхэн нь хүлээсэн төлөвөөс авса�
 `iroha_data_model` хайрцаг нь бүртгэлийн бүх объект, заавар, асуулга, үйл явдлыг тодорхойлдог. Онцлох үйл явдал:
 
 - **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
-  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Asset quantities support fixed-point
   operations; NFTs carry arbitrary structured metadata.
 
 - **Үүрэг ба зөвшөөрөл** нь Norito тоологдсон токенуудыг ашигладаг бөгөөд энэ нь гүйцэтгэгчийн шалгалттай шууд холбогддог.

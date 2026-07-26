@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use executor_custom_data_model::{complex_isi::NumericQuery, permissions::CanControlDomainLives};
+use executor_custom_data_model::{complex_isi::QuantityQuery, permissions::CanControlDomainLives};
 use eyre::{Context, Result, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -135,7 +135,7 @@ fn wait_for_role_permission(
 fn wait_for_asset_value(
     client: &Client,
     asset_id: &AssetId,
-    expected: &Numeric,
+    expected: &Quantity,
     context: &str,
 ) -> Result<Asset> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -148,7 +148,7 @@ fn wait_for_asset_value(
         match client.query_single(FindAssetById::new(asset_id.clone())) {
             Ok(asset) => {
                 last_observed = format!("{}", asset.value());
-                if asset.value().as_numeric() == expected {
+                if asset.value() == expected {
                     return Ok(asset);
                 }
             }
@@ -426,14 +426,14 @@ fn executor_custom_instructions_simple() -> Result<()> {
     wait_for_asset_value(
         &client,
         &bob_rose,
-        &Numeric::from(1u32),
+        &Quantity::from(1_u32),
         "simple custom initial mint",
     )?;
 
     // Give 1 rose to all
     let isi = MintAssetForAllAccounts {
         asset_definition: asset_definition_id,
-        quantity: Numeric::from(1u32),
+        quantity: Quantity::from(1_u32),
     };
     client.submit_blocking(
         InstructionBox::from(isi),
@@ -444,7 +444,7 @@ fn executor_custom_instructions_simple() -> Result<()> {
     wait_for_asset_value(
         &client,
         &bob_rose,
-        &Numeric::from(2u32),
+        &Quantity::from(2_u32),
         "simple custom mint for all",
     )?;
 
@@ -485,17 +485,17 @@ fn executor_custom_instructions_complex() -> Result<()> {
     wait_for_asset_value(
         &client,
         &bob_rose,
-        &Numeric::from(6u32),
+        &Quantity::from(6_u32),
         "complex custom initial mint",
     )?;
 
     // If bob has more then 5 roses, then burn 1 rose
     let burn_bob_rose_if_more_then_5 = || -> Result<()> {
         let condition = Greater::new(
-            EvaluatesTo::new_unchecked(Expression::Query(NumericQuery::FindAssetQuantityById(
+            EvaluatesTo::new_unchecked(Expression::Query(QuantityQuery::FindAssetQuantityById(
                 bob_rose.clone(),
             ))),
-            Numeric::from(5u32),
+            Quantity::from(5_u32),
         );
         let then = Burn::asset_quantity(1_u32, bob_rose.clone());
         let then: InstructionBox = then.into();
@@ -513,7 +513,7 @@ fn executor_custom_instructions_complex() -> Result<()> {
     wait_for_asset_value(
         &client,
         &bob_rose,
-        &Numeric::from(5u32),
+        &Quantity::from(5_u32),
         "complex custom conditional burn",
     )?;
 
@@ -523,7 +523,7 @@ fn executor_custom_instructions_complex() -> Result<()> {
     wait_for_asset_value(
         &client,
         &bob_rose,
-        &Numeric::from(5u32),
+        &Quantity::from(5_u32),
         "complex custom skipped conditional burn",
     )?;
 
@@ -624,7 +624,7 @@ fn executor_with_fuel() -> Result<()> {
     wait_for_asset_value(
         &client,
         &bob_rose,
-        &Numeric::from(3u32),
+        &Quantity::from(3_u32),
         "executor fuel mint",
     )?;
 
@@ -714,7 +714,7 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
     wait_for_asset_value(
         &client,
         &bob_rose,
-        &Numeric::from(3u32),
+        &Quantity::from(3_u32),
         "executor fuel trigger mint",
     )?;
 

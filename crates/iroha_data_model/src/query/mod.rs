@@ -6287,11 +6287,11 @@ pub mod sorafs {
             FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
             FindSorafsProofOutcome, FindSorafsProofOutcomeEvents, FindSorafsProviderOwner,
-            FindSorafsReputationJournalEvents,
             FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
-            FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveAppeals,
-            FindSorafsReserveEvents, FindSorafsReserveMovementById, FindSorafsReserveMovements,
-            FindSorafsReservePolicy, FindSorafsReserveProviderById, FindSorafsReserveProviders,
+            FindSorafsRepairTasks, FindSorafsReputationJournalEvents, FindSorafsReserveAppealById,
+            FindSorafsReserveAppeals, FindSorafsReserveEvents, FindSorafsReserveMovementById,
+            FindSorafsReserveMovements, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+            FindSorafsReserveProviders,
         };
     }
 }
@@ -7498,12 +7498,11 @@ mod tests {
             height: 9,
             block_hash: [0xA9; 32],
         };
-        let reputation_cursor =
-            crate::sorafs::reputation::ReputationJournalFinalizedCursorV1 {
-                height: 10,
-                block_hash: [0xAA; 32],
-                finalized_at_unix_ms: 1_700_000_010_000,
-            };
+        let reputation_cursor = crate::sorafs::reputation::ReputationJournalFinalizedCursorV1 {
+            height: 10,
+            block_hash: [0xAA; 32],
+            finalized_at_unix_ms: 1_700_000_010_000,
+        };
         let queries: Vec<SingularQueryBox> = vec![
             sorafs::prelude::FindSorafsOrderbookPolicy.into(),
             sorafs::prelude::FindSorafsOrderbookOrderById::new([0x11; 32]).into(),

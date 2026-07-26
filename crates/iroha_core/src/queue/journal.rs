@@ -9,7 +9,13 @@ use std::{
     path::{Path, PathBuf},
 };
 #[cfg(test)]
-use std::{collections::VecDeque, sync::Mutex as StdMutex};
+use std::{
+    collections::VecDeque,
+    sync::{
+        Mutex as StdMutex,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    },
+};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::transaction::{SignedTransaction, TransactionEntrypoint};
@@ -361,6 +367,10 @@ pub struct QueuePlanJournal {
     poisoned: bool,
     #[cfg(test)]
     injected_faults: StdMutex<VecDeque<QueuePlanJournalTestFault>>,
+    #[cfg(test)]
+    replay_scan_count: AtomicUsize,
+    #[cfg(test)]
+    exact_remove_failure_after: Option<usize>,
 }
 
 /// Test-only journal phase fault.
@@ -675,6 +685,10 @@ impl QueuePlanJournal {
             poisoned: false,
             #[cfg(test)]
             injected_faults: StdMutex::new(VecDeque::new()),
+            #[cfg(test)]
+            replay_scan_count: AtomicUsize::new(0),
+            #[cfg(test)]
+            exact_remove_failure_after: None,
         })
     }
 
@@ -683,6 +697,12 @@ impl QueuePlanJournal {
     #[must_use]
     pub const fn is_poisoned(&self) -> bool {
         self.poisoned
+    }
+
+    /// Return the number of authenticated live-snapshot scans performed by this handle.
+    #[cfg(test)]
+    pub(super) fn replay_scan_count(&self) -> usize {
+        self.replay_scan_count.load(AtomicOrdering::Relaxed)
     }
 
     /// Durably replace the live record for one canonical queue identity.
@@ -776,53 +796,127 @@ impl QueuePlanJournal {
         plan_digest: Hash,
         claim_digest: Hash,
     ) -> io::Result<QueuePlanJournalExactRemoveResult> {
+        self.remove_many_exact_strict_durable([(entrypoint_hash, plan_digest, claim_digest)])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| invalid_data("queue plan journal exact tombstone result is missing"))
+    }
+
+    /// Durably tombstone a batch of exact currently live routing plans.
+    ///
+    /// The complete content-bound live snapshot and every requested identity are validated before
+    /// the first Remove append. Absent targets are idempotent successes. If capacity requires a
+    /// compaction, all targets are revalidated as one batch before append. A crash may therefore
+    /// leave only a durable prefix of tombstones, and retry safely treats that prefix as absent.
+    ///
+    /// # Errors
+    /// Returns malformed-snapshot, duplicate-target, mismatched-claim, capacity, compaction,
+    /// append, or durability errors. Any ambiguous append or synchronization boundary poisons this
+    /// open journal.
+    pub fn remove_many_exact_strict_durable<I>(
+        &mut self,
+        removals: I,
+    ) -> io::Result<Vec<QueuePlanJournalExactRemoveResult>>
+    where
+        I: IntoIterator<Item = (HashOf<TransactionEntrypoint>, Hash, Hash)>,
+    {
         self.ensure_healthy()?;
-        match self.verified_live_claim_digests(entrypoint_hash)? {
-            None => return Ok(QueuePlanJournalExactRemoveResult::AlreadyAbsent),
-            Some((live_plan_digest, live_claim_digest))
-                if live_plan_digest != plan_digest || live_claim_digest != claim_digest =>
+        let removals = removals.into_iter().collect::<Vec<_>>();
+        if removals.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut unique_targets = BTreeMap::new();
+        for (entrypoint_hash, plan_digest, claim_digest) in &removals {
+            if unique_targets
+                .insert(*entrypoint_hash, (*plan_digest, *claim_digest))
+                .is_some()
             {
-                return Err(invalid_data(
-                    "queue plan journal exact tombstone does not match the currently live claim",
+                return Err(invalid_input(
+                    "queue plan journal exact tombstone batch contains a duplicate entrypoint",
                 ));
             }
-            Some(_) => {}
         }
 
-        let encoded = encode_frame(
-            &QueuePlanJournalFrameV4::Remove {
-                entrypoint_hash,
-                plan_digest,
-                claim_digest,
-            },
-            self.limits,
-        )?;
-        if let Err(initial_capacity_error) = self.ensure_append_capacity(encoded.len()) {
+        let classify =
+            |mut replay: QueuePlanJournalReplay|
+             -> io::Result<Vec<QueuePlanJournalExactRemoveResult>> {
+                replay.verify_snapshot_content()?;
+                removals
+                    .iter()
+                    .map(
+                        |(entrypoint_hash, plan_digest, claim_digest)| match replay
+                            .live_positions
+                            .get(entrypoint_hash)
+                        {
+                            None => Ok(QueuePlanJournalExactRemoveResult::AlreadyAbsent),
+                            Some(live)
+                                if live.plan_digest != *plan_digest
+                                    || live.claim_digest != *claim_digest =>
+                            {
+                                Err(invalid_data(
+                                    "queue plan journal exact tombstone does not match the currently live claim",
+                                ))
+                            }
+                            Some(_) => Ok(QueuePlanJournalExactRemoveResult::Removed),
+                        },
+                    )
+                    .collect()
+            };
+        let results = classify(self.prepare_replay()?)?;
+        let mut encoded_frames = Vec::new();
+        let mut encoded_bytes = 0_usize;
+        for ((entrypoint_hash, plan_digest, claim_digest), result) in removals.iter().zip(&results)
+        {
+            if *result == QueuePlanJournalExactRemoveResult::AlreadyAbsent {
+                continue;
+            }
+            let encoded = encode_frame(
+                &QueuePlanJournalFrameV4::Remove {
+                    entrypoint_hash: *entrypoint_hash,
+                    plan_digest: *plan_digest,
+                    claim_digest: *claim_digest,
+                },
+                self.limits,
+            )?;
+            encoded_bytes = encoded_bytes.checked_add(encoded.len()).ok_or_else(|| {
+                invalid_data("queue plan journal exact tombstone batch capacity overflow")
+            })?;
+            encoded_frames.push(encoded);
+        }
+        if encoded_frames.is_empty() {
+            return Ok(results);
+        }
+
+        if let Err(initial_capacity_error) = self.ensure_append_capacity(encoded_bytes) {
             if self.poisoned {
                 return Err(initial_capacity_error);
             }
             self.compact(true)?;
-            match self.verified_live_claim_digests(entrypoint_hash)? {
-                Some((live_plan_digest, live_claim_digest))
-                    if live_plan_digest == plan_digest && live_claim_digest == claim_digest => {}
-                Some(_) => {
-                    return Err(invalid_data(
-                        "queue plan journal exact tombstone target changed during preflight compaction",
-                    ));
-                }
-                None => {
-                    return Err(invalid_data(
-                        "queue plan journal exact tombstone target disappeared during preflight compaction",
-                    ));
-                }
+            if classify(self.prepare_replay()?)? != results {
+                return Err(invalid_data(
+                    "queue plan journal exact tombstone batch changed during preflight compaction",
+                ));
             }
-            self.ensure_append_capacity(encoded.len())?;
+            self.ensure_append_capacity(encoded_bytes)?;
         }
-        self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)
-            .map_err(|failure| failure.source)?;
-        self.tombstones = self.tombstones.saturating_add(1);
+        for encoded in encoded_frames {
+            self.append_encoded(&encoded, AppendPhase::OrdinaryRemove)
+                .map_err(|failure| failure.source)?;
+            self.tombstones = self.tombstones.saturating_add(1);
+            #[cfg(test)]
+            if let Some(remaining) = self.exact_remove_failure_after {
+                if remaining <= 1 {
+                    self.exact_remove_failure_after = None;
+                    self.poisoned = true;
+                    return Err(io::Error::other(
+                        "injected queue plan journal failure after a durable exact tombstone prefix",
+                    ));
+                }
+                self.exact_remove_failure_after = Some(remaining - 1);
+            }
+        }
         self.sync_all_raw(SyncPhase::General)?;
-        Ok(QueuePlanJournalExactRemoveResult::Removed)
+        Ok(results)
     }
 
     /// Append a Put frame and return deferred durability work for the caller.
@@ -978,6 +1072,19 @@ impl QueuePlanJournal {
         script.extend(faults);
     }
 
+    /// Fail a strict exact-removal batch after this many tombstones have been durably appended.
+    #[cfg(test)]
+    pub(super) fn inject_exact_remove_failure_after_durable_tombstones(
+        &mut self,
+        durable_tombstones: usize,
+    ) {
+        assert!(
+            durable_tombstones > 0,
+            "an exact-remove prefix fault requires at least one durable tombstone"
+        );
+        self.exact_remove_failure_after = Some(durable_tombstones);
+    }
+
     /// Replay live records from disk.
     ///
     /// # Errors
@@ -1019,6 +1126,8 @@ impl QueuePlanJournal {
         self.verify_cached_storage()?;
         let mut live_positions =
             BTreeMap::<QueuePlanJournalKey, QueuePlanJournalLivePosition>::new();
+        #[cfg(test)]
+        self.replay_scan_count.fetch_add(1, AtomicOrdering::Relaxed);
         scan_file(
             &mut file,
             snapshot_len,
@@ -1115,18 +1224,6 @@ impl QueuePlanJournal {
     /// Returns I/O, bound, consistency, or malformed-frame errors.
     pub fn live_record_count(&self) -> io::Result<usize> {
         Ok(self.prepare_replay()?.len())
-    }
-
-    fn verified_live_claim_digests(
-        &self,
-        entrypoint_hash: HashOf<TransactionEntrypoint>,
-    ) -> io::Result<Option<(Hash, Hash)>> {
-        let mut replay = self.prepare_replay()?;
-        replay.verify_snapshot_content()?;
-        Ok(replay
-            .live_positions
-            .get(&entrypoint_hash)
-            .map(|live| (live.plan_digest, live.claim_digest)))
     }
 
     /// Atomically rewrite only live records when the configured threshold warrants it.
@@ -2146,10 +2243,47 @@ fn read_frame_at_position(
         .checked_sub(position)
         .ok_or_else(|| invalid_data("queue plan journal scan position underflow"))?;
     // Phase one writes at most the fixed header, and phase two cannot start until that exact
-    // header has survived `sync_all`. Therefore an arbitrary terminal suffix no longer than one
-    // header is unambiguously an interrupted phase-one write. This deliberately does not apply at
-    // offset zero: a partial bootstrap cannot establish that the file is a V4 journal.
+    // header has survived `sync_all`. Therefore a short terminal suffix is an interrupted
+    // phase-one write. A complete, structurally recognizable header must still have its declared
+    // bound validated before repair; otherwise an attacker can disguise an oversized frame as a
+    // crash tear. This deliberately does not apply at offset zero: a partial bootstrap cannot
+    // establish that the file is a V4 journal.
     if mode == ScanMode::RepairTerminalTear && position != 0 && remaining <= FRAME_HEADER_BYTES {
+        if remaining == FRAME_HEADER_BYTES {
+            let header_len = usize::try_from(FRAME_HEADER_BYTES)
+                .map_err(|_| invalid_data("queue plan journal header length exceeds usize"))?;
+            let mut header = vec![0_u8; header_len];
+            file.read_exact(&mut header)?;
+            let version_offset = QUEUE_PLAN_JOURNAL_FRAME_MAGIC.len();
+            let length_offset = version_offset + 2;
+            let guard_offset = length_offset + 4;
+            let magic_matches =
+                header[..QUEUE_PLAN_JOURNAL_FRAME_MAGIC.len()] == QUEUE_PLAN_JOURNAL_FRAME_MAGIC;
+            let version = u16::from_le_bytes(
+                header[version_offset..length_offset]
+                    .try_into()
+                    .expect("fixed queue journal version field"),
+            );
+            let declared = u32::from_le_bytes(
+                header[length_offset..guard_offset]
+                    .try_into()
+                    .expect("fixed queue journal length field"),
+            );
+            let guard = u32::from_le_bytes(
+                header[guard_offset..guard_offset + 4]
+                    .try_into()
+                    .expect("fixed queue journal length guard"),
+            );
+            if magic_matches
+                && version == QUEUE_PLAN_JOURNAL_FRAME_FORMAT_VERSION
+                && guard == !declared
+                && (declared == 0 || u64::from(declared) > limits.max_frame_payload_bytes)
+            {
+                return Err(invalid_data(
+                    "queue plan journal frame exceeds the configured payload limit",
+                ));
+            }
+        }
         let path = repair_path
             .ok_or_else(|| invalid_data("queue plan journal repair path is unavailable"))?;
         truncate_journal_tail(file, position, path)?;
@@ -2210,6 +2344,11 @@ fn read_frame_at_position(
                 .ok_or_else(|| invalid_data("queue plan journal repair path is unavailable"))?;
             truncate_journal_tail(file, position, path)?;
             return Ok(None);
+        }
+        if position == 0 {
+            return Err(invalid_data(
+                "queue plan journal has an incomplete bootstrap frame",
+            ));
         }
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
@@ -3877,6 +4016,159 @@ mod tests {
         assert_eq!(
             journal.replay().expect("replay retained replacement"),
             vec![replacement]
+        );
+    }
+
+    #[test]
+    fn exact_tombstone_batch_validates_every_claim_before_append() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir
+            .path()
+            .join("exact-strict-remove-batch-preflight.norito");
+        let first = record("exact-strict-remove-batch-first");
+        let second = record("exact-strict-remove-batch-second");
+        let mut journal = open(&path).expect("open");
+        journal
+            .replace_strict_durable(first.clone())
+            .expect("install first owner");
+        journal
+            .replace_strict_durable(second.clone())
+            .expect("install second owner");
+        let before = fs::read(&path).expect("read complete live journal");
+
+        let error = journal
+            .remove_many_exact_strict_durable([
+                (
+                    first.entrypoint_hash,
+                    first.plan_digest(),
+                    first.claim_digest().expect("hash first claim"),
+                ),
+                (
+                    second.entrypoint_hash,
+                    second.plan_digest(),
+                    Hash::new(b"tampered second batch claim"),
+                ),
+            ])
+            .expect_err("one stale claim must reject the complete tombstone batch");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            fs::read(&path).expect("read rejected batch"),
+            before,
+            "batch preflight must append no prefix before every exact claim validates",
+        );
+        assert_eq!(
+            journal.replay().expect("replay both retained owners"),
+            vec![first.clone(), second.clone()],
+        );
+
+        let exact = [
+            (
+                first.entrypoint_hash,
+                first.plan_digest(),
+                first.claim_digest().expect("rehash first claim"),
+            ),
+            (
+                second.entrypoint_hash,
+                second.plan_digest(),
+                second.claim_digest().expect("hash second claim"),
+            ),
+        ];
+        assert_eq!(
+            journal
+                .remove_many_exact_strict_durable(exact)
+                .expect("remove complete exact batch"),
+            vec![
+                QueuePlanJournalExactRemoveResult::Removed,
+                QueuePlanJournalExactRemoveResult::Removed,
+            ],
+        );
+        let removed_len = path.metadata().expect("removed batch metadata").len();
+        assert_eq!(
+            journal
+                .remove_many_exact_strict_durable(exact)
+                .expect("retry complete exact batch"),
+            vec![
+                QueuePlanJournalExactRemoveResult::AlreadyAbsent,
+                QueuePlanJournalExactRemoveResult::AlreadyAbsent,
+            ],
+        );
+        assert_eq!(
+            path.metadata().expect("idempotent batch metadata").len(),
+            removed_len,
+            "an idempotent batch retry must append no tombstones",
+        );
+    }
+
+    #[test]
+    fn exact_tombstone_batch_restart_completes_durable_prefix_idempotently() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir
+            .path()
+            .join("exact-strict-remove-batch-prefix-restart.norito");
+        let records = [
+            record("exact-strict-remove-prefix-first"),
+            record("exact-strict-remove-prefix-second"),
+            record("exact-strict-remove-prefix-third"),
+        ];
+        let exact = records
+            .iter()
+            .map(|record| {
+                (
+                    record.entrypoint_hash,
+                    record.plan_digest(),
+                    record.claim_digest().expect("hash exact prefix claim"),
+                )
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut journal = open(&path).expect("open");
+            for record in &records {
+                journal
+                    .replace_strict_durable(record.clone())
+                    .expect("install exact prefix owner");
+            }
+            journal.inject_exact_remove_failure_after_durable_tombstones(2);
+
+            let error = journal
+                .remove_many_exact_strict_durable(exact.iter().copied())
+                .expect_err("fail after the durable two-tombstone prefix");
+
+            assert_eq!(error.kind(), io::ErrorKind::Other);
+            assert!(
+                journal.is_poisoned(),
+                "the interrupted batch handle must require restart repair",
+            );
+        }
+
+        let mut journal = open(&path).expect("restart after exact tombstone prefix");
+        assert_eq!(
+            journal.replay().expect("replay durable tombstone prefix"),
+            vec![records[2].clone()],
+            "the first two exact tombstones must survive the simulated crash",
+        );
+        assert_eq!(
+            journal
+                .remove_many_exact_strict_durable(exact.iter().copied())
+                .expect("idempotently finish interrupted exact tombstone batch"),
+            vec![
+                QueuePlanJournalExactRemoveResult::AlreadyAbsent,
+                QueuePlanJournalExactRemoveResult::AlreadyAbsent,
+                QueuePlanJournalExactRemoveResult::Removed,
+            ],
+        );
+        let completed_len = path.metadata().expect("completed batch metadata").len();
+        assert!(journal.replay().expect("replay completed batch").is_empty());
+        assert_eq!(
+            journal
+                .remove_many_exact_strict_durable(exact)
+                .expect("repeat completed exact tombstone batch"),
+            vec![QueuePlanJournalExactRemoveResult::AlreadyAbsent; 3],
+        );
+        assert_eq!(
+            path.metadata().expect("idempotent retry metadata").len(),
+            completed_len,
+            "the completed retry must append no duplicate tombstones",
         );
     }
 

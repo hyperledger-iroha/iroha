@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Typed builder for {@code CastPlainBallot} instructions. */
 public final class CastPlainBallotInstruction implements InstructionTemplate {
@@ -149,28 +150,25 @@ public final class CastPlainBallotInstruction implements InstructionTemplate {
     }
 
     public Builder setAmount(final String amount) {
-      if (amount == null || amount.isBlank()) {
-        throw new IllegalArgumentException("amount must not be blank");
+      if (amount == null) {
+        throw new IllegalArgumentException("amount must be a canonical non-negative Quantity");
       }
-      // Validate numeric content without constraining size
       try {
-        final BigInteger parsed = new BigInteger(amount);
-        if (parsed.signum() < 0) {
-          throw new IllegalArgumentException("amount must be non-negative");
-        }
-      } catch (final NumberFormatException ex) {
-        throw new IllegalArgumentException("amount must be a non-negative integer", ex);
+        this.amount = NumericV1.QuantityValue.parseCanonical(amount).toString();
+      } catch (final IllegalArgumentException ex) {
+        throw new IllegalArgumentException(
+            "amount must be a canonical non-negative Quantity", ex);
       }
-      this.amount = amount;
       return this;
     }
 
     public Builder setAmount(final BigInteger amount) {
       Objects.requireNonNull(amount, "amount");
-      if (amount.signum() < 0) {
-        throw new IllegalArgumentException("amount must be non-negative");
-      }
-      this.amount = amount.toString();
+      return setAmount(amount.toString());
+    }
+
+    public Builder setAmount(final NumericV1.QuantityValue amount) {
+      this.amount = Objects.requireNonNull(amount, "amount").toString();
       return this;
     }
 

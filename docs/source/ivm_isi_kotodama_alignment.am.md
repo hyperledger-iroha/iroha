@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T19:17:13.238594+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ translator: machine-google-reviewed
 
 ### B. ለተተየቡ እሴቶች የሚወስን VM/አስተናጋጅ ABI ይግለጹ
 - ለተዋቀሩ ክርክሮች በቪኤም በኩል Norito ይጠቀሙ፡
-  - ጠቋሚዎችን (በ x10..x13, ወዘተ.) ወደ VM ማህደረ ትውስታ ክልሎች Norito-የተመሰጠሩ እሴቶችን እንደ `AccountId`፣ `AssetDefinitionId`፣ `Numeric`፣ I1012000
+  - ጠቋሚዎችን (በ x10..x13, ወዘተ.) ወደ VM ማህደረ ትውስታ ክልሎች Norito-የተመሰጠሩ እሴቶችን እንደ `AccountId`፣ `AssetDefinitionId`፣ `Quantity`፣ I1012000
   - አስተናጋጁ ባይት ያነባል በ`IVM` የማስታወሻ ረዳቶች እና በ Norito (`iroha_data_model` `Encode/Decode` ቀድሞውንም ያገኛል) መፍታት።
 - ትክክለኛ መታወቂያዎችን ወደ ኮድ/ቋሚ ገንዳዎች ለመደርደር ወይም የጥሪ ፍሬሞችን በማህደረ ትውስታ ለማዘጋጀት በKotodama codegen ውስጥ አነስተኛ ረዳቶችን ይጨምሩ።
-- መጠኖች `Numeric` እና እንደ NoritoBytes ጠቋሚዎች ያልፋሉ; ሌሎች ውስብስብ ዓይነቶችም በጠቋሚ ያልፋሉ.
+- የንብረት መጠኖች አጠቃላይ `NoritoBytes` ጠቋሚን ሳይሆን የተለየውን `QuantityValueV1` pointer-ABI TLV (`PointerType::Quantity = 0x0010`) ይጠቀማሉ፤ ሌሎች ውስብስብ እሴቶች የተመደቡላቸውን የጠቋሚ ዓይነቶች ይጠቀማሉ።
 - ይህንን በ `crates/ivm/docs/calling_convention.md` ውስጥ ይመዝግቡ እና ምሳሌዎችን ያክሉ።### ሐ. የሲሲካል ስያሜ እና ሽፋንን ከአይኤስአይ/ዳታ ሞዴል ጋር አሰልፍ
 - ግልጽ ለማድረግ ከNFT ጋር የሚዛመዱ ሲስኮሎችን እንደገና ይሰይሙ፡ ቀኖናዊ ስሞች አሁን የ`SYSCALL_NFT_*` ስርዓተ ጥለት (`SYSCALL_NFT_MINT_ASSET`፣ `SYSCALL_NFT_SET_METADATA`፣ ወዘተ) ይከተላሉ።
 - የካርታ ሠንጠረዥን (የሰነድ + ኮድ አስተያየቶችን) ያትሙ፡-

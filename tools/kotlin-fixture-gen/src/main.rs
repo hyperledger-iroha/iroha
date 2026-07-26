@@ -93,7 +93,7 @@ fn emit_offline_device_attestation() {
         ios_environment: None,
         android_package_name: Some("org.hyperledger.iroha.abi20.fixture".to_owned()),
         android_signing_certificate_sha256: Some(signing_certificate_sha256.clone()),
-        public_key: public_key.clone(),
+        public_key,
         assertion_scheme: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME.to_owned(),
         assertion_key_algorithm: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
             .to_owned(),

@@ -523,7 +523,6 @@ impl Execute for DeFiInstructionBox {
 #[cfg(test)]
 mod tests {
     use iroha_data_model::block::BlockHeader;
-    use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
@@ -585,8 +584,7 @@ mod tests {
             "a rejected NAV report must not mutate account metadata"
         );
 
-        let nav_per_share =
-            Quantity::try_from_numeric(Numeric::new(125_u32, 2)).expect("positive canonical NAV");
+        let nav_per_share: Quantity = "1.25".parse().expect("positive canonical NAV");
         report(nav_per_share.clone())
             .execute(&authority, &mut transaction)
             .expect("positive NAV report");

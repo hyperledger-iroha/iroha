@@ -67,7 +67,7 @@ macro_rules! def_ffi_fns {
                 Err(err) => err.into(),
             },
             Err(panic_payload) => {
-                $crate::panic_notifier::log_panic(&panic_payload);
+                $crate::panic_notifier::handle_panic(panic_payload);
                 $crate::FfiReturn::UnrecoverableError
             },
         }

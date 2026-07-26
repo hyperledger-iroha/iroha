@@ -1,14 +1,10 @@
 {
   "instruction_manifest": {
-    "sha256": "769ce89c0686acecd107d91bbe5d7fdaf638e0e1fabf19cfe5d2b00d11115334",
-    "entry_count": 104,
-    "generated_at": "2026-07-12T11:52:15.35205Z",
-    "norito_instruction_changes_ref": "2026-07-12"
+    "sha256": "cf97bbea1e90a41b700776e4022e66caba44cf71845b027a472c3231343ff4c9",
+    "entry_count": 107
   },
   "builder_index": {
-    "sha256": "31c6bd63f5b575fb75ab2d60b6cfdb108deab8cc2243035bd33517ee8e9aacc2",
-    "entry_count": 104,
-    "generated_at": "2026-07-12T11:52:15.35205Z",
-    "norito_instruction_changes_ref": "2026-07-12"
+    "sha256": "63756519f24fe11b14f553ef4349c4abe2bc2092ccf120e5b94cdfd554feba37",
+    "entry_count": 107
   }
 }

@@ -10,6 +10,8 @@ use std::{
 
 const BEGIN: &str = "<!-- BEGIN GENERATED POINTER TYPES -->";
 const END: &str = "<!-- END GENERATED POINTER TYPES -->";
+const POINTER_TYPE_GOLDEN_BEGIN: &str = "    // BEGIN GENERATED ABI V1 POINTER TYPE IDS";
+const POINTER_TYPE_GOLDEN_END: &str = "    // END GENERATED ABI V1 POINTER TYPE IDS";
 
 fn localized_pointer_doc_paths(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
     let localized_root = workspace_root.join("docs/i18n/root");
@@ -34,21 +36,28 @@ fn localized_pointer_doc_paths(workspace_root: &Path) -> Result<Vec<PathBuf>, St
     Ok(paths)
 }
 
-fn render_generated_block(text: &str, expected_block: &str) -> Result<String, String> {
+fn render_generated_block(
+    text: &str,
+    begin_marker: &str,
+    end_marker: &str,
+    expected_block: &str,
+) -> Result<String, String> {
     let begin = text
-        .find(BEGIN)
-        .ok_or_else(|| format!("begin marker `{BEGIN}` not found"))?;
-    if text[begin + BEGIN.len()..].contains(BEGIN) {
-        return Err(format!("multiple begin markers `{BEGIN}` found"));
+        .find(begin_marker)
+        .ok_or_else(|| format!("begin marker `{begin_marker}` not found"))?;
+    if text[begin + begin_marker.len()..].contains(begin_marker) {
+        return Err(format!("multiple begin markers `{begin_marker}` found"));
     }
 
     let end_start = begin
         + text[begin..]
-            .find(END)
-            .ok_or_else(|| format!("end marker `{END}` not found after begin marker"))?;
-    let end = end_start + END.len();
-    if text[end..].contains(END) {
-        return Err(format!("multiple end markers `{END}` found"));
+            .find(end_marker)
+            .ok_or_else(|| format!("end marker `{end_marker}` not found after begin marker"))?;
+    let end = end_start + end_marker.len();
+    if text[..begin].contains(end_marker) || text[end..].contains(end_marker) {
+        return Err(format!(
+            "multiple or misplaced end markers `{end_marker}` found"
+        ));
     }
 
     let mut rendered = text.to_owned();
@@ -56,16 +65,60 @@ fn render_generated_block(text: &str, expected_block: &str) -> Result<String, St
     Ok(rendered)
 }
 
-fn process(path: &Path, expected_block: &str, write: bool, check: bool) {
+fn render_pointer_type_golden_block(types: &[ivm::PointerType]) -> Result<String, String> {
+    let mut previous_id = None;
+    let mut entries = Vec::with_capacity(types.len());
+    for pointer_type in types {
+        let id = *pointer_type as u16;
+        if previous_id.is_some_and(|previous| previous >= id) {
+            return Err(format!(
+                "pointer types are not strictly increasing: {previous_id:?} then 0x{id:04X}"
+            ));
+        }
+        previous_id = Some(id);
+        let name = format!("{pointer_type:?}");
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(format!(
+                "pointer type 0x{id:04X} has invalid Rust variant name `{name}`"
+            ));
+        }
+        entries.push((name, id));
+    }
+
+    let mut rendered = String::new();
+    rendered.push_str(POINTER_TYPE_GOLDEN_BEGIN);
+    rendered.push_str("\n    let expected: &[(P, u16)] = &[\n");
+    for (name, id) in &entries {
+        rendered.push_str("        (P::");
+        rendered.push_str(name);
+        rendered.push_str(&format!(", 0x{id:04X}),\n"));
+    }
+    rendered.push_str("    ];\n");
+    rendered.push_str(POINTER_TYPE_GOLDEN_END);
+    Ok(rendered)
+}
+
+fn process(
+    path: &Path,
+    begin_marker: &str,
+    end_marker: &str,
+    expected_block: &str,
+    write: bool,
+    check: bool,
+) {
     let text =
         fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let rendered = render_generated_block(&text, expected_block)
+    let rendered = render_generated_block(&text, begin_marker, end_marker, expected_block)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     if check {
         assert_eq!(
             text,
             rendered,
-            "{} out of date; run: cargo run -p ivm --bin gen_pointer_types_doc -- --write",
+            "{} out of date; run: cargo run --locked -p ivm --bin gen_pointer_types_doc -- --write",
             path.display()
         );
     }
@@ -95,23 +148,35 @@ fn main() {
         .expect("workspace root")
         .to_path_buf();
     let path_ivm_md = workspace_root.join("ivm.md");
+    let path_pointer_type_golden =
+        PathBuf::from(manifest_dir).join("tests/pointer_type_ids_golden.rs");
 
     // Render expected table
     let table = ivm::render_pointer_types_markdown_table();
     let expected_block = format!("{BEGIN}\n{table}{END}");
+    let expected_pointer_type_golden = render_pointer_type_golden_block(ivm::PointerType::all())
+        .unwrap_or_else(|error| panic!("render pointer type golden: {error}"));
 
     if !write && !check {
         eprintln!("usage: --write or --check");
         return;
     }
 
-    process(&path_pointer, &expected_block, write, check);
-    process(&path_ivm_md, &expected_block, write, check);
+    process(&path_pointer, BEGIN, END, &expected_block, write, check);
+    process(&path_ivm_md, BEGIN, END, &expected_block, write, check);
     let localized_paths = localized_pointer_doc_paths(&workspace_root)
         .unwrap_or_else(|error| panic!("discover localized pointer documents: {error}"));
     for path in localized_paths {
-        process(&path, &expected_block, write, check);
+        process(&path, BEGIN, END, &expected_block, write, check);
     }
+    process(
+        &path_pointer_type_golden,
+        POINTER_TYPE_GOLDEN_BEGIN,
+        POINTER_TYPE_GOLDEN_END,
+        &expected_pointer_type_golden,
+        write,
+        check,
+    );
 }
 
 #[cfg(test)]
@@ -121,7 +186,10 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use super::{BEGIN, END, localized_pointer_doc_paths, render_generated_block};
+    use super::{
+        BEGIN, END, POINTER_TYPE_GOLDEN_BEGIN, POINTER_TYPE_GOLDEN_END,
+        localized_pointer_doc_paths, render_generated_block, render_pointer_type_golden_block,
+    };
 
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -133,11 +201,46 @@ mod tests {
         let expected_block = format!("{BEGIN}\ncanonical\n{END}");
         let expected = format!("{prefix}{expected_block}{suffix}");
 
-        let rendered =
-            render_generated_block(&current, &expected_block).expect("replace generated block");
+        let rendered = render_generated_block(&current, BEGIN, END, &expected_block)
+            .expect("replace generated block");
         assert_eq!(rendered, expected);
         assert_eq!(
-            render_generated_block(&rendered, &expected_block).expect("idempotent replacement"),
+            render_generated_block(&rendered, BEGIN, END, &expected_block)
+                .expect("idempotent replacement"),
+            rendered
+        );
+    }
+
+    #[test]
+    fn pointer_type_golden_rendering_is_owned_and_idempotent() {
+        let expected_block = render_pointer_type_golden_block(&[
+            ivm::PointerType::AccountId,
+            ivm::PointerType::AssetDefinitionId,
+        ])
+        .expect("render pointer type golden");
+        assert!(expected_block.contains("P::AccountId"));
+        assert!(expected_block.contains("0x0002"));
+
+        let prefix = "fn test() {\n";
+        let suffix = "\n}\n";
+        let current = format!(
+            "{prefix}{POINTER_TYPE_GOLDEN_BEGIN}\nstale\n{POINTER_TYPE_GOLDEN_END}{suffix}"
+        );
+        let rendered = render_generated_block(
+            &current,
+            POINTER_TYPE_GOLDEN_BEGIN,
+            POINTER_TYPE_GOLDEN_END,
+            &expected_block,
+        )
+        .expect("replace pointer type golden");
+        assert_eq!(
+            render_generated_block(
+                &rendered,
+                POINTER_TYPE_GOLDEN_BEGIN,
+                POINTER_TYPE_GOLDEN_END,
+                &expected_block,
+            )
+            .expect("idempotent pointer type golden replacement"),
             rendered
         );
     }

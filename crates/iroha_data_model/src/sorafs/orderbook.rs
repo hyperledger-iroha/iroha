@@ -115,8 +115,7 @@ pub fn is_orderbook_settlement_escrow_id_v1(escrow_id: &EscrowId) -> bool {
 /// Return whether public escrow creation must reject `escrow_id`.
 #[must_use]
 pub fn is_reserved_orderbook_escrow_id_v1(escrow_id: &EscrowId) -> bool {
-    is_orderbook_order_escrow_id_v1(escrow_id)
-        || is_orderbook_settlement_escrow_id_v1(escrow_id)
+    is_orderbook_order_escrow_id_v1(escrow_id) || is_orderbook_settlement_escrow_id_v1(escrow_id)
 }
 
 /// Governance-controlled order admission and receipt-retention policy.

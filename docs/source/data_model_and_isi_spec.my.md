@@ -107,7 +107,7 @@ Execution ကို `iroha_core::smartcontracts::isi` တွင် `Execute for 
 အမျိုးအစားများ- `Mint<O, D: Identifiable>` နှင့် `Burn<O, D: Identifiable>`၊ `MintBox`/`BurnBox` အဖြစ် အကွက်များ။
 
 - ပိုင်ဆိုင်မှု (ဂဏန်း) mint/burn- လက်ကျန်များနှင့် အဓိပ္ပါယ်ဖွင့်ဆိုချက်၏ `total_quantity` ကို ချိန်ညှိသည်။
-  - ကြိုတင်သတ်မှတ်ချက်များ- `Numeric` တန်ဖိုးသည် `AssetDefinition.spec()` ကျေနပ်ရပါမည်။ `mintable` မှ ခွင့်ပြုထားသော mint
+  - ကြိုတင်သတ်မှတ်ချက်များ- `Quantity` တန်ဖိုးသည် `AssetDefinition.spec()` ကျေနပ်ရပါမည်။ `mintable` မှ ခွင့်ပြုထားသော mint
     - `Infinitely`- အမြဲတမ်း ခွင့်ပြုထားသည်။
     - `Once`: တစ်ကြိမ်တိတိ ခွင့်ပြုသည်; ပထမဆုံး mint သည် `mintable` ကို `Not` သို့ ပြောင်းလိုက်ပြီး `AssetDefinitionEvent::MintabilityChanged` နှင့် အသေးစိတ် `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` ကို ထုတ်ပေးပါသည်။
     - `Limited(n)`- `n` နောက်ထပ် mint လုပ်ဆောင်ချက်များကို ခွင့်ပြုသည်။ အောင်မြင်သော mint တစ်ခုစီသည် တန်ပြန်မှုကို လျှော့ချသည်။ သုညသို့ရောက်သောအခါ အဓိပ္ပါယ်ဖွင့်ဆိုချက်သည် `Not` သို့ပြောင်းသွားပြီး အထက်ပါကဲ့သို့တူညီသော `MintabilityChanged` ဖြစ်ရပ်များကို ထုတ်လွှတ်ပါသည်။

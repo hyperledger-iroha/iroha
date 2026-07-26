@@ -6,7 +6,7 @@ use std::{borrow::ToOwned, format, string::String, vec::Vec};
 use iroha_data_model::{
     asset::AssetDefinitionId,
     isi::{CustomInstruction, InstructionBox},
-    prelude::{Json, Numeric},
+    prelude::{Json, Quantity},
 };
 use iroha_schema::IntoSchema;
 use norito::{
@@ -23,7 +23,7 @@ pub enum CustomInstructionBox {
 #[derive(Debug, JsonDeserialize, JsonSerialize, IntoSchema)]
 pub struct MintAssetForAllAccounts {
     pub asset_definition: AssetDefinitionId,
-    pub quantity: Numeric,
+    pub quantity: Quantity,
 }
 
 impl From<MintAssetForAllAccounts> for CustomInstructionBox {

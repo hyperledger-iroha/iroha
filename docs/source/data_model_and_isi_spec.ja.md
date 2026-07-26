@@ -107,7 +107,7 @@ ID は、`Display`/`FromStr` 往復の安定した文字列形式を持ちます
 タイプ: `Mint<O, D: Identifiable>` および `Burn<O, D: Identifiable>`、`MintBox`/`BurnBox` としてボックス化されます。
 
 - アセット (数値) ミント/バーン: バランスと定義の `total_quantity` を調整します。
-  - 前提条件: `Numeric` 値は `AssetDefinition.spec()` を満たす必要があります。 `mintable` で許可されているミント:
+  - 前提条件: `Quantity` 値は `AssetDefinition.spec()` を満たす必要があります。 `mintable` で許可されているミント:
     - `Infinitely`: 常に許可されます。
     - `Once`: 許可されるのは 1 回だけです。最初のミントは `mintable` を `Not` に反転し、`AssetDefinitionEvent::MintabilityChanged` に加えて、可聴性のための詳細な `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` を発行します。
     - `Limited(n)`: `n` の追加のミント操作を許可します。ミントが成功するたびにカウンターがデクリメントされます。ゼロに達すると、定義は `Not` に切り替わり、上記と同じ `MintabilityChanged` イベントを発行します。

@@ -815,10 +815,10 @@ fn validate_fx_settlement_preconditions(
         authority,
         source_id,
         source_destination_id,
-        source_leg.quantity().as_numeric().clone(),
+        source_leg.quantity().clone(),
         destination_source_id,
         destination_id,
-        destination_leg.quantity().as_numeric().clone(),
+        destination_leg.quantity().clone(),
     )?;
 
     Ok((policy, source_leg, destination_leg))
@@ -898,10 +898,10 @@ impl Execute for SettleFxCorridor {
             authority,
             source_id,
             source_destination_id,
-            source_leg.quantity().as_numeric().clone(),
+            source_leg.quantity().clone(),
             destination_source_id,
             destination_id,
-            destination_leg.quantity().as_numeric().clone(),
+            destination_leg.quantity().clone(),
         )?;
         let outcome = SettlementPairOutcome {
             first_committed: true,
@@ -1329,8 +1329,10 @@ mod tests {
     use super::*;
     use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
 
-    fn quantity(value: Numeric) -> Quantity {
-        Quantity::try_from_numeric(value).expect("settlement fixture quantity must be non-negative")
+    fn quantity(value: &str) -> Quantity {
+        value
+            .parse::<Quantity>()
+            .expect("settlement fixture quantity must be canonical and non-negative")
     }
 
     fn assert_smart_contract_parameter_contains(error: InstructionExecutionError, expected: &str) {
@@ -2548,7 +2550,7 @@ mod tests {
             ),
             payment_leg: SettlementLeg::new(
                 payment_def_id.clone(),
-                quantity("1.001".parse::<Numeric>().expect("numeric")),
+                quantity("1.001"),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),
@@ -2670,7 +2672,7 @@ mod tests {
             ),
             payment_leg: SettlementLeg::new(
                 payment_def_id.clone(),
-                quantity("1.001".parse::<Numeric>().expect("numeric")),
+                quantity("1.001"),
                 BOB_ID.clone(),
                 ALICE_ID.clone(),
             ),

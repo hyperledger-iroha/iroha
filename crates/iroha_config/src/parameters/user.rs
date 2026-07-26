@@ -15877,11 +15877,11 @@ impl AccountOnboarding {
                 "torii.account_onboarding.auto_renew.term_years must be greater than zero",
             );
         }
-        let max_amount = match Numeric::from_str(&config.max_amount) {
-            Ok(amount) if amount > Numeric::zero() && amount.to_string() == config.max_amount => {
+        let max_amount = match Quantity::from_str(&config.max_amount) {
+            Ok(amount) if !amount.is_zero() && amount.to_string() == config.max_amount => {
                 Some(amount)
             }
-            Ok(amount) if amount <= Numeric::zero() => {
+            Ok(amount) if amount.is_zero() => {
                 emit_torii_config_error(
                     emitter,
                     "torii.account_onboarding.auto_renew.max_amount must be greater than zero",
@@ -15894,6 +15894,13 @@ impl AccountOnboarding {
                     format!(
                         "torii.account_onboarding.auto_renew.max_amount must use canonical form `{amount}`"
                     ),
+                );
+                None
+            }
+            Err(iroha_primitives::numeric::NumericOperationError::NegativeQuantity) => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.account_onboarding.auto_renew.max_amount must be greater than zero",
                 );
                 None
             }
@@ -19721,7 +19728,9 @@ impl SorafsPrivacyAggregateScheduleConfig {
         }
         if self.enabled
             && (self.first_cycle_start_unix == 0
-                || self.first_cycle_start_unix % self.cycle_seconds.max(1) != 0)
+                || !self
+                    .first_cycle_start_unix
+                    .is_multiple_of(self.cycle_seconds.max(1)))
         {
             invalid(
                 "torii.sorafs.storage.privacy_aggregates.first_cycle_start_unix must be nonzero and cycle-aligned when enabled"
@@ -23328,7 +23337,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(onboarding.credentials[1].token_hash, [0xcd; 32]);
         let auto_renew = onboarding.auto_renew.expect("native auto-renew configured");
         assert_eq!(auto_renew.term_years.get(), 2);
-        assert_eq!(auto_renew.max_amount, Numeric::from(25_u32));
+        assert_eq!(auto_renew.max_amount, Quantity::from(25_u32));
         assert_eq!(
             auto_renew.renew_before_expiry,
             Duration::from_millis(86_400_000)

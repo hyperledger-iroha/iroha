@@ -1172,7 +1172,7 @@ mod tests {
         permission::Permission,
         role::{Role, RoleId},
     };
-    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::decode_from_bytes;
 
@@ -1744,14 +1744,13 @@ mod tests {
     #[test]
     fn batch_from_transcripts_normalizes_mixed_scale_values() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].amount =
-            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
+        transcript.deltas[0].amount = "0.5".parse().expect("non-negative FASTPQ quantity");
         transcript.deltas[0].from_balance_before = Quantity::from(1_u64);
         transcript.deltas[0].from_balance_after =
-            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
+            "0.5".parse().expect("non-negative FASTPQ quantity");
         transcript.deltas[0].to_balance_before = Quantity::from(0_u64);
         transcript.deltas[0].to_balance_after =
-            Quantity::try_from_numeric(Numeric::new(5, 1)).expect("non-negative FASTPQ quantity");
+            "0.5".parse().expect("non-negative FASTPQ quantity");
         let batch = batch_from_transcripts(
             "fastpq-lane-balanced",
             sample_public_inputs(),
@@ -1790,18 +1789,13 @@ mod tests {
     #[test]
     fn batch_from_transcripts_trims_padded_balance_scale() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].amount =
-            Quantity::try_from_numeric(Numeric::new(11, 3)).expect("non-negative FASTPQ quantity");
-        transcript.deltas[0].from_balance_before =
-            Quantity::try_from_numeric(Numeric::new(120_000_000_000_000_000_000_000_i128, 18))
-                .expect("non-negative FASTPQ quantity");
+        transcript.deltas[0].amount = "0.011".parse().expect("non-negative FASTPQ quantity");
+        transcript.deltas[0].from_balance_before = Quantity::from(120_000_u64);
         transcript.deltas[0].from_balance_after =
-            Quantity::try_from_numeric(Numeric::new(119_999_989_000_000_000_000_000_i128, 18))
-                .expect("non-negative FASTPQ quantity");
+            "119999.989".parse().expect("non-negative FASTPQ quantity");
         transcript.deltas[0].to_balance_before = Quantity::zero();
         transcript.deltas[0].to_balance_after =
-            Quantity::try_from_numeric(Numeric::new(11_000_000_000_000_000_i128, 18))
-                .expect("non-negative FASTPQ quantity");
+            "0.011".parse().expect("non-negative FASTPQ quantity");
 
         let batch = batch_from_transcripts(
             FASTPQ_CANONICAL_PARAMETER_SET,

@@ -5683,6 +5683,7 @@ type ToriiRuntimeNamespaceExport =
   | "ToriiHttpError"
   | "TransactionStatusError"
   | "TransactionTimeoutError"
+  | "__sumeragiNativeAmxTestHelpers"
   | "buildConnectWebSocketUrl"
   | "buildIdentifierRequestForPolicy"
   | "buildSorafsOrderbookEventsWebSocketUrl"
@@ -5703,7 +5704,8 @@ type ToriiRuntimeNamespaceExport =
 type NoritoRuntimeNamespaceExport =
     "encodeAccountIdNoritoValue"
   | "encodeAssetDefinitionIdNoritoValue"
-  | "encodeNumericNoritoValue"
+  | "encodeQuantityNoritoValue"
+  | "inspectSubscriptionTriggerAction"
   | "noritoDecodeBlockProofs"
   | "noritoDecodeInstruction"
   | "noritoDecodePrivacyProofEnvelope"
@@ -6752,7 +6754,8 @@ export interface ToriiGovernanceTallyResult {
 
 export interface ToriiGovernanceLockRecord {
   owner: string;
-  amount: number;
+  amount: string;
+  slashed: string;
   expiry_height: number;
   direction: number;
   duration_blocks: number;
@@ -6937,7 +6940,7 @@ export interface ToriiGovernancePlainBallotRequest {
   chainId: string;
   referendumId: string;
   owner: string;
-  amount: NumericLike;
+  amount: QuantityInput;
   durationBlocks: number | string | bigint;
   direction: ToriiGovernanceBallotDirection | string;
 }
@@ -6960,17 +6963,28 @@ export interface ToriiGovernanceZkBallotV1Request {
   envelopeB64?: BinaryLike | string;
   root_hint?: string | BinaryLike | null;
   owner?: string | null;
-  amount?: NumericLike | null;
+  amount?: QuantityInput | null;
   durationBlocks?: number | string | bigint | null;
   direction?: ToriiGovernanceBallotDirection | string | null;
   nullifier?: string | BinaryLike | null;
+}
+
+export interface ToriiGovernanceBallotProof {
+  backend: string;
+  envelope_bytes: string;
+  root_hint?: string | null;
+  owner?: string | null;
+  nullifier?: string | null;
+  amount?: QuantityInput | null;
+  duration_blocks?: number | null;
+  direction?: ToriiGovernanceBallotDirection | string | null;
 }
 
 export interface ToriiGovernanceZkBallotProofRequest {
   authority: string;
   chainId: string;
   electionId: string;
-  ballot: JsonValue;
+  ballot: ToriiGovernanceBallotProof;
 }
 
 export interface ToriiGovernanceBallotResponse
@@ -7105,7 +7119,7 @@ export interface SubscriptionActionRequest {
 export interface SubscriptionUsageRequest {
   authority: string;
   unitKey: string;
-  delta: NumericLike;
+  delta: QuantityInput;
   usageTriggerId?: string | null;
   privateKey?:
     | ArrayBufferView
@@ -7241,6 +7255,13 @@ export function isStatusQueueStalled(
   status: ToriiStatusPayload | Record<string, unknown>,
   stallThresholdMs: number | string | bigint,
 ): boolean;
+
+export const __sumeragiNativeAmxTestHelpers: Readonly<{
+  computeDescriptorHash(value: unknown): string;
+  computeParticipantSettlementHash(value: unknown): string;
+  computeProposalHash(value: unknown): string;
+  computeValidatorSetHash(value: unknown): string;
+}>;
 
 export interface ToriiNetworkTimeNow {
   timestampMs: number;
@@ -9449,7 +9470,7 @@ export interface CastZkBallotInstructionInput {
 export interface CastPlainBallotInstructionInput {
   referendumId: string;
   owner: string;
-  amount: NumericLike;
+  amount: QuantityInput;
   durationBlocks: NumericLike;
   direction?: number | string;
 }
@@ -11428,7 +11449,7 @@ export interface PrivateKaigiFeeSpendInput {
   assetDefinitionId: string;
   actionHash: BinaryLike;
   anchorRootHex: string;
-  feeAmount: NumericLike;
+  feeAmount: QuantityInput;
   verifyingKey: Record<string, unknown>;
 }
 
@@ -13846,9 +13867,9 @@ export function encodeAssetDefinitionIdNoritoValue(
   value: string,
   context?: string,
 ): Uint8Array;
-/** Exact compact-length Numeric value encoding for typed policy codecs. */
-export function encodeNumericNoritoValue(
-  value: NumericLike,
+/** Exact compact-length Quantity value encoding for typed policy codecs. */
+export function encodeQuantityNoritoValue(
+  value: QuantityInput,
   context?: string,
 ): Uint8Array;
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
@@ -15723,19 +15744,19 @@ export const NumericV1: {
   // END GENERATED: kotodama-v1-numeric-policy
   encodeIntFrame(value: KotodamaInt | bigint | string): Uint8Array;
   encodeDecimalFrame(value: KotodamaDecimal | string): Uint8Array;
-  encodeQuantityFrame(value: KotodamaQuantity | string): Uint8Array;
+  encodeQuantityFrame(value: KotodamaQuantity | bigint | string): Uint8Array;
   decodeIntFrame(value: ArrayBuffer | ArrayBufferView): KotodamaInt;
   decodeDecimalFrame(value: ArrayBuffer | ArrayBufferView): KotodamaDecimal;
   decodeQuantityFrame(value: ArrayBuffer | ArrayBufferView): KotodamaQuantity;
   encodeIntEnvelope(value: KotodamaInt | bigint | string): Uint8Array;
   encodeDecimalEnvelope(value: KotodamaDecimal | string): Uint8Array;
-  encodeQuantityEnvelope(value: KotodamaQuantity | string): Uint8Array;
+  encodeQuantityEnvelope(value: KotodamaQuantity | bigint | string): Uint8Array;
   decodeIntEnvelope(value: ArrayBuffer | ArrayBufferView): KotodamaInt;
   decodeDecimalEnvelope(value: ArrayBuffer | ArrayBufferView): KotodamaDecimal;
   decodeQuantityEnvelope(value: ArrayBuffer | ArrayBufferView): KotodamaQuantity;
   encodeIntJson(value: KotodamaInt | bigint | string): string;
   encodeDecimalJson(value: KotodamaDecimal | string): string;
-  encodeQuantityJson(value: KotodamaQuantity | string): string;
+  encodeQuantityJson(value: KotodamaQuantity | bigint | string): string;
   decodeIntJson(value: string): KotodamaInt;
   decodeDecimalJson(value: string): KotodamaDecimal;
   decodeQuantityJson(value: string): KotodamaQuantity;

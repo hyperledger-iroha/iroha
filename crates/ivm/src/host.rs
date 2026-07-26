@@ -958,6 +958,8 @@ pub enum HostSyscallGasFormula {
     StateCount,
     /// Escrow the available bounded budget before host-dependent work.
     ReserveAvailable,
+    /// V1 ledger query charged by request kind, visited/skipped items, and bytes.
+    LedgerQueryV1,
     /// Conservative pointer-input and complete-output-region envelope.
     ConservativeEnvelope,
 }
@@ -985,6 +987,8 @@ pub enum HostSyscallGasParameters {
     DurableState,
     /// Conservative base, input multiplier, and output-region multiplier.
     Conservative,
+    /// V1 ledger-query bases, item/sort rates, byte rate, and formula version.
+    LedgerQueryV1,
 }
 
 /// Exhaustive ABI-v1 host metering metadata for one syscall.
@@ -1076,11 +1080,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
     }
     if matches!(
         number,
-        syscalls::SYSCALL_JSON_BUILD
-            | syscalls::SYSCALL_STATE_VALUE_ENCODE
-            | syscalls::SYSCALL_STATE_VALUE_DECODE
-            | syscalls::SYSCALL_GET_PUBLIC_INPUT
-            | syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY
+        syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY
             | syscalls::SYSCALL_QUERY_EXECUTE_NORITO
             | syscalls::SYSCALL_CORE_QUERY_GET
             | syscalls::SYSCALL_CORE_QUERY_PAGE
@@ -1089,6 +1089,15 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE
             | syscalls::SYSCALL_GET_ACCOUNT_BALANCE
             | syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS
+    ) {
+        return Some(HostSyscallGasFormula::LedgerQueryV1);
+    }
+    if matches!(
+        number,
+        syscalls::SYSCALL_JSON_BUILD
+            | syscalls::SYSCALL_STATE_VALUE_ENCODE
+            | syscalls::SYSCALL_STATE_VALUE_DECODE
+            | syscalls::SYSCALL_GET_PUBLIC_INPUT
             | syscalls::SYSCALL_VRF_EPOCH_SEED
             | syscalls::SYSCALL_ZK_ROOTS_GET
             | syscalls::SYSCALL_ZK_VOTE_GET_TALLY
@@ -1291,6 +1300,7 @@ pub fn host_syscall_metering_spec(
         | HostSyscallGasFormula::StateValue
         | HostSyscallGasFormula::StateKeys
         | HostSyscallGasFormula::StateCount => HostSyscallGasParameters::DurableState,
+        HostSyscallGasFormula::LedgerQueryV1 => HostSyscallGasParameters::LedgerQueryV1,
         HostSyscallGasFormula::ConservativeEnvelope => HostSyscallGasParameters::Conservative,
         HostSyscallGasFormula::ByteLinear | HostSyscallGasFormula::ReserveAvailable => {
             HostSyscallGasParameters::HostByte
@@ -1301,6 +1311,7 @@ pub fn host_syscall_metering_spec(
             HostSyscallQuoteStrategy::AllocationExtent
         }
         HostSyscallGasFormula::ReserveAvailable
+        | HostSyscallGasFormula::LedgerQueryV1
         | HostSyscallGasFormula::StateKeys
         | HostSyscallGasFormula::StateCount => HostSyscallQuoteStrategy::ReserveAvailable,
         _ => HostSyscallQuoteStrategy::InputOutputBounded,
@@ -1314,6 +1325,7 @@ pub fn host_syscall_metering_spec(
         HostSyscallGasParameters::GrowHeap => gas::GROW_HEAP_GAS_BASE,
         HostSyscallGasParameters::HostCommit => gas::HOST_COMMIT_OUTPUT_GAS,
         HostSyscallGasParameters::DurableState => STATE_QUERY_GAS_BASE,
+        HostSyscallGasParameters::LedgerQueryV1 => gas::LEDGER_QUERY_GAS_BASE_SINGULAR,
         HostSyscallGasParameters::Conservative => gas::CONSERVATIVE_SYSCALL_GAS_BASE,
         HostSyscallGasParameters::HostByte => match formula {
             HostSyscallGasFormula::ReserveAvailable => gas::HOST_BYTE_GAS_BASE,
@@ -6617,10 +6629,8 @@ mod tests {
     fn quantity_arguments_require_canonical_quantity_pointer() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
-        let canonical = Numeric::new(125_u32, 2);
-        let canonical_quantity =
-            Quantity::try_from_numeric(canonical.clone()).expect("canonical quantity");
-        let canonical_payload = QuantityValueV1::new(canonical_quantity)
+        let canonical = "1.25".parse::<Quantity>().expect("canonical quantity");
+        let canonical_payload = QuantityValueV1::new(canonical.clone())
             .encode_frame()
             .expect("encode canonical quantity frame");
         let canonical_ptr = vm
@@ -6668,7 +6678,8 @@ mod tests {
         );
         assert!(batch_host.fastpq_batch_has_entries);
 
-        let legacy_payload = norito::to_bytes(&canonical).expect("encode legacy Numeric");
+        let legacy_payload =
+            norito::to_bytes(&canonical.into_numeric()).expect("encode legacy Numeric");
         let legacy_ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &legacy_payload))
             .expect("allocate legacy Numeric pointer");

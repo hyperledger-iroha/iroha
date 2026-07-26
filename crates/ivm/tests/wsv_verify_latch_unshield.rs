@@ -221,13 +221,13 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     let tlv_out = vm.memory.validate_tlv(p_out).expect("out tlv");
     assert_eq!(tlv_out.type_id, PointerType::Json);
     let val: norito::json::Value = common::json_from_payload(tlv_out.payload);
-    let bal: iroha_primitives::numeric::Numeric = val
+    let bal: Quantity = val
         .get("balance")
         .and_then(|v| v.as_str())
         .expect("balance present")
         .parse()
-        .expect("parse numeric balance");
-    assert_eq!(bal, iroha_primitives::numeric::Numeric::from(1u64));
+        .expect("parse quantity balance");
+    assert_eq!(bal, Quantity::from(1u64));
 }
 
 #[test]
@@ -340,7 +340,7 @@ fn wsv_unshield_routes_private_change_outputs() {
             public_amount,
         } if event_asset == &asset
             && to == &caller
-            && public_amount == &iroha_primitives::numeric::Numeric::from(2u64)
+            && public_amount == &Quantity::from(2u64)
     ));
 }
 

@@ -1642,7 +1642,7 @@ impl UnstableNetwork {
                 "recovered submit failed before supply wait; continuing with supply retries"
             );
         }
-        let expected_supply = Numeric::new((round_index + 1) as u128, 0);
+        let expected_supply = Quantity::from((round_index + 1) as u128);
         let supply_start = Instant::now();
         let supply_deadline = supply_start + sync_timeout;
         let initial_resubmit_at =
@@ -1684,11 +1684,9 @@ impl UnstableNetwork {
                             None
                         }
                     };
-                let asset_value = asset
-                    .as_ref()
-                    .map(|asset| asset.value().clone().into_numeric());
+                let asset_value = asset.as_ref().map(|asset| asset.value().clone());
                 if let Some(asset) = asset.as_ref() {
-                    if asset.value().as_numeric() == &expected_supply {
+                    if asset.value() == &expected_supply {
                         break 'wait_supply;
                     }
                 }
@@ -1797,9 +1795,9 @@ impl UnstableNetwork {
         force_soft_fork: bool,
     ) -> Result<()> {
         let peers = network.peers();
-        let expected = Numeric::new(rounds as u128, 0);
+        let expected = Quantity::from(rounds as u128);
         let expected_floor = if force_soft_fork {
-            Numeric::new(rounds.saturating_sub(1) as u128, 0)
+            Quantity::from(rounds.saturating_sub(1) as u128)
         } else {
             expected.clone()
         };
@@ -1835,12 +1833,10 @@ impl UnstableNetwork {
                             None
                         }
                     };
-                let asset_value = asset
-                    .as_ref()
-                    .map(|asset| asset.value().clone().into_numeric());
+                let asset_value = asset.as_ref().map(|asset| asset.value().clone());
                 if let Some(asset) = asset.as_ref() {
-                    if asset.value().as_numeric() == &expected
-                        || (force_soft_fork && asset.value().as_numeric() == &expected_floor)
+                    if asset.value() == &expected
+                        || (force_soft_fork && asset.value() == &expected_floor)
                     {
                         return Ok(());
                     }

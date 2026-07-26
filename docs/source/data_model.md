@@ -53,7 +53,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 
 ### Asset Definitions and Assets
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` exposed textually as an unprefixed Base58 address with versioning and checksum.
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`.
   - `name` is required human-facing display text and must not contain `#`/`@`.
   - `alias` is optional and must be one of:
     - `<name>#<domain>.<dataspace>`
@@ -65,9 +65,9 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - Builders: `AssetDefinition::new(id, spec)` or convenience `numeric(id)`; `name` is required and must be set via `.with_name(...)`.
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }` with storage-friendly `AssetEntry`/`AssetValue`.
+- `Asset { id, value: Quantity }` with storage-friendly `AssetEntry`/`AssetValue`.
 - `AssetBalanceScope`: `Global` for unrestricted balances and `Dataspace(DataSpaceId)` for dataspace-restricted balances.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` exposed for summary APIs.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` exposed for summary APIs.
 
 ### NFTs
 - `NftId { domain: DomainId, name: Name }`.
@@ -207,7 +207,7 @@ Create a domain and account, define an asset, and build a transaction with instr
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -228,7 +228,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

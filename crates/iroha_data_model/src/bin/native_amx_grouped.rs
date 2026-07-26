@@ -595,6 +595,10 @@ fn evidence_control(id: &str, mutations: Vec<Value>) -> Value {
     controls(id, "application_evidence", mutations)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the five coherent hash-consistency controls stay together so their linked descriptor, proposal, and quorum-certificate mutations remain auditable"
+)]
 fn hash_consistency_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
     let remote_leg = &commitment.native_amx_receipts[0].legs[1];
     let leg = "/golden/receipt_group/native_amx_receipts/0/legs/1";

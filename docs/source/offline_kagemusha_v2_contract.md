@@ -10,7 +10,7 @@ top-up finality proofs. A V2 or V3 lifecycle archive is never upgraded to V4.
 ## Exact amounts and notes
 
 `KagemushaScaledAmountV2` contains positive atomic `u128` units and the
-authoritative on-chain asset scale. Conversion from `Numeric` is exact and
+authoritative on-chain asset scale. Conversion from `Quantity` is exact and
 rejects excess precision, overflow, zero, negative values, and unsupported
 scale. `KagemushaSpendableNoteDescriptorV2`, note openings, and membership
 witnesses keep their established commitments and tree semantics; V4 binds

@@ -300,14 +300,14 @@ def _canonical_quantity(value: Any, context: str) -> str:
     if not isinstance(value, str):
         raise RuntimeError(f"{context} must be a quantity string")
     if len(value) > _QUANTITY_MAX_TEXT_LENGTH:
-        raise RuntimeError(f"{context} exceeds the quantity text length bound")
+        raise RuntimeError(f"{context} quantity exceeds the text length bound")
     matched = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
     if matched is None:
         raise RuntimeError(f"{context} must be a canonical non-negative quantity")
     fraction = matched.group(2) or ""
     mantissa = int(matched.group(1) + fraction)
     if mantissa > _QUANTITY_MAX_MANTISSA:
-        raise RuntimeError(f"{context} exceeds the signed 512-bit domain")
+        raise RuntimeError(f"{context} quantity exceeds the signed 512-bit domain")
     return value
 
 
@@ -626,6 +626,7 @@ __all__ = [
     "CouncilCurrentStatus",
     "CouncilAuditMetadata",
     "GovernanceProposalStatus",
+    "GovernanceLockRecord",
     "GovernanceLocksOverview",
     "GovernanceReferendumStatus",
     "GovernanceTallySummary",
@@ -6036,12 +6037,57 @@ class GovernanceProposalStatus:
 
 
 @dataclass(frozen=True)
+class GovernanceLockRecord:
+    """Strict governance lock record returned by Torii."""
+
+    owner: str
+    amount: str
+    slashed: str
+    expiry_height: int
+    direction: int
+    duration_blocks: int
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> "GovernanceLockRecord":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError(f"{context} must be a JSON object")
+        owner = payload.get("owner")
+        if not isinstance(owner, str) or not owner:
+            raise RuntimeError(f"{context}.owner must be a non-empty string")
+
+        def unsigned(field: str, *, maximum: Optional[int] = None) -> int:
+            value = payload.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise RuntimeError(f"{context}.{field} must be an unsigned integer")
+            if maximum is not None and value > maximum:
+                raise RuntimeError(f"{context}.{field} exceeds its protocol bound")
+            return value
+
+        return cls(
+            owner=owner,
+            amount=_canonical_quantity(payload.get("amount"), f"{context}.amount"),
+            slashed=_canonical_quantity(
+                payload.get("slashed"),
+                f"{context}.slashed",
+            ),
+            expiry_height=unsigned("expiry_height"),
+            direction=unsigned("direction", maximum=0xFF),
+            duration_blocks=unsigned("duration_blocks"),
+        )
+
+
+@dataclass(frozen=True)
 class GovernanceLocksOverview:
     """Locks/escrow view returned by ``GET /v1/gov/locks/{referendum}``."""
 
     found: bool
     referendum_id: str
-    locks: Optional[Dict[str, Any]]
+    locks: Optional[Dict[str, GovernanceLockRecord]]
 
 
 @dataclass(frozen=True)
@@ -8156,15 +8202,6 @@ class _SumeragiV2StatusParser:
         return _canonical_quantity(value, context)
 
     @staticmethod
-    def _numeric(value: Any, context: str) -> str:
-        if (
-            not isinstance(value, str)
-            or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", value) is None
-        ):
-            raise RuntimeError(f"{context} must be a canonical non-negative Numeric string")
-        return value
-
-    @staticmethod
     def _crc16(tag: str, body: str) -> int:
         crc = 0xFFFF
         for byte in f"{tag}:{body}".encode("ascii"):
@@ -8868,15 +8905,15 @@ class _SumeragiV2StatusParser:
                 record.get("instruction_count"), f"{context}.instruction_count"
             ),
             "gas_used": cls._unsigned(record.get("gas_used"), f"{context}.gas_used"),
-            "base_fee": cls._numeric(record.get("base_fee"), f"{context}.base_fee"),
-            "per_byte_fee": cls._numeric(
+            "base_fee": cls._quantity(record.get("base_fee"), f"{context}.base_fee"),
+            "per_byte_fee": cls._quantity(
                 record.get("per_byte_fee"), f"{context}.per_byte_fee"
             ),
-            "per_instruction_fee": cls._numeric(
+            "per_instruction_fee": cls._quantity(
                 record.get("per_instruction_fee"),
                 f"{context}.per_instruction_fee",
             ),
-            "per_gas_unit_fee": cls._numeric(
+            "per_gas_unit_fee": cls._quantity(
                 record.get("per_gas_unit_fee"), f"{context}.per_gas_unit_fee"
             ),
         }
@@ -8921,7 +8958,7 @@ class _SumeragiV2StatusParser:
             "fee_asset_id": cls._non_empty_string(
                 record.get("fee_asset_id"), f"{context}.fee_asset_id"
             ),
-            "fee_amount": cls._numeric(
+            "fee_amount": cls._quantity(
                 record.get("fee_amount"), f"{context}.fee_amount"
             ),
             "schedule": cls._nexus_fee_schedule(
@@ -12450,7 +12487,7 @@ class ToriiClient:
         authority: str,
         private_key: str,
         unit_key: str,
-        delta: Any,
+        delta: str,
         usage_trigger_id: Optional[str] = None,
     ) -> SubscriptionActionResult:
         """Record usage for a subscription (`POST /v1/subscriptions/{subscription_id}/usage`)."""
@@ -12473,7 +12510,7 @@ class ToriiClient:
                 unit_key,
                 "subscription usage unit_key",
             ),
-            "delta": self._normalize_numeric_literal(
+            "delta": _canonical_quantity(
                 delta,
                 "subscription usage delta",
             ),
@@ -13301,7 +13338,22 @@ class ToriiClient:
         )
         rid = str(payload.get("referendum_id") or referendum_id)
         found = bool(payload.get("found"))
-        locks = self._optional_mapping(payload.get("locks"), context="locks payload")
+        locks_payload = self._optional_mapping(
+            payload.get("locks"),
+            context="locks payload",
+        )
+        locks: Optional[Dict[str, GovernanceLockRecord]] = None
+        if locks_payload is not None:
+            locks = {}
+            for account_id, record in locks_payload.items():
+                if not isinstance(account_id, str) or not account_id:
+                    raise RuntimeError(
+                        "governance locks keys must be non-empty account identifiers"
+                    )
+                locks[account_id] = GovernanceLockRecord.from_payload(
+                    record,
+                    context=f"governance locks[{account_id!r}]",
+                )
         return GovernanceLocksOverview(found=found, referendum_id=rid, locks=locks)
 
     def get_governance_referendum(self, referendum_id: str) -> GovernanceReferendumStatus:
@@ -13474,7 +13526,7 @@ class ToriiClient:
         chain_id: str,
         referendum_id: str,
         owner: str,
-        amount: Union[str, int],
+        amount: str,
         duration_blocks: int,
         direction: str,
         public: Optional[Mapping[str, Any]] = None,
@@ -13486,7 +13538,7 @@ class ToriiClient:
             "chain_id": chain_id,
             "referendum_id": referendum_id,
             "owner": owner,
-            "amount": self._stringify_amount(amount),
+            "amount": _canonical_quantity(amount, "plain ballot amount"),
             "duration_blocks": int(duration_blocks),
             "direction": direction,
         }
@@ -13579,7 +13631,10 @@ class ToriiClient:
         if owner is not None:
             payload["owner"] = owner
         if amount is not None:
-            payload["amount"] = amount
+            payload["amount"] = _canonical_quantity(
+                amount,
+                "zk ballot v1 amount",
+            )
         if duration_blocks is not None:
             payload["duration_blocks"] = duration_blocks
         if direction:
@@ -17971,17 +18026,6 @@ class ToriiClient:
         return result
 
     @staticmethod
-    def _stringify_amount(amount: Union[str, int]) -> str:
-        if isinstance(amount, int):
-            return str(amount)
-        if isinstance(amount, str):
-            trimmed = amount.strip()
-            if not trimmed:
-                raise ValueError("amount string cannot be empty")
-            return trimmed
-        raise TypeError("amount must be str or int")
-
-    @staticmethod
     def _coerce_unsigned(value: Any, context: str) -> int:
         result = ToriiClient._coerce_int(value, context)
         if result < 0:
@@ -18381,6 +18425,11 @@ class ToriiClient:
             normalized.get("duration_blocks"),
             context=context,
         )
+        if normalized.get("amount") is not None:
+            normalized["amount"] = cls._quantity(
+                normalized["amount"],
+                f"{context}.amount",
+            )
         cls._ensure_governance_owner_canonical(
             normalized.get("owner"),
             context=context,

@@ -25,10 +25,7 @@ use iroha_executor_data_model::permission::{
     nexus::CanPublishSpaceDirectoryManifest,
 };
 use iroha_genesis::RawGenesisTransaction;
-use iroha_primitives::{
-    json::Json,
-    numeric::{Numeric, Quantity},
-};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
 
 const LOCALNET_GENESIS_SEED_SUFFIX: &[u8] = b"genesis";
@@ -258,13 +255,13 @@ fn append_bootstrap_authority_overlay(
         dataspace: DataSpaceId::UNIVERSAL,
     }
     .into();
-    let required_fee_funding = Numeric::from(authority.fee_amount);
+    let required_fee_funding = Quantity::from(authority.fee_amount);
     let authority_account = Account::new(authority.account_id.clone());
     let authority_fee_asset =
         AssetId::new(authority.fee_asset_id.clone(), authority.account_id.clone());
     let mut has_account_registration = false;
     let mut has_linked_domain_registration = false;
-    let mut existing_fee_funding = Numeric::zero();
+    let mut existing_fee_funding = Quantity::zero();
     let mut has_manage_soracloud = false;
     let mut has_manage_alias = false;
     let mut has_publish_manifest = false;
@@ -286,8 +283,8 @@ fn append_bootstrap_authority_overlay(
             && mint_asset.destination() == &authority_fee_asset
         {
             existing_fee_funding = existing_fee_funding
-                .checked_add(mint_asset.object().as_numeric().clone())
-                .unwrap_or_else(|| required_fee_funding.clone());
+                .checked_add(mint_asset.object())
+                .unwrap_or_else(|_| required_fee_funding.clone());
         }
         let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
             continue;
@@ -320,10 +317,8 @@ fn append_bootstrap_authority_overlay(
     if existing_fee_funding < required_fee_funding {
         let funding_delta = required_fee_funding
             .clone()
-            .checked_sub(existing_fee_funding)
+            .checked_sub(&existing_fee_funding)
             .expect("existing fee funding is known to be below required funding");
-        let funding_delta = Quantity::try_from_numeric(funding_delta)
-            .expect("fee funding delta is non-negative by construction");
         builder =
             builder.append_instruction(Mint::asset_quantity(funding_delta, authority_fee_asset));
     }
@@ -828,9 +823,7 @@ mod tests {
                         }
                         _ => None,
                     })
-                    .is_some_and(|mint_asset| {
-                        mint_asset.object().as_numeric() == &Numeric::from(975_000_u64)
-                    })
+                    .is_some_and(|mint_asset| mint_asset.object() == &Quantity::from(975_000_u64))
             })
             .count();
         assert_eq!(

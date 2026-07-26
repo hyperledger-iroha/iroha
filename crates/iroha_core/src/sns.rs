@@ -556,7 +556,7 @@ fn alias_auto_renew_attempt(
             &state.owner,
             AssetId::of(config.payment_asset.clone(), state.owner.clone()),
             quote.collector_account.clone(),
-            quote.charge_amount.as_numeric().clone(),
+            quote.charge_amount.clone(),
         )
     {
         return AliasAutoRenewAttempt::Retry(error.to_string());

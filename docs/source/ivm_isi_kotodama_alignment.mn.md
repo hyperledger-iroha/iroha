@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T19:17:13.238594+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ translator: machine-google-reviewed
 
 ### B. Бичсэн утгуудын хувьд детерминист VM/host ABI-г тодорхойлох
 - Бүтэцлэгдсэн аргументуудын хувьд VM тал дээр Norito ашиглана уу:
-  - `AccountId`, `AssetDefinitionId`, `Numeric`, I101270. зэрэг төрлийн Norito-кодлогдсон утгыг агуулсан VM санах ойн бүс рүү заагчийг (x10..x13 гэх мэт) дамжуулна.
+  - `AccountId`, `AssetDefinitionId`, `Quantity`, I101270. зэрэг төрлийн Norito-кодлогдсон утгыг агуулсан VM санах ойн бүс рүү заагчийг (x10..x13 гэх мэт) дамжуулна.
   - Хост `IVM` санах ойн туслагчаар дамжуулан байт уншиж, Norito (`iroha_data_model` нь `Encode/Decode`-ийг аль хэдийн авсан) кодыг тайлдаг.
 - Kotodama codegen-д хамгийн бага туслахуудыг нэмж, код/тогтмол санд шууд ID-г цувуулж эсвэл санах ойд дуудлагын хүрээ бэлтгэх.
-- Дүн нь `Numeric` бөгөөд NoritoBytes заагчаар дамжуулагдана; бусад төвөгтэй төрлүүд мөн заагчаар дамждаг.
+- Хөрөнгийн хэмжээнүүд ерөнхий `NoritoBytes` заагч биш, зориулалтын `QuantityValueV1` pointer-ABI TLV (`PointerType::Quantity = 0x0010`)-г ашиглана; бусад нийлмэл утгууд өөрт нь оноосон заагчийн төрлийг ашиглана.
 - Үүнийг `crates/ivm/docs/calling_convention.md` дээр баримтжуулж, жишээ нэмнэ үү.### C. Системийн дуудлагын нэршил болон хамрах хүрээг ISI/өгөгдлийн загварт тохируулна
 - Тодорхой болгохын тулд NFT-тэй холбоотой системүүдийн нэрийг өөрчил: каноник нэрс одоо `SYSCALL_NFT_*` загварыг дагаж мөрддөг (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA` гэх мэт).
 - Системийн дуудлага бүрээс үндсэн ISI семантик руу зураглалын хүснэгтийг (doc + кодын тайлбар) нийтлэх, үүнд:

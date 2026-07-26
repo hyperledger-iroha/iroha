@@ -95,10 +95,10 @@ async fn submit_instruction_and_wait(
 async fn wait_for_asset_value(
     client: &iroha::client::Client,
     asset_id: &AssetId,
-    expected: Numeric,
+    expected: Quantity,
     timeout_after: Duration,
     context: &str,
-) -> Result<Numeric> {
+) -> Result<Quantity> {
     let deadline = Instant::now() + timeout_after;
     let mut last_observed = String::from("asset value was not queried");
 
@@ -309,7 +309,7 @@ async fn call_execute_trigger() -> Result<()> {
             move || get_asset_value(&client, &asset_id)
         })
         .await??;
-        assert_eq!(new_value, prev_value.checked_add(Numeric::one()).unwrap());
+        assert_eq!(new_value, prev_value.checked_add(&Quantity::one()).unwrap());
 
         Ok(())
     })
@@ -521,7 +521,7 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
             })
             .await??;
             assert!(
-                new_asset_value >= prev_asset_value.checked_add(numeric!(1)).unwrap(),
+                new_asset_value >= prev_asset_value.checked_add(&Quantity::one()).unwrap(),
                 "expected pre-commit trigger to execute despite failing trigger"
             );
             Ok(())
@@ -630,7 +630,7 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             .await??;
             assert_eq!(
                 new_asset_value,
-                prev_asset_value.checked_add(Numeric::one()).unwrap()
+                prev_asset_value.checked_add(&Quantity::one()).unwrap()
             );
 
             Ok(())
@@ -743,7 +743,9 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
             .await??;
             assert_eq!(
                 new_asset_value,
-                prev_asset_value.checked_add(numeric!(2)).unwrap()
+                prev_asset_value
+                    .checked_add(&Quantity::from(2_u32))
+                    .unwrap()
             );
 
             Ok(())
@@ -1070,7 +1072,7 @@ async fn trigger_in_genesis() -> Result<()> {
             move || get_asset_value(&client, &asset_id)
         })
         .await??;
-        assert_eq!(new_value, prev_value.checked_add(Numeric::one()).unwrap());
+        assert_eq!(new_value, prev_value.checked_add(&Quantity::one()).unwrap());
 
         Ok(())
     })
@@ -1551,7 +1553,7 @@ async fn call_execute_trigger_with_args() -> Result<()> {
         )
         .await?;
 
-        let expected_value = prev_value.checked_add(numeric!(42)).unwrap();
+        let expected_value = prev_value.checked_add(&Quantity::from(42_u32)).unwrap();
         let new_value = wait_for_asset_value(
             &test_client,
             &asset_id,

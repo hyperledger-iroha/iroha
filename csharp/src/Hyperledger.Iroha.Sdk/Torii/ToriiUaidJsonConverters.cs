@@ -27,7 +27,7 @@ internal static class ToriiUaidJson
 
         RequireExactNonEmptyText(response.AssetId, $"{context}.asset_id");
         RequireExactNonEmptyText(response.AssetDefinitionId, $"{context}.asset_definition_id");
-        ValidateCanonicalNonNegativeNumericText(response.Quantity, $"{context}.quantity");
+        ValidateCanonicalQuantityText(response.Quantity, $"{context}.quantity");
     }
 
     internal static void ValidateUaidPortfolioAccount(ToriiUaidPortfolioAccount? response, string context)
@@ -1375,7 +1375,7 @@ internal static class ToriiUaidJson
         }
     }
 
-    private static void ValidateCanonicalNonNegativeNumericText(string? value, string field)
+    private static void ValidateCanonicalQuantityText(string? value, string field)
     {
         _ = RequireExactNonEmptyText(value, field);
         _ = ToriiQuantityJson.RequireCanonicalQuantity(value, field);

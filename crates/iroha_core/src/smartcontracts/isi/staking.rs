@@ -254,10 +254,10 @@ impl Execute for RegisterPublicLaneValidator {
         let initial_stake = self.initial_stake.clone();
         state_transaction
             .world
-            .withdraw_numeric_asset(&stake_ctx.staker_asset, initial_stake.as_numeric())?;
+            .withdraw_numeric_asset(&stake_ctx.staker_asset, &initial_stake)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&stake_ctx.escrow_asset, initial_stake.as_numeric())?;
+            .deposit_numeric_asset(&stake_ctx.escrow_asset, &initial_stake)?;
 
         let block_height = state_transaction.block_height();
         let epoch_length = state_transaction
@@ -623,10 +623,10 @@ impl Execute for BondPublicLaneStake {
         }
         state_transaction
             .world
-            .withdraw_numeric_asset(&stake_ctx.staker_asset, amount.as_numeric())?;
+            .withdraw_numeric_asset(&stake_ctx.staker_asset, &amount)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&stake_ctx.escrow_asset, amount.as_numeric())?;
+            .deposit_numeric_asset(&stake_ctx.escrow_asset, &amount)?;
 
         {
             let validator = state_transaction
@@ -837,10 +837,10 @@ impl Execute for FinalizePublicLaneUnbond {
         )?;
         state_transaction
             .world
-            .withdraw_numeric_asset(&stake_ctx.escrow_asset, pending.amount.as_numeric())?;
+            .withdraw_numeric_asset(&stake_ctx.escrow_asset, &pending.amount)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&stake_ctx.staker_asset, pending.amount.as_numeric())?;
+            .deposit_numeric_asset(&stake_ctx.staker_asset, &pending.amount)?;
         persist_share(state_transaction, share_key, share);
 
         sumeragi_status::record_public_lane_pending_unbond_delta(
@@ -1789,8 +1789,8 @@ pub(crate) fn apply_slash_to_validator(
         }
     }
 
-    world.withdraw_numeric_asset(&stake_ctx.escrow_asset, amount.as_numeric())?;
-    world.deposit_numeric_asset(&stake_ctx.slash_sink_asset, amount.as_numeric())?;
+    world.withdraw_numeric_asset(&stake_ctx.escrow_asset, amount)?;
+    world.deposit_numeric_asset(&stake_ctx.slash_sink_asset, amount)?;
 
     sumeragi_status::record_public_lane_bonded_delta(lane_id, amount, false);
     sumeragi_status::record_public_lane_slash(lane_id);
@@ -5648,7 +5648,7 @@ mod tests {
         let delegator_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
         let delegator_balance = Quantity::from(10_000_u64);
         stx.world
-            .withdraw_numeric_asset(&delegator_asset, delegator_balance.as_numeric())
+            .withdraw_numeric_asset(&delegator_asset, &delegator_balance)
             .expect("drain delegator funds");
 
         RegisterPublicLaneValidator {

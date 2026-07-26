@@ -12357,8 +12357,11 @@ test("getSumeragiDiagnosticsTyped requires every canonical lane array", async ()
 });
 
 test("getSumeragiDiagnosticsTyped parses exact nested fee and native AMX receipts", async () => {
+  const nexusFeeReceipt = createNexusFeeReceipt({
+    fee_amount: "18446744073709551616.25",
+  });
   const settlement = createLaneSettlementCommitment({
-    nexus_fee_receipts: [createNexusFeeReceipt()],
+    nexus_fee_receipts: [nexusFeeReceipt],
     native_amx_receipts: createNativeAmxReceiptGroup(),
   });
   const payload = createSumeragiDiagnosticsPayload({
@@ -12368,6 +12371,10 @@ test("getSumeragiDiagnosticsTyped parses exact nested fee and native AMX receipt
   const status = await sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped();
   const parsed = status.lane_settlement_commitments[0];
 
+  assert.equal(
+    parsed.nexus_fee_receipts[0].fee_amount,
+    "18446744073709551616.25",
+  );
   assert.equal(parsed.nexus_fee_receipts[0].schedule.per_byte_fee, "0.5");
   assert.equal(parsed.native_amx_receipts[0].version, 2);
   assert.deepEqual(
@@ -12483,6 +12490,26 @@ test("getSumeragiDiagnosticsTyped rejects unordered native QC validators", async
   );
 });
 
+test("getSumeragiDiagnosticsTyped rejects invalid and identity BLS-Normal validators", async () => {
+  for (const compressed of [
+    "00".repeat(48),
+    `C0${"00".repeat(47)}`,
+  ]) {
+    const native = createNativeAmxReceiptFixture();
+    native.legs[0].prepare_qc.validator_set[0] = `ea0130${compressed}`;
+    await assert.rejects(
+      () => sumeragiDiagnosticsClientForPayload(
+        createSumeragiDiagnosticsPayload({
+          lane_settlement_commitments: [
+            createLaneSettlementCommitment({ native_amx_receipts: [native] }),
+          ],
+        }),
+      ).getSumeragiDiagnosticsTyped(),
+      /contains an invalid BLS-Normal public key/,
+    );
+  }
+});
+
 test("getSumeragiDiagnosticsTyped rejects participant-finality tampering", async () => {
   const mutations = [
     (leg) => { leg.future_leg_field = 1; },
@@ -12589,6 +12616,42 @@ test("getSumeragiDiagnosticsTyped rejects non-canonical settlement scalars and n
       })],
     })).getSumeragiDiagnosticsTyped(),
     /schedule contains unknown field legacy_rate/,
+  );
+
+  for (const invalid of [
+    7,
+    "+1",
+    "01",
+    "1.0",
+    "1.2300",
+    "1amt",
+    "1qty",
+    " 1",
+    "1 ",
+    "-1",
+    "9".repeat(155),
+  ]) {
+    const invalidFee = createNexusFeeReceipt({ fee_amount: invalid });
+    await assert.rejects(
+      () => sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
+        lane_settlement_commitments: [createLaneSettlementCommitment({
+          nexus_fee_receipts: [invalidFee],
+        })],
+      })).getSumeragiDiagnosticsTyped(),
+      /fee_amount must be a canonical/u,
+      `fee_amount ${String(invalid)} must be rejected`,
+    );
+  }
+
+  const noncanonicalScheduleFee = createNexusFeeReceipt();
+  noncanonicalScheduleFee.schedule.base_fee = "2.0";
+  await assert.rejects(
+    () => sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
+      lane_settlement_commitments: [createLaneSettlementCommitment({
+        nexus_fee_receipts: [noncanonicalScheduleFee],
+      })],
+    })).getSumeragiDiagnosticsTyped(),
+    /base_fee must be a canonical/u,
   );
 
   const nativeWithUnknownBodyField = createNativeAmxReceiptFixture();
@@ -14297,10 +14360,14 @@ test("getGovernanceReferendum treats 404 as not found", async () => {
 });
 
 test("getGovernanceLocksTyped parses lock records and synthesizes not-found result on 404", async () => {
+  const locksFixture = cloneFixture(toriiFixtures.governance.locks);
+  const [lock] = Object.values(locksFixture.locks);
+  lock.amount = "18446744073709551616.25";
+  lock.slashed = "0.25";
   const fetchImpl = async () =>
     createResponse({
       status: 200,
-      jsonData: cloneFixture(toriiFixtures.governance.locks),
+      jsonData: locksFixture,
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
@@ -14309,6 +14376,8 @@ test("getGovernanceLocksTyped parses lock records and synthesizes not-found resu
   assert.equal(Object.keys(result.locks).length, 1);
   const [firstLock] = Object.values(result.locks);
   assert.ok(firstLock);
+  assert.equal(firstLock.amount, "18446744073709551616.25");
+  assert.equal(firstLock.slashed, "0.25");
   assert.equal(firstLock.duration_blocks, 5);
 
   const missingClient = new ToriiClient(BASE_URL, {
@@ -14322,6 +14391,41 @@ test("getGovernanceLocksTyped parses lock records and synthesizes not-found resu
     locks: {},
     referendum_id: "ref-2",
   });
+});
+
+test("getGovernanceLocksTyped rejects noncanonical and numeric JSON quantities", async () => {
+  for (const field of ["amount", "slashed"]) {
+    for (const value of [
+      1,
+      "+1",
+      "01",
+      "1.0",
+      "1.2300",
+      "1amt",
+      "1qty",
+      " 1",
+      "1 ",
+      "-1",
+      "9".repeat(155),
+    ]) {
+      const fixture = cloneFixture(toriiFixtures.governance.locks);
+      const [lock] = Object.values(fixture.locks);
+      lock[field] = value;
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () =>
+          createResponse({
+            status: 200,
+            jsonData: fixture,
+            headers: { "content-type": "application/json" },
+          }),
+      });
+      await assert.rejects(
+        () => client.getGovernanceLocksTyped("ref-1"),
+        /canonical non-negative Kotodama V1 quantity|canonical Kotodama V1 quantity/u,
+        `${field} ${String(value)} must be rejected`,
+      );
+    }
+  }
 });
 
 test("getGovernanceUnlockStatsTyped normalizes numeric fields", async () => {
@@ -14759,7 +14863,7 @@ test("governanceSubmitPlainBallot normalizes amount and direction", async () => 
   assert.equal(ballot.accepted, true);
 });
 
-test("governanceSubmitPlainBallot accepts decimal Numeric amounts", async () => {
+test("governanceSubmitPlainBallot accepts canonical fractional Quantity amounts", async () => {
   let capturedBody;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (_url, init) => {
@@ -14776,14 +14880,14 @@ test("governanceSubmitPlainBallot accepts decimal Numeric amounts", async () => 
     chainId: "chain-0",
     referendumId: "ref-plain-decimal",
     owner: FIXTURE_ALICE_ID,
-    amount: "12.500",
+    amount: "12.5",
     durationBlocks: 1,
     direction: "aye",
   });
-  assert.equal(capturedBody.amount, "12.500");
+  assert.equal(capturedBody.amount, "12.5");
 });
 
-test("governanceSubmitPlainBallot enforces the signed Numeric and text bounds", async () => {
+test("governanceSubmitPlainBallot enforces canonical lossless Quantity input", async () => {
   let fetchCalls = 0;
   let capturedBody;
   const client = new ToriiClient(BASE_URL, {
@@ -14813,16 +14917,25 @@ test("governanceSubmitPlainBallot enforces the signed Numeric and text bounds", 
 
   await assert.rejects(
     () => client.governanceSubmitPlainBallot({ ...payload, amount: 1n << 511n }),
-    /signed 512-bit range/u,
+    /mantissa_overflow/u,
   );
-  await assert.rejects(
-    () =>
-      client.governanceSubmitPlainBallot({
-        ...payload,
-        amount: "1".repeat(100_000),
-      }),
-    /bounded Numeric text length/u,
-  );
+  for (const amount of [
+    1,
+    "+1",
+    "01",
+    "1.0",
+    "1amt",
+    "1qty",
+    " 1",
+    "-1",
+    "1".repeat(100_000),
+  ]) {
+    await assert.rejects(
+      () => client.governanceSubmitPlainBallot({ ...payload, amount }),
+      /canonical|JavaScript numbers are rejected|mantissa_overflow/u,
+      `amount ${String(amount).slice(0, 32)} must be rejected`,
+    );
+  }
   assert.equal(fetchCalls, 1);
 });
 
@@ -15006,11 +15119,15 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
     backend: "halo2/ipa",
     envelope: [4, 5],
     root_hint: `blake2b32:${"Ab".repeat(32)}`,
-    owner: null,
+    owner: SAMPLE_ACCOUNT_FORMS.i105,
+    amount: "18446744073709551616.25",
+    durationBlocks: 128,
+    direction: "Aye",
     nullifier: Buffer.alloc(32, 0xff),
   });
   assert.equal(calls[1].body.envelope_b64, "BAU=");
   assert.equal(calls[1].body.root_hint, "ab".repeat(32));
+  assert.equal(calls[1].body.amount, "18446744073709551616.25");
   assert.equal(calls[1].body.nullifier, "ff".repeat(32));
   assert.equal(zkV1Result.accepted, false);
   assert.equal(zkV1Result.reason, "build transaction skeleton");
@@ -15024,15 +15141,86 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
       envelope_bytes: "AAE=",
       root_hint: `blake2b32:${"Cc".repeat(32)}`,
       nullifier: `0x${"DD".repeat(32)}`,
-      owner: null,
-      amount: null,
-      duration_blocks: null,
+      owner: SAMPLE_ACCOUNT_FORMS.i105,
+      amount: "18446744073709551616.25",
+      duration_blocks: 128,
       direction: null,
     },
   });
   assert.equal(calls[2].body.ballot.root_hint, "cc".repeat(32));
   assert.equal(calls[2].body.ballot.nullifier, "dd".repeat(32));
+  assert.equal(calls[2].body.ballot.amount, "18446744073709551616.25");
   assert.equal(zkProofResult.accepted, false);
+});
+
+test("governanceSubmitZk ballot lock hints reject noncanonical Quantity amounts", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  for (const amount of [
+    1,
+    "+1",
+    "01",
+    "1.0",
+    "1.2300",
+    "1amt",
+    "1qty",
+    " 1",
+    "1 ",
+    "-1",
+    "9".repeat(155),
+  ]) {
+    await assert.rejects(
+      () =>
+        client.governanceSubmitZkBallot({
+          authority: FIXTURE_BOB_ID,
+          chainId: "chain-0",
+          electionId: "ref-zk",
+          proof: [1, 2, 3],
+          public: {
+            owner: SAMPLE_ACCOUNT_FORMS.i105,
+            amount,
+            duration_blocks: 128,
+          },
+        }),
+      /canonical/u,
+      `public amount ${String(amount)} must be rejected`,
+    );
+    await assert.rejects(
+      () =>
+        client.governanceSubmitZkBallotV1({
+          authority: FIXTURE_BOB_ID,
+          chainId: "chain-0",
+          electionId: "ref-zk",
+          backend: "halo2/ipa",
+          envelope: [4, 5],
+          owner: SAMPLE_ACCOUNT_FORMS.i105,
+          amount,
+          durationBlocks: 128,
+        }),
+      /canonical|JavaScript numbers are rejected/u,
+      `V1 amount ${String(amount)} must be rejected`,
+    );
+    await assert.rejects(
+      () =>
+        client.governanceSubmitZkBallotProofV1({
+          authority: FIXTURE_BOB_ID,
+          chainId: "chain-0",
+          electionId: "ref-zk",
+          ballot: {
+            backend: "halo2/ipa",
+            envelope_bytes: "AAE=",
+            owner: SAMPLE_ACCOUNT_FORMS.i105,
+            amount,
+            duration_blocks: 128,
+          },
+        }),
+      /canonical|JavaScript numbers are rejected/u,
+      `BallotProof amount ${String(amount)} must be rejected`,
+    );
+  }
 });
 
 test("governanceSubmitZk ballots reject partial lock hints", async () => {
@@ -17444,7 +17632,7 @@ test("listAccountAssets enforces canonical quantity strings", async () => {
 });
 
 test("listAccountAssets rejects noncanonical quantity spellings", async () => {
-  for (const quantity of [-1, "01", "1.0", "1.20", " 1", "1e0"]) {
+  for (const quantity of [-1, "01", "1.0", "1.20", "1amt", "1qty", " 1", "1e0"]) {
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () =>
         createResponse({

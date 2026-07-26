@@ -107,7 +107,7 @@ ID 具有穩定的字串形式，可進行 `Display`/`FromStr` 往返。名稱�
 型號：`Mint<O, D: Identifiable>` 和 `Burn<O, D: Identifiable>`，盒裝為 `MintBox`/`BurnBox`。
 
 - 資產（數位）鑄造/銷毀：調整餘額和定義的 `total_quantity`。
-  - 前提條件：`Numeric`值必須符合`AssetDefinition.spec()`；`mintable` 允許的薄荷：
+  - 前提條件：`Quantity`值必須符合`AssetDefinition.spec()`；`mintable` 允許的薄荷：
     - `Infinitely`：始終允許。
     - `Once`：僅允許一次；第一個鑄幣廠將 `mintable` 翻轉為 `Not` 並發出 `AssetDefinitionEvent::MintabilityChanged`，以及用於可審計的詳細 `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }`。
     - `Limited(n)`：允許 `n` 額外的鑄造作業。每個成功的鑄幣廠都會減少計數器；當它達到零時，定義翻轉到 `Not` 並發出與上面相同的 `MintabilityChanged` 事件。

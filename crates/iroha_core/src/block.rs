@@ -4166,7 +4166,6 @@ pub(crate) mod valid {
     };
     use iroha_data_model::{
         ChainId,
-        block::consensus::SumeragiLanePayloadOwnership,
         events::pipeline::PipelineEventBox,
         nexus::{AxtPolicySnapshot, GroupBinding, HandleBudget, HandleSubject},
     };
@@ -8072,15 +8071,6 @@ pub(crate) mod valid {
                 )));
             }
             Ok(())
-        }
-
-        fn execution_context_preimage_hash(
-            preimage: &impl Encode,
-            context: &str,
-        ) -> Result<Hash, BlockValidationError> {
-            Ok(Hash::new(norito::to_bytes(preimage).map_err(|err| {
-                Self::execution_context_error(format!("failed to encode {context} preimage: {err}"))
-            })?))
         }
 
         fn execution_context_lane_descriptor_validator_set(
@@ -29399,7 +29389,7 @@ mod tests {
         let error = validate(&stale_participant_incarnation)
             .expect_err("retired participant incarnation must fail");
         assert!(
-            error.contains("internally inconsistent"),
+            error.contains("unexpected participant lane 2 dataspace 8"),
             "unexpected participant-incarnation rejection: {error}"
         );
 

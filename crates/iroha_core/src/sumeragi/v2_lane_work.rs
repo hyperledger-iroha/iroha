@@ -99,10 +99,10 @@ use crate::{
         decode_certified_merge_sidecar,
     },
     native_amx::{
-        MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD, NativeAmxAttestationRequestV2,
-        NativeAmxCommitRequestV2, NativeAmxMessage, NativeAmxSessionCache, NativeAmxSessionError,
-        NativeAmxSessionKey, NativeAmxSigningGuard, NativeAmxSigningGuardLimits, NativeAmxVoteV2,
-        aggregate_votes_to_qc, validate_native_amx_qc,
+        NativeAmxAttestationRequestV2, NativeAmxCommitRequestV2, NativeAmxMessage,
+        NativeAmxSessionCache, NativeAmxSessionError, NativeAmxSessionKey, NativeAmxSigningGuard,
+        NativeAmxSigningGuardLimits, NativeAmxVoteV2, aggregate_votes_to_qc,
+        validate_native_amx_qc,
     },
     queue::{
         LaneQueueReservationKeyV2, LaneQueueReservationOutcome, LaneQueueReservationRoutingMode,
@@ -114,6 +114,8 @@ use crate::{
 
 #[cfg(test)]
 use crate::queue::{RouteLeg, RouteLegRole};
+#[cfg(test)]
+use crate::native_amx::MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD;
 
 // Keep compact-QC preflight at least as strict as State's full-entry admission
 // before allocating transport. These are first-release protocol caps, not

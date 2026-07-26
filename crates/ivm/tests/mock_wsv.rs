@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 
 use iroha_data_model::prelude::PublicKey;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use ivm::mock_wsv::{
     AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId, PermissionToken,
 };
 
-fn num(value: u64) -> Numeric {
-    Numeric::from(value)
+fn num(value: u64) -> Quantity {
+    Quantity::from(value)
 }
 
 fn test_account(domain: &DomainId, public_key: PublicKey) -> AccountId {
@@ -49,7 +49,7 @@ fn test_mock_wsv_basic_ops() {
 }
 
 #[test]
-fn test_mock_wsv_rejects_scaled_numeric() {
+fn test_mock_wsv_rejects_scaled_quantity() {
     let d: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
@@ -65,21 +65,21 @@ fn test_mock_wsv_rejects_scaled_numeric() {
     );
 
     let mut wsv = MockWorldStateView::with_balances(&[
-        ((acc1.clone(), asset.clone()), Numeric::from(1_000_u64)),
-        ((acc2.clone(), asset.clone()), Numeric::from(0_u64)),
+        ((acc1.clone(), asset.clone()), Quantity::from(1_000_u64)),
+        ((acc2.clone(), asset.clone()), Quantity::zero()),
     ]);
     assert!(!wsv.transfer(
         &acc1,
         acc1.clone(),
         acc2.clone(),
         asset.clone(),
-        Numeric::new(25_u64, 2)
+        "0.25".parse().expect("scaled quantity")
     ));
     assert_eq!(
         wsv.balance(acc1.clone(), asset.clone()),
-        Numeric::from(1_000_u64)
+        Quantity::from(1_000_u64)
     );
-    assert_eq!(wsv.balance(acc2.clone(), asset), Numeric::from(0_u64));
+    assert_eq!(wsv.balance(acc2.clone(), asset), Quantity::zero());
 }
 
 #[test]

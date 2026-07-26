@@ -52,7 +52,7 @@ mod model {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
-        any(feature = "ffi_import", feature = "ffi_export"),
+        all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
     )]
     #[repr(u8)]

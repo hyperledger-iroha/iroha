@@ -7961,7 +7961,7 @@ pub struct AccountOnboardingAutoRenew {
     /// Lease term requested by each renewal.
     pub term_years: NonZeroU8,
     /// Maximum amount the owner authorizes per renewal.
-    pub max_amount: Numeric,
+    pub max_amount: Quantity,
     /// How far before expiry native block processing begins attempting renewal.
     pub renew_before_expiry: Duration,
     /// Deterministic retry delay after an insufficient-funds failure.

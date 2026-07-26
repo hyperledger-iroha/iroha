@@ -39,22 +39,22 @@ where
     Ok(())
 }
 
-fn asset_value(client: &client::Client, asset_id: &AssetId) -> Result<Numeric> {
+fn asset_value(client: &client::Client, asset_id: &AssetId) -> Result<Quantity> {
     let assets = client.query(FindAssets::new()).execute_all()?;
     let asset = assets
         .into_iter()
         .find(|asset| asset.id() == asset_id)
         .ok_or_else(|| eyre::eyre!("asset {asset_id} not found"))?;
 
-    Ok(asset.value().clone().into_numeric())
+    Ok(asset.value().clone())
 }
 
 fn wait_for_asset_value(
     client: &client::Client,
     asset_id: &AssetId,
-    expected: &Numeric,
+    expected: &Quantity,
     context: &str,
-) -> Result<Numeric> {
+) -> Result<Quantity> {
     let deadline = Instant::now() + ASSET_VALUE_TIMEOUT;
     let mut last_observed = "asset was not queried".to_owned();
 
@@ -189,7 +189,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
 
-        let expected_new_value = prev_value.checked_add(numeric!(1)).unwrap();
+        let expected_new_value = prev_value.checked_add(&Quantity::one()).unwrap();
         let new_value = spawn_blocking({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
@@ -217,7 +217,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
 
-        let expected_newer_value = new_value.checked_add(numeric!(1)).unwrap();
+        let expected_newer_value = new_value.checked_add(&Quantity::one()).unwrap();
         let expected_newer_value_for_wait = expected_newer_value.clone();
         let newer_value = spawn_blocking({
             let client = test_client.clone();

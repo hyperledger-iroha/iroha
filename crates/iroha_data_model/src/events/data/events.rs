@@ -1118,7 +1118,14 @@ mod repo_account {
 
     /// Role played by the account within a repo agreement lifecycle event.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     /// Role carried by accounts participating in the repository subsystem.
     pub enum RepoAccountRole {
         /// Account initiated the agreement (borrower).
@@ -1979,6 +1986,7 @@ mod domain {
             any(feature = "ffi_export", feature = "ffi_import"),
             ffi_type(unsafe {robust})
         )]
+        #[repr(transparent)]
         #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct StreamingTicketCapabilities(u32);

@@ -21,7 +21,7 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
         DomainId::try_new("wonderland", "universal")?,
         "rose".parse()?,
     );
-    let alice_has_roses = numeric!(13);
+    let alice_has_roses = Quantity::from(13_u32);
 
     // When
     let Some(network) = sandbox::build_network_or_skip(
@@ -67,7 +67,7 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
             .iter()
             .find(|asset| *asset.id().account() == alice_id && *asset.id().definition() == roses)
             .ok_or_eyre("asset should be found")?;
-        assert_eq!(&alice_has_roses, asset.value().as_numeric());
+        assert_eq!(&alice_has_roses, asset.value());
         Ok(())
     })
     .await??;

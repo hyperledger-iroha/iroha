@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::Hash;
 use iroha_data_model::{DomainId, prelude::Name};
-use iroha_primitives::{json::Json, numeric::Numeric, numeric_abi::QuantityValueV1};
+use iroha_primitives::{json::Json, numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken, PointerType,
     ProgramMetadata, encode_argument_record_from_json,
@@ -63,9 +63,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // These reserves make the post-fee share exactly 0.5, so the mock ledger's
     // scale-zero quantity policy can apply the quoted output without rounding.
     let wsv = MockWorldStateView::with_balances(&[
-        ((alice.clone(), asset_a.clone()), Numeric::from(1_000_u64)),
-        ((pool.clone(), asset_a.clone()), Numeric::from(997_u64)),
-        ((pool.clone(), asset_b.clone()), Numeric::from(100_u64)),
+        ((alice.clone(), asset_a.clone()), Quantity::from(1_000_u64)),
+        ((pool.clone(), asset_a.clone()), Quantity::from(997_u64)),
+        ((pool.clone(), asset_b.clone()), Quantity::from(100_u64)),
     ]);
     let mut wsv = wsv;
     // Grant permissions for caller (Alice) to transfer these assets

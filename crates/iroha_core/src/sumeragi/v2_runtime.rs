@@ -352,11 +352,12 @@ pub(crate) struct RuntimeCommandIdentity {
 /// Direct QC delivery and discovery-response delivery therefore occupy two
 /// independent slots while sharing one immutable runtime command. Each slot
 /// retains a protocol-bounded set of independently admitted fair-ingress
-/// carriers. Identical certificates can legitimately arrive from every voter,
-/// so collapsing the slot to one semantic origin would turn a valid duplicate
-/// into a fail-closed ownership mismatch. The bound is exact: once every slot
-/// is occupied, a new disjoint carrier is rejected rather than summarized
-/// without its source identity.
+/// carriers; direct timeout certificates use the direct slot under the same
+/// bound. Identical aggregate certificates can legitimately arrive from every
+/// voter, so collapsing the slot to one semantic origin would turn a valid
+/// duplicate into a fail-closed ownership mismatch. The bound is exact: once
+/// every slot is occupied, a new disjoint carrier is rejected rather than
+/// summarized without its source identity.
 const MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM: usize = wire::MAX_VALIDATORS_PER_HEIGHT;
 
 #[derive(Clone, Debug)]
@@ -416,13 +417,14 @@ impl RuntimeIngressOwnershipEvidence {
             return Err(RuntimeIngressMergeError::Conflict);
         }
         // Distinct semantic origins are independent requests for proposal,
-        // vote, timeout, and transport traffic. A QC is an idempotent
-        // authenticated fact which can legitimately arrive from every voter,
-        // so it alone retains a bounded set of disjoint source carriers in one
-        // serialized runtime command.
+        // vote, timeout-vote, and transport traffic. QCs and TCs are
+        // idempotent authenticated facts which can legitimately arrive from
+        // every voter, so each retains a bounded set of disjoint source
+        // carriers in one serialized runtime command.
         let allow_disjoint_carriers = matches!(
             runtime.payload,
             wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+                | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
         );
         let mut merged = self.clone();
         merge_runtime_ingress_slot(
@@ -3349,10 +3351,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     ///
     /// Traffic which passes the bounded capacity check, exactly matches an
     /// already-owned authenticated envelope, or exactly matches a
-    /// Busy-deferred QC is cryptographically authenticated and then checked
-    /// against canonical authority. Rejections do not poison the runtime.
-    /// Once admitted, any adapter transition failure is fatal when the
-    /// serialized command is executed.
+    /// Busy-deferred authenticated certificate is cryptographically
+    /// authenticated and then checked against canonical authority. Rejections
+    /// do not poison the runtime. Once admitted, any adapter transition
+    /// failure is fatal when the serialized command is executed.
     pub(crate) fn enqueue_network_with_ingress_ownership(
         &mut self,
         message: wire::ConsensusMessageV2,
@@ -3369,11 +3371,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let default_class = classify_reducer_network_ingress(self.fail_closed, &message.payload)?;
         let deferred_owner = self.driver.deferred_authenticated_message_owner(&message);
         // An exact queued retransmission may always spend authentication work
-        // so it can release its ingress occurrence. An exact Busy-deferred QC
-        // may likewise spend authentication work without claiming a second
-        // queue slot. Otherwise, only the adapter's exact active-lock match
-        // may proceed after the normal prefix fills. Authentication below
-        // remains mandatory before either form of coalescing.
+        // so it can release its ingress occurrence. An exact Busy-deferred
+        // authenticated certificate may likewise spend authentication work
+        // without claiming a second queue slot. Otherwise, only the adapter's
+        // exact active-lock match may proceed after the normal prefix fills.
+        // Authentication below remains mandatory before either form of
+        // coalescing.
         let may_be_exact_locked_commit =
             self.driver.wire_ingress_may_use_progress(&message.payload);
         if deferred_owner.is_none() {
@@ -4510,6 +4513,46 @@ mod tests {
             signers,
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate runtime fixture certificate"),
+        }
+    }
+
+    fn signed_runtime_timeout_certificate(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+    ) -> wire::TimeoutCertificate {
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let signers = vec![0, 1, 2];
+        let preimage = wire::TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let shares = signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("small signer index")].private_key(),
+                    &preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        wire::TimeoutCertificate {
+            round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers,
+                aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                    .expect("aggregate runtime timeout certificate"),
+            }],
         }
     }
 
@@ -6362,6 +6405,128 @@ mod tests {
             !reordered.validate_exact(),
             "the retained runtime projection must reject carrier-order mutation"
         );
+        assert!(!runtime.fail_closed);
+    }
+
+    #[test]
+    fn exact_authenticated_tc_from_distinct_sources_retains_one_busy_owner() {
+        let directory = TempDir::new().expect("temporary multi-source TC directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(4, 1, 1),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before authenticated ingress");
+        let owner_tag = runtime.round_tag();
+        let timeout_effects = runtime
+            .driver
+            .timeout_elapsed(owner_tag)
+            .expect("install a local signing fence")
+            .into_effects();
+        let (signature_tag, signature_preimage) = match timeout_effects.as_slice() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(vote),
+                },
+            ] => (*tag, vote.signature_preimage()),
+            effects => panic!("unexpected timeout effects: {effects:?}"),
+        };
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                signed_runtime_timeout_certificate(&context, &keys),
+            ));
+
+        for source in &keys[..2] {
+            assert_eq!(
+                runtime
+                    .enqueue_network_with_ingress_ownership(
+                        message.clone(),
+                        fair_network_ownership(&message, PeerId::new(source.public_key().clone()),),
+                    )
+                    .expect("each authenticated TC carrier coalesces"),
+                owner_tag
+            );
+        }
+        assert_eq!(runtime.queued_commands(), 1);
+        let queued = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|command| command.ingress_ownership.as_ref())
+            .expect("the queued TC retains both fair-ingress carriers");
+        assert_eq!(queued.direct.len(), 2);
+        assert!(queued.validate_exact());
+
+        assert!(matches!(
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+        ));
+        let fifo_owner = runtime
+            .take_last_scheduler_ownership()
+            .expect("Busy TC dispatch retains its exact FIFO owner");
+        assert!(fifo_owner.validate_exact().is_ok());
+        assert_eq!(runtime.deferred_ingress_ownership.len(), 1);
+        let deferred = runtime
+            .deferred_ingress_ownership
+            .values()
+            .next()
+            .expect("the Busy TC owns one deferred ordinal");
+        assert_eq!(deferred.direct.len(), 2);
+        assert!(deferred.validate_exact());
+
+        assert_eq!(
+            runtime
+                .enqueue_network_with_ingress_ownership(
+                    message.clone(),
+                    fair_network_ownership(&message, PeerId::new(keys[2].public_key().clone()),),
+                )
+                .expect("a later authenticated carrier merges into the Busy TC"),
+            owner_tag
+        );
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(
+            runtime
+                .deferred_ingress_ownership
+                .values()
+                .next()
+                .expect("the Busy TC retains its merged carrier set")
+                .direct
+                .len(),
+            3
+        );
+
+        let signature = Signature::new(keys[0].private_key(), &signature_preimage)
+            .payload()
+            .to_vec();
+        runtime
+            .enqueue_signature(signature_tag, signature)
+            .expect("enqueue the exact signing completion");
+        assert!(matches!(
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects))
+                if matches!(effects.as_slice(), [AdapterEffect::Broadcast(_)])
+        ));
+        assert!(runtime.take_last_scheduler_ownership().is_some());
+        assert!(matches!(runtime.step(now), Ok(RuntimeStep::Advanced(_))));
+        let deferred_owner = runtime
+            .take_last_scheduler_ownership()
+            .expect("deferred TC service hands off its exact owner");
+        assert!(deferred_owner.validate_exact().is_ok());
+        let RuntimeSelectedCandidateOwnership::ExactDeferred(deferred) = &deferred_owner.candidate
+        else {
+            panic!("expected exact deferred TC scheduler ownership")
+        };
+        assert!(
+            deferred
+                .ingress_ownership
+                .as_ref()
+                .is_some_and(|ownership| ownership.direct.len() == 3)
+        );
+        assert!(runtime.deferred_ingress_ownership.is_empty());
         assert!(!runtime.fail_closed);
     }
 

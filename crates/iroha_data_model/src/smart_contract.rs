@@ -963,7 +963,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct ContractManifest {
         /// Canonical source-level seiyaku name embedded by the compiler.
         #[norito(default)]
@@ -1148,7 +1155,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct ManifestProvenance {
         /// Public key that signed the manifest payload.
         pub signer: PublicKey,
@@ -1167,7 +1181,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct EntrypointDescriptor {
         /// Symbol name as declared in the Kotodama source file.
         pub name: String,
@@ -1219,7 +1240,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct EntrypointParamDescriptor {
         /// Stable parameter name as declared in the Kotodama source file.
         pub name: String,
@@ -1238,7 +1266,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct StateDescriptor {
         /// Stable state key as declared in Kotodama source.
         pub name: String,
@@ -1257,7 +1292,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct ContractErrorCodeDescriptor {
         /// Error enum namespace declared in Kotodama source.
         pub namespace: String,
@@ -1278,7 +1320,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct KotobaTranslation {
         /// Language tag, e.g. "en", "ja".
         pub lang: String,
@@ -1297,7 +1346,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct KotobaTranslationEntry {
         /// Stable message identifier.
         pub msg_id: String,
@@ -1316,7 +1372,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct TriggerCallback {
         /// Optional contract namespace for cross-contract callbacks.
         #[norito(default)]
@@ -1336,7 +1399,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct TriggerDescriptor {
         /// Trigger identifier.
         pub id: TriggerId,
@@ -1366,7 +1436,14 @@ pub mod manifest {
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[norito(tag = "kind", content = "value")]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub enum EntryPointKind {
         /// Transaction dispatcher entrypoint (`kotoage`/`言挙げ fn`).
         Kotoage,
@@ -1389,7 +1466,14 @@ pub mod manifest {
         )
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        derive(iroha_ffi::FfiType)
+    )]
+    #[cfg_attr(
+        all(feature = "ffi_export", not(feature = "ffi_import")),
+        ffi_type(opaque)
+    )]
     pub struct ContractManifestSignaturePayload {
         /// Canonical source-level seiyaku name.
         #[norito(default)]

@@ -42,6 +42,14 @@ pub const MAX_DECIMAL_SCALE: u32 = 28;
 /// `e` is carried separately. Public constructors strip fractional trailing
 /// zeroes, including reducing every zero to scale zero, so equality, ordering,
 /// hashing, map keys, and serialization all observe one representation.
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Numeric {
     mantissa: BigInt,
@@ -55,6 +63,14 @@ pub struct Numeric {
 /// value reaches storage or hashing. The name deliberately does not imply
 /// currency: an Iroha asset may represent money, a commodity, a vote, or a
 /// right.
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Quantity(Numeric);
@@ -72,6 +88,14 @@ pub const XOR_QUANTITY_SCALE: u32 = 9;
 /// enforcing XOR's scale policy at every construction and wire-decoding
 /// boundary. It is intentionally unit-neutral: callers exchange decimal XOR
 /// values, never an implicit micro- or nano-unit integer.
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct XorQuantity(Quantity);
@@ -92,6 +116,10 @@ pub struct XorQuantity(Quantity);
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct NumericSpec {
     /// Count of decimal digits in the fractional part.

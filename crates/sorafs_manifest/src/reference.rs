@@ -24,9 +24,9 @@ use crate::{
     HedgingPriceFeedV1, HedgingReferencePriceDecisionV1, HedgingValidationError,
     ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1, OrderCancelV1,
     OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookSignatureV1, OrderbookValidationError,
-    PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
-    PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PDP_MAX_HOT_LEAVES_PER_SEGMENT_SAMPLE_V1,
-    PDP_MAX_MERKLE_PATH_DEPTH_V1, PDP_MAX_SEGMENT_SAMPLES_V1, PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1,
+    PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+    PDP_MAX_HOT_LEAVES_PER_SEGMENT_SAMPLE_V1, PDP_MAX_MERKLE_PATH_DEPTH_V1,
+    PDP_MAX_SEGMENT_SAMPLES_V1, PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1,
     PDP_PROOF_MAX_CANONICAL_BYTES_V1, PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1,
     PdpCommitmentValidationError, PdpProofV1, PdpProofValidationError, PdpVerificationError,
     PopCommitmentRootV1, PopCredentialV1, PopCredentialValidationError, PopEligibilityClassV1,
@@ -46,13 +46,12 @@ use crate::{
     decode_billing_statement_v1, decode_hedging_price_feed_v1,
     decode_hedging_reference_price_decision_v1, decode_order_cancel_v1, decode_order_request_v1,
     decode_settlement_channel_v1, decode_settlement_receipt_v1, decode_trade_event_v1,
-    sign_order_cancel_ed25519_v1,
-    sign_order_request_ed25519_v1, sign_settlement_receipt_ed25519_v1,
-    validate_governance_dag_head_against_chain_v1, verify_envelope_untrusted_signers,
-    verify_order_cancel_signature_v1, verify_order_request_signature_v1, verify_pdp_bundle_v1,
-    verify_pdp_witnesses_v1, verify_pop_commitment_root_signature_v1,
-    verify_pop_credential_signature_v1, verify_pop_revocation_list_signature_v1,
-    verify_settlement_receipt_signature_v1,
+    sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
+    sign_settlement_receipt_ed25519_v1, validate_governance_dag_head_against_chain_v1,
+    verify_envelope_untrusted_signers, verify_order_cancel_signature_v1,
+    verify_order_request_signature_v1, verify_pdp_bundle_v1, verify_pdp_witnesses_v1,
+    verify_pop_commitment_root_signature_v1, verify_pop_credential_signature_v1,
+    verify_pop_revocation_list_signature_v1, verify_settlement_receipt_signature_v1,
 };
 
 /// Current schema version for [`ValidationOutcomeV1`].
@@ -7055,17 +7054,6 @@ mod tests {
                 .expect("legacy micro-XOR value is representable"),
             timestamp_unix: 1_800_000_005,
         }
-    }
-
-    fn orderbook_settlement_channel(trade: &TradeEventV1) -> SettlementChannelV1 {
-        crate::open_settlement_channel_for_trade_v1(
-            trade,
-            [0x82; 32],
-            b"buyer@sora".to_vec(),
-            [0x91; 32],
-            1_800_000_005,
-        )
-        .expect("orderbook fixture channel should open")
     }
 
     fn hedging_digest(label: &str) -> [u8; 32] {

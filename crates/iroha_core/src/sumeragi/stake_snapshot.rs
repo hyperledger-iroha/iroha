@@ -730,8 +730,7 @@ mod tests {
         {
             let mut block = state.world.public_lane_validators.block();
             let mut record = active_validator_record(LaneId::SINGLE, &account, &peer, 1);
-            record.total_stake =
-                Quantity::try_from_numeric(Numeric::new(15_u32, 1)).expect("non-negative stake");
+            record.total_stake = "1.5".parse().expect("non-negative stake");
             block.insert((LaneId::SINGLE, account.clone()), record);
             block.commit();
         }

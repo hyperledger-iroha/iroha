@@ -23,7 +23,17 @@ mod std_impls;
 
 /// Panic logging utilities invoked by generated FFI stubs.
 pub mod panic_notifier {
-    use std::any::Any;
+    use std::{
+        any::Any,
+        fmt,
+        io::{self, Write as _},
+    };
+
+    fn write_stderr(args: fmt::Arguments<'_>) {
+        let mut stderr = io::stderr().lock();
+        let _ = stderr.write_fmt(args);
+        let _ = stderr.write_all(b"\n");
+    }
 
     /// Logs the panic payload captured while crossing the FFI boundary.
     ///
@@ -31,17 +41,32 @@ pub mod panic_notifier {
     /// a generic marker for non-string payloads.
     pub fn log_panic(payload: &(dyn Any + Send + 'static)) {
         if let Some(message) = payload.downcast_ref::<&str>() {
-            eprintln!("ffi panic: {message}");
+            write_stderr(format_args!("ffi panic: {message}"));
         } else if let Some(message) = payload.downcast_ref::<String>() {
-            eprintln!("ffi panic: {message}");
+            write_stderr(format_args!("ffi panic: {message}"));
         } else {
-            eprintln!("ffi panic: non-string payload"); // best-effort log
+            write_stderr(format_args!("ffi panic: non-string payload"));
+        }
+    }
+
+    /// Logs and destroys a caught panic payload without permitting a malicious
+    /// payload destructor to unwind across the FFI boundary.
+    pub fn handle_panic(payload: Box<dyn Any + Send + 'static>) {
+        log_panic(payload.as_ref());
+
+        if let Err(drop_panic) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
+        {
+            write_stderr(format_args!(
+                "ffi panic: panic payload destructor also panicked"
+            ));
+            std::mem::forget(drop_panic);
         }
     }
 
     /// Logs an unexpected handle identifier observed on the FFI boundary.
     pub fn log_unknown_handle(handle_id: crate::handle::Id) {
-        eprintln!("ffi error: unknown handle id {handle_id}");
+        write_stderr(format_args!("ffi error: unknown handle id {handle_id}"));
     }
 }
 

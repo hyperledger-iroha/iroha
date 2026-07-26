@@ -839,7 +839,7 @@ struct AssetTransferSummary {
     asset_definition_id: AssetDefinitionId,
     source_account_id: AccountId,
     destination_account_id: AccountId,
-    amount: Numeric,
+    amount: Quantity,
 }
 
 impl TransferLocation for AssetTransferSummary {
@@ -1290,7 +1290,7 @@ fn validate_treasury_payout_effect_plan(
     if sbd_leg.asset_definition_id != binding.sbd_asset_id
         || sbd_leg.source_account_id != binding.treasury_account_id
         || sbd_leg.destination_account_id != binding.pool_vault_account_id
-        || sbd_leg.amount != *binding.batch_sbd.as_numeric()
+        || &sbd_leg.amount != &binding.batch_sbd
     {
         return Err(mismatch(
             "instruction 0 must be the exact bound SBD treasury-to-vault batch",
@@ -1306,8 +1306,7 @@ fn validate_treasury_payout_effect_plan(
             "instruction 1 must return XOR from the bound vault to the treasury",
         ));
     }
-    let amount_out = Quantity::from_canonical_numeric(xor_return.amount.clone())
-        .map_err(|_| mismatch("the XOR output must be a non-negative canonical quantity"))?;
+    let amount_out = xor_return.amount.clone();
     if amount_out < binding.min_xor_out || amount_out > binding.max_xor_out {
         return Err(mismatch(
             "the XOR output is outside the signed slippage bounds",
@@ -1341,7 +1340,7 @@ fn validate_treasury_payout_effect_plan(
         if transfer.asset_definition_id != binding.xor_asset_id
             || transfer.source_account_id != binding.treasury_account_id
             || transfer.destination_account_id != recipient.account_id
-            || transfer.amount != *expected_amount.as_numeric()
+            || &transfer.amount != expected_amount
         {
             return Err(mismatch(
                 "instructions 2 through 5 must match the ordered validator shares exactly",
@@ -2751,7 +2750,7 @@ fn required_fee_minor_units(
     policy: &ValidationFeePolicyV1,
 ) -> Result<u64, ValidationFeeAdmissionError> {
     let per_transfer_minor_units =
-        numeric_to_minor_units(policy.fee.as_numeric(), policy.ds_scale, usize::MAX)
+        quantity_to_minor_units(&policy.fee, policy.ds_scale, usize::MAX)
             .map_err(|_| ValidationFeeAdmissionError::RequiredFeeOverflow)?;
     u64::try_from(
         (qualifying_transfer_count as u128)
@@ -3135,7 +3134,7 @@ fn native_instruction_ds_effect_disposition(
 
     if let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() {
         return match mint {
-            // Numeric mint is supply-changing and can also charge an implicit account fee.
+            // Quantity mint is supply-changing and can also charge an implicit account fee.
             MintBox::Asset(_) => {
                 NativeInstructionDsEffectDisposition::RejectKnownDsCapable(core::any::type_name::<
                     MintBox,
@@ -3397,7 +3396,7 @@ fn collect_instruction_asset_transfers(
                             asset_definition_id: entry.asset_definition().clone(),
                             source_account_id: entry.from().clone(),
                             destination_account_id: entry.to().clone(),
-                            amount: entry.amount().as_numeric().clone(),
+                            amount: entry.amount().clone(),
                         });
                     }
                     continue;
@@ -3417,7 +3416,7 @@ fn collect_instruction_asset_transfers(
                                 | TransferBox::Nft(_) => None,
                             })
                     })
-                    .expect("explicit asset-transfer disposition must contain a numeric transfer");
+                    .expect("explicit asset-transfer disposition must contain a quantity transfer");
                 collection.transfers.push(AssetTransferSummary {
                     context_index,
                     instruction_index,
@@ -3425,7 +3424,7 @@ fn collect_instruction_asset_transfers(
                     asset_definition_id: transfer.source.definition.clone(),
                     source_account_id: transfer.source.account.clone(),
                     destination_account_id: transfer.destination.clone(),
-                    amount: transfer.object.as_numeric().clone(),
+                    amount: transfer.object.clone(),
                 });
             }
             NativeInstructionDsEffectDisposition::RecursiveMultisigProposal => {
@@ -3550,7 +3549,7 @@ fn collect_fee_asset_transfers(
         .iter()
         .filter(|transfer| &transfer.asset_definition_id == fee_asset_definition_id)
         .map(|transfer| {
-            let amount_minor_units = numeric_to_minor_units(
+            let amount_minor_units = quantity_to_minor_units(
                 &transfer.amount,
                 policy.ds_scale,
                 transfer.instruction_index,
@@ -3567,12 +3566,13 @@ fn collect_fee_asset_transfers(
         .collect()
 }
 
-fn numeric_to_minor_units(
-    amount: &Numeric,
+fn quantity_to_minor_units(
+    amount: &Quantity,
     policy_scale: u8,
     instruction_index: usize,
 ) -> Result<u64, ValidationFeeAdmissionError> {
     let mantissa = amount
+        .as_numeric()
         .try_mantissa_u128()
         .ok_or(ValidationFeeAdmissionError::AmountTooLarge { instruction_index })?;
     let amount_scale = amount.scale();
@@ -4176,25 +4176,20 @@ mod tests {
         policy
     }
 
-    fn minor_units(value: u64) -> Numeric {
-        Numeric::new(value, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
-    }
-
-    fn quantity_minor_units(value: u64) -> Quantity {
-        Quantity::try_from_numeric(minor_units(value))
-            .expect("validation-fee fixture quantity must be non-negative")
+    fn minor_units(value: u64) -> Quantity {
+        quantity_from_policy_minor_units(value, TEST_VALIDATION_FEE_ASSET_SCALE)
+            .expect("validation-fee fixture minor units fit Quantity")
     }
 
     fn transfer(
         from: &AccountId,
         asset_definition: &AssetDefinitionId,
-        amount: Numeric,
+        amount: Quantity,
         to: &AccountId,
     ) -> InstructionBox {
         Transfer::asset_quantity(
             AssetId::new(asset_definition.clone(), from.clone()),
-            Quantity::try_from_numeric(amount)
-                .expect("validation-fee fixture amount must be non-negative"),
+            amount,
             to.clone(),
         )
         .into()
@@ -4223,13 +4218,13 @@ mod tests {
             transfer(
                 &binding.treasury_account_id,
                 &binding.sbd_asset_id,
-                binding.batch_sbd.as_numeric().clone(),
+                binding.batch_sbd.clone(),
                 &binding.pool_vault_account_id,
             ),
             transfer(
                 &binding.pool_vault_account_id,
                 &binding.xor_asset_id,
-                xor_out.as_numeric().clone(),
+                xor_out.clone(),
                 &binding.treasury_account_id,
             ),
         ];
@@ -4242,7 +4237,7 @@ mod tests {
                     transfer(
                         &binding.treasury_account_id,
                         &binding.xor_asset_id,
-                        amount.as_numeric().clone(),
+                        amount,
                         &recipient.account_id,
                     )
                 }),
@@ -5021,7 +5016,7 @@ mod tests {
             TopUpKagemushaRecursiveV4::new(kagemusha_top_up_request(&fee_asset)).into();
         let redeem: InstructionBox =
             RedeemKagemushaRecursiveV4::new(kagemusha_redeem_request(&fee_asset)).into();
-        let principal = transfer(&user, &fee_asset, Numeric::new(1_u64, 0), &recipient);
+        let principal = transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient);
 
         for conversion in [top_up, redeem] {
             assert_eq!(
@@ -5069,7 +5064,7 @@ mod tests {
                 vec![transfer(
                     &user,
                     &fee_asset,
-                    Numeric::new(1_u64, 0),
+                    Quantity::from(1_u64),
                     &recipient,
                 )]
                 .into(),
@@ -5211,7 +5206,7 @@ mod tests {
         let tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ],
             metadata_for_fee_instruction(&policy, 1),
@@ -5462,7 +5457,7 @@ mod tests {
         let exact = ivm_proved_tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ],
             metadata_for_fee_instruction(&policy, 1),
@@ -5474,7 +5469,7 @@ mod tests {
             vec![transfer(
                 &user,
                 &fee_asset,
-                Numeric::new(1u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
             metadata_for(&policy),
@@ -5490,7 +5485,7 @@ mod tests {
             let wrong = ivm_proved_tx(
                 1,
                 vec![
-                    transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                    transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                     transfer(
                         &user,
                         &fee_asset,
@@ -5517,7 +5512,7 @@ mod tests {
         let treasury = account(3);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-        let principal = || transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient);
+        let principal = || transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient);
 
         assert_eq!(
             enforce_deferred_policy(&user, &[principal()], &policy),
@@ -5578,7 +5573,7 @@ mod tests {
         let treasury = account(3);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
-        let principal = || transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient);
+        let principal = || transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient);
         let fee = || transfer(&user, &fee_asset, minor_units(10), &treasury);
 
         let mut duplicate = with_multisig_fee_marker(&policy, vec![principal(), fee()], 1, None);
@@ -5661,7 +5656,7 @@ mod tests {
                 user.clone(),
                 treasury.clone(),
                 fee_asset.clone(),
-                quantity_minor_units(10),
+                minor_units(10),
             ),
         ]);
         let batch_with_marker =
@@ -5695,7 +5690,7 @@ mod tests {
         let mut instruction_groups = std::collections::BTreeMap::new();
         instruction_groups.insert(
             user.clone(),
-            vec![transfer(&user, &xor, Numeric::new(1u64, 0), &recipient)],
+            vec![transfer(&user, &xor, Quantity::from(1_u64), &recipient)],
         );
         enforce_opaque_deferred_policy(&instruction_groups, &policy, None)
             .expect("opaque non-fee-asset artifacts remain generic");
@@ -5703,7 +5698,7 @@ mod tests {
         instruction_groups.insert(
             user.clone(),
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ],
         );
@@ -5724,7 +5719,7 @@ mod tests {
             trigger_id.clone(),
             Action::new(
                 vec![
-                    transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                    transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                     transfer(&user, &fee_asset, minor_units(10), &treasury),
                 ],
                 Repeats::Indefinitely,
@@ -5749,7 +5744,7 @@ mod tests {
             nested_trigger_id.clone(),
             Action::new(
                 vec![
-                    transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                    transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                     transfer(&user, &fee_asset, minor_units(10), &treasury),
                 ],
                 Repeats::Indefinitely,
@@ -5775,7 +5770,7 @@ mod tests {
         ));
 
         let proposal_instructions = vec![
-            transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+            transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
             transfer(&multisig, &fee_asset, minor_units(10), &treasury),
         ];
         let proposal_hash = HashOf::new(&proposal_instructions);
@@ -5836,7 +5831,7 @@ mod tests {
             vec![transfer(
                 &treasury,
                 &fee_asset,
-                Numeric::new(1_u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
         )]);
@@ -5859,7 +5854,7 @@ mod tests {
             vec![transfer(
                 &treasury,
                 &fee_asset,
-                Numeric::new(1_u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
         )]);
@@ -5876,7 +5871,7 @@ mod tests {
             vec![transfer(
                 &other,
                 &fee_asset,
-                Numeric::new(1_u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
         )]);
@@ -5890,7 +5885,7 @@ mod tests {
             vec![transfer(
                 &treasury,
                 &fee_asset,
-                Numeric::new(1_u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
             None,
@@ -5943,7 +5938,7 @@ mod tests {
         wrong_batch[0] = transfer(
             &treasury,
             &binding.sbd_asset_id,
-            Numeric::new(2_u64, 0),
+            Quantity::from(2_u64),
             &binding.pool_vault_account_id,
         );
         let wrong_batch_groups =
@@ -5958,7 +5953,7 @@ mod tests {
         wrong_sbd_asset[0] = transfer(
             &treasury,
             &binding.xor_asset_id,
-            binding.batch_sbd.as_numeric().clone(),
+            binding.batch_sbd.clone(),
             &binding.pool_vault_account_id,
         );
         let wrong_sbd_asset_groups =
@@ -5973,7 +5968,7 @@ mod tests {
         wrong_vault[1] = transfer(
             &account(7),
             &binding.xor_asset_id,
-            Numeric::new(20_u64, 0),
+            Quantity::from(20_u64),
             &treasury,
         );
         let wrong_vault_groups =
@@ -6000,7 +5995,7 @@ mod tests {
         wrong_validator[2] = transfer(
             &treasury,
             &binding.xor_asset_id,
-            Numeric::new(5_u64, 0),
+            Quantity::from(5_u64),
             &account(7),
         );
         let wrong_validator_groups =
@@ -6015,7 +6010,7 @@ mod tests {
         wrong_final_amount[5] = transfer(
             &treasury,
             &binding.xor_asset_id,
-            Numeric::new(4_u64, 0),
+            Quantity::from(4_u64),
             &binding.recipients[3].account_id,
         );
         let wrong_final_groups =
@@ -6099,7 +6094,7 @@ mod tests {
             vec![transfer(
                 &user,
                 &fee_asset,
-                Numeric::new(1u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
             metadata_for(&policy),
@@ -6142,7 +6137,7 @@ mod tests {
         let tx = ivm_proved_tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1_u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(
                     &user,
                     &fee_asset,
@@ -6354,7 +6349,7 @@ mod tests {
             OpaqueDeferredValidationOutcome::NoOp,
         );
         let payout_credit_minor_units =
-            numeric_to_minor_units(binding.batch_sbd.as_numeric(), policy.ds_scale, usize::MAX)
+            quantity_to_minor_units(&binding.batch_sbd, policy.ds_scale, usize::MAX)
                 .expect("payout batch must fit the policy minor-unit domain");
         let payout_credit = ValidationFeeCredit::from_policy_minor_units(
             treasury.clone(),
@@ -6575,12 +6570,12 @@ mod tests {
 
         let mut maximum_bytes = vec![0xff_u8; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
         *maximum_bytes.last_mut().expect("non-empty mantissa") = 0x7f;
-        let maximum = Quantity::try_from_numeric(Numeric::new(
-            iroha_primitives::bigint::BigInt::from_twos_bytes(&maximum_bytes)
-                .expect("maximum signed 512-bit mantissa"),
-            0,
-        ))
-        .expect("maximum non-negative quantity");
+        let maximum_mantissa = iroha_primitives::bigint::BigInt::from_twos_bytes(&maximum_bytes)
+            .expect("maximum signed 512-bit mantissa");
+        let maximum: Quantity = maximum_mantissa
+            .to_string()
+            .parse()
+            .expect("maximum non-negative quantity");
         state_tx.world.smart_contract_state.insert(
             expected_credit_key.clone(),
             encode_validation_fee_credit_state_value(&maximum).expect("encode maximum credit"),
@@ -6822,7 +6817,7 @@ mod tests {
         let tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ],
             metadata_for(&policy),
@@ -6849,7 +6844,7 @@ mod tests {
         let tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ],
             metadata,
@@ -6875,7 +6870,7 @@ mod tests {
             vec![transfer(
                 &delegated_source,
                 &fee_asset,
-                Numeric::new(1u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
             metadata_for(&policy),
@@ -6893,7 +6888,7 @@ mod tests {
                 transfer(
                     &delegated_source,
                     &fee_asset,
-                    Numeric::new(1u64, 0),
+                    Quantity::from(1_u64),
                     &recipient,
                 ),
                 transfer(&authority, &fee_asset, minor_units(10), &treasury),
@@ -6913,7 +6908,7 @@ mod tests {
         let transaction = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1_u64, 0), &treasury),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &treasury),
                 transfer(
                     &user,
                     &fee_asset,
@@ -6959,7 +6954,7 @@ mod tests {
             let tx = tx(
                 1,
                 vec![
-                    transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                    transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                     transfer(&user, &fee_asset, minor_units(observed), &treasury),
                 ],
                 metadata_for_fee_instruction(&policy, 1),
@@ -6979,7 +6974,7 @@ mod tests {
         let tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(5), &treasury),
                 transfer(&user, &fee_asset, minor_units(5), &treasury),
             ],
@@ -7002,9 +6997,9 @@ mod tests {
         let tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &treasury),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &treasury),
             ],
             metadata_for_fee_instruction(&policy, 1),
         );
@@ -7031,7 +7026,7 @@ mod tests {
         let wrong_treasury_tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(10), &wrong_treasury),
             ],
             metadata_for_fee_instruction(&policy, 1),
@@ -7049,7 +7044,7 @@ mod tests {
         let wrong_asset_tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &xor, minor_units(10), &treasury),
             ],
             metadata_for_fee_instruction(&policy, 1),
@@ -7074,7 +7069,7 @@ mod tests {
         let tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&sponsor, &fee_asset, minor_units(10), &treasury),
             ],
             metadata_for_fee_instruction(&policy, 1),
@@ -7100,7 +7095,7 @@ mod tests {
         let exact_fee_tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ],
             metadata_for_fee_instruction(&policy, 1),
@@ -7110,7 +7105,7 @@ mod tests {
         let recursively_charged_tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(20), &treasury),
             ],
             metadata_for_fee_instruction(&policy, 1),
@@ -7133,7 +7128,7 @@ mod tests {
         let tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &treasury),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &treasury),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ],
             metadata_for_fee_instruction(&policy, 1),
@@ -7176,7 +7171,7 @@ mod tests {
             vec![transfer(
                 &treasury,
                 &fee_asset,
-                Numeric::new(1u64, 0),
+                Quantity::from(1_u64),
                 &user,
             )],
             Metadata::default(),
@@ -7199,7 +7194,7 @@ mod tests {
         let treasury_payout = tx(
             2,
             vec![
-                transfer(&treasury, &fee_asset, Numeric::new(1u64, 0), &user),
+                transfer(&treasury, &fee_asset, Quantity::from(1_u64), &user),
                 transfer(&treasury, &fee_asset, minor_units(10), &treasury),
             ],
             metadata_for_fee_instruction(&policy, 1),
@@ -7221,7 +7216,7 @@ mod tests {
             vec![transfer(
                 &treasury,
                 &fee_asset,
-                Numeric::new(1u64, 0),
+                Quantity::from(1_u64),
                 &user,
             )],
             Metadata::default(),
@@ -7245,8 +7240,13 @@ mod tests {
         let tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
-                transfer(&user, &fee_asset, Numeric::new(1u64, 5), &treasury),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
+                transfer(
+                    &user,
+                    &fee_asset,
+                    "0.00001".parse().expect("canonical quantity"),
+                    &treasury,
+                ),
             ],
             metadata_for_fee_instruction(&policy, 1),
         );
@@ -7270,7 +7270,7 @@ mod tests {
         let fee_asset = policy_fee_asset(&policy);
         let instructions = || {
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ]
         };
@@ -7315,7 +7315,7 @@ mod tests {
         let tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ],
             metadata,
@@ -7345,7 +7345,7 @@ mod tests {
             vec![transfer(
                 &user,
                 &non_fee_asset,
-                Numeric::new(1u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
             metadata,
@@ -7372,7 +7372,7 @@ mod tests {
             vec![transfer(
                 &user,
                 &non_fee_asset,
-                Numeric::new(1u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
             metadata_for_fee_instruction_coordinate(0),
@@ -7401,7 +7401,7 @@ mod tests {
             vec![transfer(
                 &user,
                 &non_fee_asset,
-                Numeric::new(1u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
             metadata,
@@ -7437,12 +7437,7 @@ mod tests {
                         fee_asset.clone(),
                         1_u64,
                     ),
-                    TransferAssetBatchEntry::new(
-                        user,
-                        treasury,
-                        fee_asset,
-                        quantity_minor_units(20),
-                    ),
+                    TransferAssetBatchEntry::new(user, treasury, fee_asset, minor_units(20)),
                 ])
                 .into(),
             ],
@@ -7501,7 +7496,7 @@ mod tests {
                             user.clone(),
                             treasury.clone(),
                             fee_asset.clone(),
-                            quantity_minor_units(observed),
+                            minor_units(observed),
                         ),
                     ])
                     .into(),
@@ -7534,7 +7529,7 @@ mod tests {
                         user,
                         treasury.clone(),
                         fee_asset,
-                        quantity_minor_units(10),
+                        minor_units(10),
                     ),
                 ])
                 .into(),
@@ -7585,7 +7580,7 @@ mod tests {
                         user.clone(),
                         wrong_treasury.clone(),
                         fee_asset.clone(),
-                        quantity_minor_units(20),
+                        minor_units(20),
                     ),
                 ])
                 .into(),
@@ -7622,7 +7617,7 @@ mod tests {
                         user.clone(),
                         treasury.clone(),
                         xor,
-                        quantity_minor_units(20),
+                        minor_units(20),
                     ),
                 ])
                 .into(),
@@ -7652,7 +7647,7 @@ mod tests {
                         sponsor,
                         treasury.clone(),
                         fee_asset,
-                        quantity_minor_units(20),
+                        minor_units(20),
                     ),
                 ])
                 .into(),
@@ -7681,7 +7676,7 @@ mod tests {
             vec![transfer(
                 &multisig,
                 &fee_asset,
-                Numeric::new(1u64, 0),
+                Quantity::from(1_u64),
                 &recipient,
             )],
             None,
@@ -7701,7 +7696,7 @@ mod tests {
                     with_multisig_fee_marker(
                         &policy,
                         vec![
-                            transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                            transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
                             transfer(&multisig, &fee_asset, minor_units(10), &treasury),
                         ],
                         1,
@@ -7739,7 +7734,7 @@ mod tests {
                     with_multisig_fee_marker(
                         &policy,
                         vec![
-                            transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                            transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
                             transfer(&multisig, &fee_asset, minor_units(10), &treasury),
                         ],
                         1,
@@ -7765,7 +7760,7 @@ mod tests {
         let deferred_instructions = with_multisig_fee_marker(
             &policy,
             vec![
-                transfer(&multisig, &fee_asset, Numeric::new(1_u64, 0), &recipient),
+                transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
                 transfer(
                     &multisig,
                     &fee_asset,
@@ -7812,7 +7807,7 @@ mod tests {
                 with_multisig_fee_marker(
                     &policy,
                     vec![
-                        transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                        transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
                         transfer(&multisig, &fee_asset, minor_units(10), &treasury),
                     ],
                     1,
@@ -7847,7 +7842,7 @@ mod tests {
                 transfer(
                     &user,
                     &asset_definition("xor"),
-                    Numeric::new(1u64, 0),
+                    Quantity::from(1_u64),
                     &recipient,
                 ),
             ],
@@ -7877,7 +7872,7 @@ mod tests {
             with_multisig_fee_marker(
                 &policy,
                 vec![
-                    transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                    transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
                     transfer(&multisig, &fee_asset, minor_units(10), &treasury),
                 ],
                 1,
@@ -7888,7 +7883,7 @@ mod tests {
         let tx = tx(
             1,
             vec![
-                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, Quantity::from(1_u64), &recipient),
                 nested_proposal.into(),
                 transfer(&user, &fee_asset, minor_units(10), &treasury),
             ],
@@ -7916,7 +7911,7 @@ mod tests {
                     with_multisig_fee_marker(
                         &policy,
                         vec![
-                            transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                            transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
                             transfer(&multisig, &fee_asset, minor_units(10), &treasury),
                         ],
                         1,
@@ -7967,7 +7962,7 @@ mod tests {
                         with_multisig_fee_marker(
                             &policy,
                             vec![
-                                transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                                transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
                                 transfer(&multisig, &fee_asset, minor_units(observed), &treasury),
                             ],
                             1,
@@ -8003,7 +7998,7 @@ mod tests {
                     with_multisig_fee_marker(
                         &policy,
                         vec![
-                            transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                            transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
                             transfer(&multisig, &fee_asset, minor_units(10), &wrong_treasury),
                         ],
                         1,
@@ -8033,7 +8028,7 @@ mod tests {
                     with_multisig_fee_marker(
                         &policy,
                         vec![
-                            transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                            transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
                             transfer(&multisig, &xor, minor_units(10), &treasury),
                         ],
                         1,
@@ -8061,7 +8056,7 @@ mod tests {
                     with_multisig_fee_marker(
                         &policy,
                         vec![
-                            transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                            transfer(&multisig, &fee_asset, Quantity::from(1_u64), &recipient),
                             transfer(&sponsor, &fee_asset, minor_units(10), &treasury),
                         ],
                         1,
@@ -8112,7 +8107,7 @@ mod tests {
                             multisig,
                             treasury,
                             fee_asset,
-                            quantity_minor_units(20),
+                            minor_units(20),
                         ),
                     ])
                     .into(),
@@ -8174,7 +8169,7 @@ mod tests {
                                 multisig.clone(),
                                 treasury.clone(),
                                 fee_asset.clone(),
-                                quantity_minor_units(observed),
+                                minor_units(observed),
                             ),
                         ])
                         .into(),

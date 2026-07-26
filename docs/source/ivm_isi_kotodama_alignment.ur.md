@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T10:20:35.513444+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ translator: machine-google-reviewed
 
 ### B. ٹائپ شدہ اقدار کے لئے ایک عزم VM/میزبان ABI کی وضاحت کریں
 - ساختہ دلائل کے لئے VM طرف Norito استعمال کریں:
-  - پاس پوائنٹرز (x10..x13 ، وغیرہ میں) Norito - انکوڈڈ اقدار جیسے `AccountId` ، `AssetDefinitionId` ، `Numeric` ، `Metadata` پر مشتمل VM میموری والے خطوں پر پاس کریں۔
+  - پاس پوائنٹرز (x10..x13 ، وغیرہ میں) Norito - انکوڈڈ اقدار جیسے `AccountId` ، `AssetDefinitionId` ، `Quantity` ، `Metadata` پر مشتمل VM میموری والے خطوں پر پاس کریں۔
   - میزبان `IVM` میموری مددگار اور Norito (`iroha_data_model` پہلے ہی `Encode/Decode`) کے ساتھ بائٹس پڑھتا ہے۔
 - کوڈ/مستقل تالابوں میں لفظی آئی ڈی کو سیریلائز کرنے یا میموری میں کال فریم تیار کرنے کے لئے Kotodama کوڈجن میں کم سے کم مددگار شامل کریں۔
-- مقدار `Numeric` ہیں اور نوریٹو بائٹس پوائنٹرز کے طور پر منظور کی جاتی ہیں۔ دوسری پیچیدہ اقسام بھی پوائنٹر کے ذریعہ گزرتی ہیں۔
+- اثاثوں کی مقدار عام `NoritoBytes` پوائنٹر کے بجائے مخصوص `QuantityValueV1` pointer-ABI TLV (`PointerType::Quantity = 0x0010`) استعمال کرتی ہے؛ دوسری پیچیدہ قدریں اپنے مقرر کردہ پوائنٹر اقسام استعمال کرتی ہیں۔
 - اس کو `crates/ivm/docs/calling_convention.md` میں دستاویز کریں اور مثالوں کو شامل کریں۔### C. آئی ایس آئی/ڈیٹا ماڈل کے ساتھ سیسکل نام اور کوریج کو سیدھ کریں
 - NFT کا نام تبدیل کریں - وضاحت کے لئے متعلقہ Syscalls: کیننیکل نام اب `SYSCALL_NFT_*` پیٹرن (`SYSCALL_NFT_MINT_ASSET` ، `SYSCALL_NFT_SET_METADATA` ، وغیرہ) کی پیروی کریں۔
 - ہر سیسکل سے کور آئی ایس آئی سیمنٹکس تک میپنگ ٹیبل (دستاویز + کوڈ کے تبصرے) شائع کریں ، بشمول:

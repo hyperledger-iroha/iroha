@@ -17,11 +17,9 @@ use iroha_data_model::{
     proof::{ProofAttachment, VerifyingKeyId},
     smart_contract::ContractAddress,
 };
-use iroha_primitives::json::Json;
-use iroha_primitives::{
-    numeric::{Numeric, Quantity},
-    numeric_abi::QuantityValueV1,
-};
+#[cfg(test)]
+use iroha_primitives::numeric::Numeric;
+use iroha_primitives::{json::Json, numeric::Quantity, numeric_abi::QuantityValueV1};
 use norito::{
     decode_from_bytes,
     derive::{Decode, Encode},
@@ -53,14 +51,14 @@ use crate::{
 #[derive(Clone, Debug)]
 struct AssetDefinition {
     mintable: Mintable,
-    total_supply: Numeric,
+    total_supply: Quantity,
 }
 
 impl AssetDefinition {
     fn new(mintable: Mintable) -> Self {
         Self {
             mintable,
-            total_supply: Numeric::zero(),
+            total_supply: Quantity::zero(),
         }
     }
 }
@@ -346,9 +344,9 @@ pub struct MockWorldStateView {
     accounts: HashMap<AccountId, Account>,
     permissions: HashMap<AccountId, HashSet<PermissionToken>>,
     asset_definitions: HashMap<AssetDefinitionId, AssetDefinition>,
-    balances: HashMap<(AccountId, AssetDefinitionId), Numeric>,
+    balances: HashMap<(AccountId, AssetDefinitionId), Quantity>,
     asset_transfer_freezes: HashMap<(AccountId, AssetDefinitionId), bool>,
-    asset_transfer_daily_limits: HashMap<(AccountId, AssetDefinitionId), Option<Numeric>>,
+    asset_transfer_daily_limits: HashMap<(AccountId, AssetDefinitionId), Option<Quantity>>,
     nfts: HashMap<NftId, NftRecord>,
     peers: HashSet<Peer>,
     triggers: HashMap<String, bool>,
@@ -633,7 +631,7 @@ impl MockWorldStateView {
         &mut self,
         from: &AccountId,
         asset: &AssetDefinitionId,
-        amount: Numeric,
+        amount: Quantity,
         note_commitment: [u8; 32],
     ) -> bool {
         if !self.asset_definitions.contains_key(asset) {
@@ -642,7 +640,7 @@ impl MockWorldStateView {
         if !self.account_is_linked(from) {
             return false;
         }
-        if !Self::is_unsigned_scale0(&amount) {
+        if !Self::is_scale0(&amount) {
             return false;
         }
         let from_subject = Self::account_subject(from);
@@ -658,14 +656,11 @@ impl MockWorldStateView {
                     .balances
                     .get(&key)
                     .cloned()
-                    .unwrap_or_else(Numeric::zero);
-                let remaining = match current.checked_sub(amount) {
-                    Some(val) => val,
-                    None => return false,
+                    .unwrap_or_else(Quantity::zero);
+                let remaining = match current.checked_sub(&amount) {
+                    Ok(value) => value,
+                    Err(_) => return false,
                 };
-                if remaining.mantissa().is_negative() {
-                    return false;
-                }
                 if remaining.is_zero() {
                     self.balances.remove(&key);
                 } else {
@@ -730,7 +725,7 @@ impl MockWorldStateView {
         &mut self,
         to: &AccountId,
         asset: &AssetDefinitionId,
-        public_amount: Numeric,
+        public_amount: Quantity,
         inputs: &[[u8; 32]],
         outputs: &[[u8; 32]],
         proof: &ProofAttachment,
@@ -738,7 +733,7 @@ impl MockWorldStateView {
         if !self.account_is_linked(to) {
             return false;
         }
-        if !Self::is_unsigned_scale0(&public_amount) {
+        if !Self::is_scale0(&public_amount) {
             return false;
         }
         let to_subject = Self::account_subject(to);
@@ -747,9 +742,10 @@ impl MockWorldStateView {
             .balances
             .get(&key)
             .cloned()
-            .unwrap_or_else(Numeric::zero);
-        let Some(next) = current.checked_add(public_amount.clone()) else {
-            return false;
+            .unwrap_or_else(Quantity::zero);
+        let next = match current.checked_add(&public_amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
         let Some(st) = self.zk_assets.get_mut(asset) else {
             return false;
@@ -1205,12 +1201,12 @@ impl MockWorldStateView {
     }
 
     /// Initialize with a list of balances.
-    pub fn with_balances(entries: &[((AccountId, AssetDefinitionId), Numeric)]) -> Self {
+    pub fn with_balances(entries: &[((AccountId, AssetDefinitionId), Quantity)]) -> Self {
         let mut wsv = Self::new();
         for ((account, asset), amount) in entries.iter().cloned() {
             assert!(
-                Self::is_unsigned_scale0(&amount),
-                "mock WSV balances must be unsigned scale=0"
+                Self::is_scale0(&amount),
+                "mock WSV balances must have scale=0"
             );
             let subject = Self::account_subject(&account);
             wsv.domains.entry(asset.domain().clone()).or_default();
@@ -1223,8 +1219,7 @@ impl MockWorldStateView {
             if let Some(def) = wsv.asset_definitions.get_mut(&asset) {
                 def.total_supply = def
                     .total_supply
-                    .clone()
-                    .checked_add(amount)
+                    .checked_add(&amount)
                     .expect("mock total supply overflow");
             }
         }
@@ -1393,19 +1388,19 @@ impl MockWorldStateView {
     }
 
     /// Get the balance of `account_id` for `asset_id`.
-    pub fn balance(&self, account_id: AccountId, asset_id: AssetDefinitionId) -> Numeric {
+    pub fn balance(&self, account_id: AccountId, asset_id: AssetDefinitionId) -> Quantity {
         if !self.account_is_linked(&account_id) {
-            return Numeric::zero();
+            return Quantity::zero();
         }
         let subject = Self::account_subject(&account_id);
         self.balances
             .get(&(subject, asset_id))
             .cloned()
-            .unwrap_or_else(Numeric::zero)
+            .unwrap_or_else(Quantity::zero)
     }
 
-    fn is_unsigned_scale0(amount: &Numeric) -> bool {
-        amount.scale() == 0 && !amount.mantissa().is_negative()
+    fn is_scale0(amount: &Quantity) -> bool {
+        amount.scale() == 0
     }
 
     /// Get the balance of `account_id` for `asset_id` if `caller` is allowed to
@@ -1415,7 +1410,7 @@ impl MockWorldStateView {
         caller: &AccountId,
         account_id: &AccountId,
         asset_id: &AssetDefinitionId,
-    ) -> Option<Numeric> {
+    ) -> Option<Quantity> {
         if Self::account_subject(caller) == Self::account_subject(account_id)
             || self.has_permission(
                 caller,
@@ -1446,7 +1441,7 @@ impl MockWorldStateView {
         &self,
         account_id: &AccountId,
         asset_id: &AssetDefinitionId,
-    ) -> Option<Option<Numeric>> {
+    ) -> Option<Option<Quantity>> {
         self.asset_transfer_daily_limits
             .get(&(Self::account_subject(account_id), asset_id.clone()))
             .cloned()
@@ -1460,7 +1455,7 @@ impl MockWorldStateView {
         from: AccountId,
         to: AccountId,
         asset_id: AssetDefinitionId,
-        amount: Numeric,
+        amount: Quantity,
     ) -> bool {
         self.transfer_with_permission_bypass(caller, from, to, asset_id, amount, false)
     }
@@ -1471,13 +1466,13 @@ impl MockWorldStateView {
         from: AccountId,
         to: AccountId,
         asset_id: AssetDefinitionId,
-        amount: Numeric,
+        amount: Quantity,
         bypass_transfer_permission: bool,
     ) -> bool {
         if !self.account_is_linked(&from) || !self.account_is_linked(&to) {
             return false;
         }
-        if !Self::is_unsigned_scale0(&amount) {
+        if !Self::is_scale0(&amount) {
             return false;
         }
         if Self::account_subject(caller) != Self::account_subject(&from)
@@ -1497,36 +1492,26 @@ impl MockWorldStateView {
                 .balances
                 .get(&from_key)
                 .cloned()
-                .unwrap_or_else(Numeric::zero);
-            let remaining = match current.clone().checked_sub(amount) {
-                Some(val) => val,
-                None => return false,
-            };
-            if remaining.mantissa().is_negative() {
-                return false;
-            }
-            return true;
+                .unwrap_or_else(Quantity::zero);
+            return current.checked_sub(&amount).is_ok();
         }
         let from_current = self
             .balances
             .get(&from_key)
             .cloned()
-            .unwrap_or_else(Numeric::zero);
-        let from_remaining = match from_current.checked_sub(amount.clone()) {
-            Some(val) => val,
-            None => return false,
+            .unwrap_or_else(Quantity::zero);
+        let from_remaining = match from_current.checked_sub(&amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
-        if from_remaining.mantissa().is_negative() {
-            return false;
-        }
         let to_current = self
             .balances
             .get(&to_key)
             .cloned()
-            .unwrap_or_else(Numeric::zero);
-        let to_next = match to_current.checked_add(amount) {
-            Some(val) => val,
-            None => return false,
+            .unwrap_or_else(Quantity::zero);
+        let to_next = match to_current.checked_add(&amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
         if from_remaining.is_zero() {
             self.balances.remove(&from_key);
@@ -1543,12 +1528,12 @@ impl MockWorldStateView {
         caller: &AccountId,
         account_id: AccountId,
         asset_id: AssetDefinitionId,
-        amount: Numeric,
+        amount: Quantity,
     ) -> bool {
         if !self.account_is_linked(&account_id) {
             return false;
         }
-        if !Self::is_unsigned_scale0(&amount) {
+        if !Self::is_scale0(&amount) {
             return false;
         }
         let token = PermissionToken::MintAsset(asset_id.clone());
@@ -1558,23 +1543,23 @@ impl MockWorldStateView {
         let Some(def) = self.asset_definitions.get_mut(&asset_id) else {
             return false;
         };
-        if def.mintable.consume_one().is_err() {
-            return false;
-        }
         let balance_key = (Self::account_subject(&account_id), asset_id.clone());
         let current = self
             .balances
             .get(&balance_key)
             .cloned()
-            .unwrap_or_else(Numeric::zero);
-        let next = match current.checked_add(amount.clone()) {
-            Some(val) => val,
-            None => return false,
+            .unwrap_or_else(Quantity::zero);
+        let next = match current.checked_add(&amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
-        let total = match def.total_supply.clone().checked_add(amount) {
-            Some(val) => val,
-            None => return false,
+        let total = match def.total_supply.checked_add(&amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
+        if def.mintable.consume_one().is_err() {
+            return false;
+        }
         self.balances.insert(balance_key, next);
         def.total_supply = total;
         true
@@ -1587,12 +1572,12 @@ impl MockWorldStateView {
         caller: &AccountId,
         account_id: AccountId,
         asset_id: AssetDefinitionId,
-        amount: Numeric,
+        amount: Quantity,
     ) -> bool {
         if !self.account_is_linked(&account_id) {
             return false;
         }
-        if !Self::is_unsigned_scale0(&amount) {
+        if !Self::is_scale0(&amount) {
             return false;
         }
         if Self::account_subject(caller) != Self::account_subject(&account_id) {
@@ -1609,21 +1594,15 @@ impl MockWorldStateView {
             .balances
             .get(&balance_key)
             .cloned()
-            .unwrap_or_else(Numeric::zero);
-        let remaining = match current.checked_sub(amount.clone()) {
-            Some(val) => val,
-            None => return false,
+            .unwrap_or_else(Quantity::zero);
+        let remaining = match current.checked_sub(&amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
-        if remaining.mantissa().is_negative() {
-            return false;
-        }
-        let total = match def.total_supply.clone().checked_sub(amount) {
-            Some(val) => val,
-            None => return false,
+        let total = match def.total_supply.checked_sub(&amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
-        if total.mantissa().is_negative() {
-            return false;
-        }
         if remaining.is_zero() {
             self.balances.remove(&balance_key);
         } else {
@@ -1973,7 +1952,7 @@ pub enum ZkEvent {
     Unshielded {
         asset: AssetDefinitionId,
         to: AccountId,
-        public_amount: Numeric,
+        public_amount: Quantity,
     },
 }
 
@@ -2008,7 +1987,7 @@ pub struct WsvHost {
     contract_runtime_invoker: Option<AccountId>,
     contract_runtime_address: Option<ContractAddress>,
     contract_runtime_entrypoint: Option<String>,
-    fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
+    fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Quantity)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
     tx_active: bool,
@@ -2037,7 +2016,7 @@ struct WsvHostSnapshot {
     contract_runtime_invoker: Option<AccountId>,
     contract_runtime_address: Option<ContractAddress>,
     contract_runtime_entrypoint: Option<String>,
-    fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
+    fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Quantity)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
     tx_active: bool,
@@ -2915,14 +2894,13 @@ impl WsvHost {
     }
 
     /// Decode one canonical V1 `quantity` argument from a register.
-    fn decode_amount_reg(&self, vm: &IVM, reg: usize) -> Result<Numeric, VMError> {
+    fn decode_amount_reg(&self, vm: &IVM, reg: usize) -> Result<Quantity, VMError> {
         let tlv = vm.validate_tlv(vm.register(reg))?;
         if tlv.type_id != PointerType::Quantity {
             return Err(VMError::NoritoInvalid);
         }
         QuantityValueV1::decode_frame(tlv.payload)
             .map(QuantityValueV1::into_quantity)
-            .map(iroha_primitives::numeric::Quantity::into_numeric)
             .map_err(|_| VMError::DecodeError)
     }
 
@@ -3021,7 +2999,7 @@ impl WsvHost {
                 from,
                 to,
                 entry.asset_definition().clone(),
-                entry.amount().clone().into_numeric(),
+                entry.amount().clone(),
                 self.allow_contract_runtime_asset_transfer_bypass,
             ) {
                 return Err(VMError::PermissionDenied);
@@ -4664,23 +4642,12 @@ impl IVMHost for WsvHost {
                             let (ty, payload) = parse_json_envelope(root)?;
                             let ty_ref = ty.as_str();
                             let alias_matches = |aliases: &[&str]| aliases.contains(&ty_ref);
-                            let parse_numeric_field =
+                            let parse_quantity_field =
                                 |payload: &norito::json::Value,
                                  key: &str|
-                                 -> Result<Numeric, VMError> {
+                                 -> Result<Quantity, VMError> {
                                     let value = payload.get(key).ok_or(VMError::NoritoInvalid)?;
-                                    let numeric = if let Some(raw) = value.as_str() {
-                                        raw.parse::<Numeric>()
-                                            .map_err(|_| VMError::NoritoInvalid)?
-                                    } else if let Some(raw) = value.as_u64() {
-                                        Numeric::from(raw)
-                                    } else if let Some(raw) = value.as_i64() {
-                                        Numeric::from(raw)
-                                    } else {
-                                        return Err(VMError::NoritoInvalid);
-                                    };
-                                    Quantity::from_canonical_numeric(numeric)
-                                        .map(Quantity::into_numeric)
+                                    norito::json::from_value::<Quantity>(value.clone())
                                         .map_err(|_| VMError::NoritoInvalid)
                                 };
                             match Self::decode_instruction_envelope(ty_ref, payload.clone())? {
@@ -4695,7 +4662,7 @@ impl IVMHost for WsvHost {
                                             .get("asset_id")
                                             .and_then(|v| v.as_str())
                                             .ok_or(VMError::NoritoInvalid)?;
-                                        let amount = parse_numeric_field(&payload, "amount")?;
+                                        let amount = parse_quantity_field(&payload, "amount")?;
                                         let account = parse_account_id_literal(account_s)?;
                                         let asset: AssetDefinitionId =
                                             asset_s.parse().map_err(|_| VMError::NoritoInvalid)?;
@@ -4720,7 +4687,7 @@ impl IVMHost for WsvHost {
                                             .get("asset_id")
                                             .and_then(|v| v.as_str())
                                             .ok_or(VMError::NoritoInvalid)?;
-                                        let amount = parse_numeric_field(&payload, "amount")?;
+                                        let amount = parse_quantity_field(&payload, "amount")?;
                                         let account = parse_account_id_literal(account_s)?;
                                         let asset: AssetDefinitionId =
                                             asset_s.parse().map_err(|_| VMError::NoritoInvalid)?;
@@ -4753,7 +4720,7 @@ impl IVMHost for WsvHost {
                                             .get("asset_id")
                                             .and_then(|v| v.as_str())
                                             .ok_or(VMError::NoritoInvalid)?;
-                                        let amount = parse_numeric_field(&payload, "amount")?;
+                                        let amount = parse_quantity_field(&payload, "amount")?;
                                         let from = parse_account_id_literal(from_s)?;
                                         let to = parse_account_id_literal(to_s)?;
                                         let asset: AssetDefinitionId =
@@ -5209,7 +5176,7 @@ impl IVMHost for WsvHost {
                 }
                 // Shield
                 if let Some(instr) = any_ref.downcast_ref::<DMZk::Shield>() {
-                    let amount = instr.amount().as_numeric().clone();
+                    let amount = instr.amount().clone();
                     // Permission: Shield(asset)
                     let tok = PermissionToken::Shield(instr.asset().clone());
                     if !self.wsv.has_permission(&self.caller, &tok) {
@@ -5246,7 +5213,7 @@ impl IVMHost for WsvHost {
                 }
                 // Unshield
                 if let Some(instr) = any_ref.downcast_ref::<DMZk::Unshield>() {
-                    let amount = instr.public_amount().as_numeric().clone();
+                    let amount = instr.public_amount().clone();
                     // Permission: Unshield(asset)
                     let tok = PermissionToken::Unshield(instr.asset().clone());
                     if !self.wsv.has_permission(&self.caller, &tok) {
@@ -5660,7 +5627,6 @@ impl IVMHost for WsvHost {
                     Some(
                         QuantityValueV1::decode_frame(tlv.payload)
                             .map(QuantityValueV1::into_quantity)
-                            .map(Quantity::into_numeric)
                             .map_err(|_| VMError::DecodeError)?,
                     )
                 } else {
@@ -6115,9 +6081,7 @@ impl IVMHost for WsvHost {
                     }
                 }
                 if let Some(b) = self.wsv.balance_checked(&authority, &account_id, &asset_id) {
-                    let quantity =
-                        Quantity::from_canonical_numeric(b).map_err(|_| VMError::DecodeError)?;
-                    let payload = QuantityValueV1::new(quantity)
+                    let payload = QuantityValueV1::new(b)
                         .encode_frame()
                         .map_err(|_| VMError::NoritoInvalid)?;
                     let p = Self::alloc_tlv_payload(vm, PointerType::Quantity, &payload)?;
@@ -7032,9 +6996,9 @@ mod tests_zk_asset_bindings {
             &caller,
             caller.clone(),
             asset.clone(),
-            Numeric::from(10_u64),
+            Quantity::from(10_u64),
         );
-        assert!(wsv.shield(&caller, &asset, Numeric::from(3_u64), [7u8; 32]));
+        assert!(wsv.shield(&caller, &asset, Quantity::from(3_u64), [7u8; 32]));
     }
 
     #[test]
@@ -7049,7 +7013,7 @@ mod tests_zk_asset_bindings {
         );
         let mut wsv = MockWorldStateView::with_balances(&[(
             (caller.clone(), asset.clone()),
-            Numeric::from(10_u64),
+            Quantity::from(10_u64),
         )]);
         assert!(wsv.register_zk_asset(
             asset.clone(),
@@ -7074,14 +7038,14 @@ mod tests_zk_asset_bindings {
         assert!(wsv.unshield(
             &caller,
             &asset,
-            Numeric::from(4_u64),
+            Quantity::from(4_u64),
             &inputs,
             &outputs,
             &proof,
         ));
         assert_eq!(
             wsv.balance(caller.clone(), asset.clone()),
-            Numeric::from(14_u64)
+            Quantity::from(14_u64)
         );
         let (latest_root, roots, depth) = wsv.get_roots(&asset, 8);
         assert_eq!(depth, 2);
@@ -7105,7 +7069,7 @@ mod tests_zk_asset_bindings {
                 ZkEvent::Unshielded {
                     asset: asset.clone(),
                     to: caller.clone(),
-                    public_amount: Numeric::from(4_u64),
+                    public_amount: Quantity::from(4_u64),
                 },
             ]
         );
@@ -7114,14 +7078,14 @@ mod tests_zk_asset_bindings {
         assert!(!wsv.unshield(
             &caller,
             &asset,
-            Numeric::from(1_u64),
+            Quantity::from(1_u64),
             &duplicate_inputs,
             &[[11u8; 32]],
             &proof,
         ));
         assert_eq!(
             wsv.balance(caller.clone(), asset.clone()),
-            Numeric::from(14_u64)
+            Quantity::from(14_u64)
         );
         let (latest_after_failure, roots_after_failure, depth_after_failure) =
             wsv.get_roots(&asset, 8);
@@ -7467,7 +7431,7 @@ mod tests_null_decode {
         );
         let wsv = MockWorldStateView::with_balances(&[(
             (caller.clone(), asset.clone()),
-            Numeric::from(41_u64),
+            Quantity::from(41_u64),
         )]);
         let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
@@ -7496,10 +7460,7 @@ mod tests_null_decode {
         let decoded = QuantityValueV1::decode_frame(out.payload)
             .expect("decode quantity frame")
             .into_quantity();
-        assert_eq!(
-            decoded,
-            Quantity::try_from_numeric(Numeric::from(41_u64)).unwrap()
-        );
+        assert_eq!(decoded, Quantity::from(41_u64));
         let canonical =
             crate::numeric_tlv::encode_quantity(&decoded).expect("canonical quantity envelope");
         assert_eq!(
@@ -7526,7 +7487,7 @@ mod tests_null_decode {
         );
         let wsv = MockWorldStateView::with_balances(&[(
             (caller.clone(), asset.clone()),
-            Numeric::from(41_u64),
+            Quantity::from(41_u64),
         )]);
         let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
@@ -7927,9 +7888,9 @@ mod tests_null_decode {
             "rose".parse().expect("asset name"),
         );
         let mut wsv = MockWorldStateView::with_balances(&[
-            ((alice.clone(), asset.clone()), Numeric::from(100_u64)),
-            ((bob.clone(), asset.clone()), Numeric::zero()),
-            ((carol.clone(), asset.clone()), Numeric::zero()),
+            ((alice.clone(), asset.clone()), Quantity::from(100_u64)),
+            ((bob.clone(), asset.clone()), Quantity::zero()),
+            ((carol.clone(), asset.clone()), Quantity::zero()),
         ]);
         wsv.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
 
@@ -7963,9 +7924,9 @@ mod tests_null_decode {
         );
 
         let mut apply_wsv = MockWorldStateView::with_balances(&[
-            ((alice.clone(), asset.clone()), Numeric::from(100_u64)),
-            ((bob.clone(), asset.clone()), Numeric::zero()),
-            ((carol.clone(), asset.clone()), Numeric::zero()),
+            ((alice.clone(), asset.clone()), Quantity::from(100_u64)),
+            ((bob.clone(), asset.clone()), Quantity::zero()),
+            ((carol.clone(), asset.clone()), Quantity::zero()),
         ]);
         apply_wsv.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
         let mut apply_host = WsvHost::new_with_subject(apply_wsv, bob.clone(), HashMap::new());
@@ -8021,8 +7982,8 @@ mod tests_null_decode {
                 "pkr".parse().expect("asset name"),
             );
             let mut wsv = MockWorldStateView::with_balances(&[
-                ((source.clone(), asset.clone()), Numeric::from(100_u64)),
-                ((destination.clone(), asset.clone()), Numeric::zero()),
+                ((source.clone(), asset.clone()), Quantity::from(100_u64)),
+                ((destination.clone(), asset.clone()), Quantity::zero()),
             ]);
             wsv.add_account_unchecked(contract_subject.clone());
             wsv.add_account_unchecked(app.clone());
@@ -8056,11 +8017,9 @@ mod tests_null_decode {
             vm.set_register(10, 1);
             vm.set_register(11, 2);
             vm.set_register(12, 1);
-            let quantity = QuantityValueV1::new(
-                Quantity::try_from_numeric(Numeric::from(10_u64)).expect("canonical quantity"),
-            )
-            .encode_frame()
-            .expect("encode quantity");
+            let quantity = QuantityValueV1::new(Quantity::from(10_u64))
+                .encode_frame()
+                .expect("encode quantity");
             let quantity_ptr = vm
                 .alloc_input_tlv(&make_tlv(PointerType::Quantity, &quantity))
                 .expect("allocate quantity");
@@ -8851,10 +8810,8 @@ mod tests_null_decode {
         );
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
         let mut vm = IVM::new(1_000_000);
-        let canonical = Numeric::new(125_u32, 2);
-        let canonical_quantity =
-            Quantity::try_from_numeric(canonical.clone()).expect("canonical quantity");
-        let canonical_payload = QuantityValueV1::new(canonical_quantity)
+        let canonical: Quantity = "1.25".parse().expect("canonical quantity");
+        let canonical_payload = QuantityValueV1::new(canonical.clone())
             .encode_frame()
             .expect("encode canonical quantity frame");
         let canonical_envelope = make_tlv(PointerType::Quantity, &canonical_payload);
@@ -8899,21 +8856,22 @@ mod tests_null_decode {
         vm.set_register(12, corrupted_ptr);
         assert_eq!(host.decode_amount_reg(&vm, 12), Err(VMError::NoritoInvalid));
 
-        let legacy_payload = norito::to_bytes(&canonical).expect("encode legacy Numeric");
+        let legacy_numeric = Numeric::new(125_u32, 2);
+        let legacy_payload = norito::to_bytes(&legacy_numeric).expect("encode legacy Numeric");
         let legacy_ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &legacy_payload))
             .expect("allocate legacy Numeric pointer");
         vm.set_register(12, legacy_ptr);
         assert_eq!(host.decode_amount_reg(&vm, 12), Err(VMError::NoritoInvalid));
 
-        let noncanonical = Numeric::new(1_250_u32, 3);
-        let noncanonical_ptr = vm
+        let wrong_schema_numeric = Numeric::new(1_250_u32, 3);
+        let wrong_schema_ptr = vm
             .alloc_input_tlv(&make_tlv(
                 PointerType::Quantity,
-                &norito::to_bytes(&noncanonical).expect("encode noncanonical quantity"),
+                &norito::to_bytes(&wrong_schema_numeric).expect("encode hostile Numeric payload"),
             ))
-            .expect("allocate noncanonical quantity");
-        vm.set_register(12, noncanonical_ptr);
+            .expect("allocate Quantity-tagged Numeric payload");
+        vm.set_register(12, wrong_schema_ptr);
         assert_eq!(host.decode_amount_reg(&vm, 12), Err(VMError::DecodeError));
     }
 

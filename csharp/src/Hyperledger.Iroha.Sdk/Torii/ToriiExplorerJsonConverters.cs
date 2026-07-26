@@ -223,9 +223,9 @@ internal static class ToriiExplorerJson
         RequireExactTokenText(response.Mintable, $"{context}.mintable");
         RequireOptionalExactTokenText(response.Logo, $"{context}.logo");
         RequireCanonicalAccountId(response.OwnedBy, $"{context}.owned_by");
-        ValidateCanonicalNonNegativeNumericText(response.TotalQuantity, $"{context}.total_quantity");
-        ValidateOptionalCanonicalNonNegativeNumericText(response.LockedQuantity, $"{context}.locked_quantity");
-        ValidateOptionalCanonicalNonNegativeNumericText(
+        ValidateCanonicalQuantityText(response.TotalQuantity, $"{context}.total_quantity");
+        ValidateOptionalCanonicalQuantityText(response.LockedQuantity, $"{context}.locked_quantity");
+        ValidateOptionalCanonicalQuantityText(
             response.CirculatingQuantity,
             $"{context}.circulating_quantity");
     }
@@ -252,7 +252,7 @@ internal static class ToriiExplorerJson
         }
 
         RequireExactTokenText(response.Key, $"{context}.key");
-        ValidateCanonicalNonNegativeNumericText(response.Amount, $"{context}.amount");
+        ValidateCanonicalQuantityText(response.Amount, $"{context}.amount");
     }
 
     internal static void ValidateExplorerIssuanceWindow(
@@ -265,9 +265,9 @@ internal static class ToriiExplorerJson
         }
 
         RequireExactTokenText(response.Key, $"{context}.key");
-        ValidateCanonicalNonNegativeNumericText(response.Minted, $"{context}.minted");
-        ValidateCanonicalNonNegativeNumericText(response.Burned, $"{context}.burned");
-        ValidateCanonicalNonNegativeNumericText(response.Net, $"{context}.net");
+        ValidateCanonicalQuantityText(response.Minted, $"{context}.minted");
+        ValidateCanonicalQuantityText(response.Burned, $"{context}.burned");
+        ValidateCanonicalQuantityText(response.Net, $"{context}.net");
     }
 
     internal static void ValidateExplorerIssuanceSeriesPoint(
@@ -279,9 +279,9 @@ internal static class ToriiExplorerJson
             throw new JsonException($"{context} must not be null.");
         }
 
-        ValidateCanonicalNonNegativeNumericText(response.Minted, $"{context}.minted");
-        ValidateCanonicalNonNegativeNumericText(response.Burned, $"{context}.burned");
-        ValidateCanonicalNonNegativeNumericText(response.Net, $"{context}.net");
+        ValidateCanonicalQuantityText(response.Minted, $"{context}.minted");
+        ValidateCanonicalQuantityText(response.Burned, $"{context}.burned");
+        ValidateCanonicalQuantityText(response.Net, $"{context}.net");
     }
 
     internal static void ValidateExplorerAssetDefinitionSnapshot(
@@ -291,7 +291,7 @@ internal static class ToriiExplorerJson
         ArgumentNullException.ThrowIfNull(response);
 
         RequireExactTokenText(response.DefinitionId, $"{context}.definition_id");
-        ValidateCanonicalNonNegativeNumericText(response.TotalSupply, $"{context}.total_supply");
+        ValidateCanonicalQuantityText(response.TotalSupply, $"{context}.total_supply");
         ValidateExplorerItems(response.TopHolders, $"{context}.top_holders", ValidateExplorerTopHolder);
         if (response.Distribution is null)
         {
@@ -309,7 +309,7 @@ internal static class ToriiExplorerJson
         }
 
         RequireCanonicalAccountId(response.AccountId, $"{context}.account_id");
-        ValidateCanonicalNonNegativeNumericText(response.Balance, $"{context}.balance");
+        ValidateCanonicalQuantityText(response.Balance, $"{context}.balance");
     }
 
     internal static void ValidateExplorerDistributionSnapshot(
@@ -329,9 +329,9 @@ internal static class ToriiExplorerJson
         ValidateFiniteUnitIntervalDouble(response.Top1, $"{context}.top1");
         ValidateFiniteUnitIntervalDouble(response.Top5, $"{context}.top5");
         ValidateFiniteUnitIntervalDouble(response.Top10, $"{context}.top10");
-        ValidateOptionalCanonicalNonNegativeNumericText(response.Median, $"{context}.median");
-        ValidateOptionalCanonicalNonNegativeNumericText(response.P90, $"{context}.p90");
-        ValidateOptionalCanonicalNonNegativeNumericText(response.P99, $"{context}.p99");
+        ValidateOptionalCanonicalQuantityText(response.Median, $"{context}.median");
+        ValidateOptionalCanonicalQuantityText(response.P90, $"{context}.p90");
+        ValidateOptionalCanonicalQuantityText(response.P99, $"{context}.p99");
         ValidateExplorerItems(response.Lorenz, $"{context}.lorenz", ValidateExplorerLorenzPoint);
     }
 
@@ -365,7 +365,7 @@ internal static class ToriiExplorerJson
         RequireExactTokenText(response.Id, $"{context}.id");
         RequireExactTokenText(response.DefinitionId, $"{context}.definition_id");
         RequireCanonicalAccountId(response.AccountId, $"{context}.account_id");
-        ValidateCanonicalNonNegativeNumericText(response.Value, $"{context}.value");
+        ValidateCanonicalQuantityText(response.Value, $"{context}.value");
     }
 
     internal static void ValidateExplorerNftsPage(ToriiExplorerNftsPage response, string context)
@@ -402,8 +402,8 @@ internal static class ToriiExplorerJson
 
         RequireExactTokenText(response.Id, $"{context}.id");
         RequireCanonicalAccountId(response.OwnedBy, $"{context}.owned_by");
-        ValidateCanonicalNonNegativeNumericText(response.Quantity, $"{context}.quantity");
-        ValidateCanonicalNonNegativeNumericText(response.HeldQuantity, $"{context}.held_quantity");
+        ValidateCanonicalQuantityText(response.Quantity, $"{context}.quantity");
+        ValidateCanonicalQuantityText(response.HeldQuantity, $"{context}.held_quantity");
         RequireExactNonEmptyText(response.PrimaryReference, $"{context}.primary_reference");
         RequireOptionalExactTokenText(response.Status, $"{context}.status");
         ValidateExplorerItems(response.Parents, $"{context}.parents", ValidateExplorerRwaParent);
@@ -417,7 +417,7 @@ internal static class ToriiExplorerJson
         }
 
         RequireExactTokenText(response.Rwa, $"{context}.rwa");
-        ValidateCanonicalNonNegativeNumericText(response.Quantity, $"{context}.quantity");
+        ValidateCanonicalQuantityText(response.Quantity, $"{context}.quantity");
     }
 
     internal static JsonObject ReadObject(ref Utf8JsonReader reader, string context)
@@ -941,17 +941,17 @@ internal static class ToriiExplorerJson
         }
     }
 
-    private static void ValidateCanonicalNonNegativeNumericText(string? value, string field)
+    private static void ValidateCanonicalQuantityText(string? value, string field)
     {
         RequireExactNonEmptyText(value, field);
         _ = ToriiQuantityJson.RequireCanonicalQuantity(value, field);
     }
 
-    private static void ValidateOptionalCanonicalNonNegativeNumericText(string? value, string field)
+    private static void ValidateOptionalCanonicalQuantityText(string? value, string field)
     {
         if (value is not null)
         {
-            ValidateCanonicalNonNegativeNumericText(value, field);
+            ValidateCanonicalQuantityText(value, field);
         }
     }
 

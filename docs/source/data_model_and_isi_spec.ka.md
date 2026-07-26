@@ -107,7 +107,7 @@ ID-ებს აქვთ სტაბილური სიმებიან�
 ტიპები: `Mint<O, D: Identifiable>` და `Burn<O, D: Identifiable>`, ყუთში როგორც `MintBox`/`BurnBox`.
 
 - აქტივი (რიცხვითი) ზარაფხანა/დაწვა: არეგულირებს ნაშთებს და განსაზღვრავს `total_quantity`.
-  - წინაპირობები: `Numeric` მნიშვნელობა უნდა აკმაყოფილებდეს `AssetDefinition.spec()`; ზარაფხანა დაშვებულია `mintable`-ით:
+  - წინაპირობები: `Quantity` მნიშვნელობა უნდა აკმაყოფილებდეს `AssetDefinition.spec()`; ზარაფხანა დაშვებულია `mintable`-ით:
     - `Infinitely`: ყოველთვის დასაშვებია.
     - `Once`: დასაშვებია ზუსტად ერთხელ; პირველი ზარაფხანა აბრუნებს `mintable`-ს `Not`-ზე და ასხივებს `AssetDefinitionEvent::MintabilityChanged`, პლუს დეტალური `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` აუდიტორობისთვის.
     - `Limited(n)`: საშუალებას იძლევა `n` დამატებითი ზარაფხანის ოპერაციები. ყოველი წარმატებული ზარაფხანა ამცირებს მრიცხველს; როდესაც ის მიაღწევს ნულს, განსაზღვრება გადადის `Not`-ზე და ასხივებს იგივე `MintabilityChanged` მოვლენებს, როგორც ზემოთ.

@@ -353,8 +353,11 @@ function canonicalDecimalValue(value) {
 }
 
 function canonicalQuantityValue(value) {
-  return value instanceof KotodamaQuantity
-    ? new KotodamaQuantity(value.mantissa, value.scale)
+  if (value instanceof KotodamaQuantity) {
+    return new KotodamaQuantity(value.mantissa, value.scale);
+  }
+  return typeof value === "bigint"
+    ? new KotodamaQuantity(value, 0)
     : new KotodamaQuantity(value);
 }
 

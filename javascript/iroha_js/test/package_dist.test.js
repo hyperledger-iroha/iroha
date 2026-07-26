@@ -306,7 +306,20 @@ test("package dist quantity builders reject numbers and noncanonical strings", (
     ),
   }).toI105();
   const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${account}`;
-  for (const quantity of [1, -1, "+1", "01", "1.0", "1.2300", " 1", "1e0"]) {
+  for (const quantity of [
+    1,
+    -1,
+    "-1",
+    "+1",
+    "01",
+    "1.0",
+    "1.2300",
+    "1amt",
+    "1qty",
+    " 1",
+    "1e0",
+    1n << 511n,
+  ]) {
     assert.throws(
       () => packageExports.buildMintAssetInstruction({ assetId, quantity }),
       /canonical|JavaScript numbers/u,
@@ -315,6 +328,10 @@ test("package dist quantity builders reject numbers and noncanonical strings", (
   assert.equal(
     packageExports.buildMintAssetInstruction({ assetId, quantity: 1n }).Mint.Asset.object,
     "1",
+  );
+  assert.equal(
+    packageExports.buildMintAssetInstruction({ assetId, quantity: "1.25" }).Mint.Asset.object,
+    "1.25",
   );
 });
 
