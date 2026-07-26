@@ -112,7 +112,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Манифест с кодировкой base64 или кодировкой:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -180,7 +180,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   `por_sampling_returns_verified_proofs` کو کور کرتے ہیں۔
 - Если вы хотите, чтобы это произошло:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` или `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` или `torii_sorafs_storage_fetch_inflight`
   - `/v1/sorafs/capacity/state` کے ذریعے ظاہر کیے گئے PoR کامیابی/ناکامی کاؤنٹرز
   - `sorafs_node_deal_publish_total{result=success|failure}` کے ذریعے попытки публикации урегулирования
 

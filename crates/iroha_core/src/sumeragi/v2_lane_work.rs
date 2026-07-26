@@ -1739,9 +1739,11 @@ struct LanePersistencePause {
 ///
 /// Only [`RetainedMergeSidecars`] can construct this value, after matching the
 /// exact service/transport owner pair, predecessor artifact, empty lane-output
-/// handoff, and immediate successor context. The authority authenticates that
-/// binding only; it cannot clear or otherwise bypass non-terminal responder
-/// streams, gates, transfers, or flush ownership.
+/// handoff, and immediate successor context. For an identical roster it
+/// preserves every responder occurrence. For a changed certified roster it
+/// authorizes a durable generation fence which commits empty successor
+/// responder tables before clearing predecessor state; no process-local writer
+/// or queued output can survive the sealed handoff.
 pub(crate) struct DurableMergeSidecarRolloverAuthority {
     _exact_output_handoff: DurableExactOutputHandoffReceipt,
 }
@@ -8132,18 +8134,6 @@ impl V2LaneWorkAdapter {
             reply_route,
             message,
         } = post;
-        // A GenerationHint is authenticated by its consensus envelope and
-        // targets the requester directly.  The transport still receives the
-        // triggering request's return route so it can authenticate and bound
-        // ingress, but that capability must not escape into Hint output.
-        let reply_route = if matches!(
-            message.as_ref(),
-            CertifiedMergeSidecarMessage::GenerationHint(_)
-        ) {
-            None
-        } else {
-            reply_route
-        };
         let reply_routes = match reply_route {
             Some(reply_route) => {
                 let Ok(reply_routes) = NetworkReplyRoutes::try_from_route(reply_route) else {
@@ -8478,11 +8468,12 @@ impl V2LaneWorkAdapter {
     }
 
     #[cfg(test)]
-    pub(in crate::sumeragi) fn roll_merge_sidecar_service_generation_for_test(
+    pub(in crate::sumeragi) fn transition_merge_sidecar_responder_roster_for_test(
         &mut self,
+        server_roster: &[PeerId],
     ) -> Result<(), MergeSidecarError> {
         self.merge_sidecars
-            .roll_server_service_generation_for_test()
+            .transition_server_service_generation_for_test(server_roster)
     }
 
     /// Authenticate one local serving decision against the QC-selected carrier.
@@ -8823,7 +8814,10 @@ impl V2LaneWorkAdapter {
         reply_route: Option<NetworkReplyRoute>,
         hint: &crate::merge_sidecar::CertifiedMergeSidecarGenerationHintV1,
     ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
-        if reply_route.is_some() {
+        let Some(reply_route) = reply_route else {
+            return Ok(V2LaneIngressOutcome::Rejected);
+        };
+        if !reply_route.is_active() || reply_route.semantic_target() != &sender {
             return Ok(V2LaneIngressOutcome::Rejected);
         }
         match self
@@ -12574,7 +12568,7 @@ fn retryable_sidecar_server_control_peer(effect: &V2LaneWorkEffect) -> Option<&P
     };
     match message.as_ref() {
         CertifiedMergeSidecarMessage::CloseAck(_) if reply_routes.is_some() => Some(peer),
-        CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_none() => Some(peer),
+        CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_some() => Some(peer),
         CertifiedMergeSidecarMessage::Request(_)
         | CertifiedMergeSidecarMessage::Close(_)
         | CertifiedMergeSidecarMessage::CloseAck(_)
@@ -12619,14 +12613,14 @@ fn lane_work_effect_reply_routes_have_valid_shape(effect: &V2LaneWorkEffect) -> 
             reply_routes,
             message,
         } => match message.as_ref() {
-            CertifiedMergeSidecarMessage::Request(_)
-            | CertifiedMergeSidecarMessage::Close(_)
-            | CertifiedMergeSidecarMessage::GenerationHint(_) => reply_routes.is_none(),
-            CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {
-                reply_routes
-                    .as_ref()
-                    .is_some_and(|routes| reply_routes_target_peer(routes, peer))
+            CertifiedMergeSidecarMessage::Request(_) | CertifiedMergeSidecarMessage::Close(_) => {
+                reply_routes.is_none()
             }
+            CertifiedMergeSidecarMessage::CloseAck(_)
+            | CertifiedMergeSidecarMessage::GenerationHint(_)
+            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes
+                .as_ref()
+                .is_some_and(|routes| reply_routes_target_peer(routes, peer)),
         },
     }
 }
@@ -12664,14 +12658,14 @@ fn lane_work_effect_reply_routes_are_valid(effect: &V2LaneWorkEffect) -> bool {
             reply_routes,
             message,
         } => match message.as_ref() {
-            CertifiedMergeSidecarMessage::Request(_)
-            | CertifiedMergeSidecarMessage::Close(_)
-            | CertifiedMergeSidecarMessage::GenerationHint(_) => reply_routes.is_none(),
-            CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {
-                reply_routes
-                    .as_ref()
-                    .is_some_and(|routes| reply_routes_are_live_for_peer(routes, peer))
+            CertifiedMergeSidecarMessage::Request(_) | CertifiedMergeSidecarMessage::Close(_) => {
+                reply_routes.is_none()
             }
+            CertifiedMergeSidecarMessage::CloseAck(_)
+            | CertifiedMergeSidecarMessage::GenerationHint(_)
+            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes
+                .as_ref()
+                .is_some_and(|routes| reply_routes_are_live_for_peer(routes, peer)),
         },
     }
 }
@@ -13265,6 +13259,10 @@ pub(super) mod tests {
         CertifiedMergeSidecarSemanticSequenceV1(
             NonZeroU64::new(value).expect("test semantic sequence must be non-zero"),
         )
+    }
+
+    pub(in crate::sumeragi) fn changed_merge_sidecar_server_roster() -> Vec<PeerId> {
+        vec![PeerId::new(KeyPair::random().public_key().clone())]
     }
 
     pub(in crate::sumeragi) fn fixture(
@@ -14209,7 +14207,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn typed_finality_handoff_rejects_changed_roster_with_active_writable_writer() {
+    fn typed_finality_handoff_fences_changed_roster_after_sealing_active_writer() {
         let CertifiedSidecarServerFixture {
             mut adapter,
             validators,
@@ -14322,12 +14320,11 @@ pub(super) mod tests {
             .seal_applied_height_output_handoff(&durable_receipt, &artifact, &lane_authority)
             .expect("seal the final empty writer corridor");
         let output_guard = Arc::clone(&adapter.output_guard);
-        let lifecycle_state = adapter
+        let lifecycle_root = adapter
             .merge_sidecars
-            .lifecycle_journal_temp_path_for_test()
-            .with_file_name("state.norito");
-        let predecessor_snapshot =
-            std::fs::read(&lifecycle_state).expect("read the active predecessor V2 snapshot");
+            .lifecycle_root_high_water_path_for_test();
+        let predecessor_root =
+            std::fs::read(&lifecycle_root).expect("read the active predecessor V3 root");
 
         let replacement = PeerId::new(
             KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::BlsNormal)
@@ -14348,59 +14345,90 @@ pub(super) mod tests {
         let successor_construction = output_guard
             .begin_fail_stop_operation()
             .expect("successor construction starts while output remains open");
-        let error = match retained.rehydrate_for_successor(
-            &successor,
-            reply_source_capacity,
-            sidecar_limits,
-            successor_roster.len(),
-            successor_roster_digest,
-            Instant::now(),
-        ) {
-            Err(error) => error,
-            Ok(_) => panic!("a move-only handoff cannot bypass active responder ownership"),
-        };
-        drop(successor_construction);
+        let mut successor_transport = retained
+            .rehydrate_for_successor(
+                &successor,
+                reply_source_capacity,
+                sidecar_limits,
+                successor_roster.len(),
+                successor_roster_digest.clone(),
+                Instant::now(),
+            )
+            .expect("sealed exact output durably fences active predecessor ownership");
+        successor_construction.complete();
 
-        assert!(matches!(
-            error,
-            V2LaneWorkError::InvalidContext(ref reason)
-                if reason.contains(
-                    "certified merge-sidecar transport capacity reached: \
-                     server semantic requester geometry"
-                )
-        ));
         assert!(
-            output_guard.restart_required(),
-            "failed successor construction must latch restart recovery"
+            !output_guard.restart_required(),
+            "successful authority-gated rollover keeps successor output open"
+        );
+        assert_ne!(
+            std::fs::read(&lifecycle_root).expect("read successor V3 root"),
+            predecessor_root,
+            "changed roster must publish a new root-anchored generation fence"
         );
         assert_eq!(
-            std::fs::read(&lifecycle_state)
-                .expect("reread the fail-atomic predecessor V2 snapshot"),
-            predecessor_snapshot,
-            "capacity rejection must not publish successor lifecycle state"
-        );
-        let recovered = MergeSidecarTransport::open_durable_with_server_stream_capacity(
-            &kura.store_root(),
-            reply_source_capacity,
-            sidecar_limits,
-            predecessor_roster.len(),
-            predecessor_roster_digest.clone(),
-        )
-        .expect("restart reopens the exact predecessor responder state");
-        assert_eq!(
-            recovered.server_service_generation_for_test(),
-            predecessor_generation
+            successor_transport.server_service_generation_for_test(),
+            service_generation(
+                predecessor_generation
+                    .get()
+                    .checked_add(1)
+                    .expect("test generation remains representable")
+            )
         );
         assert_eq!(
-            recovered.server_roster_digest_for_test(),
+            successor_transport.server_roster_digest_for_test(),
+            &successor_roster_digest
+        );
+        assert_ne!(
+            successor_transport.server_roster_digest_for_test(),
             &predecessor_roster_digest
         );
-        assert_eq!(recovered.server_stream_count_for_test(), 1);
-        assert_eq!(recovered.server_request_gate_count_for_test(), 1);
-        assert_eq!(recovered.server_request_attempt_count_for_test(), 1);
+        assert_eq!(successor_transport.server_stream_count_for_test(), 0);
+        assert_eq!(successor_transport.server_request_gate_count_for_test(), 0);
+        assert_eq!(
+            successor_transport.server_request_attempt_count_for_test(),
+            0
+        );
+        assert_eq!(
+            successor_transport.retained_outbound_attempt_count_for_test(),
+            0
+        );
+        assert_eq!(successor_transport.retained_outbound_bytes_for_test(), 0);
+        assert!(
+            successor_transport
+                .drain_closed_server_prefixes()
+                .is_empty(),
+            "forced roster fencing must not forge requester-authenticated close prefixes"
+        );
+
+        let stale = successor_transport
+            .admit_server_request(
+                &requester,
+                &request,
+                Some(&route),
+                &request.responder,
+                Instant::now(),
+            )
+            .expect("stale predecessor request receives the successor fence");
+        let ServerRequestAdmission::GenerationHint(post) = stale else {
+            panic!("stale predecessor request must not recreate responder ownership")
+        };
+        assert!(
+            post.reply_route
+                .as_ref()
+                .is_some_and(|retained| retained.same_delivery(&route))
+        );
+        let CertifiedMergeSidecarMessage::GenerationHint(hint) = post.message.as_ref() else {
+            panic!("changed-roster fence must emit a GenerationHint")
+        };
+        assert_eq!(
+            hint.current_generation,
+            successor_transport.server_service_generation_for_test()
+        );
+        assert_eq!(hint.observed_generation, predecessor_generation);
         assert!(
             route.is_active() && route.is_reply_writable(),
-            "transport rejection does not revoke the independent reply route"
+            "generation fencing does not mutate the independent route capability"
         );
         assert!(
             !writer_control
@@ -14580,7 +14608,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn typed_changed_roster_v2_snapshot_failure_preserves_predecessor_state() {
+    fn typed_changed_roster_v3_lifecycle_failure_preserves_predecessor_pair() {
         let CertifiedSidecarServerFixture {
             mut adapter,
             validators,
@@ -14599,11 +14627,11 @@ pub(super) mod tests {
         let (receipt, artifact) = durable_finality_fixture(&service, &validators);
         let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
             &artifact,
-            Hash::new(b"typed V2 snapshot crash has no winning lane output"),
+            Hash::new(b"typed V3 lifecycle crash has no winning lane output"),
         );
         let handoff = service
             .seal_applied_height_output_handoff(&receipt, &artifact, &lane_authority)
-            .expect("seal the empty typed V2 snapshot fixture");
+            .expect("seal the empty typed V3 lifecycle fixture");
         let predecessor_generation = adapter.merge_sidecars.server_service_generation_for_test();
         let predecessor_roster = adapter
             .context
@@ -14630,16 +14658,23 @@ pub(super) mod tests {
         let lifecycle_temp = adapter
             .merge_sidecars
             .lifecycle_journal_temp_path_for_test();
-        let lifecycle_state = lifecycle_temp.with_file_name("state.norito");
+        let lifecycle_state = adapter
+            .merge_sidecars
+            .lifecycle_journal_state_path_for_test();
+        let lifecycle_root = adapter
+            .merge_sidecars
+            .lifecycle_root_high_water_path_for_test();
         let predecessor_snapshot =
-            std::fs::read(&lifecycle_state).expect("read the predecessor V2 lifecycle snapshot");
+            std::fs::read(&lifecycle_state).expect("read the predecessor V3 lifecycle snapshot");
+        let predecessor_root =
+            std::fs::read(&lifecycle_root).expect("read the predecessor V3 root high-water");
         let output_guard = Arc::clone(&adapter.output_guard);
         adapter
             .merge_sidecars
             .obstruct_lifecycle_journal_temp_for_test();
         let retained = adapter
             .into_retained_merge_sidecars(handoff, &artifact, &successor)
-            .expect("bind the V2 snapshot fixture to its exact transport");
+            .expect("bind the V3 lifecycle fixture to its exact transport");
 
         let successor_construction = output_guard
             .begin_fail_stop_operation()
@@ -14653,7 +14688,7 @@ pub(super) mod tests {
             Instant::now(),
         ) {
             Err(error) => error,
-            Ok(_) => panic!("an obstructed V2 lifecycle snapshot cannot commit a successor"),
+            Ok(_) => panic!("an obstructed V3 lifecycle snapshot cannot commit a successor"),
         };
         drop(successor_construction);
         assert!(matches!(
@@ -14665,12 +14700,17 @@ pub(super) mod tests {
             "a failed durable successor transition must latch restart recovery"
         );
         assert_eq!(
-            std::fs::read(&lifecycle_state).expect("reread the predecessor V2 lifecycle snapshot"),
+            std::fs::read(&lifecycle_state).expect("reread the predecessor V3 lifecycle snapshot"),
             predecessor_snapshot,
-            "the sole V2 snapshot must retain the complete predecessor on write failure"
+            "the V3 state must retain the complete predecessor on write failure"
+        );
+        assert_eq!(
+            std::fs::read(&lifecycle_root).expect("reread the predecessor V3 root high-water"),
+            predecessor_root,
+            "the V3 root must retain the predecessor commitment on write failure"
         );
 
-        std::fs::remove_dir(lifecycle_temp).expect("remove the injected V2 state obstruction");
+        std::fs::remove_dir(lifecycle_temp).expect("remove the injected V3 state obstruction");
         let recovered_predecessor =
             MergeSidecarTransport::open_durable_with_server_stream_capacity(
                 &kura.store_root(),
@@ -14679,7 +14719,7 @@ pub(super) mod tests {
                 predecessor_roster.len(),
                 predecessor_roster_digest.clone(),
             )
-            .expect("restart reopens the complete predecessor V2 state");
+            .expect("restart reopens the complete predecessor V3 state");
         assert_eq!(
             recovered_predecessor.server_service_generation_for_test(),
             predecessor_generation
@@ -15682,9 +15722,9 @@ pub(super) mod tests {
             request,
             ..
         } = certified_sidecar_server_fixture();
+        let changed_roster = changed_merge_sidecar_server_roster();
         adapter
-            .merge_sidecars
-            .roll_server_service_generation_for_test()
+            .transition_merge_sidecar_responder_roster_for_test(&changed_roster)
             .expect("persist a quiescent successor responder generation");
         adapter
             .merge_sidecars
@@ -15751,7 +15791,7 @@ pub(super) mod tests {
             matches!(
                 effect,
                 V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                    reply_routes: None,
+                    reply_routes: Some(_),
                     message,
                     ..
                 } if matches!(
@@ -15797,7 +15837,7 @@ pub(super) mod tests {
             adapter.accept_relay_message(
                 LaneRelayMessage::CertifiedMergeSidecar {
                     sender: requester,
-                    reply_route: Some(replay_reply_route),
+                    reply_route: Some(replay_reply_route.clone()),
                     message: CertifiedMergeSidecarMessage::Close(close),
                 },
                 0,
@@ -15809,7 +15849,7 @@ pub(super) mod tests {
             matches!(
                 effect,
                 V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                    reply_routes: None,
+                    reply_routes: Some(reply_routes),
                     message,
                     ..
                 } if matches!(
@@ -15817,10 +15857,101 @@ pub(super) mod tests {
                     CertifiedMergeSidecarMessage::GenerationHint(hint)
                         if hint.observed_generation == request.service_generation
                             && hint.observed_message_hash == close_hash
-                )
+                ) && reply_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&replay_reply_route))
             )
         }));
         assert!(!output_guard.restart_required());
+    }
+
+    #[test]
+    fn duplicate_generation_hint_coalesces_alternate_reply_sources() {
+        let CertifiedSidecarServerFixture {
+            mut adapter,
+            requester,
+            request,
+            ..
+        } = certified_sidecar_server_fixture();
+        let changed_roster = changed_merge_sidecar_server_roster();
+        adapter
+            .transition_merge_sidecar_responder_roster_for_test(&changed_roster)
+            .expect("persist a quiescent successor responder generation");
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            hub_a.clone(),
+            adapter.limits.reply_source_capacity.get(),
+        );
+        let first_a = routes.mint_via(requester.clone(), hub_a.clone());
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+
+        for route in [first_a.clone(), route_b.clone()] {
+            assert_eq!(
+                adapter
+                    .accept_certified_merge_sidecar_for_test(
+                        requester.clone(),
+                        route,
+                        request.clone(),
+                    )
+                    .expect("the same stale request retains each authenticated return source"),
+                V2LaneIngressOutcome::Inserted
+            );
+        }
+        assert_eq!(adapter.sidecar_effects.len(), 1);
+
+        let later_a = routes
+            .redeliver(&first_a)
+            .expect("redeliver the first authenticated return source");
+        assert_eq!(
+            adapter
+                .accept_certified_merge_sidecar_for_test(
+                    requester.clone(),
+                    later_a.clone(),
+                    request.clone(),
+                )
+                .expect("a later delivery supersedes only its own source"),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(
+            adapter
+                .accept_certified_merge_sidecar_for_test(
+                    requester.clone(),
+                    first_a.clone(),
+                    request.clone(),
+                )
+                .expect("a stale delivery cannot regress the retained source"),
+            V2LaneIngressOutcome::Duplicate
+        );
+
+        let foreign_target = PeerId::new(KeyPair::random().public_key().clone());
+        let foreign_hub = PeerId::new(KeyPair::random().public_key().clone());
+        let foreign_route = routes.mint_via(foreign_target, foreign_hub);
+        assert_eq!(
+            adapter
+                .accept_certified_merge_sidecar_for_test(requester.clone(), foreign_route, request,)
+                .expect("a foreign semantic target is rejected without disturbing the Hint"),
+            V2LaneIngressOutcome::Rejected
+        );
+
+        let Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer,
+            reply_routes: Some(retained),
+            message,
+        }) = adapter.sidecar_effects.front()
+        else {
+            panic!("one routed generation Hint remains queued")
+        };
+        assert_eq!(peer, &requester);
+        assert!(matches!(
+            message.as_ref(),
+            CertifiedMergeSidecarMessage::GenerationHint(_)
+        ));
+        assert_eq!(retained.len(), 2);
+        assert_eq!(retained.semantic_target(), &requester);
+        assert!(retained.iter().any(|route| route.same_delivery(&later_a)));
+        assert!(retained.iter().any(|route| route.same_delivery(&route_b)));
+        assert!(!retained.iter().any(|route| route.same_delivery(&first_a)));
     }
 
     #[test]
@@ -15832,9 +15963,9 @@ pub(super) mod tests {
             request,
             ..
         } = certified_sidecar_server_fixture();
+        let changed_roster = changed_merge_sidecar_server_roster();
         adapter
-            .merge_sidecars
-            .roll_server_service_generation_for_test()
+            .transition_merge_sidecar_responder_roster_for_test(&changed_roster)
             .expect("persist a quiescent successor responder generation");
         let current_generation = CertifiedMergeSidecarServiceGenerationV1(
             NonZeroU64::new(
@@ -16149,13 +16280,13 @@ pub(super) mod tests {
             adapter.accept_relay_message(
                 LaneRelayMessage::CertifiedMergeSidecar {
                     sender: responder.clone(),
-                    reply_route: Some(reply_route),
+                    reply_route: None,
                     message: CertifiedMergeSidecarMessage::GenerationHint(hint.clone()),
                 },
                 0,
             ),
             V2LaneIngressOutcome::Rejected,
-            "GenerationHint must arrive as route-free Consensus control"
+            "GenerationHint must retain exact reply-route authentication"
         );
         assert!(!output_guard.restart_required());
         adapter
@@ -16166,7 +16297,7 @@ pub(super) mod tests {
             adapter.accept_relay_message(
                 LaneRelayMessage::CertifiedMergeSidecar {
                     sender: responder,
-                    reply_route: None,
+                    reply_route: Some(reply_route),
                     message: CertifiedMergeSidecarMessage::GenerationHint(hint),
                 },
                 0,
@@ -16240,6 +16371,12 @@ pub(super) mod tests {
         );
         let responder = close.responder.clone();
         let output_guard = Arc::clone(&adapter.output_guard);
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            hub.clone(),
+            adapter.limits.reply_source_capacity.get(),
+        );
+        let reply_route = routes.mint_via(responder.clone(), hub);
         adapter
             .merge_sidecars
             .obstruct_lifecycle_journal_temp_for_test();
@@ -16248,7 +16385,7 @@ pub(super) mod tests {
             adapter.accept_relay_message(
                 LaneRelayMessage::CertifiedMergeSidecar {
                     sender: responder,
-                    reply_route: None,
+                    reply_route: Some(reply_route),
                     message: CertifiedMergeSidecarMessage::GenerationHint(hint),
                 },
                 0,

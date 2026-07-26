@@ -1190,6 +1190,34 @@ fn resolve_finalized_cursor(
     Ok(ProofOutcomeFinalizedCursorV1 { height, block_hash })
 }
 
+/// Read the active provider proof/admission policy from one immutable finalized
+/// state view.
+///
+/// The returned cursor and policy record are resolved from the same borrowed
+/// view. Callers must not combine the result with a record read from another
+/// view. Stored records are decoded canonically and their policy digest,
+/// provider binding, activation provenance, and key material are revalidated
+/// before this function returns.
+///
+/// # Errors
+///
+/// Returns a query failure when the view has no committed block or the
+/// consensus state contains a malformed policy record.
+pub fn read_sorafs_proof_outcome_signer_policy_in_finalized_view(
+    state_ro: &impl crate::state::StateReadOnly,
+    provider_id: iroha_data_model::sorafs::capacity::ProviderId,
+) -> Result<
+    (
+        ProofOutcomeFinalizedCursorV1,
+        Option<ProofOutcomeSignerPolicyRecordV1>,
+    ),
+    QueryExecutionFail,
+> {
+    let finalized_cursor = resolve_finalized_cursor(state_ro)?;
+    let policy = read_signer_policy(state_ro.world(), provider_id).map_err(query_failure)?;
+    Ok((finalized_cursor, policy))
+}
+
 fn resolve_committed_event(
     state_ro: &impl crate::state::StateReadOnly,
     event: &ProofOutcomePersistedEventV1,

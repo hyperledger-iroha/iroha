@@ -222,7 +222,7 @@ blake2 = { workspace = true }
 iroha_file_mmap = { path = "../iroha_file_mmap" }
 ciborium = { version = "0.2.2", default-features = false, features = ["std"] }
 x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8"] }
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve"] }
 der-parser = "10.0.0"
 signature = { version = "2.2.0", default-features = false, features = ["std"] }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }

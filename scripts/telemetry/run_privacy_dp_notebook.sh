@@ -9,12 +9,25 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
-ARTIFACT_DIR="${PROJECT_ROOT}/artifacts/soranet_privacy_dp"
+ARTIFACT_DIR="${SORANET_PRIVACY_DP_ARTIFACT_DIR:-${PROJECT_ROOT}/artifacts/soranet_privacy_dp}"
 NOTEBOOK="${PROJECT_ROOT}/notebooks/soranet_privacy_dp.ipynb"
 OUTPUT_NOTEBOOK="${ARTIFACT_DIR}/soranet_privacy_dp.executed.ipynb"
 PYTHON_BIN="${PYTHON:-python3}"
 
-mkdir -p "${ARTIFACT_DIR}"
+if [[ -n "${SORANET_PRIVACY_DP_ARTIFACT_DIR:-}" ]]; then
+  if [[ "${ARTIFACT_DIR}" != /* ]]; then
+    printf 'SORANET_PRIVACY_DP_ARTIFACT_DIR must be absolute\n' >&2
+    exit 1
+  fi
+  if [[ -e "${ARTIFACT_DIR}" || -L "${ARTIFACT_DIR}" ]]; then
+    printf 'Refusing existing privacy DP artifact directory: %s\n' "${ARTIFACT_DIR}" >&2
+    exit 1
+  fi
+  mkdir -m 0700 -- "${ARTIFACT_DIR}"
+else
+  mkdir -p "${ARTIFACT_DIR}"
+fi
+export SORANET_PRIVACY_DP_ARTIFACT_DIR="${ARTIFACT_DIR}"
 
 if [[ ! -f "${NOTEBOOK}" ]]; then
   printf 'Notebook not found: %s\n' "${NOTEBOOK}" >&2
@@ -32,21 +45,13 @@ PY
     "${OUTPUT_NOTEBOOK}" \
     --cwd "${PROJECT_ROOT}" \
     --no-progress-bar
-  printf 'Executed notebook via papermill: %s\n' "${OUTPUT_NOTEBOOK}"
-  exit 0
-fi
-
-if command -v papermill >/dev/null 2>&1; then
+elif command -v papermill >/dev/null 2>&1; then
   papermill \
     "${NOTEBOOK}" \
     "${OUTPUT_NOTEBOOK}" \
     --cwd "${PROJECT_ROOT}" \
     --no-progress-bar
-  printf 'Executed notebook via papermill: %s\n' "${OUTPUT_NOTEBOOK}"
-  exit 0
-fi
-
-if command -v jupyter >/dev/null 2>&1; then
+elif command -v jupyter >/dev/null 2>&1; then
   OUTPUT_BASENAME="$(basename "${OUTPUT_NOTEBOOK}")"
   jupyter nbconvert \
     --to notebook \
@@ -56,9 +61,12 @@ if command -v jupyter >/dev/null 2>&1; then
     --output "${OUTPUT_BASENAME}" \
     --output-dir "${ARTIFACT_DIR}" \
     "${NOTEBOOK}"
-  printf 'Executed notebook via jupyter nbconvert: %s\n' "${OUTPUT_NOTEBOOK}"
-  exit 0
+else
+  printf 'Unable to execute notebook. Install papermill (preferred) or jupyter.\n' >&2
+  exit 1
 fi
 
-printf 'Unable to execute notebook. Install papermill (preferred) or jupyter.\n' >&2
-exit 1
+"${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/telemetry/normalize_executed_notebook.py" \
+  --notebook "${OUTPUT_NOTEBOOK}" \
+  --source-date-epoch "${SOURCE_DATE_EPOCH:-0}"
+printf 'Executed and normalized notebook: %s\n' "${OUTPUT_NOTEBOOK}"

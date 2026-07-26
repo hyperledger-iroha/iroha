@@ -185,6 +185,7 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_find_sorafs_repair_tasks(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsRepairTasks)",
         "fn visit_find_sorafs_repair_status(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsRepairStatus)",
         "fn visit_find_sorafs_repair_events(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsRepairEvents)",
+        "fn visit_find_sorafs_reputation_journal_authority_policy(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy)",
         "fn visit_find_sorafs_reputation_journal_events(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReputationJournalEvents)",
         "fn visit_find_sorafs_orderbook_policy(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookPolicy)",
         "fn visit_find_sorafs_orderbook_order_by_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookOrderById)",

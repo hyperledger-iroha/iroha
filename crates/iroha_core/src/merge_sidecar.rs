@@ -10,7 +10,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
@@ -106,9 +106,13 @@ impl CertifiedMergeSidecarSemanticSequenceV1 {
 
 /// Durable responder-owned generation of the bounded sidecar service state.
 ///
-/// A responder advances this global fence before compacting its per-requester
-/// lifecycle table. Delayed messages from an older generation can therefore
-/// be rejected without retaining an unbounded collection of peer tombstones.
+/// A responder advances this global fence only while atomically installing a
+/// certified changed roster. Ordinary rehydration requires terminal
+/// per-requester state; a durable exact-output handoff or lifecycle restart may
+/// instead supersede active responder state after predecessor writers become
+/// unreachable. Delayed messages from the prior roster generation can
+/// therefore be rejected without retaining an unbounded collection of peer
+/// tombstones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[repr(transparent)]
 pub struct CertifiedMergeSidecarServiceGenerationV1(pub NonZeroU64);
@@ -155,9 +159,10 @@ const RESERVED_DECIDED_DEFERRED_BLOCKS: usize = 1;
 ///
 /// The table is validator-scoped rather than connection-scoped. Requester
 /// streams use globally monotonic local epochs; responder tables are compacted
-/// only by advancing a durable global service generation. Delayed traffic from
-/// a compacted generation is answered statelessly with the current fence and
-/// can never recreate an evicted per-peer tombstone.
+/// only by advancing a durable global service generation for a certified
+/// changed roster. Ordinary capacity pressure never advances that fence.
+/// Delayed traffic from a prior roster generation is answered statelessly with
+/// the current fence and can never recreate an evicted per-peer tombstone.
 const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize = MAX_VALIDATORS_PER_HEIGHT;
 
 #[cfg(test)]
@@ -179,11 +184,19 @@ const SIGNING_GUARD_RECORD_EXT: &str = "norito";
 const SIGNING_GUARD_TEMP_EXT: &str = "norito.tmp";
 const SIGNING_GUARD_HIGH_WATER_FILE: &str = "committed-high-water.norito";
 const SIGNING_GUARD_HIGH_WATER_TEMP: &str = "committed-high-water.norito.tmp";
-const LIFECYCLE_JOURNAL_VERSION_V2: u8 = 2;
-const LIFECYCLE_JOURNAL_DIR: &str = "sumeragi_v2_merge_sidecar_lifecycle_v2";
-const LEGACY_LIFECYCLE_JOURNAL_DIRS: &[&str] = &["sumeragi_v2_merge_sidecar_lifecycle_v1"];
-const LIFECYCLE_JOURNAL_FILE: &str = "state.norito";
+const LIFECYCLE_JOURNAL_VERSION_V3: u8 = 3;
+const LIFECYCLE_JOURNAL_DIR: &str = "sumeragi_v2_merge_sidecar_lifecycle_v3";
+const LEGACY_LIFECYCLE_JOURNAL_DIRS: &[&str] = &[
+    "sumeragi_v2_merge_sidecar_lifecycle_v1",
+    "sumeragi_v2_merge_sidecar_lifecycle_v2",
+];
+const LIFECYCLE_JOURNAL_SLOT_FILES: [&str; 2] = ["state-0.norito", "state-1.norito"];
 const LIFECYCLE_JOURNAL_TEMP: &str = "state.norito.tmp";
+const LIFECYCLE_ROOT_HIGH_WATER_FILE: &str =
+    "sumeragi_v2_merge_sidecar_lifecycle_v3_root_high_water.norito";
+const LIFECYCLE_ROOT_HIGH_WATER_TEMP: &str =
+    "sumeragi_v2_merge_sidecar_lifecycle_v3_root_high_water.norito.tmp";
+const LIFECYCLE_ROOT_HIGH_WATER_MAX_BYTES: usize = 4 * 1024;
 const LIFECYCLE_JOURNAL_BASE_BYTES: usize = 64 * 1024;
 const LIFECYCLE_JOURNAL_GATE_BYTES: usize = 16 * 1024;
 const LIFECYCLE_JOURNAL_STREAM_BYTES: usize = 2 * 1024;
@@ -1494,7 +1507,7 @@ impl ServerPendingChunkIdentity {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct MergeSidecarRuntimeGeometryV2 {
+struct MergeSidecarRuntimeGeometryV3 {
     reply_source_capacity: u64,
     semantic_peer_capacity: u64,
     inbound_session_capacity: u64,
@@ -1512,7 +1525,7 @@ struct MergeSidecarRuntimeGeometryV2 {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct RequestStreamLifecycleV2 {
+struct RequestStreamLifecycleV3 {
     responder: PeerId,
     service_generation: CertifiedMergeSidecarServiceGenerationV1,
     stream_epoch: CertifiedMergeSidecarStreamEpochV1,
@@ -1522,20 +1535,20 @@ struct RequestStreamLifecycleV2 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-enum DurableServerRequestSourceV2 {
+enum DurableServerRequestSourceV3 {
     Synthetic(PeerId),
     Authenticated(PeerId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-enum DurableServerResponseCursorV2 {
+enum DurableServerResponseCursorV3 {
     Pending(u64),
     Complete,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct ServerPendingChunkLifecycleV2 {
+struct ServerPendingChunkLifecycleV3 {
     request_id: Hash,
     service_generation: CertifiedMergeSidecarServiceGenerationV1,
     stream_epoch: CertifiedMergeSidecarStreamEpochV1,
@@ -1554,7 +1567,7 @@ struct ServerPendingChunkLifecycleV2 {
     chunk_count: u32,
 }
 
-impl From<&ServerPendingChunkIdentity> for ServerPendingChunkLifecycleV2 {
+impl From<&ServerPendingChunkIdentity> for ServerPendingChunkLifecycleV3 {
     fn from(identity: &ServerPendingChunkIdentity) -> Self {
         Self {
             request_id: identity.request_id,
@@ -1577,8 +1590,8 @@ impl From<&ServerPendingChunkIdentity> for ServerPendingChunkLifecycleV2 {
     }
 }
 
-impl From<ServerPendingChunkLifecycleV2> for ServerPendingChunkIdentity {
-    fn from(identity: ServerPendingChunkLifecycleV2) -> Self {
+impl From<ServerPendingChunkLifecycleV3> for ServerPendingChunkIdentity {
+    fn from(identity: ServerPendingChunkLifecycleV3) -> Self {
         Self {
             request_id: identity.request_id,
             service_generation: identity.service_generation,
@@ -1603,15 +1616,15 @@ impl From<ServerPendingChunkLifecycleV2> for ServerPendingChunkIdentity {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct ServerRequestAttemptLifecycleV2 {
-    source: DurableServerRequestSourceV2,
-    cursor: DurableServerResponseCursorV2,
-    pending_flush_chunk: Option<ServerPendingChunkLifecycleV2>,
+struct ServerRequestAttemptLifecycleV3 {
+    source: DurableServerRequestSourceV3,
+    cursor: DurableServerResponseCursorV3,
+    pending_flush_chunk: Option<ServerPendingChunkLifecycleV3>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct ServerRequestGateLifecycleV2 {
+struct ServerRequestGateLifecycleV3 {
     requester: PeerId,
     request_id: Hash,
     request: CertifiedMergeSidecarRequestV1,
@@ -1620,12 +1633,12 @@ struct ServerRequestGateLifecycleV2 {
     stream_epoch: CertifiedMergeSidecarStreamEpochV1,
     semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,
     source_capacity: Option<u64>,
-    attempts: Vec<ServerRequestAttemptLifecycleV2>,
+    attempts: Vec<ServerRequestAttemptLifecycleV3>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct ServerStreamLifecycleV2 {
+struct ServerStreamLifecycleV3 {
     requester: PeerId,
     service_generation: CertifiedMergeSidecarServiceGenerationV1,
     stream_epoch: CertifiedMergeSidecarStreamEpochV1,
@@ -1638,12 +1651,12 @@ struct ServerStreamLifecycleV2 {
 #[norito(deny_unknown_fields)]
 struct UnsupportedMergeSidecarLifecyclePayloadV1 {
     version: u8,
-    geometry: MergeSidecarRuntimeGeometryV2,
+    geometry: MergeSidecarRuntimeGeometryV3,
     next_stream_epoch: u64,
     server_service_generation: CertifiedMergeSidecarServiceGenerationV1,
-    request_streams: Vec<RequestStreamLifecycleV2>,
-    server_streams: Vec<ServerStreamLifecycleV2>,
-    server_request_gates: Vec<ServerRequestGateLifecycleV2>,
+    request_streams: Vec<RequestStreamLifecycleV3>,
+    server_streams: Vec<ServerStreamLifecycleV3>,
+    server_request_gates: Vec<ServerRequestGateLifecycleV3>,
 }
 
 #[cfg(test)]
@@ -1665,12 +1678,45 @@ impl UnsupportedMergeSidecarLifecycleSnapshotV1 {
     }
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct UnsupportedMergeSidecarLifecyclePayloadV2 {
+    version: u8,
+    geometry: MergeSidecarLifecycleGeometryV3,
+    next_stream_epoch: u64,
+    server_service_generation: CertifiedMergeSidecarServiceGenerationV1,
+    materialization_requester_cursor: Option<PeerId>,
+    request_streams: Vec<RequestStreamLifecycleV3>,
+    server_streams: Vec<ServerStreamLifecycleV3>,
+    server_request_gates: Vec<ServerRequestGateLifecycleV3>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct UnsupportedMergeSidecarLifecycleSnapshotV2 {
+    payload: UnsupportedMergeSidecarLifecyclePayloadV2,
+    payload_hash: HashOf<UnsupportedMergeSidecarLifecyclePayloadV2>,
+}
+
+#[cfg(test)]
+impl UnsupportedMergeSidecarLifecycleSnapshotV2 {
+    fn new(payload: UnsupportedMergeSidecarLifecyclePayloadV2) -> Self {
+        let payload_hash = HashOf::new(&payload);
+        Self {
+            payload,
+            payload_hash,
+        }
+    }
+}
+
 /// The current format fingerprints the canonical responder roster and the independently
 /// bounded stream, logical-gate, and authenticated-attempt tables.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct MergeSidecarLifecycleGeometryV2 {
-    runtime: MergeSidecarRuntimeGeometryV2,
+struct MergeSidecarLifecycleGeometryV3 {
+    runtime: MergeSidecarRuntimeGeometryV3,
     server_roster_digest: MergeSidecarRosterDigest,
     server_stream_capacity: u64,
     server_request_gate_capacity: u64,
@@ -1679,28 +1725,30 @@ struct MergeSidecarLifecycleGeometryV2 {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct MergeSidecarLifecyclePayloadV2 {
+struct MergeSidecarLifecyclePayloadV3 {
     version: u8,
-    geometry: MergeSidecarLifecycleGeometryV2,
+    /// Monotonic root-level commit generation owned by the journal.
+    root_generation: u64,
+    geometry: MergeSidecarLifecycleGeometryV3,
     next_stream_epoch: u64,
     server_service_generation: CertifiedMergeSidecarServiceGenerationV1,
     /// Last requester selected by the durable two-level materialization
     /// scheduler. Selection resumes strictly after this requester and wraps.
     materialization_requester_cursor: Option<PeerId>,
-    request_streams: Vec<RequestStreamLifecycleV2>,
-    server_streams: Vec<ServerStreamLifecycleV2>,
-    server_request_gates: Vec<ServerRequestGateLifecycleV2>,
+    request_streams: Vec<RequestStreamLifecycleV3>,
+    server_streams: Vec<ServerStreamLifecycleV3>,
+    server_request_gates: Vec<ServerRequestGateLifecycleV3>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct MergeSidecarLifecycleSnapshotV2 {
-    payload: MergeSidecarLifecyclePayloadV2,
-    payload_hash: HashOf<MergeSidecarLifecyclePayloadV2>,
+struct MergeSidecarLifecycleSnapshotV3 {
+    payload: MergeSidecarLifecyclePayloadV3,
+    payload_hash: HashOf<MergeSidecarLifecyclePayloadV3>,
 }
 
-impl MergeSidecarLifecycleSnapshotV2 {
-    fn new(payload: MergeSidecarLifecyclePayloadV2) -> Self {
+impl MergeSidecarLifecycleSnapshotV3 {
+    fn new(payload: MergeSidecarLifecyclePayloadV3) -> Self {
         let payload_hash = HashOf::new(&payload);
         Self {
             payload,
@@ -1713,18 +1761,206 @@ impl MergeSidecarLifecycleSnapshotV2 {
     }
 }
 
-/// Integrity-bound, source-bounded lifecycle state under the Kura root.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct MergeSidecarLifecycleRootHighWaterV3 {
+    version: u8,
+    root_generation: u64,
+    /// `None` only for the durably published generation-zero bootstrap
+    /// sentinel. Every committed state generation carries its exact snapshot
+    /// hash.
+    snapshot_hash: Option<HashOf<MergeSidecarLifecycleSnapshotV3>>,
+}
+
+impl MergeSidecarLifecycleRootHighWaterV3 {
+    fn bootstrap() -> Self {
+        Self {
+            version: LIFECYCLE_JOURNAL_VERSION_V3,
+            root_generation: 0,
+            snapshot_hash: None,
+        }
+    }
+
+    fn new(snapshot: &MergeSidecarLifecycleSnapshotV3) -> Self {
+        debug_assert_ne!(
+            snapshot.payload.root_generation, 0,
+            "a committed lifecycle snapshot cannot use the bootstrap generation"
+        );
+        Self {
+            version: LIFECYCLE_JOURNAL_VERSION_V3,
+            root_generation: snapshot.payload.root_generation,
+            snapshot_hash: Some(HashOf::new(snapshot)),
+        }
+    }
+
+    fn is_bootstrap(&self) -> bool {
+        self.version == LIFECYCLE_JOURNAL_VERSION_V3
+            && self.root_generation == 0
+            && self.snapshot_hash.is_none()
+    }
+
+    fn matches(&self, snapshot: &MergeSidecarLifecycleSnapshotV3) -> bool {
+        self.version == LIFECYCLE_JOURNAL_VERSION_V3
+            && self.root_generation != 0
+            && self.root_generation == snapshot.payload.root_generation
+            && self.snapshot_hash.as_ref() == Some(&HashOf::new(snapshot))
+    }
+}
+
+#[cfg(unix)]
+type LifecycleDirectoryIdentity = (u64, u64);
+#[cfg(windows)]
+type LifecycleDirectoryIdentity = (Option<u32>, Option<u64>);
+#[cfg(not(any(unix, windows)))]
+type LifecycleDirectoryIdentity = ();
+
+#[cfg(unix)]
+fn lifecycle_directory_identity(metadata: &fs::Metadata) -> LifecycleDirectoryIdentity {
+    use std::os::unix::fs::MetadataExt as _;
+
+    (metadata.dev(), metadata.ino())
+}
+
+#[cfg(windows)]
+fn lifecycle_directory_identity(metadata: &fs::Metadata) -> LifecycleDirectoryIdentity {
+    use std::os::windows::fs::MetadataExt as _;
+
+    (metadata.volume_serial_number(), metadata.file_index())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn lifecycle_directory_identity(_metadata: &fs::Metadata) -> LifecycleDirectoryIdentity {}
+
+#[cfg(unix)]
+const fn lifecycle_directory_identity_available(_identity: LifecycleDirectoryIdentity) -> bool {
+    true
+}
+
+#[cfg(windows)]
+const fn lifecycle_directory_identity_available(identity: LifecycleDirectoryIdentity) -> bool {
+    identity.0.is_some() && identity.1.is_some()
+}
+
+#[cfg(not(any(unix, windows)))]
+const fn lifecycle_directory_identity_available(_identity: LifecycleDirectoryIdentity) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn lifecycle_directory_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn lifecycle_directory_is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn verify_open_lifecycle_directory(
+    path: &Path,
+    directory: &File,
+) -> Result<LifecycleDirectoryIdentity, MergeSidecarError> {
+    let path_metadata = fs::symlink_metadata(path)
+        .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+    let opened = directory
+        .metadata()
+        .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+    let path_identity = lifecycle_directory_identity(&path_metadata);
+    let opened_identity = lifecycle_directory_identity(&opened);
+    if path_metadata.file_type().is_symlink()
+        || opened.file_type().is_symlink()
+        || lifecycle_directory_is_reparse_point(&path_metadata)
+        || lifecycle_directory_is_reparse_point(&opened)
+        || !path_metadata.is_dir()
+        || !opened.is_dir()
+        || !lifecycle_directory_identity_available(path_identity)
+        || !lifecycle_directory_identity_available(opened_identity)
+        || path_identity != opened_identity
+    {
+        return Err(MergeSidecarError::LifecycleJournal(format!(
+            "lifecycle journal directory {} is indirect or changed identity",
+            path.display()
+        )));
+    }
+    Ok(opened_identity)
+}
+
+#[cfg(any(unix, windows))]
+fn open_lifecycle_directory(path: &Path) -> Result<File, MergeSidecarError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options.custom_flags(
+            (rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW).bits() as i32,
+        );
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        // `FlushFileBuffers`, which backs `File::sync_all`, requires a
+        // write-capable directory handle on Windows.
+        options.write(true);
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+    }
+    let directory = options
+        .open(path)
+        .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+    verify_open_lifecycle_directory(path, &directory)?;
+    Ok(directory)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_lifecycle_directory(_path: &Path) -> Result<File, MergeSidecarError> {
+    Err(MergeSidecarError::LifecycleJournal(
+        "durable lifecycle directory synchronization is unsupported on this platform".to_owned(),
+    ))
+}
+
+/// Integrity-bound lifecycle state committed by one root-level high-water.
+///
+/// Successive snapshots alternate between two state slots. A slot is fsynced
+/// before the root marker selects it, so an interrupted update either reopens
+/// the exact predecessor or the exact successor. Known regular temp files are
+/// discarded only after one selected pair passes transport-level validation;
+/// non-regular artifacts fail closed. One process must own this journal
+/// exclusively.
+///
+/// The root marker is first published as a generation-zero bootstrap sentinel,
+/// before the state directory exists. A missing root is therefore always
+/// corruption; an interrupted first commit validates its complete state before
+/// selecting it.
+///
+/// The root marker is the local trust anchor, not an external monotonic
+/// counter. Rolling back or replacing that marker (including restoring the
+/// bootstrap sentinel), or rolling back the entire store root, is outside the
+/// rollback guarantee.
 #[derive(Debug)]
 struct MergeSidecarLifecycleJournal {
+    store_root: PathBuf,
     directory: PathBuf,
     max_snapshot_bytes: usize,
+    committed: Option<MergeSidecarLifecycleRootHighWaterV3>,
+    poisoned: bool,
+    #[cfg(test)]
+    fail_after_state_publish: bool,
+    #[cfg(test)]
+    fail_after_root_publish: bool,
 }
 
 impl MergeSidecarLifecycleJournal {
     fn open(
         store_root: &Path,
         max_snapshot_bytes: usize,
-    ) -> Result<(Self, Option<MergeSidecarLifecycleSnapshotV2>), MergeSidecarError> {
+    ) -> Result<(Self, Option<MergeSidecarLifecycleSnapshotV3>), MergeSidecarError> {
         for legacy in LEGACY_LIFECYCLE_JOURNAL_DIRS {
             let legacy = store_root.join(legacy);
             match fs::symlink_metadata(&legacy) {
@@ -1740,6 +1976,7 @@ impl MergeSidecarLifecycleJournal {
                 }
             }
         }
+
         let directory = store_root.join(LIFECYCLE_JOURNAL_DIR);
         let directory_exists = match fs::symlink_metadata(&directory) {
             Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
@@ -1756,106 +1993,369 @@ impl MergeSidecarLifecycleJournal {
                 return Err(MergeSidecarError::LifecycleJournal(error.to_string()));
             }
         };
-        if !directory_exists {
-            fs::create_dir(&directory)
-                .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-            Self::sync_directory(store_root)?;
-        }
-        let journal = Self {
+
+        let mut journal = Self {
+            store_root: store_root.to_path_buf(),
             directory,
             max_snapshot_bytes,
+            committed: None,
+            poisoned: false,
+            #[cfg(test)]
+            fail_after_state_publish: false,
+            #[cfg(test)]
+            fail_after_root_publish: false,
         };
-        journal.remove_stale_temp()?;
-        let snapshot = journal.load()?;
-        if !directory_exists {
-            if snapshot.is_some() {
-                return Err(MergeSidecarError::LifecycleJournal(
-                    "new lifecycle journal unexpectedly contained state".to_owned(),
-                ));
+
+        let marker_exists = Self::artifact_exists(&journal.root_high_water_path())?;
+        match (directory_exists, marker_exists) {
+            (false, false) => {
+                journal.publish_bootstrap_marker()?;
+                fs::create_dir(&journal.directory)
+                    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+                Self::sync_directory(store_root)?;
+                Ok((journal, None))
             }
-            return Ok((journal, None));
+            (false, true) => {
+                let marker = journal.decode_root_high_water(&journal.root_high_water_path())?;
+                if !marker.is_bootstrap() {
+                    return Err(MergeSidecarError::LifecycleJournal(
+                        "committed lifecycle root high-water survived without its V3 directory"
+                            .to_owned(),
+                    ));
+                }
+                fs::create_dir(&journal.directory)
+                    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+                Self::sync_directory(store_root)?;
+                journal.committed = Some(marker);
+                Ok((journal, None))
+            }
+            (true, false) => Err(MergeSidecarError::LifecycleJournal(
+                "V3 lifecycle directory survived without its root high-water".to_owned(),
+            )),
+            (true, true) => {
+                let marker = journal.decode_root_high_water(&journal.root_high_water_path())?;
+                if marker.is_bootstrap() {
+                    journal.committed = Some(marker);
+                    let candidate = journal.bootstrap_candidate()?;
+                    return Ok((journal, candidate));
+                }
+                let (snapshot, marker) = journal.load_pair_strict()?;
+                journal.committed = Some(marker);
+                Ok((journal, Some(snapshot)))
+            }
         }
-        let snapshot = snapshot.ok_or_else(|| {
-            MergeSidecarError::LifecycleJournal(
-                "lifecycle journal state disappeared during recovery".to_owned(),
-            )
-        })?;
-        Ok((journal, Some(snapshot)))
     }
 
     fn state_path(&self) -> PathBuf {
-        self.directory.join(LIFECYCLE_JOURNAL_FILE)
+        let generation = self
+            .committed
+            .as_ref()
+            .map_or(1, |marker| marker.root_generation.max(1));
+        self.state_path_for_generation(generation)
+    }
+
+    fn state_path_for_generation(&self, generation: u64) -> PathBuf {
+        let slot = usize::from((generation & 1) != 0);
+        self.directory.join(LIFECYCLE_JOURNAL_SLOT_FILES[slot])
     }
 
     fn temp_path(&self) -> PathBuf {
         self.directory.join(LIFECYCLE_JOURNAL_TEMP)
     }
 
-    fn sync_directory(path: &Path) -> Result<(), MergeSidecarError> {
-        let directory = OpenOptions::new()
-            .read(true)
-            .open(path)
-            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-        directory
-            .sync_all()
-            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))
+    fn root_high_water_path(&self) -> PathBuf {
+        self.store_root.join(LIFECYCLE_ROOT_HIGH_WATER_FILE)
     }
 
-    fn remove_stale_temp(&self) -> Result<(), MergeSidecarError> {
-        let temp = self.temp_path();
-        match fs::symlink_metadata(&temp) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(MergeSidecarError::LifecycleJournal(error.to_string())),
-            Ok(metadata)
-                if metadata.file_type().is_file() && !metadata.file_type().is_symlink() =>
-            {
-                if usize::try_from(metadata.len())
-                    .ok()
-                    .is_none_or(|len| len > self.max_snapshot_bytes)
-                {
-                    return Err(MergeSidecarError::LifecycleJournal(
-                        "stale lifecycle journal temp exceeds its geometry".to_owned(),
-                    ));
-                }
-                fs::remove_file(temp)
-                    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))
+    fn root_high_water_temp_path(&self) -> PathBuf {
+        self.store_root.join(LIFECYCLE_ROOT_HIGH_WATER_TEMP)
+    }
+
+    fn publish_bootstrap_marker(&mut self) -> Result<(), MergeSidecarError> {
+        Self::remove_regular_artifact(
+            &self.root_high_water_temp_path(),
+            &self.store_root,
+            "root high-water temp",
+        )?;
+        let marker = MergeSidecarLifecycleRootHighWaterV3::bootstrap();
+        let marker_bytes = norito::to_bytes(&marker)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        if marker_bytes.is_empty() || marker_bytes.len() > LIFECYCLE_ROOT_HIGH_WATER_MAX_BYTES {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle bootstrap marker exceeds its geometry".to_owned(),
+            ));
+        }
+        Self::write_new_synced(&self.root_high_water_temp_path(), &marker_bytes)?;
+        Self::persist_atomic_replacement(
+            &self.root_high_water_temp_path(),
+            &self.root_high_water_path(),
+        )?;
+        Self::sync_directory(&self.store_root)?;
+        self.committed = Some(marker);
+        Ok(())
+    }
+
+    fn bootstrap_candidate(
+        &self,
+    ) -> Result<Option<MergeSidecarLifecycleSnapshotV3>, MergeSidecarError> {
+        self.validate_directory_entries()?;
+        let even_slot = self.state_path_for_generation(0);
+        if Self::artifact_exists(&even_slot)? {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "bootstrap lifecycle root retained a non-initial state slot".to_owned(),
+            ));
+        }
+        let initial_path = self.state_path_for_generation(1);
+        if !Self::artifact_exists(&initial_path)? {
+            return Ok(None);
+        }
+        let snapshot = self.decode_snapshot(&initial_path)?;
+        if snapshot.payload.root_generation != 1 {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "bootstrap lifecycle candidate is not generation one".to_owned(),
+            ));
+        }
+        Ok(Some(snapshot))
+    }
+
+    /// Publish or clean a selected snapshot only after it has passed all
+    /// transport-level geometry and semantic validation.
+    fn finalize_validated_open(
+        &mut self,
+        validated: Option<&MergeSidecarLifecycleSnapshotV3>,
+    ) -> Result<(), MergeSidecarError> {
+        let Some(committed) = self.committed.clone() else {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "restored lifecycle journal has no committed root".to_owned(),
+            ));
+        };
+        if committed.is_bootstrap() {
+            let live = self.decode_root_high_water(&self.root_high_water_path())?;
+            if live != committed {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "bootstrap lifecycle root changed during validation".to_owned(),
+                ));
             }
-            Ok(_) => Err(MergeSidecarError::LifecycleJournal(
-                "unsafe lifecycle journal temp artifact".to_owned(),
-            )),
+            match validated {
+                Some(snapshot) => {
+                    let live_snapshot = self.decode_snapshot(&self.state_path_for_generation(1))?;
+                    if snapshot.payload.root_generation != 1 || &live_snapshot != snapshot {
+                        return Err(MergeSidecarError::LifecycleJournal(
+                            "bootstrap lifecycle candidate changed during validation".to_owned(),
+                        ));
+                    }
+                    self.validate_known_temps()?;
+                    Self::remove_regular_artifact(
+                        &self.root_high_water_temp_path(),
+                        &self.store_root,
+                        "root high-water temp",
+                    )?;
+                    let marker = MergeSidecarLifecycleRootHighWaterV3::new(snapshot);
+                    let marker_bytes = norito::to_bytes(&marker)
+                        .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+                    if marker_bytes.is_empty()
+                        || marker_bytes.len() > LIFECYCLE_ROOT_HIGH_WATER_MAX_BYTES
+                    {
+                        return Err(MergeSidecarError::LifecycleJournal(
+                            "lifecycle root high-water exceeds its geometry".to_owned(),
+                        ));
+                    }
+                    Self::write_new_synced(&self.root_high_water_temp_path(), &marker_bytes)?;
+                    Self::persist_atomic_replacement(
+                        &self.root_high_water_temp_path(),
+                        &self.root_high_water_path(),
+                    )?;
+                    Self::sync_directory(&self.store_root)?;
+                    self.committed = Some(marker);
+                    Self::remove_regular_artifact(
+                        &self.temp_path(),
+                        &self.directory,
+                        "state temp",
+                    )?;
+                }
+                None => {
+                    if self.bootstrap_candidate()?.is_some() {
+                        return Err(MergeSidecarError::LifecycleJournal(
+                            "bootstrap lifecycle candidate appeared during validation".to_owned(),
+                        ));
+                    }
+                    self.discard_uncommitted_temps()?;
+                }
+            }
+            return Ok(());
+        }
+        let Some(validated) = validated else {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "committed lifecycle root has no validated snapshot".to_owned(),
+            ));
+        };
+        let (live_snapshot, live_marker) = self.load_pair_strict()?;
+        if live_marker != committed || &live_snapshot != validated {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "committed lifecycle pair changed during validation".to_owned(),
+            ));
+        }
+        self.discard_uncommitted_temps()?;
+        self.discard_inactive_slot()
+    }
+
+    fn sync_directory(path: &Path) -> Result<(), MergeSidecarError> {
+        let directory = open_lifecycle_directory(path)?;
+        let identity = verify_open_lifecycle_directory(path, &directory)?;
+        directory
+            .sync_all()
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        if verify_open_lifecycle_directory(path, &directory)? != identity {
+            return Err(MergeSidecarError::LifecycleJournal(format!(
+                "lifecycle journal directory {} changed while synchronizing",
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    fn artifact_exists(path: &Path) -> Result<bool, MergeSidecarError> {
+        match fs::symlink_metadata(path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(MergeSidecarError::LifecycleJournal(error.to_string())),
         }
     }
 
-    fn load(&self) -> Result<Option<MergeSidecarLifecycleSnapshotV2>, MergeSidecarError> {
-        let path = self.state_path();
-        let metadata = match fs::symlink_metadata(&path) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    fn reject_artifact_if_present(path: &Path, artifact: &str) -> Result<(), MergeSidecarError> {
+        if Self::artifact_exists(path)? {
+            return Err(MergeSidecarError::LifecycleJournal(format!(
+                "unsafe lifecycle journal temp artifact: incomplete {artifact} {} requires operator recovery",
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    fn reject_known_temps(&self) -> Result<(), MergeSidecarError> {
+        Self::reject_artifact_if_present(&self.temp_path(), "state temp")?;
+        Self::reject_artifact_if_present(&self.root_high_water_temp_path(), "root high-water temp")
+    }
+
+    fn remove_regular_artifact(
+        path: &Path,
+        parent: &Path,
+        artifact: &str,
+    ) -> Result<(), MergeSidecarError> {
+        if !Self::validate_regular_artifact_if_present(path, artifact)? {
+            return Ok(());
+        }
+        fs::remove_file(path)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        Self::sync_directory(parent)
+    }
+
+    fn validate_regular_artifact_if_present(
+        path: &Path,
+        artifact: &str,
+    ) -> Result<bool, MergeSidecarError> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => {
                 return Err(MergeSidecarError::LifecycleJournal(error.to_string()));
             }
-            Ok(metadata) => metadata,
         };
         if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-            return Err(MergeSidecarError::LifecycleJournal(
-                "unsafe lifecycle journal state artifact".to_owned(),
-            ));
+            return Err(MergeSidecarError::LifecycleJournal(format!(
+                "unsafe lifecycle {artifact} artifact {}",
+                path.display()
+            )));
+        }
+        Ok(true)
+    }
+
+    fn validate_known_temps(&self) -> Result<(), MergeSidecarError> {
+        Self::validate_regular_artifact_if_present(&self.temp_path(), "state temp")?;
+        Self::validate_regular_artifact_if_present(
+            &self.root_high_water_temp_path(),
+            "root high-water temp",
+        )?;
+        Ok(())
+    }
+
+    fn discard_uncommitted_temps(&self) -> Result<(), MergeSidecarError> {
+        self.validate_known_temps()?;
+        Self::remove_regular_artifact(&self.temp_path(), &self.directory, "state temp")?;
+        Self::remove_regular_artifact(
+            &self.root_high_water_temp_path(),
+            &self.store_root,
+            "root high-water temp",
+        )
+    }
+
+    fn discard_inactive_slot(&self) -> Result<(), MergeSidecarError> {
+        let Some(committed) = &self.committed else {
+            return Ok(());
+        };
+        let inactive_generation = committed.root_generation ^ 1;
+        Self::remove_regular_artifact(
+            &self.state_path_for_generation(inactive_generation),
+            &self.directory,
+            "uncommitted state slot",
+        )
+    }
+
+    fn validate_directory_entries(&self) -> Result<(), MergeSidecarError> {
+        for entry in fs::read_dir(&self.directory)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?
+        {
+            let entry =
+                entry.map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !LIFECYCLE_JOURNAL_SLOT_FILES.contains(&name.as_ref())
+                && name != LIFECYCLE_JOURNAL_TEMP
+            {
+                return Err(MergeSidecarError::LifecycleJournal(format!(
+                    "unknown artifact in V3 lifecycle directory: {}",
+                    entry.path().display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn read_bounded_regular(
+        path: &Path,
+        max_bytes: usize,
+        artifact: &str,
+    ) -> Result<Vec<u8>, MergeSidecarError> {
+        let metadata = fs::symlink_metadata(path)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(MergeSidecarError::LifecycleJournal(format!(
+                "unsafe lifecycle {artifact} artifact {}",
+                path.display()
+            )));
         }
         let len = usize::try_from(metadata.len()).map_err(|_| {
-            MergeSidecarError::LifecycleJournal(
-                "lifecycle journal length is not representable".to_owned(),
-            )
+            MergeSidecarError::LifecycleJournal(format!(
+                "lifecycle {artifact} length is not representable"
+            ))
         })?;
-        if len == 0 || len > self.max_snapshot_bytes {
-            return Err(MergeSidecarError::LifecycleJournal(
-                "lifecycle journal length exceeds its geometry".to_owned(),
-            ));
+        if len == 0 || len > max_bytes {
+            return Err(MergeSidecarError::LifecycleJournal(format!(
+                "lifecycle {artifact} length exceeds its geometry"
+            )));
         }
-        let bytes = fs::read(path)
-            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-        let snapshot = norito::decode_from_bytes::<MergeSidecarLifecycleSnapshotV2>(&bytes)
+        fs::read(path).map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))
+    }
+
+    fn decode_snapshot(
+        &self,
+        path: &Path,
+    ) -> Result<MergeSidecarLifecycleSnapshotV3, MergeSidecarError> {
+        let bytes = Self::read_bounded_regular(path, self.max_snapshot_bytes, "journal state")?;
+        let snapshot = norito::decode_from_bytes::<MergeSidecarLifecycleSnapshotV3>(&bytes)
             .map_err(|_| {
                 MergeSidecarError::LifecycleJournal(
-                    "unsupported or corrupt lifecycle journal; migration is not supported"
+                    "unsupported or corrupt V3 lifecycle journal; migration is not supported"
                         .to_owned(),
                 )
             })?;
@@ -1863,51 +2363,280 @@ impl MergeSidecarLifecycleJournal {
             .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
         if canonical != bytes {
             return Err(MergeSidecarError::LifecycleJournal(
-                "lifecycle journal is not canonical Norito".to_owned(),
+                "V3 lifecycle journal is not canonical Norito".to_owned(),
             ));
         }
-        if snapshot.payload.version != LIFECYCLE_JOURNAL_VERSION_V2 {
+        if snapshot.payload.version != LIFECYCLE_JOURNAL_VERSION_V3
+            || snapshot.payload.root_generation == 0
+        {
             return Err(MergeSidecarError::LifecycleJournal(
-                "unsupported lifecycle journal version; migration is not supported".to_owned(),
+                "unsupported lifecycle journal version or zero root generation; migration is not supported"
+                    .to_owned(),
             ));
         }
         if !snapshot.integrity_is_valid() {
             return Err(MergeSidecarError::LifecycleJournal(
                 "lifecycle journal payload digest mismatch".to_owned(),
+            ));
+        }
+        Ok(snapshot)
+    }
+
+    fn decode_root_high_water(
+        &self,
+        path: &Path,
+    ) -> Result<MergeSidecarLifecycleRootHighWaterV3, MergeSidecarError> {
+        let bytes = Self::read_bounded_regular(
+            path,
+            LIFECYCLE_ROOT_HIGH_WATER_MAX_BYTES,
+            "root high-water",
+        )?;
+        let marker = norito::decode_from_bytes::<MergeSidecarLifecycleRootHighWaterV3>(&bytes)
+            .map_err(|_| {
+                MergeSidecarError::LifecycleJournal(
+                    "unsupported or corrupt lifecycle root high-water".to_owned(),
+                )
+            })?;
+        let canonical = norito::to_bytes(&marker)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        let bootstrap_shape = marker.root_generation == 0 && marker.snapshot_hash.is_none();
+        let committed_shape = marker.root_generation != 0 && marker.snapshot_hash.is_some();
+        if canonical != bytes
+            || marker.version != LIFECYCLE_JOURNAL_VERSION_V3
+            || !(bootstrap_shape || committed_shape)
+        {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "non-canonical, unsupported, or malformed lifecycle root high-water".to_owned(),
+            ));
+        }
+        Ok(marker)
+    }
+
+    fn load_pair_strict(
+        &self,
+    ) -> Result<
+        (
+            MergeSidecarLifecycleSnapshotV3,
+            MergeSidecarLifecycleRootHighWaterV3,
+        ),
+        MergeSidecarError,
+    > {
+        self.validate_directory_entries()?;
+        if !Self::artifact_exists(&self.root_high_water_path())? {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle state and root high-water are not both present".to_owned(),
+            ));
+        }
+        let marker = self.decode_root_high_water(&self.root_high_water_path())?;
+        if marker.is_bootstrap() {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "bootstrap lifecycle root does not select a committed state".to_owned(),
+            ));
+        }
+        let state_path = self.state_path_for_generation(marker.root_generation);
+        if !Self::artifact_exists(&state_path)? {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle state and root high-water are not both present".to_owned(),
+            ));
+        }
+        let snapshot = self.decode_snapshot(&state_path)?;
+        if !marker.matches(&snapshot) {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle state and root high-water generation/hash mismatch".to_owned(),
+            ));
+        }
+        Ok((snapshot, marker))
+    }
+
+    fn load(&self) -> Result<Option<MergeSidecarLifecycleSnapshotV3>, MergeSidecarError> {
+        self.reject_known_temps()?;
+        if !Self::artifact_exists(&self.root_high_water_path())? {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle state and root high-water are not both present".to_owned(),
+            ));
+        }
+        let marker = self.decode_root_high_water(&self.root_high_water_path())?;
+        if self.committed.as_ref() != Some(&marker) {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle root high-water changed outside the live journal".to_owned(),
+            ));
+        }
+        if marker.is_bootstrap() {
+            self.validate_directory_entries()?;
+            for name in LIFECYCLE_JOURNAL_SLOT_FILES {
+                if Self::artifact_exists(&self.directory.join(name))? {
+                    return Err(MergeSidecarError::LifecycleJournal(
+                        "uncommitted lifecycle state appeared beside the live bootstrap root"
+                            .to_owned(),
+                    ));
+                }
+            }
+            return Ok(None);
+        }
+        let (snapshot, marker) = self.load_pair_strict()?;
+        if self.committed.as_ref() != Some(&marker) {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle root high-water changed outside the live journal".to_owned(),
             ));
         }
         Ok(Some(snapshot))
     }
 
-    fn persist(&self, snapshot: &MergeSidecarLifecycleSnapshotV2) -> Result<(), MergeSidecarError> {
-        if !snapshot.integrity_is_valid() {
+    fn write_new_synced(path: &Path, bytes: &[u8]) -> Result<(), MergeSidecarError> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        file.write_all(bytes)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        file.sync_all()
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))
+    }
+
+    fn persist_atomic_replacement(
+        temporary: &Path,
+        destination: &Path,
+    ) -> Result<(), MergeSidecarError> {
+        // `std::fs::rename` replaces an existing destination on Unix but
+        // rejects it on Windows. `TempPath::persist` uses the native atomic
+        // replacement operation on both platforms. Preserve a failed temp so
+        // startup reconciliation observes the incomplete publication.
+        let mut temporary = tempfile::TempPath::try_from_path(temporary)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        temporary.disable_cleanup(true);
+        temporary
+            .persist(destination)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.error.to_string()))
+    }
+
+    fn live_generation(&self) -> Result<u64, MergeSidecarError> {
+        let on_disk = self.load()?;
+        match (&self.committed, on_disk.as_ref()) {
+            (Some(committed), None) if committed.is_bootstrap() => Ok(0),
+            (Some(committed), Some(snapshot)) if committed.matches(snapshot) => {
+                Ok(committed.root_generation)
+            }
+            (None, None) | (None, Some(_)) | (Some(_), None) | (Some(_), Some(_)) => {
+                Err(MergeSidecarError::LifecycleJournal(
+                    "live lifecycle journal differs from its committed root".to_owned(),
+                ))
+            }
+        }
+    }
+
+    fn preflight_next_commit(&mut self) -> Result<(), MergeSidecarError> {
+        if self.poisoned {
             return Err(MergeSidecarError::LifecycleJournal(
-                "lifecycle journal payload digest mismatch".to_owned(),
+                "lifecycle journal requires process restart".to_owned(),
             ));
         }
-        let bytes = norito::to_bytes(snapshot)
-            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-        if bytes.is_empty() || bytes.len() > self.max_snapshot_bytes {
+        let result = (|| {
+            self.live_generation()?
+                .checked_add(1)
+                .filter(|generation| *generation != 0)
+                .ok_or_else(|| {
+                    MergeSidecarError::LifecycleJournal(
+                        "lifecycle root generation exhausted".to_owned(),
+                    )
+                })?;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
+    }
+
+    fn persist_next(
+        &mut self,
+        mut snapshot: MergeSidecarLifecycleSnapshotV3,
+    ) -> Result<MergeSidecarLifecycleSnapshotV3, MergeSidecarError> {
+        if self.poisoned {
             return Err(MergeSidecarError::LifecycleJournal(
-                "lifecycle journal snapshot exceeds its geometry".to_owned(),
+                "lifecycle journal requires process restart".to_owned(),
             ));
         }
-        self.remove_stale_temp()?;
-        let temp = self.temp_path();
-        {
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temp)
+        let result = (|| {
+            let current_generation = self.live_generation()?;
+            snapshot.payload.version = LIFECYCLE_JOURNAL_VERSION_V3;
+            snapshot.payload.root_generation = current_generation;
+            snapshot.payload_hash = HashOf::new(&snapshot.payload);
+            if self
+                .committed
+                .as_ref()
+                .is_some_and(|marker| marker.matches(&snapshot))
+            {
+                return Ok(snapshot);
+            }
+
+            let next_generation = current_generation
+                .checked_add(1)
+                .filter(|generation| *generation != 0)
+                .ok_or_else(|| {
+                    MergeSidecarError::LifecycleJournal(
+                        "lifecycle root generation exhausted".to_owned(),
+                    )
+                })?;
+            snapshot.payload.root_generation = next_generation;
+            snapshot.payload_hash = HashOf::new(&snapshot.payload);
+            let snapshot_bytes = norito::to_bytes(&snapshot)
                 .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-            file.write_all(&bytes)
+            if snapshot_bytes.is_empty() || snapshot_bytes.len() > self.max_snapshot_bytes {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "lifecycle journal snapshot exceeds its geometry".to_owned(),
+                ));
+            }
+            let marker = MergeSidecarLifecycleRootHighWaterV3::new(&snapshot);
+            let marker_bytes = norito::to_bytes(&marker)
                 .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-            file.sync_all()
-                .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+            if marker_bytes.is_empty() || marker_bytes.len() > LIFECYCLE_ROOT_HIGH_WATER_MAX_BYTES {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "lifecycle root high-water exceeds its geometry".to_owned(),
+                ));
+            }
+
+            self.reject_known_temps()?;
+            Self::write_new_synced(&self.temp_path(), &snapshot_bytes)?;
+            let next_state_path = self.state_path_for_generation(next_generation);
+            Self::persist_atomic_replacement(&self.temp_path(), &next_state_path)?;
+            Self::sync_directory(&self.directory)?;
+            #[cfg(test)]
+            if std::mem::take(&mut self.fail_after_state_publish) {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "injected failure after lifecycle state publication".to_owned(),
+                ));
+            }
+
+            Self::write_new_synced(&self.root_high_water_temp_path(), &marker_bytes)?;
+            Self::persist_atomic_replacement(
+                &self.root_high_water_temp_path(),
+                &self.root_high_water_path(),
+            )?;
+            Self::sync_directory(&self.store_root)?;
+            #[cfg(test)]
+            if std::mem::take(&mut self.fail_after_root_publish) {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "injected failure after lifecycle root publication".to_owned(),
+                ));
+            }
+            self.committed = Some(marker);
+            // The root marker is the sole commit point. Once it is durable,
+            // the predecessor slot is no longer needed for crash recovery.
+            // Cleanup is best-effort because the successor is already
+            // committed and returning an error would misreport its outcome.
+            let predecessor_path = self.state_path_for_generation(current_generation);
+            if Self::artifact_exists(&predecessor_path).unwrap_or(false)
+                && fs::remove_file(&predecessor_path).is_ok()
+            {
+                let _ = Self::sync_directory(&self.directory);
+            }
+            Ok(snapshot)
+        })();
+        if result.is_err() {
+            self.poisoned = true;
         }
-        fs::rename(&temp, self.state_path())
-            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-        Self::sync_directory(&self.directory)
+        result
     }
 }
 
@@ -3401,9 +4130,22 @@ struct ServerServiceGenerationTransitionPlan {
     server_roster_digest: MergeSidecarRosterDigest,
     server_request_gate_capacity: usize,
     server_request_attempt_capacity: usize,
-    next_geometry: MergeSidecarLifecycleGeometryV2,
+    next_geometry: MergeSidecarLifecycleGeometryV3,
     next_generation: CertifiedMergeSidecarServiceGenerationV1,
 }
+
+#[derive(Clone, Copy)]
+enum ServerServiceGenerationRetirement {
+    /// Every retained occurrence was cumulatively closed by its requester.
+    AuthenticatedTerminal,
+    /// A certified roster successor superseded the responder tables after all
+    /// process-local exact-output ownership became unreachable.
+    ExactOutputSuperseded,
+}
+
+/// Private evidence that durable lifecycle restoration invalidated every
+/// predecessor process-local writer and output queue.
+struct RestoredLifecycleResponderFence;
 
 impl MergeSidecarTransport {
     /// Construct an empty transport with the dependent-test source geometry.
@@ -3543,14 +4285,14 @@ impl MergeSidecarTransport {
         Ok(())
     }
 
-    fn lifecycle_runtime_geometry_v2(
+    fn lifecycle_runtime_geometry_v3(
         &self,
-    ) -> Result<MergeSidecarRuntimeGeometryV2, MergeSidecarError> {
+    ) -> Result<MergeSidecarRuntimeGeometryV3, MergeSidecarError> {
         let as_u64 = |value: usize| {
             u64::try_from(value)
                 .map_err(|_| MergeSidecarError::Capacity("lifecycle journal geometry"))
         };
-        Ok(MergeSidecarRuntimeGeometryV2 {
+        Ok(MergeSidecarRuntimeGeometryV3 {
             reply_source_capacity: as_u64(self.reply_source_capacity)?,
             semantic_peer_capacity: as_u64(MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)?,
             inbound_session_capacity: as_u64(self.limits.inbound_session_capacity)?,
@@ -3567,7 +4309,7 @@ impl MergeSidecarTransport {
         })
     }
 
-    fn lifecycle_geometry(&self) -> Result<MergeSidecarLifecycleGeometryV2, MergeSidecarError> {
+    fn lifecycle_geometry(&self) -> Result<MergeSidecarLifecycleGeometryV3, MergeSidecarError> {
         self.lifecycle_geometry_for_server_roster(
             self.server_stream_capacity,
             self.server_roster_digest.clone(),
@@ -3578,7 +4320,7 @@ impl MergeSidecarTransport {
         &self,
         server_stream_capacity: usize,
         server_roster_digest: MergeSidecarRosterDigest,
-    ) -> Result<MergeSidecarLifecycleGeometryV2, MergeSidecarError> {
+    ) -> Result<MergeSidecarLifecycleGeometryV3, MergeSidecarError> {
         let as_u64 = |value: usize| {
             u64::try_from(value)
                 .map_err(|_| MergeSidecarError::Capacity("lifecycle journal geometry"))
@@ -3589,8 +4331,8 @@ impl MergeSidecarTransport {
                 self.limits,
                 server_stream_capacity,
             )?;
-        Ok(MergeSidecarLifecycleGeometryV2 {
-            runtime: self.lifecycle_runtime_geometry_v2()?,
+        Ok(MergeSidecarLifecycleGeometryV3 {
+            runtime: self.lifecycle_runtime_geometry_v3()?,
             server_roster_digest,
             server_stream_capacity: as_u64(server_stream_capacity)?,
             server_request_gate_capacity: as_u64(server_request_gate_capacity)?,
@@ -3631,11 +4373,11 @@ impl MergeSidecarTransport {
         Self::lifecycle_max_snapshot_bytes_for_attempt_capacity(attempts)
     }
 
-    fn lifecycle_snapshot(&self) -> Result<MergeSidecarLifecycleSnapshotV2, MergeSidecarError> {
+    fn lifecycle_snapshot(&self) -> Result<MergeSidecarLifecycleSnapshotV3, MergeSidecarError> {
         let request_streams = self
             .request_streams
             .iter()
-            .map(|(responder, stream)| RequestStreamLifecycleV2 {
+            .map(|(responder, stream)| RequestStreamLifecycleV3 {
                 responder: responder.clone(),
                 service_generation: stream.service_generation,
                 stream_epoch: stream.stream_epoch,
@@ -3647,7 +4389,7 @@ impl MergeSidecarTransport {
         let server_streams = self
             .server_streams
             .iter()
-            .map(|(requester, stream)| ServerStreamLifecycleV2 {
+            .map(|(requester, stream)| ServerStreamLifecycleV3 {
                 requester: requester.clone(),
                 service_generation: self.server_service_generation,
                 stream_epoch: stream.stream_epoch,
@@ -3661,7 +4403,7 @@ impl MergeSidecarTransport {
             for (source, attempt) in &gate.attempts {
                 let source = match source {
                     ServerRequestSource::Synthetic(peer) => {
-                        DurableServerRequestSourceV2::Synthetic(peer.clone())
+                        DurableServerRequestSourceV3::Synthetic(peer.clone())
                     }
                     ServerRequestSource::Authenticated(_) => {
                         let route = attempt.reply_route.as_ref().ok_or_else(|| {
@@ -3669,34 +4411,34 @@ impl MergeSidecarTransport {
                                 "authenticated lifecycle attempt lost its route source".to_owned(),
                             )
                         })?;
-                        DurableServerRequestSourceV2::Authenticated(
+                        DurableServerRequestSourceV3::Authenticated(
                             route.authenticated_source_peer().clone(),
                         )
                     }
                     ServerRequestSource::RecoveredAuthenticated(peer) => {
-                        DurableServerRequestSourceV2::Authenticated(peer.clone())
+                        DurableServerRequestSourceV3::Authenticated(peer.clone())
                     }
                 };
                 let cursor = match attempt.cursor {
-                    ServerResponseCursor::Pending(index) => DurableServerResponseCursorV2::Pending(
+                    ServerResponseCursor::Pending(index) => DurableServerResponseCursorV3::Pending(
                         u64::try_from(index).map_err(|_| {
                             MergeSidecarError::LifecycleJournal(
                                 "server response cursor is not representable".to_owned(),
                             )
                         })?,
                     ),
-                    ServerResponseCursor::Complete => DurableServerResponseCursorV2::Complete,
+                    ServerResponseCursor::Complete => DurableServerResponseCursorV3::Complete,
                 };
-                attempts.push(ServerRequestAttemptLifecycleV2 {
+                attempts.push(ServerRequestAttemptLifecycleV3 {
                     source,
                     cursor,
                     pending_flush_chunk: attempt
                         .pending_flush_chunk
                         .as_ref()
-                        .map(ServerPendingChunkLifecycleV2::from),
+                        .map(ServerPendingChunkLifecycleV3::from),
                 });
             }
-            server_request_gates.push(ServerRequestGateLifecycleV2 {
+            server_request_gates.push(ServerRequestGateLifecycleV3 {
                 requester: requester.clone(),
                 request_id: *request_id,
                 request: gate.request.clone(),
@@ -3711,9 +4453,14 @@ impl MergeSidecarTransport {
                 attempts,
             });
         }
-        Ok(MergeSidecarLifecycleSnapshotV2::new(
-            MergeSidecarLifecyclePayloadV2 {
-                version: LIFECYCLE_JOURNAL_VERSION_V2,
+        Ok(MergeSidecarLifecycleSnapshotV3::new(
+            MergeSidecarLifecyclePayloadV3 {
+                version: LIFECYCLE_JOURNAL_VERSION_V3,
+                root_generation: self
+                    .lifecycle_journal
+                    .as_ref()
+                    .and_then(|journal| journal.committed.as_ref())
+                    .map_or(0, |marker| marker.root_generation),
                 geometry: self.lifecycle_geometry()?,
                 next_stream_epoch: self.next_stream_epoch,
                 server_service_generation: self.server_service_generation,
@@ -3727,9 +4474,9 @@ impl MergeSidecarTransport {
 
     fn configure_prior_lifecycle_server_geometry(
         &mut self,
-        geometry: &MergeSidecarLifecycleGeometryV2,
+        geometry: &MergeSidecarLifecycleGeometryV3,
     ) -> Result<(), MergeSidecarError> {
-        if geometry.runtime != self.lifecycle_runtime_geometry_v2()? {
+        if geometry.runtime != self.lifecycle_runtime_geometry_v3()? {
             return Err(MergeSidecarError::LifecycleJournal(
                 "lifecycle journal non-roster geometry drift".to_owned(),
             ));
@@ -3762,7 +4509,7 @@ impl MergeSidecarTransport {
 
     fn restore_lifecycle_snapshot(
         &mut self,
-        snapshot: MergeSidecarLifecycleSnapshotV2,
+        snapshot: MergeSidecarLifecycleSnapshotV3,
         now: Instant,
     ) -> Result<(), MergeSidecarError> {
         if !snapshot.integrity_is_valid() {
@@ -3771,7 +4518,7 @@ impl MergeSidecarTransport {
             ));
         }
         let snapshot = snapshot.payload;
-        if snapshot.version != LIFECYCLE_JOURNAL_VERSION_V2
+        if snapshot.version != LIFECYCLE_JOURNAL_VERSION_V3
             || snapshot.geometry != self.lifecycle_geometry()?
         {
             return Err(MergeSidecarError::LifecycleJournal(
@@ -3923,25 +4670,25 @@ impl MergeSidecarTransport {
             let mut attempts = BTreeMap::new();
             for attempt in gate.attempts {
                 let source = match attempt.source {
-                    DurableServerRequestSourceV2::Synthetic(peer)
+                    DurableServerRequestSourceV3::Synthetic(peer)
                         if source_capacity.is_none() && peer == gate.requester =>
                     {
                         ServerRequestSource::Synthetic(peer)
                     }
-                    DurableServerRequestSourceV2::Authenticated(peer)
+                    DurableServerRequestSourceV3::Authenticated(peer)
                         if source_capacity.is_some() =>
                     {
                         ServerRequestSource::RecoveredAuthenticated(peer)
                     }
-                    DurableServerRequestSourceV2::Synthetic(_)
-                    | DurableServerRequestSourceV2::Authenticated(_) => {
+                    DurableServerRequestSourceV3::Synthetic(_)
+                    | DurableServerRequestSourceV3::Authenticated(_) => {
                         return Err(MergeSidecarError::LifecycleJournal(
                             "durable server source kind differs from its route geometry".to_owned(),
                         ));
                     }
                 };
                 let cursor = match attempt.cursor {
-                    DurableServerResponseCursorV2::Pending(index) => {
+                    DurableServerResponseCursorV3::Pending(index) => {
                         let index = usize::try_from(index).map_err(|_| {
                             MergeSidecarError::LifecycleJournal(
                                 "durable server cursor is not representable".to_owned(),
@@ -3954,7 +4701,7 @@ impl MergeSidecarTransport {
                         }
                         ServerResponseCursor::Pending(index)
                     }
-                    DurableServerResponseCursorV2::Complete => ServerResponseCursor::Complete,
+                    DurableServerResponseCursorV3::Complete => ServerResponseCursor::Complete,
                 };
                 let pending_flush_chunk = attempt
                     .pending_flush_chunk
@@ -4141,32 +4888,63 @@ impl MergeSidecarTransport {
             server_stream_capacity,
             server_roster_digest,
         )?;
-        let (journal, snapshot) = MergeSidecarLifecycleJournal::open(
+        let (mut journal, snapshot) = MergeSidecarLifecycleJournal::open(
             store_root,
             transport.lifecycle_protocol_max_snapshot_bytes()?,
         )?;
-        if let Some(snapshot) = snapshot {
+        let restored = snapshot.is_some();
+        if let Some(snapshot) = snapshot.as_ref() {
             transport.configure_prior_lifecycle_server_geometry(&snapshot.payload.geometry)?;
-            transport.restore_lifecycle_snapshot(snapshot, Instant::now())?;
+            transport.restore_lifecycle_snapshot(snapshot.clone(), Instant::now())?;
         }
+        journal.finalize_validated_open(snapshot.as_ref())?;
         transport.lifecycle_journal = Some(journal);
-        transport = transport.rehydrate_with_exact_geometry(
-            reply_source_capacity,
-            limits,
-            server_stream_capacity,
-            target_roster_digest,
-            Instant::now(),
-        )?;
+        transport = if restored {
+            transport.rehydrate_after_lifecycle_restore(
+                reply_source_capacity,
+                limits,
+                server_stream_capacity,
+                target_roster_digest,
+                RestoredLifecycleResponderFence,
+            )?
+        } else {
+            transport.rehydrate_with_exact_geometry(
+                reply_source_capacity,
+                limits,
+                server_stream_capacity,
+                target_roster_digest,
+                Instant::now(),
+            )?
+        };
         transport.persist_lifecycle_state()?;
         Ok(transport)
     }
 
-    /// Atomically persist all semantic request ownership and non-regressing cursors.
-    pub(crate) fn persist_lifecycle_state(&self) -> Result<(), MergeSidecarError> {
-        let Some(journal) = &self.lifecycle_journal else {
+    fn persist_lifecycle_projection(
+        &mut self,
+        snapshot: MergeSidecarLifecycleSnapshotV3,
+    ) -> Result<(), MergeSidecarError> {
+        let Some(journal) = self.lifecycle_journal.as_mut() else {
             return Ok(());
         };
-        journal.persist(&self.lifecycle_snapshot()?)
+        journal.persist_next(snapshot)?;
+        Ok(())
+    }
+
+    fn preflight_lifecycle_mutation(&mut self) -> Result<(), MergeSidecarError> {
+        let Some(journal) = self.lifecycle_journal.as_mut() else {
+            return Ok(());
+        };
+        journal.preflight_next_commit()
+    }
+
+    /// Atomically persist all semantic request ownership and non-regressing cursors.
+    pub(crate) fn persist_lifecycle_state(&mut self) -> Result<(), MergeSidecarError> {
+        if self.lifecycle_journal.is_none() {
+            return Ok(());
+        }
+        let snapshot = self.lifecycle_snapshot()?;
+        self.persist_lifecycle_projection(snapshot)
     }
 
     /// Obstruct the next durable lifecycle write for lane fail-stop tests.
@@ -4187,6 +4965,42 @@ impl MergeSidecarTransport {
             .as_ref()
             .expect("durable merge-sidecar transport has a lifecycle journal")
             .temp_path()
+    }
+
+    /// Return the lifecycle state path for exact crash-boundary assertions.
+    #[cfg(test)]
+    pub(crate) fn lifecycle_journal_state_path_for_test(&self) -> PathBuf {
+        self.lifecycle_journal
+            .as_ref()
+            .expect("durable merge-sidecar transport has a lifecycle journal")
+            .state_path()
+    }
+
+    /// Return the independent root high-water path for crash-boundary assertions.
+    #[cfg(test)]
+    pub(crate) fn lifecycle_root_high_water_path_for_test(&self) -> PathBuf {
+        self.lifecycle_journal
+            .as_ref()
+            .expect("durable merge-sidecar transport has a lifecycle journal")
+            .root_high_water_path()
+    }
+
+    /// Inject a one-shot failure after state publication but before root publication.
+    #[cfg(test)]
+    pub(crate) fn fail_after_lifecycle_state_publish_for_test(&mut self) {
+        self.lifecycle_journal
+            .as_mut()
+            .expect("durable merge-sidecar transport has a lifecycle journal")
+            .fail_after_state_publish = true;
+    }
+
+    /// Inject a one-shot failure after the root commit is durable but before memory publication.
+    #[cfg(test)]
+    pub(crate) fn fail_after_lifecycle_root_publish_for_test(&mut self) {
+        self.lifecycle_journal
+            .as_mut()
+            .expect("durable merge-sidecar transport has a lifecycle journal")
+            .fail_after_root_publish = true;
     }
 
     /// Obstruct only the terminal-retirement write after admission is durable.
@@ -4211,14 +5025,15 @@ impl MergeSidecarTransport {
             .is_some_and(|gate| gate.request.same_occurrence_except_close_floor(request))
     }
 
-    /// Advance an otherwise quiescent responder fence for ingress tests.
+    /// Advance an otherwise quiescent responder fence for a changed test roster.
     #[cfg(test)]
-    pub(crate) fn roll_server_service_generation_for_test(
+    pub(crate) fn transition_server_service_generation_for_test(
         &mut self,
+        server_roster: &[PeerId],
     ) -> Result<(), MergeSidecarError> {
         self.transition_server_service_generation(
-            self.server_stream_capacity,
-            self.server_roster_digest.clone(),
+            server_roster.len(),
+            canonical_merge_sidecar_roster_digest(server_roster),
         )
     }
 
@@ -4256,30 +5071,67 @@ impl MergeSidecarTransport {
 
     /// Rehydrate after consuming the exact predecessor's durable output handoff.
     ///
-    /// The move-only authority authenticates the height handoff but does not
-    /// weaken responder lifecycle terminality. A changed roster therefore uses
-    /// the same fail-atomic terminal-state transition as ordinary rehydration;
-    /// active streams, gates, transfers, or flush ownership return
-    /// [`MergeSidecarError::Capacity`] without mutation. Equal roster identity
-    /// preserves responder state and reproduces each current chunk for the
-    /// successor's exact writer.
+    /// Equal roster identity preserves responder state and reproduces each
+    /// current chunk for the successor's exact writer. A changed certified
+    /// roster may supersede non-terminal responder tables because the move-only
+    /// authority proves that every predecessor exact-output writer and queued
+    /// occurrence has been durably sealed. The successor generation and empty
+    /// responder projection are committed before memory changes; requester-side
+    /// streams and inbound assemblies are preserved.
     pub(crate) fn rehydrate_with_exact_geometry_after_durable_handoff(
-        self,
+        mut self,
         reply_source_capacity: usize,
         limits: MergeSidecarLimits,
         server_stream_capacity: usize,
         server_roster_digest: MergeSidecarRosterDigest,
-        now: Instant,
+        _now: Instant,
         authority: DurableMergeSidecarRolloverAuthority,
     ) -> Result<Self, MergeSidecarError> {
+        self.validate_retained_height_geometry(reply_source_capacity, limits)?;
+        if self.server_roster_digest != server_roster_digest {
+            self.transition_server_service_generation_after_durable_handoff(
+                server_stream_capacity,
+                server_roster_digest,
+                authority,
+            )?;
+            return Ok(self);
+        }
         drop(authority);
-        self.rehydrate_with_exact_geometry(
-            reply_source_capacity,
-            limits,
-            server_stream_capacity,
-            server_roster_digest,
-            now,
-        )
+        if self.server_stream_capacity != server_stream_capacity {
+            return Err(MergeSidecarError::Capacity(
+                "merge-sidecar retained-height roster capacity drift",
+            ));
+        }
+        // The exact-output handoff sealed any previously drained closure
+        // occurrence. Undrained authenticated prefixes remain queued.
+        self.server_closure_handoff_pending = false;
+        self.requeue_retained_outbound_after_height_rollover();
+        Ok(self)
+    }
+
+    fn rehydrate_after_lifecycle_restore(
+        mut self,
+        reply_source_capacity: usize,
+        limits: MergeSidecarLimits,
+        server_stream_capacity: usize,
+        server_roster_digest: MergeSidecarRosterDigest,
+        _authority: RestoredLifecycleResponderFence,
+    ) -> Result<Self, MergeSidecarError> {
+        self.validate_retained_height_geometry(reply_source_capacity, limits)?;
+        if self.server_roster_digest != server_roster_digest {
+            self.transition_server_service_generation_after_exact_output_fence(
+                server_stream_capacity,
+                server_roster_digest,
+            )?;
+            return Ok(self);
+        }
+        if self.server_stream_capacity != server_stream_capacity {
+            return Err(MergeSidecarError::Capacity(
+                "merge-sidecar retained-height roster capacity drift",
+            ));
+        }
+        self.requeue_retained_outbound_after_height_rollover();
+        Ok(self)
     }
 
     fn validate_retained_height_geometry(
@@ -4489,7 +5341,7 @@ impl MergeSidecarTransport {
         if ack.closed_through == 0 || ack.close_id != ack.canonical_close_id() {
             return Err(MergeSidecarError::CloseIdMismatch);
         }
-        let Some(stream) = self.request_streams.get_mut(sender) else {
+        let Some(stream) = self.request_streams.get(sender) else {
             // The exact ACK may be duplicated after its first application
             // reclaimed the terminal stream. Its canonical identity and
             // authenticated endpoints were checked above, so retaining no
@@ -4503,15 +5355,24 @@ impl MergeSidecarTransport {
         {
             return Err(MergeSidecarError::UnsolicitedResponse);
         }
-        let advanced = stream.acknowledge_close(ack.closed_through);
-        if advanced {
-            let retire = stream.open_sequences.is_empty()
-                && stream.acknowledged_through == stream.next_sequence;
-            if retire {
-                self.request_streams.remove(sender);
-            }
-            self.persist_lifecycle_state()?;
+        if ack.closed_through <= stream.acknowledged_through
+            || ack.closed_through > stream.closed_through
+        {
+            return Ok(false);
         }
+        self.preflight_lifecycle_mutation()?;
+        let stream = self
+            .request_streams
+            .get_mut(sender)
+            .expect("preflight cannot remove the checked request stream");
+        let advanced = stream.acknowledge_close(ack.closed_through);
+        debug_assert!(advanced, "the immutable preflight established ACK progress");
+        let retire =
+            stream.open_sequences.is_empty() && stream.acknowledged_through == stream.next_sequence;
+        if retire {
+            self.request_streams.remove(sender);
+        }
+        self.persist_lifecycle_state()?;
         Ok(advanced)
     }
 
@@ -4572,7 +5433,7 @@ impl MergeSidecarTransport {
 
         // Stage and persist the exact durable replacement before resetting any
         // process-local assembly or allowing a new request to be scheduled.
-        if let Some(journal) = &self.lifecycle_journal {
+        if self.lifecycle_journal.is_some() {
             let mut snapshot = self.lifecycle_snapshot()?;
             snapshot.payload.next_stream_epoch = next_stream_epoch;
             let durable = snapshot
@@ -4587,7 +5448,7 @@ impl MergeSidecarTransport {
             durable.closed_through = 0;
             durable.acknowledged_through = 0;
             snapshot.payload_hash = HashOf::new(&snapshot.payload);
-            journal.persist(&snapshot)?;
+            self.persist_lifecycle_projection(snapshot)?;
         }
 
         for assembly in self.inbound.values_mut() {
@@ -4764,6 +5625,7 @@ impl MergeSidecarTransport {
         let Some((holder_index, holder)) = selected else {
             return Ok(None);
         };
+        self.preflight_lifecycle_mutation()?;
         let (stream_epoch, semantic_sequence, closed_through) =
             self.allocate_request_sequence(&holder)?;
         let service_generation = self
@@ -4826,7 +5688,7 @@ impl MergeSidecarTransport {
         request: &CertifiedMergeSidecarRequestV1,
     ) -> Result<(), MergeSidecarError> {
         let key = (request.entry_hash, request.reference_digest);
-        let Some(assembly) = self.inbound.get_mut(&key) else {
+        let Some(assembly) = self.inbound.get(&key) else {
             return Ok(());
         };
         if !assembly.current.as_ref().is_some_and(|attempt| {
@@ -4838,6 +5700,11 @@ impl MergeSidecarTransport {
         }) {
             return Ok(());
         }
+        self.preflight_lifecycle_mutation()?;
+        let assembly = self
+            .inbound
+            .get_mut(&key)
+            .expect("preflight cannot remove the checked inbound assembly");
         let attempt = assembly
             .current
             .take()
@@ -5153,6 +6020,13 @@ impl MergeSidecarTransport {
     > {
         let key = (entry_hash, reference_digest);
         if success {
+            if self
+                .inbound
+                .get(&key)
+                .is_some_and(|assembly| assembly.current.is_some())
+            {
+                self.preflight_lifecycle_mutation()?;
+            }
             let deferred = self.inbound.remove(&key).map_or_else(Vec::new, |assembly| {
                 if let Some(attempt) = &assembly.current {
                     self.close_request_sequence(
@@ -5170,6 +6044,13 @@ impl MergeSidecarTransport {
             self.persist_lifecycle_state()?;
             return Ok((deferred, None));
         }
+        if self
+            .inbound
+            .get(&key)
+            .is_some_and(|assembly| assembly.current.is_some())
+        {
+            self.preflight_lifecycle_mutation()?;
+        }
         let closed = self.inbound.get_mut(&key).and_then(|assembly| {
             let closed = assembly.current.take().map(|attempt| {
                 (
@@ -5183,11 +6064,17 @@ impl MergeSidecarTransport {
             assembly.complete_pending_validation = false;
             closed
         });
+        let closed_any = closed.is_some();
         if let Some((holder, stream_epoch, semantic_sequence)) = closed {
             self.close_request_sequence(&holder, stream_epoch, semantic_sequence);
+            // Publish release of the failed occurrence before allocating a
+            // replacement. Sequence/epoch exhaustion or holder-capacity
+            // rejection must leave a restartable idle assembly, not an
+            // unjournaled in-memory close.
+            self.persist_lifecycle_state()?;
         }
         let request = self.begin_request(key, requester, now)?;
-        if request.is_none() {
+        if request.is_none() && !closed_any {
             self.persist_lifecycle_state()?;
         }
         Ok((Vec::new(), request))
@@ -5204,6 +6091,13 @@ impl MergeSidecarTransport {
             .filter(|key| key.0 == entry_hash)
             .copied()
             .collect::<Vec<_>>();
+        if keys.iter().any(|key| {
+            self.inbound
+                .get(key)
+                .is_some_and(|assembly| assembly.current.is_some())
+        }) {
+            self.preflight_lifecycle_mutation()?;
+        }
         let mut affected = Vec::new();
         for key in keys {
             let Some(assembly) = self.inbound.remove(&key) else {
@@ -5298,24 +6192,24 @@ impl MergeSidecarTransport {
                 .iter_mut()
                 .find(|attempt| match (&attempt.source, source) {
                     (
-                        DurableServerRequestSourceV2::Synthetic(durable),
+                        DurableServerRequestSourceV3::Synthetic(durable),
                         ServerRequestSource::Synthetic(live),
                     ) => durable == live,
                     (
-                        DurableServerRequestSourceV2::Authenticated(durable),
+                        DurableServerRequestSourceV3::Authenticated(durable),
                         ServerRequestSource::Authenticated(live),
                     ) => durable == live.authenticated_source_peer(),
                     (
-                        DurableServerRequestSourceV2::Authenticated(durable),
+                        DurableServerRequestSourceV3::Authenticated(durable),
                         ServerRequestSource::RecoveredAuthenticated(live),
                     ) => durable == live,
                     (
-                        DurableServerRequestSourceV2::Synthetic(_),
+                        DurableServerRequestSourceV3::Synthetic(_),
                         ServerRequestSource::Authenticated(_)
                         | ServerRequestSource::RecoveredAuthenticated(_),
                     )
                     | (
-                        DurableServerRequestSourceV2::Authenticated(_),
+                        DurableServerRequestSourceV3::Authenticated(_),
                         ServerRequestSource::Synthetic(_),
                     ) => false,
                 })
@@ -5324,7 +6218,7 @@ impl MergeSidecarTransport {
                         "unwritable outbound attempt lost its durable source".to_owned(),
                     )
                 })?;
-            durable_attempt.cursor = DurableServerResponseCursorV2::Pending(
+            durable_attempt.cursor = DurableServerResponseCursorV3::Pending(
                 u64::try_from(*resume_chunk).map_err(|_| {
                     MergeSidecarError::LifecycleJournal(
                         "unwritable outbound cursor is not representable".to_owned(),
@@ -5333,9 +6227,7 @@ impl MergeSidecarTransport {
             );
         }
         projected.payload_hash = HashOf::new(&projected.payload);
-        if let Some(journal) = &self.lifecycle_journal {
-            journal.persist(&projected)?;
-        }
+        self.persist_lifecycle_projection(projected)?;
 
         let reclaimed = unwritable.len();
         let unwritable_keys = unwritable
@@ -5392,6 +6284,7 @@ impl MergeSidecarTransport {
         &self,
         requester: &PeerId,
         responder: &PeerId,
+        reply_route: &NetworkReplyRoute,
         observed_generation: CertifiedMergeSidecarServiceGenerationV1,
         observed_message_hash: Hash,
     ) -> MergeSidecarPost {
@@ -5407,7 +6300,7 @@ impl MergeSidecarTransport {
         hint.bind_canonical_hint_id();
         MergeSidecarPost {
             peer: requester.clone(),
-            reply_route: None,
+            reply_route: Some(reply_route.clone()),
             message: Arc::new(CertifiedMergeSidecarMessage::GenerationHint(hint)),
         }
     }
@@ -5502,21 +6395,6 @@ impl MergeSidecarTransport {
             && !self.server_closure_handoff_pending
     }
 
-    /// Compact a full, terminal responder table behind a fresh durable fence.
-    fn roll_server_service_generation(&mut self) -> Result<(), MergeSidecarError> {
-        if self.server_streams.len() < self.server_stream_capacity
-            || !self.server_generation_is_terminal()
-        {
-            return Err(MergeSidecarError::Capacity(
-                "server semantic requester geometry",
-            ));
-        }
-        self.transition_server_service_generation(
-            self.server_stream_capacity,
-            self.server_roster_digest.clone(),
-        )
-    }
-
     fn transition_server_service_generation(
         &mut self,
         server_stream_capacity: usize,
@@ -5531,7 +6409,44 @@ impl MergeSidecarTransport {
                 "server semantic requester geometry",
             ));
         }
-        self.commit_server_service_generation_transition(plan)
+        self.commit_server_service_generation_transition(
+            plan,
+            ServerServiceGenerationRetirement::AuthenticatedTerminal,
+        )
+    }
+
+    fn transition_server_service_generation_after_durable_handoff(
+        &mut self,
+        server_stream_capacity: usize,
+        server_roster_digest: MergeSidecarRosterDigest,
+        authority: DurableMergeSidecarRolloverAuthority,
+    ) -> Result<(), MergeSidecarError> {
+        drop(authority);
+        self.transition_server_service_generation_after_exact_output_fence(
+            server_stream_capacity,
+            server_roster_digest,
+        )
+    }
+
+    fn transition_server_service_generation_after_exact_output_fence(
+        &mut self,
+        server_stream_capacity: usize,
+        server_roster_digest: MergeSidecarRosterDigest,
+    ) -> Result<(), MergeSidecarError> {
+        if self.lifecycle_journal.is_none() {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "authority-gated responder rollover requires a durable lifecycle journal"
+                    .to_owned(),
+            ));
+        }
+        let plan = self.prepare_server_service_generation_transition(
+            server_stream_capacity,
+            server_roster_digest,
+        )?;
+        self.commit_server_service_generation_transition(
+            plan,
+            ServerServiceGenerationRetirement::ExactOutputSuperseded,
+        )
     }
 
     fn prepare_server_service_generation_transition(
@@ -5539,6 +6454,11 @@ impl MergeSidecarTransport {
         server_stream_capacity: usize,
         server_roster_digest: MergeSidecarRosterDigest,
     ) -> Result<ServerServiceGenerationTransitionPlan, MergeSidecarError> {
+        if server_roster_digest == self.server_roster_digest {
+            return Err(MergeSidecarError::Capacity(
+                "server service generation requires a changed roster identity",
+            ));
+        }
         let (server_request_gate_capacity, server_request_attempt_capacity) =
             Self::derive_server_request_capacities(
                 self.reply_source_capacity,
@@ -5571,12 +6491,13 @@ impl MergeSidecarTransport {
     fn commit_server_service_generation_transition(
         &mut self,
         plan: ServerServiceGenerationTransitionPlan,
+        retirement: ServerServiceGenerationRetirement,
     ) -> Result<(), MergeSidecarError> {
         // Publish the successor generation, geometry, and empty responder
-        // tables in the sole V2 snapshot before changing memory or emitting a
+        // tables in the root-anchored V3 snapshot before changing memory or emitting a
         // generation hint. A crash observes either the complete predecessor or
         // the complete successor state.
-        if let Some(journal) = &self.lifecycle_journal {
+        if self.lifecycle_journal.is_some() {
             let mut snapshot = self.lifecycle_snapshot()?;
             snapshot.payload.geometry = plan.next_geometry.clone();
             snapshot.payload.server_service_generation = plan.next_generation;
@@ -5584,21 +6505,36 @@ impl MergeSidecarTransport {
             snapshot.payload.server_streams.clear();
             snapshot.payload.server_request_gates.clear();
             snapshot.payload_hash = HashOf::new(&snapshot.payload);
-            journal.persist(&snapshot)?;
+            self.persist_lifecycle_projection(snapshot)?;
         }
 
-        let retired = self
-            .server_streams
-            .iter()
-            .map(|(requester, stream)| (requester.clone(), *stream))
-            .collect::<Vec<_>>();
-        for (requester, stream) in retired {
-            self.record_server_closure(
-                &requester,
-                self.server_service_generation,
-                stream.stream_epoch,
-                stream.highest_sequence,
-            );
+        match retirement {
+            ServerServiceGenerationRetirement::AuthenticatedTerminal => {
+                let retired = self
+                    .server_streams
+                    .iter()
+                    .map(|(requester, stream)| (requester.clone(), *stream))
+                    .collect::<Vec<_>>();
+                for (requester, stream) in retired {
+                    debug_assert_eq!(
+                        stream.closed_through, stream.highest_sequence,
+                        "ordinary responder rollover requires authenticated terminality"
+                    );
+                    self.record_server_closure(
+                        &requester,
+                        self.server_service_generation,
+                        stream.stream_epoch,
+                        stream.closed_through,
+                    );
+                }
+            }
+            ServerServiceGenerationRetirement::ExactOutputSuperseded => {
+                // The generation fence invalidates active predecessor requests;
+                // it must not manufacture requester-authenticated close
+                // prefixes for semantic sequences that were never closed.
+                self.pending_server_closures.clear();
+                self.server_closure_handoff_pending = false;
+            }
         }
         self.server_service_generation = plan.next_generation;
         self.server_roster_digest = plan.server_roster_digest;
@@ -5615,9 +6551,9 @@ impl MergeSidecarTransport {
 
     /// Ensure that requester admission stays inside the immutable roster bound.
     ///
-    /// Active exhaustion rejects locally. A full terminal table is compacted
-    /// by the admission path, while a certified roster-geometry replacement
-    /// uses the same terminal transition before advancing the generation.
+    /// Exhaustion rejects locally even when every retained stream is terminal.
+    /// Only a certified changed-roster geometry replacement may advance the
+    /// responder generation and clear the prior table.
     fn ensure_server_stream_slot(&self, sender: &PeerId) -> Result<(), MergeSidecarError> {
         if self.server_streams.contains_key(sender) {
             return Ok(());
@@ -5750,7 +6686,7 @@ impl MergeSidecarTransport {
         // mutating live gates, transfers, or cancellation output. Pending
         // chunk identities remain valid because the cumulative floor is the
         // sole request field deliberately excluded from occurrence identity.
-        if let Some(journal) = &self.lifecycle_journal {
+        if self.lifecycle_journal.is_some() {
             let mut projected = self.lifecycle_snapshot()?;
             let stream = projected
                 .payload
@@ -5796,7 +6732,7 @@ impl MergeSidecarTransport {
             retained.request = request.clone();
             retained.request_hash = HashOf::new(request);
             projected.payload_hash = HashOf::new(&projected.payload);
-            journal.persist(&projected)?;
+            self.persist_lifecycle_projection(projected)?;
         }
 
         self.advance_server_close_floor(sender, request.stream_epoch, request.closed_through);
@@ -5844,9 +6780,11 @@ impl MergeSidecarTransport {
             return Err(MergeSidecarError::UnsolicitedResponse);
         }
         if close.service_generation < self.server_service_generation {
+            let reply_route = reply_route.ok_or(MergeSidecarError::UnsolicitedResponse)?;
             return Ok(self.generation_hint_post(
                 sender,
                 local_peer,
+                reply_route,
                 close.service_generation,
                 observed_message_hash,
             ));
@@ -5869,15 +6807,29 @@ impl MergeSidecarTransport {
         if !self.server_streams.contains_key(sender) {
             return Ok(close_ack());
         }
-        let mut changed = false;
-        match self.server_streams.get(sender).copied() {
-            Some(stream) if close.stream_epoch < stream.stream_epoch => {
+        let stream = self
+            .server_streams
+            .get(sender)
+            .copied()
+            .expect("the checked server stream remains present");
+        let will_change = if close.stream_epoch < stream.stream_epoch {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        } else if close.stream_epoch == stream.stream_epoch {
+            if close.closed_through < stream.closed_through {
                 return Err(MergeSidecarError::UnsolicitedResponse);
             }
+            close.closed_through > stream.highest_sequence
+                || close.closed_through > stream.closed_through
+        } else {
+            true
+        };
+        if !will_change {
+            return Ok(close_ack());
+        }
+        self.preflight_lifecycle_mutation()?;
+        let mut changed = false;
+        match self.server_streams.get(sender).copied() {
             Some(stream) if close.stream_epoch == stream.stream_epoch => {
-                if close.closed_through < stream.closed_through {
-                    return Err(MergeSidecarError::UnsolicitedResponse);
-                }
                 if close.closed_through > stream.highest_sequence {
                     self.server_streams
                         .get_mut(sender)
@@ -5908,6 +6860,10 @@ impl MergeSidecarTransport {
         if changed {
             self.persist_lifecycle_state()?;
         }
+        debug_assert!(
+            changed,
+            "the immutable preflight established close progress"
+        );
         Ok(close_ack())
     }
 
@@ -6332,9 +7288,7 @@ impl MergeSidecarTransport {
         let mut projected = self.lifecycle_snapshot()?;
         projected.payload.materialization_requester_cursor = Some(requester.clone());
         projected.payload_hash = HashOf::new(&projected.payload);
-        if let Some(journal) = &self.lifecycle_journal {
-            journal.persist(&projected)?;
-        }
+        self.persist_lifecycle_projection(projected)?;
 
         self.materialization_requester_cursor = Some(requester.clone());
         let gate = self
@@ -6431,28 +7385,22 @@ impl MergeSidecarTransport {
             return Err(MergeSidecarError::UnsolicitedResponse);
         }
         if request.service_generation < self.server_service_generation {
+            let reply_route = reply_route.ok_or(MergeSidecarError::UnsolicitedResponse)?;
             return Ok(ServerRequestAdmission::GenerationHint(
                 self.generation_hint_post(
                     sender,
                     local_peer,
+                    reply_route,
                     request.service_generation,
                     observed_message_hash,
                 ),
             ));
         }
-        if !self.server_streams.contains_key(sender)
-            && self.server_streams.len() >= self.server_stream_capacity
-        {
-            self.roll_server_service_generation()?;
-            return Ok(ServerRequestAdmission::GenerationHint(
-                self.generation_hint_post(
-                    sender,
-                    local_peer,
-                    request.service_generation,
-                    observed_message_hash,
-                ),
-            ));
-        }
+        // A full semantic table is a roster-bound capacity condition, not
+        // evidence for a new service generation. Return before pruning or
+        // touching any durable ownership so an unrecognised requester cannot
+        // trigger same-roster state loss.
+        self.ensure_server_stream_slot(sender)?;
         // Lower-generation probes returned above without touching lifecycle
         // state. Only current-generation admission may prune obsolete local
         // writer ownership or mutate a semantic gate.
@@ -6730,6 +7678,7 @@ impl MergeSidecarTransport {
                 if !self.can_add_outbound_attempt(&source, bytes) {
                     return Err(MergeSidecarError::Capacity("outbound response budget"));
                 }
+                self.preflight_lifecycle_mutation()?;
                 self.server_request_gates
                     .get_mut(&key)
                     .expect("existing server gate remains present")
@@ -6767,6 +7716,7 @@ impl MergeSidecarTransport {
                 .attempts
                 .values()
                 .any(|attempt| attempt.materialization_authorized);
+            self.preflight_lifecycle_mutation()?;
             self.server_request_gates
                 .get_mut(&key)
                 .expect("existing server gate remains present")
@@ -6814,6 +7764,7 @@ impl MergeSidecarTransport {
             return Err(MergeSidecarError::Capacity("server request rate gate"));
         }
         self.ensure_server_stream_slot(sender)?;
+        self.preflight_lifecycle_mutation()?;
         match self.server_streams.get(sender).copied() {
             Some(stream) if request.stream_epoch > stream.stream_epoch => {
                 self.supersede_server_stream(sender, request.stream_epoch);
@@ -7012,9 +7963,7 @@ impl MergeSidecarTransport {
         if std::mem::take(&mut self.obstruct_next_terminal_retirement_persist) {
             self.obstruct_lifecycle_journal_temp_for_test();
         }
-        if let Some(journal) = &self.lifecycle_journal {
-            journal.persist(&projected)?;
-        }
+        self.persist_lifecycle_projection(projected)?;
 
         self.server_request_gates
             .remove(&key)
@@ -7398,6 +8347,61 @@ impl MergeSidecarTransport {
         (posts, lifecycle_changed)
     }
 
+    fn outbound_drain_requires_lifecycle_commit(&self, limit: usize) -> bool {
+        let mut emitted = 0;
+        for (key, source) in &self.outbound_order {
+            if emitted >= limit {
+                break;
+            }
+            let Some(transfer) = self.outbound.get(key) else {
+                continue;
+            };
+            let Some(outbound_attempt) = transfer.attempts.get(source) else {
+                continue;
+            };
+            let Some(gate_attempt) = self
+                .server_request_gates
+                .get(key)
+                .and_then(|gate| gate.attempts.get(source))
+            else {
+                continue;
+            };
+            let retained = gate_attempt.pending_flush_chunk.clone();
+            let index = outbound_attempt
+                .in_flight_chunk
+                .unwrap_or(outbound_attempt.next_chunk);
+            let (cursor, pending, emitted_post) =
+                if !Self::outbound_attempt_has_writable_route(source, outbound_attempt) {
+                    (ServerResponseCursor::Pending(index), retained, false)
+                } else if index >= transfer.chunks.len() {
+                    (ServerResponseCursor::Complete, None, false)
+                } else {
+                    let identity = ServerPendingChunkIdentity::from_message(
+                        transfer
+                            .chunks
+                            .get(index)
+                            .expect("bounded sidecar cursor names a cached chunk"),
+                    )
+                    .expect("outbound response contains only certified chunks");
+                    if retained
+                        .as_ref()
+                        .is_some_and(|pending| pending != &identity)
+                    {
+                        (ServerResponseCursor::Pending(index), retained, false)
+                    } else {
+                        (ServerResponseCursor::Pending(index), Some(identity), true)
+                    }
+                };
+            if gate_attempt.cursor != cursor || gate_attempt.pending_flush_chunk != pending {
+                return true;
+            }
+            if emitted_post {
+                emitted += 1;
+            }
+        }
+        false
+    }
+
     /// Emit at most `limit` response chunks after durably publishing their
     /// pending writer identities and non-regressing source cursors.
     pub(crate) fn drain_outbound_chunks_durable(
@@ -7406,6 +8410,9 @@ impl MergeSidecarTransport {
         now: Instant,
     ) -> Result<Vec<MergeSidecarPost>, MergeSidecarError> {
         self.reclaim_inactive_outbound_attempts(now)?;
+        if self.outbound_drain_requires_lifecycle_commit(limit) {
+            self.preflight_lifecycle_mutation()?;
+        }
         let (posts, lifecycle_changed) = self.drain_outbound_chunks_inner(limit, now);
         if lifecycle_changed {
             self.persist_lifecycle_state()?;
@@ -7493,9 +8500,11 @@ impl MergeSidecarTransport {
             expected_chunk_cursor_after,
             count,
         )?;
+        self.preflight_lifecycle_mutation()?;
 
         // This is the only linearization point. Every fallible identity,
-        // cursor, route, shared-state, and scalar check completed above.
+        // cursor, route, shared-state, scalar, and durable-generation check
+        // completed above.
         if !admission.flush_identity.claim_writer_flush_once() {
             return Ok(false);
         }
@@ -7533,6 +8542,15 @@ impl MergeSidecarTransport {
         pending_blocks: &BTreeSet<HashOf<BlockHeader>>,
         committed_height: u64,
     ) -> Result<(), MergeSidecarError> {
+        let closes_request_stream = self.inbound.values().any(|assembly| {
+            assembly.current.is_some()
+                && assembly.deferred.values().all(|carrier| {
+                    carrier.height <= committed_height || !pending_blocks.contains(&carrier.hash)
+                })
+        });
+        if closes_request_stream {
+            self.preflight_lifecycle_mutation()?;
+        }
         for assembly in self.inbound.values_mut() {
             assembly.deferred.retain(|hash, carrier| {
                 carrier.height > committed_height && pending_blocks.contains(hash)
@@ -7579,6 +8597,9 @@ impl MergeSidecarTransport {
             })
             .map(|(hash, _)| *hash)
             .collect();
+        if !timed_out.is_empty() {
+            self.preflight_lifecycle_mutation()?;
+        }
         let mut closed = Vec::new();
         for hash in &timed_out {
             if let Some(assembly) = self.inbound.get_mut(hash) {
@@ -7642,6 +8663,9 @@ impl MergeSidecarTransport {
             let mut emitted = false;
 
             if response_first {
+                if self.outbound_drain_requires_lifecycle_commit(1) {
+                    self.preflight_lifecycle_mutation()?;
+                }
                 let (mut drained, changed) = self.drain_outbound_chunks_inner(1, now);
                 lifecycle_changed |= changed;
                 if let Some(post) = drained.pop() {
@@ -7672,6 +8696,9 @@ impl MergeSidecarTransport {
                     emitted = true;
                 }
             } else if !emitted {
+                if response_ready && self.outbound_drain_requires_lifecycle_commit(1) {
+                    self.preflight_lifecycle_mutation()?;
+                }
                 let (mut drained, changed) = self.drain_outbound_chunks_inner(1, now);
                 lifecycle_changed |= changed;
                 if let Some(post) = drained.pop() {
@@ -8774,6 +9801,43 @@ mod tests {
         )
     }
 
+    fn read_lifecycle_pair(
+        transport: &MergeSidecarTransport,
+    ) -> (
+        MergeSidecarLifecycleSnapshotV3,
+        MergeSidecarLifecycleRootHighWaterV3,
+    ) {
+        transport
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable transport owns its lifecycle journal")
+            .load_pair_strict()
+            .expect("read an exact lifecycle state/root pair")
+    }
+
+    fn install_lifecycle_pair(
+        journal: &MergeSidecarLifecycleJournal,
+        mut snapshot: MergeSidecarLifecycleSnapshotV3,
+    ) -> MergeSidecarLifecycleRootHighWaterV3 {
+        snapshot.payload_hash = HashOf::new(&snapshot.payload);
+        let marker = MergeSidecarLifecycleRootHighWaterV3::new(&snapshot);
+        fs::write(
+            journal.state_path_for_generation(snapshot.payload.root_generation),
+            norito::to_bytes(&snapshot).expect("encode lifecycle test state"),
+        )
+        .expect("install lifecycle test state");
+        MergeSidecarLifecycleJournal::sync_directory(&journal.directory)
+            .expect("sync lifecycle test state");
+        fs::write(
+            journal.root_high_water_path(),
+            norito::to_bytes(&marker).expect("encode lifecycle test root high-water"),
+        )
+        .expect("install lifecycle test root high-water");
+        MergeSidecarLifecycleJournal::sync_directory(&journal.store_root)
+            .expect("sync lifecycle test root high-water");
+        marker
+    }
+
     fn stream_epoch(value: u64) -> CertifiedMergeSidecarStreamEpochV1 {
         CertifiedMergeSidecarStreamEpochV1(
             NonZeroU64::new(value).expect("test stream epoch must be non-zero"),
@@ -9311,8 +10375,17 @@ mod tests {
                 closed_through: request.semantic_sequence.get(),
             }]
         );
+        let mut stale_routes =
+            NetworkReplyRouteTestFixture::new(peer(b"roster transition stale reply hub"));
+        let stale_route = stale_routes.mint(retained_requester.clone());
         let admission = transitioned
-            .admit_server_request(&retained_requester, &request, None, &local_peer, now)
+            .admit_server_request(
+                &retained_requester,
+                &request,
+                Some(&stale_route),
+                &local_peer,
+                now,
+            )
             .expect("the old-roster request receives the successor fence");
         let ServerRequestAdmission::GenerationHint(post) = admission else {
             panic!("stale old-roster traffic must receive a generation Hint")
@@ -9323,6 +10396,11 @@ mod tests {
         assert_eq!(hint.observed_generation, request.service_generation);
         assert_eq!(hint.current_generation, service_generation(2));
         assert_eq!(hint.observed_message_hash, HashOf::new(&request).into());
+        assert!(
+            post.reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&stale_route))
+        );
         assert!(transitioned.server_streams.is_empty());
         assert!(transitioned.server_request_gates.is_empty());
         assert!(transitioned.outbound.is_empty());
@@ -9375,7 +10453,7 @@ mod tests {
             .enqueue_response(request, Some(route), vec![0x61], now)
             .expect("replace lookup authority with active output");
         assert!(matches!(
-            server.transition_server_service_generation(new_roster.len(), new_digest),
+            server.transition_server_service_generation(new_roster.len(), new_digest.clone()),
             Err(MergeSidecarError::Capacity(
                 "server semantic requester geometry"
             ))
@@ -9385,6 +10463,21 @@ mod tests {
             CertifiedMergeSidecarServiceGenerationV1::INITIAL
         );
         assert_eq!(server.server_roster_digest, old_digest);
+        assert_eq!(server.outbound.len(), 1);
+        assert!(matches!(
+            server.transition_server_service_generation_after_exact_output_fence(
+                new_roster.len(),
+                new_digest,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("requires a durable lifecycle journal")
+        ));
+        assert_eq!(
+            server.server_service_generation,
+            CertifiedMergeSidecarServiceGenerationV1::INITIAL
+        );
+        assert_eq!(server.server_roster_digest, old_digest);
+        assert_eq!(server.server_request_gates.len(), 1);
         assert_eq!(server.outbound.len(), 1);
     }
 
@@ -9470,48 +10563,13 @@ mod tests {
         server
             .persist_lifecycle_state()
             .expect("persist all old-roster lifecycle state");
-        let predecessor_state_path = server
-            .lifecycle_journal
-            .as_ref()
-            .expect("durable roster fixture retains its journal")
-            .state_path();
-        let predecessor_bytes =
-            fs::read(&predecessor_state_path).expect("read the active predecessor V2 snapshot");
+        let predecessor_snapshot = server
+            .lifecycle_snapshot()
+            .expect("snapshot active predecessor ownership");
+        let predecessor_root_path = server.lifecycle_root_high_water_path_for_test();
+        let predecessor_root =
+            fs::read(&predecessor_root_path).expect("read the active predecessor V3 root");
         drop(server);
-
-        assert!(matches!(
-            MergeSidecarTransport::open_durable_with_server_stream_capacity(
-                temp.path(),
-                source_capacity,
-                limits,
-                new_roster.len(),
-                new_digest.clone(),
-            ),
-            Err(MergeSidecarError::Capacity(
-                "server semantic requester geometry"
-            ))
-        ));
-        assert_eq!(
-            fs::read(&predecessor_state_path)
-                .expect("reread the fail-atomic predecessor V2 snapshot"),
-            predecessor_bytes
-        );
-
-        let mut predecessor = MergeSidecarTransport::open_durable_with_server_stream_capacity(
-            temp.path(),
-            source_capacity,
-            limits,
-            old_roster.len(),
-            old_digest,
-        )
-        .expect("reopen the exact predecessor geometry after rejected replacement");
-        assert_eq!(predecessor.server_request_gates.len(), 1);
-        let close = close_for_request(&old_request);
-        predecessor
-            .admit_server_close(&retained_requester, &close, None, &local_peer)
-            .expect("persist the exact terminal close under predecessor geometry");
-        assert_eq!(predecessor.drain_closed_server_prefixes().len(), 1);
-        drop(predecessor);
 
         let mut restarted = MergeSidecarTransport::open_durable_with_server_stream_capacity(
             temp.path(),
@@ -9520,16 +10578,27 @@ mod tests {
             new_roster.len(),
             new_digest.clone(),
         )
-        .expect("restore the old roster and transition to the new roster");
+        .expect("restart fences active predecessor ownership into the certified new roster");
         assert_eq!(restarted.server_service_generation, service_generation(2));
         assert_eq!(restarted.server_roster_digest, new_digest.clone());
         assert_eq!(restarted.server_stream_capacity, new_roster.len());
         assert!(restarted.server_streams.is_empty());
         assert!(restarted.server_request_gates.is_empty());
         assert!(restarted.outbound.is_empty());
+        assert!(restarted.outbound_order.is_empty());
+        assert!(restarted.pending_server_closures.is_empty());
+        assert!(!restarted.server_closure_handoff_pending);
         let successor_snapshot = restarted
             .lifecycle_snapshot()
             .expect("snapshot the new roster");
+        assert_ne!(
+            successor_snapshot, predecessor_snapshot,
+            "changed-roster restart publishes a new durable generation fence"
+        );
+        assert_ne!(
+            fs::read(&predecessor_root_path).expect("read successor V3 root"),
+            predecessor_root
+        );
         assert_eq!(
             successor_snapshot.payload.request_streams,
             requester_streams_before
@@ -9561,14 +10630,9 @@ mod tests {
             )
             .expect("derive the protocol-maximum lifecycle bound")
         );
-        assert_eq!(
-            restarted.drain_closed_server_prefixes(),
-            vec![CertifiedMergeSidecarClosedPrefix {
-                requester: retained_requester.clone(),
-                service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
-                stream_epoch: old_request.stream_epoch,
-                closed_through: old_request.semantic_sequence.get(),
-            }]
+        assert!(
+            restarted.drain_closed_server_prefixes().is_empty(),
+            "forced fencing must not forge requester-authenticated close prefixes"
         );
 
         let admission = restarted
@@ -9580,16 +10644,20 @@ mod tests {
                 now,
             )
             .expect("stale durable old-roster traffic receives a Hint");
-        assert!(matches!(
-            admission,
-            ServerRequestAdmission::GenerationHint(ref post)
-                if matches!(
-                    post.message.as_ref(),
-                    CertifiedMergeSidecarMessage::GenerationHint(hint)
-                        if hint.current_generation == service_generation(2)
-                            && hint.observed_message_hash == HashOf::new(&old_request).into()
-                )
-        ));
+        let ServerRequestAdmission::GenerationHint(post) = admission else {
+            panic!("stale predecessor traffic must receive the successor fence")
+        };
+        let CertifiedMergeSidecarMessage::GenerationHint(hint) = post.message.as_ref() else {
+            panic!("successor fence must be encoded as a GenerationHint")
+        };
+        assert_eq!(hint.current_generation, service_generation(2));
+        assert_eq!(hint.observed_message_hash, HashOf::new(&old_request).into());
+        assert!(
+            post.reply_route
+                .as_ref()
+                .is_some_and(|retained| retained.same_delivery(&route)),
+            "stale traffic retains its exact triggering reply delivery"
+        );
         assert!(restarted.server_streams.is_empty());
         assert!(restarted.server_request_gates.is_empty());
         drop(restarted);
@@ -9617,6 +10685,132 @@ mod tests {
     }
 
     #[test]
+    fn durable_exact_output_fence_clears_unconfirmed_debt_without_forging_close() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let now = Instant::now();
+        let source_capacity = 2;
+        let limits = MergeSidecarLimits::defaults();
+        let (_, requester, _, request, _) = start_session(1, 1);
+        let responder = request.responder.clone();
+        let old_roster = vec![requester.clone()];
+        let new_roster = vec![peer(b"authority-fenced replacement requester")];
+        let old_digest = canonical_merge_sidecar_roster_digest(&old_roster);
+        let new_digest = canonical_merge_sidecar_roster_digest(&new_roster);
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            peer(b"authority-fenced reply hub"),
+            source_capacity,
+        );
+        let route = routes.mint(requester.clone());
+        let mut server = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            source_capacity,
+            limits,
+            old_roster.len(),
+            old_digest,
+        )
+        .expect("open authority-fenced durable responder");
+        assert!(matches!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &responder, now,)
+                .expect("retain one active predecessor occurrence"),
+            ServerRequestAdmission::Materialize
+        ));
+        server.record_server_closure(
+            &requester,
+            request.service_generation,
+            request.stream_epoch,
+            request.semantic_sequence.get(),
+        );
+        server.server_closure_handoff_pending = true;
+
+        server
+            .transition_server_service_generation_after_exact_output_fence(
+                new_roster.len(),
+                new_digest.clone(),
+            )
+            .expect("durable exact-output fence supersedes requester-controlled debt");
+        assert_eq!(server.server_service_generation, service_generation(2));
+        assert_eq!(server.server_roster_digest, new_digest);
+        assert!(server.server_streams.is_empty());
+        assert!(server.server_request_gates.is_empty());
+        assert!(server.outbound.is_empty());
+        assert!(server.outbound_order.is_empty());
+        assert!(server.pending_server_closures.is_empty());
+        assert!(!server.server_closure_handoff_pending);
+        assert!(
+            server.drain_closed_server_prefixes().is_empty(),
+            "supersession cannot convert an unconfirmed occurrence into authenticated closure"
+        );
+
+        let ServerRequestAdmission::GenerationHint(post) = server
+            .admit_server_request(&requester, &request, Some(&route), &responder, now)
+            .expect("stale occurrence receives the durable successor fence")
+        else {
+            panic!("stale predecessor request must receive a GenerationHint")
+        };
+        assert!(
+            post.reply_route
+                .as_ref()
+                .is_some_and(|retained| retained.same_delivery(&route))
+        );
+        let CertifiedMergeSidecarMessage::GenerationHint(hint) = post.message.as_ref() else {
+            panic!("successor fence must be a GenerationHint")
+        };
+        assert_eq!(hint.current_generation, service_generation(2));
+        assert_eq!(hint.observed_generation, request.service_generation);
+    }
+
+    #[test]
+    fn durable_exact_output_fence_rejects_service_generation_exhaustion_before_mutation() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let source_capacity = 2;
+        let limits = MergeSidecarLimits::defaults();
+        let old_roster = vec![peer(b"maximum service generation requester")];
+        let new_roster = vec![peer(b"maximum service generation replacement")];
+        let old_digest = canonical_merge_sidecar_roster_digest(&old_roster);
+        let new_digest = canonical_merge_sidecar_roster_digest(&new_roster);
+        let mut server = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            source_capacity,
+            limits,
+            old_roster.len(),
+            old_digest.clone(),
+        )
+        .expect("open maximum service-generation fixture");
+        server.server_service_generation = service_generation(u64::MAX);
+        server
+            .persist_lifecycle_state()
+            .expect("persist the maximum service generation");
+        let state_path = server.lifecycle_journal_state_path_for_test();
+        let root_path = server.lifecycle_root_high_water_path_for_test();
+        let state_bytes = fs::read(&state_path).expect("read maximum-generation state");
+        let root_bytes = fs::read(&root_path).expect("read maximum-generation root");
+
+        assert!(matches!(
+            server.transition_server_service_generation_after_exact_output_fence(
+                new_roster.len(),
+                new_digest,
+            ),
+            Err(MergeSidecarError::Capacity(
+                "server service generation exhausted"
+            ))
+        ));
+        assert_eq!(
+            server.server_service_generation,
+            service_generation(u64::MAX)
+        );
+        assert_eq!(server.server_roster_digest, old_digest);
+        assert_eq!(
+            fs::read(state_path).expect("reread unchanged maximum-generation state"),
+            state_bytes
+        );
+        assert_eq!(
+            fs::read(root_path).expect("reread unchanged maximum-generation root"),
+            root_bytes
+        );
+    }
+
+    #[test]
     fn durable_roster_transition_failure_preserves_predecessor_then_commits_successor() {
         let temp = tempfile::tempdir().expect("temp dir");
         let source_capacity = 2;
@@ -9633,6 +10827,20 @@ mod tests {
             old_digest.clone(),
         )
         .expect("open the durable atomic roster fixture");
+        let (_, _, _, base, now) = start_session(1, 1);
+        let responder = base.responder.clone();
+        let active_request = routed_server_request(
+            &base,
+            old_roster[0].clone(),
+            b"atomic active predecessor request",
+            1,
+        );
+        assert!(matches!(
+            server
+                .admit_server_request(&old_roster[0], &active_request, None, &responder, now,)
+                .expect("persist active predecessor ownership"),
+            ServerRequestAdmission::Materialize
+        ));
         let predecessor_snapshot = server
             .lifecycle_snapshot()
             .expect("snapshot the predecessor roster");
@@ -9644,7 +10852,10 @@ mod tests {
         server.obstruct_lifecycle_journal_temp_for_test();
 
         assert!(matches!(
-            server.transition_server_service_generation(new_roster.len(), new_digest.clone()),
+            server.transition_server_service_generation_after_exact_output_fence(
+                new_roster.len(),
+                new_digest.clone(),
+            ),
             Err(MergeSidecarError::LifecycleJournal(_))
         ));
         assert_eq!(
@@ -9652,6 +10863,18 @@ mod tests {
             CertifiedMergeSidecarServiceGenerationV1::INITIAL
         );
         assert_eq!(server.server_roster_digest, old_digest);
+        assert_eq!(server.server_streams.len(), 1);
+        assert_eq!(server.server_request_gates.len(), 1);
+        assert!(matches!(
+            server
+                .lifecycle_journal
+                .as_ref()
+                .expect("failed transition retains its journal")
+                .load(),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("unsafe lifecycle journal temp artifact")
+        ));
+        fs::remove_dir(state_temp_path).expect("remove the injected state obstruction");
         assert_eq!(
             server
                 .lifecycle_journal
@@ -9662,7 +10885,6 @@ mod tests {
                 .expect("the predecessor snapshot remains durable"),
             predecessor_snapshot
         );
-        fs::remove_dir(state_temp_path).expect("remove the injected state obstruction");
         drop(server);
 
         let restarted = MergeSidecarTransport::open_durable_with_server_stream_capacity(
@@ -9686,6 +10908,7 @@ mod tests {
         );
         assert!(successor_snapshot.payload.server_streams.is_empty());
         assert!(successor_snapshot.payload.server_request_gates.is_empty());
+        assert!(restarted.pending_server_closures.is_empty());
         assert_eq!(
             restarted
                 .lifecycle_journal
@@ -9707,7 +10930,7 @@ mod tests {
         let new_roster = vec![peer(b"geometry-drift new roster requester")];
         let old_digest = canonical_merge_sidecar_roster_digest(&old_roster);
         let new_digest = canonical_merge_sidecar_roster_digest(&new_roster);
-        let server = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+        let mut server = MergeSidecarTransport::open_durable_with_server_stream_capacity(
             temp.path(),
             source_capacity,
             limits,
@@ -9717,7 +10940,7 @@ mod tests {
         .expect("open the durable geometry-drift fixture");
         let journal = server
             .lifecycle_journal
-            .as_ref()
+            .as_mut()
             .expect("durable fixture owns its journal");
         let snapshot = journal
             .load()
@@ -9733,7 +10956,7 @@ mod tests {
             .expect("test geometry remains representable");
         snapshot.payload_hash = HashOf::new(&snapshot.payload);
         journal
-            .persist(&snapshot)
+            .persist_next(snapshot)
             .expect("persist canonical non-roster geometry corruption");
         drop(server);
 
@@ -9975,6 +11198,78 @@ mod tests {
         assert_eq!(deferred.len(), 1);
         assert!(retry.is_none());
         assert_eq!(transport.inbound_len(), 0);
+    }
+
+    #[test]
+    fn failed_response_rotation_persists_close_before_sequence_exhaustion() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let now = Instant::now();
+        let requester = peer(b"exhausted rotation requester");
+        let reference = reference(1, 1);
+        let key = (
+            reference.entry_hash,
+            certified_merge_reference_digest(&reference),
+        );
+        let mut transport = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("open durable rotation fixture");
+        let post = transport
+            .defer_block(
+                HashOf::from_untyped_unchecked(Hash::new(b"exhausted rotation block")),
+                2,
+                0,
+                reference,
+                &requester,
+                1,
+                now,
+            )
+            .expect("admit durable request")
+            .expect("emit durable request");
+        let CertifiedMergeSidecarMessage::Request(request) = Arc::unwrap_or_clone(post.message)
+        else {
+            panic!("rotation fixture emits a request")
+        };
+        transport
+            .request_streams
+            .get_mut(&request.responder)
+            .expect("request stream exists")
+            .next_sequence = u64::MAX;
+        transport
+            .persist_lifecycle_state()
+            .expect("persist the exhausted stream frontier");
+
+        assert!(matches!(
+            transport.finish_completed(key.0, key.1, false, &requester, now),
+            Err(MergeSidecarError::Capacity(
+                "semantic request sequence exhausted"
+            ))
+        ));
+        assert!(
+            transport.inbound[&key].current.is_none(),
+            "the failed occurrence is durably idle after release"
+        );
+        let memory = transport
+            .lifecycle_snapshot()
+            .expect("snapshot released occurrence in memory");
+        let durable = transport
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable fixture owns its journal")
+            .load()
+            .expect("load released occurrence")
+            .expect("released occurrence has a durable snapshot");
+        assert_eq!(durable, memory);
+        let stream = memory
+            .payload
+            .request_streams
+            .iter()
+            .find(|stream| stream.responder == request.responder)
+            .expect("released stream remains durable");
+        assert_eq!(stream.next_sequence, u64::MAX);
+        assert_eq!(stream.closed_through, u64::MAX);
     }
 
     #[test]
@@ -12418,8 +13713,11 @@ mod tests {
             .admit_server_close(&requester, &close, Some(&reply_route), &responder)
             .expect("stale Close receives the current responder fence");
         assert!(
-            first_hint_post.reply_route.is_none(),
-            "GenerationHint is route-free Consensus control traffic"
+            first_hint_post
+                .reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&reply_route)),
+            "GenerationHint retains the exact authenticated route of its stale Close"
         );
         let CertifiedMergeSidecarMessage::GenerationHint(hint) =
             Arc::unwrap_or_clone(first_hint_post.message)
@@ -12440,7 +13738,7 @@ mod tests {
             repeated,
             MergeSidecarPost {
                 peer: requester.clone(),
-                reply_route: None,
+                reply_route: Some(reply_route),
                 message: Arc::new(CertifiedMergeSidecarMessage::GenerationHint(hint.clone())),
             }
         );
@@ -12520,8 +13818,9 @@ mod tests {
             MergeSidecarLimits::defaults(),
         )
         .expect("open the durable responder");
+        let successor_roster = vec![peer(b"stale replay successor roster")];
         server
-            .roll_server_service_generation_for_test()
+            .transition_server_service_generation_for_test(&successor_roster)
             .expect("persist the successor responder generation");
         let before = server
             .lifecycle_snapshot()
@@ -12530,16 +13829,28 @@ mod tests {
 
         let (_, _, _, base_request, now) = start_session(1, 1);
         let responder = base_request.responder.clone();
+        let hub = peer(b"stale generation replay hub");
+        let mut reply_routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            hub.clone(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+        );
         for index in 0..64 {
             let requester = peer(format!("stale generation replay requester {index}").as_bytes());
             let request =
                 routed_server_request(&base_request, requester.clone(), b"stale replay", 1);
+            let reply_route = reply_routes.mint_via(requester.clone(), hub.clone());
             let admission = server
-                .admit_server_request(&requester, &request, None, &responder, now)
+                .admit_server_request(&requester, &request, Some(&reply_route), &responder, now)
                 .expect("a canonical stale request is a stateless generation probe");
             let ServerRequestAdmission::GenerationHint(post) = admission else {
                 panic!("stale generation replay must receive an exact Hint")
             };
+            assert!(
+                post.reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_delivery(&reply_route)),
+                "each stateless Hint retains the triggering authenticated delivery"
+            );
             let CertifiedMergeSidecarMessage::GenerationHint(hint) = post.message.as_ref() else {
                 panic!("stale generation replay must not allocate response work")
             };
@@ -12547,6 +13858,28 @@ mod tests {
             assert_eq!(hint.current_generation, server.server_service_generation);
             assert_eq!(hint.observed_message_hash, HashOf::new(&request).into());
         }
+        let synthetic_requester = peer(b"synthetic stale generation replay requester");
+        let synthetic_request = routed_server_request(
+            &base_request,
+            synthetic_requester.clone(),
+            b"synthetic stale replay",
+            1,
+        );
+        assert!(matches!(
+            server.admit_server_request(
+                &synthetic_requester,
+                &synthetic_request,
+                None,
+                &responder,
+                now,
+            ),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+        let synthetic_close = close_for_request(&synthetic_request);
+        assert!(matches!(
+            server.admit_server_close(&synthetic_requester, &synthetic_close, None, &responder,),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
         assert_eq!(
             server
                 .lifecycle_snapshot()
@@ -12631,23 +13964,59 @@ mod tests {
             MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
         );
         server.confirm_closed_server_prefix_handoff();
-        let hint = match server
-            .admit_server_request(&successor_requester, &successor, None, &responder, now)
-            .expect("the externally terminal full table advances the durable generation")
-        {
-            ServerRequestAdmission::GenerationHint(post) => {
-                let CertifiedMergeSidecarMessage::GenerationHint(hint) =
-                    Arc::unwrap_or_clone(post.message)
-                else {
-                    panic!("generation rollover must emit a Hint")
-                };
-                hint
-            }
-            ServerRequestAdmission::Materialize | ServerRequestAdmission::Existing => {
-                panic!("the old-generation successor must receive a Hint")
-            }
+        let terminal_predecessor = server
+            .lifecycle_snapshot()
+            .expect("snapshot the externally terminal full table");
+        assert!(matches!(
+            server.admit_server_request(&successor_requester, &successor, None, &responder, now),
+            Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry"
+            ))
+        ));
+        assert_eq!(
+            server
+                .lifecycle_snapshot()
+                .expect("snapshot after terminal same-roster rejection"),
+            terminal_predecessor,
+            "external terminality alone cannot advance a responder generation"
+        );
+
+        let changed_roster = vec![successor_requester.clone()];
+        let changed_digest = canonical_merge_sidecar_roster_digest(&changed_roster);
+        let mut server = server
+            .rehydrate_with_exact_geometry(
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                MergeSidecarLimits::defaults(),
+                changed_roster.len(),
+                changed_digest,
+                now,
+            )
+            .expect("a certified changed roster advances the terminal responder generation");
+        let mut successor_routes =
+            NetworkReplyRouteTestFixture::new(peer(b"generation rollover successor reply hub"));
+        let successor_route = successor_routes.mint(successor_requester.clone());
+        let ServerRequestAdmission::GenerationHint(post) = server
+            .admit_server_request(
+                &successor_requester,
+                &successor,
+                Some(&successor_route),
+                &responder,
+                now,
+            )
+            .expect("the old-generation successor receives the changed-roster fence")
+        else {
+            panic!("the old-generation successor must receive a Hint")
+        };
+        let CertifiedMergeSidecarMessage::GenerationHint(hint) = Arc::unwrap_or_clone(post.message)
+        else {
+            panic!("changed-roster generation rollover must emit a Hint")
         };
         assert_eq!(hint.current_generation, service_generation(2));
+        assert!(
+            post.reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&successor_route))
+        );
         assert_eq!(server.server_service_generation, hint.current_generation);
         assert!(server.server_streams.is_empty());
         assert!(server.server_request_gates.is_empty());
@@ -12781,8 +14150,12 @@ mod tests {
         let before = server
             .lifecycle_snapshot()
             .expect("snapshot the full server generation");
+        let changed_roster = vec![peer(b"generation overflow changed roster")];
         assert!(matches!(
-            server.roll_server_service_generation(),
+            server.transition_server_service_generation(
+                changed_roster.len(),
+                canonical_merge_sidecar_roster_digest(&changed_roster),
+            ),
             Err(MergeSidecarError::Capacity(
                 "server service generation exhausted"
             ))
@@ -12797,7 +14170,7 @@ mod tests {
     }
 
     #[test]
-    fn full_server_table_rolls_only_after_terminal_state_and_rejects_active_state_atomically() {
+    fn full_server_table_never_advances_generation_without_a_changed_roster() {
         let (_, first_requester, _, first, now) = start_session(1, 1);
         let responder = first.responder.clone();
         let limits = MergeSidecarLimits::defaults();
@@ -12807,7 +14180,7 @@ mod tests {
             DEFAULT_REPLY_SOURCE_CAPACITY,
             limits,
             1,
-            roster_digest,
+            roster_digest.clone(),
         )
         .expect("construct a one-requester responder table");
         assert!(matches!(
@@ -12824,11 +14197,23 @@ mod tests {
             b"active full-table extra request",
             1,
         );
+        let reply_hub = peer(b"full-table extra requester reply hub");
+        let mut reply_routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            reply_hub.clone(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+        );
+        let extra_reply_route = reply_routes.mint_via(extra_requester.clone(), reply_hub);
         let active_snapshot = server
             .lifecycle_snapshot()
             .expect("snapshot the active full table");
         assert!(matches!(
-            server.admit_server_request(&extra_requester, &extra, None, &responder, now),
+            server.admit_server_request(
+                &extra_requester,
+                &extra,
+                Some(&extra_reply_route),
+                &responder,
+                now,
+            ),
             Err(MergeSidecarError::Capacity(
                 "server semantic requester geometry"
             ))
@@ -12859,19 +14244,78 @@ mod tests {
         server.confirm_closed_server_prefix_handoff();
         assert!(server.server_generation_is_terminal());
 
-        let post = match server
-            .admit_server_request(&extra_requester, &extra, None, &responder, now)
-            .expect("the full terminal table rolls atomically")
-        {
-            ServerRequestAdmission::GenerationHint(post) => post,
-            ServerRequestAdmission::Materialize | ServerRequestAdmission::Existing => {
-                panic!("the triggering old-generation request receives the successor fence")
-            }
+        let terminal_snapshot = server
+            .lifecycle_snapshot()
+            .expect("snapshot the full terminal table");
+        assert!(matches!(
+            server.admit_server_request(
+                &extra_requester,
+                &extra,
+                Some(&extra_reply_route),
+                &responder,
+                now,
+            ),
+            Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry"
+            ))
+        ));
+        assert_eq!(
+            server
+                .lifecycle_snapshot()
+                .expect("snapshot after terminal-state capacity rejection"),
+            terminal_snapshot,
+            "terminal exhaustion must not clear streams or advance the responder generation"
+        );
+        assert!(matches!(
+            server.transition_server_service_generation(1, roster_digest),
+            Err(MergeSidecarError::Capacity(
+                "server service generation requires a changed roster identity"
+            ))
+        ));
+        assert_eq!(
+            server
+                .lifecycle_snapshot()
+                .expect("snapshot after same-roster transition rejection"),
+            terminal_snapshot,
+            "even an explicit same-roster transition is fail-atomic"
+        );
+
+        let changed_roster = vec![extra_requester.clone()];
+        let changed_digest = canonical_merge_sidecar_roster_digest(&changed_roster);
+        let mut server = server
+            .rehydrate_with_exact_geometry(
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+                changed_roster.len(),
+                changed_digest,
+                now,
+            )
+            .expect("a certified changed roster advances the terminal responder generation");
+        assert_eq!(server.server_service_generation, service_generation(2));
+        assert!(server.server_streams.is_empty());
+        assert!(server.server_request_gates.is_empty());
+
+        let ServerRequestAdmission::GenerationHint(post) = server
+            .admit_server_request(
+                &extra_requester,
+                &extra,
+                Some(&extra_reply_route),
+                &responder,
+                now,
+            )
+            .expect("old-generation traffic receives the changed-roster fence")
+        else {
+            panic!("changed-roster stale traffic must receive a GenerationHint")
         };
-        assert!(post.reply_route.is_none());
+        assert!(
+            post.reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&extra_reply_route)),
+            "the changed-roster fence retains the triggering authenticated route"
+        );
         let CertifiedMergeSidecarMessage::GenerationHint(hint) = Arc::unwrap_or_clone(post.message)
         else {
-            panic!("terminal compaction emits a GenerationHint")
+            panic!("changed-roster stale traffic emits a GenerationHint")
         };
         assert_eq!(
             hint.observed_generation,
@@ -13433,7 +14877,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_v2_roundtrip_and_restore_enforce_gate_and_attempt_bounds_separately() {
+    fn lifecycle_v3_roundtrip_and_restore_enforce_gate_and_attempt_bounds_separately() {
         let (_, requester, _, request, now) = start_session(1, 1);
         let responder = request.responder.clone();
         let source_capacity = 2;
@@ -13475,7 +14919,7 @@ mod tests {
         server.cancel_unmaterialized_server_request(&selected.requester, &selected.request);
         let snapshot = server
             .lifecycle_snapshot()
-            .expect("capture V2 split-capacity snapshot");
+            .expect("capture V3 split-capacity snapshot");
         assert_eq!(snapshot.payload.server_request_gates.len(), 1);
         assert_eq!(snapshot.payload.server_request_gates[0].attempts.len(), 2);
         assert_eq!(
@@ -13492,11 +14936,11 @@ mod tests {
         .expect("matching restore geometry");
         restored
             .restore_lifecycle_snapshot(snapshot.clone(), now)
-            .expect("roundtrip valid V2 snapshot");
+            .expect("roundtrip valid V3 snapshot");
         assert_eq!(
             restored
                 .lifecycle_snapshot()
-                .expect("capture restored V2 snapshot"),
+                .expect("capture restored V3 snapshot"),
             snapshot
         );
 
@@ -13512,7 +14956,7 @@ mod tests {
         over_gate.geometry.server_request_gate_capacity = 0;
         assert!(matches!(
             gate_limited
-                .restore_lifecycle_snapshot(MergeSidecarLifecycleSnapshotV2::new(over_gate), now),
+                .restore_lifecycle_snapshot(MergeSidecarLifecycleSnapshotV3::new(over_gate), now),
             Err(MergeSidecarError::LifecycleJournal(ref error))
                 if error.contains("unsupported lifecycle journal version or geometry drift")
         ));
@@ -13529,7 +14973,7 @@ mod tests {
         over_attempt.geometry.server_request_attempt_capacity = 1;
         assert!(matches!(
             attempt_limited.restore_lifecycle_snapshot(
-                MergeSidecarLifecycleSnapshotV2::new(over_attempt),
+                MergeSidecarLifecycleSnapshotV3::new(over_attempt),
                 now,
             ),
             Err(MergeSidecarError::LifecycleJournal(ref error))
@@ -13584,6 +15028,50 @@ mod tests {
         }
         MergeSidecarLifecycleJournal::sync_directory(&journal_directory)
             .expect("sync retired lifecycle mutation");
+        drop(server);
+
+        assert!(matches!(
+            MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("migration is not supported")
+        ));
+    }
+
+    #[test]
+    fn legacy_lifecycle_v2_snapshot_is_rejected_without_layout_guessing() {
+        let temp = tempfile::tempdir().expect("temporary lifecycle root");
+        let limits = MergeSidecarLimits::defaults();
+        let server =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("open current lifecycle journal");
+        let current = server
+            .lifecycle_snapshot()
+            .expect("capture current lifecycle payload")
+            .payload;
+        let legacy = UnsupportedMergeSidecarLifecycleSnapshotV2::new(
+            UnsupportedMergeSidecarLifecyclePayloadV2 {
+                version: 2,
+                geometry: current.geometry,
+                next_stream_epoch: current.next_stream_epoch,
+                server_service_generation: current.server_service_generation,
+                materialization_requester_cursor: current.materialization_requester_cursor,
+                request_streams: current.request_streams,
+                server_streams: current.server_streams,
+                server_request_gates: current.server_request_gates,
+            },
+        );
+        let legacy_bytes = norito::to_bytes(&legacy).expect("encode legacy V2 fixture");
+        let journal = server
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable transport owns lifecycle journal");
+        fs::write(journal.state_path(), legacy_bytes).expect("install legacy V2 lifecycle bytes");
+        MergeSidecarLifecycleJournal::sync_directory(&journal.directory)
+            .expect("sync retired V2 lifecycle mutation");
         drop(server);
 
         assert!(matches!(
@@ -15799,11 +17287,21 @@ mod tests {
         let now = Instant::now();
         let reply_source_capacity = DEFAULT_REPLY_SOURCE_CAPACITY;
         let limits = MergeSidecarLimits::defaults();
-        let mut transport =
-            MergeSidecarTransport::open_durable(temp.path(), reply_source_capacity, limits)
-                .expect("open durable churn fixture");
-
         let churn = MAX_CERTIFIED_MERGE_SEMANTIC_PEERS;
+        let initial_server_roster = (0..churn)
+            .map(|index| peer(format!("semantic requester {index}").as_bytes()))
+            .collect::<Vec<_>>();
+        let initial_server_roster_digest =
+            canonical_merge_sidecar_roster_digest(&initial_server_roster);
+        let mut transport = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            reply_source_capacity,
+            limits,
+            initial_server_roster.len(),
+            initial_server_roster_digest,
+        )
+        .expect("open durable churn fixture");
+
         let mut allocated_epochs = BTreeSet::new();
         for index in 0..churn {
             let responder = peer(format!("semantic responder {index}").as_bytes());
@@ -15847,8 +17345,8 @@ mod tests {
         let (_, _, _, base_request, _) = start_session(1, 1);
         let local_peer = base_request.responder.clone();
         let mut delayed_request = None;
-        for index in 0..MAX_CERTIFIED_MERGE_SEMANTIC_PEERS {
-            let requester = peer(format!("semantic requester {index}").as_bytes());
+        for requester in &initial_server_roster {
+            let requester = requester.clone();
             let request = routed_server_request(&base_request, requester.clone(), b"semantic", 1);
             assert!(matches!(
                 transport
@@ -15881,25 +17379,68 @@ mod tests {
         let extra_requester = peer(b"semantic requester beyond roster");
         let mut extra_request =
             routed_server_request(&base_request, extra_requester.clone(), b"extra", 1);
-        let hint = match transport
-            .admit_server_request(&extra_requester, &extra_request, None, &local_peer, now)
-            .expect("a full terminal table compacts before admitting another requester")
-        {
-            ServerRequestAdmission::GenerationHint(post) => {
-                assert!(
-                    post.reply_route.is_none(),
-                    "generation compaction emits route-free Consensus control"
-                );
-                let CertifiedMergeSidecarMessage::GenerationHint(hint) =
-                    Arc::unwrap_or_clone(post.message)
-                else {
-                    unreachable!("generation compaction emits an exact Hint")
-                };
-                hint
-            }
-            ServerRequestAdmission::Materialize | ServerRequestAdmission::Existing => {
-                panic!("the triggering old-generation request must receive the durable fence")
-            }
+        let full_terminal_snapshot = transport
+            .lifecycle_snapshot()
+            .expect("snapshot the full terminal server table");
+        assert!(matches!(
+            transport.admit_server_request(
+                &extra_requester,
+                &extra_request,
+                None,
+                &local_peer,
+                now,
+            ),
+            Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry"
+            ))
+        ));
+        assert_eq!(
+            transport
+                .lifecycle_snapshot()
+                .expect("snapshot after terminal server-capacity rejection"),
+            full_terminal_snapshot,
+            "same-roster peer churn cannot advance a responder generation"
+        );
+
+        let mut changed_server_roster = initial_server_roster.clone();
+        changed_server_roster[0] = extra_requester.clone();
+        let changed_server_roster_digest =
+            canonical_merge_sidecar_roster_digest(&changed_server_roster);
+        transport = transport
+            .rehydrate_with_exact_geometry(
+                reply_source_capacity,
+                limits,
+                changed_server_roster.len(),
+                changed_server_roster_digest.clone(),
+                now,
+            )
+            .expect("a certified changed roster advances the terminal responder generation");
+        let mut stale_routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            peer(b"durable churn stale reply hub"),
+            reply_source_capacity,
+        );
+        let extra_route = stale_routes.mint(extra_requester.clone());
+        let ServerRequestAdmission::GenerationHint(post) = transport
+            .admit_server_request(
+                &extra_requester,
+                &extra_request,
+                Some(&extra_route),
+                &local_peer,
+                now,
+            )
+            .expect("old-generation traffic receives the changed-roster fence")
+        else {
+            panic!("changed-roster stale traffic must receive a GenerationHint")
+        };
+        assert!(
+            post.reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&extra_route)),
+            "the stale fence retains the exact authenticated delivery"
+        );
+        let CertifiedMergeSidecarMessage::GenerationHint(hint) = Arc::unwrap_or_clone(post.message)
+        else {
+            unreachable!("changed-roster stale traffic emits an exact Hint")
         };
         assert_eq!(
             hint.observed_generation,
@@ -15921,9 +17462,16 @@ mod tests {
 
         let (delayed_requester, delayed_request) =
             delayed_request.expect("retain one compacted request");
+        let delayed_route = stale_routes.mint(delayed_requester.clone());
         assert!(matches!(
             transport
-                .admit_server_request(&delayed_requester, &delayed_request, None, &local_peer, now,)
+                .admit_server_request(
+                    &delayed_requester,
+                    &delayed_request,
+                    Some(&delayed_route),
+                    &local_peer,
+                    now,
+                )
                 .expect("a delayed compacted request is answered statelessly"),
             ServerRequestAdmission::GenerationHint(_)
         ));
@@ -15961,9 +17509,14 @@ mod tests {
         let durable_epoch_high_water = transport.next_stream_epoch;
         drop(transport);
 
-        let mut restarted =
-            MergeSidecarTransport::open_durable(temp.path(), reply_source_capacity, limits)
-                .expect("restore compacted semantic streams");
+        let mut restarted = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            reply_source_capacity,
+            limits,
+            changed_server_roster.len(),
+            changed_server_roster_digest,
+        )
+        .expect("restore compacted semantic streams under the changed roster");
         assert_eq!(
             restarted.request_streams.len(),
             MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
@@ -16034,7 +17587,7 @@ mod tests {
         let mut oversized_requesters = snapshot.payload.clone();
         oversized_requesters
             .request_streams
-            .push(RequestStreamLifecycleV2 {
+            .push(RequestStreamLifecycleV3 {
                 responder: peer(b"oversized durable responder"),
                 service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
                 stream_epoch: stream_epoch(snapshot.payload.next_stream_epoch + 1),
@@ -16046,7 +17599,7 @@ mod tests {
             .expect("construct fresh restore target");
         assert!(matches!(
             fresh.restore_lifecycle_snapshot(
-                MergeSidecarLifecycleSnapshotV2::new(oversized_requesters),
+                MergeSidecarLifecycleSnapshotV3::new(oversized_requesters),
                 now,
             ),
             Err(MergeSidecarError::LifecycleJournal(ref error))
@@ -16058,7 +17611,7 @@ mod tests {
         for index in 0..MAX_CERTIFIED_MERGE_SEMANTIC_PEERS {
             oversized_responders
                 .server_streams
-                .push(ServerStreamLifecycleV2 {
+                .push(ServerStreamLifecycleV3 {
                     requester: peer(format!("oversized durable requester {index}").as_bytes()),
                     service_generation: server_service_generation,
                     stream_epoch: stream_epoch(1),
@@ -16068,7 +17621,7 @@ mod tests {
         }
         assert!(matches!(
             fresh.restore_lifecycle_snapshot(
-                MergeSidecarLifecycleSnapshotV2::new(oversized_responders),
+                MergeSidecarLifecycleSnapshotV3::new(oversized_responders),
                 now,
             ),
             Err(MergeSidecarError::LifecycleJournal(ref error))
@@ -16099,10 +17652,11 @@ mod tests {
         let before = server
             .lifecycle_snapshot()
             .expect("snapshot before obstructed rollover");
+        let changed_roster = vec![peer(b"durable rollover changed roster")];
         server.obstruct_lifecycle_journal_temp_for_test();
 
         assert!(matches!(
-            server.roll_server_service_generation_for_test(),
+            server.transition_server_service_generation_for_test(&changed_roster),
             Err(MergeSidecarError::LifecycleJournal(_))
         ));
         assert_eq!(
@@ -16118,6 +17672,12 @@ mod tests {
             .lifecycle_journal
             .as_ref()
             .expect("durable server retains its lifecycle journal");
+        assert!(matches!(
+            journal.load(),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("unsafe lifecycle journal temp artifact")
+        ));
+        fs::remove_dir(journal.temp_path()).expect("remove the injected state obstruction");
         assert_eq!(
             journal
                 .load()
@@ -16125,7 +17685,6 @@ mod tests {
                 .expect("the predecessor snapshot remains durable"),
             before
         );
-        fs::remove_dir(journal.temp_path()).expect("remove the injected state obstruction");
         drop(server);
         let mut restarted =
             MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
@@ -16146,7 +17705,7 @@ mod tests {
         );
 
         restarted
-            .roll_server_service_generation_for_test()
+            .transition_server_service_generation_for_test(&changed_roster)
             .expect("commit the complete successor after recovery");
         let successor = restarted
             .lifecycle_snapshot()
@@ -16170,7 +17729,923 @@ mod tests {
     }
 
     #[test]
-    fn durable_lifecycle_rejects_missing_sole_v2_state() {
+    fn durable_lifecycle_v3_root_high_water_is_exact_monotonic_and_noop_stable() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let limits = MergeSidecarLimits::defaults();
+        let mut transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize the V3 lifecycle pair");
+        let (initial, marker) = read_lifecycle_pair(&transport);
+        assert_eq!(initial.payload.root_generation, 1);
+        assert_eq!(marker.version, LIFECYCLE_JOURNAL_VERSION_V3);
+        assert!(marker.matches(&initial));
+        let state_path = transport.lifecycle_journal_state_path_for_test();
+        let root_path = transport.lifecycle_root_high_water_path_for_test();
+        let initial_state_bytes = fs::read(&state_path).expect("read initial lifecycle state");
+        let initial_root_bytes = fs::read(&root_path).expect("read initial lifecycle root");
+
+        transport
+            .persist_lifecycle_state()
+            .expect("an unchanged snapshot is a durable no-op");
+        assert_eq!(
+            fs::read(&state_path).expect("reread no-op lifecycle state"),
+            initial_state_bytes
+        );
+        assert_eq!(
+            fs::read(&root_path).expect("reread no-op lifecycle root"),
+            initial_root_bytes
+        );
+        drop(transport);
+
+        let mut restarted =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("an equal-geometry restart is also a durable no-op");
+        assert_eq!(
+            fs::read(&state_path).expect("read restarted lifecycle state"),
+            initial_state_bytes
+        );
+        assert_eq!(
+            fs::read(&root_path).expect("read restarted lifecycle root"),
+            initial_root_bytes
+        );
+
+        let (_, requester, _, request, now) = start_session(1, 1);
+        let responder = request.responder.clone();
+        assert!(matches!(
+            restarted
+                .admit_server_request(&requester, &request, None, &responder, now)
+                .expect("commit one semantic responder occurrence"),
+            ServerRequestAdmission::Materialize
+        ));
+        let (advanced, advanced_marker) = read_lifecycle_pair(&restarted);
+        assert_eq!(advanced.payload.root_generation, 2);
+        assert!(advanced_marker.matches(&advanced));
+        let advanced_state_path = restarted.lifecycle_journal_state_path_for_test();
+        assert_ne!(
+            advanced_state_path, state_path,
+            "successive generations alternate immutable state slots"
+        );
+        let advanced_state_bytes =
+            fs::read(&advanced_state_path).expect("read advanced lifecycle state");
+        let advanced_root_bytes = fs::read(&root_path).expect("read advanced lifecycle root");
+        restarted
+            .persist_lifecycle_state()
+            .expect("repeating the advanced snapshot is a no-op");
+        assert_eq!(
+            fs::read(&advanced_state_path).expect("reread advanced lifecycle state"),
+            advanced_state_bytes
+        );
+        assert_eq!(
+            fs::read(&root_path).expect("reread advanced lifecycle root"),
+            advanced_root_bytes
+        );
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_bootstrap_recovers_first_commit_and_rejects_missing_roots() {
+        let limits = MergeSidecarLimits::defaults();
+
+        {
+            let temp = tempfile::tempdir().expect("temp dir");
+            let fixture = MergeSidecarTransport::with_limits(DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("construct an empty first-commit projection");
+            let (journal, restored) = MergeSidecarLifecycleJournal::open(
+                temp.path(),
+                fixture
+                    .lifecycle_protocol_max_snapshot_bytes()
+                    .expect("derive lifecycle snapshot bound"),
+            )
+            .expect("publish the durable bootstrap sentinel");
+            assert!(restored.is_none());
+            let bootstrap = journal
+                .decode_root_high_water(&journal.root_high_water_path())
+                .expect("decode the bootstrap sentinel");
+            assert!(bootstrap.is_bootstrap());
+            let mut candidate = fixture
+                .lifecycle_snapshot()
+                .expect("snapshot the empty first generation");
+            candidate.payload.root_generation = 1;
+            candidate.payload_hash = HashOf::new(&candidate.payload);
+            let state_path = journal.state_path_for_generation(1);
+            fs::write(
+                &state_path,
+                norito::to_bytes(&candidate).expect("encode first-generation candidate"),
+            )
+            .expect("simulate state publication before the first root commit");
+            let root_path = journal.root_high_water_path();
+            let bootstrap_bytes = fs::read(&root_path).expect("read bootstrap root");
+            drop(journal);
+
+            let recovered = MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            )
+            .expect("validate and select the complete first-generation candidate");
+            let (snapshot, marker) = read_lifecycle_pair(&recovered);
+            assert_eq!(snapshot, candidate);
+            assert!(marker.matches(&snapshot));
+            assert_ne!(
+                fs::read(root_path).expect("read committed first-generation root"),
+                bootstrap_bytes,
+                "first-generation validation replaces the bootstrap commit point"
+            );
+            assert!(state_path.is_file());
+        }
+
+        {
+            let temp = tempfile::tempdir().expect("temp dir");
+            let transport = MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            )
+            .expect("initialize missing-root fixture");
+            let state_path = transport.lifecycle_journal_state_path_for_test();
+            let root_path = transport.lifecycle_root_high_water_path_for_test();
+            let state_bytes = fs::read(&state_path).expect("read committed generation-one state");
+            drop(transport);
+            fs::remove_file(&root_path).expect("delete the committed root");
+            assert!(matches!(
+                MergeSidecarTransport::open_durable(
+                    temp.path(),
+                    DEFAULT_REPLY_SOURCE_CAPACITY,
+                    limits,
+                ),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains("directory survived without its root high-water")
+            ));
+            assert_eq!(
+                fs::read(state_path).expect("missing-root rejection preserves committed state"),
+                state_bytes
+            );
+            assert!(!root_path.exists());
+        }
+
+        {
+            let temp = tempfile::tempdir().expect("temp dir");
+            fs::create_dir(temp.path().join(LIFECYCLE_JOURNAL_DIR))
+                .expect("install an ambiguous rootless lifecycle directory");
+            assert!(matches!(
+                MergeSidecarTransport::open_durable(
+                    temp.path(),
+                    DEFAULT_REPLY_SOURCE_CAPACITY,
+                    limits,
+                ),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains("directory survived without its root high-water")
+            ));
+            assert!(
+                temp.path().join(LIFECYCLE_JOURNAL_DIR).is_dir(),
+                "rootless directory remains for operator inspection"
+            );
+        }
+
+        {
+            let temp = tempfile::tempdir().expect("temp dir");
+            let fixture = MergeSidecarTransport::with_limits(DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("construct bootstrap-only fixture");
+            let (journal, restored) = MergeSidecarLifecycleJournal::open(
+                temp.path(),
+                fixture
+                    .lifecycle_protocol_max_snapshot_bytes()
+                    .expect("derive lifecycle snapshot bound"),
+            )
+            .expect("publish bootstrap sentinel and directory");
+            assert!(restored.is_none());
+            let root_path = journal.root_high_water_path();
+            let bootstrap_bytes = fs::read(&root_path).expect("read bootstrap sentinel");
+            let directory = journal.directory.clone();
+            drop(journal);
+            fs::remove_dir(&directory).expect("simulate crash before directory creation");
+            let recovered = MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            )
+            .expect("bootstrap sentinel uniquely authorizes directory recreation");
+            assert_eq!(read_lifecycle_pair(&recovered).0.payload.root_generation, 1);
+            assert_ne!(
+                fs::read(root_path).expect("read initialized root"),
+                bootstrap_bytes
+            );
+        }
+
+        {
+            let temp = tempfile::tempdir().expect("temp dir");
+            let mut transport = MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            )
+            .expect("initialize non-initial state-without-root fixture");
+            let (_, requester, _, request, now) = start_session(1, 1);
+            let responder = request.responder.clone();
+            transport
+                .admit_server_request(&requester, &request, None, &responder, now)
+                .expect("publish generation two");
+            let root_path = transport.lifecycle_root_high_water_path_for_test();
+            let directory = transport
+                .lifecycle_journal_state_path_for_test()
+                .parent()
+                .expect("lifecycle state has a directory")
+                .to_path_buf();
+            drop(transport);
+            fs::remove_file(root_path).expect("remove the non-initial root high-water");
+            assert!(matches!(
+                MergeSidecarTransport::open_durable(
+                    temp.path(),
+                    DEFAULT_REPLY_SOURCE_CAPACITY,
+                    limits,
+                ),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains("directory survived without its root high-water")
+            ));
+            assert_eq!(
+                fs::read_dir(directory)
+                    .expect("inspect retained alternating slots")
+                    .filter_map(Result::ok)
+                    .count(),
+                1,
+                "a completed commit retires its predecessor slot"
+            );
+        }
+
+        {
+            let temp = tempfile::tempdir().expect("temp dir");
+            let transport = MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            )
+            .expect("initialize root-without-directory fixture");
+            let state_path = transport.lifecycle_journal_state_path_for_test();
+            let directory = state_path
+                .parent()
+                .expect("lifecycle state has a directory")
+                .to_path_buf();
+            let root_path = transport.lifecycle_root_high_water_path_for_test();
+            let root_bytes = fs::read(&root_path).expect("read retained root high-water");
+            drop(transport);
+            fs::remove_file(state_path).expect("remove lifecycle state");
+            fs::remove_dir(directory).expect("remove empty lifecycle directory");
+            assert!(matches!(
+                MergeSidecarTransport::open_durable(
+                    temp.path(),
+                    DEFAULT_REPLY_SOURCE_CAPACITY,
+                    limits,
+                ),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains("committed lifecycle root high-water survived without")
+            ));
+            assert_eq!(
+                fs::read(root_path).expect("root survives rejected open"),
+                root_bytes
+            );
+        }
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_rejects_crossed_bootstrap_and_committed_root_shapes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let limits = MergeSidecarLimits::defaults();
+        let transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize malformed-root fixture");
+        let (snapshot, marker) = read_lifecycle_pair(&transport);
+        let state_path = transport.lifecycle_journal_state_path_for_test();
+        let state_bytes = fs::read(&state_path).expect("read committed state");
+        let root_path = transport.lifecycle_root_high_water_path_for_test();
+        let committed_hash = marker
+            .snapshot_hash
+            .expect("committed marker carries its snapshot hash");
+        drop(transport);
+
+        for malformed in [
+            MergeSidecarLifecycleRootHighWaterV3 {
+                version: LIFECYCLE_JOURNAL_VERSION_V3,
+                root_generation: snapshot.payload.root_generation,
+                snapshot_hash: None,
+            },
+            MergeSidecarLifecycleRootHighWaterV3 {
+                version: LIFECYCLE_JOURNAL_VERSION_V3,
+                root_generation: 0,
+                snapshot_hash: Some(committed_hash),
+            },
+        ] {
+            fs::write(
+                &root_path,
+                norito::to_bytes(&malformed).expect("encode malformed root shape"),
+            )
+            .expect("install malformed root shape");
+            assert!(matches!(
+                MergeSidecarTransport::open_durable(
+                    temp.path(),
+                    DEFAULT_REPLY_SOURCE_CAPACITY,
+                    limits,
+                ),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains("malformed lifecycle root high-water")
+            ));
+            assert_eq!(
+                fs::read(&state_path).expect("malformed root rejection preserves state"),
+                state_bytes
+            );
+        }
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_recovers_regular_temps_and_rejects_unsafe_artifacts() {
+        let limits = MergeSidecarLimits::defaults();
+        for root_temp in [false, true] {
+            let temp = tempfile::tempdir().expect("temp dir");
+            let transport = MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            )
+            .expect("initialize temp-artifact fixture");
+            let journal = transport
+                .lifecycle_journal
+                .as_ref()
+                .expect("durable fixture owns its journal");
+            let artifact = if root_temp {
+                journal.root_high_water_temp_path()
+            } else {
+                journal.temp_path()
+            };
+            let state_path = journal.state_path();
+            let root_path = journal.root_high_water_path();
+            let state_bytes = fs::read(&state_path).expect("read committed state");
+            let root_bytes = fs::read(&root_path).expect("read committed root");
+            let bytes = b"incomplete lifecycle commit";
+            drop(transport);
+            fs::write(&artifact, bytes).expect("install an incomplete regular temp file");
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("the exact committed pair discards its uncommitted regular temp");
+            assert!(
+                !artifact.exists(),
+                "recovery removes only the known regular temp artifact"
+            );
+            assert_eq!(
+                fs::read(state_path).expect("reread committed state"),
+                state_bytes
+            );
+            assert_eq!(
+                fs::read(root_path).expect("reread committed root"),
+                root_bytes
+            );
+        }
+
+        for root_temp in [false, true] {
+            let temp = tempfile::tempdir().expect("temp dir");
+            let transport = MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            )
+            .expect("initialize unsafe-temp fixture");
+            let journal = transport
+                .lifecycle_journal
+                .as_ref()
+                .expect("durable fixture owns its journal");
+            let artifact = if root_temp {
+                journal.root_high_water_temp_path()
+            } else {
+                journal.temp_path()
+            };
+            let expected = if root_temp {
+                "root high-water temp"
+            } else {
+                "state temp"
+            };
+            drop(transport);
+            fs::create_dir(&artifact).expect("install an unsafe temp directory");
+            assert!(matches!(
+                MergeSidecarTransport::open_durable(
+                    temp.path(),
+                    DEFAULT_REPLY_SOURCE_CAPACITY,
+                    limits,
+                ),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains(expected)
+            ));
+            assert!(artifact.is_dir(), "unsafe temp is never removed implicitly");
+        }
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize unknown-artifact fixture");
+        let unknown = transport
+            .lifecycle_journal_state_path_for_test()
+            .with_file_name("untrusted.norito");
+        drop(transport);
+        fs::write(&unknown, b"unknown").expect("install unknown lifecycle artifact");
+        assert!(matches!(
+            MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("unknown artifact in V3 lifecycle directory")
+        ));
+        assert_eq!(
+            fs::read(&unknown).expect("unknown artifact remains for operator inspection"),
+            b"unknown"
+        );
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_validates_semantics_before_retiring_crash_artifacts() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let limits = MergeSidecarLimits::defaults();
+        let transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize validation-order fixture");
+        let journal = transport
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable fixture owns its journal");
+        let active_path = journal.state_path();
+        let committed_generation = journal
+            .committed
+            .as_ref()
+            .expect("initialized fixture has a committed root")
+            .root_generation;
+        let inactive_path = journal.state_path_for_generation(committed_generation ^ 1);
+        let state_temp = journal.temp_path();
+        let root_path = journal.root_high_water_path();
+        let root_temp = journal.root_high_water_temp_path();
+        let valid_state_bytes = fs::read(&active_path).expect("read valid lifecycle state");
+        let valid_root_bytes = fs::read(&root_path).expect("read valid lifecycle root");
+        let mut invalid_payload = read_lifecycle_pair(&transport).0.payload;
+        invalid_payload
+            .request_streams
+            .push(RequestStreamLifecycleV3 {
+                responder: peer(b"semantically invalid durable responder"),
+                service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
+                stream_epoch: stream_epoch(1),
+                next_sequence: 0,
+                closed_through: 0,
+                acknowledged_through: 0,
+            });
+        let invalid = MergeSidecarLifecycleSnapshotV3::new(invalid_payload);
+        let invalid_state_bytes =
+            norito::to_bytes(&invalid).expect("encode self-consistent invalid state");
+        let invalid_root_bytes =
+            norito::to_bytes(&MergeSidecarLifecycleRootHighWaterV3::new(&invalid))
+                .expect("encode root for self-consistent invalid state");
+        let inactive_bytes = b"retained predecessor for operator recovery";
+        let state_temp_bytes = b"retained incomplete state temp";
+        let root_temp_bytes = b"retained incomplete root temp";
+        drop(transport);
+
+        fs::write(&active_path, &invalid_state_bytes).expect("install invalid selected state");
+        fs::write(&root_path, &invalid_root_bytes).expect("install its matching root");
+        fs::write(&inactive_path, inactive_bytes).expect("install inactive predecessor");
+        fs::write(&state_temp, state_temp_bytes).expect("install regular state temp");
+        fs::write(&root_temp, root_temp_bytes).expect("install regular root temp");
+        assert!(matches!(
+            MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("request stream lifecycle regressed")
+        ));
+        for (path, expected) in [
+            (&active_path, invalid_state_bytes.as_slice()),
+            (&root_path, invalid_root_bytes.as_slice()),
+            (&inactive_path, inactive_bytes.as_slice()),
+            (&state_temp, state_temp_bytes.as_slice()),
+            (&root_temp, root_temp_bytes.as_slice()),
+        ] {
+            assert_eq!(
+                fs::read(path).expect("failed validation preserves every artifact"),
+                expected
+            );
+        }
+
+        fs::write(&active_path, &valid_state_bytes).expect("restore valid selected state");
+        fs::write(&root_path, &valid_root_bytes).expect("restore its matching root");
+        let recovered =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("valid selected pair permits bounded crash cleanup");
+        assert_eq!(
+            fs::read(recovered.lifecycle_journal_state_path_for_test())
+                .expect("reread selected valid state"),
+            valid_state_bytes
+        );
+        assert_eq!(
+            fs::read(recovered.lifecycle_root_high_water_path_for_test())
+                .expect("reread selected valid root"),
+            valid_root_bytes
+        );
+        assert!(!inactive_path.exists());
+        assert!(!state_temp.exists());
+        assert!(!root_temp.exists());
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_rejects_split_generations_and_rehashed_state() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let limits = MergeSidecarLimits::defaults();
+        let mut transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize split-pair fixture");
+        let journal = transport
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable fixture owns its journal");
+        let state_path_generation_one = journal.state_path();
+        let root_path = journal.root_high_water_path();
+        let state_generation_one =
+            fs::read(&state_path_generation_one).expect("read generation-one state");
+        let root_generation_one = fs::read(&root_path).expect("read generation-one root");
+        let snapshot_generation_one = journal
+            .decode_snapshot(&state_path_generation_one)
+            .expect("decode generation-one state");
+
+        let (_, requester, _, request, now) = start_session(1, 1);
+        let responder = request.responder.clone();
+        transport
+            .admit_server_request(&requester, &request, None, &responder, now)
+            .expect("commit generation-two state");
+        let state_path_generation_two = transport.lifecycle_journal_state_path_for_test();
+        assert_ne!(state_path_generation_one, state_path_generation_two);
+        let state_generation_two =
+            fs::read(&state_path_generation_two).expect("read generation-two state");
+        let root_generation_two = fs::read(&root_path).expect("read generation-two root");
+        drop(transport);
+
+        fs::write(&state_path_generation_two, &state_generation_one).expect("install old state");
+        fs::write(&root_path, &root_generation_two).expect("retain new root");
+        assert!(matches!(
+            MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("generation/hash mismatch")
+        ));
+
+        fs::write(&state_path_generation_one, &state_generation_two).expect("install new state");
+        fs::write(&root_path, &root_generation_one).expect("install old root");
+        assert!(matches!(
+            MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("generation/hash mismatch")
+        ));
+
+        let mut rehashed = snapshot_generation_one;
+        rehashed.payload.next_stream_epoch = rehashed
+            .payload
+            .next_stream_epoch
+            .checked_add(1)
+            .expect("test stream epoch remains representable");
+        rehashed.payload_hash = HashOf::new(&rehashed.payload);
+        fs::write(
+            &state_path_generation_one,
+            norito::to_bytes(&rehashed).expect("encode rehashed state"),
+        )
+        .expect("install independently rehashed state");
+        fs::write(&root_path, root_generation_one).expect("retain original root commitment");
+        assert!(matches!(
+            MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("generation/hash mismatch")
+        ));
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_generation_exhaustion_precedes_close_mutation() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let limits = MergeSidecarLimits::defaults();
+        let (_, requester, _, request, now) = start_session(1, 1);
+        let responder = request.responder.clone();
+        let close = close_for_request(&request);
+        let mut transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize maximum-generation fixture");
+        transport
+            .admit_server_request(&requester, &request, None, &responder, now)
+            .expect("persist one responder occurrence");
+        let mut maximum = read_lifecycle_pair(&transport).0;
+        maximum.payload.root_generation = u64::MAX;
+        install_lifecycle_pair(
+            transport
+                .lifecycle_journal
+                .as_ref()
+                .expect("durable fixture owns its journal"),
+            maximum,
+        );
+        let state_path = transport
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable fixture owns its journal")
+            .state_path_for_generation(u64::MAX);
+        let root_path = transport.lifecycle_root_high_water_path_for_test();
+        let maximum_state_bytes = fs::read(&state_path).expect("read maximum-generation state");
+        let maximum_root_bytes = fs::read(&root_path).expect("read maximum-generation root");
+        drop(transport);
+
+        let mut restarted =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("an unchanged maximum-generation pair can reopen");
+        restarted
+            .persist_lifecycle_state()
+            .expect("an unchanged maximum-generation snapshot is a no-op");
+        let before = restarted
+            .lifecycle_snapshot()
+            .expect("snapshot memory before exhausted close");
+        assert!(matches!(
+            restarted.admit_server_close(&requester, &close, None, &responder),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("root generation exhausted")
+        ));
+        assert_eq!(
+            restarted
+                .lifecycle_snapshot()
+                .expect("snapshot memory after exhausted close"),
+            before
+        );
+        assert_eq!(
+            fs::read(&state_path).expect("reread maximum-generation state"),
+            maximum_state_bytes
+        );
+        assert_eq!(
+            fs::read(&root_path).expect("reread maximum-generation root"),
+            maximum_root_bytes
+        );
+        assert!(matches!(
+            restarted.admit_server_close(&requester, &close, None, &responder),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("requires process restart")
+        ));
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_generation_exhaustion_precedes_writer_flush_cas() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let limits = MergeSidecarLimits::defaults();
+        let (_, requester, _, request, now) = start_session(1, 1);
+        let responder = request.responder.clone();
+        let hub = peer(b"maximum-generation flush hub");
+        let mut routes =
+            NetworkReplyRouteTestFixture::with_source_capacity(hub, DEFAULT_REPLY_SOURCE_CAPACITY);
+        let route = routes.mint(requester.clone());
+        let mut transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize maximum-generation flush fixture");
+        assert!(matches!(
+            transport
+                .admit_server_request(&requester, &request, Some(&route), &responder, now)
+                .expect("admit one exact responder occurrence"),
+            ServerRequestAdmission::Materialize
+        ));
+        transport
+            .enqueue_response(request.clone(), Some(route), vec![0xA5], now)
+            .expect("materialize one response chunk");
+        let post = transport
+            .drain_outbound_chunks_durable(1, now)
+            .expect("publish the pending chunk identity")
+            .pop()
+            .expect("emit one response chunk");
+        let admission = reply_chunk_admission(&post);
+
+        let mut maximum = read_lifecycle_pair(&transport).0;
+        maximum.payload.root_generation = u64::MAX;
+        let marker = install_lifecycle_pair(
+            transport
+                .lifecycle_journal
+                .as_ref()
+                .expect("durable fixture owns its journal"),
+            maximum,
+        );
+        transport
+            .lifecycle_journal
+            .as_mut()
+            .expect("durable fixture owns its journal")
+            .committed = Some(marker);
+        let before = transport
+            .lifecycle_snapshot()
+            .expect("snapshot the maximum-generation pending flush");
+        let key = (requester.clone(), request.request_id);
+        let source = ServerRequestSource::Authenticated(
+            post.reply_route
+                .as_ref()
+                .expect("response retains its exact route")
+                .source_key(),
+        );
+        let pending_before = transport.server_request_gates[&key].attempts[&source].clone();
+
+        assert!(matches!(
+            transport.acknowledge_outbound_chunk(&admission, now),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("root generation exhausted")
+        ));
+        assert_eq!(
+            transport
+                .lifecycle_snapshot()
+                .expect("snapshot after rejected writer flush"),
+            before
+        );
+        let pending_after = &transport.server_request_gates[&key].attempts[&source];
+        assert_eq!(pending_after.cursor, pending_before.cursor);
+        assert_eq!(
+            pending_after.pending_flush_chunk,
+            pending_before.pending_flush_chunk
+        );
+        assert!(
+            admission.flush_identity.claim_writer_flush_once(),
+            "generation preflight must fail before claiming the writer-flush CAS"
+        );
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_recovers_predecessor_between_state_and_root_publication() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let limits = MergeSidecarLimits::defaults();
+        let mut transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize split-publication fixture");
+        let (_, requester, _, request, now) = start_session(1, 1);
+        let responder = request.responder.clone();
+        transport
+            .admit_server_request(&requester, &request, None, &responder, now)
+            .expect("persist active predecessor ownership");
+        let before = transport
+            .lifecycle_snapshot()
+            .expect("snapshot the predecessor in memory");
+        let root_path = transport.lifecycle_root_high_water_path_for_test();
+        let predecessor_root = fs::read(&root_path).expect("read predecessor root high-water");
+        transport.fail_after_lifecycle_state_publish_for_test();
+        let changed_roster = vec![peer(b"split publication successor roster")];
+        let changed_digest = canonical_merge_sidecar_roster_digest(&changed_roster);
+        assert!(matches!(
+            transport.transition_server_service_generation_after_exact_output_fence(
+                changed_roster.len(),
+                changed_digest.clone(),
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("after lifecycle state publication")
+        ));
+        assert_eq!(
+            transport
+                .lifecycle_snapshot()
+                .expect("snapshot memory after split publication"),
+            before,
+            "projection-first rollover cannot publish successor memory on failure"
+        );
+        assert_eq!(
+            fs::read(&root_path).expect("reread predecessor root high-water"),
+            predecessor_root,
+            "the independent root still commits the predecessor"
+        );
+        let journal = transport
+            .lifecycle_journal
+            .as_ref()
+            .expect("failed transport retains its journal");
+        let successor_generation = before
+            .payload
+            .root_generation
+            .checked_add(1)
+            .expect("test generation remains representable");
+        let successor_state = journal
+            .decode_snapshot(&journal.state_path_for_generation(successor_generation))
+            .expect("the successor state was atomically published");
+        let predecessor_marker = journal
+            .decode_root_high_water(&root_path)
+            .expect("the predecessor marker remains canonical");
+        assert!(!predecessor_marker.matches(&successor_state));
+        assert_eq!(
+            journal
+                .load()
+                .expect("the old root selects the predecessor slot")
+                .expect("the predecessor remains committed"),
+            before
+        );
+        assert!(matches!(
+            transport.persist_lifecycle_state(),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("requires process restart")
+        ));
+        drop(transport);
+
+        let mut recovered =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("restart follows the predecessor root and ignores the uncommitted slot");
+        assert_eq!(
+            recovered
+                .lifecycle_snapshot()
+                .expect("snapshot recovered predecessor"),
+            before
+        );
+        assert_eq!(recovered.server_request_gates.len(), 1);
+        recovered
+            .transition_server_service_generation_after_exact_output_fence(
+                changed_roster.len(),
+                changed_digest,
+            )
+            .expect("a later complete commit overwrites the abandoned successor slot");
+        let committed = recovered
+            .lifecycle_snapshot()
+            .expect("snapshot the later complete successor");
+        assert_eq!(committed.payload.root_generation, successor_generation);
+        assert_eq!(
+            committed.payload.server_service_generation,
+            service_generation(2)
+        );
+        assert!(read_lifecycle_pair(&recovered).1.matches(&committed));
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_recovers_successor_after_root_publication() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let limits = MergeSidecarLimits::defaults();
+        let mut transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize post-root-publication fixture");
+        let (_, requester, _, request, now) = start_session(1, 1);
+        let responder = request.responder.clone();
+        transport
+            .admit_server_request(&requester, &request, None, &responder, now)
+            .expect("persist active predecessor ownership");
+        let predecessor = transport
+            .lifecycle_snapshot()
+            .expect("snapshot the predecessor in memory");
+        transport.fail_after_lifecycle_root_publish_for_test();
+        let changed_roster = vec![peer(b"post-root-publication successor roster")];
+        let changed_digest = canonical_merge_sidecar_roster_digest(&changed_roster);
+        assert!(matches!(
+            transport.transition_server_service_generation_after_exact_output_fence(
+                changed_roster.len(),
+                changed_digest.clone(),
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("after lifecycle root publication")
+        ));
+        assert_eq!(
+            transport
+                .lifecycle_snapshot()
+                .expect("snapshot memory after injected post-commit failure"),
+            predecessor,
+            "memory cannot publish a successor after the durable call reports failure"
+        );
+        assert!(matches!(
+            transport
+                .lifecycle_journal
+                .as_ref()
+                .expect("failed transport retains its journal")
+                .load(),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("changed outside the live journal")
+        ));
+        drop(transport);
+
+        let recovered = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            limits,
+            changed_roster.len(),
+            changed_digest,
+        )
+        .expect("restart follows the durable successor root");
+        let successor = recovered
+            .lifecycle_snapshot()
+            .expect("snapshot recovered successor");
+        assert_eq!(
+            successor.payload.root_generation,
+            predecessor
+                .payload
+                .root_generation
+                .checked_add(1)
+                .expect("test generation remains representable")
+        );
+        assert_eq!(
+            successor.payload.server_service_generation,
+            service_generation(2)
+        );
+        assert!(successor.payload.server_streams.is_empty());
+        assert!(successor.payload.server_request_gates.is_empty());
+        assert!(recovered.pending_server_closures.is_empty());
+        assert!(read_lifecycle_pair(&recovered).1.matches(&successor));
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_rejects_missing_state_with_surviving_root_high_water() {
         let temp = tempfile::tempdir().expect("temp dir");
         let limits = MergeSidecarLimits::defaults();
         let transport =
@@ -16190,7 +18665,7 @@ mod tests {
                 limits,
             ),
             Err(MergeSidecarError::LifecycleJournal(ref error))
-                if error.contains("state disappeared during recovery")
+                if error.contains("not both present")
         ));
     }
 
@@ -16215,7 +18690,7 @@ mod tests {
         let mut restore_target = MergeSidecarTransport::new();
         assert!(matches!(
             restore_target.restore_lifecycle_snapshot(
-                MergeSidecarLifecycleSnapshotV2::new(regressed_counter),
+                MergeSidecarLifecycleSnapshotV3::new(regressed_counter),
                 now,
             ),
             Err(MergeSidecarError::LifecycleJournal(ref error))
@@ -16227,7 +18702,7 @@ mod tests {
         duplicate_epoch.request_streams[1].stream_epoch = first_epoch;
         assert!(matches!(
             restore_target.restore_lifecycle_snapshot(
-                MergeSidecarLifecycleSnapshotV2::new(duplicate_epoch),
+                MergeSidecarLifecycleSnapshotV3::new(duplicate_epoch),
                 now,
             ),
             Err(MergeSidecarError::LifecycleJournal(ref error))
@@ -16256,7 +18731,7 @@ mod tests {
             successor_stream_epoch(request.stream_epoch);
         assert!(matches!(
             restore_target.restore_lifecycle_snapshot(
-                MergeSidecarLifecycleSnapshotV2::new(gate_epoch_mismatch),
+                MergeSidecarLifecycleSnapshotV3::new(gate_epoch_mismatch),
                 now,
             ),
             Err(MergeSidecarError::LifecycleJournal(ref error))
@@ -16271,7 +18746,7 @@ mod tests {
             .stream_epoch = successor_stream_epoch(request.stream_epoch);
         assert!(matches!(
             restore_target.restore_lifecycle_snapshot(
-                MergeSidecarLifecycleSnapshotV2::new(marker_epoch_mismatch),
+                MergeSidecarLifecycleSnapshotV3::new(marker_epoch_mismatch),
                 now,
             ),
             Err(MergeSidecarError::LifecycleJournal(ref error))
@@ -16307,10 +18782,10 @@ mod tests {
             .expect("snapshot one authenticated pending response")
             .payload;
 
-        let restore_error = |payload: MergeSidecarLifecyclePayloadV2| {
+        let restore_error = |payload: MergeSidecarLifecyclePayloadV3| {
             let mut target = MergeSidecarTransport::new();
             target
-                .restore_lifecycle_snapshot(MergeSidecarLifecycleSnapshotV2::new(payload), now)
+                .restore_lifecycle_snapshot(MergeSidecarLifecycleSnapshotV3::new(payload), now)
                 .expect_err("corrupt lifecycle state must fail closed")
                 .to_string()
         };
@@ -16320,7 +18795,7 @@ mod tests {
         let first_attempt = gate.attempts[0].clone();
         for index in 0..DEFAULT_REPLY_SOURCE_CAPACITY {
             let mut alternate = first_attempt.clone();
-            alternate.source = DurableServerRequestSourceV2::Authenticated(peer(
+            alternate.source = DurableServerRequestSourceV3::Authenticated(peer(
                 format!("excess durable source {index}").as_bytes(),
             ));
             gate.attempts.push(alternate);
@@ -16339,7 +18814,7 @@ mod tests {
 
         let mut synthetic_with_capacity = baseline.clone();
         synthetic_with_capacity.server_request_gates[0].attempts[0].source =
-            DurableServerRequestSourceV2::Synthetic(requester.clone());
+            DurableServerRequestSourceV3::Synthetic(requester.clone());
         assert!(
             restore_error(synthetic_with_capacity)
                 .contains("durable server source kind differs from its route geometry")
@@ -16348,7 +18823,7 @@ mod tests {
         let mut unaffiliated_synthetic = baseline.clone();
         unaffiliated_synthetic.server_request_gates[0].source_capacity = None;
         unaffiliated_synthetic.server_request_gates[0].attempts[0].source =
-            DurableServerRequestSourceV2::Synthetic(peer(b"wrong durable synthetic requester"));
+            DurableServerRequestSourceV3::Synthetic(peer(b"wrong durable synthetic requester"));
         assert!(
             restore_error(unaffiliated_synthetic)
                 .contains("durable server source kind differs from its route geometry")
@@ -16356,7 +18831,7 @@ mod tests {
 
         let mut terminal_with_pending = baseline.clone();
         terminal_with_pending.server_request_gates[0].attempts[0].cursor =
-            DurableServerResponseCursorV2::Complete;
+            DurableServerResponseCursorV3::Complete;
         assert!(
             restore_error(terminal_with_pending)
                 .contains("terminal durable cursor retained an in-flight chunk")
@@ -16411,22 +18886,24 @@ mod tests {
 
     #[test]
     fn durable_lifecycle_rejects_legacy_stream_state_without_guessing_a_layout() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        fs::create_dir(temp.path().join(LEGACY_LIFECYCLE_JOURNAL_DIRS[0]))
-            .expect("create legacy lifecycle journal directory");
-        assert!(matches!(
-            MergeSidecarTransport::open_durable(
-                temp.path(),
-                DEFAULT_REPLY_SOURCE_CAPACITY,
-                MergeSidecarLimits::defaults(),
-            ),
-            Err(MergeSidecarError::LifecycleJournal(ref error))
-                if error.contains("unsupported legacy lifecycle journal")
-        ));
-        assert!(
-            !temp.path().join(LIFECYCLE_JOURNAL_DIR).exists(),
-            "legacy state must be rejected before a V2 journal is created"
-        );
+        for legacy in LEGACY_LIFECYCLE_JOURNAL_DIRS {
+            let temp = tempfile::tempdir().expect("temp dir");
+            fs::create_dir(temp.path().join(legacy))
+                .expect("create legacy lifecycle journal directory");
+            assert!(matches!(
+                MergeSidecarTransport::open_durable(
+                    temp.path(),
+                    DEFAULT_REPLY_SOURCE_CAPACITY,
+                    MergeSidecarLimits::defaults(),
+                ),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains("unsupported legacy lifecycle journal")
+            ));
+            assert!(
+                !temp.path().join(LIFECYCLE_JOURNAL_DIR).exists(),
+                "V1/V2 state must be rejected before a V3 journal is created"
+            );
+        }
     }
 
     #[test]
@@ -16470,15 +18947,10 @@ mod tests {
             !snapshot.integrity_is_valid(),
             "the semantic mutation must leave the prior payload digest stale"
         );
-        assert!(matches!(
-            journal.persist(&snapshot),
-            Err(MergeSidecarError::LifecycleJournal(ref error))
-                if error.contains("payload digest mismatch")
-        ));
         let canonical =
             norito::to_bytes(&snapshot).expect("mutated snapshot still has canonical Norito bytes");
         assert_eq!(
-            norito::decode_from_bytes::<MergeSidecarLifecycleSnapshotV2>(&canonical)
+            norito::decode_from_bytes::<MergeSidecarLifecycleSnapshotV3>(&canonical)
                 .expect("mutated canonical bytes remain structurally decodable"),
             snapshot
         );
@@ -16707,6 +19179,10 @@ mod tests {
         server
             .enqueue_response(request.clone(), Some(route), vec![0xA7; len], now)
             .expect("materialize durable response");
+        assert!(
+            server.outbound_drain_requires_lifecycle_commit(1),
+            "the first handoff must publish its exact pending identity"
+        );
         let first = server
             .drain_outbound_chunks_durable(1, now)
             .expect("persist pending chunk before handoff")
@@ -16742,6 +19218,10 @@ mod tests {
         restarted
             .enqueue_response(request, Some(rebound), vec![0xA7; len], now)
             .expect("rematerialize identical response");
+        assert!(
+            !restarted.outbound_drain_requires_lifecycle_commit(1),
+            "an exact retry of the already-published pending identity is a journal no-op"
+        );
         let retried = restarted
             .drain_outbound_chunks_durable(1, now)
             .expect("persist retried pending chunk")

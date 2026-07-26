@@ -107,7 +107,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. أرسل المانيفست بترميز base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -174,7 +174,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   و`por_sampling_returns_verified_proofs`.
 - يجب أن تتابع اللوحات للمتابعة:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` و`torii_sorafs_storage_fetch_inflight`
   - عدد النجاح/الفشل PoR وبالتالي عبر `/v1/sorafs/capacity/state`
   - بهدف نشر الترخيص عبر `sorafs_node_deal_publish_total{result=success|failure}`بما في ذلك اتباع هذه التدريبات أن عامل التخزين المتنوع قادر على تخزين البيانات،
 والصمود أمام عمليات إعادة التشغيل، للجميع الحصص المضبوطة، وتوليد إثباتات PoR

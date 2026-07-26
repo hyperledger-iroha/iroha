@@ -78,7 +78,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Base64 エンコードを使用してマニフェストを送信します。
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -138,7 +138,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   ```これには、`pin_fetch_roundtrip`、`pin_survives_restart`、`pin_quota_rejection`、および `por_sampling_returns_verified_proofs` が含まれます。
 - ダッシュボードは以下を追跡する必要があります。
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` および `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` および `torii_sorafs_storage_fetch_inflight`
   - `/v1/sorafs/capacity/state` 経由で PoR 成功/失敗カウンターが表示される
   - `sorafs_node_deal_publish_total{result=success|failure}` を介した決済公開試行
 

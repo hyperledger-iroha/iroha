@@ -69,21 +69,23 @@ export function validateReleaseOpenApiDocument(
 }
 
 /**
- * Validate schema-compatible OpenAPI generator provenance.
+ * Validate the V2 OpenAPI generator provenance contract.
  *
- * Legacy version-1 manifests without `generator_dirty` remain clean manifests.
- * Dirty development manifests must be unsigned, omit `generator_commit`, and
+ * Dirty development manifests must be unsigned, omit no required fields, and
  * bind the exact non-generated source state with a lowercase SHA-256 digest.
  */
 export function validateOpenApiGeneratorProvenance(
   manifest,
   {label = 'OpenAPI manifest', signed = false, requireClean = false} = {},
 ) {
-  const dirtyField = manifest?.generator_dirty;
-  if (dirtyField !== undefined && typeof dirtyField !== 'boolean') {
-    throw new Error(`${label} generator_dirty must be boolean when present`);
+  if (manifest?.version !== 2) {
+    throw new Error(`${label} provenance requires manifest version exactly 2`);
   }
-  const dirty = dirtyField === true;
+  const dirtyField = manifest?.generator_dirty;
+  if (typeof dirtyField !== 'boolean') {
+    throw new Error(`${label} generator_dirty must be boolean and is required`);
+  }
+  const dirty = dirtyField;
   const commit = manifest?.generator_commit;
   const sourceDigest = manifest?.generator_source_sha256_hex;
 
@@ -110,7 +112,7 @@ export function validateOpenApiGeneratorProvenance(
       `${label} clean provenance requires generator_commit as exactly 40 lowercase hexadecimal characters`,
     );
   }
-  if (sourceDigest !== undefined && sourceDigest !== null) {
+  if (Object.hasOwn(manifest, 'generator_source_sha256_hex')) {
     throw new Error(`${label} clean provenance must omit generator_source_sha256_hex`);
   }
   return {dirty: false, commit, sourceSha256Hex: null};

@@ -623,13 +623,13 @@ handoff with two initial exact-output workers, a move-only service/transport
 owner pair, an empty-corridor seal, an exact predecessor receipt, an immediate
 successor, retry preservation, and late-callback isolation. This applied-height
 model is orthogonal to the production responder lifecycle and does not
-authorize rolling service generation. Production permits that roll only for
-needed server-table compaction—a full table or certified roster-geometry
-replacement—after terminal responder state, then persists the checked
-successor generation and empty server state as one
-`MergeSidecarLifecycleSnapshotV2` postimage. Active predecessor state or
-counter overflow returns `Capacity` without mutation. No Rust-to-TLA refinement
-for that production relation is claimed.
+authorize advancing service generation. Production permits that transition
+only for a certified changed-roster geometry after terminal responder state,
+then commits the checked successor generation and empty server state as one
+marker-selected `MergeSidecarLifecycleSnapshotV3` postimage in the inactive
+alternating slot. Active predecessor state or counter overflow returns
+`Capacity` without mutation. No Rust-to-TLA refinement for that production
+relation is claimed.
 
 The model records an inductive control partition over the reachable healthy
 handoff stages and keeps `NoRolloverFailure` explicit. That structure is a
@@ -641,7 +641,7 @@ The conditional local handoff result is not a proof of the final compaction
 relation. It begins after finality validation and does not cover network
 delivery, reply-writer flush, recovery after a fail-stop rejection, repeated
 rollover, or a Rust-to-TLA semantic refinement. Historical bounded and strict
-receipts predate the sole-V2 persistence relation; both typed-handoff ledger
+receipts predate the V3 two-slot persistence relation; both typed-handoff ledger
 entries remain `specified_unproved` until fresh strict TLAPS succeeds.
 
 ## Mechanization ledger
@@ -1050,7 +1050,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 704 tests across thirty-eight Rust
+The current pre-network release inventory names 722 tests across thirty-eight Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1117,7 +1117,11 @@ fairness-cursor retry regressions yielded the 588-test checkpoint. The durable
 semantic-peer-history regression yielded the 589-test checkpoint. Mechanical
 source-to-inventory reconciliation then adds 115 net authoritative-ingress,
 merge-sidecar, lane-work, runner, worker, P2P-network, and daemon-relay
-changes, yielding the current 704-test, 38-module inventory. The complete source-sealed
+changes, yielding the 704-test checkpoint. The runner close-prefix
+failed-suffix handoff regression adds one exact name, yielding the current
+705-test checkpoint. The routed-Hint and crash-safe V3 lifecycle closure adds
+26 exact regressions and retires eight obsolete route-free/V2 selectors,
+yielding the current 723-test, 38-module inventory. The complete source-sealed
 pre-network corridor
 contains 81 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
@@ -1125,21 +1129,49 @@ Wire protocol version 1 uses positive `NonZeroU64` responder generation,
 requester epoch, and per-stream semantic sequence coordinates. Canonical
 request identity binds the version, those coordinates, payload or reference,
 and both peers, excluding only cumulative `closed_through`; a monotonic floor
-advance on the same occurrence does not rematerialize output. Authenticated
-`GenerationHint` is route-free Consensus control naming the observed/current
-generations and exact triggering Request or Close hash.
+advance on the same occurrence does not rematerialize output. `GenerationHint`
+names the observed/current generations and exact triggering Request or Close
+hash while retaining that delivery's authenticated reply route. Alternate
+sources remain independent attempts.
+The canonical progress-mutation runner executes the dedicated
+`GenerationEpochFixed` trace as well as the cursor, source-isolation, and close
+traces. It persists and installs responder generation two, observes an old
+generation request, persists a fresh requester epoch before discarding the old
+partial identity, and rejects future-generation input without mutation. TLC
+exhausts exactly 7 generated and 7 distinct states at depth 7. This is bounded
+regression evidence; it does not promote a deductive obligation. The separate
+pipeline trace carries that occurrence through enqueue, persisted hint reset,
+successor enqueue, and stale-flush rejection. Its complete graph has exactly
+11 generated and 10 distinct states at depth 10. The capacity-overflow trace
+then keeps active ownership unchanged across rejected nonterminal compaction,
+requester-epoch exhaustion, and responder-generation exhaustion; its graph has
+5 generated and 5 distinct states at depth 5. The pipeline companion retains
+the pending attachment, exact item, and source-owned occurrence across the same
+rejections, exhausting 8 generated and 7 distinct states at depth 7.
 
-The sole `MergeSidecarLifecycleSnapshotV2` persists geometry,
+The machine-checked claim boundary contains exactly 13 ownership, 9 pipeline,
+and 11 asynchronous structural theorems. Current pinned strict waves discharge
+15/15, 11/11, and 54/54 backend obligations respectively. They prove coordinate
+identities, fail-atomic local transitions, exact V2 action projection, both
+product brackets, and both composed-spec projections. Whole-spec induction,
+successor isolation, local progress, and the asynchronous temporal product
+remain plain operators with no proof evidence and stay `specified_unproved`.
+Neither these bounded traces nor the structural theorems establish network
+delivery, rotating-leader progress, or another liveness result.
+
+The sole `MergeSidecarLifecycleSnapshotV3` persists geometry,
 `next_stream_epoch`, responder generation, requester streams, unified
 server streams, and request gates. The unified server-stream table and gate
 table are bounded independently of P2P reply-source capacity, and restore
-validates the whole candidate before assignment. V1 is unsupported. Generation
-rolls only for necessary server-table compaction—a full table or certified
-roster-geometry replacement—after every old stream, gate, transfer, and flush
-is terminal; its checked increment and empty responder state persist together
-before memory or Hint publication.
+validates the whole marker-selected candidate before assignment. V1/V2 are
+unsupported. Successive snapshots alternate between two state slots: the
+inactive slot is fsynced before the independent root marker commits it. Thus a
+pre-marker crash restores the predecessor and a post-marker crash restores the
+successor. Generation advances only for a certified changed-roster geometry
+after every old stream, gate, transfer, and flush is terminal. A full
+same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`fd2176898c873bc00fae598689f6bf0ec2f9cd5de58ccf37fbe6713a061811da`.
+`66a130b892347a296ed3b447d3cf388e00a5c83fdfcd193b228b8eab67059f1a`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

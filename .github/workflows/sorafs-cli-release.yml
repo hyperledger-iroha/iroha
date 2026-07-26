@@ -8,19 +8,35 @@ on:
       - ".github/workflows/sorafs-fixtures-nightly.yml"
       - ".github/workflows/sorafs-orchestrator-sdk.yml"
       - "ci/check_sorafs_cli_release.sh"
+      - "ci/check_nexus_lane_smoke.sh"
+      - "scripts/telemetry/run_privacy_dp_notebook.sh"
+      - "scripts/telemetry/run_privacy_dp.py"
+      - "scripts/telemetry/normalize_executed_notebook.py"
+      - "notebooks/soranet_privacy_dp.ipynb"
       - "scripts/check_sorafs_release_automation.py"
       - "scripts/check_sorafs_release_version_map.py"
       - "scripts/check_sorafs_reference_sdk_release_evidence.py"
       - "scripts/build_sorafs_reference_sdk_release_canary.py"
       - "scripts/run_sorafs_reference_sdk_release_evidence.py"
       - "scripts/check_workflow_action_pins.py"
+      - "Dockerfile"
       - "scripts/build_release_bundle.sh"
       - "scripts/build_release_image.sh"
+      - "scripts/build_release_oci_archive.py"
+      - "scripts/build_release_tar_gz.py"
+      - "scripts/build_release_tar_zst.py"
+      - "scripts/capture_release_command.py"
+      - "scripts/copy_release_file.py"
+      - "scripts/copy_release_tree.py"
       - "scripts/generate_release_manifest.py"
       - "scripts/generate_sorafs_cli_release_manifest.py"
+      - "scripts/release_artifact_contract.py"
       - "scripts/release_manifest_signing.py"
       - "scripts/publish_plan.py"
       - "scripts/run_release_pipeline.py"
+      - "scripts/write_release_checksum.py"
+      - "scripts/write_release_sha256sums.py"
+      - "scripts/validate_release_image_bases.py"
       - "scripts/examples/sorafs_reference_sdk_release_*.args.example"
       - "scripts/requirements.txt"
       - "scripts/package_sorafs_cli_candidate.py"
@@ -33,6 +49,11 @@ on:
       - "scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py"
       - "scripts/tests/package_sorafs_cli_candidate_test.py"
       - "scripts/tests/package_sorafs_validate_release_test.py"
+      - "scripts/tests/build_release_bundle_test.py"
+      - "scripts/tests/build_release_image_test.py"
+      - "scripts/tests/capture_release_command_test.py"
+      - "scripts/tests/release_artifact_contract_test.py"
+      - "scripts/tests/validate_release_image_bases_test.py"
       - "scripts/tests/release_sorafs_cli_test.py"
       - "scripts/tests/check_sorafs_rollout_gate_contract_test.py"
       - "scripts/tests/check_workflow_action_pins_test.py"
@@ -229,16 +250,22 @@ jobs:
           version="${{ needs.release-gate.outputs.version }}"
           target="${{ matrix.target }}"
           suffix="${{ matrix.binary_suffix }}"
+          source_commit="${GITHUB_SHA}"
+          source_date_epoch="$(git show -s --format=%ct "$source_commit")"
           first_out="$(mktemp -d "${RUNNER_TEMP}/sorafs-validate-first.XXXXXX")"
           replay_out="$(mktemp -d "${RUNNER_TEMP}/sorafs-validate-replay.XXXXXX")"
           bash scripts/package_sorafs_validate_release.sh \
             --version "$version" \
             --target "${{ matrix.target }}" \
+            --source-commit "$source_commit" \
+            --source-date-epoch "$source_date_epoch" \
             --binary "artifacts/sorafs-cli/sorafs-validate${suffix}" \
             --out-dir "$first_out"
           bash scripts/package_sorafs_validate_release.sh \
             --version "$version" \
             --target "$target" \
+            --source-commit "$source_commit" \
+            --source-date-epoch "$source_date_epoch" \
             --binary "artifacts/sorafs-cli/sorafs-validate${suffix}" \
             --out-dir "$replay_out"
           package_name="sorafs-validate-${version}-${target}"

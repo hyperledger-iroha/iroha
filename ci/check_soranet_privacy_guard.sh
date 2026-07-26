@@ -118,21 +118,19 @@ if ! rg -q "soranet_privacy_ingest" "${DOC_PATH}"; then
 	exit 1
 fi
 
-pin_handler="handle_post_sorafs_storage_pin"
-pin_pattern="(?s)fn[[:space:]]+${pin_handler}.*?manifest_pin_policy_constraints_from_config\\(&state\\.state\\.gov\\.sorafs_pin_policy\\).*?validate_manifest\\(&manifest,[[:space:]]*&manifest_constraints\\)"
-if ! rg --pcre2 --multiline -n "${pin_pattern}" "${PIN_TARGET}" >/dev/null; then
-	echo "error: ${pin_handler} must validate manifests against iroha_config sorafs_pin_policy before accepting storage pins." >&2
+if rg -Fq "handle_post_sorafs_storage_pin" "${PIN_TARGET}"; then
+	echo "error: retired public SoraFS storage-ingest handler must not return." >&2
 	exit 1
 fi
 
-for doc_key in "sorafs.storage.pin" "governance.sorafs_telemetry"; do
+for doc_key in "no public storage-ingest route" "governance.sorafs_telemetry"; do
 	if ! rg -q "${doc_key}" "${DOC_PATH}"; then
 		echo "error: ${DOC_PATH} is missing ${doc_key} authz documentation; keep docs aligned with Torii guards." >&2
 		exit 1
 	fi
 done
 
-for runbook_key in "X-SoraNet-Privacy-Token" "per_provider_submitters" "sorafs.storage.pin" "CanOperateSorafsRepair"; do
+for runbook_key in "X-SoraNet-Privacy-Token" "per_provider_submitters" "Storage ingest is not an ingress route" "CanOperateSorafsRepair"; do
 	if ! rg -q "${runbook_key}" "${RUNBOOK_PATH}"; then
 		echo "error: ${RUNBOOK_PATH} is missing ${runbook_key} guidance; update the authz runbook alongside code changes." >&2
 		exit 1

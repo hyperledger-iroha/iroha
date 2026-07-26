@@ -3512,543 +3512,95 @@ test("getSorafsPinManifestTyped rejects when Torii responds with 404", async () 
   );
 });
 
-test("registerSorafsPinManifest posts payload and returns JSON", async () => {
-  const manifestHex = "a".repeat(64);
-  const successorHex = "c".repeat(64);
-  const manifestPayload = Buffer.from("manifest-norito").toString("base64");
-  const aliasProof = Buffer.from("alias-proof").toString("base64");
+test("registerSorafsPinManifest posts only a versioned signed transaction", async () => {
+  const signedTransaction = Buffer.from([0xde, 0xad, 0xbe, 0xef]);
+  const admission = {
+    status: "submitted",
+    tx_hash_hex: "a".repeat(64),
+    manifest_digest_hex: "b".repeat(64),
+  };
   let captured = null;
   const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: validNodeCapabilitiesPayload(),
+        headers: { "content-type": "application/json" },
+      });
+    }
     captured = { url, init };
     return createResponse({
-      status: 200,
-      jsonData: { status: "queued", manifest_digest_hex: manifestHex },
+      status: 202,
+      jsonData: admission,
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.registerSorafsPinManifest({
-    authority: FIXTURE_ALICE_ID,
-    private_key: "ed25519:deadbeef",
-    manifest_payload: manifestPayload,
-    submitted_epoch: 42,
-    alias: { namespace: "docs", name: "main", proof_base64: aliasProof },
-    successor_of_hex: successorHex.toUpperCase(),
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    __nativeBinding: {},
   });
+
+  const result = await client.registerSorafsPinManifestTyped(signedTransaction);
+
   assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/pin/register`);
   assert.equal(captured?.init?.method, "POST");
-  const body = JSON.parse(captured?.init?.body ?? "{}");
-  assert.deepEqual(body, {
-    authority: FIXTURE_ALICE_ID,
-    private_key: "ed25519:deadbeef",
-    manifest_payload: manifestPayload,
-    submitted_epoch: 42,
-    alias: { namespace: "docs", name: "main", proof_base64: aliasProof },
-    successor_of_hex: successorHex,
-  });
-  assert.deepEqual(result, { status: "queued", manifest_digest_hex: manifestHex });
+  assert.equal(captured?.init?.headers["Content-Type"], "application/x-norito");
+  assert.equal(captured?.init?.headers.Accept, "application/json");
+  assert.deepEqual(captured?.init?.body, Buffer.from([1, ...signedTransaction]));
+  assert.deepEqual(result, admission);
 });
 
-function sorafsPinRegisterInput(overrides = {}) {
-  return {
-    authority: FIXTURE_ALICE_ID,
-    private_key: "ed25519:deadbeef",
-    manifest_payload: Buffer.from("manifest-norito").toString("base64"),
-    submitted_epoch: 42,
-    ...overrides,
-  };
-}
-
-test("registerSorafsPinManifest omits null optionals and keeps signal out of JSON", async () => {
-  const controller = new AbortController();
-  let captured = null;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url, init) => {
-      captured = { url, init };
-      return createResponse({
-        status: 200,
-        jsonData: { status: "queued" },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const input = sorafsPinRegisterInput({
-    alias: null,
-    successor_of_hex: null,
-    signal: controller.signal,
-  });
-  await client.registerSorafsPinManifest(input);
-
-  assert.equal(captured?.init?.signal, controller.signal);
-  assert.deepEqual(JSON.parse(captured?.init?.body ?? "{}"), {
-    authority: input.authority,
-    private_key: input.private_key,
-    manifest_payload: input.manifest_payload,
-    submitted_epoch: input.submitted_epoch,
-  });
-});
-
-test("registerSorafsPinManifest rejects all unknown and retired fields before fetch", async () => {
-  let fetchCalls = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      fetchCalls += 1;
-      throw new Error("fetch should not be called");
-    },
-  });
-  const retiredFields = [
-    ["privateKey", "ed25519:deadbeef"],
-    ["manifest", Buffer.from("manifest")],
-    ["manifestBytes", Buffer.from("manifest")],
-    ["manifest_bytes", Buffer.from("manifest")],
-    ["manifestB64", "bWFuaWZlc3Q="],
-    ["manifest_b64", "bWFuaWZlc3Q="],
-    ["manifestBase64", "bWFuaWZlc3Q="],
-    ["manifest_base64", "bWFuaWZlc3Q="],
-    ["chunker", {}],
-    ["chunker_profile_id", 1],
-    ["pinPolicy", {}],
-    ["pin_policy", {}],
-    ["manifestDigestHex", "a".repeat(64)],
-    ["manifest_digest_hex", "a".repeat(64)],
-    ["chunkDigestSha3_256Hex", "b".repeat(64)],
-    ["chunk_digest_sha3_256_hex", "b".repeat(64)],
-    ["chunkDigest", "b".repeat(64)],
-    ["chunk_digest", "b".repeat(64)],
-    ["contentLength", 1],
-    ["content_length", 1],
-    ["submittedEpoch", 42],
-    ["gasAssetId", "xor#universal"],
-    ["gas_asset_id", "xor#universal"],
-    ["aliasNamespace", "docs"],
-    ["alias_namespace", "docs"],
-    ["aliasName", "main"],
-    ["alias_name", "main"],
-    ["aliasProof", "cHJvb2Y="],
-    ["alias_proof", "cHJvb2Y="],
-    ["successorOfHex", "c".repeat(64)],
-    ["unexpected", undefined],
-  ];
-
-  for (const [field, value] of retiredFields) {
-    await assert.rejects(
-      () => client.registerSorafsPinManifest(sorafsPinRegisterInput({ [field]: value })),
-      new RegExp(`unsupported fields: ${field}`, "i"),
-      field,
-    );
-  }
-  assert.equal(fetchCalls, 0);
-});
-
-test("registerSorafsPinManifest requires every canonical field before fetch", async () => {
-  let fetchCalls = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      fetchCalls += 1;
-      throw new Error("fetch should not be called");
-    },
-  });
-  for (const field of ["authority", "private_key", "manifest_payload", "submitted_epoch"]) {
-    const input = sorafsPinRegisterInput();
-    delete input[field];
-    await assert.rejects(
-      () => client.registerSorafsPinManifest(input),
-      new RegExp(field, "i"),
-      field,
-    );
-  }
-  assert.equal(fetchCalls, 0);
-});
-
-test("registerSorafsPinManifest rejects non-canonical and malformed manifests before fetch", async () => {
-  let fetchCalls = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      fetchCalls += 1;
-      throw new Error("fetch should not be called");
-    },
-  });
-  const cases = [
-    [Buffer.from("manifest"), /manifest_payload.*string/i],
-    ["", /manifest_payload.*1\.\.=524288/i],
-    ["not base64!", /manifest_payload.*base64/i],
-    [" YQ==", /manifest_payload.*canonical/i],
-    ["YQ==\n", /manifest_payload.*canonical/i],
-    ["YQ", /manifest_payload.*canonical/i],
-    ["_w==", /manifest_payload.*canonical/i],
-    ["YQ=====", /manifest_payload.*canonical/i],
-    ["A".repeat(Math.ceil((512 * 1024) / 3) * 4 + 1), /manifest_payload.*524288/i],
-    [Buffer.alloc(512 * 1024 + 1).toString("base64"), /manifest_payload.*524288/i],
-  ];
-  for (const [manifestPayload, pattern] of cases) {
-    await assert.rejects(
-      () =>
-        client.registerSorafsPinManifest(
-          sorafsPinRegisterInput({ manifest_payload: manifestPayload }),
-        ),
-      pattern,
-    );
-  }
-  assert.equal(fetchCalls, 0);
-});
-
-test("registerSorafsPinManifest accepts the maximum manifest payload", async () => {
+test("registerSorafsPinManifest rejects legacy secret-bearing request objects", async () => {
   let fetchCalls = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       fetchCalls += 1;
+      throw new Error("fetch must not run");
+    },
+    __nativeBinding: {},
+  });
+
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest({
+        authority: FIXTURE_ALICE_ID,
+        private_key: "[redacted]",
+        manifest_payload: "bWFuaWZlc3Q=",
+        submitted_epoch: 1,
+      }),
+    /signedTransaction must be a Buffer, ArrayBuffer, or ArrayBuffer view/,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("registerSorafsPinManifestTyped rejects pre-finality fee or custody claims", async () => {
+  const fetchImpl = async (url) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
       return createResponse({
         status: 200,
-        jsonData: { status: "queued" },
+        jsonData: validNodeCapabilitiesPayload(),
         headers: { "content-type": "application/json" },
       });
-    },
-  });
-  await client.registerSorafsPinManifest(
-    sorafsPinRegisterInput({
-      manifest_payload: Buffer.alloc(512 * 1024, 0xa5).toString("base64"),
-    }),
-  );
-  assert.equal(fetchCalls, 1);
-});
-
-test("registerSorafsPinManifest rejects invalid scalar fields before fetch", async () => {
-  let fetchCalls = 0;
+    }
+    return createResponse({
+      status: 202,
+      jsonData: {
+        status: "submitted",
+        tx_hash_hex: "a".repeat(64),
+        manifest_digest_hex: "b".repeat(64),
+        pin_fee: "1",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      fetchCalls += 1;
-      throw new Error("fetch should not be called");
-    },
+    fetchImpl,
+    __nativeBinding: {},
   });
-  for (const submittedEpoch of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, null]) {
-    await assert.rejects(
-      () =>
-        client.registerSorafsPinManifest(
-          sorafsPinRegisterInput({ submitted_epoch: submittedEpoch }),
-        ),
-      /submitted_epoch/i,
-    );
-  }
-  for (const privateKey of [
-    "",
-    "   ",
-    " ed25519:deadbeef",
-    "ed25519:deadbeef ",
-    "ed25519:dead beef",
-    "ed25519:deadbeef\u0001",
-    42,
-    {},
-    [],
-  ]) {
-    await assert.rejects(
-      () =>
-        client.registerSorafsPinManifest(
-          sorafsPinRegisterInput({ private_key: privateKey }),
-        ),
-      /private_key/i,
-    );
-  }
-  for (const authority of [
-    ` ${FIXTURE_ALICE_ID}`,
-    `${FIXTURE_ALICE_ID} `,
-    "alice@boi",
-  ]) {
-    await assert.rejects(
-      () =>
-        client.registerSorafsPinManifest(
-          sorafsPinRegisterInput({ authority }),
-        ),
-      /authority/i,
-    );
-  }
-  assert.equal(fetchCalls, 0);
-});
 
-test("registerSorafsPinManifest rejects malformed and oversized aliases before fetch", async () => {
-  let fetchCalls = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      fetchCalls += 1;
-      throw new Error("fetch should not be called");
-    },
-  });
-  const cases = [
-    [[], /alias.*object/i],
-    [{ namespace: "docs", name: "main", proof_base64: "cHJvb2Y=", proof: "cHJvb2Y=" }, /unsupported fields: proof/i],
-    [{ namespace: " docs", name: "main", proof_base64: "cHJvb2Y=" }, /alias\.namespace.*whitespace/i],
-    [{ namespace: "docs", name: "main ", proof_base64: "cHJvb2Y=" }, /alias\.name.*whitespace/i],
-    [{ namespace: "Docs", name: "main", proof_base64: "cHJvb2Y=" }, /alias\.namespace.*lowercase ASCII/i],
-    [{ namespace: "docs", name: "main site", proof_base64: "cHJvb2Y=" }, /alias\.name.*lowercase ASCII/i],
-    [{ namespace: "docs", name: "máin", proof_base64: "cHJvb2Y=" }, /alias\.name.*lowercase ASCII/i],
-    [{ namespace: "docs", name: "a".repeat(129), proof_base64: "cHJvb2Y=" }, /alias\.name.*128/i],
-    [{ name: "main", proof_base64: "cHJvb2Y=" }, /alias\.namespace/i],
-    [{ namespace: "docs", proof_base64: "cHJvb2Y=" }, /alias\.name/i],
-    [{ namespace: "docs", name: "main" }, /alias\.proof_base64/i],
-    [{ namespace: "docs", name: "main", proof_base64: "" }, /alias\.proof_base64/i],
-    [{ namespace: "docs", name: "main", proof_base64: "cHJvb2Y" }, /alias\.proof_base64.*canonical/i],
-    [{ namespace: "docs", name: "main", proof_base64: "not base64!" }, /alias\.proof_base64.*base64/i],
-    [
-      {
-        namespace: "docs",
-        name: "main",
-        proof_base64: Buffer.alloc(1024 * 1024 + 1).toString("base64"),
-      },
-      /alias\.proof_base64.*1048576/i,
-    ],
-    [
-      {
-        namespace: "docs",
-        name: "main",
-        proof_base64: "A".repeat(Math.ceil((1024 * 1024) / 3) * 4 + 1),
-      },
-      /alias\.proof_base64.*1048576/i,
-    ],
-  ];
-  for (const [alias, pattern] of cases) {
-    await assert.rejects(
-      () => client.registerSorafsPinManifest(sorafsPinRegisterInput({ alias })),
-      pattern,
-    );
-  }
-  assert.equal(fetchCalls, 0);
-});
-
-test("registerSorafsPinManifest rejects malformed and zero successor digests before fetch", async () => {
-  let fetchCalls = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      fetchCalls += 1;
-      throw new Error("fetch should not be called");
-    },
-  });
-  for (const [successor, pattern] of [
-    ["", /successor_of_hex/i],
-    [" ", /successor_of_hex/i],
-    [` ${"c".repeat(64)}`, /successor_of_hex.*whitespace/i],
-    ["zz", /successor_of_hex.*32-byte hex/i],
-    ["0".repeat(64), /successor_of_hex.*must not be zero/i],
-  ]) {
-    await assert.rejects(
-      () =>
-        client.registerSorafsPinManifest(
-          sorafsPinRegisterInput({ successor_of_hex: successor }),
-        ),
-      pattern,
-    );
-  }
-  assert.equal(fetchCalls, 0);
-});
-
-test("registerSorafsPinManifestTyped normalizes response payloads", async () => {
-  const manifestHex = "a".repeat(64);
-  const successorHex = "b".repeat(64);
-  const aliasB64 = Buffer.from("alias-proof").toString("base64");
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        manifestDigestHex: manifestHex.toUpperCase(),
-        chunkerHandle: "sorafs.sf1@1.0.0",
-        submittedEpoch: "42",
-        contentLength: 4096,
-        pinFeeNano: "500000000",
-        pinFeeAssetId: "xor#universal",
-        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
-        alias: {
-          namespace: "docs",
-          name: "main",
-          proof_base64: aliasB64,
-        },
-        successor_of_hex: successorHex,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.registerSorafsPinManifestTyped(
-    sorafsPinRegisterInput(),
-  );
-  assert.deepEqual(result, {
-    manifest_digest_hex: manifestHex,
-    chunker_handle: "sorafs.sf1@1.0.0",
-    submitted_epoch: 42,
-    content_length: 4096,
-    pin_fee_nano: 500000000,
-    pin_fee_asset_id: "xor#universal",
-    pin_fee_treasury_account_id: FIXTURE_ALICE_ID,
-    alias: {
-      namespace: "docs",
-      name: "main",
-      proof_base64: aliasB64,
-    },
-    successor_of_hex: successorHex,
-  });
-});
-
-test("registerSorafsPinManifestTyped rejects response without fee receipt", async () => {
-  const manifestHex = "a".repeat(64);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        manifestDigestHex: manifestHex,
-        chunkerHandle: "sorafs.sf1@1.0.0",
-        submittedEpoch: 42,
-        contentLength: 4096,
-        pinFeeNano: 500000000,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
-    () =>
-      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
-    /pin_fee_asset_id/,
-  );
-});
-
-test("registerSorafsPinManifestTyped rejects negative fee receipt", async () => {
-  const manifestHex = "a".repeat(64);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        manifestDigestHex: manifestHex,
-        chunkerHandle: "sorafs.sf1@1.0.0",
-        submittedEpoch: 42,
-        contentLength: 4096,
-        pinFeeNano: "-1",
-        pinFeeAssetId: "xor#universal",
-        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
-    /pin_fee_nano.*non-negative/i,
-  );
-});
-
-test("registerSorafsPinManifestTyped rejects negative response content length", async () => {
-  const manifestHex = "a".repeat(64);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        manifestDigestHex: manifestHex,
-        chunkerHandle: "sorafs.sf1@1.0.0",
-        submittedEpoch: 42,
-        contentLength: "-1",
-        pinFeeNano: "500000000",
-        pinFeeAssetId: "xor#universal",
-        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
-    /content_length.*non-negative/i,
-  );
-});
-
-test("registerSorafsPinManifestTyped rejects negative response submitted epoch", async () => {
-  const manifestHex = "a".repeat(64);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        manifestDigestHex: manifestHex,
-        chunkerHandle: "sorafs.sf1@1.0.0",
-        submittedEpoch: "-1",
-        contentLength: 4096,
-        pinFeeNano: "500000000",
-        pinFeeAssetId: "xor#universal",
-        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
-    /submitted_epoch.*non-negative/i,
-  );
-});
-
-test("registerSorafsPinManifestTyped rejects malformed response successor digest", async () => {
-  const manifestHex = "a".repeat(64);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        manifestDigestHex: manifestHex,
-        chunkerHandle: "sorafs.sf1@1.0.0",
-        submittedEpoch: "42",
-        contentLength: 4096,
-        pinFeeNano: "500000000",
-        pinFeeAssetId: "xor#universal",
-        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
-        successorOfHex: "zz",
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
-    /successor_of_hex.*32-byte hex/i,
-  );
-});
-
-test("registerSorafsPinManifestTyped rejects response alias without proof", async () => {
-  const manifestHex = "a".repeat(64);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        manifestDigestHex: manifestHex,
-        chunkerHandle: "sorafs.sf1@1.0.0",
-        submittedEpoch: "42",
-        contentLength: 4096,
-        pinFeeNano: "500000000",
-        pinFeeAssetId: "xor#universal",
-        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
-        alias: { namespace: "docs", name: "main" },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () =>
-      client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
-    /alias\.proof/i,
-  );
-});
-
-test("registerSorafsPinManifestTyped rejects ambiguous response aliases", async () => {
-  const manifestHex = "a".repeat(64);
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        manifest_digest_hex: manifestHex,
-        manifestDigestHex: manifestHex,
-        chunkerHandle: "sorafs.sf1@1.0.0",
-        submittedEpoch: "42",
-        contentLength: 4096,
-        pinFeeNano: "500000000",
-        pinFeeAssetId: "xor#universal",
-        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
-    /manifest_digest_hex.*ambiguous aliases/i,
+    () => client.registerSorafsPinManifestTyped(Buffer.from([0x01])),
+    /unsupported fields.*pin_fee/i,
   );
 });
 
@@ -5868,41 +5420,6 @@ test("_iterateOffsetIterable enforces item-key whitelists", async () => {
   );
 });
 
-test("pinSorafsManifest posts manifest and payload bytes", async () => {
-  let captured = null;
-  const manifestBytes = Buffer.from("norito-manifest");
-  const payloadBytes = Buffer.from([0, 1, 2, 3]);
-  const manifestHex = "a".repeat(64);
-  const digestHex = "b".repeat(64);
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        manifest_id_hex: manifestHex,
-        payload_digest_hex: digestHex,
-        content_length: payloadBytes.length,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.pinSorafsManifest({
-    manifest: manifestBytes,
-    payload: payloadBytes,
-  });
-  assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/storage/pin`);
-  assert.equal(captured?.init?.method, "POST");
-  const body = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(body.manifest_b64, manifestBytes.toString("base64"));
-  assert.equal(body.payload_b64, payloadBytes.toString("base64"));
-  assert.deepEqual(result, {
-    manifest_id_hex: manifestHex,
-    payload_digest_hex: digestHex,
-    content_length: payloadBytes.length,
-  });
-});
-
 test("fetchSorafsPayloadRange normalizes request and response payloads", async () => {
   let captured = null;
   const manifestHex = "c".repeat(64);
@@ -7147,45 +6664,6 @@ test("proveDaAvailabilityToDir persists CLI artefacts", async () => {
   }
 });
 
-test("submitSorafsUptimeObservation posts telemetry sample", async () => {
-  let captured = null;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: { status: "recorded", uptime_secs: 540, observed_secs: 600 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.submitSorafsUptimeObservation({ uptimeSecs: 540, observedSecs: 600 });
-  assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/capacity/uptime`);
-  assert.equal(captured?.init?.method, "POST");
-  const parsed = JSON.parse(captured?.init?.body ?? "{}");
-  assert.deepEqual(parsed, { uptime_secs: 540, observed_secs: 600 });
-  assert.deepEqual(result, { status: "recorded", uptime_secs: 540, observed_secs: 600 });
-});
-
-test("submitSorafsUptimeObservation rejects unsupported input fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { status: "recorded", uptime_secs: 1, observed_secs: 1 },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () =>
-      client.submitSorafsUptimeObservation({
-        uptimeSecs: 1,
-        observedSecs: 1,
-        extra: true,
-      }),
-    /submitSorafsUptimeObservation input contains unsupported fields: extra/,
-  );
-});
-
 test("retired PoR challenge and observation SDK methods are absent", () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -7194,6 +6672,7 @@ test("retired PoR challenge and observation SDK methods are absent", () => {
   });
   assert.equal("recordSorafsPorChallenge" in client, false);
   assert.equal("submitSorafsPorObservation" in client, false);
+  assert.equal("submitSorafsUptimeObservation" in client, false);
   assert.equal(typeof client.recordSorafsPorProof, "function");
   assert.equal(typeof client.recordSorafsPorVerdict, "function");
   assert.equal(typeof client.getSorafsPorStatus, "function");
@@ -7237,16 +6716,6 @@ test("recordSorafsPorVerdict rejects unsupported input fields", async () => {
 });
 
 const invalidSorafsSignalCases = [
-  {
-    label: "submitSorafsUptimeObservation",
-    invoke: (client) =>
-      client.submitSorafsUptimeObservation({
-        uptimeSecs: 1,
-        observedSecs: 1,
-        signal: "invalid",
-      }),
-    path: "submitSorafsUptimeObservation.options.signal",
-  },
   {
     label: "recordSorafsPorProof",
     invoke: (client) =>
@@ -11900,36 +11369,37 @@ test("Sumeragi execution commitment declarations expose Native AMX manifest fiel
   }
 });
 
-test("getSumeragiStatusTyped preserves carried proposal origins", async () => {
+test("getSumeragiStatusTyped preserves exact proposal rounds", async () => {
   const payload = createSumeragiV2StatusPayload();
   const commitQuorum = structuredClone(payload.liveness.prepare_quorums[0]);
   commitQuorum.round.view = 2;
-  commitQuorum.proposal_round.view = 1;
+  commitQuorum.proposal_round.view = 2;
   payload.liveness.commit_quorums = [commitQuorum];
 
   const commitIntent = structuredClone(payload.liveness.outbound_intents[0]);
   commitIntent.kind.kind = "commit_vote";
   commitIntent.round.view = 2;
-  commitIntent.proposal_round.view = 1;
+  commitIntent.proposal_round.view = 2;
   commitIntent.execution_commitment = structuredClone(
     commitQuorum.execution_commitment,
   );
   payload.liveness.outbound_intents = [commitIntent];
   payload.last_commit_qc.certificate.round.view = 2;
-  payload.last_commit_qc.certificate.proposal_round.view = 1;
+  payload.last_commit_qc.certificate.proposal_round.view = 2;
 
   const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
 
   assert.equal(status.liveness.commit_quorums[0].round.view, 2);
-  assert.equal(status.liveness.commit_quorums[0].proposal_round.view, 1);
+  assert.equal(status.liveness.commit_quorums[0].proposal_round.view, 2);
   assert.equal(status.liveness.outbound_intents[0].round.view, 2);
-  assert.equal(status.liveness.outbound_intents[0].proposal_round.view, 1);
-  assert.equal(status.last_commit_qc.certificate.proposal_round.view, 1);
+  assert.equal(status.liveness.outbound_intents[0].proposal_round.view, 2);
+  assert.equal(status.last_commit_qc.certificate.proposal_round.view, 2);
 
   const laterCommitPayload = createSumeragiV2StatusPayload();
   const laterCommitIntent = laterCommitPayload.liveness.outbound_intents[0];
   laterCommitIntent.kind.kind = "commit_qc";
   laterCommitIntent.round.view = 3;
+  laterCommitIntent.proposal_round.view = 3;
   laterCommitIntent.execution_commitment = structuredClone(
     laterCommitPayload.last_commit_qc.certificate.execution_commitment,
   );
@@ -11938,7 +11408,7 @@ test("getSumeragiStatusTyped preserves carried proposal origins", async () => {
   assert.equal(laterCommitStatus.liveness.outbound_intents[0].round.view, 3);
   assert.equal(
     laterCommitStatus.liveness.outbound_intents[0].proposal_round.view,
-    1,
+    3,
   );
 
   const timeoutPayload = createSumeragiV2StatusPayload();
@@ -11974,7 +11444,7 @@ test("getSumeragiStatusTyped enforces vote-quorum proposal geometry", async () =
   futureCommitOrigin.liveness.commit_quorums = [commitQuorum];
   await assert.rejects(
     () => sumeragiClientForPayload(futureCommitOrigin).getSumeragiStatusTyped(),
-    /proposal_round.view must not exceed/,
+    /proposal_round must equal round/,
   );
 
   const foreignOrigin = createSumeragiV2StatusPayload();
@@ -12031,7 +11501,7 @@ test("getSumeragiStatusTyped enforces outbound-intent proposal geometry", async 
   commitIntent.proposal_round.view = 2;
   await assert.rejects(
     () => sumeragiClientForPayload(futureCommitOrigin).getSumeragiStatusTyped(),
-    /proposal_round.view must not exceed/,
+    /proposal_round must equal round/,
   );
 
   const foreignOrigin = createSumeragiV2StatusPayload();
@@ -12301,7 +11771,7 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
   futureProposalRound.last_commit_qc.certificate.proposal_round.view = 2;
   await assert.rejects(
     () => sumeragiClientForPayload(futureProposalRound).getSumeragiStatusTyped(),
-    /proposal_round.view must not exceed/,
+    /proposal_round must equal round/,
   );
 
   const underpowered = createSumeragiV2StatusPayload();

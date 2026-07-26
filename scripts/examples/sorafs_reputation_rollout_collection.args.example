@@ -16,6 +16,8 @@ target/debug/sorafs_cli
 https://validator.example.invalid
 --snapshot
 /runtime/sorafs/reputation/reputation-snapshot.to
+--publish-evidence
+/runtime/sorafs/reputation/reputation-publication-canary.json
 --provider-id
 provider-a
 --provider-proof

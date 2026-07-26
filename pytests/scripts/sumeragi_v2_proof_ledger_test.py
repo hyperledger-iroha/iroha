@@ -587,12 +587,17 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
     typed_safety = by_id["typed-rollover-handoff-model-safety"]
     assert typed_safety["module"] == "SumeragiV2TypedRolloverHandoffProofs"
     assert typed_safety["symbol"] == (
-        "TypedRolloverSpecAlwaysSafe / "
-        "TypedRolloverNextSatisfiesActionSafety"
+        "TypedRolloverSpecAlwaysSafeObligation / "
+        "TypedRolloverNextPreservesSafetyObligation"
     )
     assert typed_safety["status"] == "specified_unproved"
-    assert "one-step kernel, not a temporal proof" in typed_safety["requirement"]
-    assert "do not prove Rust-to-TLA semantic refinement" in (
+    assert "one atomic LifecycleSnapshotV2 successor" in (
+        typed_safety["requirement"]
+    )
+    assert "allocates requester epochs durably before use without reuse" in (
+        typed_safety["requirement"]
+    )
+    assert "no Rust-to-TLA semantic refinement theorem is claimed" in (
         typed_safety["requirement"]
     )
 
@@ -603,13 +608,13 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         "SumeragiV2TypedRolloverHandoffProofs"
     )
     assert typed_liveness["symbol"] == (
-        "ResponsiveChangedRosterRolloverLivenessFromWeakFairness"
+        "ResponsiveChangedRosterRolloverLivenessObligation"
     )
     assert typed_liveness["status"] == "specified_unproved"
-    assert "inductive eight-rank control partition" in (
+    assert "proofless temporal target" in (
         typed_liveness["requirement"]
     )
-    assert "fresh strict TLAPS remains required" in (
+    assert "No derivation from fairness is claimed" in (
         typed_liveness["requirement"]
     )
 
@@ -919,7 +924,9 @@ def test_typed_rollover_deductive_liveness_remains_unproved_until_strict() -> No
     assert module._symbol_exists(
         source, liveness["symbol"], theorem_only=True
     )
-    assert "fresh strict TLAPS remains required" in liveness["requirement"]
+    assert "fresh strict TLAPS proof establishes the target" in (
+        liveness["requirement"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -5153,6 +5160,30 @@ def copy_reply_route_ownership_fixture(
             "    rrRequesterClosedThrough <- asyncReplyRequesterClosedThrough,\n",
             "",
         ),
+        (
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
+            "MutationRoute",
+            "    rrDurableResponderGeneration <- durableResponderGeneration,\n",
+            "    rrDurableResponderGeneration <- responderGeneration,\n",
+        ),
+        (
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "MutationPipeline",
+            "    rrDiscardedPartialIdentities <- discardedPartialIdentities,\n",
+            "",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRoutes.tla",
+            "AsyncReplyRoute",
+            "    rrServiceGeneration <- asyncReplyServiceGeneration,\n",
+            "    rrServiceGeneration <- asyncReplyResponderGeneration,\n",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRouteProofs.tla",
+            "AsyncReplyRouteProofs",
+            "    rrPendingHintResets <- asyncReplyPendingHintResets,\n",
+            "",
+        ),
     ),
 )
 def test_reply_route_lifecycle_instances_fail_closed(
@@ -5175,8 +5206,122 @@ def test_reply_route_lifecycle_instances_fail_closed(
         formal_dir, repo_root
     )
     assert any(
-        f"{symbol} must supply the exact eight terminal-close lifecycle "
+        f"{symbol} must supply the exact 18 durable lifecycle/coordinate "
         "substitutions" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    "symbol",
+    (
+        "AsyncReplyRouteV2InductiveSafetyObligation",
+        "AsyncReplyRouteV2SuccessorIsolationObligation",
+        "AsyncNetworkReplyRouteTemporalProductObligation",
+        "AsyncNetworkReplyRouteModelObligation",
+    ),
+)
+def test_async_reply_route_debt_operator_cannot_be_promoted(
+    tmp_path: Path,
+    symbol: str,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_reply_route_ownership_fixture(
+        tmp_path, module
+    )
+    path = formal_dir / "SumeragiV2AsyncNetworkReplyRouteProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    declaration = f"\n{symbol} =="
+    assert source.count(declaration) == 1
+    path.write_text(
+        source.replace(declaration, f"\nTHEOREM {symbol} ==", 1),
+        encoding="utf-8",
+    )
+
+    errors = module._reply_route_ownership_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        f"{symbol} must remain a plain operator, not a THEOREM" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "next_declaration"),
+    (
+        (
+            "AsyncReplyRouteV2InductiveSafetyObligation",
+            "\nAsyncReplyRouteV2SuccessorIsolationObligation ==",
+        ),
+        (
+            "AsyncReplyRouteV2SuccessorIsolationObligation",
+            "\nAsyncNetworkReplyRouteTemporalProductObligation ==",
+        ),
+        (
+            "AsyncNetworkReplyRouteTemporalProductObligation",
+            "\nTHEOREM AsyncNetworkReplyRouteActionProjectionObligation ==",
+        ),
+        (
+            "AsyncNetworkReplyRouteModelObligation",
+            "\n=============================================================================",
+        ),
+    ),
+)
+def test_async_reply_route_debt_operator_rejects_proof_evidence(
+    tmp_path: Path,
+    symbol: str,
+    next_declaration: str,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_reply_route_ownership_fixture(
+        tmp_path, module
+    )
+    path = formal_dir / "SumeragiV2AsyncNetworkReplyRouteProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    symbol_offset = source.index(f"\n{symbol} ==")
+    next_offset = source.index(next_declaration, symbol_offset)
+    path.write_text(
+        source[:next_offset] + "\nBY OBVIOUS\n" + source[next_offset:],
+        encoding="utf-8",
+    )
+
+    errors = module._reply_route_ownership_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        f"{symbol} may not carry proof evidence" in error for error in errors
+    ), errors
+
+
+def test_reply_route_local_theorem_inventory_rejects_unreviewed_claim(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_reply_route_ownership_fixture(
+        tmp_path, module
+    )
+    path = formal_dir / "SumeragiV2ReplyRouteOwnershipProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    marker = "\nReplyRouteV2InductiveSafetyObligation =="
+    assert source.count(marker) == 1
+    path.write_text(
+        source.replace(
+            marker,
+            "\nTHEOREM UnreviewedReplyRouteLiveness == TRUE\n"
+            "BY OBVIOUS\n"
+            + marker,
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._reply_route_ownership_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        "reply-route local THEOREM inventory must equal" in error
+        and "UnreviewedReplyRouteLiveness" in error
         for error in errors
     ), errors
 
@@ -5220,22 +5365,52 @@ def test_reply_route_ownership_source_fidelity_fails_closed(
             "ReplyAttemptReplayValid must retain non-regressing",
         ),
         (
-            "SumeragiV2ReplyRouteOwnershipProofs.tla",
-            "    <2>3. [][CursorState => CursorState']_ReplyRouteVars\n"
-            "             => [](CursorState => []CursorState)\n",
-            "    <2>3. [](CursorState => CursorState')\n"
-            "             => [](CursorState => []CursorState)\n",
-            "ReplyCursorOrAdvancedPersists must retain deductive connection",
+            "SumeragiV2ReplyRouteOwnership.tla",
+            "       WF_ReplyRouteV2Vars(\n"
+            "         AcquireReplyTicketV2(owner, semantic, source))\n",
+            "       WF_ReplyRouteVars(\n"
+            "         AcquireReplyTicketV2(owner, semantic, source))\n",
+            "ReplyRouteV2Fairness must retain non-regressing",
         ),
         (
             "SumeragiV2ReplyRouteOwnershipProofs.tla",
-            "      <3>1. CursorState\n"
-            "               /\\ [CursorState => CursorState']_ReplyRouteVars\n"
-            "               => CursorState'\n",
-            "      <3>1. CursorState\n"
-            "               /\\ [CursorState => CursorState']_ReplyRouteVars\n"
-            "               => CursorState\n",
-            "ReplyCursorOrAdvancedPersists must retain deductive connection",
+            "  ReplyRouteV2Spec => []ReplyRouteV2SafetyInvariant\n",
+            "  ReplyRouteSpec => []ReplyRouteV2SafetyInvariant\n",
+            "ReplyRouteV2InductiveSafetyObligation must retain non-regressing",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRoutes.tla",
+            "AsyncReplyRouteFairness ==\n"
+            "  AsyncReplyRoute!ReplyRouteV2Fairness\n",
+            "AsyncReplyRouteFairness ==\n"
+            "  AsyncReplyRoute!ReplyRouteFairness\n",
+            "AsyncReplyRouteFairness must retain non-regressing",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRouteProofs.tla",
+            "      => AsyncReplyRoute!ReplyRouteV2Spec\n",
+            "      => AsyncReplyRoute!ReplyRouteSpec\n",
+            "AsyncProductionSpecAtProjectsReplyRouteV2SpecObligation must retain deductive connection",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRouteProofs.tla",
+            "THEOREM AsyncReplyRouteNextProjectionObligation ==\n",
+            "AsyncReplyRouteNextProjectionObligation ==\n",
+            "missing reviewed reply-route theorem AsyncReplyRouteNextProjectionObligation",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRouteProofs.tla",
+            "    => [AsyncReplyRoute!ReplyRouteV2Next]_AsyncReplyRouteVars\n",
+            "    => [AsyncReplyRoute!ReplyRouteNext]_AsyncReplyRouteVars\n",
+            "AsyncProductionBracketProjectsReplyV2BracketObligation must retain deductive connection",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRouteProofs.tla",
+            "BY AsyncReplyRouteNextProjectionObligation,\n"
+            "   AsyncProductionBracketProjectsAsyncBracketObligation,\n"
+            "   AsyncProductionBracketProjectsReplyV2BracketObligation\n",
+            "BY OBVIOUS\n",
+            "AsyncNetworkReplyRouteActionProjectionObligation must retain deductive connection",
         ),
         (
             "SumeragiV2ReplyRouteOwnership.tla",
@@ -5297,6 +5472,58 @@ def test_reply_route_ownership_source_fidelity_fails_closed(
             "AsyncReplyTenureAwareReplay must retain non-regressing",
         ),
         (
+            "SumeragiV2AsyncNetworkReplyRoutes.tla",
+            "       AsyncReplyRoute!ReturnOlderGenerationHintWithoutRoute(\n"
+            "         requester, responder, observedMessageHash)\n",
+            "       AsyncReplyRoute!RejectFutureGenerationWithoutMutation(\n"
+            "         requester, responder, observedMessageHash)\n",
+            "AsyncReplyRouteNext must retain non-regressing",
+        ),
+        (
+            "SumeragiV2ReplyRouteOwnership.tla",
+            "               semantic \\in ReplySemantics}\n"
+            "  /\\ UNCHANGED ReplyRouteV2Vars\n",
+            "               semantic \\in ReplySemantics}\n"
+            "  /\\ rrConnectionTenure[requester][responder]\n"
+            "       \\in ReplyConnectionTenures\n"
+            "  /\\ UNCHANGED ReplyRouteV2Vars\n",
+            "ReturnOlderGenerationHintWithoutRoute may not contain cursor-reset",
+        ),
+        (
+            "SumeragiV2ReplyRouteOwnershipProofs.tla",
+            "      => UNCHANGED ReplyRouteV2Vars\n",
+            "      => TRUE\n",
+            "ReplyOlderGenerationHintHasNoReplyRoute must retain deductive connection",
+        ),
+        (
+            "SumeragiV2ReplyRouteOwnershipProofs.tla",
+            "      => UNCHANGED ReplyRouteV2Vars\n",
+            "      => /\\ rrSourceActive[requester][responder]\n"
+            "         /\\ UNCHANGED ReplyRouteV2Vars\n",
+            "ReplyOlderGenerationHintHasNoReplyRoute may not depend on prohibited",
+        ),
+        (
+            "SumeragiV2ReplyRoutePipeline.tla",
+            "          /\\ ReturnOlderGenerationHintWithoutRoute(\n"
+            "               requester, responder, observedMessageHash)\n",
+            "          /\\ UNCHANGED ReplyRouteV2Vars\n",
+            "ReplyPipelineNext must retain non-regressing",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRoutes.tla",
+            "       AsyncReplyRoute!\n"
+            "         RejectRequesterEpochOverflowWithoutMutation(requester)\n",
+            "       AsyncReplyRoute!RejectResponderGenerationOverflow(requester)\n",
+            "AsyncReplyRouteNext must retain non-regressing",
+        ),
+        (
+            "SumeragiV2AsyncNetworkReplyRoutes.tla",
+            "       AsyncReplyRoute!\n"
+            "         RejectNonTerminalResponderCompactionWithoutMutation(source)\n",
+            "       AsyncReplyRoute!RejectResponderGenerationOverflow(source)\n",
+            "AsyncReplyRouteNext must retain non-regressing",
+        ),
+        (
             "SumeragiV2ReplyRouteOwnershipMutation.tla",
             "     /\\ attempts' = {updatedAttempt}\n",
             "     /\\ attempts' =\n"
@@ -5325,6 +5552,42 @@ def test_reply_route_ownership_source_fidelity_fails_closed(
         ),
         (
             "SumeragiV2ReplyRouteOwnershipMutation.tla",
+            "                   /\\ MutationRoute!\n"
+            "                        ReplyStaleArtifactCannotAffectSuccessor)\n",
+            "                   /\\ TRUE)\n",
+            "GenerationEpochLifecycleSafety must retain non-regressing",
+        ),
+        (
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
+            "       MutationRoute!ObserveNewReplySourceV2(\n"
+            "         0, RequestA, 0), 50)\n",
+            "       MutationRoute!ObserveNewReplySourceV2(\n"
+            "         0, RequestB, 0), 50)\n",
+            "CapacityActiveObserveStep must retain non-regressing",
+        ),
+        (
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
+            "                /\\ ~MutationRoute!ReplyResponderStateTerminal(0)\n",
+            "                /\\ MutationRoute!ReplyResponderStateTerminal(0)\n",
+            "CapacityOverflowLifecycleSafety must retain non-regressing",
+        ),
+        (
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "                /\\ MutationPipeline!\n"
+            "                     ReplyStaleChunkAckOrFlushCannotAffectSuccessor)\n",
+            "                /\\ TRUE)\n",
+            "PipelineGenerationEpochSafety must retain non-regressing",
+        ),
+        (
+            "SumeragiV2ReplyRoutePipelineMutation.tla",
+            "                MutationPipeline!ReplyPipelineItemOwned(\n"
+            "                  0, RequestA, Source))\n",
+            "                MutationPipeline!ReplyPendingAttachmentOwned(\n"
+            "                  0, RequestA, Source))\n",
+            "PipelineCapacityOverflowSafety must retain non-regressing",
+        ),
+        (
+            "SumeragiV2ReplyRouteOwnershipMutation.tla",
             "  /\\ BothSemanticAttemptsRetained\n",
             "  /\\ TRUE\n",
             "RouteMutationSafety must retain non-regressing",
@@ -5334,6 +5597,30 @@ def test_reply_route_ownership_source_fidelity_fails_closed(
             "PROPERTY RouteMutationTemporalProperties\n",
             "PROPERTY MutationRoute!ReplyTenureAwareReplay\n",
             "reply-route configuration must retain reviewed fragment",
+        ),
+        (
+            "reply_route_generation_epoch_fixed.cfg",
+            "INVARIANT GenerationEpochLifecycleSafety\n",
+            "INVARIANT RouteMutationSafety\n",
+            "reply-route configuration must retain reviewed fragment",
+        ),
+        (
+            "reply_route_capacity_overflow_fixed.cfg",
+            "INVARIANT CapacityOverflowLifecycleSafety\n",
+            "INVARIANT RouteMutationSafety\n",
+            "reply-route configuration must retain reviewed fragment",
+        ),
+        (
+            "reply_route_pipeline_generation_epoch_fixed.cfg",
+            "INVARIANT PipelineGenerationEpochSafety\n",
+            "INVARIANT PipelineMutationSafety\n",
+            "reply-route pipeline configuration must retain reviewed fragment",
+        ),
+        (
+            "reply_route_pipeline_capacity_overflow_fixed.cfg",
+            "INVARIANT PipelineCapacityOverflowSafety\n",
+            "INVARIANT PipelineMutationSafety\n",
+            "reply-route pipeline configuration must retain reviewed fragment",
         ),
     )
     for name, old, new, expected_error in mutations:
@@ -5381,9 +5668,49 @@ def test_reply_route_ownership_mutation_runner_fails_closed(
             "reply-route-cursor-reset-bug exactly once with status 12",
         ),
         (
-            '  "attempts = { [ connectionTenure |-> 1"\n',
+            '  "attempts = { [ semantic |-> \\"request-a\\""\n',
             '  "attempts were replaced"\n',
-            "must require exact counterexample marker",
+            "reply-route-source-replacement-bug must require exact markers",
+        ),
+        (
+            "  reply_route_generation_epoch_fixed.cfg 0 \\\n",
+            "  reply_route_generation_epoch_fixed.cfg 12 \\\n",
+            "reply-route-generation-epoch-fixed exactly once with status 0",
+        ),
+        (
+            '  "7 states generated, 7 distinct states found" \\\n',
+            '  "8 states generated, 7 distinct states found" \\\n',
+            "reply-route-generation-epoch-fixed must require exact markers",
+        ),
+        (
+            "  reply_route_capacity_overflow_fixed.cfg 0 \\\n",
+            "  reply_route_capacity_overflow_fixed.cfg 12 \\\n",
+            "reply-route-capacity-overflow-fixed exactly once with status 0",
+        ),
+        (
+            '  "5 states generated, 5 distinct states found" \\\n',
+            '  "6 states generated, 5 distinct states found" \\\n',
+            "reply-route-capacity-overflow-fixed must require exact markers",
+        ),
+        (
+            "  reply_route_pipeline_generation_epoch_fixed.cfg 0 \\\n",
+            "  reply_route_pipeline_generation_epoch_fixed.cfg 12 \\\n",
+            "reply-route-pipeline-generation-epoch-fixed exactly once with status 0",
+        ),
+        (
+            '  "11 states generated, 10 distinct states found" \\\n',
+            '  "12 states generated, 10 distinct states found" \\\n',
+            "reply-route-pipeline-generation-epoch-fixed must require exact markers",
+        ),
+        (
+            "  reply_route_pipeline_capacity_overflow_fixed.cfg 0 \\\n",
+            "  reply_route_pipeline_capacity_overflow_fixed.cfg 12 \\\n",
+            "reply-route-pipeline-capacity-overflow-fixed exactly once with status 0",
+        ),
+        (
+            '  "8 states generated, 7 distinct states found" \\\n',
+            '  "9 states generated, 7 distinct states found" \\\n',
+            "reply-route-pipeline-capacity-overflow-fixed must require exact markers",
         ),
     )
     for old, new, expected_error in mutations:
@@ -6911,8 +7238,8 @@ def test_transport_hardening_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "retire_unmaterialized_server_request",
-            "journal.persist(&projected)?;",
-            "let _ = journal.persist(&projected);",
+            "self.persist_lifecycle_projection(projected)?;",
+            "let _ = self.persist_lifecycle_projection(projected);",
             "publish its complete projection before mutating either in-memory owner",
         ),
         (
@@ -7005,24 +7332,29 @@ def test_transport_hardening_production_source_is_bound() -> None:
             'Err(MergeSidecarError::Capacity(\n'
             '            "server semantic requester geometry",\n'
             "        ))",
-            "self.roll_server_service_generation()?;\n"
-            "        Ok(())",
-            "stream-slot helper must reject immutable-capacity exhaustion without independently rolling",
+            "Ok(())",
+            "responder stream exhaustion must reject locally and never roll the service generation",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "admit_server_request",
-            "self.roll_server_service_generation()?;",
-            'return Err(MergeSidecarError::Capacity(\n'
-            '                "server semantic requester geometry",\n'
-            "            ));",
-            "full responder table may roll only through checked terminal compaction",
+            "self.ensure_server_stream_slot(sender)?;\n"
+            "        // Lower-generation probes returned above without touching lifecycle\n"
+            "        // state. Only current-generation admission may prune obsolete local\n"
+            "        // writer ownership or mutate a semantic gate.\n"
+            "        self.prune_server_gates(now)?;",
+            "self.prune_server_gates(now)?;\n"
+            "        self.ensure_server_stream_slot(sender)?;",
+            "full current-generation responder table rejects before pruning",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "admit_server_request",
             'return Err(MergeSidecarError::Capacity("server request gate geometry"));',
-            "self.roll_server_service_generation()?;\n"
+            "self.transition_server_service_generation(\n"
+            "                self.server_stream_capacity,\n"
+            "                self.server_roster_digest.clone(),\n"
+            "            )?;\n"
             '            return Err(MergeSidecarError::Capacity("server request gate geometry"));',
             "Request pressure must reject at each explicit bound",
         ),
@@ -7035,20 +7367,23 @@ def test_transport_hardening_production_source_is_bound() -> None:
             "if !self.server_streams.contains_key(sender) {\n"
             "            self.ensure_server_stream_slot(sender)?;\n"
             "        }",
-            "unknown current-generation canonical Close must return its exact-route CloseAck before touching responder state",
+            "unknown or duplicate current-generation canonical Close",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "admit_server_close",
             "if close.closed_through < stream.closed_through {",
             "if close.closed_through > stream.closed_through {",
-            "known Close streams must reject regressions",
+            "changing Close preflights durable mutation",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "admit_server_close",
             "let mut changed = false;",
-            "self.roll_server_service_generation()?;\n"
+            "self.transition_server_service_generation(\n"
+            "            self.server_stream_capacity,\n"
+            "            self.server_roster_digest.clone(),\n"
+            "        )?;\n"
             "        let mut changed = false;",
             "Close admission must never trigger a service-generation rollover",
         ),
@@ -7096,18 +7431,32 @@ def test_transport_hardening_production_source_is_bound() -> None:
         (
             "crates/irohad/src/main.rs",
             "certified_merge_sidecar_ingress_reply_route",
-            "iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
-            "iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => {\n"
-            "            Some(reply_route)\n"
-            "        },",
-            "discard the process-local reply route only for route-free GenerationHint",
+            "| iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_)\n"
+            "        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => Some(reply_route),",
+            "| iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => Some(reply_route),\n"
+            "        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
+            "preserve the authenticated reply route for every certified sidecar message",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "generation_hint_post",
+            "reply_route: Some(reply_route.clone()),",
             "reply_route: None,",
-            "reply_route: Some(todo!()),",
-            "GenerationHint must use route-free Consensus control traffic",
+            "GenerationHint must retain the authenticated Request or Close reply route",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "admit_server_request",
+            "let reply_route = reply_route.ok_or(MergeSidecarError::UnsolicitedResponse)?;",
+            "let reply_route = reply_route.unwrap_or_else(|| todo!());",
+            "stale Request admission must preserve its authenticated reply route",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "admit_server_close",
+            "let reply_route = reply_route.ok_or(MergeSidecarError::UnsolicitedResponse)?;",
+            "let reply_route = reply_route.unwrap_or_else(|| todo!());",
+            "unknown or duplicate current-generation canonical Close",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -7119,23 +7468,27 @@ def test_transport_hardening_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "retryable_sidecar_server_control_peer",
-            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_none()",
             "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_some()",
-            "GenerationHint remains route-free topology control",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_none()",
+            "GenerationHint must both retain exact reply-route ownership",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "lane_work_effect_reply_routes_have_valid_shape",
-            "CertifiedMergeSidecarMessage::CloseAck(_)",
-            "CertifiedMergeSidecarMessage::Request(_)",
-            "Request, Close, and GenerationHint must use topology while CloseAck",
+            "CertifiedMergeSidecarMessage::Request(_) | CertifiedMergeSidecarMessage::Close(_) => {",
+            "CertifiedMergeSidecarMessage::Request(_)\n"
+            "            | CertifiedMergeSidecarMessage::Close(_)\n"
+            "            | CertifiedMergeSidecarMessage::GenerationHint(_) => {",
+            "Request and Close must use topology while CloseAck, GenerationHint",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "lane_work_effect_reply_routes_are_valid",
-            "| CertifiedMergeSidecarMessage::GenerationHint(_) => reply_routes.is_none(),",
-            "| CertifiedMergeSidecarMessage::GenerationHint(_) => reply_routes.is_some(),",
-            "Request, Close, and GenerationHint must use topology while CloseAck",
+            "CertifiedMergeSidecarMessage::Request(_) | CertifiedMergeSidecarMessage::Close(_) => {",
+            "CertifiedMergeSidecarMessage::Request(_)\n"
+            "            | CertifiedMergeSidecarMessage::Close(_)\n"
+            "            | CertifiedMergeSidecarMessage::GenerationHint(_) => {",
+            "Request and Close must use topology while CloseAck, GenerationHint",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -7147,54 +7500,62 @@ def test_transport_hardening_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "accept_certified_merge_sidecar_generation_hint",
-            "if reply_route.is_some() {",
-            "if reply_route.is_none() {",
-            "GenerationHint ingress must reject process-local reply-route ownership",
+            "let Some(reply_route) = reply_route else {\n"
+            "            return Ok(V2LaneIngressOutcome::Rejected);\n"
+            "        };",
+            "let Some(reply_route) = reply_route else {\n"
+            "            return Ok(V2LaneIngressOutcome::Duplicate);\n"
+            "        };",
+            "GenerationHint ingress must require one active route",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "post_certified_merge_sidecar_with_reply_routes",
-            "reply_routes.is_none()",
-            "reply_routes.is_some()",
-            "worker dispatch must keep Request, Close, and GenerationHint on topology",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "post_certified_merge_sidecar_with_reply_routes",
-            "CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {\n"
-            "                reply_routes.is_some()\n"
-            "            }",
-            "CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {\n"
+            "CertifiedMergeSidecarMessage::Request(_) | CertifiedMergeSidecarMessage::Close(_) => {\n"
             "                reply_routes.is_none()\n"
             "            }",
-            "CloseAck and Chunk retain exact reply routes",
+            "CertifiedMergeSidecarMessage::Request(_) | CertifiedMergeSidecarMessage::Close(_) => {\n"
+            "                reply_routes.is_some()\n"
+            "            }",
+            "worker dispatch must keep Request and Close on topology",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "post_certified_merge_sidecar_with_reply_routes",
+            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "            | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
+            "            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),",
+            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "            | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
+            "            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_none(),",
+            "CloseAck, GenerationHint, and Chunk retain exact reply routes",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "retryable_certified_sidecar_responder_control_target",
-            "CertifiedMergeSidecarMessage::GenerationHint(_) => self\n"
-            "                    .targets\n"
-            "                    .iter()\n"
-            "                    .all(|route| matches!(&route.route, ExactTargetRoute::Topology)),",
-            "CertifiedMergeSidecarMessage::GenerationHint(_) => self\n"
-            "                    .targets\n"
-            "                    .iter()\n"
-            "                    .all(|route| matches!(&route.route, ExactTargetRoute::Reply(_))),",
-            "distinguish exact-route CloseAck from topology GenerationHint",
+            ".all(|route| matches!(&route.route, ExactTargetRoute::Reply(_))),",
+            ".all(|route| matches!(&route.route, ExactTargetRoute::Topology)),",
+            "exact reply ownership for CloseAck and GenerationHint",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "dispatch_lane_work_effect",
-            "reply_routes.is_none()",
-            "reply_routes.is_some()",
-            "runner dispatch must keep Request, Close, and GenerationHint on topology",
+            "CertifiedMergeSidecarMessage::Request(_)\n"
+            "                | CertifiedMergeSidecarMessage::Close(_) => reply_routes.is_none(),",
+            "CertifiedMergeSidecarMessage::Request(_)\n"
+            "                | CertifiedMergeSidecarMessage::Close(_) => reply_routes.is_some(),",
+            "runner dispatch must keep Request and Close on topology",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "dispatch_lane_work_effect",
-            "| CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),",
-            "| CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_none(),",
-            "CloseAck and Chunk retain exact reply routes",
+            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "                | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
+            "                | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),",
+            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "                | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
+            "                | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_none(),",
+            "CloseAck, GenerationHint, and Chunk retain exact reply routes",
         ),
     ),
 )
@@ -7669,230 +8030,369 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
     (
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
-            "  /\\ FailureLatchInvariant\n"
-            "  /\\ LateOldCallbackIsolationInvariant",
-            "  /\\ FailureLatchInvariant",
-            "TypedRolloverSafetyInvariant must equal exact reviewed",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "    /\\ PredecessorMismatchCandidateStepSafety\n"
-            "    /\\ WrongSuccessorCandidateStepSafety",
-            "    /\\ PredecessorMismatchCandidateStepSafety",
-            "TypedRolloverNextSatisfiesActionSafety must state only",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            r"        \/ ChangedRolloverRank7"
-            "\n"
-            r"        \/ ChangedRolloverRank8)",
-            r"        \/ ChangedRolloverRank7)",
-            "ChangedRolloverControlInvariant must equal exact reviewed",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "BY SMTT(180)\n"
-            "   DEF ChangedRolloverControlInvariant, PreValidationControl,",
-            "BY SMTT(179)\n"
-            "   DEF ChangedRolloverControlInvariant, PreValidationControl,",
-            "TypedRolloverNextPreservesControl proof must retain "
-            "reviewed tactic/composition fragments",
+            "   serverStreams |-> serverStreams,\n"
+            "   requestGates |-> requestGates]",
+            "   serverStreams |-> serverStreams]",
+            "LifecycleSnapshotV2 must equal exact reviewed sole-V2",
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
-            "ValidationCandidatePending ==\n"
-            r"  \/ foreignReceiptCandidatePresent"
-            "\n"
-            r'  \/ predecessorMismatchCandidateKind # "NoMismatch"'
-            "\n"
-            r"  \/ wrongSuccessorCandidatePresent",
-            "ValidationCandidatePending ==\n"
-            r"  \/ foreignReceiptCandidatePresent"
-            "\n"
-            r'  \/ predecessorMismatchCandidateKind # "NoMismatch"',
-            "ValidationCandidatePending must equal exact reviewed",
+            "AllOldLifecycleTerminal ==\n"
+            '  /\\ state.serverStreamState = "Terminal"\n'
+            '  /\\ state.requestGateState = "Terminal"\n'
+            '  /\\ state.transferState = "Terminal"\n'
+            '  /\\ state.flushState = "Terminal"',
+            "AllOldLifecycleTerminal ==\n"
+            '  /\\ state.serverStreamState = "Terminal"\n'
+            '  /\\ state.requestGateState = "Terminal"\n'
+            '  /\\ state.transferState = "Terminal"',
+            "AllOldLifecycleTerminal must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "              state.nextStreamEpoch + 1,\n"
+            "              state.serverStreamState,",
+            "              state.nextStreamEpoch,\n"
+            "              state.serverStreamState,",
+            "PersistFreshRequesterEpoch must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "PublishFreshRequesterEpoch ==\n"
+            "  /\\ RequesterEpochPersistenceAheadOfMemory\n",
+            "PublishFreshRequesterEpoch ==\n"
+            '  /\\ state.requesterEpochPhase = "Idle"\n',
+            "PublishFreshRequesterEpoch must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "RejectRequesterEpochOverflow ==\n"
+            '  /\\ state.requesterEpochPhase = "Idle"\n'
+            "  /\\ state.nextStreamEpoch = StreamEpochLimit\n"
+            "  /\\ ~state.capacityRejected\n"
+            "  /\\ state' =\n"
+            "       [state EXCEPT !.capacityRejected = TRUE]",
+            "RejectRequesterEpochOverflow ==\n"
+            '  /\\ state.requesterEpochPhase = "Idle"\n'
+            "  /\\ state.nextStreamEpoch = StreamEpochLimit\n"
+            "  /\\ ~state.capacityRejected\n"
+            "  /\\ state' =\n"
+            "       [state EXCEPT !.nextStreamEpoch = InitialNextStreamEpoch]",
+            "RejectRequesterEpochOverflow must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "          !.failureReason = "
+            '"CrashAfterRequesterEpochPersistence",\n'
+            "          !.skippedStreamEpoch = state.pendingStreamEpoch,\n"
+            "          !.epochCrashObserved = TRUE]",
+            "          !.failureReason = "
+            '"CrashAfterRequesterEpochPersistence",\n'
+            "          !.epochCrashObserved = TRUE]",
+            "CrashAfterRequesterEpochPersistence must equal exact reviewed "
+            "sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            '          !.requesterEpochPhase = "Idle",\n'
+            "          !.pendingStreamEpoch = 0,\n"
+            "          !.activeStreamEpoch = 0,\n"
+            "          !.restartRequired = FALSE,",
+            '          !.requesterEpochPhase = "Idle",\n'
+            "          !.pendingStreamEpoch = 0,\n"
+            "          !.restartRequired = FALSE,",
+            "RestoreRequesterEpochCounterAfterCrash must equal exact reviewed "
+            "sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "RejectActiveLifecycleCompaction ==\n"
+            "  /\\ ExactRetainedMergeSidecars\n"
+            "  /\\ CompactionNeeded\n"
+            "  /\\ ~AllOldLifecycleTerminal",
+            "RejectActiveLifecycleCompaction ==\n"
+            "  /\\ ExactRetainedMergeSidecars\n"
+            "  /\\ CompactionNeeded\n"
+            "  /\\ AllOldLifecycleTerminal",
+            "RejectActiveLifecycleCompaction must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "PersistSuccessorLifecycleSnapshotV2 ==\n"
+            "  /\\ ExactRetainedMergeSidecars\n"
+            "  /\\ CompactionNeeded\n"
+            "  /\\ AllOldLifecycleTerminal\n",
+            "PersistSuccessorLifecycleSnapshotV2 ==\n"
+            "  /\\ ExactRetainedMergeSidecars\n"
+            "  /\\ CompactionNeeded\n",
+            "PersistSuccessorLifecycleSnapshotV2 must equal exact reviewed "
+            "sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "              state.nextStreamEpoch,\n"
+            '              "Empty",\n'
+            '              "Empty"),\n'
+            '          !.lifecycleSnapshotPhase = "Persisted",',
+            "              state.nextStreamEpoch,\n"
+            '              "Empty",\n'
+            '              "Active"),\n'
+            '          !.lifecycleSnapshotPhase = "Persisted",',
+            "PersistSuccessorLifecycleSnapshotV2 must equal exact reviewed "
+            "sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            '  /\\ state.lifecycleSnapshotPhase \\in {"Persisted", "Restored"}',
+            '  /\\ state.lifecycleSnapshotPhase '
+            '\\in {"Current", "Persisted", "Restored"}',
+            "PublishPersistedLifecycleSnapshotV2 must retain sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "RejectGenerationOverflow ==\n"
+            "  /\\ state.successorActive\n"
+            "  /\\ state.serviceGeneration = GenerationLimit\n"
+            "  /\\ ~state.capacityRejected\n"
+            "  /\\ state' =\n"
+            "       [state EXCEPT !.capacityRejected = TRUE]",
+            "RejectGenerationOverflow ==\n"
+            "  /\\ state.successorActive\n"
+            "  /\\ state.serviceGeneration = GenerationLimit\n"
+            "  /\\ ~state.capacityRejected\n"
+            "  /\\ state' =\n"
+            "       [state EXCEPT !.serviceGeneration = GenerationLimit + 1]",
+            "RejectGenerationOverflow must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "  \\/ RejectRequesterEpochOverflow\n"
+            "  \\/ RejectActiveLifecycleCompaction\n"
+            "  \\/ TerminalizeServerStream",
+            "  \\/ RejectRequesterEpochOverflow\n"
+            "  \\/ TerminalizeServerStream",
+            "Next must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "  /\\ LifecycleSnapshotPhaseInvariant\n"
+            "  /\\ TerminalOnlyGenerationAdvanceInvariant\n"
+            "  /\\ SameRosterTransportPreservationInvariant",
+            "  /\\ LifecycleSnapshotPhaseInvariant\n"
+            "  /\\ SameRosterTransportPreservationInvariant",
+            "TypedRolloverSafetyInvariant must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "      /\\ LifecycleMemory(state') = LifecycleMemory(state)\n"
+            "      /\\ DurableLifecycle(state') = DurableLifecycle(state)",
+            "      /\\ LifecycleMemory(state') = LifecycleMemory(state)",
+            "CapacityRejectionStepSafety must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "AtomicLifecycleSnapshotV2PersistenceStepSafety ==\n"
+            "  state'.durableLifecycleSnapshotV2.generation >\n"
+            "    state.durableLifecycleSnapshotV2.generation\n"
+            "    =>\n"
+            "      /\\ AllOldLifecycleTerminal\n",
+            "AtomicLifecycleSnapshotV2PersistenceStepSafety ==\n"
+            "  state'.durableLifecycleSnapshotV2.generation >\n"
+            "    state.durableLifecycleSnapshotV2.generation\n"
+            "    =>\n",
+            "AtomicLifecycleSnapshotV2PersistenceStepSafety must equal exact "
+            "reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "      /\\ state.durableLifecycleSnapshotV2.serverStreams = "
+            '"Empty"\n'
+            "      /\\ state.durableLifecycleSnapshotV2.requestGates = "
+            '"Empty"\n'
+            '      /\\ state\'.serverStreamState = "Empty"',
+            "      /\\ state.durableLifecycleSnapshotV2.serverStreams = "
+            '"Empty"\n'
+            '      /\\ state\'.serverStreamState = "Empty"',
+            "LifecycleSnapshotV2PublicationStepSafety must equal exact "
+            "reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "RequesterEpochUseStepSafety ==\n"
+            "  (/\\ state.activeStreamEpoch = 0\n"
+            "   /\\ state'.activeStreamEpoch # 0)\n"
+            "    =>\n"
+            '      /\\ state.requesterEpochPhase = "Persisted"',
+            "RequesterEpochUseStepSafety ==\n"
+            "  (/\\ state.activeStreamEpoch = 0\n"
+            "   /\\ state'.activeStreamEpoch # 0)\n"
+            "    =>\n"
+            '      /\\ state.requesterEpochPhase = "Idle"',
+            "RequesterEpochUseStepSafety must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "  \\/ ObserveLateOldWriterCallback\n\n"
+            "TypedRolloverSpec ==",
+            "  \\/ ObserveLateOldWriterCallback\n"
+            "  \\/ PersistNextServiceHighWater\n\n"
+            "TypedRolloverSpec ==",
+            "retired split/high-water or terminality-bypass token "
+            "PersistNextServiceHighWater",
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "    /\\ (wrongSuccessorCandidatePresent =>\n"
-            "          wrongSuccessorCandidatePresent' \\/ restartRequired')\n"
-            "BY TypedRolloverNextSatisfiesActionSafety, SMTT(30)",
-            "BY TypedRolloverNextSatisfiesActionSafety, SMTT(30)",
-            "ValidationCandidatesPersistOrFail must state only",
+            "THEOREM TypedRolloverNextPreservesSafetyObligation ==",
+            "THEOREM TypedRolloverNextMayBreakSafetyObligation ==",
+            "missing reviewed proofless typed rollover theorem "
+            "TypedRolloverNextPreservesSafetyObligation",
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "BY ValidationCandidatesLeadToRestart, PTL\n"
-            "   DEF ValidationCandidatePending",
-            "BY ValidationCandidatesLeadToRestart\n"
-            "   DEF ValidationCandidatePending",
-            "ValidationCandidateLeadsToRestart proof must retain "
-            "reviewed tactic/composition fragments",
+            "THEOREM TypedRolloverSpecAlwaysSafeObligation ==\n"
+            "  TypedRolloverSpec => []TypedRolloverSafetyInvariant\n",
+            "THEOREM TypedRolloverSpecAlwaysSafeObligation ==\n"
+            "  TypedRolloverSpec => []TypedRolloverSafetyInvariant\n"
+            "BY OBVIOUS\n",
+            "specified_unproved typed rollover obligations must remain "
+            "proofless",
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "    /\\ (wrongSuccessorCandidatePresent =>\n"
-            "          ENABLED\n"
-            "            <<RejectWrongImmediateSuccessor>>_typedRolloverVars)",
-            "    /\\ (wrongSuccessorCandidatePresent =>\n"
-            "          ENABLED\n"
-            "            <<RejectSameContextForeignOwnerReceipt>>"
-            "_typedRolloverVars)",
-            "ValidationCandidateRejectActionsEnabled must state only",
+            "THEOREM ResponsiveChangedRosterRolloverLivenessObligation ==\n"
+            "  ResponsiveChangedRosterRolloverLiveness\n",
+            "THEOREM ResponsiveChangedRosterRolloverLivenessObligation ==\n"
+            "  ResponsiveChangedRosterRolloverLiveness\n"
+            "BY PTL\n",
+            "specified_unproved typed rollover obligations must remain "
+            "proofless",
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "  /\\ (<<RejectMismatchedPredecessorReceipt>>"
-            "_typedRolloverVars =>\n"
-            "        restartRequired')\n"
-            "  /\\ (<<RejectWrongImmediateSuccessor>>_typedRolloverVars =>\n"
-            "        restartRequired')\n"
-            "BY DEF RejectSameContextForeignOwnerReceipt,",
-            "  /\\ (<<RejectMismatchedPredecessorReceipt>>"
-            "_typedRolloverVars =>\n"
-            "        restartRequired')\n"
-            "BY DEF RejectSameContextForeignOwnerReceipt,",
-            "ValidationCandidateRejectActionsExit must state only",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "  => []~ValidationCandidatePending\n"
-            "BY ValidationCandidateLeadsToRestart, PTL",
-            "  => <>~ValidationCandidatePending\n"
-            "BY ValidationCandidateLeadsToRestart, PTL",
-            "NoFailureExcludesValidationCandidates must state only",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "BY ValidationCandidateLeadsToRestart, PTL\n"
-            "   DEF NoRolloverFailure",
-            "BY PTL\n"
-            "   DEF NoRolloverFailure",
-            "NoFailureExcludesValidationCandidates proof must retain exact "
-            "acyclic dependencies",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "ChangedRolloverRank8Exit ==\n"
-            r"  \/ ChangedRolloverRank7"
-            "\n"
-            r"  \/ ChangedRolloverRank7Exit",
-            "ChangedRolloverRank8Exit ==\n"
-            r"  \/ ChangedRolloverRank6"
-            "\n"
-            r"  \/ ChangedRolloverRank7Exit",
-            "ChangedRolloverRank8Exit must equal exact reviewed",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "    /\\ (ChangedRolloverRank7\n"
-            "          ~> ChangedRosterSuccessorActiveWithoutRestart)\n"
-            "    /\\ (ChangedRolloverRank8\n"
-            "          ~> ChangedRosterSuccessorActiveWithoutRestart)\n"
-            "BY ChangedRolloverRanksLeadToExit,",
-            "    /\\ (ChangedRolloverRank7\n"
-            "          ~> ChangedRosterSuccessorActiveWithoutRestart)\n"
-            "BY ChangedRolloverRanksLeadToExit,",
-            "FailureFreeChangedRolloverRanksLeadToGoal must state only",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "   ChangedRolloverRankBracketClosure,\n"
-            "   ChangedRolloverRankFairActionsEnabled,\n"
-            "   ChangedRolloverRankFairActionsExit, PTL",
-            "   ChangedRolloverRankBracketClosure,\n"
-            "   ChangedRolloverRankFairActionsExit, PTL",
-            "ChangedRolloverRanksLeadToExit proof must retain exact "
-            "acyclic dependencies",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "    (ChangedRosterValidated\n"
-            "       ~> ChangedRosterSuccessorActiveWithoutRestart)\n"
-            "BY TypedRolloverSpecAlwaysControl,",
-            "    (ChangedRosterValidated ~> restartRequired)\n"
-            "BY TypedRolloverSpecAlwaysControl,",
-            "ConditionalResponsiveChangedRosterRolloverLiveness must "
-            "state only",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "THEOREM ResponsiveChangedRosterRolloverLivenessFromWeakFairness ==\n"
-            "  ResponsiveTypedRolloverSpec =>\n"
-            "    ResponsiveChangedRosterRolloverLiveness\n"
-            "BY ConditionalResponsiveChangedRosterRolloverLiveness, PTL",
-            "THEOREM ResponsiveChangedRosterRolloverLivenessFromWeakFairness ==\n"
-            "  ResponsiveTypedRolloverSpec =>\n"
-            "    ChangedRosterSuccessorActiveWithoutRestart\n"
-            "BY ConditionalResponsiveChangedRosterRolloverLiveness, PTL",
-            "ResponsiveChangedRosterRolloverLivenessFromWeakFairness "
+            "    /\\ LifecycleMemory(state') = LifecycleMemory(state)\n"
+            "    /\\ DurableLifecycle(state') = DurableLifecycle(state)\n\n"
+            "THEOREM GenerationOverflowReturnsCapacityAtomicallyObligation",
+            "    /\\ LifecycleMemory(state') = LifecycleMemory(state)\n\n"
+            "THEOREM GenerationOverflowReturnsCapacityAtomicallyObligation",
+            "ActiveLifecycleCompactionReturnsCapacityAtomicallyObligation "
             "must state only",
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "BY ConditionalResponsiveChangedRosterRolloverLiveness, PTL\n"
-            "   DEF ResponsiveChangedRosterRolloverLiveness,",
-            "BY ConditionalResponsiveChangedRosterRolloverLiveness\n"
-            "   DEF ResponsiveChangedRosterRolloverLiveness,",
-            "ResponsiveChangedRosterRolloverLivenessFromWeakFairness proof "
-            "must retain reviewed tactic/composition fragments",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
-            "<1>25. CASE RejectWrongImmediateSuccessor",
-            "<1>25. CASE RejectWrongImmediateSuccessorMutant",
-            "must enumerate all 25 Next actions in reviewed order",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
-            "NoRolloverFailure ==\n"
-            "  [](/\\ failureReason = \"None\"\n"
-            "     /\\ ~restartRequired)",
-            "NoRolloverFailure ==\n"
-            "  [](/\\ failureReason = \"None\"\n"
-            "     /\\ restartRequired)",
-            "NoRolloverFailure must equal exact reviewed",
-        ),
-        (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
-            "  /\\ WF_typedRolloverVars(TypedChangedRosterTransition)",
-            "  /\\ SF_typedRolloverVars(TypedChangedRosterTransition)",
-            "may use only the reviewed finite local weak-fair actions",
+            "    /\\ AllOldLifecycleTerminal\n"
+            "    /\\ state'.durableLifecycleSnapshotV2 =",
+            "    /\\ state'.durableLifecycleSnapshotV2 =",
+            "TerminalCompactionPersistsAtomicSoleV2SnapshotObligation must "
+            "state only",
         ),
         (
             "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
-            '   \"LoseSameRosterRetry\"}',
-            '   \"LoseRetry\"}',
-            "MutationModes must equal exact reviewed",
+            '   "EpochReuseAfterCrash",\n'
+            '   "EpochOverflowWrap"}',
+            '   "EpochReuseAfterCrash",\n'
+            '   "EpochCounterWrap"}',
+            "MutationModes must equal exact reviewed sole-V2",
         ),
         (
-            "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
-            "foreign-candidate-ignored|"
-            "typed_rollover_handoff_foreign_candidate_ignored_bug.cfg|13|",
-            "foreign-candidate-ignored|"
-            "typed_rollover_handoff_foreign_candidate_ignored_bug.cfg|12|",
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            '    [] MutationMode = "EpochUseBeforePersist" ->\n'
+            "         UseRequesterEpochBeforePersistence",
+            '    [] MutationMode = "EpochUseBeforePersist" ->\n'
+            "         WrapRequesterEpochCounter",
+            "SelectedMutationAction must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            "RollActiveLifecycleState ==\n"
+            "  /\\ ExactRetainedMergeSidecars\n"
+            "  /\\ CompactionNeeded\n"
+            "  /\\ ~AllOldLifecycleTerminal",
+            "RollActiveLifecycleState ==\n"
+            "  /\\ ExactRetainedMergeSidecars\n"
+            "  /\\ CompactionNeeded\n"
+            "  /\\ AllOldLifecycleTerminal",
+            "RollActiveLifecycleState must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            "UseRequesterEpochBeforePersistence ==\n"
+            '  /\\ state.requesterEpochPhase = "Idle"\n'
+            "  /\\ state.nextStreamEpoch < StreamEpochLimit",
+            "UseRequesterEpochBeforePersistence ==\n"
+            '  /\\ state.requesterEpochPhase = "Persisted"\n'
+            "  /\\ state.nextStreamEpoch < StreamEpochLimit",
+            "UseRequesterEpochBeforePersistence must equal exact reviewed "
+            "sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            "          !.activeStreamEpoch = state.skippedStreamEpoch,\n"
+            "          !.restartRequired = FALSE,",
+            "          !.activeStreamEpoch = state.nextStreamEpoch,\n"
+            "          !.restartRequired = FALSE,",
+            "ReuseRequesterEpochAfterCrash must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            "WrapGenerationCounter ==\n"
+            "  /\\ state.successorActive\n"
+            "  /\\ state.serviceGeneration = GenerationLimit\n"
+            "  /\\ state' =\n"
+            "       [state EXCEPT\n"
+            "          !.serviceGeneration = GenerationLimit + 1,",
+            "WrapGenerationCounter ==\n"
+            "  /\\ state.successorActive\n"
+            "  /\\ state.serviceGeneration = GenerationLimit\n"
+            "  /\\ state' =\n"
+            "       [state EXCEPT\n"
+            "          !.serviceGeneration = InitialGeneration,",
+            "WrapGenerationCounter must equal exact reviewed sole-V2",
+        ),
+        (
+            "docs/formal/sumeragi_v2/typed_rollover_handoff_fixed.cfg",
+            "PROPERTY LifecycleSnapshotV2PublicationActionProperty\n"
+            "PROPERTY RequesterEpochUseActionProperty",
+            "PROPERTY LifecycleSnapshotV2PublicationActionProperty",
+            "fixed typed rollover configuration must contain exactly",
+        ),
+        (
+            "docs/formal/sumeragi_v2/"
+            "typed_rollover_handoff_epoch_use_before_persist_bug.cfg",
+            'CONSTANT MutationMode = "EpochUseBeforePersist"',
+            'CONSTANT MutationMode = "EpochOverflowWrap"',
+            "mutation config must select exact mode EpochUseBeforePersist",
+        ),
+        (
+            "scripts/formal/"
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            "epoch-use-before-persist|"
+            "typed_rollover_handoff_epoch_use_before_persist_bug.cfg|12|",
+            "epoch-use-before-persist|"
+            "typed_rollover_handoff_epoch_use_before_persist_bug.cfg|13|",
             "typed rollover-handoff mutation matrix must list",
         ),
         (
-            "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
-            "228 states generated, 131 distinct states found, "
+            "scripts/formal/"
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            "6878 states generated, 2799 distinct states found, "
             "0 states left on queue.",
-            "228 states generated, 130 distinct states found, "
+            "6877 states generated, 2799 distinct states found, "
             "0 states left on queue.",
             "fixed typed rollover case must retain exact status/count/depth",
         ),
         (
-            "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            "scripts/formal/"
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
             "  SumeragiV2TypedRolloverHandoffProofs; do",
             "  SumeragiV2TypedRolloverHandoffMutation; do",
             "must SANY-parse the base, mutation, and proof modules exactly once",
         ),
         (
-            "docs/formal/sumeragi_v2/typed_rollover_handoff_fixed.cfg",
-            "PROPERTY PredecessorMismatchCandidateActionProperty\n"
-            "PROPERTY WrongSuccessorCandidateActionProperty",
-            "PROPERTY PredecessorMismatchCandidateActionProperty",
-            "fixed typed rollover configuration must contain exactly",
+            "scripts/formal/"
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+            "readonly EXPECTED_MUTATION_COUNT=25",
+            "readonly EXPECTED_MUTATION_COUNT=24",
+            "runner must retain exact 25-case matrix/inventory fragment",
         ),
     ),
 )
@@ -7912,91 +8412,6 @@ def test_typed_rollover_handoff_semantic_mutations_fail_closed(
     )
 
     assert any(error_fragment in error for error in errors), errors
-
-
-@pytest.mark.parametrize(
-    ("rank", "action", "replacement"),
-    (
-        (1, "TypedChangedRosterTransition", "CloseWorkerIngress"),
-        (2, "PersistNextServiceHighWater", "CloseWorkerIngress"),
-        (
-            3,
-            "ConsumeReceiptIntoRetainedMergeSidecars",
-            "CloseWorkerIngress",
-        ),
-        (4, "BeginExactSuccessorConstruction", "CloseWorkerIngress"),
-        (5, "SealAppliedHeightOutputHandoff", "CloseWorkerIngress"),
-        (6, "ClearOneWorkerExactOutput", "CloseWorkerIngress"),
-        (7, "ClearOneWorkerExactOutput", "CloseWorkerIngress"),
-        (8, "CloseWorkerIngress", "TypedChangedRosterTransition"),
-    ),
-)
-def test_typed_rollover_each_rank_fair_action_mapping_fails_closed(
-    tmp_path: Path,
-    rank: int,
-    action: str,
-    replacement: str,
-) -> None:
-    module = load_checker()
-    proof_relative = Path(
-        "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla"
-    )
-
-    enabled_root = tmp_path / "enabled"
-    enabled_formal_dir = copy_typed_rollover_handoff_formal_fixture(
-        enabled_root, module
-    )
-    if rank == 3:
-        enabled_fragment = (
-            f"  /\\ (ChangedRolloverRank{rank} =>\n"
-            "        ENABLED\n"
-            f"          <<{action}>>_typedRolloverVars)"
-        )
-    else:
-        enabled_fragment = (
-            f"  /\\ (ChangedRolloverRank{rank} =>\n"
-            f"        ENABLED <<{action}>>_typedRolloverVars)"
-        )
-    mutate_source_once(
-        enabled_root / proof_relative,
-        enabled_fragment,
-        enabled_fragment.replace(action, replacement, 1),
-    )
-    enabled_errors = (
-        module._typed_rollover_handoff_formal_source_fidelity_errors(
-            enabled_formal_dir, enabled_root
-        )
-    )
-    assert any(
-        "ChangedRolloverRankFairActionsEnabled must state only" in error
-        for error in enabled_errors
-    ), enabled_errors
-
-    exit_root = tmp_path / "exit"
-    exit_formal_dir = copy_typed_rollover_handoff_formal_fixture(
-        exit_root, module
-    )
-    exit_fragment = (
-        f"  /\\ (/\\ ChangedRolloverRank{rank}\n"
-        f"      /\\ <<{action}>>_typedRolloverVars\n"
-        f"      => ChangedRolloverRank{rank}Exit')"
-    )
-    mutate_source_once(
-        exit_root / proof_relative,
-        exit_fragment,
-        exit_fragment.replace(action, replacement, 1),
-    )
-    exit_errors = (
-        module._typed_rollover_handoff_formal_source_fidelity_errors(
-            exit_formal_dir, exit_root
-        )
-    )
-    assert any(
-        "ChangedRolloverRankFairActionsExit must state only" in error
-        for error in exit_errors
-    ), exit_errors
-
-
 def test_typed_rollover_handoff_rejects_unexpected_config(
     tmp_path: Path,
 ) -> None:
@@ -10122,16 +10537,16 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn retryable_sidecar_server_control_peer(",
-            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_none()",
             "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_some()",
-            "lane retryable responder controls must retain exact-route CloseAck and route-free GenerationHint as distinct shapes",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_none()",
+            "lane retryable responder controls must retain exact reply ownership for CloseAck and GenerationHint during per-peer coalescing",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn retryable_sidecar_server_control_peer(",
             "CertifiedMergeSidecarMessage::CloseAck(_) if reply_routes.is_some()",
             "CertifiedMergeSidecarMessage::CloseAck(_) if reply_routes.is_none()",
-            "lane retryable responder controls must retain exact-route CloseAck and route-free GenerationHint as distinct shapes",
+            "lane retryable responder controls must retain exact reply ownership for CloseAck and GenerationHint during per-peer coalescing",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -10363,25 +10778,17 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn retryable_certified_sidecar_responder_control_target(",
-            "CertifiedMergeSidecarMessage::GenerationHint(_) => self\n"
-            "                    .targets\n"
-            "                    .iter()\n"
-            "                    .all(|route| matches!(&route.route, ExactTargetRoute::Topology)),",
-            "CertifiedMergeSidecarMessage::GenerationHint(_) => false,",
-            "worker retryable responder control must use exact reply ownership for CloseAck and topology ownership for route-free GenerationHint",
+            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "                | CertifiedMergeSidecarMessage::GenerationHint(_) => self",
+            "CertifiedMergeSidecarMessage::CloseAck(_) => self",
+            "worker retryable responder control must use exact reply ownership for CloseAck and GenerationHint",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn retryable_certified_sidecar_responder_control_target(",
-            "CertifiedMergeSidecarMessage::CloseAck(_) => self\n"
-            "                    .targets\n"
-            "                    .iter()\n"
-            "                    .all(|route| matches!(&route.route, ExactTargetRoute::Reply(_))),",
-            "CertifiedMergeSidecarMessage::CloseAck(_) => self\n"
-            "                    .targets\n"
-            "                    .iter()\n"
-            "                    .all(|route| matches!(&route.route, ExactTargetRoute::Topology)),",
-            "worker retryable responder control must use exact reply ownership for CloseAck and topology ownership for route-free GenerationHint",
+            ".all(|route| matches!(&route.route, ExactTargetRoute::Reply(_))),",
+            ".all(|route| matches!(&route.route, ExactTargetRoute::Topology)),",
+            "worker retryable responder control must use exact reply ownership for CloseAck and GenerationHint",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -10437,13 +10844,13 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "pub(crate) fn post_certified_merge_sidecar_with_reply_routes(",
-            "CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {\n"
-            "                reply_routes.is_some()\n"
-            "            }",
-            "CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {\n"
-            "                reply_routes.is_none()\n"
-            "            }",
-            "worker sidecar dispatch must keep Request, Close, and GenerationHint on topology while CloseAck and Chunk retain exact reply routes",
+            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "            | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
+            "            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),",
+            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "            | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
+            "            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_none(),",
+            "worker sidecar dispatch must keep Request and Close on topology while CloseAck, GenerationHint, and Chunk retain exact reply routes",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -10817,9 +11224,72 @@ LOCAL THEOREM LocalPending == TRUE
     )
 
 
+def test_typed_rollover_proofless_support_uses_exact_aggregate_debt() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    obligations = [
+        obligation
+        for obligation in ledger["obligations"]
+        if obligation["id"]
+        in {
+            "typed-rollover-handoff-model-safety",
+            "typed-rollover-handoff-conditional-local-liveness",
+        }
+    ]
+    source = (
+        module.FORMAL_DIR / "SumeragiV2TypedRolloverHandoffProofs.tla"
+    ).read_text(encoding="utf-8")
+    sources = {"SumeragiV2TypedRolloverHandoffProofs": source}
+
+    assert module._proofless_release_theorem_errors(
+        obligations, sources
+    ) == []
+
+    wrong_symbol = copy.deepcopy(obligations)
+    safety = next(
+        obligation
+        for obligation in wrong_symbol
+        if obligation["id"] == "typed-rollover-handoff-model-safety"
+    )
+    safety["symbol"] = "TypedRolloverSpecAlwaysSafeObligation"
+    errors = module._proofless_release_theorem_errors(wrong_symbol, sources)
+    assert any(
+        "TypedRolloverInitEstablishesSafetyObligation must have exactly one "
+        "ledger entry" in error
+        for error in errors
+    ), errors
+
+    falsely_proved = copy.deepcopy(obligations)
+    safety = next(
+        obligation
+        for obligation in falsely_proved
+        if obligation["id"] == "typed-rollover-handoff-model-safety"
+    )
+    safety["status"] = "tlaps_proved"
+    errors = module._proofless_release_theorem_errors(
+        falsely_proved, sources
+    )
+    assert any(
+        "TypedRolloverInitEstablishesSafetyObligation must be ledgered "
+        "specified_unproved" in error
+        for error in errors
+    ), errors
+
+
 def test_release_obligations_are_bound_to_direct_production_specs() -> None:
     module = load_checker()
 
+    liveness_statement_by_obligation = {
+        obligation_id: module.ASYNC_LIVENESS_EXACT_STATEMENTS.get(
+            obligation_id,
+            (
+                "\\A initialContext: "
+                f"{module.ASYNC_LIVENESS_PROPERTY_WRAPPERS[obligation_id]}"
+                "(AsyncSpecAt(initialContext))"
+            ),
+        )
+        for obligation_id in module.ASYNC_LIVENESS_OBLIGATIONS
+    }
     safety_source = "---- MODULE SumeragiV2Proofs ----\n" + "\n".join(
         f"THEOREM {symbol} ==\n"
         f"  \\A initialContext: "
@@ -10832,11 +11302,7 @@ def test_release_obligations_are_bound_to_direct_production_specs() -> None:
         "---- MODULE SumeragiV2AsyncLivenessProofs ----\n"
         + "\n".join(
             f"THEOREM {symbol} ==\n"
-            f"  \\A initialContext: "
-            f"{module.ASYNC_LIVENESS_PROPERTY_WRAPPERS[obligation_id]}"
-            "("
-            f"{'AsyncLiveSpecAt' if obligation_id == 'rotating-leader-liveness' else 'AsyncSpecAt'}"
-            "(initialContext))\n"
+            f"  {liveness_statement_by_obligation[obligation_id]}\n"
             "BY PTL"
             for obligation_id, symbol in module.ASYNC_LIVENESS_OBLIGATIONS.items()
         )
@@ -10879,6 +11345,16 @@ def test_release_obligations_are_bound_to_direct_production_specs() -> None:
         }
         for obligation_id, target in module.FIXED_PROOF_OBLIGATION_TARGETS.items()
     ]
+    present_obligation_ids = {obligation["id"] for obligation in obligations}
+    obligations.extend(
+        {
+            "id": obligation_id,
+            "module": target[0],
+            "symbol": target[1],
+        }
+        for obligation_id, target in module.REQUIRED_PROOF_OBLIGATION_INVENTORY.items()
+        if obligation_id not in present_obligation_ids
+    )
     sources = {
         "SumeragiV2Proofs": safety_source,
         "SumeragiV2AsyncLivenessProofs": liveness_source,
@@ -20338,6 +20814,208 @@ def test_live_fixed_obligation_statements_are_exact(
     assert any(f"{symbol} must state only" in error for error in errors), errors
 
 
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            "node \\in AsyncCurrentResponsiveVoters",
+            "node \\in ValidatorIds",
+        ),
+        (
+            "\\/ HistoricalRecoveryTarget(node)",
+            "\\/ FALSE",
+        ),
+    ),
+)
+def test_decision_exact_source_owner_generalization_is_exact(
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2DecisionWitnessPreservationProofs"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    sources = {
+        target_module: mutate_tla_operator(
+            source,
+            "DecisionExactSourceOwner",
+            old,
+            new,
+        )
+    }
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        sources,
+    )
+
+    assert any(
+        "DecisionExactSourceOwner must equal only" in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("target_module", "symbol"),
+    (
+        (
+            "SumeragiV2DecisionWitnessPreservationProofs",
+            "DecisionExactRetentionFrame",
+        ),
+        (
+            "SumeragiV2ProgressWitnessFinalClosureProofs",
+            "FinalWitnessMonotoneCarrierFrame",
+        ),
+    ),
+)
+def test_decision_exact_source_union_frames_cannot_drop_historical_targets(
+    target_module: str,
+    symbol: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    old = (
+        "  /\\ (AsyncCurrentResponsiveVoters'\n"
+        "        \\cup asyncHistoricalRecoveryTargets')\n"
+        "       \\subseteq\n"
+        "         (AsyncCurrentResponsiveVoters\n"
+        "            \\cup asyncHistoricalRecoveryTargets)"
+    )
+    new = (
+        "  /\\ AsyncCurrentResponsiveVoters'\n"
+        "       \\subseteq AsyncCurrentResponsiveVoters"
+    )
+    sources = {
+        target_module: mutate_tla_operator(source, symbol, old, new)
+    }
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        sources,
+    )
+
+    assert any(f"{symbol} must equal only" in error for error in errors), errors
+
+
+def test_open_historical_recovery_decision_preservation_statement_is_exact() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2ProgressWitnessFinalClosureProofs"
+    symbol = "OpenHistoricalRecoveryPreservesDecisionExactSource"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    sources = {
+        target_module: mutate_tla_theorem(
+            source,
+            symbol,
+            "    /\\ OpenHistoricalRecovery(node)\n",
+            "    /\\ TRUE\n",
+        )
+    }
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        sources,
+    )
+
+    assert any(f"{symbol} must state only" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("target_module", "symbol", "old", "new", "missing_token"),
+    (
+        (
+            "SumeragiV2DecisionWitnessPreservationProofs",
+            "DecisionExactRetentionFramePreservesSource",
+            "HistoricalRecoveryTarget",
+            "RetiredHistoricalOwner",
+            "HistoricalRecoveryTarget",
+        ),
+        (
+            "SumeragiV2ProgressWitnessFinalClosureProofs",
+            "OpenHistoricalRecoveryPreservesDecisionExactSource",
+            "~NodeHasDecision(node)",
+            "TRUE",
+            "~NodeHasDecision(node)",
+        ),
+        (
+            "SumeragiV2ProgressWitnessFinalClosureProofs",
+            "OpenHistoricalRecoveryPreservesFinalProgressWitnessClosure",
+            "OpenHistoricalRecoveryPreservesDecisionExactSource",
+            "FinalMonotoneCarrierFramePreservesClosure",
+            "OpenHistoricalRecoveryPreservesDecisionExactSource",
+        ),
+        (
+            "SumeragiV2ApplicationCompletionProofs",
+            "ExactDecisionSourceProjectsPostGstServiceStage",
+            "DecisionExactSourceOwner,",
+            "GeneralizedSourceOwnerRemoved,",
+            "DecisionExactSourceOwner",
+        ),
+    ),
+)
+def test_historical_decision_source_owner_dependencies_are_connected(
+    target_module: str,
+    symbol: str,
+    old: str,
+    new: str,
+    missing_token: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    sources = {
+        target_module: mutate_tla_theorem(source, symbol, old, new)
+    }
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        sources,
+    )
+
+    assert any(
+        f"{symbol} must retain reviewed proof dependencies" in error
+        and missing_token in error
+        for error in errors
+    ), errors
+
+
+def test_open_historical_recovery_cannot_fold_into_monotone_frame_path() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2ProgressWitnessFinalClosureProofs"
+    symbol = "AsyncNonRunnerPreservesFinalProgressWitnessClosure"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    sources = {
+        target_module: mutate_tla_theorem(
+            source,
+            symbol,
+            "OpenHistoricalRecoveryPreservesFinalProgressWitnessClosure",
+            "FinalMonotoneCarrierFramePreservesClosure",
+        )
+    }
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        sources,
+    )
+
+    assert any(
+        "must keep OpenHistoricalRecovery on its dedicated preservation branch"
+        in error
+        for error in errors
+    ), errors
+
+
 def test_chain_rejects_standalone_catch_up_state_and_transition(
     tmp_path: Path,
 ) -> None:
@@ -22521,7 +23199,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 704 tests",
+            "must contain exactly 705 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -22529,9 +23207,9 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=704",
+            "readonly expected_production_liveness_test_count=705",
             "readonly expected_production_liveness_test_count=701",
-            "production liveness source count must be sealed as 704",
+            "production liveness source count must be sealed as 705",
         ),
         (
             "readonly expected_multilane_focus_test_count=277",
@@ -22612,6 +23290,7 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -22624,6 +23303,19 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
 
     errors = module._production_liveness_release_inventory_errors(tmp_path)
     assert any(expected_error in error for error in errors), errors
+
+
+def assert_only_frozen_g_unit_inventory_drift(module, repo_root: Path) -> None:
+    """Require the one intentionally unresealed G-UNIT inventory residual."""
+
+    errors = module._production_liveness_release_inventory_errors(repo_root)
+    assert len(errors) == 1, errors
+    assert "canonical G-UNIT leg/crate/test inventory SHA-256" in errors[0]
+    assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 in errors[0]
+    assert (
+        "found 9ac5508323573c9dfc6e4e6f219befd13a62ef59e8c611e6374f5706145b61fd"
+        in errors[0]
+    )
 
 
 def test_production_release_inventory_seals_later_genesis_proposal_origin(
@@ -22643,6 +23335,7 @@ def test_production_release_inventory_seals_later_genesis_proposal_origin(
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
     )
     for relative in required_paths:
@@ -22650,7 +23343,7 @@ def test_production_release_inventory_seals_later_genesis_proposal_origin(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / relative, destination)
 
-    assert module._production_liveness_release_inventory_errors(tmp_path) == []
+    assert_only_frozen_g_unit_inventory_drift(module, tmp_path)
 
     finality_path = (
         tmp_path
@@ -22694,6 +23387,7 @@ def test_production_release_inventory_seals_contention_tolerant_restart_deadline
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
     )
     for relative in required_paths:
@@ -22701,7 +23395,7 @@ def test_production_release_inventory_seals_contention_tolerant_restart_deadline
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / relative, destination)
 
-    assert module._production_liveness_release_inventory_errors(tmp_path) == []
+    assert_only_frozen_g_unit_inventory_drift(module, tmp_path)
 
     runner_path = tmp_path / "integration_tests" / "tests" / "sumeragi_v2_runner.rs"
     source = runner_path.read_text(encoding="utf-8")
@@ -22741,6 +23435,7 @@ def test_production_release_inventory_seals_successor_parent_binding(
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
     )
     for relative in required_paths:
@@ -22748,7 +23443,7 @@ def test_production_release_inventory_seals_successor_parent_binding(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / relative, destination)
 
-    assert module._production_liveness_release_inventory_errors(tmp_path) == []
+    assert_only_frozen_g_unit_inventory_drift(module, tmp_path)
 
     adapter_path = tmp_path / "crates" / "iroha_core" / "src" / "sumeragi" / "v2.rs"
     canonical_source = adapter_path.read_text(encoding="utf-8")
@@ -22786,32 +23481,86 @@ def test_production_release_inventory_seals_successor_parent_binding(
         adapter_path.write_text(canonical_source, encoding="utf-8")
 
 
+def test_production_release_inventory_seals_closed_prefix_suffix_retry(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    required_paths = (
+        Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("scripts/write_sumeragi_v2_release_receipt.py"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
+        Path("docs/formal/sumeragi_v2/README.md"),
+        Path("docs/formal/sumeragi_v2/PROOF.md"),
+        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+    )
+    for relative in required_paths:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+
+    assert_only_frozen_g_unit_inventory_drift(module, tmp_path)
+
+    runner_path = (
+        tmp_path / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_runner.rs"
+    )
+    source = runner_path.read_text(encoding="utf-8")
+    exact_retry_split = (
+        "        let error = "
+        "apply_certified_merge_sidecar_closed_prefixes_with(&mut adapter, "
+        "|prefix| {\n"
+        "            calls = calls.saturating_add(1);\n"
+        "            if calls == 2 {\n"
+    )
+    assert source.count(exact_retry_split) == 1
+    runner_path.write_text(
+        source.replace(
+            exact_retry_split,
+            exact_retry_split.replace("if calls == 2", "if calls == 1"),
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._production_liveness_release_inventory_errors(tmp_path)
+    assert any(
+        "closed-prefix suffix-retry release regression must match exact "
+        "reviewed token digest" in error
+        for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     ("relative", "old", "new"),
     (
         (
             Path("docs/formal/sumeragi_v2/README.md"),
-            "current inventory therefore contains 704 tests across 38 modules.\n"
+            "current inventory therefore contains 705 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 81 legs.",
-            "current inventory therefore contains 704 tests across 38 modules.\n"
+            "current inventory therefore contains 705 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 80 legs.",
         ),
         (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
-            "the current 704-test, 38-module inventory. The complete source-sealed\n"
+            "the current\n705-test, 38-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 81 legs",
-            "the current 704-test, 38-module inventory. The complete source-sealed\n"
+            "the current\n705-test, 38-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 80 legs",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "current source-bound inventory therefore contains 704 exact tests "
+            "current source-bound inventory therefore contains 705 exact tests "
             "across\n38 modules and 81 pre-network legs.",
-            "current source-bound inventory therefore contains 704 exact tests "
+            "current source-bound inventory therefore contains 705 exact tests "
             "across\n38 modules and 80 pre-network legs.",
         ),
     ),
@@ -22834,6 +23583,7 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
     ):
         destination = tmp_path / fixture_relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -22860,9 +23610,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 704",
+            "_PRODUCTION_TEST_COUNT = 705",
             "_PRODUCTION_TEST_COUNT = 701",
-            "production test count must equal the exact shell inventory count 704",
+            "production test count must equal the exact shell inventory count 705",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -22894,8 +23644,8 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-runner", "sumeragi::v2_runner::tests", 31),',
             '("production-v2-runner", "sumeragi::v2_runner::tests", 30),',
-            '("production-v2-runner", "sumeragi::v2_runner::tests", 29),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
@@ -22947,6 +23697,7 @@ def test_production_release_inventory_rejects_receipt_and_command_drift(
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
     )
     for required in required_paths:
         destination = tmp_path / required
@@ -24323,10 +25074,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 704
-    assert len(set(production_inventory)) == 704
-    assert "readonly expected_production_liveness_test_count=704" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 704" in receipt_source
+    assert len(production_inventory) == 705
+    assert len(set(production_inventory)) == 705
+    assert "readonly expected_production_liveness_test_count=705" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 705" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -24336,7 +25087,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 704
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 705
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -24427,6 +25178,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "late_old_sidecar_flush_removes_only_reconnected_source_retry",
         "sumeragi::v2_recovery::tests::"
         "finalized_tip_derives_one_idempotent_successor_context",
+        "sumeragi::v2_runner::tests::"
+        "closed_sidecar_prefix_handoff_requeues_only_failed_suffix",
         "sumeragi::v2_runner::tests::"
         "exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift",
     ):

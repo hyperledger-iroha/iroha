@@ -195,7 +195,7 @@ public sealed class TransactionBuilderTests
 
         var builder = new TransactionBuilder(
             payload.GetProperty("chain").GetString()!,
-            payload.GetProperty("authority").GetString()!,
+            FixtureAccountId,
             EmptyAuthorityFeePayment)
             .SetCreationTimeMilliseconds((ulong)payload.GetProperty("creation_time_ms").GetInt64())
             .SetTimeToLiveMilliseconds((ulong)payload.GetProperty("time_to_live_ms").GetInt64())
@@ -206,7 +206,7 @@ public sealed class TransactionBuilderTests
         var action = arguments.GetProperty("action").GetString();
         var assetDefinitionId = arguments.GetProperty("asset_definition_id").GetString()!;
         var quantity = arguments.GetProperty("quantity").GetString()!;
-        var destination = arguments.GetProperty("destination").GetString()!;
+        var destination = FixtureAccountId;
 
         _ = action switch
         {
@@ -1966,10 +1966,15 @@ public sealed class TransactionBuilderTests
                 (offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
                     + offsetAfterTimeToLive)..],
             out var offsetAfterNonce);
-        var metadataBytes = ReadField(
+        _ = ReadField(
             payloadBytes[
                 (offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
                     + offsetAfterTimeToLive + offsetAfterNonce)..],
+            out var offsetAfterFeePayment);
+        var metadataBytes = ReadField(
+            payloadBytes[
+                (offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
+                    + offsetAfterTimeToLive + offsetAfterNonce + offsetAfterFeePayment)..],
             out _);
 
         var count = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(metadataBytes[..8]));

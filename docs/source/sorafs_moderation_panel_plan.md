@@ -22,10 +22,29 @@ not a competing authority.
 
 The fail-closed SFM-4b evidence checker and collection runner bind every
 recognized artifact to one reviewed deployment, case, roster, tally, and active
-policy context. The repository still lacks reviewed reference-deployment
-evidence for the complete moderation service, evidence viewer, juror
-notification/portal workflow, downstream settlement/publication, and
-four-validator recovery scenarios.
+policy context. Moderation GETs now read only a fresh worker-owned finalized
+projection; reconciliation runs outside request threads under supervised
+deadlines, non-overlap fencing, monotonic cursor/freshness/liveness checks, and
+dead-letter readiness. The evidence viewer's signed receipt checkpoint and
+exact predecessor-bound projection are its sole audit authority, and missing
+runtime dependencies fail through typed payload-free startup errors. The
+retained checkpoint anchor signs its canonical digest, receipt count, exact
+chain head, and governed signer identity; audit pages require that digest and
+an explicit digest-bound limit and return `409` on change. A deployment-owned
+monotonic transparency or ledger head is still required for first-contact
+freshness.
+
+Remaining production blockers under
+`V1-BLOCK-MODERATION-VIEWER-RUNTIME-01` are durable notification delivery,
+real settlement/publication and signed receipt-to-transparency plus monotonic
+public-head adapters,
+semantic operation-ID fencing, predecessor-bound multi-instance checkpoint
+CAS/single-writer ownership, signed replay-safe terminal and receipt
+compaction/archive, and stock-daemon construction of the runtime-only
+HSM/KMS/WebAuthn/downstream boundaries. The repository still lacks reviewed
+reference-deployment evidence for the complete moderation service, evidence
+viewer, juror notification/portal workflow, downstream
+settlement/publication, and four-validator recovery scenarios.
 
 ## Shipped Foundations
 
@@ -95,10 +114,11 @@ four-validator recovery scenarios.
   responses come from a reconciled finalized-chain snapshot with bounded
   arrays and cursors; there is no local ballot fallback.
 - The durable orchestrator submits transactions and reconciles committed state.
-  Settlement and notification workers consume finalized outcomes rather than
-  subscribing to a process-local tally stream.
-- sorafs_manifest::SoraFsModerationBallotGovernanceEventV1 and
-  sorafs_node::FilesystemGovernancePublisher retain the canonical payload-free
+  Settlement/publication handoff and notification lease contracts are present,
+  but their supervised production delivery workers are not yet complete. They
+  must consume finalized outcomes rather than a process-local tally stream.
+- `sorafs_manifest::SoraFsModerationBallotGovernanceEventV1` and the embedded
+  node's signed Governance DAG outbox retain the canonical payload-free
   publication format, but production producers must derive it from committed
   native events.
 - `docs/examples/ministry/policy_jury_roster_example.json` and
@@ -136,7 +156,7 @@ runtime binding. Together with the ballot wrappers it binds:
 
 - appeal case identifiers;
 - moderation policy references;
-- proof-token and denylist evidence references;
+- proof-token and governed compliance catalog/denial evidence references;
 - panel roster hashes;
 - settlement manifest version;
 - moderation vote choices;
@@ -158,12 +178,17 @@ case activation are submitted as typed ISIs; no direct-open ISI exists.
 
 ## Remaining Production Gates
 
-- Ship the secure evidence viewer and audit logger described by
-  `docs/source/sorafs_evidence_viewer_plan.md`.
-- Build and deploy the production appeal/panel transaction submitter, retry and
-  reconciliation worker, ballot orchestrator, challenge monitor, juror
-  notification/portal workflow, and scheduled no-show settlement handoff around
-  the authoritative intake, sortition, and commit/reveal ledger described by
+- Construct the reference runtime's HSM/KMS/WebAuthn and authenticated
+  downstream providers. Add durable juror-notification delivery, real
+  settlement/publication and signed receipt-to-transparency adapters,
+  cross-replica semantic operation-ID fencing, predecessor-bound checkpoint
+  CAS/single-writer ownership, and signed replay-safe terminal/receipt
+  compaction and archive.
+- Deploy the existing appeal/panel transaction outbox, finalized-chain
+  orchestrator, retry/reconciliation worker, and challenge/no-show maintenance
+  with the remaining juror notification/portal and scheduled settlement
+  delivery workers around the authoritative intake, sortition, and
+  commit/reveal ledger described by
   `docs/source/sorafs_commit_reveal_plan.md`.
 - Connect panel outcomes to gateway compliance caches, transparency
   publication, settlement reconciliation, and reputation scoring.
@@ -219,7 +244,7 @@ scenario, outcome, publication-target, and metric inputs before any canary JSON
 is written. It also requires reviewed appeal-intake `--case` labels whose unique
 inventory matches `--case-count`, reviewed sortition-roster `--roster-juror`
 labels whose unique inventory matches `--panel-size`, reviewed evidence-viewer
-reviewed `moderation-viewer-session-*` `--viewer-session` labels whose unique
+`moderation-viewer-session-*` `--viewer-session` labels whose unique
 inventory matches `--session-count` and rejects non-production markers,
 reviewed juror-notification
 `--notification` and `--juror` labels whose unique inventories match the
@@ -260,6 +285,13 @@ python3 scripts/build_sorafs_moderation_panel_canary.py \
   @scripts/examples/sorafs_moderation_panel_e2e_canary.args.example
 ```
 
+The checker exports its required top-level payload fields as
+`EVIDENCE_REQUIRED_FIELDS`, and the runner dry-run emits the checker-backed
+`evidence_contract` map listing each selected evidence kind's schema and
+required payload fields. Every recognized rollout artifact must also carry
+reviewed `deployment_id` and `environment` context, and the gate blocks mixed
+reviewed deployment contexts across the same rollout bundle.
+
 The checker recognizes `sorafs.moderation_panel.*` SFM-4b rollout schemas for
 appeal intake, sortition roster, evidence viewer, operator workflow, juror
 notifications, commit/reveal, decision publication, settlement integration,
@@ -279,11 +311,16 @@ that fail appeal-intake binding and commit/reveal runs that fail roster binding
 do not anchor downstream rollout evidence.
 The aggregate production-readiness gate also requires `valid_roster_bindings`,
 `valid_tally_bindings`, `valid_e2e_runs`, and
-`valid_evidence_viewer_digest_sets` to preserve those case, roster, and tally
-relationships before final promotion can report ready. It also rechecks the
-lane-proven bound artifacts before final promotion: case-bound artifact
-fingerprints must match `valid_case_digests`, roster-bound artifact fingerprints
-must match `valid_roster_bindings`, tally-bound artifact fingerprints must match
+`valid_evidence_viewer_digest_sets` to preserve those case, roster, tally, and
+viewer-observed gateway catalog relationships before final promotion can
+report ready. Evidence-viewer fingerprints and digest sets export the canonical
+nested `gateway_compliance_denial_enforced.catalog_digest_hex` value. When the
+moderation-panel and gateway-compliance lanes are promoted together, the
+viewer-observed catalog digest set must equal gateway compliance
+`valid_catalog_digests`. The aggregate gate also rechecks the lane-proven bound
+artifacts before final promotion: case-bound artifact fingerprints must match
+`valid_case_digests`, roster-bound artifact fingerprints must match
+`valid_roster_bindings`, tally-bound artifact fingerprints must match
 `valid_tally_bindings`, and policy-bound governance approval fingerprints must
 match `valid_policy_digests`. The moderation-panel gate fail-closes when more
 than one valid case, roster, tally, or policy anchor appears, and clears the

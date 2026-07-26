@@ -164,10 +164,6 @@ redirect_html_only = true
 live = "sorafs.sora.org"
 taira = "sorafs.taira.sora.org"
 
-[sorafs.quota]
-storage_pin_max_events = 64
-storage_pin_window_secs = 3600
-
 [sorafs.repair]
 enabled = false
 claim_ttl_secs = 900

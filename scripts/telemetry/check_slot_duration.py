@@ -288,6 +288,7 @@ def check_thresholds(stats: SlotStats, *, max_p95: float, max_p99: float, min_sa
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
+    metrics_label = args.metrics_path.as_posix()
     metrics_path = args.metrics_path.resolve()
     if not metrics_path.exists():
         raise SystemExit(f"[error] metrics file '{metrics_path}' does not exist")
@@ -305,7 +306,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     )
     if args.json_out is not None:
         report = {
-            "metrics_path": str(metrics_path),
+            "metrics_path": metrics_label,
             "samples": stats.count,
             "p50_ms": stats.p50_ms,
             "p95_ms": stats.p95_ms,

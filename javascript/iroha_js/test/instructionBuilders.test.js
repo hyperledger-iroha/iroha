@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildBurnAssetInstruction,
+  buildCancelAssetLockInstruction,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
   buildBurnTriggerRepetitionsInstruction,
@@ -139,6 +140,7 @@ import {
   buildFinalizeElectionInstruction,
   encodeInstruction,
 } from "../src/instructionBuilders.js";
+import { blake2b256 } from "../src/blake2b.js";
 import {
   getPrivacyAlgorithmDescriptor,
   getPrivacyAlgorithmDescriptors,
@@ -159,7 +161,12 @@ import {
   noritoEncodeInstruction,
   noritoEncodePrivacyProofEnvelope,
 } from "../src/norito.js";
-import { hasNoritoBinding, makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
+import {
+  hasNoritoBinding,
+  makeNativeTest,
+  nativeBinding,
+  noritoRequiredMethods,
+} from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const zkAceNativeTest = makeNativeTest(baseTest, {
@@ -170,6 +177,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const SORA_I105_DISCRIMINANT = 0x2f1;
+const CANCEL_ASSET_LOCK_ESCROW_ID =
+  "hash:996264C84790C64086AAB0EF693A1D33EC18FC0B1C1229774C461A00939A6687#F2BD";
 
 function loadInstructionFixture(name) {
   const fixturePath = path.join(repoRoot, "fixtures", "norito_instructions", name);
@@ -446,6 +455,152 @@ test("normalizeAssetId rejects malformed asset literals", () => {
 test("normalizeAssetHoldingId exported canonicalizes asset-holding identifiers", () => {
   const canonical = exportedNormalizeAssetHoldingId(ASSET_ID_INPUT);
   assert.equal(canonical, ASSET_ID_CANONICAL);
+});
+
+baseTest("buildCancelAssetLockInstruction emits the exact two-field V1 payload", () => {
+  const instruction = buildCancelAssetLockInstruction({
+    lockId: "merchant-lock-001",
+    expectedRemainingAmount: "1500",
+  });
+  assert.deepEqual(instruction, {
+    CancelAssetLock: {
+      escrow_id: CANCEL_ASSET_LOCK_ESCROW_ID,
+      expected_remaining_amount: "1500",
+    },
+  });
+  assert.equal(
+    instruction.CancelAssetLock.escrow_id,
+    normalizedHashHex(blake2b256(Buffer.from("merchant-lock-001", "utf8"))),
+  );
+});
+
+baseTest("buildCancelAssetLockInstruction rejects legacy and ambiguous inputs", () => {
+  assert.throws(
+    () => buildCancelAssetLockInstruction({ lockId: "merchant-lock-001" }),
+    /expectedRemainingAmount/,
+  );
+  assert.throws(
+    () =>
+      buildCancelAssetLockInstruction({
+        lockId: "merchant-lock-001",
+        expectedRemainingAmount: "1",
+        expected_remaining_amount: "1",
+      }),
+    /not supported/,
+  );
+  assert.throws(
+    () =>
+      buildCancelAssetLockInstruction({
+        lockId: "",
+        expectedRemainingAmount: "1",
+      }),
+    /non-empty string/,
+  );
+  assert.throws(
+    () =>
+      buildCancelAssetLockInstruction({
+        lockId: " merchant-lock-001",
+        expectedRemainingAmount: "1",
+      }),
+    /surrounding whitespace/,
+  );
+  for (const expectedRemainingAmount of [0n, "0", "-1", "01", "1.0", "+1", 1]) {
+    assert.throws(
+      () =>
+        buildCancelAssetLockInstruction({
+          lockId: "merchant-lock-001",
+          expectedRemainingAmount,
+        }),
+      undefined,
+      `accepted invalid expected remaining amount ${String(expectedRemainingAmount)}`,
+    );
+  }
+});
+
+baseTest("pure JS codec roundtrips CancelAssetLock and rejects the legacy shape", () => {
+  withPureJsInstructionCodec(() => {
+    const instruction = buildCancelAssetLockInstruction({
+      lockId: "merchant-lock-001",
+      expectedRemainingAmount: "1.25",
+    });
+    const encoded = noritoEncodeInstruction(instruction);
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+
+    assert.throws(
+      () =>
+        noritoEncodeInstruction({
+          CancelAssetLock: { escrow_id: instruction.CancelAssetLock.escrow_id },
+        }),
+      /expected_remaining_amount is required/,
+    );
+    for (const expected_remaining_amount of ["0", "01", "1.0"]) {
+      assert.throws(
+        () =>
+          noritoEncodeInstruction({
+            CancelAssetLock: {
+              escrow_id: instruction.CancelAssetLock.escrow_id,
+              expected_remaining_amount,
+            },
+          }),
+        undefined,
+        `pure JS codec accepted ${expected_remaining_amount}`,
+      );
+    }
+  });
+});
+
+test("native and pure JS codecs byte-match and cross-decode CancelAssetLock V1", () => {
+  const instruction = buildCancelAssetLockInstruction({
+    lockId: "merchant-lock-001",
+    expectedRemainingAmount: "1.25",
+  });
+  assert.equal(
+    instruction.CancelAssetLock.escrow_id,
+    CANCEL_ASSET_LOCK_ESCROW_ID,
+  );
+
+  const pureEncoded = withPureJsInstructionCodec(() =>
+    noritoEncodeInstruction(instruction),
+  );
+  const nativeEncoded = nativeBinding.noritoEncodeInstruction(
+    JSON.stringify(instruction),
+  );
+  assert.deepEqual(toByteArray(pureEncoded), toByteArray(nativeEncoded));
+
+  assert.deepEqual(
+    JSON.parse(nativeBinding.noritoDecodeInstruction(pureEncoded)),
+    instruction,
+  );
+  assert.deepEqual(
+    withPureJsInstructionCodec(() =>
+      noritoDecodeInstruction(nativeEncoded),
+    ),
+    instruction,
+  );
+
+  assert.throws(
+    () =>
+      nativeBinding.noritoEncodeInstruction(
+        JSON.stringify({
+          CancelAssetLock: {
+            escrow_id: instruction.CancelAssetLock.escrow_id,
+          },
+        }),
+      ),
+    /missing field/,
+  );
+  assert.throws(
+    () =>
+      nativeBinding.noritoEncodeInstruction(
+        JSON.stringify({
+          CancelAssetLock: {
+            escrow_id: instruction.CancelAssetLock.escrow_id,
+            expected_remaining_amount: "0",
+          },
+        }),
+      ),
+    /must be positive/,
+  );
 });
 
 test("buildMintAssetInstruction produces canonical Norito payload", () => {

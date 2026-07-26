@@ -6,11 +6,10 @@
 //! digests (the envelope identity) and exact binary root CIDs (the content DAG
 //! identity), plus replication policies and lifecycle metadata. These two
 //! commitments are distinct and replication/alias records bind both where
-//! applicable. The deal module extends this
-//! surface with storage market accounting (contracts, micropayments, bonds),
-//! while the pricing module captures governance-controlled tariffs and credit
-//! policy so ISI definitions can coordinate incentives deterministically. The
-//! repair module models audit-driven repair queues that tie proof failures to
+//! applicable. The orderbook and reserve modules define the native storage
+//! market, while the pricing module captures governance-controlled tariffs so
+//! ISI definitions can coordinate incentives deterministically. The repair
+//! module models audit-driven repair queues that tie proof failures to
 //! remediation workflows, and the transparency module defines canonical
 //! moderation ledger payloads/proofs for public SFM-4c verifiers. The
 //! `pop_registry` module defines the consensus-owned, payload-free credential
@@ -43,9 +42,6 @@ pub mod proof_ledger;
 /// Chain-authoritative PoR, provider-dispute, and stream-token reputation journal.
 pub mod reputation;
 
-/// Storage deal contracts, micropayment tickets, and settlement ledgers.
-pub mod deal;
-
 /// Governance-controlled pricing schedule and credit policy.
 pub mod pricing;
 
@@ -63,13 +59,6 @@ pub mod prelude {
             CapacityDisputeOutcome, CapacityDisputeRecord, CapacityDisputeResolution,
             CapacityDisputeStatus, CapacityFeeLedgerEntry, CapacityLedgerMutationError,
             CapacityTelemetryRecord, ProviderId,
-        },
-        deal::{
-            BondLedgerMutationError, ClientId, DealComputationError, DealId, DealProposal,
-            DealProposalValidationError, DealRecord, DealSettlementRecord,
-            DealSettlementValidationError, DealStatus, DealTerms, DealTermsValidationError,
-            DealUsageReport, DealUsageValidationError, MicropaymentTicket,
-            MicropaymentTicketValidationError, ProviderBondLedgerEntry, TicketId,
         },
         gar::{
             GarCdnPolicyV1, GarEnforcementActionV1, GarEnforcementReceiptV1, GarLicenseSetV1,
@@ -175,8 +164,8 @@ pub mod prelude {
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
             ManifestDigest, ManifestRootCid, ManifestRootCidError, ManifestRootCidErrorKind,
             PinManifestFinalizedCursorV1, PinManifestFinalizedRecordV1, PinManifestRecord,
-            PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
-            ReplicationOrderStatus, StorageClass,
+            PinPolicy, PinStatus, ReplicationOrderCompletionRecord, ReplicationOrderId,
+            ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
         pop_registry::{
             POP_COMMITMENT_ROOT_PAYLOAD_MAX_BYTES_V1, POP_CREDENTIAL_COMMITMENT_BATCH_VERSION_V1,
@@ -220,7 +209,8 @@ pub mod prelude {
             REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
             REPUTATION_JOURNAL_DISPUTE_SOURCE_ID_DOMAIN_V1, REPUTATION_JOURNAL_ENTRY_VERSION_V1,
             REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1, REPUTATION_JOURNAL_MAX_ENTRY_BYTES_V1,
-            REPUTATION_JOURNAL_MAX_TEXT_BYTES_V1, REPUTATION_JOURNAL_POR_SOURCE_ID_DOMAIN_V1,
+            REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1, REPUTATION_JOURNAL_MAX_TEXT_BYTES_V1,
+            REPUTATION_JOURNAL_POR_SOURCE_ID_DOMAIN_V1,
             REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1,
             REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1, REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1,
             ReputationJournalAuthorityPolicyRecordV1, ReputationJournalAuthorityPolicyV1,

@@ -35,6 +35,8 @@ pub const REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1: usize = 128 * 1024;
 pub const REPUTATION_JOURNAL_MAX_ENTRY_BYTES_V1: usize = 16 * 1024;
 /// Hard UTF-8 byte ceiling for a governance resolution rationale.
 pub const REPUTATION_JOURNAL_MAX_TEXT_BYTES_V1: usize = 2_048;
+/// Hard governed ceiling for the age of a submitted source observation.
+pub const REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1: u64 = 30 * 24 * 60 * 60 * 1_000;
 
 /// Domain separator for governed recorder-policy digests.
 pub const REPUTATION_JOURNAL_AUTHORITY_POLICY_DIGEST_DOMAIN_V1: &[u8] =
@@ -162,6 +164,8 @@ pub struct ReputationJournalAuthorityPolicyV1 {
     pub dispute_recorder_authority: AccountId,
     /// Exact governed regional-gateway authority allowed to record token outcomes.
     pub token_recorder_authority: AccountId,
+    /// Maximum age of an authenticated source decision or observation at commit.
+    pub max_source_age_ms: u64,
 }
 
 impl ReputationJournalAuthorityPolicyV1 {
@@ -169,8 +173,8 @@ impl ReputationJournalAuthorityPolicyV1 {
     ///
     /// # Errors
     ///
-    /// Returns a typed validation error for an unsupported version, a zero
-    /// revision, or a non-canonical predecessor link.
+    /// Returns a typed validation error for an unsupported version, zero
+    /// revision, non-canonical predecessor link, or unsafe freshness bound.
     pub fn validate(&self) -> Result<(), ReputationJournalValidationError> {
         if self.version != REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1 {
             return Err(
@@ -181,6 +185,14 @@ impl ReputationJournalAuthorityPolicyV1 {
         }
         if self.revision == 0 {
             return Err(ReputationJournalValidationError::ZeroAuthorityPolicyRevision);
+        }
+        if self.max_source_age_ms == 0
+            || self.max_source_age_ms > REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1
+        {
+            return Err(ReputationJournalValidationError::InvalidSourceAgeLimit {
+                found: self.max_source_age_ms,
+                maximum: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
+            });
         }
         match (self.revision, self.predecessor_policy_digest) {
             (1, None) => Ok(()),
@@ -383,7 +395,7 @@ pub struct PorTerminalOutcomeV1 {
     pub deadline_at_unix_ms: u64,
     /// Proof receipt time, present exactly for proof-bearing terminals.
     pub responded_at_unix_ms: Option<u64>,
-    /// Exact committing decision time in milliseconds since Unix epoch.
+    /// Authenticated terminal decision time in milliseconds since Unix epoch.
     pub decided_at_unix_ms: u64,
     /// Canonical provider-signed proof digest for proof-bearing terminals.
     #[cfg_attr(
@@ -404,7 +416,7 @@ pub struct PorTerminalOutcomeV1 {
 }
 
 impl PorTerminalOutcomeV1 {
-    fn validate(&self, recorded_at_unix_ms: u64) -> Result<(), ReputationJournalValidationError> {
+    fn validate(&self, source_time_unix_ms: u64) -> Result<(), ReputationJournalValidationError> {
         ensure_digest(self.challenge_id, "challenge_id")?;
         ensure_digest(self.manifest_digest, "manifest_digest")?;
         if self.epoch_id == 0 || self.drand_round == 0 {
@@ -425,8 +437,8 @@ impl PorTerminalOutcomeV1 {
                 later: "decided_at_unix_ms",
             });
         }
-        if self.decided_at_unix_ms != recorded_at_unix_ms {
-            return Err(ReputationJournalValidationError::RecordedTimestampMismatch);
+        if self.decided_at_unix_ms != source_time_unix_ms {
+            return Err(ReputationJournalValidationError::SourceTimestampMismatch);
         }
         if let Some(responded_at) = self.responded_at_unix_ms {
             ensure_timestamp(responded_at, "responded_at_unix_ms")?;
@@ -539,7 +551,7 @@ pub enum ProviderDisputeKindV1 {
 pub struct ProviderDisputeResolutionV1 {
     /// Existing capacity-governance outcome vocabulary.
     pub outcome: CapacityDisputeOutcome,
-    /// Exact committing decision time.
+    /// Authenticated governance decision time.
     pub resolved_at_unix_ms: u64,
     /// Digest of the canonical decision evidence/envelope.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
@@ -582,21 +594,21 @@ pub struct ProviderDisputeEventV1 {
     /// Digest of the canonical evidence bundle.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub evidence_digest: [u8; 32],
-    /// Exact committing submission time.
+    /// Authenticated source submission time.
     pub submitted_at_unix_ms: u64,
     /// Lifecycle transition.
     pub status: ProviderDisputeStatusV1,
 }
 
 impl ProviderDisputeEventV1 {
-    fn validate(&self, recorded_at_unix_ms: u64) -> Result<(), ReputationJournalValidationError> {
+    fn validate(&self, source_time_unix_ms: u64) -> Result<(), ReputationJournalValidationError> {
         ensure_digest(*self.dispute_id.as_bytes(), "dispute_id")?;
         ensure_digest(self.evidence_digest, "evidence_digest")?;
         ensure_timestamp(self.submitted_at_unix_ms, "submitted_at_unix_ms")?;
         match &self.status {
             ProviderDisputeStatusV1::Opened => {
-                if recorded_at_unix_ms != self.submitted_at_unix_ms {
-                    return Err(ReputationJournalValidationError::RecordedTimestampMismatch);
+                if source_time_unix_ms != self.submitted_at_unix_ms {
+                    return Err(ReputationJournalValidationError::SourceTimestampMismatch);
                 }
             }
             ProviderDisputeStatusV1::Resolved(resolution) => {
@@ -608,8 +620,8 @@ impl ProviderDisputeEventV1 {
                         later: "resolved_at_unix_ms",
                     });
                 }
-                if recorded_at_unix_ms != resolution.resolved_at_unix_ms {
-                    return Err(ReputationJournalValidationError::RecordedTimestampMismatch);
+                if source_time_unix_ms != resolution.resolved_at_unix_ms {
+                    return Err(ReputationJournalValidationError::SourceTimestampMismatch);
                 }
                 if let Some(rationale) = &resolution.rationale {
                     validate_text(rationale)?;
@@ -739,19 +751,19 @@ pub struct StreamTokenValidationOutcomeV1 {
     pub token_body_digest: Option<[u8; 32]>,
     /// Signing-key version from the decoded token body.
     pub token_key_version: Option<u32>,
-    /// Exact committing validation time in milliseconds since Unix epoch.
+    /// Authenticated gateway observation time in milliseconds since Unix epoch.
     pub validated_at_unix_ms: u64,
     /// Stable validation result.
     pub status: StreamTokenValidationStatusV1,
 }
 
 impl StreamTokenValidationOutcomeV1 {
-    fn validate(&self, recorded_at_unix_ms: u64) -> Result<(), ReputationJournalValidationError> {
+    fn validate(&self, source_time_unix_ms: u64) -> Result<(), ReputationJournalValidationError> {
         ensure_digest(self.validation_id, "validation_id")?;
         ensure_digest(self.request_digest, "request_digest")?;
         ensure_timestamp(self.validated_at_unix_ms, "validated_at_unix_ms")?;
-        if self.validated_at_unix_ms != recorded_at_unix_ms {
-            return Err(ReputationJournalValidationError::RecordedTimestampMismatch);
+        if self.validated_at_unix_ms != source_time_unix_ms {
+            return Err(ReputationJournalValidationError::SourceTimestampMismatch);
         }
         let carries_decoded_body = self.status.carries_decoded_body();
         if carries_decoded_body != self.token_body_digest.is_some()
@@ -823,11 +835,11 @@ impl ReputationJournalPayloadV1 {
         }
     }
 
-    fn validate(&self, recorded_at_unix_ms: u64) -> Result<(), ReputationJournalValidationError> {
+    fn validate(&self, source_time_unix_ms: u64) -> Result<(), ReputationJournalValidationError> {
         match self {
-            Self::PorTerminal(outcome) => outcome.validate(recorded_at_unix_ms),
-            Self::ProviderDispute(event) => event.validate(recorded_at_unix_ms),
-            Self::StreamTokenValidation(outcome) => outcome.validate(recorded_at_unix_ms),
+            Self::PorTerminal(outcome) => outcome.validate(source_time_unix_ms),
+            Self::ProviderDispute(event) => event.validate(source_time_unix_ms),
+            Self::StreamTokenValidation(outcome) => outcome.validate(source_time_unix_ms),
         }
     }
 }
@@ -856,8 +868,8 @@ pub struct ReputationJournalEntryV1 {
     pub authority_policy_digest: [u8; 32],
     /// Exact governed transaction authority that committed the entry.
     pub recorded_by: AccountId,
-    /// Exact committing block timestamp in milliseconds since Unix epoch.
-    pub recorded_at_unix_ms: u64,
+    /// Authenticated source decision or observation time in Unix milliseconds.
+    pub source_time_unix_ms: u64,
     /// Typed, payload-free source projection.
     pub payload: ReputationJournalPayloadV1,
 }
@@ -866,7 +878,9 @@ impl ReputationJournalEntryV1 {
     /// Construct and validate an entry with a canonical content-derived id.
     ///
     /// `predecessor_event_id` is required exactly for a resolved dispute and
-    /// forbidden for every revision-one entry.
+    /// forbidden for every revision-one entry. `source_time_unix_ms` must equal
+    /// the typed payload decision/observation time; consensus supplies the
+    /// separate authoritative recorded time when the instruction executes.
     ///
     /// # Errors
     ///
@@ -876,7 +890,7 @@ impl ReputationJournalEntryV1 {
         provider_id: ProviderId,
         authority_policy_digest: [u8; 32],
         recorded_by: AccountId,
-        recorded_at_unix_ms: u64,
+        source_time_unix_ms: u64,
         predecessor_event_id: Option<ReputationJournalEventIdV1>,
         payload: ReputationJournalPayloadV1,
     ) -> Result<Self, ReputationJournalValidationError> {
@@ -891,7 +905,7 @@ impl ReputationJournalEntryV1 {
             provider_id,
             authority_policy_digest,
             recorded_by,
-            recorded_at_unix_ms,
+            source_time_unix_ms,
             payload,
         };
         entry.event_id = entry.expected_event_id()?;
@@ -930,8 +944,8 @@ impl ReputationJournalEntryV1 {
             return Err(ReputationJournalValidationError::ZeroProviderId);
         }
         ensure_digest(self.authority_policy_digest, "authority_policy_digest")?;
-        ensure_timestamp(self.recorded_at_unix_ms, "recorded_at_unix_ms")?;
-        self.payload.validate(self.recorded_at_unix_ms)?;
+        ensure_timestamp(self.source_time_unix_ms, "source_time_unix_ms")?;
+        self.payload.validate(self.source_time_unix_ms)?;
         if self.source_id != self.payload.source_id() {
             return Err(ReputationJournalValidationError::SourceIdMismatch);
         }
@@ -986,6 +1000,35 @@ impl ReputationJournalEntryV1 {
         }
         if &self.recorded_by != policy.recorder_authority(self.source_kind()) {
             return Err(ReputationJournalValidationError::RecorderAuthorityMismatch);
+        }
+        Ok(())
+    }
+
+    /// Validate policy binding and source freshness at authoritative commit time.
+    ///
+    /// V1 accepts no future source skew: an authenticated source decision or
+    /// observation must not be later than the executing block. Its age must
+    /// also remain within the active governed policy bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural/policy error, a future source-time error, or a
+    /// governed freshness violation.
+    pub fn validate_at_commit(
+        &self,
+        policy: &ReputationJournalAuthorityPolicyV1,
+        recorded_at_unix_ms: u64,
+    ) -> Result<(), ReputationJournalValidationError> {
+        self.validate_against_policy(policy)?;
+        ensure_timestamp(recorded_at_unix_ms, "recorded_at_unix_ms")?;
+        let source_age_ms = recorded_at_unix_ms
+            .checked_sub(self.source_time_unix_ms)
+            .ok_or(ReputationJournalValidationError::SourceTimeAfterCommit)?;
+        if source_age_ms > policy.max_source_age_ms {
+            return Err(ReputationJournalValidationError::SourceObservationStale {
+                age_ms: source_age_ms,
+                maximum_ms: policy.max_source_age_ms,
+            });
         }
         Ok(())
     }
@@ -1066,6 +1109,8 @@ pub struct ReputationJournalCommittedEventRecordV1 {
     pub target_block_height: u64,
     /// Reputation-journal event index within the executing block.
     pub event_index: u32,
+    /// Authoritative executing-block timestamp in Unix milliseconds.
+    pub recorded_at_unix_ms: u64,
     /// Complete canonical journal entry.
     pub entry: ReputationJournalEntryV1,
 }
@@ -1083,7 +1128,12 @@ impl ReputationJournalCommittedEventRecordV1 {
         if self.target_block_height == 0 {
             return Err(ReputationJournalValidationError::InvalidTargetBlockHeight);
         }
-        self.entry.validate()
+        ensure_timestamp(self.recorded_at_unix_ms, "recorded_at_unix_ms")?;
+        self.entry.validate()?;
+        if self.entry.source_time_unix_ms > self.recorded_at_unix_ms {
+            return Err(ReputationJournalValidationError::SourceTimeAfterCommit);
+        }
+        Ok(())
     }
 }
 
@@ -1171,6 +1221,8 @@ pub struct ReputationJournalFinalizedEventV1 {
     pub block_hash: [u8; 32],
     /// Journal-event index within the committing block.
     pub event_index: u32,
+    /// Authoritative committing-block timestamp in Unix milliseconds.
+    pub recorded_at_unix_ms: u64,
     /// Chain-authoritative journal entry.
     pub entry: ReputationJournalEntryV1,
 }
@@ -1201,7 +1253,11 @@ impl ReputationJournalFinalizedEventV1 {
         if is_at_finalized_height && !matches_finalized_hash {
             return Err(ReputationJournalValidationError::FinalizedBlockHashMismatch);
         }
-        if self.entry.recorded_at_unix_ms > finalized_cursor.finalized_at_unix_ms {
+        ensure_timestamp(self.recorded_at_unix_ms, "recorded_at_unix_ms")?;
+        if self.entry.source_time_unix_ms > self.recorded_at_unix_ms {
+            return Err(ReputationJournalValidationError::SourceTimeAfterCommit);
+        }
+        if self.recorded_at_unix_ms > finalized_cursor.finalized_at_unix_ms {
             return Err(ReputationJournalValidationError::EventAfterFinalizedTimestamp);
         }
         Ok(())
@@ -1317,7 +1373,7 @@ impl ReputationJournalFinalizedEventPageV1 {
                     return Err(ReputationJournalValidationError::EventSequenceGap);
                 }
                 validate_block_order(previous, event)?;
-                if event.entry.recorded_at_unix_ms < previous.entry.recorded_at_unix_ms {
+                if event.recorded_at_unix_ms < previous.recorded_at_unix_ms {
                     return Err(ReputationJournalValidationError::EventTimestampReordered);
                 }
             }
@@ -1355,6 +1411,14 @@ pub enum ReputationJournalValidationError {
     /// Later policy revisions require a non-zero predecessor.
     #[error("reputation journal authority-policy predecessor is missing or zero")]
     MissingPolicyPredecessor,
+    /// Governed source-age bound is zero or exceeds the V1 ceiling.
+    #[error("reputation journal source-age limit {found}ms is outside 1..={maximum}ms")]
+    InvalidSourceAgeLimit {
+        /// Rejected governed source-age limit.
+        found: u64,
+        /// Hard first-release maximum.
+        maximum: u64,
+    },
     /// Entry version is unsupported.
     #[error("unsupported reputation journal entry version {found}")]
     UnsupportedEntryVersion {
@@ -1393,10 +1457,21 @@ pub enum ReputationJournalValidationError {
         /// Timestamp field that must occur later.
         later: &'static str,
     },
-    /// Source decision time must equal the committing block time.
-    #[error("reputation journal source decision time must equal recorded_at_unix_ms")]
-    RecordedTimestampMismatch,
-    /// `PoR` epoch or drand identity is inert.
+    /// Common source time differs from the typed payload decision/observation.
+    #[error("reputation journal source_time_unix_ms differs from the typed payload time")]
+    SourceTimestampMismatch,
+    /// A source decision or observation lies after the authoritative block time.
+    #[error("reputation journal source time lies after authoritative commit time")]
+    SourceTimeAfterCommit,
+    /// Source material exceeded the active governed freshness limit.
+    #[error("reputation journal source observation age {age_ms}ms exceeds {maximum_ms}ms")]
+    SourceObservationStale {
+        /// Observed source age at authoritative commit.
+        age_ms: u64,
+        /// Active governed maximum source age.
+        maximum_ms: u64,
+    },
+    /// PoR epoch or drand identity is inert.
     #[error("PoR epoch and drand round must be non-zero")]
     InvalidPorRandomnessIdentity,
     /// `PoR` response time lies outside issue/decision bounds.
@@ -1647,7 +1722,8 @@ mod tests {
 
     const BLOCK_HASH: [u8; 32] = [0xB1; 32];
     const FINAL_HASH: [u8; 32] = [0xF1; 32];
-    const RECORDED_AT: u64 = 1_700_000_001_700;
+    const SOURCE_TIME: u64 = 1_700_000_001_700;
+    const RECORDED_AT: u64 = SOURCE_TIME + 250;
 
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
@@ -1663,6 +1739,7 @@ mod tests {
             por_recorder_authority: account(1),
             dispute_recorder_authority: account(2),
             token_recorder_authority: account(3),
+            max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
 
@@ -1684,7 +1761,7 @@ mod tests {
             issued_at_unix_ms: 1_700_000_000_000,
             deadline_at_unix_ms: 1_700_000_001_500,
             responded_at_unix_ms: Some(1_700_000_001_400),
-            decided_at_unix_ms: RECORDED_AT,
+            decided_at_unix_ms: SOURCE_TIME,
             proof_digest: Some([0x55; 32]),
             repair_task_id: None,
             verifier_latency_ms: Some(7),
@@ -1698,7 +1775,7 @@ mod tests {
             ProviderId::new([0x22; 32]),
             policy.canonical_digest().expect("policy digest"),
             policy.por_recorder_authority.clone(),
-            RECORDED_AT,
+            SOURCE_TIME,
             None,
             por_payload(seed),
         )
@@ -1715,6 +1792,7 @@ mod tests {
             block_height: 5,
             block_hash: BLOCK_HASH,
             event_index,
+            recorded_at_unix_ms: RECORDED_AT,
             entry: por_entry(seed),
         }
     }
@@ -1723,7 +1801,7 @@ mod tests {
         ReputationJournalFinalizedCursorV1 {
             height: 10,
             block_hash: FINAL_HASH,
-            finalized_at_unix_ms: RECORDED_AT + 1_000,
+            finalized_at_unix_ms: SOURCE_TIME + 1_000,
         }
     }
 
@@ -1744,7 +1822,7 @@ mod tests {
             ProviderId::new([0x33; 32]),
             policy.canonical_digest().expect("policy digest"),
             policy.dispute_recorder_authority.clone(),
-            RECORDED_AT,
+            SOURCE_TIME,
             Some(ReputationJournalEventIdV1(digest_from_u32(
                 index.saturating_add(10_000),
             ))),
@@ -1752,10 +1830,10 @@ mod tests {
                 dispute_id: CapacityDisputeId::new(digest_from_u32(index.saturating_add(1))),
                 kind: ProviderDisputeKindV1::ProofFailure,
                 evidence_digest: digest_from_u32(index.saturating_add(20_000)),
-                submitted_at_unix_ms: RECORDED_AT - 1_000,
+                submitted_at_unix_ms: SOURCE_TIME - 1_000,
                 status: ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                     outcome: CapacityDisputeOutcome::Upheld,
-                    resolved_at_unix_ms: RECORDED_AT,
+                    resolved_at_unix_ms: SOURCE_TIME,
                     decision_digest: digest_from_u32(index.saturating_add(30_000)),
                     rationale: Some(rationale),
                 }),
@@ -1783,6 +1861,33 @@ mod tests {
     }
 
     #[test]
+    fn source_age_policy_is_strictly_bounded() {
+        let mut invalid = policy();
+        invalid.max_source_age_ms = 0;
+        assert_eq!(
+            invalid.validate(),
+            Err(ReputationJournalValidationError::InvalidSourceAgeLimit {
+                found: 0,
+                maximum: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
+            })
+        );
+
+        invalid.max_source_age_ms = REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1 + 1;
+        assert_eq!(
+            invalid.validate(),
+            Err(ReputationJournalValidationError::InvalidSourceAgeLimit {
+                found: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1 + 1,
+                maximum: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
+            })
+        );
+
+        invalid.max_source_age_ms = REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1;
+        invalid
+            .validate()
+            .expect("the hard maximum source-age policy remains valid");
+    }
+
+    #[test]
     fn instruction_payloads_have_total_structural_order() {
         fn assert_total_order<T: Ord>() {}
 
@@ -1802,7 +1907,7 @@ mod tests {
         let activation = ReputationJournalAuthorityPolicyRecordV1::try_new(
             policy.clone(),
             account(9),
-            RECORDED_AT,
+            SOURCE_TIME,
         )
         .expect("canonical policy activation");
         activation.validate().expect("activation validates");
@@ -1823,6 +1928,7 @@ mod tests {
             sequence: 1,
             target_block_height: 7,
             event_index: 0,
+            recorded_at_unix_ms: RECORDED_AT,
             entry,
         };
         committed.validate().expect("committed event validates");
@@ -1833,11 +1939,18 @@ mod tests {
             bad_activation.validate(),
             Err(ReputationJournalValidationError::AuthorityPolicyDigestMismatch)
         );
-        let mut bad_committed = committed;
+        let mut bad_committed = committed.clone();
         bad_committed.sequence = 0;
         assert_eq!(
             bad_committed.validate(),
             Err(ReputationJournalValidationError::InvalidJournalSequence)
+        );
+
+        let mut future_source = committed;
+        future_source.recorded_at_unix_ms = SOURCE_TIME - 1;
+        assert_eq!(
+            future_source.validate(),
+            Err(ReputationJournalValidationError::SourceTimeAfterCommit)
         );
     }
 
@@ -1874,7 +1987,7 @@ mod tests {
     }
 
     #[test]
-    fn bad_and_inexact_timestamps_are_rejected() {
+    fn bad_source_commit_and_freshness_timestamps_are_rejected() {
         let mut payload = por_payload(1);
         let ReputationJournalPayloadV1::PorTerminal(outcome) = &mut payload else {
             unreachable!()
@@ -1885,7 +1998,7 @@ mod tests {
                 ProviderId::new([0x22; 32]),
                 policy().canonical_digest().expect("policy digest"),
                 policy().por_recorder_authority,
-                RECORDED_AT,
+                SOURCE_TIME,
                 None,
                 payload,
             ),
@@ -1896,19 +2009,43 @@ mod tests {
         );
 
         let mut entry = por_entry(2);
-        entry.recorded_at_unix_ms += 1;
+        entry.source_time_unix_ms += 1;
         assert_eq!(
             entry.validate(),
-            Err(ReputationJournalValidationError::RecordedTimestampMismatch)
+            Err(ReputationJournalValidationError::SourceTimestampMismatch)
         );
 
         let mut max_timestamp = por_entry(4);
-        max_timestamp.recorded_at_unix_ms = u64::MAX;
+        max_timestamp.source_time_unix_ms = u64::MAX;
         assert_eq!(
             max_timestamp.validate(),
             Err(ReputationJournalValidationError::InvalidTimestamp {
-                field: "recorded_at_unix_ms",
+                field: "source_time_unix_ms",
             })
+        );
+
+        let entry = por_entry(5);
+        let policy = policy();
+        entry
+            .validate_at_commit(&policy, RECORDED_AT)
+            .expect("asynchronous source time remains fresh");
+        assert_eq!(
+            entry.validate_at_commit(&policy, SOURCE_TIME - 1),
+            Err(ReputationJournalValidationError::SourceTimeAfterCommit)
+        );
+        assert_eq!(
+            entry.validate_at_commit(&policy, SOURCE_TIME + policy.max_source_age_ms + 1,),
+            Err(ReputationJournalValidationError::SourceObservationStale {
+                age_ms: policy.max_source_age_ms + 1,
+                maximum_ms: policy.max_source_age_ms,
+            })
+        );
+
+        let mut before_source = finalized_event(1, 0, 3);
+        before_source.recorded_at_unix_ms = SOURCE_TIME - 1;
+        assert_eq!(
+            page(vec![before_source]).validate(),
+            Err(ReputationJournalValidationError::SourceTimeAfterCommit)
         );
 
         let event = finalized_event(1, 0, 3);
@@ -1937,7 +2074,7 @@ mod tests {
                 ProviderId::new([0x22; 32]),
                 policy().canonical_digest().expect("policy digest"),
                 policy().por_recorder_authority,
-                RECORDED_AT,
+                SOURCE_TIME,
                 None,
                 payload,
             ),
@@ -1959,7 +2096,7 @@ mod tests {
                 ProviderId::new([0x22; 32]),
                 policy().canonical_digest().expect("policy digest"),
                 policy().por_recorder_authority,
-                RECORDED_AT,
+                SOURCE_TIME,
                 None,
                 payload,
             ),
@@ -1984,7 +2121,7 @@ mod tests {
             ProviderId::new([0x22; 32]),
             policy.canonical_digest().expect("policy digest"),
             policy.por_recorder_authority.clone(),
-            RECORDED_AT,
+            SOURCE_TIME,
             None,
             failed_payload,
         )
@@ -2021,7 +2158,7 @@ mod tests {
             ProviderId::new([0x22; 32]),
             policy.canonical_digest().expect("policy digest"),
             policy.por_recorder_authority.clone(),
-            RECORDED_AT,
+            SOURCE_TIME,
             None,
             excluded_payload.clone(),
         )
@@ -2042,7 +2179,7 @@ mod tests {
                 ProviderId::new([0x22; 32]),
                 policy.canonical_digest().expect("policy digest"),
                 policy.por_recorder_authority,
-                RECORDED_AT,
+                SOURCE_TIME,
                 None,
                 excluded_payload,
             ),
@@ -2058,14 +2195,14 @@ mod tests {
             request_digest: [0x12; 32],
             token_body_digest: Some([0x13; 32]),
             token_key_version: Some(1),
-            validated_at_unix_ms: RECORDED_AT,
+            validated_at_unix_ms: SOURCE_TIME,
             status: StreamTokenValidationStatusV1::Accepted,
         };
         let entry = ReputationJournalEntryV1::try_new(
             ProviderId::new([0x22; 32]),
             policy.canonical_digest().expect("policy digest"),
             policy.token_recorder_authority.clone(),
-            RECORDED_AT,
+            SOURCE_TIME,
             None,
             ReputationJournalPayloadV1::StreamTokenValidation(accepted),
         )
@@ -2094,7 +2231,7 @@ mod tests {
                 ProviderId::new([0x22; 32]),
                 policy.canonical_digest().expect("policy digest"),
                 policy.token_recorder_authority,
-                RECORDED_AT,
+                SOURCE_TIME,
                 None,
                 ReputationJournalPayloadV1::StreamTokenValidation(malformed),
             ),
@@ -2109,16 +2246,16 @@ mod tests {
                 ProviderId::new([0x33; 32]),
                 policy().canonical_digest().expect("policy digest"),
                 policy().dispute_recorder_authority,
-                RECORDED_AT,
+                SOURCE_TIME,
                 Some(ReputationJournalEventIdV1([0x88; 32])),
                 ReputationJournalPayloadV1::ProviderDispute(ProviderDisputeEventV1 {
                     dispute_id: CapacityDisputeId::new([0x21; 32]),
                     kind: ProviderDisputeKindV1::Other,
                     evidence_digest: [0x22; 32],
-                    submitted_at_unix_ms: RECORDED_AT - 1,
+                    submitted_at_unix_ms: SOURCE_TIME - 1,
                     status: ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                         outcome: CapacityDisputeOutcome::Dismissed,
-                        resolved_at_unix_ms: RECORDED_AT,
+                        resolved_at_unix_ms: SOURCE_TIME,
                         decision_digest: [0x23; 32],
                         rationale: Some("x".repeat(REPUTATION_JOURNAL_MAX_TEXT_BYTES_V1 + 1)),
                     }),
@@ -2147,6 +2284,7 @@ mod tests {
                 block_height: 5,
                 block_hash: BLOCK_HASH,
                 event_index: u32::try_from(index).expect("bounded event index"),
+                recorded_at_unix_ms: RECORDED_AT,
                 entry: resolved_dispute_entry(
                     u32::try_from(index).expect("bounded dispute index"),
                     "x".repeat(REPUTATION_JOURNAL_MAX_TEXT_BYTES_V1),
@@ -2181,6 +2319,13 @@ mod tests {
         assert_eq!(
             page(vec![first.clone(), gap]).validate(),
             Err(ReputationJournalValidationError::EventSequenceGap)
+        );
+
+        let mut timestamp_reordered = finalized_event(2, 1, 3);
+        timestamp_reordered.recorded_at_unix_ms = RECORDED_AT - 1;
+        assert_eq!(
+            page(vec![first.clone(), timestamp_reordered]).validate(),
+            Err(ReputationJournalValidationError::EventTimestampReordered)
         );
 
         let index_gap = finalized_event(2, 2, 4);
@@ -2246,7 +2391,7 @@ mod tests {
             first.provider_id,
             first.authority_policy_digest,
             first.recorded_by.clone(),
-            first.recorded_at_unix_ms,
+            first.source_time_unix_ms,
             None,
             payload,
         )
@@ -2257,6 +2402,7 @@ mod tests {
                 block_height: 5,
                 block_hash: BLOCK_HASH,
                 event_index: 0,
+                recorded_at_unix_ms: RECORDED_AT,
                 entry: first,
             },
             ReputationJournalFinalizedEventV1 {
@@ -2264,6 +2410,7 @@ mod tests {
                 block_height: 5,
                 block_hash: BLOCK_HASH,
                 event_index: 1,
+                recorded_at_unix_ms: RECORDED_AT,
                 entry: second_entry,
             },
         ];
@@ -2280,13 +2427,13 @@ mod tests {
             ProviderId::new([0x33; 32]),
             opened_policy.canonical_digest().expect("policy digest"),
             opened_policy.dispute_recorder_authority.clone(),
-            RECORDED_AT - 1_000,
+            SOURCE_TIME - 1_000,
             None,
             ReputationJournalPayloadV1::ProviderDispute(ProviderDisputeEventV1 {
                 dispute_id: CapacityDisputeId::new([0x61; 32]),
                 kind: ProviderDisputeKindV1::ProofFailure,
                 evidence_digest: [0x62; 32],
-                submitted_at_unix_ms: RECORDED_AT - 1_000,
+                submitted_at_unix_ms: SOURCE_TIME - 1_000,
                 status: ProviderDisputeStatusV1::Opened,
             }),
         )
@@ -2295,16 +2442,16 @@ mod tests {
             opened.provider_id,
             opened.authority_policy_digest,
             opened.recorded_by.clone(),
-            RECORDED_AT,
+            SOURCE_TIME,
             Some(opened.event_id),
             ReputationJournalPayloadV1::ProviderDispute(ProviderDisputeEventV1 {
                 dispute_id: CapacityDisputeId::new([0x61; 32]),
                 kind: ProviderDisputeKindV1::ProofFailure,
                 evidence_digest: [0x62; 32],
-                submitted_at_unix_ms: RECORDED_AT - 1_000,
+                submitted_at_unix_ms: SOURCE_TIME - 1_000,
                 status: ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                     outcome: CapacityDisputeOutcome::Upheld,
-                    resolved_at_unix_ms: RECORDED_AT,
+                    resolved_at_unix_ms: SOURCE_TIME,
                     decision_digest: [0x63; 32],
                     rationale: Some("proof failure upheld".to_owned()),
                 }),
@@ -2317,6 +2464,7 @@ mod tests {
                 block_height: 4,
                 block_hash: [0x40; 32],
                 event_index: 9,
+                recorded_at_unix_ms: SOURCE_TIME - 500,
                 entry: opened,
             },
             ReputationJournalFinalizedEventV1 {
@@ -2324,6 +2472,7 @@ mod tests {
                 block_height: 5,
                 block_hash: BLOCK_HASH,
                 event_index: 0,
+                recorded_at_unix_ms: RECORDED_AT,
                 entry: resolved,
             },
         ];
@@ -2357,7 +2506,7 @@ mod tests {
     fn provider_dispute_resolution_norito_and_json_round_trip() {
         let value = ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
             outcome: CapacityDisputeOutcome::Upheld,
-            resolved_at_unix_ms: RECORDED_AT,
+            resolved_at_unix_ms: SOURCE_TIME,
             decision_digest: [0xD4; 32],
             rationale: Some("governance upheld the dispute".to_owned()),
         });

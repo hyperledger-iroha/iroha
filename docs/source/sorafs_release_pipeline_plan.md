@@ -114,41 +114,19 @@ summary: Current SF-6 release automation and QA surfaces.
   `sorafs-validate` into `dist/sorafs-validate-release/`, stages the checked
   `include/sorafs_reference.h` C FFI header for downstream SDK bindings,
   records binary/header/archive SHA256 digests, records manifest and staged-file
-  digests, and runs fixture smoke checks before archive creation. The
-  production path accepts only a detached signature through
-  `--manifest-signature-in`; the local raw-seed signer additionally requires
-  the explicit `--development-local-signing` mode and is not a production
-  release path. Manifest signing is raw Ed25519 only and requires a 32-byte raw
-  `--manifest-public-key` plus an independently reviewed lowercase SHA-256
-  fingerprint of those exact public-key bytes through
-  `--manifest-public-key-fingerprint`. The development seed is exactly 32 raw
-  bytes, must be owned by the current effective user, have exactly one hard
-  link, and use mode `0400` or `0600`. Every key, seed, or external signature
-  input is copied from one stable no-follow descriptor into an owner-private
-  ephemeral snapshot before any build work. The packaged `sorafs-validate
-  release-manifest` command performs strict native key, fingerprint, and
-  signature validation with `ed25519-dalek`; it also performs the explicitly
-  development-gated raw-seed signing path. The helper rejects encoded,
-  malformed, or mismatched key material, fingerprint mismatches, and signatures
-  that are not a verified, nonzero 64-byte Ed25519 value. The reference
-  production release keeps the private key in PKCS#11/HSM custody: generate the
-  deterministic manifest once, sign its exact bytes with the HSM, then rerun
-  the identical package command with `--manifest-signature-in`, the reviewed
-  raw Ed25519 public key, and its fingerprint. The packager recreates the
-  manifest and admits the external signature only when native strict Ed25519
-  verification succeeds.
-  Signature publication is no-clobber and rejects the stage, archive, manifest,
-  checksum sidecars, input identities, existing destinations, and stale default
-  signatures before generated artifacts are changed.
-  Packager options must
-  provide explicit non-option-shaped values, prebuilt binaries, manifest
-  signing keys, manifest public keys, and the checked FFI header are rejected
-  when they are symlinks, missing, non-regular, non-executable where required,
-  or reached through symlinked parent components, and `--out-dir` is rejected
-  when it is a symlink or parent-aliased before any cleanup can remove staged
-  artifacts. Runtime keys are never staged or written into release artifacts.
-  Archive creation uses a
-  metadata-normalized tar/gzip writer
+  digests, and runs fixture smoke checks before archive creation. It is a
+  deterministic unsigned artifact/checksum producer. Production signing is
+  intentionally absent: the final package manifest and checksum sidecars enter
+  the canonical aggregate `release_manifest.json`, and only that final
+  evidence-complete inventory is signed by the governed PKCS#11/HSM Ed25519
+  signer through `scripts/release_manifest_signing.py`.
+  Packager options must provide explicit non-option-shaped values. Prebuilt
+  binaries and the checked FFI header are rejected when they are symlinks,
+  missing, non-regular, non-executable where required, or reached through
+  symlinked parent components, and `--out-dir` is rejected when it is a symlink
+  or parent-aliased before any cleanup can remove staged artifacts. Runtime
+  keys are never staged or written into release artifacts. Archive creation
+  uses a metadata-normalized tar/gzip writer
   (sorted entries, zero mtime, fixed uid/gid, deterministic file modes) so
   identical staged inputs reproduce the same archive hash. Generated `dist/*`
   artifacts remain untracked; keep only `dist/.gitkeep` committed.
@@ -161,7 +139,8 @@ summary: Current SF-6 release automation and QA surfaces.
   target and compares the archive and manifest bytes before staging
   run-specific SBOM/SARIF evidence. This keeps volatile scanner metadata
   outside the deterministic archive while the final exact `SHA256SUMS`,
-  provenance, and signatures still bind both the archive and scan evidence.
+  provenance and the aggregate-manifest signature still bind both the archive
+  and scan evidence.
 - `scripts/sorafs_gateway_self_cert.sh` can be invoked post-deploy only with the
   complete aggregate release-authentication tuple: canonical manifest, raw
   Ed25519 signature/public key, reviewed signer fingerprint, and the reviewed
@@ -345,8 +324,8 @@ summary: Current SF-6 release automation and QA surfaces.
   package-consumer records.
 - Existing repository patterns to reuse include `scripts/js_sbom_provenance.sh`,
   `scripts/android_sbom_provenance.sh`, and the docs portal `syft` packaging
-  path. Keep generated SBOMs and signatures beside the release hashes in the
-  governance ticket.
+  path. Keep generated SBOMs and the aggregate-manifest signature tuple beside
+  the release hashes in the governance ticket.
 - If release scanning needs central exceptions, add
   `security/vuln-exceptions.yaml` with expiry and approval fields in the same
   change that enforces the scanner. Do not reference exception files that are
@@ -357,11 +336,11 @@ summary: Current SF-6 release automation and QA surfaces.
 - Current SoraFS release evidence comes from `scripts/release_sorafs_cli.sh`,
   `scripts/package_sorafs_validate_release.sh`,
   `scripts/package_sorafs_cli_candidate.py`, `status.md`, `roadmap.md`, and the
-  governance release notes template. Keep the package archive, manifest,
-  manifest signature when produced, all SHA256 sidecars, and the completed
-  rollback/yank record hash-addressed in the release ticket. The operational
-  procedure for Cargo, npm, PyPI, NuGet, JVM/Android, Swift, and GitHub
-  artifacts is
+  governance release notes template. Keep the package archive, unsigned
+  per-package manifest, all SHA256 sidecars, final aggregate-manifest signature
+  tuple, and the completed rollback/yank record hash-addressed in the release
+  ticket. The operational procedure for Cargo, npm, PyPI, NuGet, JVM/Android,
+  Swift, and GitHub artifacts is
   `docs/portal/docs/sorafs/release-rollback-yank.md`.
 - Every deterministic CLI archive carries the checked root `CHANGELOG.md` and
   `LICENSE`. The version-specific release-notes template remains

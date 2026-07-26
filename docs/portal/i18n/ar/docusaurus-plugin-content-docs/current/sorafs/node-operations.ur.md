@@ -108,7 +108,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. بيان ترميز Base64 الذي تم جمعه:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -176,7 +176,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   `por_sampling_returns_verified_proofs` بطاقة العمل.
 - كل ما تحتاجه من اللون الوردي:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` و`torii_sorafs_storage_fetch_inflight`
   - `/v1/sorafs/capacity/state` ذريعة لبطاقة PoR/البطاقة الائتمانية
   - `sorafs_node_deal_publish_total{result=success|failure}` محاولات نشر التسوية
 

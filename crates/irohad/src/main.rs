@@ -26,6 +26,12 @@ mod soracloud_runtime;
 #[cfg(not(feature = "embedded-soracloud-runtime"))]
 #[path = "soracloud_runtime_stub.rs"]
 mod soracloud_runtime;
+/// Supervised committed SoraFS hedging/billing projector and delivery worker.
+pub mod sorafs_hedging_billing_runtime;
+/// Supervised finalized-ledger SoraFS provider-ingest worker.
+pub mod sorafs_provider_ingest_runtime;
+/// Supervised committed SoraFS reputation projector and publisher.
+pub mod sorafs_reputation_runtime;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::ffi::OsStrExt;
@@ -1204,6 +1210,60 @@ enum MainError {
     IrohaRun,
 }
 
+/// Read-only Torii adapter that refuses committed reputation reads whenever
+/// the supervised daemon is not ready.
+#[derive(Debug, Clone)]
+struct ReadyReputationCommittedReaderV1 {
+    runtime: sorafs_reputation_runtime::ReputationRuntimeHandleV1,
+}
+
+impl ReadyReputationCommittedReaderV1 {
+    fn ensure_ready(&self) -> Result<(), sorafs_node::reputation::runtime::ReputationRuntimeError> {
+        if self.runtime.status()?.ready {
+            return Ok(());
+        }
+        let failure =
+            sorafs_node::reputation::runtime::ReputationExternalFailureV1::try_new([0x52; 32])?;
+        Err(sorafs_node::reputation::runtime::ReputationRuntimeError::External(failure))
+    }
+}
+
+impl sorafs_node::reputation::runtime::ReputationCommittedReadApiV1
+    for ReadyReputationCommittedReaderV1
+{
+    fn committed_read_projection(
+        &self,
+    ) -> Result<
+        sorafs_node::reputation::runtime::ReputationCommittedReadProjectionV1,
+        sorafs_node::reputation::runtime::ReputationRuntimeError,
+    > {
+        self.ensure_ready()?;
+        self.runtime.committed_read_projection()
+    }
+
+    fn committed_snapshot_by_id(
+        &self,
+        snapshot_id: [u8; 16],
+    ) -> Result<
+        Option<sorafs_manifest::ReputationSnapshotV1>,
+        sorafs_node::reputation::runtime::ReputationRuntimeError,
+    > {
+        self.ensure_ready()?;
+        self.runtime.committed_snapshot_by_id(snapshot_id)
+    }
+
+    fn committed_events_after(
+        &self,
+        sequence: u64,
+    ) -> Result<
+        Vec<sorafs_manifest::ReputationSnapshotEventV1>,
+        sorafs_node::reputation::runtime::ReputationRuntimeError,
+    > {
+        self.ensure_ready()?;
+        self.runtime.committed_events_after(sequence)
+    }
+}
+
 /// [Orchestrator](https://en.wikipedia.org/wiki/Orchestration_%28computing%29)
 /// of the system. It configures, coordinates and manages transactions
 /// and queries processing, work of consensus and storage.
@@ -1218,23 +1278,93 @@ pub struct Iroha {
     streaming: iroha_core::streaming::StreamingHandle,
     /// P2P network handle used for outbound control frames (e.g., streaming manifests).
     network: IrohaNetwork,
+    /// Supervised committed reputation runtime status/metrics handle.
+    sorafs_reputation_runtime: Option<sorafs_reputation_runtime::ReputationRuntimeHandleV1>,
+    /// Supervised committed hedging/billing runtime status/metrics handle.
+    sorafs_hedging_billing_runtime:
+        Option<sorafs_hedging_billing_runtime::HedgingBillingRuntimeHandleV1>,
+    /// Supervised finalized-ledger provider-ingest status/metrics handle.
+    sorafs_provider_ingest_runtime:
+        Option<sorafs_provider_ingest_runtime::ProviderIngestRuntimeHandleV1>,
 }
 
 /// Runtime-only daemon dependencies supplied by the deployment launcher.
 ///
-/// Implementations of the moderation wrapper and privacy-cycle PRF provider are
-/// the reference-node boundaries for PKCS#11, managed-KMS, and threshold
-/// services. Provider credentials, unwrapped keys, PRF shares, seeds, and
-/// outputs must stay inside those implementations and must never be sourced
-/// from `iroha_config`.
+/// Implementations of the moderation wrapper, privacy-cycle PRF provider,
+/// stream-token and native proof/repair/reserve/orderbook/moderation signers,
+/// moderation durable handoffs, appeal-finance transaction signers,
+/// role-separated PoTR signers, exact-view reputation and billing queries,
+/// threshold/HSM signers, immutable publication, acknowledgement, sealed
+/// witness storage, and Governance DAG readback are the reference-node
+/// boundaries for ledger access, PKCS#11, managed-KMS, and threshold services.
+/// Provider credentials, unwrapped keys, PRF shares, seeds, and outputs must
+/// stay inside those implementations and must never be sourced from
+/// `iroha_config`.
 #[derive(Clone, Default)]
 pub struct IrohaRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
     privacy_release_anchor: Option<Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>>,
+    sorafs_governance_dag_signer: Option<Arc<dyn sorafs_node::GovernanceDagRuntimeSigner>>,
+    sorafs_stream_token_signer: Option<Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>>,
+    sorafs_appeal_finance_runtime_signers:
+        Option<Arc<iroha_torii::SoraFsAppealFinanceRuntimeSignersV1>>,
+    sorafs_appeal_finance_checkpoint_runtime: Option<
+        Arc<dyn sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointRuntime>,
+    >,
+    sorafs_proof_outcome_signer: Option<Arc<dyn iroha_torii::SoraFsProofOutcomeTransactionSigner>>,
+    sorafs_repair_transaction_signer: Option<Arc<dyn iroha_torii::SoraFsRepairTransactionSigner>>,
+    sorafs_reserve_transaction_signer: Option<Arc<dyn iroha_torii::SoraFsReserveTransactionSigner>>,
+    sorafs_orderbook_transaction_signer:
+        Option<Arc<dyn iroha_torii::SoraFsOrderbookTransactionSigner>>,
+    sorafs_moderation_transaction_signer: Option<
+        Arc<dyn iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1>,
+    >,
+    sorafs_moderation_settlement_handoff: Option<
+        Arc<dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>,
+    >,
+    sorafs_moderation_publication_handoff: Option<
+        Arc<dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>,
+    >,
+    sorafs_evidence_viewer_webauthn:
+        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>>,
+    sorafs_evidence_viewer_grants:
+        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1>>,
+    sorafs_evidence_viewer_receipt_signer:
+        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1>>,
+    sorafs_evidence_viewer_erasure:
+        Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1>>,
+    sorafs_pop_credentials: Option<Arc<iroha_torii::sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
+    sorafs_potr_runtime_signer_roles: Option<Arc<iroha_torii::sorafs::PotrRuntimeSignerRolesV1>>,
     sorafs_gateway_acme_client: Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
     sorafs_gateway_compliance_feed_transport:
         Option<Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>>,
+    sorafs_reputation_finalized_query:
+        Option<Arc<dyn sorafs_node::reputation::runtime::ReputationFinalizedQueryV1>>,
+    sorafs_reputation_journal_transaction_submitter:
+        Option<Arc<dyn sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1>>,
+    sorafs_reputation_threshold_signer:
+        Option<Arc<dyn sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1>>,
+    sorafs_reputation_governance_dag:
+        Option<Arc<dyn sorafs_node::reputation::runtime::ReputationGovernanceDagClientV1>>,
+    sorafs_hedging_billing_finalized_query:
+        Option<Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingFinalizedQuery>>,
+    sorafs_hedging_billing_journal_verifier:
+        Option<Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingJournalVerifier>>,
+    sorafs_billing_statement_signer:
+        Option<Arc<dyn sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner>>,
+    sorafs_billing_statement_publisher:
+        Option<Arc<dyn sorafs_node::hedging_billing_service::BillingStatementPublisher>>,
+    sorafs_billing_acknowledgement_authority: Option<
+        Arc<dyn sorafs_node::hedging_billing_service::BillingStatementAcknowledgementAuthority>,
+    >,
+    sorafs_hedging_billing_epoch_witness_store:
+        Option<Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessStore>>,
+    sorafs_provider_ingest_authenticated_source:
+        Option<Arc<dyn sorafs_provider_ingest_runtime::ProviderIngestAuthenticatedSourceRuntimeV1>>,
+    sorafs_provider_ingest_signer_resolver: Option<
+        Arc<dyn sorafs_provider_ingest_runtime::ProviderIngestGovernedSignerResolverRuntimeV1>,
+    >,
 }
 
 impl IrohaRuntimeDeps {
@@ -1270,6 +1400,198 @@ impl IrohaRuntimeDeps {
         self
     }
 
+    /// Attach the production HSM/KMS signer for the embedded SoraFS
+    /// Governance DAG publisher.
+    #[must_use]
+    pub fn with_sorafs_governance_dag_signer(
+        mut self,
+        signer: Arc<dyn sorafs_node::GovernanceDagRuntimeSigner>,
+    ) -> Self {
+        self.sorafs_governance_dag_signer = Some(signer);
+        self
+    }
+
+    /// Attach the production HSM/KMS signer for SoraFS stream-token issuance.
+    #[must_use]
+    pub fn with_sorafs_stream_token_signer(
+        mut self,
+        signer: Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>,
+    ) -> Self {
+        self.sorafs_stream_token_signer = Some(signer);
+        self
+    }
+
+    /// Attach runtime-only HSM/KMS providers for appeal-finance lock,
+    /// disbursement, and refund transactions.
+    #[must_use]
+    pub fn with_sorafs_appeal_finance_runtime_signers(
+        mut self,
+        signers: Arc<iroha_torii::SoraFsAppealFinanceRuntimeSignersV1>,
+    ) -> Self {
+        self.sorafs_appeal_finance_runtime_signers = Some(signers);
+        self
+    }
+
+    /// Attach the HSM/KMS-authenticated monotonic checkpoint boundary for the
+    /// appeal-finance transaction forwarder.
+    #[must_use]
+    pub fn with_sorafs_appeal_finance_checkpoint_runtime(
+        mut self,
+        runtime: Arc<
+            dyn sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointRuntime,
+        >,
+    ) -> Self {
+        self.sorafs_appeal_finance_checkpoint_runtime = Some(runtime);
+        self
+    }
+
+    /// Attach the runtime-only signer for authoritative proof-outcome
+    /// transactions.
+    #[must_use]
+    pub fn with_sorafs_proof_outcome_signer(
+        mut self,
+        signer: Arc<dyn iroha_torii::SoraFsProofOutcomeTransactionSigner>,
+    ) -> Self {
+        self.sorafs_proof_outcome_signer = Some(signer);
+        self
+    }
+
+    /// Attach the runtime-only signer for native repair transactions.
+    #[must_use]
+    pub fn with_sorafs_repair_transaction_signer(
+        mut self,
+        signer: Arc<dyn iroha_torii::SoraFsRepairTransactionSigner>,
+    ) -> Self {
+        self.sorafs_repair_transaction_signer = Some(signer);
+        self
+    }
+
+    /// Attach the runtime-only signer for native reserve/rent transactions.
+    #[must_use]
+    pub fn with_sorafs_reserve_transaction_signer(
+        mut self,
+        signer: Arc<dyn iroha_torii::SoraFsReserveTransactionSigner>,
+    ) -> Self {
+        self.sorafs_reserve_transaction_signer = Some(signer);
+        self
+    }
+
+    /// Attach the runtime-only signer for native orderbook transactions.
+    #[must_use]
+    pub fn with_sorafs_orderbook_transaction_signer(
+        mut self,
+        signer: Arc<dyn iroha_torii::SoraFsOrderbookTransactionSigner>,
+    ) -> Self {
+        self.sorafs_orderbook_transaction_signer = Some(signer);
+        self
+    }
+
+    /// Attach the runtime-only HSM/KMS signer for exact moderation native
+    /// transaction envelopes.
+    #[must_use]
+    pub fn with_sorafs_moderation_transaction_signer(
+        mut self,
+        signer: Arc<
+            dyn iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1,
+        >,
+    ) -> Self {
+        self.sorafs_moderation_transaction_signer = Some(signer);
+        self
+    }
+
+    /// Attach the durable appeal-finance boundary for finalized moderation
+    /// settlement handoffs.
+    #[must_use]
+    pub fn with_sorafs_moderation_settlement_handoff(
+        mut self,
+        boundary: Arc<
+            dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1,
+        >,
+    ) -> Self {
+        self.sorafs_moderation_settlement_handoff = Some(boundary);
+        self
+    }
+
+    /// Attach the durable governance/transparency boundary for finalized
+    /// moderation publication handoffs.
+    #[must_use]
+    pub fn with_sorafs_moderation_publication_handoff(
+        mut self,
+        boundary: Arc<
+            dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1,
+        >,
+    ) -> Self {
+        self.sorafs_moderation_publication_handoff = Some(boundary);
+        self
+    }
+
+    /// Attach the production WebAuthn verifier for evidence-viewer sessions.
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_webauthn(
+        mut self,
+        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>,
+    ) -> Self {
+        self.sorafs_evidence_viewer_webauthn = Some(boundary);
+        self
+    }
+
+    /// Attach the finalized assignment/role grant authority for evidence
+    /// viewing.
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_grants(
+        mut self,
+        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1>,
+    ) -> Self {
+        self.sorafs_evidence_viewer_grants = Some(boundary);
+        self
+    }
+
+    /// Attach the HSM-backed signer for hash-chained evidence access receipts.
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_receipt_signer(
+        mut self,
+        signer: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1>,
+    ) -> Self {
+        self.sorafs_evidence_viewer_receipt_signer = Some(signer);
+        self
+    }
+
+    /// Attach the authenticated evidence erasure boundary. Its implementation
+    /// owns KMS/storage credentials and must honor stable operation IDs.
+    #[must_use]
+    pub fn with_sorafs_evidence_viewer_erasure(
+        mut self,
+        boundary: Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1>,
+    ) -> Self {
+        self.sorafs_evidence_viewer_erasure = Some(boundary);
+        self
+    }
+
+    /// Attach the complete runtime-only PoP enrollment, issuer, registry, and
+    /// wallet dependency bundle.
+    #[must_use]
+    pub fn with_sorafs_pop_credentials(
+        mut self,
+        runtime: Arc<iroha_torii::sorafs::pop_api::PopCredentialToriiRuntimeV1>,
+    ) -> Self {
+        self.sorafs_pop_credentials = Some(runtime);
+        self
+    }
+
+    /// Attach independently administered runtime HSM services for the SoraFS
+    /// PoTR gateway Ed25519 and provider ML-DSA-65 receipt roles.
+    ///
+    /// Torii binds these roles to its own authoritative finalized state after
+    /// state and the council-verified admission registry are available.
+    #[must_use]
+    pub fn with_sorafs_potr_runtime_signer_roles(
+        mut self,
+        roles: Arc<iroha_torii::sorafs::PotrRuntimeSignerRolesV1>,
+    ) -> Self {
+        self.sorafs_potr_runtime_signer_roles = Some(roles);
+        self
+    }
+
     /// Attach the runtime-owned ACME client used by the SoraFS regional gateway.
     ///
     /// Account and DNS-provider credentials remain inside the implementation
@@ -1293,6 +1615,138 @@ impl IrohaRuntimeDeps {
         transport: Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
     ) -> Self {
         self.sorafs_gateway_compliance_feed_transport = Some(transport);
+        self
+    }
+
+    /// Attach the identity-pinned exact-anchor finalized query adapter used by
+    /// the committed SoraFS reputation projector.
+    #[must_use]
+    pub fn with_sorafs_reputation_finalized_query(
+        mut self,
+        query: Arc<dyn sorafs_node::reputation::runtime::ReputationFinalizedQueryV1>,
+    ) -> Self {
+        self.sorafs_reputation_finalized_query = Some(query);
+        self
+    }
+
+    /// Attach a runtime-only identity-matching signer and normal-queue
+    /// submitter for native PoR and stream-token reputation journal entries.
+    #[must_use]
+    pub fn with_sorafs_reputation_journal_transaction_submitter(
+        mut self,
+        submitter: Arc<
+            dyn sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1,
+        >,
+    ) -> Self {
+        self.sorafs_reputation_journal_transaction_submitter = Some(submitter);
+        self
+    }
+
+    /// Attach the external threshold-signing service for exact committed
+    /// reputation material.
+    #[must_use]
+    pub fn with_sorafs_reputation_threshold_signer(
+        mut self,
+        signer: Arc<dyn sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1>,
+    ) -> Self {
+        self.sorafs_reputation_threshold_signer = Some(signer);
+        self
+    }
+
+    /// Attach the authenticated Governance DAG publication/readback service for
+    /// committed reputation snapshots.
+    #[must_use]
+    pub fn with_sorafs_reputation_governance_dag(
+        mut self,
+        governance_dag: Arc<dyn sorafs_node::reputation::runtime::ReputationGovernanceDagClientV1>,
+    ) -> Self {
+        self.sorafs_reputation_governance_dag = Some(governance_dag);
+        self
+    }
+
+    /// Attach the identity-pinned finalized billing query, including typed
+    /// consensus-authenticated period-close records.
+    #[must_use]
+    pub fn with_sorafs_hedging_billing_finalized_query(
+        mut self,
+        query: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingFinalizedQuery>,
+    ) -> Self {
+        self.sorafs_hedging_billing_finalized_query = Some(query);
+        self
+    }
+
+    /// Attach the consensus billing-journal inclusion/finality verifier.
+    #[must_use]
+    pub fn with_sorafs_hedging_billing_journal_verifier(
+        mut self,
+        verifier: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingJournalVerifier>,
+    ) -> Self {
+        self.sorafs_hedging_billing_journal_verifier = Some(verifier);
+        self
+    }
+
+    /// Attach the runtime-only HSM/KMS billing statement signer.
+    #[must_use]
+    pub fn with_sorafs_billing_statement_signer(
+        mut self,
+        signer: Arc<dyn sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner>,
+    ) -> Self {
+        self.sorafs_billing_statement_signer = Some(signer);
+        self
+    }
+
+    /// Attach the authenticated immutable billing statement publisher.
+    #[must_use]
+    pub fn with_sorafs_billing_statement_publisher(
+        mut self,
+        publisher: Arc<dyn sorafs_node::hedging_billing_service::BillingStatementPublisher>,
+    ) -> Self {
+        self.sorafs_billing_statement_publisher = Some(publisher);
+        self
+    }
+
+    /// Attach the authoritative billing statement acknowledgement service.
+    #[must_use]
+    pub fn with_sorafs_billing_acknowledgement_authority(
+        mut self,
+        authority: Arc<
+            dyn sorafs_node::hedging_billing_service::BillingStatementAcknowledgementAuthority,
+        >,
+    ) -> Self {
+        self.sorafs_billing_acknowledgement_authority = Some(authority);
+        self
+    }
+
+    /// Attach the authenticated monotonic sealed billing epoch witness store.
+    #[must_use]
+    pub fn with_sorafs_hedging_billing_epoch_witness_store(
+        mut self,
+        store: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessStore>,
+    ) -> Self {
+        self.sorafs_hedging_billing_epoch_witness_store = Some(store);
+        self
+    }
+
+    /// Attach the authenticated governed source-fetch boundary used by local
+    /// finalized replication ingest.
+    #[must_use]
+    pub fn with_sorafs_provider_ingest_authenticated_source(
+        mut self,
+        source: Arc<dyn sorafs_provider_ingest_runtime::ProviderIngestAuthenticatedSourceRuntimeV1>,
+    ) -> Self {
+        self.sorafs_provider_ingest_authenticated_source = Some(source);
+        self
+    }
+
+    /// Attach the governance-aware runtime HSM/KMS completion-signer resolver.
+    #[must_use]
+    pub fn with_sorafs_provider_ingest_signer_resolver(
+        mut self,
+        resolver: Arc<
+            dyn sorafs_provider_ingest_runtime::ProviderIngestGovernedSignerResolverRuntimeV1,
+        >,
+    ) -> Self {
+        self.sorafs_provider_ingest_signer_resolver = Some(resolver);
         self
     }
 }
@@ -2950,10 +3404,10 @@ fn certified_merge_sidecar_ingress_reply_route(
     reply_route: iroha_p2p::network::NetworkReplyRoute,
 ) -> Option<iroha_p2p::network::NetworkReplyRoute> {
     match message {
-        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => None,
         iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
         | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_)
         | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_)
+        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_)
         | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => Some(reply_route),
     }
 }
@@ -6507,7 +6961,7 @@ mod network_relay_tests {
     }
 
     #[test]
-    fn certified_merge_sidecar_generation_hint_alone_drops_ingress_reply_route() {
+    fn certified_merge_sidecar_messages_preserve_ingress_reply_route() {
         use iroha_core::merge_sidecar::{
             CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
             CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
@@ -6575,21 +7029,15 @@ mod network_relay_tests {
             CertifiedMergeSidecarMessage::Request(request),
             close,
             close_ack,
+            generation_hint,
             CertifiedMergeSidecarMessage::Chunk(chunk),
         ] {
             let route = routes.mint(semantic_sender.clone());
             let retained =
                 super::certified_merge_sidecar_ingress_reply_route(&message, route.clone())
-                    .expect("non-Hint sidecar traffic keeps its authenticated reply route");
+                    .expect("sidecar traffic keeps its authenticated reply route");
             assert!(retained.same_delivery(&route));
         }
-
-        let hint_route = routes.mint(semantic_sender);
-        assert!(
-            super::certified_merge_sidecar_ingress_reply_route(&generation_hint, hint_route)
-                .is_none(),
-            "GenerationHint is Consensus control traffic without reply authority"
-        );
     }
 
     #[test]
@@ -7666,10 +8114,14 @@ impl Iroha {
 
     /// Starts Iroha with deployment-owned, runtime-only service dependencies.
     ///
-    /// The standard daemon entry point supplies no crypto providers.
-    /// Consequently, enabling authenticated SoraFS moderation screening or
-    /// differential-privacy aggregates without a launcher that injects the
-    /// corresponding production adapter fails closed at startup.
+    /// The standard daemon entry point does not adapt the validator node key
+    /// into SoraFS proof-outcome, repair, reserve/rent, orderbook, or
+    /// moderation authority roles. Those signers, moderation durable
+    /// handoffs, and all hedging/billing query, verification, HSM,
+    /// publication, acknowledgement, and witness adapters must be supplied by
+    /// an injecting launcher; enabling the dependent path without one fails
+    /// closed. The state-backed reputation query/queue submitter and Torii
+    /// proxy bridge signer remain separate native node roles.
     ///
     /// # Errors
     /// - Reading telemetry configs
@@ -9201,7 +9653,67 @@ impl Iroha {
             runtime_deps.moderation_quarantine_key_wrapper.clone();
         let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
         let privacy_release_anchor = runtime_deps.privacy_release_anchor.clone();
+        let sorafs_governance_dag_signer = runtime_deps.sorafs_governance_dag_signer.clone();
+        let sorafs_stream_token_signer = runtime_deps.sorafs_stream_token_signer.clone();
+        let sorafs_appeal_finance_runtime_signers =
+            runtime_deps.sorafs_appeal_finance_runtime_signers.clone();
+        let sorafs_appeal_finance_checkpoint_runtime = runtime_deps
+            .sorafs_appeal_finance_checkpoint_runtime
+            .clone();
+        let sorafs_proof_outcome_signer = runtime_deps.sorafs_proof_outcome_signer.clone();
+        let sorafs_repair_transaction_signer =
+            runtime_deps.sorafs_repair_transaction_signer.clone();
+        let sorafs_reserve_transaction_signer =
+            runtime_deps.sorafs_reserve_transaction_signer.clone();
+        let sorafs_orderbook_transaction_signer =
+            runtime_deps.sorafs_orderbook_transaction_signer.clone();
+        let sorafs_moderation_transaction_signer =
+            runtime_deps.sorafs_moderation_transaction_signer.clone();
+        let sorafs_moderation_settlement_handoff =
+            runtime_deps.sorafs_moderation_settlement_handoff.clone();
+        let sorafs_moderation_publication_handoff =
+            runtime_deps.sorafs_moderation_publication_handoff.clone();
+        let sorafs_evidence_viewer_webauthn = runtime_deps.sorafs_evidence_viewer_webauthn.clone();
+        let sorafs_evidence_viewer_grants = runtime_deps.sorafs_evidence_viewer_grants.clone();
+        let sorafs_evidence_viewer_receipt_signer =
+            runtime_deps.sorafs_evidence_viewer_receipt_signer.clone();
+        let sorafs_evidence_viewer_erasure = runtime_deps.sorafs_evidence_viewer_erasure.clone();
+        let sorafs_pop_credentials = runtime_deps.sorafs_pop_credentials.clone();
+        let sorafs_potr_runtime_signer_roles =
+            runtime_deps.sorafs_potr_runtime_signer_roles.clone();
         let sorafs_gateway_acme_client = runtime_deps.sorafs_gateway_acme_client.clone();
+        let sorafs_reputation_finalized_query_override =
+            runtime_deps.sorafs_reputation_finalized_query.clone();
+        let sorafs_reputation_journal_transaction_submitter_override = runtime_deps
+            .sorafs_reputation_journal_transaction_submitter
+            .clone();
+        let sorafs_reputation_threshold_signer =
+            runtime_deps.sorafs_reputation_threshold_signer.clone();
+        let sorafs_reputation_governance_dag =
+            runtime_deps.sorafs_reputation_governance_dag.clone();
+        let sorafs_reputation_config = config.torii.sorafs_storage.reputation_runtime.clone();
+        let sorafs_hedging_billing_finalized_query =
+            runtime_deps.sorafs_hedging_billing_finalized_query.clone();
+        let sorafs_hedging_billing_journal_verifier =
+            runtime_deps.sorafs_hedging_billing_journal_verifier.clone();
+        let sorafs_billing_statement_signer = runtime_deps.sorafs_billing_statement_signer.clone();
+        let sorafs_billing_statement_publisher =
+            runtime_deps.sorafs_billing_statement_publisher.clone();
+        let sorafs_billing_acknowledgement_authority = runtime_deps
+            .sorafs_billing_acknowledgement_authority
+            .clone();
+        let sorafs_hedging_billing_epoch_witness_store = runtime_deps
+            .sorafs_hedging_billing_epoch_witness_store
+            .clone();
+        let sorafs_hedging_billing_config =
+            config.torii.sorafs_storage.hedging_billing_runtime.clone();
+        let sorafs_provider_ingest_config =
+            config.torii.sorafs_storage.provider_ingest_runtime.clone();
+        let sorafs_provider_ingest_authenticated_source = runtime_deps
+            .sorafs_provider_ingest_authenticated_source
+            .clone();
+        let sorafs_provider_ingest_signer_resolver =
+            runtime_deps.sorafs_provider_ingest_signer_resolver.clone();
         let sorafs_gateway_compliance_feed_transport: Option<
             Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
         > = match runtime_deps
@@ -9261,6 +9773,11 @@ impl Iroha {
         } else {
             sorafs_runtime_deps
         };
+        let sorafs_runtime_deps = if let Some(signer) = sorafs_governance_dag_signer.as_ref() {
+            sorafs_runtime_deps.with_governance_dag_signer(Arc::clone(signer))
+        } else {
+            sorafs_runtime_deps
+        };
         let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
             sorafs_storage_config,
             sorafs_repair_config,
@@ -9277,6 +9794,166 @@ impl Iroha {
             .change_context(StartError::StartTorii)?;
 
         let chain_id = Arc::new(config.common.chain.clone());
+        let sorafs_provider_ingest_runtime = if let Some(provider_ingest_config) =
+            sorafs_provider_ingest_config
+        {
+            let authenticated_source =
+                    sorafs_provider_ingest_authenticated_source.ok_or_else(|| {
+                        Report::new(StartError::StartTorii).attach(
+                            "enabled SoraFS provider-ingest runtime requires an injected authenticated governed source-fetch adapter",
+                        )
+                    })?;
+            let signer_resolver =
+                    sorafs_provider_ingest_signer_resolver.ok_or_else(|| {
+                        Report::new(StartError::StartTorii).attach(
+                            "enabled SoraFS provider-ingest runtime requires an injected governance-aware HSM/KMS signer resolver",
+                        )
+                    })?;
+            let (handle, child) = sorafs_provider_ingest_runtime::start(
+                provider_ingest_config,
+                config.common.chain.clone(),
+                Arc::clone(&state),
+                Arc::clone(&queue),
+                sorafs_node.clone(),
+                authenticated_source,
+                signer_resolver,
+                supervisor.shutdown_signal(),
+            )
+            .await
+            .map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to initialise SoraFS provider-ingest runtime: {error:#}"
+                ))
+            })?;
+            supervisor.monitor(child);
+            Some(handle)
+        } else {
+            None
+        };
+        let sorafs_reputation_runtime = if let Some(reputation_config) = sorafs_reputation_config {
+            let trust_policy = sorafs_node.reputation_trust_policy().ok_or_else(|| {
+                Report::new(StartError::StartTorii).attach(
+                    "enabled committed SoraFS reputation runtime requires the configured canonical reputation trust policy",
+                )
+            })?;
+            let finalized_query: Arc<
+                dyn sorafs_node::reputation::runtime::ReputationFinalizedQueryV1,
+            > = sorafs_reputation_finalized_query_override.ok_or_else(|| {
+                Report::new(StartError::StartTorii).attach(
+                    "enabled committed SoraFS reputation runtime requires an injected immutable historical finalized-query adapter; the live current-head state view is not an exact historical capability",
+                )
+            })?;
+            let journal_transaction_submitter: Arc<
+                dyn sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1,
+            > = match sorafs_reputation_journal_transaction_submitter_override {
+                Some(submitter) => submitter,
+                None => {
+                    let signer = config.common.key_pair.clone();
+                    let authority = AccountId::new(signer.public_key().clone());
+                    Arc::new(
+                        sorafs_reputation_runtime::QueuedReputationJournalTransactionSubmitterV1::try_new(
+                            reputation_config
+                                .journal_transaction_submitter_handle
+                                .clone(),
+                            Arc::clone(&chain_id),
+                            Arc::clone(&queue),
+                            Arc::clone(&state),
+                            [(authority, signer)],
+                        )
+                        .map_err(|error| {
+                            Report::new(StartError::StartTorii).attach(format!(
+                                "failed to construct the queue-backed reputation journal submitter: {error:#}"
+                            ))
+                        })?,
+                    )
+                }
+            };
+            let dependencies = sorafs_reputation_runtime::ReputationRuntimeDependenciesV1::require(
+                Some(finalized_query),
+                Some(journal_transaction_submitter),
+                sorafs_reputation_threshold_signer,
+                sorafs_reputation_governance_dag,
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "enabled committed SoraFS reputation runtime has incomplete runtime-only dependencies: {error:#}"
+                ))
+            })?;
+            let (handle, child) = sorafs_reputation_runtime::start(
+                reputation_config,
+                config.common.chain.clone(),
+                trust_policy,
+                dependencies,
+                supervisor.shutdown_signal(),
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to initialise committed SoraFS reputation runtime: {error:#}"
+                ))
+            })?;
+            supervisor.monitor(child);
+            Some(handle)
+        } else {
+            None
+        };
+        let sorafs_hedging_billing_runtime = if let Some(hedging_billing_config) =
+            sorafs_hedging_billing_config
+        {
+            let feed_policy = sorafs_node
+                .hedging_feed_trust_policy()
+                .ok_or_else(|| {
+                    Report::new(StartError::StartTorii).attach(
+                        "enabled committed SoraFS hedging/billing runtime requires the configured canonical hedging-feed trust policy",
+                    )
+                })?;
+            let service_policy = sorafs_node::load_hedging_billing_service_policy(
+                &hedging_billing_config.service_policy_path,
+                hedging_billing_config.service_policy_digest,
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to load committed SoraFS hedging/billing service policy: {error}"
+                ))
+            })?;
+            let dependencies =
+                sorafs_hedging_billing_runtime::HedgingBillingRuntimeDependenciesV1::require(
+                    sorafs_hedging_billing_finalized_query,
+                    sorafs_hedging_billing_journal_verifier,
+                    sorafs_billing_statement_signer,
+                    sorafs_billing_statement_publisher,
+                    sorafs_billing_acknowledgement_authority,
+                    sorafs_hedging_billing_epoch_witness_store,
+                )
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "enabled committed SoraFS hedging/billing runtime has incomplete runtime-only dependencies: {error:#}"
+                    ))
+                })?;
+            let (handle, child) = sorafs_hedging_billing_runtime::start(
+                hedging_billing_config,
+                config.common.chain.clone(),
+                service_policy,
+                feed_policy,
+                dependencies,
+                supervisor.shutdown_signal(),
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to initialise committed SoraFS hedging/billing runtime: {error:#}"
+                ))
+            })?;
+            supervisor.monitor(child);
+            Some(handle)
+        } else {
+            None
+        };
+        let sorafs_hedging_billing_torii_runtime: Option<
+            Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingRuntimeApiV1>,
+        > = sorafs_hedging_billing_runtime.as_ref().map(|runtime| {
+            let runtime: Arc<dyn sorafs_node::hedging_billing_service::HedgingBillingRuntimeApiV1> =
+                Arc::new(runtime.clone());
+            runtime
+        });
         if config.nexus.relay_worker.enabled {
             let relay_worker_authority =
                 AccountId::new(config.common.key_pair.public_key().clone());
@@ -9345,42 +10022,84 @@ impl Iroha {
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
             .with_sorafs_node(sorafs_node)
-            // The standard launcher uses the runtime-only node key adapter.
-            // The worker fails closed before signing unless finalized
-            // governance grants this account the exact provider-scoped
-            // CanRecordSorafsProofOutcome permission. Deployments can replace
-            // this adapter with a PKCS#11/HSM implementation at this boundary.
-            .with_sorafs_proof_outcome_signer(Arc::new(config.common.key_pair.clone()))
-            // Native repair forwarding uses an independent runtime-only signer
-            // boundary. The standard launcher adapts the node key; production
-            // deployments can replace it with PKCS#11/HSM signing without
-            // exposing key material to the durable forwarder.
-            .with_sorafs_repair_transaction_signer(Arc::new(config.common.key_pair.clone()))
-            // Reserve/rent forwarding has its own runtime-only signer boundary.
-            // The standard launcher adapts the node key, but the durable
-            // worker never sees key material. Reference production must
-            // replace this adapter through ToriiRuntimeDeps with PKCS#11/HSM.
-            .with_sorafs_reserve_transaction_signer(Arc::new(config.common.key_pair.clone()))
-            // Native orderbook matcher/maintenance forwarding has a separate
-            // runtime-only signing boundary. The standard launcher adapts the
-            // node key for reproducible deployments; reference production
-            // must inject its governed PKCS#11/HSM-backed signer here.
-            .with_sorafs_orderbook_transaction_signer(Arc::new(config.common.key_pair.clone()))
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
-        let runtime_deps = if config
-            .torii
-            .sorafs_storage
-            .moderation_orchestrator
-            .is_some()
-        {
-            // Moderation orchestration signs exact, bounded native ISI
-            // envelopes through an independent runtime-only boundary. The
-            // reference launcher adapts the node key for reproducibility;
-            // production operators must inject the governed PKCS#11/HSM
-            // signer through ToriiRuntimeDeps at this boundary.
+        let runtime_deps = if let Some(runtime) = sorafs_reputation_runtime.as_ref() {
+            let reader: Arc<dyn sorafs_node::reputation::runtime::ReputationCommittedReadApiV1> =
+                Arc::new(ReadyReputationCommittedReaderV1 {
+                    runtime: runtime.clone(),
+                });
+            runtime_deps.with_sorafs_reputation_committed_reader(reader)
+        } else {
             runtime_deps
-                .with_sorafs_moderation_transaction_signer(Arc::new(config.common.key_pair.clone()))
+        };
+        let runtime_deps = if let Some(signer) = sorafs_proof_outcome_signer {
+            runtime_deps.with_sorafs_proof_outcome_signer(signer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(signer) = sorafs_repair_transaction_signer {
+            runtime_deps.with_sorafs_repair_transaction_signer(signer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(signer) = sorafs_reserve_transaction_signer {
+            runtime_deps.with_sorafs_reserve_transaction_signer(signer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(signer) = sorafs_orderbook_transaction_signer {
+            runtime_deps.with_sorafs_orderbook_transaction_signer(signer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(signer) = sorafs_moderation_transaction_signer {
+            runtime_deps.with_sorafs_moderation_transaction_signer(signer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(signer) = sorafs_stream_token_signer {
+            runtime_deps.with_sorafs_stream_token_signer(signer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(boundary) = sorafs_moderation_settlement_handoff {
+            runtime_deps.with_sorafs_moderation_settlement_handoff(boundary)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(boundary) = sorafs_moderation_publication_handoff {
+            runtime_deps.with_sorafs_moderation_publication_handoff(boundary)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(runtime) = sorafs_appeal_finance_checkpoint_runtime {
+            runtime_deps.with_sorafs_appeal_finance_checkpoint_runtime(runtime)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(boundary) = sorafs_evidence_viewer_webauthn {
+            runtime_deps.with_sorafs_evidence_viewer_webauthn(boundary)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(boundary) = sorafs_evidence_viewer_grants {
+            runtime_deps.with_sorafs_evidence_viewer_grants(boundary)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(signer) = sorafs_evidence_viewer_receipt_signer {
+            runtime_deps.with_sorafs_evidence_viewer_receipt_signer(signer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(boundary) = sorafs_evidence_viewer_erasure {
+            runtime_deps.with_sorafs_evidence_viewer_erasure(boundary)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(runtime) = sorafs_pop_credentials {
+            runtime_deps.with_sorafs_pop_credentials(runtime)
         } else {
             runtime_deps
         };
@@ -9411,6 +10130,21 @@ impl Iroha {
         };
         let runtime_deps = if let Some(transport) = sorafs_gateway_compliance_feed_transport {
             runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(signers) = sorafs_appeal_finance_runtime_signers {
+            runtime_deps.with_sorafs_appeal_finance_runtime_signers(signers)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(roles) = sorafs_potr_runtime_signer_roles {
+            runtime_deps.with_sorafs_potr_runtime_signer_roles(roles)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(runtime) = sorafs_hedging_billing_torii_runtime {
+            runtime_deps.with_sorafs_hedging_billing_runtime(runtime)
         } else {
             runtime_deps
         };
@@ -9522,6 +10256,9 @@ impl Iroha {
                 soracloud_runtime,
                 streaming: streaming.clone(),
                 network: network.clone(),
+                sorafs_reputation_runtime,
+                sorafs_hedging_billing_runtime,
+                sorafs_provider_ingest_runtime,
             },
             async move {
                 supervisor.start().await?;
@@ -9549,6 +10286,32 @@ impl Iroha {
     /// Streaming handle used for Torii and telemetry ingress.
     pub fn streaming(&self) -> iroha_core::streaming::StreamingHandle {
         self.streaming.clone()
+    }
+
+    /// Access the supervised committed SoraFS reputation status/metrics handle.
+    #[must_use]
+    pub fn sorafs_reputation_runtime(
+        &self,
+    ) -> Option<&sorafs_reputation_runtime::ReputationRuntimeHandleV1> {
+        self.sorafs_reputation_runtime.as_ref()
+    }
+
+    /// Access the supervised committed SoraFS hedging/billing status and
+    /// metrics handle.
+    #[must_use]
+    pub fn sorafs_hedging_billing_runtime(
+        &self,
+    ) -> Option<&sorafs_hedging_billing_runtime::HedgingBillingRuntimeHandleV1> {
+        self.sorafs_hedging_billing_runtime.as_ref()
+    }
+
+    /// Access the supervised finalized-ledger SoraFS provider-ingest status
+    /// and metrics handle.
+    #[must_use]
+    pub fn sorafs_provider_ingest_runtime(
+        &self,
+    ) -> Option<&sorafs_provider_ingest_runtime::ProviderIngestRuntimeHandleV1> {
+        self.sorafs_provider_ingest_runtime.as_ref()
     }
 
     /// Construct a manifest publisher for the active network.
@@ -13516,6 +14279,94 @@ mod tests {
             high_priority_relay_filter(),
             SubscriberFilter::topics([Topic::ConsensusSafety, Topic::Consensus, Topic::Control,])
         );
+    }
+
+    #[test]
+    fn standard_launcher_does_not_derive_six_sorafs_authority_signers_from_node_key() {
+        let dependencies = IrohaRuntimeDeps::default();
+
+        assert!(dependencies.sorafs_stream_token_signer.is_none());
+        assert!(dependencies.sorafs_proof_outcome_signer.is_none());
+        assert!(dependencies.sorafs_repair_transaction_signer.is_none());
+        assert!(dependencies.sorafs_reserve_transaction_signer.is_none());
+        assert!(dependencies.sorafs_orderbook_transaction_signer.is_none());
+        assert!(dependencies.sorafs_moderation_transaction_signer.is_none());
+        assert!(dependencies.sorafs_moderation_settlement_handoff.is_none());
+        assert!(dependencies.sorafs_moderation_publication_handoff.is_none());
+        assert!(
+            dependencies
+                .sorafs_appeal_finance_checkpoint_runtime
+                .is_none()
+        );
+        assert!(dependencies.sorafs_evidence_viewer_webauthn.is_none());
+        assert!(dependencies.sorafs_evidence_viewer_grants.is_none());
+        assert!(dependencies.sorafs_evidence_viewer_receipt_signer.is_none());
+        assert!(dependencies.sorafs_evidence_viewer_erasure.is_none());
+        assert!(dependencies.sorafs_pop_credentials.is_none());
+    }
+
+    #[test]
+    fn standard_launcher_source_forbids_six_node_key_sorafs_signer_adaptations() {
+        let compact_source: String = include_str!("main.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        for builder in [
+            "with_sorafs_stream_token_signer",
+            "with_sorafs_proof_outcome_signer",
+            "with_sorafs_repair_transaction_signer",
+            "with_sorafs_reserve_transaction_signer",
+            "with_sorafs_orderbook_transaction_signer",
+            "with_sorafs_moderation_transaction_signer",
+        ] {
+            let forbidden = [".", builder, "(Arc::new(config.common.key_pair.clone()))"].concat();
+            assert!(
+                !compact_source.contains(&forbidden),
+                "standard launcher must not adapt the node key through {builder}"
+            );
+        }
+    }
+
+    #[test]
+    fn standard_launcher_forwards_external_sorafs_runtime_dependencies() {
+        let compact_source: String = include_str!("main.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        for (field, builder) in [
+            (
+                "sorafs_appeal_finance_checkpoint_runtime",
+                "with_sorafs_appeal_finance_checkpoint_runtime",
+            ),
+            (
+                "sorafs_evidence_viewer_webauthn",
+                "with_sorafs_evidence_viewer_webauthn",
+            ),
+            (
+                "sorafs_evidence_viewer_grants",
+                "with_sorafs_evidence_viewer_grants",
+            ),
+            (
+                "sorafs_evidence_viewer_receipt_signer",
+                "with_sorafs_evidence_viewer_receipt_signer",
+            ),
+            (
+                "sorafs_evidence_viewer_erasure",
+                "with_sorafs_evidence_viewer_erasure",
+            ),
+            ("sorafs_pop_credentials", "with_sorafs_pop_credentials"),
+        ] {
+            let clone_from_external = ["runtime_deps.", field, ".clone()"].concat();
+            let forward_to_torii = [".", builder, "("].concat();
+            assert!(
+                compact_source.contains(&clone_from_external),
+                "standard launcher must clone external dependency `{field}` before Torii dependency assembly"
+            );
+            assert!(
+                compact_source.contains(&forward_to_torii),
+                "standard launcher must forward `{field}` through `{builder}`"
+            );
+        }
     }
 
     mod scheduler_banner {

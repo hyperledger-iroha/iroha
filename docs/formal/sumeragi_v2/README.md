@@ -995,7 +995,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 704 named tests
+Before network startup, the executable wrapper inventories 705 named tests
 across 38 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -1065,7 +1065,10 @@ durable semantic-peer-history regression produced the 589-test checkpoint.
 Mechanical source-to-inventory reconciliation then adds 115 net regressions:
 3 authoritative-ingress, 57 merge-sidecar, 17 lane-work, 3 runner, 17 worker,
 and 18 P2P network tests; the daemon network-relay rename is cardinality
-neutral. The current inventory therefore contains 704 tests across 38 modules.
+neutral. The runner close-prefix failed-suffix handoff regression adds one
+exact name. The routed-Hint and crash-safe V3 lifecycle closure then adds 26
+exact regressions and retires eight obsolete route-free/V2 selectors, for a net
+increase of 18. The current inventory therefore contains 723 tests across 38 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 81 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1075,21 +1078,48 @@ sequence coordinates. Canonical request identity binds the version, all three
 coordinates, payload or reference, and requester/responder peers. It excludes
 only cumulative `closed_through`, which may advance monotonically on the same
 occurrence without rematerializing output. `GenerationHint` carries the
-observed/current generations and exact triggering Request or Close hash as
-route-free Consensus control; unlike CloseAck and Chunk, it has no reply route.
+observed/current generations and exact triggering Request or Close hash on the
+triggering authenticated reply route. Alternate sources retain independent
+attempts, and a later delivery refreshes only its own source route.
+The canonical progress-mutation runner also executes the source-bound
+`GenerationEpochFixed` trace. The repaired path persists and installs the next
+responder generation, persists a fresh requester epoch before retiring the old
+partial occurrence, and rejects future-generation input atomically. Its
+complete TLC graph contains exactly 7 generated and 7 distinct states at depth
+7. The paired pipeline trace additionally enqueues the old occurrence, discards
+it only after the fresh coordinates persist, enqueues its successor, and
+rejects the stale flush without mutation; TLC exhausts 11 generated and 10
+distinct states at depth 10. Both remain bounded regression evidence rather
+than deductive proof. A third fixed trace checks atomic rejection of
+nonterminal compaction plus requester-epoch and responder-generation
+exhaustion, exhausting 5 generated and 5 distinct states at depth 5. Its
+queued-output pipeline companion exhausts 8 generated and 7 distinct states at
+depth 7 without losing the pending attachment, item, or occurrence.
 
-`MergeSidecarLifecycleSnapshotV2` is the sole durable lifecycle schema. It
+The deductive boundary is deliberately narrower than those traces: 13
+ownership, 9 pipeline, and 11 asynchronous structural theorems are strict-green
+at 15/15, 11/11, and 54/54 backend obligations. They cover canonical
+coordinates, fail-atomic local actions, exact V2 action projection, both
+product brackets, and both composed-spec projections. Whole-spec induction,
+successor isolation, local progress, and the asynchronous temporal product
+remain plain operators without proof evidence. They stay `specified_unproved`;
+no bounded trace or structural theorem promotes network delivery,
+rotating-leader progress, or another liveness claim.
+
+`MergeSidecarLifecycleSnapshotV3` is the sole durable lifecycle schema. It
 contains geometry, `next_stream_epoch`, responder generation, requester
-streams, the unified bounded server-stream table, and request gates; V1 is
-unsupported rather than decoded or migrated. The server-stream and gate tables
-are the two bounded responder tables, with attempts bounded inside gates.
-Generation advances only for needed server-table compaction—a full table or
-certified roster-geometry replacement—after all old streams, gates, transfers,
-and flushes become terminal. The checked increment and empty responder state
-persist together before memory publication or Hint emission; active-state
-exhaustion and overflow return `Capacity` atomically.
+streams, the unified bounded server-stream table, and request gates; V1/V2 are
+unsupported rather than decoded or migrated. Successive snapshots alternate
+between two immutable state slots. The inactive slot is fsynced first and an
+independent root high-water marker is the sole commit point, so restart selects
+the exact predecessor before marker publication and the exact successor after
+it. The server-stream and gate tables are the two bounded responder tables,
+with attempts bounded inside gates. Generation advances only for a certified
+changed-roster geometry after all old streams, gates, transfers, and flushes
+become terminal. A full same-roster table, active-state exhaustion, and
+overflow return `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`fd2176898c873bc00fae598689f6bf0ec2f9cd5de58ccf37fbe6713a061811da`.
+`66a130b892347a296ed3b447d3cf388e00a5c83fdfcd193b228b8eab67059f1a`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1210,7 +1240,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and the exact
-704-test inventory, the pinned harness lock and resolved toolchain, the formal
+723-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

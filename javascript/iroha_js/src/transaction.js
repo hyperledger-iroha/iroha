@@ -997,6 +997,141 @@ export async function quoteAndSignTransaction(client, input, options = {}) {
   return { ...signed, draft, quote };
 }
 
+const SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 * 1024;
+const SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES = 1024 * 1024;
+
+function normalizeSorafsPinRegisterEpoch(value) {
+  const epoch = ToriiClient._normalizeUnsignedInteger(
+    value,
+    "submittedEpoch",
+    { allowZero: true },
+  );
+  if (!Number.isSafeInteger(epoch)) {
+    throw new TypeError("submittedEpoch must be a safe uint64 integer");
+  }
+  return epoch;
+}
+
+function normalizeSorafsPinRegisterSegment(value, context) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.trim() !== value ||
+    value.length > 128 ||
+    !/^[a-z0-9._-]+$/u.test(value)
+  ) {
+    throw new TypeError(
+      `${context} must contain 1..=128 lowercase ASCII letters, digits, '.', '-', or '_'`,
+    );
+  }
+  return value;
+}
+
+function normalizeSorafsPinRegisterSuccessor(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  let bytes;
+  if (typeof value === "string") {
+    const exact = value.startsWith("0x") ? value.slice(2) : value;
+    if (!/^[0-9a-fA-F]{64}$/u.test(exact)) {
+      throw new TypeError("successorOf must be exactly 32 hexadecimal bytes");
+    }
+    bytes = Buffer.from(exact, "hex");
+  } else {
+    bytes = toBuffer(value, "successorOf");
+  }
+  if (bytes.length !== 32 || bytes.every((byte) => byte === 0)) {
+    throw new TypeError("successorOf must be exactly 32 non-zero bytes");
+  }
+  return Array.from(bytes);
+}
+
+/**
+ * Build the exact native instruction accepted by the signed pin-registration route.
+ *
+ * @param {{
+ *   manifestPayload: ArrayBufferView | ArrayBuffer | Buffer,
+ *   submittedEpoch: number | string | bigint,
+ *   alias?: {namespace: string, name: string, proof: ArrayBufferView | ArrayBuffer | Buffer} | null,
+ *   successorOf?: string | ArrayBufferView | ArrayBuffer | Buffer | null
+ * }} input
+ * @returns {{RegisterPinManifest: object}}
+ */
+export function buildRegisterPinManifestInstruction(input) {
+  const manifestPayload = toBuffer(input?.manifestPayload, "manifestPayload");
+  if (
+    manifestPayload.length === 0 ||
+    manifestPayload.length > SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES
+  ) {
+    throw new TypeError(
+      `manifestPayload must contain 1..=${SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES} bytes`,
+    );
+  }
+  let alias = null;
+  if (input?.alias !== null && input?.alias !== undefined) {
+    const proof = toBuffer(input.alias.proof, "alias.proof");
+    if (
+      proof.length === 0 ||
+      proof.length > SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES
+    ) {
+      throw new TypeError(
+        `alias.proof must contain 1..=${SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES} bytes`,
+      );
+    }
+    alias = {
+      name: normalizeSorafsPinRegisterSegment(input.alias.name, "alias.name"),
+      namespace: normalizeSorafsPinRegisterSegment(
+        input.alias.namespace,
+        "alias.namespace",
+      ),
+      proof: proof.toString("base64"),
+    };
+  }
+  return {
+    RegisterPinManifest: {
+      manifest_payload: manifestPayload.toString("base64"),
+      submitted_epoch: normalizeSorafsPinRegisterEpoch(input?.submittedEpoch),
+      alias,
+      successor_of: normalizeSorafsPinRegisterSuccessor(input?.successorOf),
+    },
+  };
+}
+
+/**
+ * Fee-quote and locally sign one pin-registration transaction.
+ *
+ * @param {ToriiClient} client
+ * @param {object} input Transaction draft fields plus pin registration fields.
+ * @param {object} [options] Guided quote/sign options.
+ * @returns {Promise<{signedTransaction: Buffer, hash: Buffer, draft: object, quote: object}>}
+ */
+export function buildRegisterPinManifestTransaction(client, input, options = {}) {
+  if (input && Object.prototype.hasOwnProperty.call(input, "instructions")) {
+    throw new TypeError(
+      "buildRegisterPinManifestTransaction fixes instructions to one RegisterPinManifest",
+    );
+  }
+  const {
+    manifestPayload,
+    submittedEpoch,
+    alias = null,
+    successorOf = null,
+    ...transactionInput
+  } = input ?? {};
+  const instruction = buildRegisterPinManifestInstruction({
+    manifestPayload,
+    submittedEpoch,
+    alias,
+    successorOf,
+  });
+  return quoteAndSignTransaction(
+    client,
+    { ...transactionInput, instructions: [instruction] },
+    options,
+  );
+}
+
 /**
  * Build an `ApplySccpRouteGovernance` instruction from one closed atomic action.
  * @param {object} action

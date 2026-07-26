@@ -129,6 +129,14 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 CASE_DIGEST,
                 "--audit-digest-hex",
                 CASE_DIGEST,
+                "--gateway-compliance-denial-status-code",
+                "451",
+                "--gateway-compliance-denial-code",
+                "gateway_compliance_denied",
+                "--gateway-compliance-denial-source",
+                "baseline",
+                "--gateway-compliance-catalog-digest-hex",
+                CASE_DIGEST,
             ]
         )
         for role in MODULE.REQUIRED_VIEWER_ROLES:
@@ -338,6 +346,13 @@ def test_builds_payload_free_evidence_viewer_canary(tmp_path: Path) -> None:
     assert payload["export_targets"] == list(MODULE.REQUIRED_VIEWER_EXPORT_TARGETS)
     for claim in MODULE.TRUE_CLAIMS["evidence_viewer"]:
         assert payload[claim] is True
+    assert payload["gateway_compliance_denial_enforced"] == {
+        "status_code": 451,
+        "code": "gateway_compliance_denied",
+        "source": "baseline",
+        "catalog_digest_hex": CASE_DIGEST,
+    }
+    assert "denylisted_digest_blocked" not in payload
     assert payload["audit_log_tamper_rejected"] is True
     assert payload["watermark_metadata_mismatch_rejected"] is True
     for field in MODULE.FORCED_FALSE_FIELDS["evidence_viewer"]:
@@ -574,6 +589,54 @@ def test_missing_viewer_event_coverage_fails_closed(tmp_path: Path, capsys) -> N
 
     captured = capsys.readouterr()
     assert "--viewer-event-kind must include every required value" in captured.err
+    assert not canary_path(tmp_path, "evidence_viewer").exists()
+
+
+@pytest.mark.parametrize(
+    ("option", "value", "expected_error"),
+    (
+        (
+            "--gateway-compliance-denial-status-code",
+            "403",
+            "--gateway-compliance-denial-status-code must be exactly 451",
+        ),
+        (
+            "--gateway-compliance-denial-code",
+            "denylisted",
+            (
+                "--gateway-compliance-denial-code must be exactly "
+                "gateway_compliance_denied"
+            ),
+        ),
+        (
+            "--gateway-compliance-denial-source",
+            "accepted_appeal",
+            "--gateway-compliance-denial-source must be one of",
+        ),
+        (
+            "--gateway-compliance-catalog-digest-hex",
+            "A" * 64,
+            (
+                "--gateway-compliance-catalog-digest-hex must be exact "
+                "lowercase 32-byte hex"
+            ),
+        ),
+    ),
+)
+def test_viewer_gateway_compliance_denial_must_be_canonical_before_write(
+    option: str,
+    value: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("evidence_viewer", tmp_path)
+    args[args.index(option) + 1] = value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
     assert not canary_path(tmp_path, "evidence_viewer").exists()
 
 

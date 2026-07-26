@@ -95,7 +95,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. بیس 64 مینی فیسٹ جمع کروائیں:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```درخواست JSON میں `manifest_b64` اور `payload_b64` پر مشتمل ہونا چاہئے۔ ایک کامیاب جواب `manifest_id_hex` اور پے لوڈ ڈائجسٹ کو لوٹاتا ہے۔
@@ -155,7 +155,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   جس کا احاطہ `pin_fetch_roundtrip` ، `pin_survives_restart` ، `pin_quota_rejection` اور `por_sampling_returns_verified_proofs`۔
 - ڈیش بورڈز کو لازمی طور پر عمل کرنا چاہئے:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` اور `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` اور `torii_sorafs_storage_fetch_inflight`
   - `/v1/sorafs/capacity/state` کے ذریعے بے نقاب ہونے والی کامیابی/ناکامی کاؤنٹرز
   - `sorafs_node_deal_publish_total{result=success|failure}` کے ذریعے تصفیہ شائع کرنے کی کوششیں
 

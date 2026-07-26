@@ -2,11 +2,11 @@
 //!
 //! These types describe the governance-controlled pricing surface for storage
 //! providers together with the collateral and credit settlement policies used by
-//! the deal engine. The schedule is stored on-ledger so governance proposals
-//! can update pricing deterministically without relying on out-of-band config.
+//! native orderbook, reserve/rent, and billing services. The schedule is stored
+//! on-ledger so governance proposals can update pricing deterministically without
+//! relying on out-of-band config.
 //! Public pin admission fees are computed here, while provider credit deposits,
-//! settlement, and slashing remain separate ledger flows handled by the deal
-//! engine.
+//! settlement, and slashing remain separate authority-checked ledger flows.
 
 use std::collections::BTreeSet;
 
@@ -17,7 +17,7 @@ use thiserror::Error;
 
 use crate::{
     metadata::Metadata,
-    sorafs::{capacity::ProviderId, deal as sorafs_deal, pin_registry::StorageClass},
+    sorafs::{capacity::ProviderId, pin_registry::StorageClass},
 };
 
 /// First-version schema identifier for [`PricingScheduleRecord`].
@@ -28,6 +28,8 @@ pub const SECONDS_PER_BILLING_MONTH: u64 = 30 * 24 * 60 * 60;
 pub const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
 /// Ledger precision used by XOR-denominated `SoraFS` economic records.
 pub const XOR_QUANTITY_SCALE: u32 = 9;
+/// Canonical orderbook byte count per gibibyte, widened for exact fee arithmetic.
+const BYTES_PER_GIB: u128 = sorafs_manifest::orderbook::BYTES_PER_GIB as u128;
 /// Maximum commitment-discount tiers accepted in one governance schedule.
 pub const MAX_COMMITMENT_DISCOUNT_TIERS: usize = 64;
 /// Maximum UTF-8 byte length of governance pricing notes.
@@ -483,7 +485,7 @@ impl PricingScheduleRecord {
                 submitted_epoch,
                 retention_epoch,
             })?;
-        let bytes_per_gib = sorafs_deal::BYTES_PER_GIB;
+        let bytes_per_gib = BYTES_PER_GIB;
         let gib = u128::from(content_length_bytes)
             .checked_add(bytes_per_gib - 1)
             .ok_or(PricingComputationError::ArithmeticOverflow(
@@ -537,7 +539,7 @@ impl PricingScheduleRecord {
         Ok(multiply_ratio(
             &tier.egress_price_per_gib,
             u128::from(egress_bytes),
-            sorafs_deal::BYTES_PER_GIB,
+            BYTES_PER_GIB,
             RoundingMode::TowardZero,
         )?)
     }
@@ -1168,8 +1170,7 @@ mod tests {
     #[test]
     fn egress_charge_scales_with_bytes() {
         let schedule = PricingScheduleRecord::launch_default();
-        let bytes_per_gib =
-            u64::try_from(sorafs_deal::BYTES_PER_GIB).expect("BYTES_PER_GIB fits within u64");
+        let bytes_per_gib = u64::try_from(BYTES_PER_GIB).expect("BYTES_PER_GIB fits within u64");
         let per_gib = schedule
             .egress_charge_bytes(StorageClass::Hot, bytes_per_gib)
             .expect("bounded egress charge");
@@ -1182,8 +1183,7 @@ mod tests {
                 .clone()
         );
 
-        let half_bytes =
-            u64::try_from(sorafs_deal::BYTES_PER_GIB / 2).expect("half GiB fits within u64");
+        let half_bytes = u64::try_from(BYTES_PER_GIB / 2).expect("half GiB fits within u64");
         let half = schedule
             .egress_charge_bytes(StorageClass::Hot, half_bytes)
             .expect("bounded half-GiB charge");

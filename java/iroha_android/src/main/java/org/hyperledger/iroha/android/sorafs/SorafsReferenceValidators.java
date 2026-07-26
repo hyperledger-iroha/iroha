@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.sorafs;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 
 /** Thin JVM/JNI wrapper around the SoraFS reference validators in {@code connect_norito_bridge}. */
 public final class SorafsReferenceValidators {
@@ -18,6 +19,8 @@ public final class SorafsReferenceValidators {
   public static final int REFERENCE_MAX_INPUT_BYTES_V1 = 67_108_864;
   /** Maximum UTF-8 bytes accepted for one diagnostic input label. */
   public static final int REFERENCE_MAX_LABEL_BYTES_V1 = 1_024;
+  /** Maximum payload count accepted by one fixture-bundle call. */
+  public static final int FIXTURE_BUNDLE_MAX_PAYLOADS_V1 = 64;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   private SorafsReferenceValidators() {}
@@ -32,6 +35,16 @@ public final class SorafsReferenceValidators {
   }
 
   static boolean isGovernanceDagBridgeSupported(
+      final int abiVersion, final boolean hasSymbols) {
+    return isBridgeAbiSupported(abiVersion) && hasSymbols;
+  }
+
+  static boolean isFixtureBundleBridgeSupported(
+      final int abiVersion, final boolean hasSymbols) {
+    return isBridgeAbiSupported(abiVersion) && hasSymbols;
+  }
+
+  static boolean isGovernanceLogNodeBridgeSupported(
       final int abiVersion, final boolean hasSymbols) {
     return isBridgeAbiSupported(abiVersion) && hasSymbols;
   }
@@ -121,6 +134,86 @@ public final class SorafsReferenceValidators {
             labelPayload,
             generatedAtUnix),
         "SoraFS hedging validation");
+  }
+
+  /** Validate a bounded heterogeneous fixture bundle and canonical cross-links. */
+  public static String validateFixtureBundleJson(
+      final List<SorafsFixtureBundlePayloadInput> payloads) {
+    final long now = currentEpochSeconds();
+    return validateFixtureBundleJson(payloads, now, now);
+  }
+
+  /** Validate a bounded heterogeneous fixture bundle with caller-bound timestamps. */
+  public static String validateFixtureBundleJson(
+      final List<SorafsFixtureBundlePayloadInput> payloads,
+      final long nowUnix,
+      final long generatedAtUnix) {
+    if (payloads == null
+        || payloads.isEmpty()
+        || payloads.size() > FIXTURE_BUNDLE_MAX_PAYLOADS_V1) {
+      throw new IllegalArgumentException(
+          "payloads must contain 1.." + FIXTURE_BUNDLE_MAX_PAYLOADS_V1 + " entries");
+    }
+    requireGeneratedAt(nowUnix);
+    requireGeneratedAt(generatedAtUnix);
+    final byte[] kinds = new byte[payloads.size()];
+    final byte[][] nativePayloads = new byte[payloads.size()][];
+    final byte[][] labels = new byte[payloads.size()][];
+    long aggregateBytes = 0;
+    for (int index = 0; index < payloads.size(); index++) {
+      final SorafsFixtureBundlePayloadInput input = payloads.get(index);
+      if (input == null) {
+        throw new IllegalArgumentException("payloads[" + index + "] must be provided");
+      }
+      kinds[index] = (byte) input.kind().bridgeCode();
+      nativePayloads[index] =
+          requireReferencePayload(input.noritoBytes(), "payloads[" + index + "].noritoBytes");
+      labels[index] = labelBytes(input.label(), input.kind().defaultLabel());
+      aggregateBytes += (long) nativePayloads[index].length + labels[index].length;
+      if (aggregateBytes > REFERENCE_MAX_INPUT_BYTES_V1) {
+        throw new IllegalArgumentException(
+            "fixture-bundle inputs exceed "
+                + REFERENCE_MAX_INPUT_BYTES_V1
+                + " aggregate bytes");
+      }
+    }
+    requireNative();
+    return requireJsonOutput(
+        nativeValidateFixtureBundleJson(
+            kinds, nativePayloads, labels, nowUnix, generatedAtUnix),
+        "SoraFS fixture-bundle validation");
+  }
+
+  /** Validates one canonical signed {@code GovernanceLogNodeV1} against its expected node CID. */
+  public static String validateGovernanceLogNodeJson(
+      final byte[] noritoBytes, final byte[] expectedNodeCid) {
+    return validateGovernanceLogNodeJson(
+        noritoBytes, null, expectedNodeCid, currentEpochSeconds());
+  }
+
+  /** Validates one canonical signed {@code GovernanceLogNodeV1} against its expected node CID. */
+  public static String validateGovernanceLogNodeJson(
+      final byte[] noritoBytes,
+      final String label,
+      final byte[] expectedNodeCid,
+      final long generatedAtUnix) {
+    requireGeneratedAt(generatedAtUnix);
+    final byte[] payload = requireReferencePayload(noritoBytes, "noritoBytes");
+    final byte[] labelPayload = labelBytes(label, "governance.to");
+    if (expectedNodeCid == null
+        || expectedNodeCid.length != GOVERNANCE_DAG_CID_BYTES_V1) {
+      throw new IllegalArgumentException(
+          "expectedNodeCid must contain exactly "
+              + GOVERNANCE_DAG_CID_BYTES_V1
+              + " bytes");
+    }
+    final byte[] expectedCid = expectedNodeCid.clone();
+    requireAggregateReferenceBytes(payload.length, labelPayload.length, expectedCid.length);
+    requireNative();
+    return requireJsonOutput(
+        nativeValidateGovernanceLogNodeJson(
+            payload, labelPayload, expectedCid, generatedAtUnix),
+        "SoraFS governance log node validation");
   }
 
   /**
@@ -772,10 +865,14 @@ public final class SorafsReferenceValidators {
 
   private static byte[] labelBytes(final String label, final String fallback) {
     final String value = label == null ? fallback : label;
-    if (value.trim().isEmpty()) {
+    if (hasUnpairedSurrogate(value)) {
+      throw new IllegalArgumentException("label must be valid Unicode text");
+    }
+    if (value.codePoints().allMatch(SorafsReferenceValidators::isUnicodeWhitespace)) {
       throw new IllegalArgumentException("label must not be blank");
     }
-    if (!value.trim().equals(value)) {
+    if (isUnicodeWhitespace(value.codePointAt(0))
+        || isUnicodeWhitespace(value.codePointBefore(value.length()))) {
       throw new IllegalArgumentException("label must not contain surrounding whitespace");
     }
     if (value.codePoints().anyMatch(Character::isISOControl)) {
@@ -787,6 +884,26 @@ public final class SorafsReferenceValidators {
           "label must be at most " + REFERENCE_MAX_LABEL_BYTES_V1 + " UTF-8 bytes");
     }
     return bytes;
+  }
+
+  private static boolean hasUnpairedSurrogate(final String value) {
+    for (int index = 0; index < value.length(); index++) {
+      final char character = value.charAt(index);
+      if (Character.isHighSurrogate(character)) {
+        if (index + 1 >= value.length()
+            || !Character.isLowSurrogate(value.charAt(index + 1))) {
+          return true;
+        }
+        index++;
+      } else if (Character.isLowSurrogate(character)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isUnicodeWhitespace(final int codePoint) {
+    return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
   }
 
   private static String requireJsonOutput(final byte[] output, final String context) {
@@ -816,8 +933,11 @@ public final class SorafsReferenceValidators {
   private static boolean loadLibrary() {
     try {
       System.loadLibrary(LIBRARY_NAME);
-      return isGovernanceDagBridgeSupported(
-          nativeBridgeAbiVersion(), nativeHasGovernanceDagSymbols());
+      final int abiVersion = nativeBridgeAbiVersion();
+      return isGovernanceDagBridgeSupported(abiVersion, nativeHasGovernanceDagSymbols())
+          && isFixtureBundleBridgeSupported(abiVersion, nativeHasFixtureBundleSymbols())
+          && isGovernanceLogNodeBridgeSupported(
+              abiVersion, nativeHasGovernanceLogNodeSymbols());
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
@@ -827,6 +947,10 @@ public final class SorafsReferenceValidators {
 
   private static native boolean nativeHasGovernanceDagSymbols();
 
+  private static native boolean nativeHasFixtureBundleSymbols();
+
+  private static native boolean nativeHasGovernanceLogNodeSymbols();
+
   private static native byte[] nativeValidateOrderbookPayloadJson(
       int kind, byte[] payload, byte[] label, long generatedAtUnix);
 
@@ -835,6 +959,16 @@ public final class SorafsReferenceValidators {
 
   private static native byte[] nativeValidateHedgingPayloadJson(
       int kind, byte[] payload, byte[] label, long generatedAtUnix);
+
+  private static native byte[] nativeValidateFixtureBundleJson(
+      byte[] kinds,
+      byte[][] payloads,
+      byte[][] labels,
+      long nowUnix,
+      long generatedAtUnix);
+
+  private static native byte[] nativeValidateGovernanceLogNodeJson(
+      byte[] payload, byte[] label, byte[] expectedNodeCid, long generatedAtUnix);
 
   private static native byte[] nativeValidateGovernanceDagBlockJson(
       byte[] payload, byte[] label, byte[] expectedBlockCid, long generatedAtUnix);

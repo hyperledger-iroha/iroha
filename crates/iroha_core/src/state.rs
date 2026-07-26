@@ -637,6 +637,12 @@ macro_rules! build_world_block {
             pedersen_params: $state.pedersen_params.$method(),
             poseidon_params: $state.poseidon_params.$method(),
             runtime_upgrades: $state.runtime_upgrades.$method(),
+            privacy_activations: $state.privacy_activations.$method(),
+            privacy_pgc_accounts: $state.privacy_pgc_accounts.$method(),
+            privacy_nullifiers: $state.privacy_nullifiers.$method(),
+            privacy_commitments: $state.privacy_commitments.$method(),
+            privacy_roots: $state.privacy_roots.$method(),
+            privacy_root_heads: $state.privacy_root_heads.$method(),
             proofs: $state.proofs.$method(),
             proofs_by_status: $state.proofs_by_status.$method(),
             proof_tags: $state.proof_tags.$method(),
@@ -868,6 +874,12 @@ macro_rules! build_world_transaction {
             pedersen_params: $state.pedersen_params.transaction(),
             poseidon_params: $state.poseidon_params.transaction(),
             runtime_upgrades: $state.runtime_upgrades.transaction(),
+            privacy_activations: $state.privacy_activations.transaction(),
+            privacy_pgc_accounts: $state.privacy_pgc_accounts.transaction(),
+            privacy_nullifiers: $state.privacy_nullifiers.transaction(),
+            privacy_commitments: $state.privacy_commitments.transaction(),
+            privacy_roots: $state.privacy_roots.transaction(),
+            privacy_root_heads: $state.privacy_root_heads.transaction(),
             proofs: $state.proofs.transaction(),
             proofs_by_status: $state.proofs_by_status.transaction(),
             proof_tags: $state.proof_tags.transaction(),
@@ -3825,6 +3837,36 @@ pub struct World {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Immutable governed privacy activations keyed by closed protocol identity.
+    pub(crate) privacy_activations: Storage<
+        crate::privacy_state::PrivacyActivationKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+    >,
+    /// Canonical encrypted Anonymous PGC account state keyed by pool and public key.
+    pub(crate) privacy_pgc_accounts: Storage<
+        crate::privacy_state::PrivacyPgcAccountKeyV1,
+        crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Scoped consumed nullifiers used for deterministic replay prevention.
+    pub(crate) privacy_nullifiers: Storage<
+        crate::privacy_state::PrivacyNullifierKeyV1,
+        crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
+    /// Scoped commitments admitted by successfully verified privacy actions.
+    pub(crate) privacy_commitments: Storage<
+        crate::privacy_state::PrivacyCommitmentKeyV1,
+        crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
+    /// Ordered exact root membership retained for privacy proof admission.
+    pub(crate) privacy_roots: Storage<
+        crate::privacy_state::PrivacyRootKeyV1,
+        crate::privacy_state::PrivacyRootProvenanceV1,
+    >,
+    /// Single current root for each independent namespace and semantic role.
+    pub(crate) privacy_root_heads: Storage<
+        crate::privacy_state::PrivacyRootHeadKeyV1,
+        crate::privacy_state::PrivacyRootHeadRecordV1,
+    >,
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs:
         Storage<iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>,
@@ -4367,6 +4409,42 @@ pub struct WorldBlock<'world> {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Immutable governed privacy activations keyed by closed protocol identity.
+    pub(crate) privacy_activations: StorageBlock<
+        'world,
+        crate::privacy_state::PrivacyActivationKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+    >,
+    /// Canonical encrypted Anonymous PGC account state keyed by pool and public key.
+    pub(crate) privacy_pgc_accounts: StorageBlock<
+        'world,
+        crate::privacy_state::PrivacyPgcAccountKeyV1,
+        crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Scoped consumed nullifiers used for deterministic replay prevention.
+    pub(crate) privacy_nullifiers: StorageBlock<
+        'world,
+        crate::privacy_state::PrivacyNullifierKeyV1,
+        crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
+    /// Scoped commitments admitted by successfully verified privacy actions.
+    pub(crate) privacy_commitments: StorageBlock<
+        'world,
+        crate::privacy_state::PrivacyCommitmentKeyV1,
+        crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
+    /// Ordered exact root membership retained for privacy proof admission.
+    pub(crate) privacy_roots: StorageBlock<
+        'world,
+        crate::privacy_state::PrivacyRootKeyV1,
+        crate::privacy_state::PrivacyRootProvenanceV1,
+    >,
+    /// Single current root for each independent namespace and semantic role.
+    pub(crate) privacy_root_heads: StorageBlock<
+        'world,
+        crate::privacy_state::PrivacyRootHeadKeyV1,
+        crate::privacy_state::PrivacyRootHeadRecordV1,
+    >,
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs: StorageBlock<
         'world,
@@ -4741,6 +4819,12 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.tx_sequences, TxSequence);
         collect_reverts!(self.verifying_keys, VerifyingKey);
         collect_reverts!(self.runtime_upgrades, RuntimeUpgrade);
+        collect_reverts!(self.privacy_activations, PrivacyActivation);
+        collect_reverts!(self.privacy_pgc_accounts, PrivacyPgcAccount);
+        collect_reverts!(self.privacy_nullifiers, PrivacyNullifier);
+        collect_reverts!(self.privacy_commitments, PrivacyCommitment);
+        collect_reverts!(self.privacy_roots, PrivacyRoot);
+        collect_reverts!(self.privacy_root_heads, PrivacyRootHead);
         collect_reverts!(self.proofs, Proof);
         collect_reverts!(self.proof_tags, ProofTag);
         collect_reverts!(self.proofs_by_tag, ProofByTag);
@@ -4815,6 +4899,12 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.tx_sequences, TxSequence);
         collect_payload!(self.verifying_keys, VerifyingKey);
         collect_payload!(self.runtime_upgrades, RuntimeUpgrade);
+        collect_payload!(self.privacy_activations, PrivacyActivation);
+        collect_payload!(self.privacy_pgc_accounts, PrivacyPgcAccount);
+        collect_payload!(self.privacy_nullifiers, PrivacyNullifier);
+        collect_payload!(self.privacy_commitments, PrivacyCommitment);
+        collect_payload!(self.privacy_roots, PrivacyRoot);
+        collect_payload!(self.privacy_root_heads, PrivacyRootHead);
         collect_payload!(self.proofs, Proof);
         collect_payload!(self.proof_tags, ProofTag);
         collect_payload!(self.proofs_by_tag, ProofByTag);
@@ -4971,6 +5061,12 @@ impl<'world> WorldBlock<'world> {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            privacy_activations,
+            privacy_pgc_accounts,
+            privacy_nullifiers,
+            privacy_commitments,
+            privacy_roots,
+            privacy_root_heads,
             proofs,
             proofs_by_status,
             proof_tags,
@@ -5360,6 +5456,48 @@ pub struct WorldTransaction<'block, 'world> {
         'world,
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
+    >,
+    /// Immutable governed privacy activations keyed by closed protocol identity.
+    pub(crate) privacy_activations: StorageTransaction<
+        'block,
+        'world,
+        crate::privacy_state::PrivacyActivationKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+    >,
+    /// Canonical encrypted Anonymous PGC account state keyed by pool and public key.
+    pub(crate) privacy_pgc_accounts: StorageTransaction<
+        'block,
+        'world,
+        crate::privacy_state::PrivacyPgcAccountKeyV1,
+        crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Scoped consumed nullifiers used for deterministic replay prevention.
+    pub(crate) privacy_nullifiers: StorageTransaction<
+        'block,
+        'world,
+        crate::privacy_state::PrivacyNullifierKeyV1,
+        crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
+    /// Scoped commitments admitted by successfully verified privacy actions.
+    pub(crate) privacy_commitments: StorageTransaction<
+        'block,
+        'world,
+        crate::privacy_state::PrivacyCommitmentKeyV1,
+        crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
+    /// Ordered exact root membership retained for privacy proof admission.
+    pub(crate) privacy_roots: StorageTransaction<
+        'block,
+        'world,
+        crate::privacy_state::PrivacyRootKeyV1,
+        crate::privacy_state::PrivacyRootProvenanceV1,
+    >,
+    /// Single current root for each independent namespace and semantic role.
+    pub(crate) privacy_root_heads: StorageTransaction<
+        'block,
+        'world,
+        crate::privacy_state::PrivacyRootHeadKeyV1,
+        crate::privacy_state::PrivacyRootHeadRecordV1,
     >,
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs: StorageTransaction<
@@ -6923,6 +7061,42 @@ pub struct WorldView<'world> {
         'world,
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
+    >,
+    /// Immutable governed privacy activations keyed by closed protocol identity.
+    pub(crate) privacy_activations: StorageView<
+        'world,
+        crate::privacy_state::PrivacyActivationKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+    >,
+    /// Canonical encrypted Anonymous PGC account state keyed by pool and public key.
+    pub(crate) privacy_pgc_accounts: StorageView<
+        'world,
+        crate::privacy_state::PrivacyPgcAccountKeyV1,
+        crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Scoped consumed nullifiers used for deterministic replay prevention.
+    pub(crate) privacy_nullifiers: StorageView<
+        'world,
+        crate::privacy_state::PrivacyNullifierKeyV1,
+        crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
+    /// Scoped commitments admitted by successfully verified privacy actions.
+    pub(crate) privacy_commitments: StorageView<
+        'world,
+        crate::privacy_state::PrivacyCommitmentKeyV1,
+        crate::privacy_state::PrivacyStateItemRecordV1,
+    >,
+    /// Ordered exact root membership retained for privacy proof admission.
+    pub(crate) privacy_roots: StorageView<
+        'world,
+        crate::privacy_state::PrivacyRootKeyV1,
+        crate::privacy_state::PrivacyRootProvenanceV1,
+    >,
+    /// Single current root for each independent namespace and semantic role.
+    pub(crate) privacy_root_heads: StorageView<
+        'world,
+        crate::privacy_state::PrivacyRootHeadKeyV1,
+        crate::privacy_state::PrivacyRootHeadRecordV1,
     >,
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs:
@@ -10579,6 +10753,8 @@ pub struct StateBlock<'state> {
     pub zk_proof_bytes_in_block: u64,
     /// Deterministic SCCP verifier work applied so far in this block.
     sccp_verifier_work_in_block: SccpVerifierWorkV1,
+    /// Consensus privacy action/byte budget committed by accepted transactions.
+    privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1,
     /// Implicit accounts created so far in this block.
     pub implicit_account_creations_in_block: u32,
     /// Gas limit per block (read from on-chain parameters or defaults).
@@ -10732,6 +10908,23 @@ impl<'state> StateBlock<'state> {
     #[must_use]
     pub fn axt_envelopes(&self) -> &[AxtEnvelopeRecord] {
         &self.axt_envelopes
+    }
+
+    fn promote_due_privacy_activations(&mut self) {
+        let current_height = self._curr_block.height().get();
+        let promotions = crate::privacy_state::plan_due_privacy_activation_promotions_v1(
+            &self.world.privacy_activations,
+            current_height,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "persisted privacy activation registry is invalid at block height \
+                     {current_height}: {error}"
+            )
+        });
+        for (key, record) in promotions {
+            self.world.privacy_activations.insert(key, record);
+        }
     }
 
     fn activate_due_public_lane_validators(&mut self, current_epoch: u64) {
@@ -11159,6 +11352,14 @@ pub struct StateTransaction<'block, 'state> {
     sccp_verifier_work_after_block: SccpVerifierWorkV1,
     /// Parent block SCCP verifier work, updated only when this transaction commits.
     block_sccp_verifier_work: &'block mut SccpVerifierWorkV1,
+    /// Privacy actions reserved by this transaction.
+    privacy_actions_in_tx: u32,
+    /// Canonically encoded privacy action bytes reserved by this transaction.
+    privacy_bytes_in_tx: u64,
+    /// Privacy budget after applying this transaction to its parent block.
+    privacy_budget_after_block: crate::privacy::PrivacyBlockBudgetV1,
+    /// Parent block privacy budget, updated only when this transaction commits.
+    block_privacy_budget: &'block mut crate::privacy::PrivacyBlockBudgetV1,
     /// Total confidential nullifiers consumed so far in this transaction.
     pub zk_nullifiers_in_tx: u32,
     /// Total confidential commitments created so far in this transaction.
@@ -18857,6 +19058,12 @@ impl World {
             pedersen_params: self.pedersen_params.view(),
             poseidon_params: self.poseidon_params.view(),
             runtime_upgrades: self.runtime_upgrades.view(),
+            privacy_activations: self.privacy_activations.view(),
+            privacy_pgc_accounts: self.privacy_pgc_accounts.view(),
+            privacy_nullifiers: self.privacy_nullifiers.view(),
+            privacy_commitments: self.privacy_commitments.view(),
+            privacy_roots: self.privacy_roots.view(),
+            privacy_root_heads: self.privacy_root_heads.view(),
             proofs: self.proofs.view(),
             proofs_by_status: self.proofs_by_status.view(),
             proof_tags: self.proof_tags.view(),
@@ -21639,6 +21846,12 @@ impl<'world> WorldBlock<'world> {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            privacy_activations,
+            privacy_pgc_accounts,
+            privacy_nullifiers,
+            privacy_commitments,
+            privacy_roots,
+            privacy_root_heads,
             proofs,
             proofs_by_status,
             proof_tags,
@@ -21750,6 +21963,12 @@ impl<'world> WorldBlock<'world> {
         pedersen_params.commit();
         poseidon_params.commit();
         runtime_upgrades.commit();
+        privacy_activations.commit();
+        privacy_pgc_accounts.commit();
+        privacy_nullifiers.commit();
+        privacy_commitments.commit();
+        privacy_roots.commit();
+        privacy_root_heads.commit();
         proofs.commit();
         proofs_by_status.commit();
         proof_tags.commit();
@@ -23015,6 +23234,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            privacy_activations,
+            privacy_pgc_accounts,
+            privacy_nullifiers,
+            privacy_commitments,
+            privacy_roots,
+            privacy_root_heads,
             proofs,
             proofs_by_status,
             proof_tags,
@@ -23112,6 +23337,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         pedersen_params.apply();
         poseidon_params.apply();
         runtime_upgrades.apply();
+        privacy_activations.apply();
+        privacy_pgc_accounts.apply();
+        privacy_nullifiers.apply();
+        privacy_commitments.apply();
+        privacy_roots.apply();
+        privacy_root_heads.apply();
         proofs.apply();
         proofs_by_status.apply();
         proof_tags.apply();
@@ -27725,6 +27956,7 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
+            privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1::default(),
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -27746,6 +27978,10 @@ impl State {
             trust_committed_execution_results: false,
         };
         stage(&mut sb)?;
+        // Privacy lifecycle is persisted state, not a verifier-time projection.
+        // Plan every due promotion before applying any of them so malformed
+        // restored state cannot leave the block overlay partially promoted.
+        sb.promote_due_privacy_activations();
         crate::smartcontracts::ivm::active_runtime_abi_hash(
             &sb.world,
             sb._curr_block.height().get(),
@@ -28385,6 +28621,7 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
+            privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1::default(),
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -28489,6 +28726,7 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
+            privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1::default(),
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -47418,6 +47656,7 @@ impl<'state> StateBlock<'state> {
         let zk = self.zk.clone();
         let sccp_registry = Arc::clone(&self.sccp_registry);
         let sccp_verifier_work_after_block = self.sccp_verifier_work_in_block;
+        let privacy_budget_after_block = self.privacy_budget_in_block;
         let nexus = self.nexus.clone();
         let lane_incarnations = self.lane_incarnations.clone();
         let lane_incarnation_lineage = self.lane_incarnation_lineage.clone();
@@ -47485,6 +47724,10 @@ impl<'state> StateBlock<'state> {
             sccp_verifier_work_in_tx: SccpVerifierWorkV1::default(),
             sccp_verifier_work_after_block,
             block_sccp_verifier_work: &mut self.sccp_verifier_work_in_block,
+            privacy_actions_in_tx: 0,
+            privacy_bytes_in_tx: 0,
+            privacy_budget_after_block,
+            block_privacy_budget: &mut self.privacy_budget_in_block,
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
             native_anonymous_escrow_transfer_depth: 0,
@@ -60247,6 +60490,83 @@ impl StateTransaction<'_, '_> {
         self.register_confidential_usage(proof_bytes, 1)
     }
 
+    /// Reserve one canonically encoded first-release privacy action.
+    ///
+    /// The reservation is staged in this transaction. The parent block budget
+    /// is updated only by [`Self::apply`], so dropping a transaction after any
+    /// later instruction failure rolls the charge back together with its world
+    /// writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] without changing transaction or block accounting when
+    /// the action index is duplicated/skipped, a counter overflows, or any
+    /// compiled transaction/block action or byte limit would be exceeded.
+    pub(crate) fn reserve_privacy_action(
+        &mut self,
+        action_index: u32,
+        encoded_action_bytes: u64,
+    ) -> Result<(), Error> {
+        if action_index != self.privacy_actions_in_tx {
+            return Err(Error::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    format!(
+                        "privacy action index mismatch: expected {}, got {action_index}",
+                        self.privacy_actions_in_tx
+                    )
+                    .into(),
+                ),
+            ));
+        }
+
+        let limits = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default();
+        let next_actions = self
+            .privacy_actions_in_tx
+            .checked_add(1)
+            .ok_or_else(|| Error::InvariantViolation("privacy action counter overflow".into()))?;
+        if next_actions > limits.max_actions_per_transaction {
+            return Err(Error::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "privacy action count per transaction exceeded".into(),
+                ),
+            ));
+        }
+        let next_bytes = self
+            .privacy_bytes_in_tx
+            .checked_add(encoded_action_bytes)
+            .ok_or_else(|| Error::InvariantViolation("privacy byte counter overflow".into()))?;
+        if next_bytes > u64::from(limits.max_privacy_bytes_per_transaction) {
+            return Err(Error::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "privacy bytes per transaction exceeded".into(),
+                ),
+            ));
+        }
+
+        let mut reservation = self.privacy_budget_after_block.begin_transaction();
+        reservation
+            .reserve(0, encoded_action_bytes)
+            .map_err(|error| {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("privacy admission budget rejected action: {error}").into(),
+                ))
+            })?;
+        reservation.commit();
+        self.privacy_actions_in_tx = next_actions;
+        self.privacy_bytes_in_tx = next_bytes;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn privacy_budget_for_testing(&self) -> (u32, u64, u32, u64) {
+        (
+            self.privacy_actions_in_tx,
+            self.privacy_bytes_in_tx,
+            self.privacy_budget_after_block.actions(),
+            self.privacy_budget_after_block.bytes(),
+        )
+    }
+
     fn sccp_proof_delta(&self, proof_bytes: usize) -> Result<SccpVerifierWorkV1, Error> {
         let proof_bytes = u64::try_from(proof_bytes).map_err(|_| {
             Error::InvalidParameter(InvalidParameterError::SmartContract(
@@ -60874,6 +61194,8 @@ impl StateTransaction<'_, '_> {
             block_sccp_registry,
             block_sccp_verifier_work,
             sccp_verifier_work_after_block,
+            block_privacy_budget,
+            privacy_budget_after_block,
             tx_call_hash,
             #[cfg(feature = "telemetry")]
             gas_used_in_block_so_far,
@@ -60912,6 +61234,7 @@ impl StateTransaction<'_, '_> {
         *block_zk = zk;
         *block_sccp_registry = sccp_registry;
         *block_sccp_verifier_work = sccp_verifier_work_after_block;
+        *block_privacy_budget = privacy_budget_after_block;
         if let Some(lane_id) = current_lane_id {
             touched_lanes.insert(lane_id);
         }
@@ -64120,6 +64443,42 @@ pub(crate) mod deserialize {
         let pedersen_params = take_optional_default(&mut map, "pedersen_params")?;
         let poseidon_params = take_optional_default(&mut map, "poseidon_params")?;
         let runtime_upgrades = take_optional_default(&mut map, "runtime_upgrades")?;
+        let privacy_activations: Storage<
+            crate::privacy_state::PrivacyActivationKeyV1,
+            iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+        > = take_required(&mut map, "privacy_activations")?;
+        let privacy_pgc_accounts: Storage<
+            crate::privacy_state::PrivacyPgcAccountKeyV1,
+            crate::privacy_state::PrivacyPgcAccountStateV1,
+        > = take_required(&mut map, "privacy_pgc_accounts")?;
+        let privacy_nullifiers: Storage<
+            crate::privacy_state::PrivacyNullifierKeyV1,
+            crate::privacy_state::PrivacyStateItemRecordV1,
+        > = take_required(&mut map, "privacy_nullifiers")?;
+        let privacy_commitments: Storage<
+            crate::privacy_state::PrivacyCommitmentKeyV1,
+            crate::privacy_state::PrivacyStateItemRecordV1,
+        > = take_required(&mut map, "privacy_commitments")?;
+        let privacy_roots: Storage<
+            crate::privacy_state::PrivacyRootKeyV1,
+            crate::privacy_state::PrivacyRootProvenanceV1,
+        > = take_required(&mut map, "privacy_roots")?;
+        let privacy_root_heads: Storage<
+            crate::privacy_state::PrivacyRootHeadKeyV1,
+            crate::privacy_state::PrivacyRootHeadRecordV1,
+        > = take_required(&mut map, "privacy_root_heads")?;
+        crate::privacy_state::validate_privacy_persisted_state_v1(
+            &privacy_activations.view(),
+            &privacy_pgc_accounts.view(),
+            &privacy_nullifiers.view(),
+            &privacy_commitments.view(),
+            &privacy_roots.view(),
+            &privacy_root_heads.view(),
+        )
+        .map_err(|message| json::Error::InvalidField {
+            field: "world.privacy_state".to_owned(),
+            message,
+        })?;
         let proofs = take_optional_default(&mut map, "proofs")?;
         let proof_tags = take_optional_default(&mut map, "proof_tags")?;
         let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
@@ -64321,6 +64680,12 @@ pub(crate) mod deserialize {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            privacy_activations,
+            privacy_pgc_accounts,
+            privacy_nullifiers,
+            privacy_commitments,
+            privacy_roots,
+            privacy_root_heads,
             proofs,
             proofs_by_status: Storage::default(),
             proof_tags,
@@ -65273,6 +65638,80 @@ mod tests {
             .read()
             .ensure_lane_ready(LaneId::SINGLE)
             .expect("default test lane must be present in the manifest registry");
+    }
+
+    #[test]
+    fn privacy_action_budget_is_transactional_contiguous_and_fail_closed() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let limits = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default();
+
+        {
+            let mut transaction = block.transaction();
+            assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
+            assert!(transaction.reserve_privacy_action(1, 64).is_err());
+            assert!(transaction.reserve_privacy_action(0, 0).is_err());
+            assert!(
+                transaction
+                    .reserve_privacy_action(0, u64::from(limits.max_action_bytes) + 1)
+                    .is_err()
+            );
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 0, 0),
+                "rejected reservations must not consume local or staged block budget"
+            );
+
+            transaction
+                .reserve_privacy_action(0, 64)
+                .expect("first contiguous action");
+            assert_eq!(transaction.privacy_budget_for_testing(), (1, 64, 1, 64));
+            assert!(transaction.reserve_privacy_action(0, 32).is_err());
+            assert!(transaction.reserve_privacy_action(2, 32).is_err());
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (1, 64, 1, 64),
+                "duplicate and skipped indexes must not consume budget"
+            );
+            transaction
+                .reserve_privacy_action(1, 32)
+                .expect("second contiguous action");
+            assert_eq!(transaction.privacy_budget_for_testing(), (2, 96, 2, 96));
+            // Dropping the transaction exercises rollback of the entire
+            // staged reservation set.
+        }
+        assert_eq!(block.privacy_budget_in_block.actions(), 0);
+        assert_eq!(block.privacy_budget_in_block.bytes(), 0);
+
+        {
+            let mut transaction = block.transaction();
+            transaction
+                .reserve_privacy_action(0, 48)
+                .expect("fresh transaction restarts its action index");
+            transaction.apply();
+        }
+        assert_eq!(block.privacy_budget_in_block.actions(), 1);
+        assert_eq!(block.privacy_budget_in_block.bytes(), 48);
+
+        {
+            let mut transaction = block.transaction();
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 1, 48),
+                "a new transaction inherits committed block usage only"
+            );
+            transaction
+                .reserve_privacy_action(0, 16)
+                .expect("another transaction reserves independently");
+            transaction.apply();
+        }
+        assert_eq!(block.privacy_budget_in_block.actions(), 2);
+        assert_eq!(block.privacy_budget_in_block.bytes(), 64);
     }
 
     #[test]

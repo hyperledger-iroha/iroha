@@ -25,6 +25,8 @@ pub const POR_VRF_INPUT_DOMAIN_V1: &[u8] = b"sorafs.por.provider-vrf.input.v1\0"
 
 /// Current PoR challenge schema version.
 pub const POR_CHALLENGE_VERSION_V1: u8 = 1;
+/// Current PoR challenge governance-publication envelope version.
+pub const POR_CHALLENGE_PUBLICATION_VERSION_V1: u8 = 1;
 /// Current PoR proof schema version.
 pub const POR_PROOF_VERSION_V1: u8 = 1;
 /// Current audit verdict schema version.
@@ -466,6 +468,110 @@ pub enum PorChallengeValidationError {
     SampleCountMismatch { expected: u16, actual: u16 },
     #[error("deadline {deadline_at} must be greater than issued_at {issued_at}")]
     InvalidDeadline { issued_at: u64, deadline_at: u64 },
+}
+
+/// Canonical Governance DAG publication envelope for one PoR challenge.
+///
+/// `duplicate_samples` is encoded as a fixed-width integer and must exactly
+/// match the duplicate count in the validated challenge sample inventory.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
+pub struct PorChallengePublicationV1 {
+    /// Schema version (`POR_CHALLENGE_PUBLICATION_VERSION_V1`).
+    pub version: u8,
+    /// Canonical PoR challenge.
+    pub challenge: PorChallengeV1,
+    /// Number of repeated sample indices after unique leaves were exhausted.
+    pub duplicate_samples: u16,
+}
+
+impl PorChallengePublicationV1 {
+    /// Construct and validate a canonical challenge-publication envelope.
+    pub fn try_new(
+        challenge: PorChallengeV1,
+        duplicate_samples: usize,
+    ) -> Result<Self, PorChallengePublicationValidationError> {
+        let duplicate_samples = u16::try_from(duplicate_samples).map_err(|_| {
+            PorChallengePublicationValidationError::DuplicateSampleCountOutOfRange {
+                count: duplicate_samples,
+            }
+        })?;
+        let publication = Self {
+            version: POR_CHALLENGE_PUBLICATION_VERSION_V1,
+            challenge,
+            duplicate_samples,
+        };
+        publication.validate()?;
+        Ok(publication)
+    }
+
+    /// Validate the envelope and its exact duplicate-sample binding.
+    pub fn validate(&self) -> Result<(), PorChallengePublicationValidationError> {
+        if self.version != POR_CHALLENGE_PUBLICATION_VERSION_V1 {
+            return Err(PorChallengePublicationValidationError::UnsupportedVersion {
+                found: self.version,
+            });
+        }
+        self.challenge
+            .validate()
+            .map_err(PorChallengePublicationValidationError::InvalidChallenge)?;
+        if self.duplicate_samples > self.challenge.sample_count {
+            return Err(
+                PorChallengePublicationValidationError::DuplicateSampleCountExceedsSampleCount {
+                    duplicate_samples: self.duplicate_samples,
+                    sample_count: self.challenge.sample_count,
+                },
+            );
+        }
+        let unique_samples = self
+            .challenge
+            .sample_indices
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len();
+        let actual = self
+            .challenge
+            .sample_indices
+            .len()
+            .saturating_sub(unique_samples);
+        let actual = u16::try_from(actual).map_err(|_| {
+            PorChallengePublicationValidationError::DuplicateSampleCountOutOfRange { count: actual }
+        })?;
+        if self.duplicate_samples != actual {
+            return Err(
+                PorChallengePublicationValidationError::DuplicateSampleCountMismatch {
+                    declared: self.duplicate_samples,
+                    actual,
+                },
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Validation failures for [`PorChallengePublicationV1`].
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum PorChallengePublicationValidationError {
+    /// The publication version is unsupported.
+    #[error("unsupported PoR challenge publication version {found}")]
+    UnsupportedVersion { found: u8 },
+    /// The embedded challenge is invalid.
+    #[error("invalid published PoR challenge: {0}")]
+    InvalidChallenge(#[source] PorChallengeValidationError),
+    /// The runtime duplicate counter cannot be represented canonically.
+    #[error("PoR duplicate sample count {count} exceeds the canonical u16 range")]
+    DuplicateSampleCountOutOfRange { count: usize },
+    /// The declared duplicate count cannot exceed the total sample count.
+    #[error(
+        "PoR duplicate sample count {duplicate_samples} exceeds challenge sample count {sample_count}"
+    )]
+    DuplicateSampleCountExceedsSampleCount {
+        duplicate_samples: u16,
+        sample_count: u16,
+    },
+    /// The declared duplicate count does not match the sample inventory.
+    #[error("PoR duplicate sample count mismatch (declared {declared}, actual {actual})")]
+    DuplicateSampleCountMismatch { declared: u16, actual: u16 },
 }
 
 /// Sample proof attached to a PoR response.
@@ -1715,6 +1821,43 @@ mod tests {
         verifier_latency_ms: Option<u32>,
     }
 
+    fn challenge_fixture(sample_indices: Vec<u64>) -> PorChallengeV1 {
+        let manifest_digest = [2; 32];
+        let provider_id = [3; 32];
+        let epoch_id = 7;
+        let drand_round = 42;
+        let drand_randomness = [0x44; 32];
+        let vrf_output = [0x55; 32];
+        let seed = derive_challenge_seed(
+            &drand_randomness,
+            Some(&vrf_output),
+            &manifest_digest,
+            epoch_id,
+        );
+        let challenge_id =
+            derive_challenge_id(&seed, &manifest_digest, &provider_id, epoch_id, drand_round);
+        PorChallengeV1 {
+            version: POR_CHALLENGE_VERSION_V1,
+            challenge_id,
+            manifest_digest,
+            provider_id,
+            epoch_id,
+            drand_round,
+            drand_randomness,
+            drand_signature: [0x66; 48],
+            vrf_output: Some(vrf_output),
+            vrf_proof: Some(iroha_crypto::vrf::VrfProof::SigInG1([0x77; 48])),
+            forced: false,
+            chunking_profile: "sorafs.sf1@1.0.0".to_string(),
+            seed,
+            sample_tier: 2,
+            sample_count: u16::try_from(sample_indices.len()).expect("bounded sample fixture"),
+            sample_indices,
+            issued_at: 1_700_000_000,
+            deadline_at: 1_700_000_900,
+        }
+    }
+
     fn proof_fixture() -> PorProofV1 {
         PorProofV1 {
             version: POR_PROOF_VERSION_V1,
@@ -1847,6 +1990,71 @@ mod tests {
             deadline_at: 1_700_000_900,
         };
         assert!(challenge.validate().is_ok());
+    }
+
+    #[test]
+    fn challenge_publication_binds_duplicate_count_and_roundtrips_canonically() {
+        let publication =
+            PorChallengePublicationV1::try_new(challenge_fixture(vec![10, 42, 42]), 1)
+                .expect("valid challenge publication");
+        assert!(publication.validate().is_ok());
+
+        let encoded = norito::to_bytes(&publication).expect("encode challenge publication");
+        let decoded: PorChallengePublicationV1 =
+            norito::decode_from_bytes(&encoded).expect("decode challenge publication");
+        assert_eq!(decoded, publication);
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("re-encode challenge publication"),
+            encoded
+        );
+    }
+
+    #[test]
+    fn challenge_publication_rejects_version_and_duplicate_count_tampering() {
+        let publication =
+            PorChallengePublicationV1::try_new(challenge_fixture(vec![10, 42, 42]), 1)
+                .expect("valid challenge publication");
+
+        let mut invalid = publication.clone();
+        invalid.version = 2;
+        assert_eq!(
+            invalid.validate(),
+            Err(PorChallengePublicationValidationError::UnsupportedVersion { found: 2 })
+        );
+
+        let mut invalid = publication.clone();
+        invalid.duplicate_samples = 0;
+        assert_eq!(
+            invalid.validate(),
+            Err(
+                PorChallengePublicationValidationError::DuplicateSampleCountMismatch {
+                    declared: 0,
+                    actual: 1,
+                }
+            )
+        );
+
+        let mut invalid = publication;
+        invalid.duplicate_samples = invalid.challenge.sample_count + 1;
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                PorChallengePublicationValidationError::DuplicateSampleCountExceedsSampleCount { .. }
+            )
+        ));
+    }
+
+    #[test]
+    fn challenge_publication_rejects_architecture_dependent_duplicate_count() {
+        let error = PorChallengePublicationV1::try_new(
+            challenge_fixture(vec![10]),
+            usize::from(u16::MAX) + 1,
+        )
+        .expect_err("oversized duplicate count must fail before publication");
+        assert!(matches!(
+            error,
+            PorChallengePublicationValidationError::DuplicateSampleCountOutOfRange { .. }
+        ));
     }
 
     #[test]

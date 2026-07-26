@@ -2776,57 +2776,6 @@ test(
 );
 
 test(
-  "SoraFS uptime sampling endpoint responds (optional)",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 90_000,
-  },
-  async (t) => {
-    if (!SORAFS_ENABLED) {
-      t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1 to exercise SoraFS capacity coverage",
-      );
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    let uptimeSample;
-    try {
-      uptimeSample = await client.submitSorafsUptimeObservation({
-        uptimeSecs: 60,
-        observedSecs: 60,
-      });
-    } catch (error) {
-      if (shouldSkipSorafsPorEndpoints(error)) {
-        t.diagnostic(
-          `SoraFS uptime endpoint unavailable on target node: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        return;
-      }
-      throw error;
-    }
-    assert.ok(
-      typeof uptimeSample.status === "string" && uptimeSample.status.length > 0,
-      "SoraFS uptime response must include a status string",
-    );
-    assertNonNegativeInteger(
-      uptimeSample.uptime_secs,
-      "sorafs uptime response uptime_secs must be non-negative",
-    );
-    assertNonNegativeInteger(
-      uptimeSample.observed_secs,
-      "sorafs uptime response observed_secs must be non-negative",
-    );
-
-  },
-);
-
-test(
   "UAID portfolio endpoint responds (optional)",
   {
     skip: !!SKIP_REASON,

@@ -2,7 +2,7 @@
 lang: uz
 direction: ltr
 source: docs/source/sorafs_evidence_viewer_plan.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: 604d54b0064a5d146082599e4752bf4428993ef96c72e1021405ce5ac153c6ac
 source_last_modified: "2026-07-05T01:58:10.285289+00:00"

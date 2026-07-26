@@ -16161,7 +16161,6 @@ mod preverified_key_tests {
             let wrong_envelope_backend = match envelope_backend {
                 BackendTag::Halo2IpaPasta => BackendTag::Stark,
                 BackendTag::Stark => BackendTag::Halo2IpaPasta,
-                other => other,
             };
             let wrong_backend_proof = mutate_preverify_envelope(proof.clone(), |envelope| {
                 envelope.backend = wrong_envelope_backend;

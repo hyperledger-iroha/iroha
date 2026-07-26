@@ -418,11 +418,14 @@ test("SoraFS C# SDK runner rejects non-.NET-8 overrides before tests", () => {
   );
 });
 
-test("SoraFS pin-register SDK guard exposes typed JavaScript helpers", () => {
+test("SoraFS pin-register SDK guard enforces caller-signed transport", () => {
   const src = read("javascript/iroha_js/src/toriiClient.js");
   const dist = read("javascript/iroha_js/dist/toriiClient.js");
+  const transactionSrc = read("javascript/iroha_js/src/transaction.js");
+  const transactionDist = read("javascript/iroha_js/dist/transaction.js");
   const dts = read("javascript/iroha_js/index.d.ts");
   const tests = read("javascript/iroha_js/test/toriiClient.test.js");
+  const transactionTests = read("javascript/iroha_js/test/transactionBuilder.test.js");
   const pythonClient = read("python/iroha_python/src/iroha_python/client.py");
   const pythonTests = read("python/iroha_python/tests/client_sorafs_pin_register_test.py");
   const swiftClient = read("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift");
@@ -430,84 +433,91 @@ test("SoraFS pin-register SDK guard exposes typed JavaScript helpers", () => {
   const csharpClient = read("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs");
   const csharpModels = read("csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs");
   const csharpTests = read("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs");
+  const javaInstruction = read(
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java",
+  );
+  const kotlinInstruction = read(
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt",
+  );
 
   for (const text of [src, dist]) {
-    assert.match(text, /async registerSorafsPinManifest\(input = \{\}\)/);
-    assert.match(text, /"\/v1\/sorafs\/pin\/register"/);
-    assert.match(text, /buildSorafsPinRegisterPayload/);
-    assert.match(text, /normalizeSorafsPinRegisterResponse/);
-    assert.match(text, /"manifest_payload"/);
-    assert.match(text, /SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 \* 1024/);
-    assert.match(text, /normalizeSorafsPinRegisterAliasSegment/);
-    assert.match(text, /successor_of_hex must not be zero/);
-    const builder = text.match(
-      /function buildSorafsPinRegisterPayload[\s\S]*?const SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES/,
+    const method = text.match(
+      /async registerSorafsPinManifest\(signedTransaction, options = \{\}\)[\s\S]*?(?=\n  \/\*\*)/,
     )?.[0];
-    assert.ok(builder, "pin-register request builder missing");
-    assert.doesNotMatch(builder, /manifest_b64|chunker_profile_id|pin_policy|content_length/);
+    assert.ok(method, "signed pin-register method missing");
+    assert.match(method, /"\/v1\/sorafs\/pin\/register"/);
+    assert.match(method, /toVersionedTransactionPayload/);
+    assert.match(method, /"Content-Type": APPLICATION_NORITO/);
+    assert.match(method, /Accept: APPLICATION_JSON/);
+    assert.match(method, /_expectStatus\(response, \[202\]\)/);
+    assert.doesNotMatch(method, /private_key|manifest_payload|JSON\.stringify/);
+    assert.match(text, /normalizeSorafsPinRegisterResponse/);
+    assert.doesNotMatch(text, /function buildSorafsPinRegisterPayload/);
+  }
+  for (const text of [transactionSrc, transactionDist]) {
+    assert.match(text, /function buildRegisterPinManifestInstruction\(input\)/);
+    assert.match(text, /function buildRegisterPinManifestTransaction\(client, input, options = \{\}\)/);
+    assert.match(text, /instructions: \[instruction\]/);
+    assert.match(text, /quoteAndSignTransaction/);
   }
   assert.match(dts, /registerSorafsPinManifest\(/);
   assert.match(dts, /registerSorafsPinManifestTyped\(/);
-  const requestType = dts.match(
-    /export interface SorafsPinRegisterRequest \{[\s\S]*?\n\}/,
+  assert.match(dts, /signedTransaction: Buffer \| ArrayBuffer \| ArrayBufferView/);
+  assert.match(dts, /buildRegisterPinManifestInstruction/);
+  assert.match(dts, /buildRegisterPinManifestTransaction/);
+  assert.doesNotMatch(dts, /interface SorafsPinRegisterRequest/);
+  assert.match(tests, /posts only a versioned signed transaction/);
+  assert.match(tests, /rejects legacy secret-bearing request objects/);
+  assert.match(tests, /rejects pre-finality fee or custody claims/);
+  assert.match(transactionTests, /quotes and signs exactly one instruction/);
+
+  const pythonMethod = pythonClient.match(
+    /    def register_sorafs_pin_manifest\([\s\S]*?(?=\n    def )/,
   )?.[0];
-  assert.ok(requestType, "SorafsPinRegisterRequest declaration missing");
-  assert.match(requestType, /private_key: string;/);
-  assert.match(requestType, /manifest_payload: string;/);
-  assert.match(requestType, /submitted_epoch: NumericLike;/);
-  assert.doesNotMatch(requestType, /gas_asset_id|gasAssetId/);
-  assert.doesNotMatch(
-    requestType,
-    /manifestBytes|manifest_b64|chunker|pinPolicy|pin_policy|contentLength|content_length/,
-  );
-  assert.match(
-    tests,
-    /registerSorafsPinManifest rejects all unknown and retired fields before fetch/,
-  );
-  assert.match(
-    tests,
-    /registerSorafsPinManifest rejects non-canonical and malformed manifests before fetch/,
-  );
-  assert.match(
-    tests,
-    /registerSorafsPinManifest rejects malformed and zero successor digests before fetch/,
-  );
-  assert.match(tests, /registerSorafsPinManifestTyped rejects ambiguous response aliases/);
+  assert.ok(pythonMethod, "Python signed pin-register method missing");
+  assert.match(pythonMethod, /transaction: "SignedTransactionEnvelope"/);
+  assert.match(pythonMethod, /transaction\.signed_transaction_versioned/);
+  assert.match(pythonMethod, /"Content-Type": "application\/x-norito"/);
+  assert.match(pythonMethod, /self\._expect_status\(response, \(202,\)\)/);
+  assert.doesNotMatch(pythonMethod, /private_key|manifest_payload/);
+  assert.match(pythonTests, /posts_only_versioned_signed_transaction/);
+  assert.match(pythonTests, /rejects_pre_finality_fee_claim/);
 
-  assert.match(pythonClient, /"manifest_payload"/);
-  assert.match(pythonClient, /_SORAFS_MAX_MANIFEST_ENCODED_BYTES = 512 \* 1024/);
-  assert.match(pythonClient, /_SORAFS_MAX_ALIAS_PROOF_BYTES = 1024 \* 1024/);
-  assert.match(pythonTests, /"manifest_payload": b"manifest-norito"/);
-  assert.match(pythonTests, /body\["manifest_payload"\]/);
-  assert.match(pythonTests, /rejects_retired_and_unknown_fields/);
-
-  assert.match(swiftClient, /public var manifestPayload: String\?/);
-  assert.match(swiftClient, /case manifestPayload = "manifest_payload"/);
-  assert.match(swiftClient, /requiredManifestPayload\(/);
-  assert.match(swiftClient, /maximumManifestBytes = 512 \* 1024/);
-  assert.match(swiftClient, /maximumAliasProofBytes = 1024 \* 1024/);
-  assert.match(swiftClient, /requiredAliasSegment\(/);
-  assert.match(swiftTests, /testRegisterSoraFsPinManifestAcceptsMaximumManifestAndOmitsOptionalFields/);
-  assert.match(swiftTests, /root\["manifest_payload"\]/);
-  assert.match(swiftTests, /String\(repeating: "a", count: 129\)/);
-  assert.match(swiftTests, /oversizedAliasProof/);
-  const swiftRequest = swiftClient.match(
-    /public struct ToriiSoraFsPinRegisterRequest:[\s\S]*?(?=fileprivate struct ToriiSoraFsPinRegisterWireRequest)/,
+  const swiftMethod = swiftClient.match(
+    /    public func registerSoraFsPinManifest\(_ transaction: SignedTransactionEnvelope\) async throws[\s\S]*?(?=\n    public func getVpnProfile)/,
   )?.[0];
-  assert.ok(swiftRequest, "Swift SoraFS pin-register request declaration missing");
-  assert.doesNotMatch(
-    swiftRequest,
-    /manifestBase64|manifestBytes|manifest_b64|chunkerProfile|chunker_profile|pinPolicy|pin_policy|contentLength|content_length|chunkDigest|chunk_digest/,
-  );
+  assert.ok(swiftMethod, "Swift signed pin-register method missing");
+  assert.match(swiftMethod, /body: transaction\.norito/);
+  assert.match(swiftMethod, /"Content-Type": "application\/x-norito"/);
+  assert.match(swiftMethod, /acceptedStatus: 202\.\.<203/);
+  assert.doesNotMatch(swiftMethod, /private_key|manifestPayload/);
+  assert.doesNotMatch(swiftClient, /struct ToriiSoraFsPinRegisterRequest/);
+  assert.match(swiftTests, /testRegisterSoraFsPinManifestPostsOnlySignedNoritoAndReturnsAdmission/);
+  assert.match(swiftTests, /testRegisterSoraFsPinManifestRejectsPreFinalityFeeClaims/);
 
-  assert.match(csharpClient, /NormalizeRequiredSoraFsManifestPayload/);
-  assert.match(csharpClient, /SoraFsManifestPayloadMaxBytes = 512 \* 1024/);
-  assert.match(csharpClient, /SoraFsAliasProofMaxBytes = 1024 \* 1024/);
-  assert.match(csharpClient, /Convert\.ToBase64String\(manifestBytes\)/);
-  assert.match(csharpClient, /Provide either ManifestPayloadBase64 or ManifestBytes, not both\./);
-  assert.match(csharpModels, /public string\? ManifestPayloadBase64/);
-  assert.match(csharpModels, /public byte\[\]\? ManifestBytes/);
-  assert.match(csharpModels, /\[JsonPropertyName\("manifest_payload"\)\]/);
-  assert.match(csharpTests, /RegisterSoraFsPinManifestAsyncAcceptsCanonicalManifestPayloadBase64/);
-  assert.match(csharpTests, /GetProperty\("manifest_payload"\)/);
+  const csharpMethod = csharpClient.match(
+    /    public async Task<ToriiSoraFsPinRegisterResponse> RegisterSoraFsPinManifestAsync\([\s\S]*?(?=\n    public Task<HttpResponseMessage> OpenSoraFsCidContentAsync)/,
+  )?.[0];
+  assert.ok(csharpMethod, "C# signed pin-register method missing");
+  assert.match(csharpMethod, /SignedTransactionEnvelope transaction/);
+  assert.match(csharpMethod, /transaction\.NoritoBytes/);
+  assert.match(csharpMethod, /"application\/x-norito"/);
+  assert.match(csharpMethod, /HttpStatusCode\.Accepted/);
+  assert.doesNotMatch(csharpMethod, /private_key|ManifestPayload/);
+  assert.doesNotMatch(csharpModels, /class ToriiSoraFsPinRegisterRequest/);
+  const csharpResponse = csharpModels.match(
+    /public sealed record class ToriiSoraFsPinRegisterResponse[\s\S]*?\n\}/,
+  )?.[0];
+  assert.ok(csharpResponse, "C# pin-register admission response missing");
+  assert.doesNotMatch(csharpResponse, /PinFee|Custody|ChunkerHandle|Successor/);
+  assert.match(csharpTests, /PostsOnlySignedNoritoAndReturnsAdmission/);
+  assert.match(csharpTests, /RejectsNonAdmissionFields/);
+  assert.match(csharpTests, /\[InlineData\("private_key"\)\]/);
+
+  for (const text of [javaInstruction, kotlinInstruction]) {
+    assert.match(text, /RegisterPinManifestInstruction/);
+    assert.match(text, /submittedEpoch/);
+    assert.match(text, /successorOfHex/);
+    assert.doesNotMatch(text, /private[_A-Z]?key/i);
+  }
 });

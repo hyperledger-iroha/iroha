@@ -45,7 +45,8 @@ use iroha_data_model::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
             ManifestDigest, ManifestRootCid, PinFeePayment, PinManifestFinalizedCursorV1,
             PinManifestFinalizedRecordV1, PinManifestRecord, PinPolicy, PinStatus,
-            ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+            ReplicationOrderCompletionRecord, ReplicationOrderId, ReplicationOrderRecord,
+            ReplicationOrderStatus, StorageClass,
         },
         pricing::{
             PricingComputationError, PricingScheduleRecord, ProviderCreditRecord,
@@ -1577,6 +1578,7 @@ fn build_auto_replication_order(
         issued_epoch,
         deadline_epoch,
         canonical_order,
+        provider_completions: Vec::new(),
         status: ReplicationOrderStatus::Pending,
     }))
 }
@@ -2802,6 +2804,7 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
             issued_epoch: self.issued_epoch,
             deadline_epoch: self.deadline_epoch,
             canonical_order: self.order_payload,
+            provider_completions: Vec::new(),
             status: ReplicationOrderStatus::Pending,
         };
 
@@ -2865,6 +2868,70 @@ fn validate_stored_replication_order(
             .into(),
         ));
     }
+
+    let target_replicas = usize::from(canonical_payload.target_replicas);
+    if record.provider_completions.len() > target_replicas {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "replication order {order_label} stores more provider completions than its redundancy target"
+            )
+            .into(),
+        ));
+    }
+    let mut completed_providers = BTreeSet::new();
+    for completion in &record.provider_completions {
+        if !canonical_payload
+            .assignments
+            .iter()
+            .any(|assignment| assignment.provider_id == *completion.provider_id.as_bytes())
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} stores a completion for unassigned provider {}",
+                    hex::encode(completion.provider_id.as_bytes())
+                )
+                .into(),
+            ));
+        }
+        if !completed_providers.insert(*completion.provider_id.as_bytes()) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} stores duplicate completion records for provider {}",
+                    hex::encode(completion.provider_id.as_bytes())
+                )
+                .into(),
+            ));
+        }
+        if completion.completion_epoch < record.issued_epoch
+            || completion.completion_epoch > record.deadline_epoch
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} stores provider completion epoch {} outside its ledger epoch window {}..={}",
+                    completion.completion_epoch, record.issued_epoch, record.deadline_epoch
+                )
+                .into(),
+            ));
+        }
+    }
+    match record.status {
+        ReplicationOrderStatus::Pending | ReplicationOrderStatus::Expired(_)
+            if record.provider_completions.len() < target_replicas => {}
+        ReplicationOrderStatus::Completed(epoch)
+            if record.provider_completions.len() == target_replicas
+                && record
+                    .provider_completions
+                    .last()
+                    .is_some_and(|completion| completion.completion_epoch == epoch) => {}
+        _ => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} lifecycle is inconsistent with its provider completions"
+                )
+                .into(),
+            ));
+        }
+    }
     Ok(canonical_payload)
 }
 
@@ -2891,17 +2958,62 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
                     format!("replication order {order_label} not found").into(),
                 )
             })?;
-        validate_stored_replication_order(&record, &order_label)?;
+        let canonical_order = validate_stored_replication_order(&record, &order_label)?;
+
+        if !canonical_order
+            .assignments
+            .iter()
+            .any(|assignment| assignment.provider_id == *self.provider_id.as_bytes())
+        {
+            return Err(invalid_parameter(format!(
+                "provider {} is not assigned to replication order {order_label}",
+                hex::encode(self.provider_id.as_bytes())
+            )));
+        }
+        let provider_owner = state_transaction
+            .world
+            .provider_owners
+            .get(&self.provider_id)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "replication order {order_label} provider {} has no registered owner",
+                        hex::encode(self.provider_id.as_bytes())
+                    )
+                    .into(),
+                )
+            })?;
+        if provider_owner != authority {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} completion for provider {} must be authorized by its registered owner",
+                hex::encode(self.provider_id.as_bytes())
+            )));
+        }
+
+        if let Some(completion) = record.provider_completion(self.provider_id) {
+            if completion.completion_epoch == self.completion_epoch
+                && &completion.completed_by == authority
+            {
+                return Ok(());
+            }
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} provider {} already completed at epoch {}",
+                    hex::encode(self.provider_id.as_bytes()),
+                    completion.completion_epoch
+                )
+                .into(),
+            ));
+        }
 
         match record.status {
             ReplicationOrderStatus::Pending => {}
-            ReplicationOrderStatus::Completed(epoch) if epoch == self.completion_epoch => {
-                return Ok(());
-            }
             ReplicationOrderStatus::Completed(epoch) => {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    format!("replication order {order_label} already completed at epoch {epoch}")
-                        .into(),
+                    format!(
+                        "replication order {order_label} reached its redundancy target at epoch {epoch}"
+                    )
+                    .into(),
                 ));
             }
             ReplicationOrderStatus::Expired(epoch) => {
@@ -2951,7 +3063,27 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
             ));
         }
 
-        record.complete(self.completion_epoch);
+        record
+            .provider_completions
+            .try_reserve(1)
+            .map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "replication order {order_label} could not reserve bounded provider completion state"
+                    )
+                    .into(),
+                )
+            })?;
+        record
+            .provider_completions
+            .push(ReplicationOrderCompletionRecord {
+                provider_id: self.provider_id,
+                completed_by: authority.clone(),
+                completion_epoch: self.completion_epoch,
+            });
+        if record.provider_completions.len() == usize::from(canonical_order.target_replicas) {
+            record.status = ReplicationOrderStatus::Completed(self.completion_epoch);
+        }
         state_transaction
             .world
             .replication_orders
@@ -5432,7 +5564,6 @@ mod sorafs_tests {
                 CapacityDisputeEvidence, CapacityDisputeId, CapacityDisputeRecord,
                 CapacityDisputeStatus, CapacityFeeLedgerEntry, ProviderId,
             },
-            deal::BYTES_PER_GIB,
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestDigest,
                 PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
@@ -5451,6 +5582,7 @@ mod sorafs_tests {
     use iroha_primitives::{bigint::BigInt, json::Json};
     use nonzero_ext::nonzero;
     use norito::{json, to_bytes};
+    use sorafs_manifest::orderbook::BYTES_PER_GIB;
     use sorafs_manifest::{
         DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
         capacity::{
@@ -5766,6 +5898,7 @@ mod sorafs_tests {
             por_recorder_authority: authority.clone(),
             dispute_recorder_authority: authority.clone(),
             token_recorder_authority: authority.clone(),
+            max_source_age_ms: 24 * 60 * 60 * 1_000,
         };
         let digest = policy.canonical_digest().expect("reputation policy digest");
         SetSorafsReputationJournalAuthorityPolicy::new(policy)
@@ -10623,6 +10756,7 @@ mod sorafs_tests {
 
         let complete = CompleteReplicationOrder {
             order_id: ReplicationOrderId::new([0x55; 32]),
+            provider_id: ProviderId::new([0x56; 32]),
             completion_epoch: 5,
         };
 
@@ -11124,6 +11258,7 @@ mod sorafs_tests {
             ProviderId::new([0x31; 32]),
             ProviderId::new([0x32; 32]),
             ProviderId::new([0x33; 32]),
+            ProviderId::new([0x34; 32]),
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
@@ -11139,6 +11274,7 @@ mod sorafs_tests {
 
         let complete = CompleteReplicationOrder {
             order_id,
+            provider_id: providers[0],
             completion_epoch: 45,
         };
         complete
@@ -11146,12 +11282,14 @@ mod sorafs_tests {
             .expect("complete replication order");
         CompleteReplicationOrder {
             order_id,
+            provider_id: providers[0],
             completion_epoch: 45,
         }
         .execute(&alice(), &mut stx)
         .expect("exact completion replay is idempotent");
         let conflicting_replay = CompleteReplicationOrder {
             order_id,
+            provider_id: providers[0],
             completion_epoch: 46,
         }
         .execute(&alice(), &mut stx)
@@ -11162,6 +11300,49 @@ mod sorafs_tests {
                 if message.contains("already completed at epoch 45")
         ));
 
+        let partial_record = stx
+            .world
+            .replication_orders
+            .get(&order_id)
+            .expect("order stored");
+        assert_eq!(partial_record.provider_completions.len(), 1);
+        assert_eq!(partial_record.status, ReplicationOrderStatus::Pending);
+
+        CompleteReplicationOrder {
+            order_id,
+            provider_id: providers[1],
+            completion_epoch: 46,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("second provider completion");
+        assert_eq!(
+            stx.world
+                .replication_orders
+                .get(&order_id)
+                .expect("order stored")
+                .status,
+            ReplicationOrderStatus::Pending
+        );
+        CompleteReplicationOrder {
+            order_id,
+            provider_id: providers[2],
+            completion_epoch: 47,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("target provider completion");
+        let surplus_completion = CompleteReplicationOrder {
+            order_id,
+            provider_id: providers[3],
+            completion_epoch: 48,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("completed redundancy target must reject surplus completion");
+        assert!(matches!(
+            surplus_completion,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("reached its redundancy target at epoch 47")
+        ));
+
         let record = stx
             .world
             .replication_orders
@@ -11169,8 +11350,9 @@ mod sorafs_tests {
             .expect("order stored");
         assert!(matches!(
             record.status,
-            ReplicationOrderStatus::Completed(epoch) if epoch == 45
+            ReplicationOrderStatus::Completed(epoch) if epoch == 47
         ));
+        assert_eq!(record.provider_completions.len(), 3);
     }
 
     #[test]
@@ -11205,6 +11387,7 @@ mod sorafs_tests {
 
         let error = CompleteReplicationOrder {
             order_id,
+            provider_id: providers[0],
             completion_epoch: 16,
         }
         .execute(&alice(), &mut stx)
@@ -11309,6 +11492,7 @@ mod sorafs_tests {
         );
         let completion = CompleteReplicationOrder {
             order_id,
+            provider_id: providers[0],
             completion_epoch: 15,
         }
         .execute(&alice(), &mut stx)
@@ -11362,12 +11546,15 @@ mod sorafs_tests {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(_))
         ));
         grant_permission(&mut stx, "CanIssueSorafsReplicationOrder");
-        CompleteReplicationOrder {
-            order_id,
-            completion_epoch: 15,
+        for provider_id in providers {
+            CompleteReplicationOrder {
+                order_id,
+                provider_id,
+                completion_epoch: 15,
+            }
+            .execute(&alice(), &mut stx)
+            .expect("complete provider assignment at deadline");
         }
-        .execute(&alice(), &mut stx)
-        .expect("complete at deadline");
         let completed = ExpireReplicationOrder {
             order_id,
             expiration_epoch: 16,
@@ -11428,6 +11615,7 @@ mod sorafs_tests {
         );
         let error = CompleteReplicationOrder {
             order_id,
+            provider_id: providers[0],
             completion_epoch: 10,
         }
         .execute(&alice(), &mut stx)
@@ -11470,6 +11658,7 @@ mod sorafs_tests {
 
         let complete = CompleteReplicationOrder {
             order_id,
+            provider_id: providers[0],
             completion_epoch: 45,
         };
         let err = complete
@@ -11482,7 +11671,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn complete_replication_order_allows_permissioned_non_owner_governance() {
+    fn complete_replication_order_rejects_permissioned_non_owner_governance() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
@@ -11511,19 +11700,26 @@ mod sorafs_tests {
 
         let complete = CompleteReplicationOrder {
             order_id,
+            provider_id: providers[0],
             completion_epoch: 10,
         };
-        complete.execute(&bob(), &mut stx).expect(
-            "permissioned governance completion must not require one owner for all providers",
-        );
+        let error = complete
+            .execute(&bob(), &mut stx)
+            .expect_err("governance cannot impersonate the assigned provider owner");
         assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("must be authorized by its registered owner")
+        ));
+        assert_eq!(
             stx.world
                 .replication_orders
                 .get(&order_id)
                 .expect("order stored")
                 .status,
-            ReplicationOrderStatus::Completed(10)
-        ));
+            ReplicationOrderStatus::Pending
+        );
     }
 
     #[test]
@@ -11560,6 +11756,7 @@ mod sorafs_tests {
 
         let complete = CompleteReplicationOrder {
             order_id,
+            provider_id: providers[0],
             completion_epoch: 12,
         };
         complete

@@ -558,6 +558,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         {
             "case_digest_hex": DIGEST,
             "roster_hash_hex": DIGEST,
+            "catalog_digest_hex": DIGEST,
             "session_manifest_digest_hex": DIGEST,
             "watermark_metadata_digest_hex": DIGEST,
             "access_log_digest_hex": DIGEST,
@@ -574,6 +575,27 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         "environment": ENVIRONMENT,
     }
     assert len(payload["valid_e2e_runs"]) == 1
+
+
+def test_evidence_viewer_exports_gateway_catalog_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    viewer = evidence_viewer()
+    viewer["gateway_compliance_denial_enforced"]["catalog_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "evidence-viewer.json", viewer)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 0
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    recognized_viewer = next(
+        artifact
+        for artifact in payload["recognized_artifacts"]
+        if artifact["kind"] == "evidence_viewer"
+    )
+    assert recognized_viewer["fingerprint"]["catalog_digest_hex"] == DIGEST_2
+    assert payload["valid_evidence_viewer_digest_sets"][0][
+        "catalog_digest_hex"
+    ] == DIGEST_2
 
 
 def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:

@@ -107,7 +107,7 @@ Utilisez la CLI pour obtenir des informations supplémentaires.【crates/iroha_t
 2. Utiliser la base64 :
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -174,7 +174,7 @@ Utilisez la CLI pour obtenir des informations supplémentaires.【crates/iroha_t
   و`por_sampling_returns_verified_proofs`.
 - يجب أن تتابع لوحات المتابعة:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` et `torii_sorafs_storage_fetch_inflight`
   - عدادات نجاح/فشل PoR المعروضة عبر `/v1/sorafs/capacity/state`
   - محاولات نشر التسوية عبر `sorafs_node_deal_publish_total{result=success|failure}`يضمن اتباع هذه التدريبات أن عامل التخزين المضمّن قادر على إدخال البيانات،
 والصمود أمام عمليات إعادة التشغيل، واحترام الحصص المضبوطة، وتوليد إثباتات PoR

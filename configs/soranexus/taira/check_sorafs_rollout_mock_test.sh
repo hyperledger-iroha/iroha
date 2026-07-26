@@ -189,10 +189,6 @@ case "${method} ${url}" in
     status="400"
     body='{"error":"empty capacity declaration"}'
     ;;
-  "POST https://taira.sora.org/v1/sorafs/capacity/schedule")
-    status="400"
-    body='{"error":"empty capacity schedule"}'
-    ;;
   "GET https://taira.sora.org/v1/sorafs/capacity/state")
     if [[ "$scenario" == "capacity_state_503" ]]; then
       status="503"
@@ -348,10 +344,7 @@ SH
 set -euo pipefail
 
 spec=""
-request_out=""
-authority=""
-private_key=""
-private_key_file=""
+summary_out=""
 argv_log="${MOCK_STATE_DIR:?}/sorafs_manifest_builder_argv"
 printf '%s\n' "$*" >"$argv_log"
 
@@ -360,18 +353,8 @@ for arg in "$@"; do
     --spec=*)
       spec="${arg#--spec=}"
       ;;
-    --request-out=*)
-      request_out="${arg#--request-out=}"
-      ;;
-    --authority=*)
-      authority="${arg#--authority=}"
-      ;;
-    --private-key=*)
-      echo "private key must be passed through --private-key-file in rollout tests" >&2
-      exit 1
-      ;;
-    --private-key-file=*)
-      private_key_file="${arg#--private-key-file=}"
+    --json-out=*)
+      summary_out="${arg#--json-out=}"
       ;;
   esac
 done
@@ -380,31 +363,31 @@ done
   echo "unexpected sorafs_manifest_builder invocation: $*" >&2
   exit 1
 }
-[[ -n "$spec" && -n "$request_out" && -n "$authority" && -n "$private_key_file" ]] || {
+[[ -n "$spec" && -n "$summary_out" ]] || {
   echo "missing capacity declaration arguments" >&2
   exit 1
 }
 
-python3 - "$spec" "$request_out" "$authority" "$private_key_file" "${MOCK_STATE_DIR:?}" <<'PY'
+python3 - "$spec" "$summary_out" "${MOCK_STATE_DIR:?}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-spec_path, request_path, authority, private_key_file, state_dir = sys.argv[1:]
-private_key = Path(private_key_file).read_text(encoding="utf-8").strip()
+spec_path, summary_path, state_dir = sys.argv[1:]
 with open(spec_path, "r", encoding="utf-8") as handle:
     spec = json.load(handle)
 provider_id = spec["provider_id_hex"]
+record_window = spec["record_window"]
 Path(state_dir, "provider_id").write_text(provider_id, encoding="utf-8")
-Path(state_dir, "authority_seen").write_text(authority, encoding="utf-8")
-Path(state_dir, "private_key_seen").write_text(private_key, encoding="utf-8")
-Path(state_dir, "private_key_file_seen").write_text(private_key_file, encoding="utf-8")
-with open(request_path, "w", encoding="utf-8") as handle:
+with open(summary_path, "w", encoding="utf-8") as handle:
     json.dump(
         {
             "provider_id_hex": provider_id,
-            "authority": authority,
-            "payload": spec,
+            "declaration_b64": "fixture",
+            "registered_epoch": record_window["registered_epoch"],
+            "valid_from_epoch": record_window["valid_from_epoch"],
+            "valid_until_epoch": record_window["valid_until_epoch"],
+            "metadata": spec.get("metadata", {}),
         },
         handle,
         sort_keys=True,
@@ -417,28 +400,28 @@ SH
 #!/usr/bin/env bash
 set -euo pipefail
 
-request=""
+summary=""
 for arg in "$@"; do
   case "$arg" in
-    --request=*)
-      request="${arg#--request=}"
+    --summary=*)
+      summary="${arg#--summary=}"
       ;;
   esac
 done
 
-[[ "$1" == "capacity-declaration-request" && -n "$request" ]] || {
+[[ "$1" == "capacity-declaration" && -n "$summary" ]] || {
   echo "unexpected sorafs_tx_stdin_builder invocation: $*" >&2
   exit 1
 }
 
-python3 - "$request" <<'PY'
+python3 - "$summary" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    request = json.load(handle)
+    summary = json.load(handle)
 
-print(json.dumps({"isi": "sorafs_capacity_declaration", "request": request}, sort_keys=True))
+print(json.dumps({"isi": "sorafs_capacity_declaration", "summary": summary}, sort_keys=True))
 PY
 SH
 
@@ -586,7 +569,7 @@ run_implicit_bootstrap_success_case() {
   test -f "${root}/state/fee_program_seen"
   test -f "$config_path"
   ! grep -q 'BOOTSTRAPPRIVATEKEY' "${root}/state/sorafs_manifest_builder_argv"
-  grep -q 'BOOTSTRAPPRIVATEKEY' "${root}/state/private_key_seen"
+  ! grep -Eq -- '--(request-out|authority|private-key)' "${root}/state/sorafs_manifest_builder_argv"
 }
 
 run_custom_http_timeouts_are_passed_to_curl_case() {
@@ -633,9 +616,8 @@ run_explicit_config_is_preserved_case() {
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test ! -f "${root}/state/bootstrap_seen"
   test -f "${root}/state/fee_program_seen"
-  grep -q 'EXPLICITPRIVATEKEY' "${root}/state/private_key_seen"
   ! grep -q 'EXPLICITPRIVATEKEY' "${root}/state/sorafs_manifest_builder_argv"
-  test -f "${root}/state/private_key_file_seen"
+  ! grep -Eq -- '--(request-out|authority|private-key)' "${root}/state/sorafs_manifest_builder_argv"
 }
 
 run_explicit_missing_config_fails_without_bootstrap_case() {

@@ -33,6 +33,17 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
 
+def reviewed_context_args(payload: dict) -> list[str]:
+    return [
+        "--deployment-id",
+        payload["deployment_id"],
+        "--environment",
+        payload["environment"],
+        "--generated-at-unix",
+        str(payload["generated_at_unix"]),
+    ]
+
+
 def run_builder(
     root: Path,
     payload: dict,
@@ -51,6 +62,7 @@ def run_builder(
             str(probe),
             "--out",
             str(out),
+            *reviewed_context_args(payload),
             "--now-unix",
             str(FIXTURES.NOW),
             *(extra or []),
@@ -80,6 +92,7 @@ def test_builder_accepts_every_canonical_observed_kind(
 
 def test_builder_requires_an_input_probe_artifact(tmp_path: Path) -> None:
     out = tmp_path / "out.json"
+    payload = FIXTURES.catalog_promotion()
     assert (
         MODULE.main(
             [
@@ -87,6 +100,7 @@ def test_builder_requires_an_input_probe_artifact(tmp_path: Path) -> None:
                 "catalog_promotion",
                 "--out",
                 str(out),
+                *reviewed_context_args(payload),
                 "--now-unix",
                 str(FIXTURES.NOW),
             ]
@@ -192,7 +206,8 @@ def test_probe_symlink_is_rejected(tmp_path: Path) -> None:
     target = tmp_path / "target.json"
     probe = tmp_path / "probe.json"
     out = tmp_path / "out.json"
-    write_json(target, FIXTURES.catalog_promotion())
+    payload = FIXTURES.catalog_promotion()
+    write_json(target, payload)
     probe.symlink_to(target)
     code = MODULE.main(
         [
@@ -202,6 +217,7 @@ def test_probe_symlink_is_rejected(tmp_path: Path) -> None:
             str(probe),
             "--out",
             str(out),
+            *reviewed_context_args(payload),
             "--now-unix",
             str(FIXTURES.NOW),
         ]
@@ -210,11 +226,12 @@ def test_probe_symlink_is_rejected(tmp_path: Path) -> None:
     assert not out.exists()
 
 
-def test_output_symlink_is_rejected(tmp_path: Path) -> None:
+def test_output_symlink_is_rejected(tmp_path: Path, capsys) -> None:
     probe = tmp_path / "probe.json"
     target = tmp_path / "target.json"
     out = tmp_path / "out.json"
-    write_json(probe, FIXTURES.catalog_promotion())
+    payload = FIXTURES.catalog_promotion()
+    write_json(probe, payload)
     target.write_text("unchanged", encoding="utf-8")
     out.symlink_to(target)
     code = MODULE.main(
@@ -225,11 +242,15 @@ def test_output_symlink_is_rejected(tmp_path: Path) -> None:
             str(probe),
             "--out",
             str(out),
+            *reviewed_context_args(payload),
             "--now-unix",
             str(FIXTURES.NOW),
         ]
     )
     assert code == 2
+    captured = capsys.readouterr()
+    assert "--out" in captured.err
+    assert "must not be a symlink" in captured.err
     assert target.read_text(encoding="utf-8") == "unchanged"
 
 
@@ -245,6 +266,7 @@ def test_output_must_not_replace_probe(tmp_path: Path) -> None:
             str(probe),
             "--out",
             str(probe),
+            *reviewed_context_args(payload),
             "--now-unix",
             str(FIXTURES.NOW),
         ]
@@ -257,7 +279,8 @@ def test_response_file_arguments_are_supported(tmp_path: Path) -> None:
     probe = tmp_path / "probe.json"
     out = tmp_path / "out.json"
     args_file = tmp_path / "builder.args"
-    write_json(probe, FIXTURES.catalog_promotion())
+    payload = FIXTURES.catalog_promotion()
+    write_json(probe, payload)
     args_file.write_text(
         "\n".join(
             [
@@ -267,6 +290,7 @@ def test_response_file_arguments_are_supported(tmp_path: Path) -> None:
                 str(probe),
                 "--out",
                 str(out),
+                *reviewed_context_args(payload),
                 "--now-unix",
                 str(FIXTURES.NOW),
             ]
@@ -288,3 +312,98 @@ def test_output_is_deterministic(tmp_path: Path) -> None:
     code, second = run_builder(second_root, payload)
     assert code == 0
     assert second.read_bytes() == first_bytes
+
+
+def test_unreviewed_deployment_id_fails_before_write(
+    tmp_path: Path, capsys
+) -> None:
+    payload = FIXTURES.catalog_promotion()
+    code, out = run_builder(
+        tmp_path,
+        payload,
+        extra=["--deployment-id", "sorafs-dev-20260701"],
+    )
+    assert code == 2
+    assert "must not contain non-reviewed deployment markers" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_unreviewed_environment_fails_before_write(
+    tmp_path: Path, capsys
+) -> None:
+    payload = FIXTURES.catalog_promotion()
+    code, out = run_builder(
+        tmp_path,
+        payload,
+        extra=["--environment", "dev"],
+    )
+    assert code == 2
+    assert "--environment must be one of" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
+    tmp_path: Path,
+) -> None:
+    payload = FIXTURES.catalog_promotion()
+    code, out = run_builder(
+        tmp_path,
+        payload,
+        extra=["--kind", "catalog_promotion"],
+    )
+    assert code == 2
+    assert not out.exists()
+
+    unknown_root = tmp_path / "unknown"
+    unknown_root.mkdir()
+    code, out = run_builder(
+        unknown_root,
+        payload,
+        extra=["--kind", "removed_feed_promotion"],
+    )
+    assert code == 2
+    assert not out.exists()
+
+
+def test_output_directory_is_rejected(tmp_path: Path, capsys) -> None:
+    payload = FIXTURES.catalog_promotion()
+    probe = tmp_path / "probe.json"
+    out = tmp_path / "out"
+    write_json(probe, payload)
+    out.mkdir()
+    code = MODULE.main(
+        [
+            "--kind",
+            "catalog_promotion",
+            "--probe-artifact",
+            str(probe),
+            "--out",
+            str(out),
+            *reviewed_context_args(payload),
+            "--now-unix",
+            str(FIXTURES.NOW),
+        ]
+    )
+    assert code == 2
+    captured = capsys.readouterr()
+    assert "--out" in captured.err
+    assert "must not be a directory" in captured.err
+
+
+def test_exported_canary_kind_inventory_matches_checker() -> None:
+    assert MODULE.CANARY_KINDS == tuple(MODULE.KIND_BY_NAME)
+
+
+def test_generated_canaries_pass_full_gateway_gate(tmp_path: Path) -> None:
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    for kind, builder in FIXTURES.BUILDERS.items():
+        build_root = tmp_path / kind
+        build_root.mkdir()
+        code, output = run_builder(build_root, builder(), kind=kind)
+        assert code == 0
+        output.replace(evidence_root / f"{kind}.json")
+
+    code, summary = FIXTURES.run_gate(evidence_root)
+    assert code == 0
+    assert summary["status"] == "ready"

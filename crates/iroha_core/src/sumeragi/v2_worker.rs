@@ -2197,12 +2197,14 @@ struct ExactTargetSource {
 /// reservation geometry follows the frozen semantic target set. Every
 /// target/class occurrence is charged independently, preventing one relay from
 /// multiplying credits and one multi-target fanout from being undercounted.
-/// Route-free sidecar progress uses a distinct kind so one parked reply source
-/// cannot consume the frozen target's sole topology-delivery opportunity.
+/// Route-free Request/Close progress and reproducible exact-reply responder
+/// controls use distinct kinds, so ordinary parked output cannot consume either
+/// bounded progress opportunity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ExactTargetReservationKind {
     Reliable,
     SidecarTopologyProgress,
+    SidecarReplyControl,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -3359,6 +3361,10 @@ impl PendingExactFanout {
     ) -> ExactTargetReservation {
         let kind = if self.certified_sidecar_topology_progress_target() == Some(semantic_target) {
             ExactTargetReservationKind::SidecarTopologyProgress
+        } else if self.retryable_certified_sidecar_responder_control_target()
+            == Some(semantic_target)
+        {
+            ExactTargetReservationKind::SidecarReplyControl
         } else {
             ExactTargetReservationKind::Reliable
         };
@@ -3973,11 +3979,10 @@ impl PendingExactFanout {
         )
     }
 
-    /// Return the frozen-target reservation identity for route-free sidecar progress.
+    /// Return the frozen-target reservation identity for topology-routed sidecar progress.
     ///
-    /// Requester-owned Request/Close output and responder-owned GenerationHint
-    /// control each need one topology delivery opportunity independent of a
-    /// parked reply source.
+    /// Requester-owned Request/Close output needs one topology delivery
+    /// opportunity independent of a parked reply source.
     fn certified_sidecar_topology_progress_target(&self) -> Option<&PeerId> {
         let target = match (self.messages.as_slice(), &self.rollover_claim) {
             (
@@ -3994,14 +3999,11 @@ impl PendingExactFanout {
             (
                 [NetworkMessage::CertifiedMergeSidecar(message)],
                 ExactOutputRolloverClaim::CertifiedSidecarControl { target, .. },
-            ) if matches!(
-                message.as_ref(),
-                CertifiedMergeSidecarMessage::Close(_)
-                    | CertifiedMergeSidecarMessage::GenerationHint(_)
-            ) && matches!(
-                self.targets.as_slice(),
-                [route] if matches!(&route.route, ExactTargetRoute::Topology)
-            ) =>
+            ) if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Close(_))
+                && matches!(
+                    self.targets.as_slice(),
+                    [route] if matches!(&route.route, ExactTargetRoute::Topology)
+                ) =>
             {
                 target
             }
@@ -4019,20 +4021,17 @@ impl PendingExactFanout {
     /// so retaining more than one for the same semantic target cannot improve
     /// delivery progress. Controls for distinct targets remain independent.
     /// Requester-owned `Request`/`Close` output remains non-droppable and is
-    /// never deduplicated; `CloseAck` retains its exact reply route,
-    /// `GenerationHint` uses topology output, and responder `Chunk` output
-    /// retains ordinary exact ownership.
+    /// never deduplicated; `CloseAck` and `GenerationHint` retain their exact
+    /// reply routes, and responder `Chunk` output retains ordinary exact
+    /// ownership.
     fn retryable_certified_sidecar_responder_control_target(&self) -> Option<&PeerId> {
         let route_shape_is_valid = match self.messages.as_slice() {
             [NetworkMessage::CertifiedMergeSidecar(message)] => match message.as_ref() {
-                CertifiedMergeSidecarMessage::CloseAck(_) => self
+                CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::GenerationHint(_) => self
                     .targets
                     .iter()
                     .all(|route| matches!(&route.route, ExactTargetRoute::Reply(_))),
-                CertifiedMergeSidecarMessage::GenerationHint(_) => self
-                    .targets
-                    .iter()
-                    .all(|route| matches!(&route.route, ExactTargetRoute::Topology)),
                 CertifiedMergeSidecarMessage::Request(_)
                 | CertifiedMergeSidecarMessage::Close(_)
                 | CertifiedMergeSidecarMessage::Chunk(_) => false,
@@ -4263,14 +4262,16 @@ struct PendingExactOutput {
     /// Every outstanding authenticated source mapped to its FIFO-ordered owners.
     source_fifo_owners: BTreeMap<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>,
     /// Ownership-unit bound: shared units, one unit for every frozen
-    /// target/class pair, and one sidecar topology-progress unit per frozen target.
+    /// target/class pair, one sidecar topology-progress unit, and one
+    /// reproducible exact-reply control unit per frozen target.
     ownership_unit_capacity: usize,
     /// Units available to duplicate or non-frozen target/class ownership.
     shared_ownership_unit_capacity: usize,
     /// Immutable validator reservation geometry for this height context.
     ///
-    /// The set includes the three ordinary reliable classes and one distinct
-    /// sidecar topology-progress reservation for each frozen target.
+    /// The set includes the three ordinary reliable classes plus distinct
+    /// sidecar topology-progress and exact-reply control reservations for each
+    /// frozen target.
     reserved_target_classes: BTreeSet<ExactTargetReservation>,
     /// Aggregate outstanding multiplicity for each semantic target/class/kind unit.
     reservation_owner_counts: BTreeMap<ExactTargetReservation, usize>,
@@ -4309,10 +4310,18 @@ impl PendingExactOutput {
                     .into_iter()
                     .chain([ExactTargetReservation {
                         semantic_target: semantic_target.clone(),
-                        // Route-free certified sidecar progress is canonical
+                        // Route-free Request/Close progress is canonical
                         // Consensus traffic and therefore uses the Lane class.
                         class: ExactOutputClass::Lane,
                         kind: ExactTargetReservationKind::SidecarTopologyProgress,
+                    }])
+                    .chain([ExactTargetReservation {
+                        semantic_target: semantic_target.clone(),
+                        // Stateless responder controls retain exact reply
+                        // authority but cannot be starved by ordinary Lane
+                        // output for the same semantic target.
+                        class: ExactOutputClass::Lane,
+                        kind: ExactTargetReservationKind::SidecarReplyControl,
                     }])
             })
             .collect::<BTreeSet<_>>();
@@ -5402,8 +5411,8 @@ impl PendingExactOutput {
             // At most one reproducible responder control per semantic target
             // may own the worker corridor. Returning `Owned` consumes the lane
             // effect without retaining another distinct control. An exact
-            // reply retry was coalesced above first; a route-free Hint remains
-            // reproducible from its exact stale trigger.
+            // reply retry was coalesced above first; both response controls
+            // remain reproducible from their exact stale triggers.
             return Ok(ExactFanoutOwnership::Owned);
         }
         let ownership_additions = fanout.outstanding_reservation_counts()?;
@@ -8432,38 +8441,6 @@ impl ProductionV2Services {
         })
     }
 
-    /// Test whether the exact-output corridor retained a route-free
-    /// GenerationHint for the expected semantic requester.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn retains_route_free_generation_hint_for_test(
-        &self,
-        expected: &PeerId,
-    ) -> Result<bool, String> {
-        self.lock_pending_exact_output().map(|pending| {
-            pending.fanouts.iter().any(|fanout| {
-                matches!(
-                    (
-                        fanout.messages.as_slice(),
-                        fanout.peers.as_slice(),
-                        fanout.targets.as_slice(),
-                    ),
-                    (
-                        [NetworkMessage::CertifiedMergeSidecar(message)],
-                        [peer],
-                        [PendingExactTarget {
-                            route: ExactTargetRoute::Topology,
-                            ..
-                        }],
-                    ) if peer == expected
-                        && matches!(
-                            message.as_ref(),
-                            CertifiedMergeSidecarMessage::GenerationHint(_)
-                        )
-                )
-            })
-        })
-    }
-
     #[cfg(test)]
     /// Return whether fail-stop output handling requires a process restart.
     pub(in crate::sumeragi) fn exact_output_restart_required_for_test(&self) -> bool {
@@ -9032,9 +9009,9 @@ impl ProductionV2Services {
                 } => {
                     let valid = match message.as_ref() {
                         CertifiedMergeSidecarMessage::Request(_)
-                        | CertifiedMergeSidecarMessage::Close(_)
-                        | CertifiedMergeSidecarMessage::GenerationHint(_) => reply_routes.is_none(),
+                        | CertifiedMergeSidecarMessage::Close(_) => reply_routes.is_none(),
                         CertifiedMergeSidecarMessage::CloseAck(_)
+                        | CertifiedMergeSidecarMessage::GenerationHint(_)
                         | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
                     };
                     if !valid {
@@ -9540,12 +9517,12 @@ impl ProductionV2Services {
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         let route_shape_is_valid = match message.as_ref() {
-            CertifiedMergeSidecarMessage::Request(_)
-            | CertifiedMergeSidecarMessage::Close(_)
-            | CertifiedMergeSidecarMessage::GenerationHint(_) => reply_routes.is_none(),
-            CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_) => {
-                reply_routes.is_some()
+            CertifiedMergeSidecarMessage::Request(_) | CertifiedMergeSidecarMessage::Close(_) => {
+                reply_routes.is_none()
             }
+            CertifiedMergeSidecarMessage::CloseAck(_)
+            | CertifiedMergeSidecarMessage::GenerationHint(_)
+            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
         };
         if !route_shape_is_valid {
             return Err(
@@ -11217,7 +11194,11 @@ pub(super) mod tests {
         message: CertifiedMergeSidecarMessage,
     ) -> PendingExactFanout {
         let message_hash = HashOf::new(&message);
-        let reply_control = matches!(&message, CertifiedMergeSidecarMessage::CloseAck(_));
+        let reply_control = matches!(
+            &message,
+            CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::GenerationHint(_)
+        );
         let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(message));
         let claim = ExactOutputRolloverClaim::CertifiedSidecarControl {
             scope,
@@ -11302,62 +11283,66 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn close_ack_retry_coalesces_alternate_return_route() {
+    fn responder_control_retry_coalesces_alternate_return_route() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
-        let message = certified_sidecar_close_ack(&service.local_peer, &peer, 17);
-        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
-        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
-        let first_route = routes.mint_via(peer.clone(), hub_a);
-        let second_route = routes.mint_via(peer.clone(), hub_b);
-        let fanout_for = |message: CertifiedMergeSidecarMessage, route: NetworkReplyRoute| {
-            let message_hash = HashOf::new(&message);
-            PendingExactFanout::claimed_with_reply_routes(
-                vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(message))],
-                peer.clone(),
-                NetworkReplyRoutes::try_from_route(route)
-                    .expect("worker retry keeps one actor-owned return route"),
-                ExactOutputRolloverClaim::CertifiedSidecarControl {
-                    scope: service.exact_output_scope(),
-                    target: peer.clone(),
-                    message_hash,
-                },
-            )
-            .expect("valid actor-owned worker sidecar-control rollover claim")
-            .expect("one exact actor-owned worker sidecar-control fanout")
-        };
-        let first = fanout_for(message.clone(), first_route);
-        let second = fanout_for(message, second_route);
-        let ExactTargetRoute::Reply(first_route) = &first.targets[0].route else {
-            unreachable!("first responder control keeps an exact reply route")
-        };
-        let ExactTargetRoute::Reply(second_route) = &second.targets[0].route else {
-            unreachable!("second responder control keeps an exact reply route")
-        };
-        assert!(!first_route.same_delivery(second_route));
-        let first_route = first_route.clone();
-        let second_route = second_route.clone();
-        let mut pending = PendingExactOutput::new(4, 1, 2, std::slice::from_ref(&peer))
-            .expect("two independent control sources fit the bounded corridor");
+        for message in [
+            certified_sidecar_close_ack(&service.local_peer, &peer, 17),
+            certified_sidecar_generation_hint(&service.local_peer, &peer, 18),
+        ] {
+            let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+            let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+            let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+            let first_route = routes.mint_via(peer.clone(), hub_a);
+            let second_route = routes.mint_via(peer.clone(), hub_b);
+            let fanout_for = |message: CertifiedMergeSidecarMessage, route: NetworkReplyRoute| {
+                let message_hash = HashOf::new(&message);
+                PendingExactFanout::claimed_with_reply_routes(
+                    vec![NetworkMessage::CertifiedMergeSidecar(Arc::new(message))],
+                    peer.clone(),
+                    NetworkReplyRoutes::try_from_route(route)
+                        .expect("worker retry keeps one actor-owned return route"),
+                    ExactOutputRolloverClaim::CertifiedSidecarControl {
+                        scope: service.exact_output_scope(),
+                        target: peer.clone(),
+                        message_hash,
+                    },
+                )
+                .expect("valid actor-owned worker sidecar-control rollover claim")
+                .expect("one exact actor-owned worker sidecar-control fanout")
+            };
+            let first = fanout_for(message.clone(), first_route);
+            let second = fanout_for(message, second_route);
+            let ExactTargetRoute::Reply(first_route) = &first.targets[0].route else {
+                unreachable!("first responder control keeps an exact reply route")
+            };
+            let ExactTargetRoute::Reply(second_route) = &second.targets[0].route else {
+                unreachable!("second responder control keeps an exact reply route")
+            };
+            assert!(!first_route.same_delivery(second_route));
+            let first_route = first_route.clone();
+            let second_route = second_route.clone();
+            let mut pending = PendingExactOutput::new(4, 1, 2, std::slice::from_ref(&peer))
+                .expect("two independent control sources fit the bounded corridor");
 
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(first),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(second),
-            Ok(ExactFanoutOwnership::Owned),
-            "exact retry must merge before same-target responder-control dedup"
-        );
-        assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.fanouts[0].targets.len(), 2);
-        assert!(pending.fanouts[0].targets.iter().any(
-            |target| matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&first_route))
-        ));
-        assert!(pending.fanouts[0].targets.iter().any(
-            |target| matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&second_route))
-        ));
+            assert_eq!(
+                pending.enqueue_owned_reply_transfer(first),
+                Ok(ExactFanoutOwnership::Owned)
+            );
+            assert_eq!(
+                pending.enqueue_owned_reply_transfer(second),
+                Ok(ExactFanoutOwnership::Owned),
+                "exact retry must merge before same-target responder-control dedup"
+            );
+            assert_eq!(pending.fanouts.len(), 1);
+            assert_eq!(pending.fanouts[0].targets.len(), 2);
+            assert!(pending.fanouts[0].targets.iter().any(
+                |target| matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&first_route))
+            ));
+            assert!(pending.fanouts[0].targets.iter().any(
+                |target| matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&second_route))
+            ));
+        }
     }
 
     #[test]
@@ -11420,6 +11405,71 @@ pub(super) mod tests {
         pending
             .poll_reply_flushes()
             .expect("consume the ordinary CloseAck writer flush");
+        assert!(pending.fanouts.is_empty());
+        assert!(pending.admitted_sidecar_chunks.is_empty());
+    }
+
+    #[test]
+    fn generation_hint_uses_ordinary_reply_flush_ownership() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let fanout = certified_sidecar_control_fanout(
+            service.exact_output_scope(),
+            &peer,
+            certified_sidecar_generation_hint(&service.local_peer, &peer, 20),
+        );
+        let ExactTargetRoute::Reply(expected_route) = &fanout.targets[0].route else {
+            unreachable!("GenerationHint keeps an exact reply route")
+        };
+        let expected_route = expected_route.clone();
+        let mut pending = PendingExactOutput::new(2, 1, 1, std::slice::from_ref(&peer))
+            .expect("one exact GenerationHint fits");
+        assert_eq!(
+            pending.enqueue_owned_reply_transfer(fanout),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+
+        let mut flush_control = None;
+        let _ = pending
+            .drive_with_budget_ack(1, |post, _ticket, route, timeout_attempt| {
+                let ExactTargetRoute::Reply(route) = route else {
+                    unreachable!("GenerationHint must not use topology output")
+                };
+                assert!(route.same_delivery(&expected_route));
+                assert!(matches!(
+                    &post.data,
+                    NetworkMessage::CertifiedMergeSidecar(message)
+                        if matches!(
+                            message.as_ref(),
+                            CertifiedMergeSidecarMessage::GenerationHint(_)
+                        )
+                ));
+                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply_at_attempt(
+                    &post,
+                    route,
+                    timeout_attempt,
+                );
+                flush_control = Some(control);
+                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
+            })
+            .expect("retain the ordinary GenerationHint writer-flush receipt");
+        assert!(pending.admitted_sidecar_chunks.is_empty());
+        assert!(
+            pending.fanouts[0].targets[0]
+                .pending_flush
+                .as_ref()
+                .is_some_and(|flush| flush.sidecar_admission.is_none()),
+            "GenerationHint must not enter chunk-admission ownership"
+        );
+        assert!(
+            flush_control
+                .as_mut()
+                .expect("the exact reply minted one writer receipt")
+                .flush()
+        );
+        pending
+            .poll_reply_flushes()
+            .expect("consume the ordinary GenerationHint writer flush");
         assert!(pending.fanouts.is_empty());
         assert!(pending.admitted_sidecar_chunks.is_empty());
     }
@@ -11499,7 +11549,7 @@ pub(super) mod tests {
         assert_eq!(
             pending.drive_with(|post, ticket, route| {
                 assert!(ticket.is_none());
-                assert!(matches!(route, ExactTargetRoute::Topology));
+                assert!(matches!(route, ExactTargetRoute::Reply(_)));
                 let NetworkMessage::CertifiedMergeSidecar(message) = post.data else {
                     unreachable!("drained worker control keeps its exact sidecar message")
                 };
@@ -11682,7 +11732,7 @@ pub(super) mod tests {
         .expect("one unrelated exact reply fanout");
         let frozen = vec![peer_a.clone(), peer_b.clone()];
         let mut pending = PendingExactOutput::new(3, 1, 1, &frozen)
-            .expect("ordinary and sidecar topology-progress reservations for each frozen target");
+            .expect("ordinary and sidecar progress reservations for each frozen target");
         assert_eq!(
             pending.enqueue_owned_reply_transfer(parked_candidate),
             Ok(ExactFanoutOwnership::Owned)
@@ -11718,7 +11768,7 @@ pub(super) mod tests {
         assert_eq!(
             pending.drive_with(|post, ticket, route| {
                 assert!(ticket.is_none());
-                assert!(matches!(route, ExactTargetRoute::Topology));
+                assert!(matches!(route, ExactTargetRoute::Reply(_)));
                 admitted.push(post.peer_id);
                 Ok(())
             }),
@@ -11734,54 +11784,9 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn generation_hint_uses_route_free_topology_progress_ownership() {
+    fn generation_hint_uses_exact_reply_ownership_without_topology_fallback() {
         let (service, _) = fixture();
         let target = service.context.roster[1].validator.clone();
-        let blocker = PeerId::new(KeyPair::random().public_key().clone());
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
-        let parked_route = routes.mint_via(target.clone(), hub);
-        let parked_reply = PendingExactFanout::new_with_reply_routes(
-            vec![merge_share_message(
-                b"same target parked reply before sidecar progress",
-            )],
-            target.clone(),
-            NetworkReplyRoutes::try_from_route(parked_route.clone())
-                .expect("one live same-target reply route"),
-        )
-        .expect("one same-target reply fanout");
-        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
-            .expect("one shared unit plus frozen reliable and topology-progress reservations");
-        assert_eq!(
-            pending.enqueue_owned_reply_transfer(parked_reply),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        assert!(routes.retire(&parked_route));
-        assert_eq!(
-            pending.drive_with(|_post, _ticket, _route| {
-                panic!("the retired same-target reply must park before actor admission")
-            }),
-            Ok(None)
-        );
-        assert!(pending.fanouts[0].targets[0].parked);
-        assert_eq!(pending.shared_ownership_units, 0);
-
-        let shared_blocker = PendingExactFanout::new(
-            vec![merge_share_message(
-                b"non-frozen blocker saturates shared ownership",
-            )],
-            vec![blocker.clone()],
-        )
-        .expect("one non-frozen blocking fanout");
-        assert_eq!(
-            pending.enqueue(shared_blocker),
-            Ok(ExactFanoutOwnership::Owned)
-        );
-        assert_eq!(
-            pending.shared_ownership_units, 1,
-            "the unrelated non-frozen target consumes the sole shared unit"
-        );
-
         let control = certified_sidecar_control_fanout(
             service.exact_output_scope(),
             &target,
@@ -11789,44 +11794,106 @@ pub(super) mod tests {
         );
         assert_eq!(
             control.certified_sidecar_topology_progress_target(),
-            Some(&target),
-            "GenerationHint is route-free Consensus control"
+            None,
+            "GenerationHint must not consume topology-progress ownership"
         );
         assert!(
             matches!(
                 control.targets.as_slice(),
                 [PendingExactTarget {
-                    route: ExactTargetRoute::Topology,
+                    route: ExactTargetRoute::Reply(_),
                     ..
                 }]
             ),
-            "GenerationHint must not retain the triggering request route"
+            "GenerationHint must retain an exact reply route"
         );
-        assert_eq!(
-            pending.can_enqueue(&control),
-            Ok(true),
-            "the frozen target's topology-progress reservation is independent of reply pressure"
-        );
+        assert!(control.is_retryable_certified_sidecar_responder_control_fanout());
+
+        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
+            .expect("one exact generation Hint fits its responder-control reservation");
+        assert_eq!(pending.can_enqueue(&control), Ok(true));
         assert_eq!(pending.enqueue(control), Ok(ExactFanoutOwnership::Owned));
-        assert_eq!(pending.ownership_units, 3);
-        assert_eq!(pending.shared_ownership_units, 1);
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 0);
         assert_eq!(
             pending
                 .reservation_owner_counts
                 .get(&ExactTargetReservation {
                     semantic_target: target.clone(),
                     class: ExactOutputClass::Lane,
-                    kind: ExactTargetReservationKind::Reliable,
+                    kind: ExactTargetReservationKind::SidecarReplyControl,
                 }),
             Some(&1)
         );
+        assert!(
+            !pending
+                .reservation_owner_counts
+                .contains_key(&ExactTargetReservation {
+                    semantic_target: target.clone(),
+                    class: ExactOutputClass::Lane,
+                    kind: ExactTargetReservationKind::SidecarTopologyProgress,
+                })
+        );
+
+        let blocker = PeerId::new(KeyPair::random().public_key().clone());
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
+        let parked_route = routes.mint_via(target.clone(), hub);
+        let parked_reply = PendingExactFanout::new_with_reply_routes(
+            vec![merge_share_message(
+                b"same-target reliable reply before exact GenerationHint",
+            )],
+            target.clone(),
+            NetworkReplyRoutes::try_from_route(parked_route.clone())
+                .expect("one live same-target reply route"),
+        )
+        .expect("one same-target reliable reply");
+        let mut saturated = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
+            .expect("one shared unit plus frozen responder-control reservation");
         assert_eq!(
-            pending
+            saturated.enqueue_owned_reply_transfer(parked_reply),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        assert!(routes.retire(&parked_route));
+        assert_eq!(
+            saturated.drive_with(|_post, _ticket, _route| {
+                panic!("the retired same-target reliable reply must park")
+            }),
+            Ok(None)
+        );
+        assert_eq!(
+            saturated.enqueue(
+                PendingExactFanout::new(
+                    vec![merge_share_message(
+                        b"non-frozen blocker saturates shared ownership before Hint",
+                    )],
+                    vec![blocker],
+                )
+                .expect("one non-frozen blocking fanout"),
+            ),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        assert_eq!(saturated.shared_ownership_units, 1);
+        let hint = certified_sidecar_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_generation_hint(&service.local_peer, &target, 252),
+        );
+        assert_eq!(
+            saturated.can_enqueue(&hint),
+            Ok(true),
+            "parked reliable output and a full shared pool cannot starve the exact Hint"
+        );
+        assert_eq!(saturated.enqueue(hint), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(saturated.ownership_units, 3);
+        assert_eq!(saturated.shared_ownership_units, 1);
+        assert_eq!(
+            saturated
                 .reservation_owner_counts
                 .get(&ExactTargetReservation {
                     semantic_target: target,
                     class: ExactOutputClass::Lane,
-                    kind: ExactTargetReservationKind::SidecarTopologyProgress,
+                    kind: ExactTargetReservationKind::SidecarReplyControl,
                 }),
             Some(&1)
         );
@@ -12052,7 +12119,7 @@ pub(super) mod tests {
         let scope = service.exact_output_scope();
         let frozen = vec![peer_a.clone(), peer_b.clone()];
         let mut pending = PendingExactOutput::new(3, 1, 1, &frozen)
-            .expect("ordinary reliable reservations for each frozen target");
+            .expect("reliable and responder-control reservations for each frozen target");
 
         for (peer, message) in [
             (
@@ -12072,7 +12139,7 @@ pub(super) mod tests {
         assert_eq!(pending.ownership_units, 2);
         assert_eq!(
             pending.shared_ownership_units, 0,
-            "one control for each frozen target consumes only its reliable frozen reservation"
+            "one control for each frozen target consumes only its reply-control reservation"
         );
 
         for ordinal in 302..334 {
@@ -12118,7 +12185,7 @@ pub(super) mod tests {
             pending.drive_with(|post, ticket, route| {
                 assert!(ticket.is_none());
                 if post.peer_id == peer_a {
-                    assert!(matches!(route, ExactTargetRoute::Topology));
+                    assert!(matches!(route, ExactTargetRoute::Reply(_)));
                     return Err(NetworkActorAdmissionError::Backpressured {
                         message: post,
                         ticket,
@@ -12143,7 +12210,7 @@ pub(super) mod tests {
         assert_eq!(
             pending.drive_with(|post, ticket, route| {
                 assert!(ticket.is_none());
-                assert!(matches!(route, ExactTargetRoute::Topology));
+                assert!(matches!(route, ExactTargetRoute::Reply(_)));
                 assert_eq!(post.peer_id, peer_a);
                 Ok(())
             }),
@@ -15435,8 +15502,8 @@ pub(super) mod tests {
         let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&validator))
             .expect("one shared slot plus frozen validator and control reservations");
         assert_eq!(pending.shared_ownership_unit_capacity, 1);
-        assert_eq!(pending.reserved_target_classes.len(), 4);
-        assert_eq!(pending.ownership_unit_capacity, 5);
+        assert_eq!(pending.reserved_target_classes.len(), 5);
+        assert_eq!(pending.ownership_unit_capacity, 6);
 
         assert_eq!(
             pending
@@ -16017,7 +16084,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn generation_hint_requires_route_free_consensus_ownership() {
+    fn generation_hint_requires_exact_reply_route_ownership() {
         let (mut service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
         service.set_exact_output_admission_hook(|post, ticket| {
@@ -16032,9 +16099,14 @@ pub(super) mod tests {
             &peer,
             401,
         ));
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
+        let reply_route = routes.mint_via(peer.clone(), hub);
+        let reply_routes = NetworkReplyRoutes::try_from_route(reply_route.clone())
+            .expect("one live GenerationHint reply route");
         let effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
             peer: peer.clone(),
-            reply_routes: None,
+            reply_routes: Some(reply_routes.clone()),
             message: Arc::clone(&hint),
         };
         assert_eq!(service.can_retain_lane_work_effect(&effect), Ok(true));
@@ -16042,16 +16114,16 @@ pub(super) mod tests {
             service
                 .post_certified_merge_sidecar_with_reply_routes(
                     peer.clone(),
-                    None,
+                    Some(reply_routes),
                     Arc::clone(&hint),
                 )
-                .expect("route-free GenerationHint has exact topology ownership"),
+                .expect("routed GenerationHint has exact reply ownership"),
             ExactFanoutOwnership::Owned
         );
         assert!(!service.output_guard.restart_required());
         let pending = service
             .lock_pending_exact_output()
-            .expect("inspect retained route-free GenerationHint");
+            .expect("inspect retained routed GenerationHint");
         assert_eq!(pending.fanouts.len(), 1);
         let fanout = &pending.fanouts[0];
         assert!(matches!(
@@ -16070,46 +16142,42 @@ pub(super) mod tests {
         assert!(matches!(
             fanout.targets.as_slice(),
             [PendingExactTarget {
-                route: ExactTargetRoute::Topology,
+                route: ExactTargetRoute::Reply(retained),
                 ..
-            }]
+            }] if retained.same_delivery(&reply_route)
         ));
+        assert_eq!(fanout.certified_sidecar_topology_progress_target(), None);
         drop(pending);
 
-        let (routed_service, _) = fixture();
-        let routed_peer = routed_service.context.roster[1].validator.clone();
-        let routed_hint = Arc::new(certified_sidecar_generation_hint(
-            &routed_service.local_peer,
-            &routed_peer,
+        let (missing_route_service, _) = fixture();
+        let missing_route_peer = missing_route_service.context.roster[1].validator.clone();
+        let missing_route_hint = Arc::new(certified_sidecar_generation_hint(
+            &missing_route_service.local_peer,
+            &missing_route_peer,
             402,
         ));
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
-        let reply_route = routes.mint_via(routed_peer.clone(), hub);
-        let reply_routes =
-            NetworkReplyRoutes::try_from_route(reply_route).expect("one live adversarial route");
-        let routed_effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
-            peer: routed_peer.clone(),
-            reply_routes: Some(reply_routes.clone()),
-            message: Arc::clone(&routed_hint),
+        let missing_route_effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer: missing_route_peer.clone(),
+            reply_routes: None,
+            message: Arc::clone(&missing_route_hint),
         };
         assert!(
-            routed_service
-                .can_retain_lane_work_effect(&routed_effect)
-                .expect_err("routed GenerationHint must fail preflight")
+            missing_route_service
+                .can_retain_lane_work_effect(&missing_route_effect)
+                .expect_err("route-free GenerationHint must fail preflight")
                 .contains("reply-route ownership")
         );
         assert!(
-            routed_service
+            missing_route_service
                 .post_certified_merge_sidecar_with_reply_routes(
-                    routed_peer,
-                    Some(reply_routes),
-                    routed_hint,
+                    missing_route_peer,
+                    None,
+                    missing_route_hint,
                 )
-                .expect_err("routed GenerationHint must fail exact-output admission")
+                .expect_err("route-free GenerationHint must fail exact-output admission")
                 .contains("reply-route ownership")
         );
-        assert!(routed_service.output_guard.restart_required());
+        assert!(missing_route_service.output_guard.restart_required());
     }
 
     #[test]

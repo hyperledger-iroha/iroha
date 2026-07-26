@@ -27,8 +27,9 @@ runtime-local `car-queue.json`
 with per-publication deterministic CARv2 segments for the canonical `.to`
 payload, JSON mirror, and BLAKE3 sidecars, and Torii exposes read-only queue
 and segment lookup endpoints for that local queue. When configured with a
-runtime-only publisher peer ID and Ed25519 signing-key path, the filesystem
-publisher also appends supported published payloads to a local signed
+publisher peer ID, opaque signer handle, canonical Ed25519 public key, and a
+matching deployment-injected runtime signer, the filesystem publisher also
+appends supported published payloads to a local signed
 `runtime-dag/` chain with `GovernanceDagBlockV1` blocks,
 `GovernanceDagHeadV1` head bytes, and a
 `sorafs.governance_dag.runtime_signed_index.v1` lookup index. Torii exposes
@@ -37,18 +38,23 @@ index. Publish-index, CAR queue, and runtime digest/kind lookup responses keep
 full match counts visible while bounding returned `entries`, `segments`, or
 `blocks` arrays through `limit` (default 50, max 500).
 
-The `sorafs_governance_dag` binary is the always-on production service. It
-loads its policy from `iroha_config`, validates the complete signed local DAG,
+The `sorafs_governance_dag` service implementation, exposed through the public
+`run_governance_dag_service` library launcher, is the always-on production
+service. It loads its policy from `iroha_config`, validates the complete signed local DAG,
 uploads and recursively pins every new block plus the signed head through a
 pinned IPFS API, verifies pin state, reads every object back, and publishes the
 head with either authenticated HTTP compare-and-swap or IPNS resolve/publish/
 resolve compare-and-swap. An authenticated checkpoint and write-ahead publish
-intent make restart recovery fail closed across partial block, head, and mirror
-publication. The same process serves a bounded public mirror, head, block,
+intent live in a deployment-injected sealed monotonic store, making restart
+recovery fail closed across partial block, head, and mirror publication. Every
+outbound control-plane request is authenticated through a rotation-aware
+runtime provider selected by an opaque configuration handle. The same process
+serves a bounded public mirror, head, block,
 node, checkpoint, health, and Prometheus surface. What remains for SF-12 is
-deployment/package integration, optional RocksDB/IPLD storage if the JSON
-mirror cannot meet deployment scale, and captured multi-instance public
-rollout evidence—not an unimplemented IPFS/IPNS publisher.
+deployment-owned HSM/authenticator/sealed-store adapters, supervised
+deployment/package integration, optional RocksDB/IPLD storage if the JSON mirror cannot meet
+deployment scale, and captured multi-instance public rollout evidence—not an
+unimplemented IPFS/IPNS publisher.
 
 Implemented foundations include:
 - `GovernanceLogNodeV1`, `GovernanceLogPayloadV1`,
@@ -65,33 +71,36 @@ Implemented foundations include:
   exposes governance log-node validation; downstream block/head FFI wrappers
   remain SDK distribution work.
 - Governance fixtures under `fixtures/sorafs_manifest/governance/` and PoR fixture generation that emits governance nodes.
-- `FilesystemGovernancePublisher` support in `crates/sorafs_node` for local
-  deal settlement, repair, GC, reconciliation, reputation, moderation ballot
-  lifecycle, appeal finance report, appeal finance weekly rollup, appeal
-  finance settlement receipt, and orderbook settlement receipt evidence.
+- Embedded `NodeHandle` Governance DAG publication in `crates/sorafs_node` for
+  finalized native settlement, repair, GC, reconciliation, reputation, moderation
+  ballot lifecycle, appeal finance, orderbook settlement, and canonical PoR
+  challenge/report evidence. The filesystem implementation and its unsigned
+  assembly constructor are crate-private; production startup requires the
+  configured publisher identity plus a matching runtime-injected signer.
   Each successful filesystem publish now updates a
   local `sorafs.governance_dag.local_publish_index.v1` `publish-index.json` with
   artifact paths, BLAKE3 digests, payload-kind counts, digest lookup maps, and
   compact labels for query surfaces, then ensures a local
   `sorafs.governance_dag.local_car_queue.v1` `car-queue.json` entry and
   assembled CARv2 segment under `car-segments/` for that publication. With
-  `sorafs.storage.governance_dag_publisher_peer_id` and
-  `sorafs.storage.governance_dag_signing_key_path` configured, deal
-  settlements, reputation snapshots, moderation ballot lifecycle events, appeal
-  finance reports, weekly rollups, appeal finance settlement receipts, and
-  orderbook settlement receipts also append to the local signed runtime DAG;
+  `sorafs.storage.governance_dag_publisher_peer_id`,
+  `sorafs.storage.governance_dag_signer_handle`, and
+  `sorafs.storage.governance_dag_publisher_public_key_hex` configured, and a
+  matching `GovernanceDagRuntimeSigner` injected through `NodeRuntimeDeps`,
+  deal settlements, reputation snapshots, moderation ballot lifecycle events,
+  appeal finance reports, weekly rollups, appeal finance settlement receipts,
+  and orderbook settlement receipts also append to the local signed runtime DAG;
   duplicate publishes are idempotent and malformed runtime DAG index state
-  fails closed. A filesystem publisher now holds an exclusive lock on its root
+  fails closed. Provider construction rejects missing or mismatched handles,
+  peer identities, public keys, malformed/weak Ed25519 points, provider
+  identity drift, invalid signatures, and signer outages without exposing
+  provider diagnostics. No signing-key file setting or compatibility loader
+  remains. A filesystem publisher now holds an exclusive lock on its root
   for its full lifetime and serializes the artifact files, publish index, CAR
   queue, and signed block/head update as one in-process publication transaction,
-  so two publishers cannot race the same mutable indexes. The configured
-  signing-key file must live outside the publisher root and be a non-symlink
-  regular file containing exactly 32 nonzero raw bytes or 64 lowercase
-  hexadecimal bytes with no whitespace; on Unix it must be owned by the
-  effective user, have exactly one hard link, and grant no group or other
-  permissions. Metadata stability is checked across the bounded read. Atomic
-  artifact replacements fsync both the file and its parent directory before
-  publication is acknowledged. The exclusive lock and mutable publish, CAR
+  so two publishers cannot race the same mutable indexes. Atomic artifact
+  replacements fsync both the file and its parent directory before publication
+  is acknowledged. The exclusive lock and mutable publish, CAR
   queue, and runtime-DAG JSON indexes reject symlinks and hard links; indexes
   are bounded at 64 MiB and must remain the same file throughout each read.
   The local filesystem sink also updates the Governance DAG backlog gauge from
@@ -123,7 +132,11 @@ Implemented foundations include:
   `SoraFsAppealFinanceWeeklyRollupV1` payloads and can aggregate validated
   finance reports into deterministic weekly dashboard rows for the filesystem
   publisher and signed runtime DAG.
-- Torii PoR filesystem publishing for challenge/report artifacts rooted at the configured `sorafs_por.governance_dag_dir`.
+- Torii PoR publishes validated `PorChallengePublicationV1` envelopes and
+  validated weekly reports through the embedded node's durable signed outbox.
+  Private coordinator, drand, and provider-VRF state is derived under the
+  single `sorafs.por.state_dir`; PoR has no governance-output directory
+  or local unsigned publisher.
 - Taikai cache governance bundle generation via `cargo xtask sorafs-taikai-cache-bundle`.
 - Local operator commands:
   - `sorafs_cli governance dag list --root <dir>` inventories local `.to`
@@ -233,8 +246,12 @@ Implemented foundations include:
 
 Still outstanding:
 - Package and supervise `sorafs_governance_dag` in the supported deployment
-  bundles, provision runtime-only checkpoint/signing credentials, and capture
-  multi-instance rollout/rollback evidence.
+  bundles, implement and provision the deployment-owned HSM signer,
+  rotation-aware IPFS/head authenticators, and sealed monotonic checkpoint-store
+  adapters, and capture multi-instance rollout/rollback evidence. The generic
+  packaged binary deliberately injects no secret provider and therefore fails
+  closed when the service is enabled; production supervisors call the public
+  `run_governance_dag_service` library entry point with the three providers.
 - Decide from measured production scale whether the bounded authenticated JSON
   mirror is sufficient; add a RocksDB/IPLD backend only if the governed
   deployment profile requires it.
@@ -362,7 +379,7 @@ block/head bytes only for payload variants already represented by
 6. Clients resolve the head, verify signatures and digests, and replay blocks back to a trusted checkpoint.
 
 The local filesystem publisher performs steps 1-2 for supported payloads when a
-runtime DAG signer is configured. `sorafs_governance_dag` performs steps 3-5,
+matching runtime DAG signer is injected. `sorafs_governance_dag` performs steps 3-5,
 and the public mirror/checkpoint API supplies step 6. Production rollout still
 has to prove this workflow against the governed public deployment.
 
@@ -370,7 +387,13 @@ has to prove this workflow against the governed public deployment.
 - All payloads must remain Norito-first; JSON should be a presentation format only.
 - Unknown payload or schema versions must fail closed.
 - Head and block signatures must be deterministic and replayable.
-- Publisher keys need HSM or sealed-secret handling before production use.
+- The embedded publisher accepts only an injected signer whose opaque handle,
+  peer identity, and canonical non-weak Ed25519 public key exactly match
+  `iroha_config`; private signing material has no configuration or file path.
+- The always-on service accepts only injected rotation-aware authenticators and
+  a sealed monotonic CAS checkpoint store whose opaque handles exactly match
+  `iroha_config`; removed key/token path fields are rejected as unknown V1
+  configuration.
 - Consumers must verify payload validation status, publisher signature, parent linkage, and head signature before trusting a block.
 - Public rollout must not persist runtime secrets such as publisher private keys or bearer tokens in repo files.
 
@@ -462,9 +485,14 @@ signature-payload stability, parent linkage, missing-parent failure, signed head
 manifest validation, and head block-count mismatch rejection. The always-on
 service additionally has mock-IPFS/IPNS adversarial coverage for pin/readback,
 CAS conflicts, response bounds, SSRF policy, checkpoint/intent corruption,
-restart recovery, mirror tamper, rollback, and fork rejection. Its opt-in Kubo
-lane covers real IPNS restart and tamper behavior. Remaining work is governed
-release-environment execution and captured deployment evidence.
+restart recovery, mirror tamper, rollback, replay/deletion, provider
+missing/mismatch/outage, per-request credential rotation, legacy secret-path
+rejection without following symlinks, and fork rejection. Embedded signer
+coverage rejects malformed/weak keys, mismatched or drifting identities,
+invalid signatures, and secret-bearing provider failures. Its opt-in Kubo lane
+covers real IPNS restart and tamper behavior. Remaining work is governed
+release-environment execution with real deployment providers and captured
+deployment evidence.
 
 The rollout evidence scripts have focused Python coverage in:
 
@@ -647,11 +675,15 @@ publisher rather than synthesized from the pre-publication filesystem hooks.
   digests as payload-free metadata tied to recognized artifact fingerprints.
 - Done addendum: `sorafs_governance_dag` provides the always-on validated source
   ingest, verified IPFS add/pin/readback, signed-HTTP/IPNS CAS head publication,
-  authenticated checkpoint and publish-intent recovery, bounded public mirror,
-  health/checkpoint APIs, and IPFS/IPNS/mirror metrics with mock-adversarial and
-  opt-in real-Kubo coverage.
-- Remaining: package and deploy that service with runtime-only governed keys,
-  decide whether production scale requires the optional RocksDB/IPLD mirror,
-  add any operator convenience commands required by deployment practice, and
-  capture staged/live publication, recovery, dashboard, and alert evidence that
-  passes the SF-12 gate.
+  sealed checkpoint and publish-intent recovery, runtime-authenticated outbound
+  requests, bounded public mirror, health/checkpoint APIs, and IPFS/IPNS/mirror
+  metrics with mock-adversarial and opt-in real-Kubo coverage. The production
+  boundary is a public library launcher with opaque signer/authenticator/store
+  traits; all former service key/token paths and the embedded signer-key path
+  are removed.
+- Remaining: implement the deployment-owned provider adapters, package and
+  supervise two service instances, decide whether production scale requires the
+  optional RocksDB/IPLD mirror, add any operator convenience commands required
+  by deployment practice, and capture staged/live publication, provider
+  rotation/outage, recovery, dashboard, and alert evidence that passes the
+  SF-12 gate.

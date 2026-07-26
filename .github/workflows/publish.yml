@@ -12,18 +12,26 @@ env:
   IROHA2_RUSTFLAGS: -C force-frame-pointers=on
   IROHA2_FEATURES: profiling
   IROHA2_CARGOFLAGS: -Z build-std
+  IROHA_CI_IMAGE: ${{ vars.IROHA_CI_IMAGE }}
+  IROHA_RUST_BUILDER_IMAGE: ${{ vars.IROHA_RUST_BUILDER_IMAGE }}
+  IROHA_RUNTIME_IMAGE: ${{ vars.IROHA_RUNTIME_IMAGE }}
 
 jobs:
   registry-no-profiling:
     runs-on: [self-hosted, Linux, iroha2]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate digest-pinned Docker base images
+        run: |
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_RUST_BUILDER_IMAGE" \
+            --runtime "$IROHA_RUNTIME_IMAGE"
       - name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
           install: true
-          version: latest
+          version: v0.34.1
       - name: Get the release tag
         run: |
           RELEASE_VERSION=${{ github.ref_name }}
@@ -39,6 +47,9 @@ jobs:
           tags: |
             hyperledger/iroha:${{ env.TAG }}
             docker.soramitsu.co.jp/iroha2/iroha:${{ env.TAG }}
+          build-args: |
+            "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
+            "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Test docker-compose.single.yml before pushing
@@ -81,13 +92,24 @@ jobs:
             hyperledger/iroha:${{ env.TAG }}
             docker.soramitsu.co.jp/iroha2/iroha:${{ env.TAG }}
           labels: commit=${{ github.sha }}
+          build-args: |
+            "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
+            "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
 
   registry-with-profiling:
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ vars.IROHA_CI_IMAGE }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Validate digest-pinned Docker base images
+        run: |
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_RUST_BUILDER_IMAGE" \
+            --runtime "$IROHA_RUNTIME_IMAGE"
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_CI_IMAGE" \
+            --runtime "$IROHA_CI_IMAGE"
       - name: Get the release tag
         run: |
           RELEASE_VERSION=${{ github.ref_name }}
@@ -110,7 +132,7 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
           install: true
-          version: latest
+          version: v0.34.1
       - name: Build and push iroha2-profiling image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         if: always()
@@ -121,6 +143,8 @@ jobs:
             docker.soramitsu.co.jp/iroha2/iroha:${{ env.TAG }}-${{ env.IROHA2_PROFILE }}
           labels: commit=${{ github.sha }}
           build-args: |
+            "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
+            "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
             "PROFILE=${{ env.IROHA2_PROFILE }}"
             "RUSTFLAGS=${{ env.IROHA2_RUSTFLAGS }}"
             "FEATURES=${{ env.IROHA2_FEATURES }}"

@@ -280,6 +280,18 @@ run_case reply-route-close-lifecycle-fixed \
   "Model checking completed. No error has been found." \
   "21 states generated, 21 distinct states found" \
   "depth of the complete state graph search is 21"
+run_case reply-route-generation-epoch-fixed \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_generation_epoch_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "7 states generated, 7 distinct states found" \
+  "depth of the complete state graph search is 7"
+run_case reply-route-capacity-overflow-fixed \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_capacity_overflow_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "5 states generated, 5 distinct states found" \
+  "depth of the complete state graph search is 5"
 run_case reply-route-cursor-reset-bug \
   SumeragiV2ReplyRouteOwnershipMutation.tla \
   reply_route_cursor_reset_bug.cfg 12 \
@@ -328,6 +340,18 @@ run_case reply-route-pipeline-fixed \
   "Model checking completed. No error has been found." \
   "23 states generated, 18 distinct states found" \
   "depth of the complete state graph search is 18"
+run_case reply-route-pipeline-generation-epoch-fixed \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_generation_epoch_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "11 states generated, 10 distinct states found" \
+  "depth of the complete state graph search is 10"
+run_case reply-route-pipeline-capacity-overflow-fixed \
+  SumeragiV2ReplyRoutePipelineMutation.tla \
+  reply_route_pipeline_capacity_overflow_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "8 states generated, 7 distinct states found" \
+  "depth of the complete state graph search is 7"
 run_case reply-route-pipeline-replay-isolation-fixed \
   SumeragiV2ReplyRoutePipelineMutation.tla \
   reply_route_pipeline_replay_isolation_fixed.cfg 0 \
@@ -395,4 +419,4 @@ run_case reply-route-pipeline-cross-semantic-close-cycle-bug \
   "16 states generated, 13 distinct states found" \
   "Back to state 7"
 
-echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, locked assembly/body reproposal/recovery, ownership, replay/isolation, and per-source reply-route/pipeline mutation matrix passed"
+echo "[tlc] protected-rank, causal-FIFO, successor, effective-lock, locked assembly/body reproposal/recovery, ownership, generation/epoch, replay/isolation, and per-source reply-route/pipeline mutation matrix passed"

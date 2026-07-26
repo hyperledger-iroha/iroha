@@ -9,15 +9,27 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, join, relative, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
-import {cp, copyFile, lstat, mkdtemp, mkdir, readFile, readdir, rm, writeFile} from 'node:fs/promises';
+import {cp, lstat, mkdtemp, mkdir, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 
 import {
-  validateOpenApiGeneratorProvenance,
   validateReleaseOpenApiDocumentBytes,
 } from './lib/openapi-provenance.mjs';
-import {verifyOpenApiSignature} from './lib/openapi-signature.mjs';
+import {
+  OPENAPI_MANIFEST_VERSION,
+  parseOpenApiManifestV2Json,
+  scanJsonRejectDuplicateKeys,
+  verifyOpenApiManifestV2,
+} from './lib/openapi-manifest-v2.mjs';
+import {
+  readOpenApiStableFile,
+  writeOpenApiAtomicFile,
+} from './lib/openapi-safe-file.mjs';
 import {isAllowedSigner, loadAllowedSigners} from './lib/openapi-signers.mjs';
+import {
+  rejectUnknownOpenApiVersionsIndexFields,
+  requireOpenApiVersionsIndexFields,
+} from './lib/openapi-versions-index.mjs';
 import {checkOpenApiSignatures} from './check-openapi-signatures.mjs';
 import {verifyOpenApiVersions} from './verify-openapi-versions.mjs';
 
@@ -27,6 +39,10 @@ const __dirname = dirname(__filename);
 export const defaultRepoRoot = resolve(__dirname, '..', '..', '..');
 const defaultOutputDir = join(__dirname, '..', 'static', 'openapi');
 const defaultVersionsDir = join(defaultOutputDir, 'versions');
+const MANIFEST_SOURCE_BYTES = Symbol('openapi-manifest-source-bytes');
+const OPENAPI_SPEC_MAX_BYTES = 64 * 1024 * 1024;
+const OPENAPI_MANIFEST_MAX_BYTES = 64 * 1024;
+const OPENAPI_VERSIONS_MAX_BYTES = 1024 * 1024;
 
 export function parseArgs(argv) {
   const options = {
@@ -154,7 +170,10 @@ export async function syncOpenApi(options, context = defaultContext) {
   try {
     await generateSpec(repoRoot, generatedSpecPath);
     await assertRegularFile(generatedSpecPath, 'generated OpenAPI spec');
-    const specBytes = await readFile(generatedSpecPath);
+    const specBytes = await readOpenApiStableFile(generatedSpecPath, {
+      label: 'generated OpenAPI spec',
+      maxBytes: OPENAPI_SPEC_MAX_BYTES,
+    });
     validateReleaseOpenApiDocumentBytes(specBytes, {
       label: `generated OpenAPI spec ${generatedSpecPath}`,
     });
@@ -198,11 +217,11 @@ export async function syncOpenApi(options, context = defaultContext) {
         allowedSignersFile,
       },
     );
-    await writeFile(
-      join(stagedOutputDir, 'versions.json'),
+    const prospectiveIndexBytes = Buffer.from(
       serializeJson(prospectiveIndex),
       'utf8',
     );
+    await writeFile(join(stagedOutputDir, 'versions.json'), prospectiveIndexBytes);
     const unsignedLabels = prospectiveIndex.entries
       .filter((entry) => !entry.signed)
       .map((entry) => entry.label);
@@ -221,24 +240,37 @@ export async function syncOpenApi(options, context = defaultContext) {
 
     // Publication contains writes only; every fallible content/index check is
     // complete at this point.
+    const manifestBytes =
+      manifestTemplate[MANIFEST_SOURCE_BYTES] ??
+      Buffer.from(serializeJson(manifestTemplate), 'utf8');
     for (const label of targetLabels) {
       const destinationDir = join(versionsDir, label);
       await mkdir(destinationDir, {recursive: true});
-      await copyFile(
-        join(stagedVersionsDir, label, 'torii.json'),
+      await writeOpenApiAtomicFile(
         join(destinationDir, 'torii.json'),
+        specBytes,
+        {label: `OpenAPI version ${label} specification`},
       );
-      await copyFile(
-        join(stagedVersionsDir, label, 'manifest.json'),
+      await writeOpenApiAtomicFile(
         join(destinationDir, 'manifest.json'),
+        manifestBytes,
+        {label: `OpenAPI version ${label} manifest`},
       );
       console.log(`Torii OpenAPI spec refreshed at ${join(destinationDir, 'torii.json')}`);
     }
     if (options.latest) {
-      await copyFile(join(stagedOutputDir, 'torii.json'), join(outputDir, 'torii.json'));
+      await writeOpenApiAtomicFile(
+        join(outputDir, 'torii.json'),
+        specBytes,
+        {label: 'latest OpenAPI specification'},
+      );
       console.log(`Latest spec pointer updated at ${join(outputDir, 'torii.json')}`);
     }
-    await copyFile(join(stagedOutputDir, 'versions.json'), join(outputDir, 'versions.json'));
+    await writeOpenApiAtomicFile(
+      join(outputDir, 'versions.json'),
+      prospectiveIndexBytes,
+      {label: 'OpenAPI versions index'},
+    );
   } finally {
     await rm(stagingDir, {recursive: true, force: true});
   }
@@ -272,10 +304,14 @@ async function assertMutableTargets(labels, versionsDirPath) {
 async function stageVersion(versionDir, outputDir, specBytes, manifestTemplate) {
   await mkdir(versionDir, {recursive: true});
   await writeFile(join(versionDir, 'torii.json'), specBytes);
+  const versionManifest = manifestForVersion(
+    versionDir,
+    outputDir,
+    manifestTemplate,
+  );
   await writeFile(
     join(versionDir, 'manifest.json'),
-    serializeJson(manifestForVersion(versionDir, outputDir, manifestTemplate)),
-    'utf8',
+    versionManifest[MANIFEST_SOURCE_BYTES] ?? serializeJson(versionManifest),
   );
 }
 
@@ -356,11 +392,20 @@ async function prepareManifestTemplate(
   {requireSigned = false, allowedSignersFile} = {},
 ) {
   try {
-    const text = await readFile(manifestPath, 'utf8');
-    const manifest = JSON.parse(text);
-    validateOpenApiGeneratorProvenance(manifest, {
+    const text = await readOpenApiStableFile(manifestPath, {
+      label: `OpenAPI manifest ${manifestPath}`,
+      maxBytes: OPENAPI_MANIFEST_MAX_BYTES,
+      encoding: 'utf8',
+    });
+    const manifest = parseOpenApiManifestV2Json(text, {
       label: `manifest ${manifestPath}`,
-      signed: manifest?.artifact?.signature != null,
+    });
+    verifyOpenApiManifestV2({
+      manifest,
+      artifactBytes: specBytes,
+      label: `manifest ${manifestPath}`,
+      expectedArtifactPath: 'torii.json',
+      requireSignature: requireSigned,
       requireClean: requireSigned,
     });
     const recorded = manifest?.artifact?.sha256_hex;
@@ -370,7 +415,7 @@ async function prepareManifestTemplate(
       );
     }
     const computed = computeSha256Hex(specBytes);
-    if (!equalsIgnoreCase(recorded, computed)) {
+    if (recorded !== computed) {
       throw new Error(
         `manifest ${manifestPath} sha256 (${recorded}) does not match the freshly generated spec (${computed}); ` +
         'regenerate the canonical manifest and re-run sync-openapi.',
@@ -391,26 +436,13 @@ async function prepareManifestTemplate(
     const signature = manifest?.artifact?.signature;
     if (requireSigned && !hasSignature(signature)) {
       throw new Error(
-        `manifest ${manifestPath} is missing signature fields; sign the spec with \`cargo run -p xtask --bin xtask -- openapi --sign <key>\` or attach an operator signature with \`cargo run -p xtask --bin xtask -- openapi --signature-envelope <path>\` before publishing.`,
+        `manifest ${manifestPath} is missing signature fields; emit \`--unsigned-manifest --signing-payload <path>\`, sign that exact V2 payload with the release HSM, then attach it with \`--signature-envelope <path>\` before publishing.`,
       );
     }
     if (signature != null) {
       if (!hasSignature(signature)) {
         throw new Error(`manifest ${manifestPath} has incomplete signature fields`);
       }
-      try {
-        verifyOpenApiSignature({
-          algorithm: signature.algorithm,
-          publicKeyHex: signature.public_key_hex,
-          signatureHex: signature.signature_hex,
-          payload: specBytes,
-        });
-      } catch (error) {
-        throw new Error(
-          `manifest ${manifestPath} signature verification failed: ${error.message ?? error}`,
-        );
-      }
-
       if (!allowedSignersFile) {
         throw new Error('an allowed signers file is required for signed OpenAPI manifests');
       }
@@ -426,6 +458,11 @@ async function prepareManifestTemplate(
         );
       }
     }
+    Object.defineProperty(manifest, MANIFEST_SOURCE_BYTES, {
+      value: Buffer.from(text, 'utf8'),
+      enumerable: false,
+      writable: false,
+    });
     return manifest;
   } catch (error) {
     if (error && error.code === 'ENOENT') {
@@ -438,23 +475,13 @@ async function prepareManifestTemplate(
 }
 
 function manifestForVersion(versionDir, outputDir, manifestTemplate) {
-  const specPath = join(versionDir, 'torii.json');
-  const relativePath = toPosix(relative(outputDir, specPath));
-  return {
-    ...manifestTemplate,
-    artifact: {
-      ...manifestTemplate.artifact,
-      path: relativePath || manifestTemplate.artifact.path,
-    },
-  };
+  void versionDir;
+  void outputDir;
+  return manifestTemplate;
 }
 
 function computeSha256Hex(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
-}
-
-function equalsIgnoreCase(a, b) {
-  return typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 }
 
 function toPosix(pathValue) {
@@ -481,7 +508,10 @@ async function loadVersionMetadata(
   outputDirPath,
   {previousEntry = null, allowedSignersFile} = {},
 ) {
-  const specBuffer = await readFileOptional(specPath);
+  const specBuffer = await readFileOptional(specPath, {
+    label: `OpenAPI version ${label}`,
+    maxBytes: OPENAPI_SPEC_MAX_BYTES,
+  });
   if (!specBuffer) {
     return null;
   }
@@ -517,9 +547,9 @@ async function loadVersionMetadata(
   return entry;
 }
 
-async function readFileOptional(path) {
+async function readFileOptional(path, options) {
   try {
-    return await readFile(path);
+    return await readOpenApiStableFile(path, options);
   } catch (error) {
     if (error && error.code === 'ENOENT') {
       return null;
@@ -545,11 +575,17 @@ async function assertRegularFile(path, label) {
   if (!metadata.isFile()) {
     throw new Error(`${label} must be a regular file`);
   }
+  if (metadata.nlink !== 1) {
+    throw new Error(`${label} must have exactly one hard link`);
+  }
 }
 
 async function assertRegularTree(path) {
   const metadata = await lstat(path);
   if (metadata.isFile()) {
+    if (metadata.nlink !== 1) {
+      throw new Error(`OpenAPI artifact tree contains a hard-linked file: ${path}`);
+    }
     return;
   }
   if (!metadata.isDirectory()) {
@@ -563,14 +599,22 @@ async function assertRegularTree(path) {
 
 async function loadManifestDetails(manifestPath, outputDirPath, specContext = null) {
   try {
-    const text = await readFile(manifestPath, 'utf8');
-    const manifest = JSON.parse(text);
+    const text = await readOpenApiStableFile(manifestPath, {
+      label: `OpenAPI manifest ${manifestPath}`,
+      maxBytes: OPENAPI_MANIFEST_MAX_BYTES,
+      encoding: 'utf8',
+    });
+    const manifest = parseOpenApiManifestV2Json(text, {
+      label: `manifest ${manifestPath}`,
+    });
     const artifact = manifest?.artifact;
     if (specContext && !manifestMatchesSpec(artifact, specContext, outputDirPath)) {
       throw new Error(`manifest ${manifestPath} does not match its OpenAPI spec`);
     }
-    if (manifest.version !== 1) {
-      throw new Error(`manifest ${manifestPath} has unsupported version ${manifest.version}`);
+    if (manifest.version !== OPENAPI_MANIFEST_VERSION) {
+      throw new Error(
+        `manifest ${manifestPath} has unsupported version ${manifest.version}; expected ${OPENAPI_MANIFEST_VERSION}`,
+      );
     }
     const generatedUnixMs = manifest.generated_unix_ms;
     if (!Number.isSafeInteger(generatedUnixMs) || generatedUnixMs < 0) {
@@ -580,18 +624,15 @@ async function loadManifestDetails(manifestPath, outputDirPath, specContext = nu
     if (signature != null && !hasSignature(signature)) {
       throw new Error(`manifest ${manifestPath} has incomplete signature fields`);
     }
-    validateOpenApiGeneratorProvenance(manifest, {
+    verifyOpenApiManifestV2({
+      manifest,
+      artifactBytes: specContext.specBuffer,
       label: `manifest ${manifestPath}`,
-      signed: signature != null,
+      expectedArtifactPath: toPosix(relative(dirname(manifestPath), specContext.specPath)),
+      requireSignature: signature != null,
       requireClean: signature != null,
     });
     if (signature != null) {
-      verifyOpenApiSignature({
-        algorithm: signature.algorithm,
-        publicKeyHex: signature.public_key_hex,
-        signatureHex: signature.signature_hex,
-        payload: specContext.specBuffer,
-      });
       const allowedSigners = await loadAllowedSigners(specContext.allowedSignersFile);
       if (
         !isAllowedSigner(allowedSigners, {
@@ -620,14 +661,17 @@ async function loadManifestDetails(manifestPath, outputDirPath, specContext = nu
 }
 
 function manifestMatchesSpec(artifact, specContext, outputDirPath) {
+  void outputDirPath;
   if (!artifact || typeof artifact !== 'object') {
     return false;
   }
-  const expectedPath = toPosix(relative(outputDirPath, specContext.specPath));
+  const expectedPath = toPosix(
+    relative(dirname(specContext.specPath), specContext.specPath),
+  );
   return (
     artifact.path === expectedPath &&
     artifact.bytes === specContext.specBytes &&
-    equalsIgnoreCase(artifact.sha256_hex, specContext.specSha)
+    artifact.sha256_hex === specContext.specSha
   );
 }
 
@@ -644,13 +688,18 @@ function unsignedManifestDetails() {
 }
 
 async function readVersionIndexOptional(path) {
-  const bytes = await readFileOptional(path);
+  const bytes = await readFileOptional(path, {
+    label: 'OpenAPI versions index',
+    maxBytes: OPENAPI_VERSIONS_MAX_BYTES,
+  });
   if (!bytes) {
     return null;
   }
+  const text = bytes.toString('utf8');
+  scanJsonRejectDuplicateKeys(text, `OpenAPI versions index ${path}`);
   let index;
   try {
-    index = JSON.parse(bytes.toString('utf8'));
+    index = JSON.parse(text);
   } catch (error) {
     throw new Error(`failed to parse ${path}: ${error.message ?? error}`);
   }
@@ -662,6 +711,8 @@ function validateVersionIndexShape(index) {
   if (!index || !Array.isArray(index.versions) || !Array.isArray(index.entries)) {
     throw new Error('OpenAPI versions index must contain versions and entries arrays');
   }
+  rejectUnknownOpenApiVersionsIndexFields(index);
+  requireOpenApiVersionsIndexFields(index);
   assertIsoTimestamp(index.generatedAt, 'OpenAPI versions index generatedAt');
   const labels = new Set();
   for (const entry of index.entries) {

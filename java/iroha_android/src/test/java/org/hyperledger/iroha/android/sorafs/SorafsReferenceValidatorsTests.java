@@ -5,19 +5,163 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 
 public final class SorafsReferenceValidatorsTests {
   private static final String MAX_SCALED_XOR =
       "6703903964971298549787012499102923063739682910296196688861780721860882015"
           + "036773488400937149083451713845015929093243025426876941405973284973216824"
           + ".503042047";
+  private static final long REFERENCE_FIXTURE_GENERATED_AT_UNIX = 1_700_001_234L;
+  private static final FixtureBundleProfile[] REFERENCE_BUNDLE_PROFILES = {
+    profile(
+        "bundle_heterogeneous_positive_validation_outcome_v1.json",
+        1_700_000_001L,
+        input(
+            SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+            "replication_order/order_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.PDP_COMMITMENT, "pdp/commitment_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.PDP_CHALLENGE, "pdp/challenge_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.PDP_PROOF, "pdp/proof_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.POR_CHALLENGE, "por/challenge_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.POR_PROOF, "por/proof_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.POTR_RECEIPT, "potr/receipt_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.REPAIR_TASK_RECORD, "repair/task_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.ORDERBOOK_ORDER_REQUEST,
+            "orderbook/order_request_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.ORDERBOOK_ORDER_CANCEL,
+            "orderbook/order_cancel_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.ORDERBOOK_TRADE_EVENT,
+            "orderbook/trade_event_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.ORDERBOOK_SETTLEMENT_CHANNEL,
+            "orderbook/settlement_channel_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.ORDERBOOK_SETTLEMENT_RECEIPT,
+            "orderbook/settlement_receipt_v1.to")),
+    profile(
+        "bundle_orderbook_bad_signature_negative_validation_outcome_v1.json",
+        1_700_000_001L,
+        input(
+            SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+            "replication_order/order_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.POR_CHALLENGE, "por/challenge_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.POR_PROOF, "por/proof_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.ORDERBOOK_ORDER_REQUEST,
+            "orderbook/negative/order_request_bad_signature_v1.to")),
+    profile(
+        "bundle_orderbook_trailing_bytes_negative_validation_outcome_v1.json",
+        1_700_000_001L,
+        input(
+            SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+            "replication_order/order_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.POR_CHALLENGE, "por/challenge_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.POR_PROOF, "por/proof_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.ORDERBOOK_ORDER_REQUEST,
+            "orderbook/negative/order_request_trailing_bytes_v1.to")),
+    profile(
+        "bundle_pdp_duplicate_hot_leaf_negative_validation_outcome_v1.json",
+        1_700_000_001L,
+        input(
+            SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+            "replication_order/order_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.PDP_COMMITMENT, "pdp/commitment_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.PDP_CHALLENGE,
+            "pdp/negative/duplicate_hot_leaf_challenge_v1.to")),
+    profile(
+        "bundle_pdp_missing_signature_negative_validation_outcome_v1.json",
+        1_700_000_001L,
+        input(
+            SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+            "replication_order/order_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.PDP_COMMITMENT, "pdp/commitment_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.PDP_CHALLENGE, "pdp/challenge_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.PDP_PROOF,
+            "pdp/negative/missing_signature_proof_v1.to")),
+    profile(
+        "bundle_pdp_wrong_provider_negative_validation_outcome_v1.json",
+        1_700_000_001L,
+        input(
+            SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+            "replication_order/order_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.PDP_COMMITMENT, "pdp/commitment_v1.to"),
+        input(SorafsFixtureBundlePayloadKind.PDP_CHALLENGE, "pdp/challenge_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.PDP_PROOF,
+            "pdp/negative/wrong_provider_proof_v1.to")),
+    profile(
+        "bundle_repair_manifest_mismatch_negative_validation_outcome_v1.json",
+        1_700_000_001L,
+        // The outcome names only the offender; the order establishes the expected digest.
+        input(
+            SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+            "replication_order/order_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.REPAIR_TASK_RECORD,
+            "repair/negative/task_manifest_mismatch_v1.to")),
+    profile(
+        "bundle_repair_provider_unassigned_negative_validation_outcome_v1.json",
+        1_700_000_001L,
+        input(
+            SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+            "replication_order/order_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.REPAIR_TASK_RECORD,
+            "repair/negative/task_provider_unassigned_v1.to")),
+    profile(
+        "bundle_routing_admission_positive_validation_outcome_v1.json",
+        300L,
+        input(
+            SorafsFixtureBundlePayloadKind.PROVIDER_ADVERT,
+            "provider_admission/advert_v1.to"),
+        input(
+            SorafsFixtureBundlePayloadKind.PROVIDER_ADMISSION_ENVELOPE,
+            "provider_admission/envelope_v1.to"))
+  };
 
   private SorafsReferenceValidatorsTests() {}
 
+  private static final class FixtureBundleInputSpec {
+    private final SorafsFixtureBundlePayloadKind kind;
+    private final String path;
+
+    private FixtureBundleInputSpec(
+        final SorafsFixtureBundlePayloadKind kind, final String path) {
+      this.kind = kind;
+      this.path = path;
+    }
+  }
+
+  private static final class FixtureBundleProfile {
+    private final String outcomePath;
+    private final long nowUnix;
+    private final FixtureBundleInputSpec[] inputs;
+
+    private FixtureBundleProfile(
+        final String outcomePath,
+        final long nowUnix,
+        final FixtureBundleInputSpec[] inputs) {
+      this.outcomePath = outcomePath;
+      this.nowUnix = nowUnix;
+      this.inputs = inputs.clone();
+    }
+  }
+
   public static void main(final String[] args) throws IOException {
     exposesBridgeSelectors();
+    fixtureBundleInputSnapshotsPayloadBytes();
     rejectsGeneratedAtBeforeNativeDispatch();
     rejectsBlankLabelBeforeNativeDispatch();
+    rejectsMalformedUnicodeFixtureLabelBeforeNativeDispatch();
+    boundsFixtureBundleBeforeNativeDispatch();
+    boundsGovernanceLogNodeCidBeforeNativeDispatch();
     boundsGovernanceDagInputsBeforeNativeDispatch();
     rejectsNonSignableOrderbookPayloadBeforeNativeDispatch();
     rejectsBadSigningKeyBeforeNativeDispatch();
@@ -28,6 +172,9 @@ public final class SorafsReferenceValidatorsTests {
     rejectsNoncanonicalXorQuantitiesBeforeNativeDispatch();
     validatesOrderbookFixtureWhenNativeBridgeIsAvailable();
     validatesEveryPdpOutcomeFixtureWhenNativeBridgeIsAvailable();
+    validatesLinkedFixtureBundleWhenNativeBridgeIsAvailable();
+    validatesEveryReferenceSdkBundleOutcomeByteForByte();
+    validatesModerationGovernanceLogNodeOutcomeByteForByte();
     validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable();
     signsOrderbookFixtureWhenNativeBridgeIsAvailable();
     derivesCanonicalOrderIdWhenNativeBridgeIsAvailable();
@@ -44,6 +191,34 @@ public final class SorafsReferenceValidatorsTests {
     assert !SorafsOrderbookPayloadKind.TRADE_EVENT.isUserSignedPayload();
     assert SorafsPdpPayloadKind.COMMITMENT.bridgeCode() == 1;
     assert SorafsPdpPayloadKind.PROOF.bridgeCode() == 3;
+    final String[] fixtureLabels = {
+      "provider-advert.to",
+      "provider-admission-envelope.to",
+      "replication-order.to",
+      "por-challenge.to",
+      "por-proof.to",
+      "potr-receipt.to",
+      "repair-evidence.to",
+      "repair-report.to",
+      "repair-task-record.to",
+      "repair-slash-proposal.to",
+      "repair-task-event.to",
+      "orderbook-order-request.to",
+      "orderbook-order-cancel.to",
+      "orderbook-trade-event.to",
+      "orderbook-settlement-channel.to",
+      "orderbook-settlement-receipt.to",
+      "pdp-commitment.to",
+      "pdp-challenge.to",
+      "pdp-proof.to",
+    };
+    final SorafsFixtureBundlePayloadKind[] fixtureKinds =
+        SorafsFixtureBundlePayloadKind.values();
+    assert fixtureKinds.length == fixtureLabels.length;
+    for (int index = 0; index < fixtureKinds.length; index++) {
+      assert fixtureKinds[index].bridgeCode() == index + 1;
+      assert fixtureKinds[index].defaultLabel().equals(fixtureLabels[index]);
+    }
     assert SorafsPopPayloadKind.CREDENTIAL.bridgeCode() == 1;
     assert SorafsPopPayloadKind.MEMBERSHIP_PROOF.bridgeCode() == 6;
     assert SorafsPopPayloadKind.ISSUED_CREDENTIAL_BUNDLE.bridgeCode() == 7;
@@ -57,11 +232,70 @@ public final class SorafsReferenceValidatorsTests {
     assert SorafsReferenceValidators.isBridgeAbiSupported(21);
     assert !SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, false);
     assert SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, true);
+    assert !SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, false);
+    assert SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, true);
+    assert !SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, false);
+    assert SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, true);
     assert SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 == 256;
     assert SorafsReferenceValidators.GOVERNANCE_DAG_MAX_BLOCKS_V1 == 64;
     assert SorafsReferenceValidators.GOVERNANCE_DAG_CID_BYTES_V1 == 32;
     assert SorafsReferenceValidators.REFERENCE_MAX_INPUT_BYTES_V1 == 67_108_864;
     assert SorafsReferenceValidators.REFERENCE_MAX_LABEL_BYTES_V1 == 1_024;
+    assert SorafsReferenceValidators.FIXTURE_BUNDLE_MAX_PAYLOADS_V1 == 64;
+  }
+
+  private static void fixtureBundleInputSnapshotsPayloadBytes() {
+    final byte[] source = {1, 2, 3};
+    final SorafsFixtureBundlePayloadInput input =
+        new SorafsFixtureBundlePayloadInput(
+            SorafsFixtureBundlePayloadKind.POR_PROOF, source);
+    source[0] = 9;
+    final byte[] detached = input.noritoBytes();
+    assert detached[0] == 1;
+    detached[0] = 8;
+    assert input.noritoBytes()[0] == 1;
+  }
+
+  private static void boundsFixtureBundleBeforeNativeDispatch() {
+    boolean emptyThrew = false;
+    try {
+      SorafsReferenceValidators.validateFixtureBundleJson(
+          java.util.Collections.<SorafsFixtureBundlePayloadInput>emptyList(), 1L, 1L);
+    } catch (final IllegalArgumentException ex) {
+      emptyThrew = ex.getMessage() != null && ex.getMessage().contains("1..64");
+    }
+    assert emptyThrew : "empty fixture bundles must be rejected";
+
+    final SorafsFixtureBundlePayloadInput item =
+        new SorafsFixtureBundlePayloadInput(
+            SorafsFixtureBundlePayloadKind.POR_PROOF, new byte[] {0});
+    final SorafsFixtureBundlePayloadInput[] tooMany =
+        new SorafsFixtureBundlePayloadInput[
+            SorafsReferenceValidators.FIXTURE_BUNDLE_MAX_PAYLOADS_V1 + 1];
+    Arrays.fill(tooMany, item);
+    boolean tooManyThrew = false;
+    try {
+      SorafsReferenceValidators.validateFixtureBundleJson(
+          Arrays.asList(tooMany), 1L, 1L);
+    } catch (final IllegalArgumentException ex) {
+      tooManyThrew = ex.getMessage() != null && ex.getMessage().contains("1..64");
+    }
+    assert tooManyThrew : "oversized fixture bundles must be rejected";
+  }
+
+  private static void boundsGovernanceLogNodeCidBeforeNativeDispatch() {
+    for (final int invalidLength : new int[] {0, 31, 33}) {
+      boolean threw = false;
+      try {
+        SorafsReferenceValidators.validateGovernanceLogNodeJson(
+            new byte[0], null, new byte[invalidLength], 1L);
+      } catch (final IllegalArgumentException ex) {
+        threw =
+            ex.getMessage() != null
+                && ex.getMessage().contains("exactly 32 bytes");
+      }
+      assert threw : "invalid governance log node CID length must be rejected";
+    }
   }
 
   private static void rejectsGeneratedAtBeforeNativeDispatch() {
@@ -84,6 +318,23 @@ public final class SorafsReferenceValidatorsTests {
       threw = ex.getMessage() != null && ex.getMessage().contains("label");
     }
     assert threw : "label should be validated before native dispatch";
+  }
+
+  private static void rejectsMalformedUnicodeFixtureLabelBeforeNativeDispatch() {
+    boolean threw = false;
+    try {
+      SorafsReferenceValidators.validateFixtureBundleJson(
+          Arrays.asList(
+              new SorafsFixtureBundlePayloadInput(
+                  SorafsFixtureBundlePayloadKind.POR_PROOF,
+                  new byte[] {0},
+                  "\uD800")),
+          1L,
+          1L);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage() != null && ex.getMessage().contains("valid Unicode");
+    }
+    assert threw : "ill-formed UTF-16 labels should be rejected before native dispatch";
   }
 
   private static void boundsGovernanceDagInputsBeforeNativeDispatch() {
@@ -415,6 +666,88 @@ public final class SorafsReferenceValidatorsTests {
     }
   }
 
+  private static void validatesLinkedFixtureBundleWhenNativeBridgeIsAvailable()
+      throws IOException {
+    if (!SorafsReferenceValidators.isNativeAvailable()) {
+      return;
+    }
+    final String outcome =
+        SorafsReferenceValidators.validateFixtureBundleJson(
+            Arrays.asList(
+                new SorafsFixtureBundlePayloadInput(
+                    SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+                    fixture("sorafs_manifest", "replication_order", "order_v1.to"),
+                    "replication-order.to"),
+                new SorafsFixtureBundlePayloadInput(
+                    SorafsFixtureBundlePayloadKind.POR_PROOF,
+                    fixture("sorafs_manifest", "por", "proof_v1.to"),
+                    "por-proof.to")),
+            1_700_000_001L,
+            1_700_001_238L);
+    assert outcome.contains("\"status\":\"Ok\"") : outcome;
+    assert outcome.contains("\"code\":\"SFS-OK-000\"") : outcome;
+    assert outcome.contains("\"generated_at\":1700001238") : outcome;
+  }
+
+  private static void validatesEveryReferenceSdkBundleOutcomeByteForByte()
+      throws IOException {
+    if (!SorafsReferenceValidators.isNativeAvailable()) {
+      return;
+    }
+    assert REFERENCE_BUNDLE_PROFILES.length == 9;
+    String previousOutcomePath = null;
+    for (final FixtureBundleProfile profile : REFERENCE_BUNDLE_PROFILES) {
+      if (previousOutcomePath != null) {
+        assert previousOutcomePath.compareTo(profile.outcomePath) < 0
+            : "reference SDK bundle profile table must remain sorted";
+      }
+      previousOutcomePath = profile.outcomePath;
+
+      final SorafsFixtureBundlePayloadInput[] payloads =
+          new SorafsFixtureBundlePayloadInput[profile.inputs.length];
+      for (int index = 0; index < profile.inputs.length; index++) {
+        final FixtureBundleInputSpec input = profile.inputs[index];
+        payloads[index] =
+            new SorafsFixtureBundlePayloadInput(
+                input.kind, sorafsFixture(input.path), input.path);
+      }
+      final String actual =
+          SorafsReferenceValidators.validateFixtureBundleJson(
+              Arrays.asList(payloads),
+              profile.nowUnix,
+              REFERENCE_FIXTURE_GENERATED_AT_UNIX);
+      final byte[] expected =
+          fixture(
+              "sorafs_manifest",
+              "reference_sdk",
+              profile.outcomePath);
+      assert Arrays.equals(expected, actual.getBytes(StandardCharsets.UTF_8))
+          : profile.outcomePath + ": " + actual;
+    }
+  }
+
+  private static void validatesModerationGovernanceLogNodeOutcomeByteForByte()
+      throws IOException {
+    if (!SorafsReferenceValidators.isNativeAvailable()) {
+      return;
+    }
+    final String actual =
+        SorafsReferenceValidators.validateGovernanceLogNodeJson(
+            fixture("sorafs_manifest", "moderation", "governance_node_v1.to"),
+            "moderation/governance_node_v1.to",
+            decodeHex(
+                "9a2dc9a930494cbc70f0e4cab25df893"
+                    + "fb607e83f1fa52520ed62dabca918d5a"),
+            REFERENCE_FIXTURE_GENERATED_AT_UNIX);
+    assert Arrays.equals(
+            fixture(
+                "sorafs_manifest",
+                "moderation",
+                "governance_node_validation_outcome_v1.json"),
+            actual.getBytes(StandardCharsets.UTF_8))
+        : actual;
+  }
+
   private static void validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable()
       throws IOException {
     if (!SorafsReferenceValidators.isNativeAvailable()) {
@@ -731,6 +1064,38 @@ public final class SorafsReferenceValidatorsTests {
 
   private static byte[] repeatedKey(final int value) {
     return repeated(value);
+  }
+
+  private static FixtureBundleInputSpec input(
+      final SorafsFixtureBundlePayloadKind kind, final String path) {
+    return new FixtureBundleInputSpec(kind, path);
+  }
+
+  private static FixtureBundleProfile profile(
+      final String outcomePath,
+      final long nowUnix,
+      final FixtureBundleInputSpec... inputs) {
+    return new FixtureBundleProfile(outcomePath, nowUnix, inputs);
+  }
+
+  private static byte[] sorafsFixture(final String relativePath) throws IOException {
+    return fixture(("sorafs_manifest/" + relativePath).split("/"));
+  }
+
+  private static byte[] decodeHex(final String value) {
+    if ((value.length() & 1) != 0) {
+      throw new IllegalArgumentException("hex value must contain an even number of digits");
+    }
+    final byte[] output = new byte[value.length() / 2];
+    for (int index = 0; index < output.length; index++) {
+      final int high = Character.digit(value.charAt(index * 2), 16);
+      final int low = Character.digit(value.charAt(index * 2 + 1), 16);
+      if (high < 0 || low < 0) {
+        throw new IllegalArgumentException("hex value contains a non-hex digit");
+      }
+      output[index] = (byte) ((high << 4) | low);
+    }
+    return output;
   }
 
   private static String decimalOnes(final int length) {

@@ -1,5 +1,9 @@
-# Canonicalize a real observability probe. No claim is synthesized.
+# Exercise observability canonicalization with a non-production fixture.
 --kind observability
---probe-artifact /runtime/sorafs/gateway-compliance/probes/observability.json
+--probe-artifact scripts/examples/fixtures/gateway_compliance/observability.json
 --out artifacts/sorafs_gateway/observability-canary.json
---now-unix 1800100000
+--deployment-id sorafs-gateway-release-42
+--environment production
+--generated-at-unix 1800699940
+--now-unix 1800700000
+--non-production-fixture

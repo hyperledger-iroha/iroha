@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_alias_policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a27f6de05a787b3f9dee58350eb2a325767b0f94c8983bea6f89f20d743da7ae
+source_hash: bd0c6963cc0d88e00b87954fe58b81fbf177384cb3413930c78493a2c5254def
 source_last_modified: "2026-01-03T18:07:57.762285+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -72,10 +72,8 @@ the table without a governance override published in `iroha_config`.
 
 ## Configuration
 
-The defaults above ship via the configuration stack as
-`[sorafs.alias_cache]` in `iroha_config` (user view) and
-`torii.sorafs_alias_cache` in the runtime snapshot. Both surfaces expose the
-same fields and propagate directly into `AliasCachePolicy` and
+The defaults above ship through the sole operator-facing configuration surface,
+`[sorafs.alias_cache]`. The parsed policy propagates directly into `AliasCachePolicy` and
 `AliasCacheEnforcement` so gateways and SDKs honour identical guardrails.
 
 | Key | Default | Notes |

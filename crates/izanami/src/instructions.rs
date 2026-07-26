@@ -2792,11 +2792,17 @@ impl ChaosState {
         }
         let order_index = rng.random_range(0..self.pending_replication_orders.len());
         let order_id = self.pending_replication_orders.swap_remove(order_index);
+        let provider_id = self
+            .sorafs_replication
+            .as_ref()
+            .ok_or_else(|| eyre!("SoraFS replication seed not initialized"))?
+            .provider_id;
         Ok(TransactionPlan {
             state_updates: Vec::new(),
             label: "complete_replication_order",
             instructions: vec![InstructionBox::from(CompleteReplicationOrder {
                 order_id,
+                provider_id,
                 completion_epoch: self.bump_replication(),
             })],
             signer: self.treasury.clone(),

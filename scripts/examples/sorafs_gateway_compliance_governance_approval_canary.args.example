@@ -1,5 +1,9 @@
-# Canonicalize a real governance-approval probe. No claim is synthesized.
+# Exercise governance-approval canonicalization with a non-production fixture.
 --kind governance_approval
---probe-artifact /runtime/sorafs/gateway-compliance/probes/governance-approval.json
+--probe-artifact scripts/examples/fixtures/gateway_compliance/governance_approval.json
 --out artifacts/sorafs_gateway/governance-approval-canary.json
---now-unix 1800100000
+--deployment-id sorafs-gateway-release-42
+--environment production
+--generated-at-unix 1800699940
+--now-unix 1800700000
+--non-production-fixture

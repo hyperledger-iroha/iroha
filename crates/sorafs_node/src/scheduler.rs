@@ -163,8 +163,8 @@ pub struct StorageTelemetrySnapshot {
     pub bytes_used: u64,
     /// Configured on-disk capacity limit in bytes.
     pub bytes_capacity: u64,
-    /// Number of active pin operations waiting on disk IO.
-    pub pin_queue_depth: usize,
+    /// Number of finalized-ledger provider ingests holding storage-write admission.
+    pub provider_ingest_inflight: usize,
     /// Number of fetch tasks currently streaming chunk data.
     pub fetch_inflight: usize,
     /// Aggregate bytes-per-second observed across fetch workers.
@@ -183,8 +183,8 @@ pub mod metrics {
     pub const STORAGE_BYTES_USED: &str = "torii_sorafs_storage_bytes_used";
     /// Gauge: configured storage capacity ceiling.
     pub const STORAGE_BYTES_CAPACITY: &str = "torii_sorafs_storage_bytes_capacity";
-    /// Gauge: number of manifests currently queued for pinning.
-    pub const STORAGE_PIN_QUEUE_DEPTH: &str = "torii_sorafs_storage_pin_queue_depth";
+    /// Gauge: finalized-ledger provider ingests currently holding storage-write admission.
+    pub const PROVIDER_INGEST_INFLIGHT: &str = "sorafs_provider_ingest_inflight";
     /// Gauge: number of active fetch workers streaming chunk data.
     pub const STORAGE_FETCH_INFLIGHT: &str = "torii_sorafs_storage_fetch_inflight";
     /// Gauge: instantaneous bytes-per-second served by fetch workers.
@@ -389,7 +389,7 @@ impl RuntimeInner {
             .schedulers
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        sched.telemetry.pin_queue_depth = stats.inflight;
+        sched.telemetry.provider_ingest_inflight = stats.inflight;
         sched.utilisation.pin_queue_utilisation_bps =
             utilisation_ratio(stats.inflight, sched.config.pin_queue_max_inflight);
     }

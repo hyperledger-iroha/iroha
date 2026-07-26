@@ -1,0 +1,41 @@
+{
+  "moderation_event": {
+    "case_id": "case-reference-sdk-v1",
+    "challenge": null,
+    "challenge_count": 0,
+    "committed_count": 3,
+    "generated_at_unix_ms": 1700000750000,
+    "juror_id": null,
+    "kind": "ballot_tallied",
+    "revealed_count": 3,
+    "round_id": "round-reference-sdk-v1",
+    "sequence": 6,
+    "tally": {
+      "case_id": "case-reference-sdk-v1",
+      "contested": false,
+      "counts": {
+        "escalate": 0,
+        "modify": 0,
+        "overturn": 1,
+        "uphold": 2
+      },
+      "quorum": 2,
+      "round_id": "round-reference-sdk-v1",
+      "tallied_at_unix_ms": 1700000750000,
+      "votes_total": 3,
+      "winning_choice": "uphold"
+    },
+    "version": 1
+  },
+  "node_cid_hex": "9a2dc9a930494cbc70f0e4cab25df893fb607e83f1fa52520ed62dabca918d5a",
+  "payload_kind": "moderation_ballot_event",
+  "prev_cid_hex": "35f3e39245bb0a1e78cea49d219e1da0a112fb2223dc8d8df70a9cec23472ddf",
+  "publisher_peer_id": "12D3KooWModerationFixturePublisher",
+  "publisher_signature": {
+    "algorithm": "ed25519",
+    "public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
+    "signature_hex": "eef0e31dd70fbfded9367c2d8361ec1f1b3a99d42f6ab4258a935749a02c30847b811b9877236d17c4e4a16a807f0ebdeea63b57589d0a1f7f2458c3fe67a104"
+  },
+  "timestamp": 1700000750,
+  "version": 1
+}

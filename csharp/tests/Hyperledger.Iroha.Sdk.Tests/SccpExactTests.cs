@@ -914,14 +914,14 @@ public sealed class SccpExactTests
         var parsed = SccpGroth16ProofRequestV1.Parse(Json(valid));
         Assert.Equal(SccpDestinationProofBackendV1.EvmGroth16Bn254, parsed.Backend);
         Assert.Equal(SccpNetworkV1.BscMainnet, parsed.TargetNetwork);
-        Assert.Equal((ushort)2, parsed.SoraFinalityAnchor.ProtocolVersion);
+        Assert.Equal((ushort)3, parsed.SoraFinalityAnchor.ProtocolVersion);
         Assert.Equal(Upper(0xa2, 32), Convert.ToHexString(parsed.SoraFinalityAnchor.CheckpointContextId));
         Assert.Equal(Upper(0xa3, 32), Convert.ToHexString(parsed.SoraFinalityAnchor.CheckpointFinalityArtifactHash));
         Assert.Equal(
-            "4CE87BF7CF5AEFD0B3D41F9F26490BFE4465128F7E99A7DBB06F5B03C273B671",
+            "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA",
             Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash));
-        Assert.Equal("0x6c008ce81c03c78432807cd79dd7be4d62314fe3f00839df9a936179ac22e570", parsed.StatementHash);
-        Assert.Equal("0x3891aa1769002894a459b09198d256bcce064b4ba2709bf417bb3c02ffaee288", parsed.RequestHash);
+        Assert.Equal("0xc4b540323ca41631f036ca1fe2c99723632d176f801ff6a6f912c597636b4f49", parsed.StatementHash);
+        Assert.Equal("0x51a5a484ea19820bd95e6e9f7c9eb83e3369d2dbc2e83b0399462cde84db1c2a", parsed.RequestHash);
         var mutations = new Action<Dictionary<string, object?>>[]
         {
             value => value["allow_unready"] = true,
@@ -1840,7 +1840,9 @@ public sealed class SccpExactTests
             Convert.FromHexString((string)commitments["public_signal_schema_hash"]!),
             semanticHash);
         var anchorModel = new SccpSoraFinalityAnchorV1(
-            2,
+            Convert.ToUInt16(
+                anchor["protocol_version"],
+                System.Globalization.CultureInfo.InvariantCulture),
             Convert.FromHexString((string)anchor["chain_id_hash"]!),
             7,
             Convert.FromHexString((string)anchor["checkpoint_block_hash"]!),

@@ -7,12 +7,14 @@
     clippy::field_reassign_with_default
 )]
 
+pub mod appeal_finance_transaction_forwarder;
 pub mod capacity;
 pub mod config;
-pub mod deal;
 mod durable_transaction_forwarder;
-mod economics;
+pub mod evidence_viewer;
 mod governance;
+pub mod governance_service;
+pub mod hedging_billing_service;
 pub mod metering;
 mod moderation;
 pub mod moderation_orchestrator;
@@ -24,23 +26,27 @@ pub mod pop_credentials;
 pub mod por;
 pub mod potr;
 pub mod proof_outcome_forwarder;
+pub mod provider_ingest_outbox;
+pub mod provider_ingest_runtime;
 mod reconciliation;
 pub mod repair_ledger_projection;
 pub mod repair_transaction_forwarder;
+pub mod reputation;
 pub mod reserve_transaction_forwarder;
 pub mod scheduler;
 pub mod store;
 pub mod telemetry;
 mod transparency;
 
-pub use deal::{
-    ClientSnapshot, DealEngine, DealEngineError, DealSettlementOutcome, DealSnapshot,
-    ProviderSnapshot, UsageOutcome, derive_micropayment_ticket_id,
+use governance::FilesystemGovernancePublisher;
+pub use governance::{
+    GovernanceDagAuthenticationScope, GovernanceDagRequestAuthenticator,
+    GovernanceDagRuntimeSigner, GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
+    GovernanceDagSealedStateSlot, governance_dag_sealed_state_revision,
 };
-pub use economics::{
-    EconomicsRuntimeError, GovernedPricingAdmissionOutcome, SignedHedgingFeedAdmissionOutcome,
+pub use governance_service::{
+    GovernanceDagServiceError, GovernanceDagServiceRuntimeProviders, run_governance_dag_service,
 };
-pub use governance::FilesystemGovernancePublisher;
 pub use moderation::{
     MODERATION_SCREENING_ADMISSION_RECEIPT_VERSION_V1,
     MODERATION_SCREENING_AUTHORITY_BUNDLE_VERSION_V1,
@@ -80,13 +86,41 @@ pub use por::{
 };
 pub use potr::{
     POTR_EXPORT_MAX_RECORDS_V1, POTR_RECEIPT_MAX_CANONICAL_BYTES_V1,
-    POTR_TRACKER_CHECKPOINT_FILE_NAME_V1, PotrReceiptStatusV1, PotrRecordOutcome, PotrTrackerError,
+    POTR_TRACKER_CHECKPOINT_FILE_NAME_V1, PotrAdmissionPolicyBindingError,
+    PotrAdmissionPolicyBindingV1, PotrAdmissionPolicyProgressError, PotrReceiptStatusV1,
+    PotrRecordOutcome, PotrTrackerError,
 };
 pub use proof_outcome_forwarder::{
     PROOF_OUTCOME_OUTBOX_DEFAULT_MAX_ATTEMPTS_V1, PROOF_OUTCOME_OUTBOX_MAX_SCAN_ITEMS_V1,
     ProofOutcomeDeadLetterReasonV1, ProofOutcomeDeadLetterV1, ProofOutcomeDeliveryStateV1,
     ProofOutcomeEnqueueResultV1, ProofOutcomeOutbox, ProofOutcomeOutboxError,
     ProofOutcomeOutboxPolicyV1, ProofOutcomePendingDeliveryV1,
+};
+pub use provider_ingest_outbox::{
+    FinalizedProviderIngestAuthorizationV1, PROVIDER_INGEST_OUTBOX_FILE_V1,
+    PROVIDER_INGEST_STATUS_PAGE_MAX_V1, ProviderIngestCancellationReasonV1,
+    ProviderIngestClaimOwnerV1, ProviderIngestCompletionSigningClaimV1,
+    ProviderIngestCompletionSigningContextV1, ProviderIngestCompletionStateV1,
+    ProviderIngestCompletionSubmissionV1, ProviderIngestDeadLetterReasonV1,
+    ProviderIngestDeliveryStateV1, ProviderIngestEnqueueResultV1, ProviderIngestFailureClassV1,
+    ProviderIngestFinalizedCancellationV1, ProviderIngestFinalizedCompletionV1,
+    ProviderIngestFinalizedCursorV1, ProviderIngestOutbox, ProviderIngestOutboxCountsV1,
+    ProviderIngestOutboxError, ProviderIngestOutboxPolicyV1, ProviderIngestRetryOutcomeV1,
+    ProviderIngestSourceClaimV1, ProviderIngestStatusPageV1, ProviderIngestStatusV1,
+};
+pub use provider_ingest_runtime::{
+    ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClockV1,
+    ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
+    ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
+    ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
+    ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
+    ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedLedgerErrorV1,
+    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
+    ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
+    ProviderIngestLocalStorageV1, ProviderIngestRuntimeErrorV1, ProviderIngestRuntimePolicyV1,
+    ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1,
+    ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
+    ProviderIngestTransactionObservationV1,
 };
 use repair_ledger_projection::RepairLedgerTaskProjectionV1;
 /// Outcome returned when recording a PoR verdict.
@@ -98,33 +132,6 @@ pub struct PorVerdictOutcome {
     pub repair_task_id: Option<[u8; 32]>,
     /// Current consecutive failure streak for this provider/manifest.
     pub consecutive_failures: u64,
-    /// Recommended slash derived from the configured policy and provider bond state.
-    pub slash: Option<SlashRecommendation>,
-}
-
-/// Slash recommendation produced after PoR verification failures.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlashRecommendation {
-    /// Provider identifier targeted by the slash.
-    pub provider_id: ProviderId,
-    /// Manifest digest associated with the failed proof.
-    pub manifest_digest: [u8; 32],
-    /// Exact proposed penalty to be debited from the provider bond.
-    pub penalty: XorQuantity,
-    /// Failure streak length that triggered the slash.
-    pub strikes: u32,
-    /// Reason recorded for the recommendation.
-    pub reason: String,
-}
-
-fn checked_por_penalty(
-    bond_available: &XorQuantity,
-    bond_locked: &XorQuantity,
-    penalty_bond_bps: u16,
-) -> Result<XorQuantity, sorafs_manifest::deal::DealAmountError> {
-    bond_available
-        .checked_add(bond_locked)?
-        .checked_mul_basis_points(penalty_bond_bps)
 }
 
 /// Aggregated PoR ingestion status for a manifest.
@@ -220,9 +227,6 @@ struct GcEvictionTransactionOutcome {
 const GOVERNANCE_PUBLISH_INDEX_FILE: &str = "publish-index.json";
 const GOVERNANCE_PUBLISH_INDEX_SCHEMA: &str = "sorafs.governance_dag.local_publish_index.v1";
 const APPEAL_FINANCE_WEEKLY_ROLLUP_KIND: &str = "appeal_finance_weekly_rollup";
-const ECONOMICS_RUNTIME_STATE_DIR: &str = "economics";
-const PRICING_RUNTIME_SNAPSHOT_FILE: &str = "governed-pricing.to";
-const HEDGING_RUNTIME_SNAPSHOT_FILE: &str = "signed-hedging-feeds.to";
 const MODERATION_MODEL_REGISTRY_DIR: &str = "moderation-model-registry";
 const MODERATION_MODEL_REGISTRY_SNAPSHOT_FILE: &str = "registry-snapshot.to";
 const MODERATION_SCREENING_DIR: &str = "moderation-screening";
@@ -271,23 +275,29 @@ use std::{
 };
 
 use capacity::{
-    CapacityError, CapacityManager, CapacityUsageSnapshot, DeclarationWindow, ReplicationPlan,
-    ReplicationRelease,
+    CapacityError, CapacityFinalizedCursorV1, CapacityManager, CapacityReconcileModeV1,
+    CapacityReconciliationOutcomeV1, CapacityUsageSnapshot,
+};
+#[cfg(test)]
+use capacity::{
+    DeclarationWindow, FinalizedReplicationBindingV1, ReplicationPlan, ReplicationRelease,
 };
 use config::{GcConfig, RepairConfig, StorageConfig};
-use iroha_crypto::numeric::{Numeric, Quantity, RoundingMode};
+#[cfg(test)]
+use iroha_data_model::sorafs::pin_registry::{PinManifestFinalizedRecordV1, PinStatus};
 use iroha_data_model::{
+    ChainId,
     account::AccountId,
     da::ingest::DaStripeLayout,
     sorafs::{
         capacity::{CapacityDeclarationRecord, ProviderId},
-        deal::{ClientId, DealId, DealProposal, DealRecord, DealUsageReport},
         gar::GarEnforcementReceiptV1,
         moderation::{AdversarialCorpusManifestV1, ModerationReproManifestV1},
         moderation_ledger::{
             REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MIN_LEASE_MS_V1, RepairFinalizedCursorV1,
         },
         orderbook::OrderbookFinalizedCursorV1,
+        pin_registry::ReplicationOrderRecord,
         reserve::ReserveFinalizedCursorV1,
         transparency::{
             MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1, ModerationLedgerCyclePublicationV1,
@@ -297,8 +307,7 @@ use iroha_data_model::{
     },
 };
 use iroha_telemetry::metrics::{
-    MicropaymentCreditSnapshot, MicropaymentTicketCounters, global_or_default,
-    global_sorafs_gc_otel, global_sorafs_node_otel, global_sorafs_reconciliation_otel,
+    global_or_default, global_sorafs_gc_otel, global_sorafs_reconciliation_otel,
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use norito::json::Value as JsonValue;
@@ -323,7 +332,12 @@ use reserve_transaction_forwarder::{
     ReserveTransactionPendingV1, ReserveTransactionReconciliationV1,
     ReserveTransactionSigningRequestV1,
 };
+#[cfg(test)]
+use sorafs_car::compute_chunk_plan_digest_sha3;
 use sorafs_car::{CarBuildPlan, PorProof};
+use sorafs_manifest::hedging::signed::{
+    HedgingFeedTrustPolicyV1, MAX_HEDGING_TRUST_POLICY_BYTES, decode_hedging_feed_trust_policy,
+};
 #[cfg(test)]
 use sorafs_manifest::repair::GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1;
 use sorafs_manifest::reputation::signed::{
@@ -337,9 +351,12 @@ use sorafs_manifest::{
     SignedReputationSnapshotV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
     SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
-    capacity::{CapacityTelemetryV1, ReplicationOrderV1},
-    deal::{DealSettlementStatusV1, DealSettlementV1, XorQuantity},
-    por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
+    capacity::CapacityTelemetryV1,
+    deal::{DealSettlementV1, XorQuantity},
+    por::{
+        AuditOutcomeV1, AuditVerdictV1, PorChallengePublicationV1, PorChallengeV1, PorProofV1,
+        PorWeeklyReportV1,
+    },
     potr::PotrReceiptV1,
     proof_stream::ProofStreamTier,
     repair::{
@@ -349,17 +366,6 @@ use sorafs_manifest::{
         RepairReportV1, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
     },
     validate_reputation_snapshot_transition,
-};
-use sorafs_manifest::{
-    hedging::signed::{
-        GovernedHedgingReferencePriceDecisionV1, HedgingFeedTrustPolicyV1,
-        MAX_HEDGING_TRUST_POLICY_BYTES, SignedHedgingFeedLedgerV1, SignedHedgingPriceFeedV1,
-        decode_hedging_feed_trust_policy, decode_signed_hedging_price_feed,
-    },
-    pricing::signed::{
-        GovernedPricingManifestV1, GovernedPricingSeriesV1, MAX_PRICING_TRUST_POLICY_BYTES,
-        PricingTrustPolicyV1, decode_governed_pricing_manifest, decode_pricing_trust_policy,
-    },
 };
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -376,23 +382,18 @@ pub use transparency::{
     PrivacyCyclePrfRequestV1, PrivacyReleaseAnchorErrorV1, PrivacyReleaseAnchorHeadV1,
     PrivacyReleaseAnchorV1, PrivacySourceEventRecordOutcomeV1, ProofTokenIssuanceIngestError,
     TransparencyLedgerIngestError, TransparencyLedgerSourceEntry,
-    TransparencySourceEntryAdapterError, appeal_finance_report_source_entry,
-    appeal_finance_settlement_receipt_source_entry, gar_enforcement_receipt_source_entry,
-    moderation_evidence_viewer_audit_report_source_entry, privacy_aggregate_cycle_id,
-    privacy_metric_schema_digest, privacy_population_inventory_digest,
+    appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
+    gar_enforcement_receipt_source_entry, moderation_evidence_viewer_audit_report_source_entry,
+    privacy_aggregate_cycle_id, privacy_metric_schema_digest, privacy_population_inventory_digest,
     proof_token_issuance_from_base64, proof_token_issuance_from_frame,
     reserve_finalized_event_source_entry,
 };
 
+#[cfg(test)]
+use crate::metering::ReplicationUsageSample;
 use crate::{
     capacity::CapacityRuntimeCheckpointV1,
-    deal::DealRuntimeCheckpointV1,
-    economics::{
-        MAX_HEDGING_RUNTIME_CHECKPOINT_BYTES, MAX_PRICING_RUNTIME_CHECKPOINT_BYTES,
-        decode_hedging_checkpoint, decode_pricing_checkpoint, encode_hedging_checkpoint,
-        encode_pricing_checkpoint,
-    },
-    metering::{CapacityMeter, MeteringSnapshot, ReplicationUsageSample},
+    metering::{CapacityMeter, MeteringSnapshot},
     moderation::{
         MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1, ModerationEvidenceViewerRuntime,
         ModerationModelRegistry, ModerationQuarantineObjectEnvelopeV1,
@@ -411,6 +412,8 @@ use crate::{
     },
     telemetry::{TelemetryAccumulator, TelemetryError},
 };
+#[cfg(test)]
+use sorafs_manifest::capacity::ReplicationOrderV1;
 fn privacy_aggregate_entry_id(
     cycle_id: [u8; 16],
     aggregate_hash: [u8; 32],
@@ -425,6 +428,45 @@ fn privacy_aggregate_entry_id(
     let mut entry_id = [0u8; 16];
     entry_id.copy_from_slice(&digest.as_bytes()[..16]);
     entry_id
+}
+
+#[cfg(test)]
+fn validate_finalized_provider_payload(
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    manifest: &ManifestV1,
+    plan: &CarBuildPlan,
+) -> Result<(), FinalizedProviderIngestError> {
+    let manifest_digest = manifest
+        .digest()
+        .map_err(|error| FinalizedProviderIngestError::ManifestEncoding(error.to_string()))?;
+    let chunker_handle = format!(
+        "{}.{}@{}",
+        manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+    );
+    if manifest_digest.as_bytes() != &authorization.manifest_digest()
+        || manifest.root_cid.as_slice() != authorization.manifest_cid()
+        || chunker_handle != authorization.chunker_handle()
+        || manifest.chunk_digest_sha3_256 != authorization.chunk_digest_sha3_256()
+        || manifest.por_root != authorization.por_root()
+        || manifest.content_length != authorization.content_length()
+    {
+        return Err(FinalizedProviderIngestError::BindingMismatch(
+            "manifest bytes disagree with finalized authorization",
+        ));
+    }
+    if plan.content_length != authorization.content_length()
+        || plan.payload_digest.as_bytes() != &manifest.car_digest
+        || compute_chunk_plan_digest_sha3(&plan.chunks) != authorization.chunk_digest_sha3_256()
+        || u32::try_from(plan.chunk_profile.min_size).ok() != Some(manifest.chunking.min_size)
+        || u32::try_from(plan.chunk_profile.target_size).ok() != Some(manifest.chunking.target_size)
+        || u32::try_from(plan.chunk_profile.max_size).ok() != Some(manifest.chunking.max_size)
+        || u32::try_from(plan.chunk_profile.break_mask).ok() != Some(manifest.chunking.break_mask)
+    {
+        return Err(FinalizedProviderIngestError::BindingMismatch(
+            "CAR plan disagrees with finalized manifest",
+        ));
+    }
+    Ok(())
 }
 
 fn unix_now_secs() -> u64 {
@@ -467,18 +509,6 @@ fn evidence_viewer_audit_cycle_id(window: PrivacyAggregateCycleWindow) -> [u8; 1
     let mut cycle_id = [0u8; 16];
     cycle_id.copy_from_slice(&digest.as_bytes()[..16]);
     cycle_id
-}
-
-fn pricing_runtime_snapshot_path(data_dir: &Path) -> PathBuf {
-    data_dir
-        .join(ECONOMICS_RUNTIME_STATE_DIR)
-        .join(PRICING_RUNTIME_SNAPSHOT_FILE)
-}
-
-fn hedging_runtime_snapshot_path(data_dir: &Path) -> PathBuf {
-    data_dir
-        .join(ECONOMICS_RUNTIME_STATE_DIR)
-        .join(HEDGING_RUNTIME_SNAPSHOT_FILE)
 }
 
 fn moderation_model_registry_checkpoint_path(data_dir: &Path) -> PathBuf {
@@ -531,16 +561,8 @@ fn retired_auxiliary_runtime_checkpoint_path_v1(data_dir: &Path) -> PathBuf {
         .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V1)
 }
 
-fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 7] {
+fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 5] {
     [
-        (
-            "governed pricing runtime",
-            pricing_runtime_snapshot_path(data_dir),
-        ),
-        (
-            "signed hedging-feed runtime",
-            hedging_runtime_snapshot_path(data_dir),
-        ),
         (
             "moderation model registry",
             moderation_model_registry_checkpoint_path(data_dir),
@@ -1465,6 +1487,18 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
         archive: &PdpGovernanceArchiveV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
+    /// Persist a validated PoR challenge-publication envelope.
+    fn publish_por_challenge_publication(
+        &self,
+        publication: &PorChallengePublicationV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist a validated PoR weekly report.
+    fn publish_por_weekly_report(
+        &self,
+        report: &PorWeeklyReportV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
     /// Persist a GC audit event to the governance pipeline.
     fn publish_gc_audit_event(
         &self,
@@ -2012,6 +2046,7 @@ pub struct NodeRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider: Option<Arc<dyn PrivacyCyclePrfProviderV1>>,
     privacy_release_anchor: Option<Arc<dyn PrivacyReleaseAnchorV1>>,
+    governance_dag_signer: Option<Arc<dyn GovernanceDagRuntimeSigner>>,
 }
 
 impl std::fmt::Debug for NodeRuntimeDeps {
@@ -2029,6 +2064,13 @@ impl std::fmt::Debug for NodeRuntimeDeps {
             .field(
                 "privacy_release_anchor",
                 &self.privacy_release_anchor.is_some(),
+            )
+            .field(
+                "governance_dag_signer_handle",
+                &self
+                    .governance_dag_signer
+                    .as_ref()
+                    .map(|signer| signer.handle()),
             )
             .finish()
     }
@@ -2059,6 +2101,16 @@ impl NodeRuntimeDeps {
     #[must_use]
     pub fn with_privacy_release_anchor(mut self, anchor: Arc<dyn PrivacyReleaseAnchorV1>) -> Self {
         self.privacy_release_anchor = Some(anchor);
+        self
+    }
+
+    /// Attach the production HSM/KMS signer for local Governance DAG blocks.
+    #[must_use]
+    pub fn with_governance_dag_signer(
+        mut self,
+        signer: Arc<dyn GovernanceDagRuntimeSigner>,
+    ) -> Self {
+        self.governance_dag_signer = Some(signer);
         self
     }
 }
@@ -2131,10 +2183,10 @@ pub struct NodeHandle {
     native_repair_singleflight: native_repair_singleflight::NativeRepairSingleflightV1,
     orderbook_transaction_forwarder: OrderbookTransactionForwarder,
     reserve_transaction_forwarder: ReserveTransactionForwarder,
+    provider_ingest_outbox: Option<ProviderIngestOutbox>,
     por_history: Arc<RwLock<HashMap<PorHistoryKey, PorHistoryEntry>>>,
     storage: Option<Arc<StorageBackend>>,
     pdp_provider: Option<PdpProviderProtocol>,
-    deal_engine: DealEngine,
     gc_mutation_lock: Arc<Mutex<()>>,
     gc_eviction_intents: Arc<RwLock<GcEvictionIntentRuntime>>,
     gc_eviction_audit_links: Arc<RwLock<BTreeMap<u64, GcEvictionAuditLinkV1>>>,
@@ -2151,12 +2203,7 @@ pub struct NodeHandle {
     reputation_snapshots: Arc<RwLock<BTreeMap<[u8; 16], AdmittedReputationSnapshotV1>>>,
     reputation_events: Arc<RwLock<BoundedEventHistory<ReputationSnapshotEventV1>>>,
     reputation_event_sender: broadcast::Sender<ReputationSnapshotEventV1>,
-    pricing_trust_policy: Option<Arc<PricingTrustPolicyV1>>,
-    governed_pricing: Arc<RwLock<Option<GovernedPricingSeriesV1>>>,
-    pricing_checkpoint_path: Option<PathBuf>,
     hedging_feed_trust_policy: Option<Arc<HedgingFeedTrustPolicyV1>>,
-    signed_hedging_feeds: Arc<RwLock<Option<SignedHedgingFeedLedgerV1>>>,
-    hedging_checkpoint_path: Option<PathBuf>,
     moderation_model_registry_checkpoint_path: Option<PathBuf>,
     moderation_model_registry: Arc<RwLock<ModerationModelRegistry>>,
     moderation_screening_checkpoint_path: Option<PathBuf>,
@@ -2189,7 +2236,6 @@ struct PorHistoryEntry {
     last_failure_unix: Option<u64>,
     failures_total: u64,
     consecutive_failures: u64,
-    last_slash_unix: Option<u64>,
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -2200,7 +2246,6 @@ struct PorHistoryCheckpointEntryV1 {
     last_failure_unix: Option<u64>,
     failures_total: u64,
     consecutive_failures: u64,
-    last_slash_unix: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -2215,6 +2260,8 @@ enum GovernanceOutboxKindV1 {
     AppealFinanceWeeklyRollup,
     AppealFinanceSettlementReceipt,
     PdpArchive,
+    PorChallengePublication,
+    PorWeeklyReport,
 }
 
 impl GovernanceOutboxKindV1 {
@@ -2230,6 +2277,8 @@ impl GovernanceOutboxKindV1 {
             Self::AppealFinanceWeeklyRollup => 8,
             Self::AppealFinanceSettlementReceipt => 9,
             Self::PdpArchive => 10,
+            Self::PorChallengePublication => 11,
+            Self::PorWeeklyReport => 12,
         }
     }
 }
@@ -2896,6 +2945,16 @@ fn validate_governance_outbox_entry(
                 .validate()
                 .map_err(|err| GovernancePublishError::other(err.to_string()))?;
         }
+        GovernanceOutboxKindV1::PorChallengePublication => {
+            decode_canonical_governance_payload::<PorChallengePublicationV1>(&entry.payload_bytes)?
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+        GovernanceOutboxKindV1::PorWeeklyReport => {
+            decode_canonical_governance_payload::<PorWeeklyReportV1>(&entry.payload_bytes)?
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
     }
     Ok(())
 }
@@ -3215,6 +3274,17 @@ fn publish_governance_outbox_entry(
             )?;
             publisher.publish_pdp_archive(&payload, &entry.payload_bytes)
         }
+        GovernanceOutboxKindV1::PorChallengePublication => {
+            let payload = decode_canonical_governance_payload::<PorChallengePublicationV1>(
+                &entry.payload_bytes,
+            )?;
+            publisher.publish_por_challenge_publication(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::PorWeeklyReport => {
+            let payload =
+                decode_canonical_governance_payload::<PorWeeklyReportV1>(&entry.payload_bytes)?;
+            publisher.publish_por_weekly_report(&payload, &entry.payload_bytes)
+        }
     }
 }
 
@@ -3231,7 +3301,6 @@ struct AdmittedReputationSnapshotV1 {
 struct AuxiliaryRuntimeCheckpointV2 {
     version: u8,
     capacity_runtime: CapacityRuntimeCheckpointV1,
-    deal_runtime: DealRuntimeCheckpointV1,
     por_tracker: por::PorTrackerCheckpointV1,
     por_history: Vec<PorHistoryCheckpointEntryV1>,
     gc_eviction_intent_next_sequence: u64,
@@ -3273,6 +3342,35 @@ pub enum NodeStorageError {
     /// Scheduler admission refused work without parking the caller.
     #[error(transparent)]
     Scheduler(#[from] SchedulerAdmissionError),
+}
+
+/// Errors raised by provider-internal finalized-ledger storage ingest.
+#[derive(Debug, Error)]
+pub enum FinalizedProviderIngestError {
+    /// Provider storage or its durable outbox is disabled.
+    #[error("finalized-ledger provider ingest is disabled")]
+    Disabled,
+    /// Finalized capacity state could not be inspected.
+    #[error(transparent)]
+    Capacity(#[from] CapacityError),
+    /// Durable outbox admission or state transition failed.
+    #[error(transparent)]
+    Outbox(#[from] ProviderIngestOutboxError),
+    /// Supervised runtime construction failed.
+    #[error(transparent)]
+    Runtime(#[from] ProviderIngestRuntimeErrorV1),
+    /// Finalized pin, provider assignment, manifest, or CAR plan disagree.
+    #[error("finalized-ledger provider ingest binding mismatch: {0}")]
+    BindingMismatch(&'static str),
+    /// The exact finalized authorization exhausted its bounded retries.
+    #[error("finalized-ledger provider ingest is terminally dead-lettered")]
+    DeadLettered,
+    /// Canonical manifest encoding failed.
+    #[error("failed to encode canonical provider-ingest manifest: {0}")]
+    ManifestEncoding(String),
+    /// Verified local storage ingest failed.
+    #[error(transparent)]
+    Storage(#[from] NodeStorageError),
 }
 
 /// Errors returned by the embedded admission-bound PDP provider service.
@@ -3339,6 +3437,17 @@ pub enum NodeInitError {
     )]
     ProofOutcomeOutbox {
         /// Configured storage root containing the delivery checkpoint.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
+    /// The durable finalized-ledger provider-ingest outbox could not be opened.
+    #[error(
+        "failed to initialise SoraFS provider-ingest outbox `{path}`: {message}",
+        path = path.display()
+    )]
+    ProviderIngestOutbox {
+        /// Configured checkpoint path.
         path: PathBuf,
         /// Validation or I/O diagnostic.
         message: String,
@@ -3415,17 +3524,6 @@ pub enum NodeInitError {
         /// Validation or I/O diagnostic.
         message: String,
     },
-    /// The configured external pricing trust policy could not be read or validated.
-    #[error(
-        "failed to load SoraFS pricing trust policy `{path}`: {message}",
-        path = path.display()
-    )]
-    PricingTrustPolicy {
-        /// Configured trust-policy path.
-        path: PathBuf,
-        /// Validation or I/O diagnostic.
-        message: String,
-    },
     /// The configured external hedging-feed trust policy could not be read or validated.
     #[error(
         "failed to load SoraFS hedging-feed trust policy `{path}`: {message}",
@@ -3435,6 +3533,18 @@ pub enum NodeInitError {
         /// Configured trust-policy path.
         path: PathBuf,
         /// Validation or I/O diagnostic.
+        message: String,
+    },
+    /// The configured public hedging/billing service policy could not be read
+    /// or validated.
+    #[error(
+        "failed to load SoraFS hedging/billing service policy `{path}`: {message}",
+        path = path.display()
+    )]
+    HedgingBillingServicePolicy {
+        /// Configured public service-policy path.
+        path: PathBuf,
+        /// Validation, digest, canonical-codec, or I/O diagnostic.
         message: String,
     },
     /// The config-pinned moderation screening authority bundle could not be
@@ -3549,19 +3659,6 @@ fn load_reputation_trust_policy(
     })
 }
 
-fn load_pricing_trust_policy(path: &Path) -> Result<PricingTrustPolicyV1, NodeInitError> {
-    let bytes =
-        read_trust_policy_file(path, MAX_PRICING_TRUST_POLICY_BYTES, "pricing trust policy")
-            .map_err(|error| NodeInitError::PricingTrustPolicy {
-                path: path.to_path_buf(),
-                message: error.to_string(),
-            })?;
-    decode_pricing_trust_policy(&bytes).map_err(|error| NodeInitError::PricingTrustPolicy {
-        path: path.to_path_buf(),
-        message: error.to_string(),
-    })
-}
-
 fn load_hedging_feed_trust_policy(path: &Path) -> Result<HedgingFeedTrustPolicyV1, NodeInitError> {
     let bytes = read_trust_policy_file(
         path,
@@ -3578,6 +3675,51 @@ fn load_hedging_feed_trust_policy(path: &Path) -> Result<HedgingFeedTrustPolicyV
             message: error.to_string(),
         }
     })
+}
+
+/// Load and digest-pin one canonical public hedging/billing service policy.
+///
+/// The file is required to be an absolute, ancestor-safe, regular single-link
+/// path that is not writable by group or other users, and is opened without
+/// following a terminal symlink on supported hosts.
+///
+/// # Errors
+///
+/// Rejects unsafe paths, oversized or noncanonical Norito, invalid policy
+/// material, and any digest substitution.
+pub fn load_hedging_billing_service_policy(
+    path: &Path,
+    expected_digest: [u8; 32],
+) -> Result<hedging_billing_service::HedgingBillingServicePolicyV1, NodeInitError> {
+    let bytes = read_trust_policy_file(
+        path,
+        hedging_billing_service::HEDGING_BILLING_SERVICE_POLICY_MAX_BYTES_V1,
+        "hedging/billing service policy",
+    )
+    .map_err(|error| NodeInitError::HedgingBillingServicePolicy {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let policy =
+        hedging_billing_service::HedgingBillingServicePolicyV1::from_canonical_bytes(&bytes)
+            .map_err(|error| NodeInitError::HedgingBillingServicePolicy {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            })?;
+    let observed_digest =
+        policy
+            .canonical_digest()
+            .map_err(|error| NodeInitError::HedgingBillingServicePolicy {
+                path: path.to_path_buf(),
+                message: error.to_string(),
+            })?;
+    if observed_digest != expected_digest {
+        return Err(NodeInitError::HedgingBillingServicePolicy {
+            path: path.to_path_buf(),
+            message: "canonical digest does not match iroha_config anchor".to_owned(),
+        });
+    }
+    Ok(policy)
 }
 
 fn load_moderation_screening_authority_bundle(
@@ -3650,51 +3792,6 @@ pub enum ReconciliationError {
     Validation(#[from] ReconciliationValidationError),
 }
 
-/// Project an exact decimal quantity onto a legacy micro-unit metrics axis.
-///
-/// Metrics cannot carry the bounded 512-bit decimal representation used by
-/// settlement state. Fractional micro-XOR is therefore rounded toward zero and
-/// values outside the metrics counter domain are saturated. This helper must
-/// not be used for state, wire payloads, signatures, or digest preimages.
-fn quantity_to_metric_micro_saturating(amount: &Quantity) -> u128 {
-    amount
-        .try_mul_decimal(&Numeric::from(1_000_000_u64))
-        .and_then(|scaled| {
-            scaled.as_numeric().try_decimal_div_round(
-                &Numeric::from(1_u64),
-                0,
-                RoundingMode::TowardZero,
-            )
-        })
-        .ok()
-        .and_then(|scaled| scaled.try_mantissa_u128())
-        .unwrap_or(u128::MAX)
-}
-
-fn quantity_divergence_bps_saturating(feed: &Quantity, reference: &Quantity) -> u64 {
-    if reference.is_zero() {
-        return u64::MAX;
-    }
-    let difference = if feed >= reference {
-        feed.checked_sub(reference)
-    } else {
-        reference.checked_sub(feed)
-    };
-    difference
-        .and_then(|difference| {
-            difference.as_numeric().try_decimal_mul_div_round(
-                &Numeric::from(10_000_u64),
-                reference.as_numeric(),
-                0,
-                RoundingMode::TowardZero,
-            )
-        })
-        .ok()
-        .and_then(|value| value.try_mantissa_u128())
-        .and_then(|value| u64::try_from(value).ok())
-        .unwrap_or(u64::MAX)
-}
-
 impl PdpTerminalHandoff for NodeHandle {
     fn archive(
         &self,
@@ -3749,6 +3846,38 @@ impl NodeHandle {
             idempotency_key,
             *blake3::hash(&bytes).as_bytes(),
         ))
+    }
+
+    /// Durably enqueue and publish one canonical PoR challenge envelope.
+    pub fn publish_por_challenge_publication(
+        &self,
+        publication: PorChallengePublicationV1,
+    ) -> Result<(), GovernancePublishError> {
+        publication.validate().map_err(|error| {
+            GovernancePublishError::other(format!("invalid PoR challenge publication: {error}"))
+        })?;
+        let encoded = norito::to_bytes(&publication).map_err(|error| {
+            GovernancePublishError::other(format!("encode PoR challenge publication: {error}"))
+        })?;
+        self.enqueue_governance_outbox(GovernanceOutboxKindV1::PorChallengePublication, encoded)?;
+        self.flush_governance_outbox()?;
+        Ok(())
+    }
+
+    /// Durably enqueue and publish one validated PoR weekly report.
+    pub fn publish_por_weekly_report(
+        &self,
+        report: PorWeeklyReportV1,
+    ) -> Result<(), GovernancePublishError> {
+        report.validate().map_err(|error| {
+            GovernancePublishError::other(format!("invalid PoR weekly report: {error}"))
+        })?;
+        let encoded = norito::to_bytes(&report).map_err(|error| {
+            GovernancePublishError::other(format!("encode PoR weekly report: {error}"))
+        })?;
+        self.enqueue_governance_outbox(GovernanceOutboxKindV1::PorWeeklyReport, encoded)?;
+        self.flush_governance_outbox()?;
+        Ok(())
     }
 }
 
@@ -3940,7 +4069,24 @@ impl NodeHandle {
             moderation_quarantine_key_wrapper,
             privacy_cycle_prf_provider,
             privacy_release_anchor,
+            governance_dag_signer,
         } = runtime_deps;
+        let governance_dir = config.governance_dir().cloned();
+        let governance_dag_publisher_peer_id = config.governance_dag_publisher_peer_id().cloned();
+        let governance_dag_signer_handle = config.governance_dag_signer_handle().cloned();
+        let governance_dag_publisher_public_key_hex =
+            config.governance_dag_publisher_public_key_hex().cloned();
+        if governance_dir.is_some()
+            && (governance_dag_publisher_peer_id.is_none()
+                || governance_dag_signer_handle.is_none()
+                || governance_dag_publisher_public_key_hex.is_none()
+                || governance_dag_signer.is_none())
+        {
+            return Err(NodeInitError::GovernancePublisher(
+                "configured Governance DAG publication requires peer id, signer handle, public key, and an injected runtime signer"
+                    .to_owned(),
+            ));
+        }
         let moderation_screening_authority = if config.moderation_screening_enabled() {
             if !config.enabled() {
                 return Err(NodeInitError::ModerationScreeningAuthorityBundle {
@@ -4000,40 +4146,11 @@ impl NodeHandle {
             .map(|path| load_reputation_trust_policy(path))
             .transpose()?
             .map(Arc::new);
-        let pricing_trust_policy = config
-            .pricing_trust_policy_path()
-            .map(|path| load_pricing_trust_policy(path))
-            .transpose()?
-            .map(Arc::new);
-        let governed_pricing = match pricing_trust_policy.as_deref() {
-            Some(policy) => Some(GovernedPricingSeriesV1::new(policy).map_err(|error| {
-                NodeInitError::PricingTrustPolicy {
-                    path: config
-                        .pricing_trust_policy_path()
-                        .cloned()
-                        .unwrap_or_else(|| PathBuf::from("<configured-pricing-policy>")),
-                    message: error.to_string(),
-                }
-            })?),
-            None => None,
-        };
         let hedging_feed_trust_policy = config
             .hedging_feed_trust_policy_path()
             .map(|path| load_hedging_feed_trust_policy(path))
             .transpose()?
             .map(Arc::new);
-        let signed_hedging_feeds = match hedging_feed_trust_policy.as_deref() {
-            Some(policy) => Some(SignedHedgingFeedLedgerV1::new(policy).map_err(|error| {
-                NodeInitError::HedgingFeedTrustPolicy {
-                    path: config
-                        .hedging_feed_trust_policy_path()
-                        .cloned()
-                        .unwrap_or_else(|| PathBuf::from("<configured-hedging-policy>")),
-                    message: error.to_string(),
-                }
-            })?),
-            None => None,
-        };
         let gc_config = gc_config.with_default_state_dir(config.data_dir());
         let scheduler_config = StorageSchedulerConfig::from_storage_config(&config);
         let schedulers = StorageSchedulersRuntime::new(scheduler_config);
@@ -4067,6 +4184,19 @@ impl NodeHandle {
         let smoothing = config.smoothing_config();
         let event_history_limit = config.runtime_retention().event_history_limit();
         let state_entry_limit = config.runtime_retention().state_entry_limit();
+        let provider_ingest_outbox_path = config.data_dir().join(PROVIDER_INGEST_OUTBOX_FILE_V1);
+        let provider_ingest_outbox = storage
+            .as_ref()
+            .zip(config.provider_ingest_outbox_policy())
+            .map(|(_, policy)| {
+                ProviderIngestOutbox::open(&provider_ingest_outbox_path, policy).map_err(|error| {
+                    NodeInitError::ProviderIngestOutbox {
+                        path: provider_ingest_outbox_path.clone(),
+                        message: error.to_string(),
+                    }
+                })
+            })
+            .transpose()?;
         let potr_state_dir = config.data_dir().join("potr-receipts");
         let potr = storage
             .as_ref()
@@ -4185,16 +4315,6 @@ impl NodeHandle {
         } else {
             None
         };
-        let deal_engine = DealEngine::with_entry_limit(state_entry_limit);
-        let governance_dir = config.governance_dir().cloned();
-        let governance_dag_publisher_peer_id = config.governance_dag_publisher_peer_id().cloned();
-        let governance_dag_signing_key_path = config.governance_dag_signing_key_path().cloned();
-        let pricing_checkpoint_path = storage
-            .as_ref()
-            .map(|_| pricing_runtime_snapshot_path(config.data_dir()));
-        let hedging_checkpoint_path = storage
-            .as_ref()
-            .map(|_| hedging_runtime_snapshot_path(config.data_dir()));
         let moderation_model_registry_checkpoint_path = storage
             .as_ref()
             .map(|_| moderation_model_registry_checkpoint_path(config.data_dir()));
@@ -4233,10 +4353,10 @@ impl NodeHandle {
             native_repair_singleflight,
             orderbook_transaction_forwarder,
             reserve_transaction_forwarder,
+            provider_ingest_outbox,
             por_history: Arc::new(RwLock::new(HashMap::new())),
             storage,
             pdp_provider,
-            deal_engine,
             gc_mutation_lock: Arc::new(Mutex::new(())),
             gc_eviction_intents: Arc::new(RwLock::new(GcEvictionIntentRuntime::default())),
             gc_eviction_audit_links: Arc::new(RwLock::new(BTreeMap::new())),
@@ -4253,12 +4373,7 @@ impl NodeHandle {
             reputation_snapshots: Arc::new(RwLock::new(BTreeMap::new())),
             reputation_events: Arc::new(RwLock::new(BoundedEventHistory::new(event_history_limit))),
             reputation_event_sender,
-            pricing_trust_policy,
-            governed_pricing: Arc::new(RwLock::new(governed_pricing)),
-            pricing_checkpoint_path,
             hedging_feed_trust_policy,
-            signed_hedging_feeds: Arc::new(RwLock::new(signed_hedging_feeds)),
-            hedging_checkpoint_path,
             moderation_model_registry_checkpoint_path,
             moderation_model_registry: Arc::new(RwLock::new(
                 ModerationModelRegistry::with_entry_limit(state_entry_limit),
@@ -4302,8 +4417,6 @@ impl NodeHandle {
                     node.initialize_runtime_checkpoints()?;
                 }
                 Some(RuntimeCheckpointInitialization::Initialized) => {
-                    node.load_pricing_checkpoint()?;
-                    node.load_hedging_checkpoint()?;
                     node.load_moderation_model_registry_checkpoint()?;
                     node.load_moderation_screening_checkpoint()?;
                     node.load_moderation_quarantine_object_index_checkpoint()?;
@@ -4333,23 +4446,38 @@ impl NodeHandle {
                     .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
                 let publisher = match (
                     governance_dag_publisher_peer_id.clone(),
-                    governance_dag_signing_key_path.clone(),
+                    governance_dag_signer_handle.clone(),
+                    governance_dag_publisher_public_key_hex.clone(),
+                    governance_dag_signer.clone(),
                 ) {
-                    (Some(peer_id), Some(signing_key_path)) => publisher
-                        .with_runtime_dag_signer(peer_id.into_bytes(), signing_key_path)
-                        .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?,
-                    (Some(_), None) | (None, Some(_)) => {
-                        return Err(NodeInitError::GovernancePublisher(
-                            "runtime DAG signing requires both publisher peer id and signing key path"
-                                .to_owned(),
-                        ));
+                    (Some(peer_id), Some(handle), Some(public_key_hex), Some(signer)) => {
+                        let public_key = hex::decode(&public_key_hex).map_err(|_| {
+                            NodeInitError::GovernancePublisher(
+                                "Governance DAG publisher public key is not canonical hex"
+                                    .to_owned(),
+                            )
+                        })?;
+                        let public_key: [u8; 32] = public_key.try_into().map_err(|_| {
+                            NodeInitError::GovernancePublisher(
+                                "Governance DAG publisher public key must be 32 bytes".to_owned(),
+                            )
+                        })?;
+                        publisher
+                            .with_runtime_dag_signer_provider(
+                                handle,
+                                peer_id.into_bytes(),
+                                public_key,
+                                signer,
+                            )
+                            .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?
                     }
-                    (None, None) => publisher,
+                    _ => {
+                        unreachable!("configured Governance DAG dependencies validated above");
+                    }
                 };
                 iroha_logger::info!(
                     path = ?dir,
-                    signed_runtime_dag = governance_dag_publisher_peer_id.is_some()
-                        && governance_dag_signing_key_path.is_some(),
+                    signed_runtime_dag = true,
                     "SoraFS governance publisher initialised"
                 );
                 node.try_set_governance_publisher(Arc::new(publisher))
@@ -5086,22 +5214,6 @@ impl NodeHandle {
     }
 
     fn initialize_runtime_checkpoints(&self) -> Result<(), NodeInitError> {
-        let pricing_path = self
-            .pricing_checkpoint_path
-            .as_ref()
-            .expect("storage-backed node has a governed-pricing checkpoint path");
-        self.persist_pricing_checkpoint().map_err(|err| {
-            NodeInitError::checkpoint("governed pricing runtime", pricing_path, err)
-        })?;
-
-        let hedging_path = self
-            .hedging_checkpoint_path
-            .as_ref()
-            .expect("storage-backed node has a signed-feed checkpoint path");
-        self.persist_hedging_checkpoint().map_err(|err| {
-            NodeInitError::checkpoint("signed hedging-feed runtime", hedging_path, err)
-        })?;
-
         let model_path = self
             .moderation_model_registry_checkpoint_path
             .as_ref()
@@ -5156,352 +5268,6 @@ impl NodeHandle {
         .map_err(|err| {
             NodeInitError::checkpoint("runtime initialization marker", &marker_path, err)
         })
-    }
-
-    /// Returns a clone of the embedded deal engine handle.
-    #[must_use]
-    pub fn deal_engine(&self) -> DealEngine {
-        self.deal_engine.clone()
-    }
-
-    /// Deposit provider collateral without an external funding sequence in tests.
-    #[cfg(test)]
-    pub fn deposit_provider_bond(
-        &self,
-        provider_id: ProviderId,
-        amount: XorQuantity,
-    ) -> Result<ProviderSnapshot, DealEngineError> {
-        self.mutate_deal_engine_durably(|engine| {
-            engine
-                .deposit_provider_bond(provider_id, amount)
-                .map(|snapshot| (snapshot, true))
-        })
-    }
-
-    /// Admit one exact-canonical threshold-governed pricing manifest durably.
-    ///
-    /// The configured external policy supplies all trust roots. The submitted
-    /// bytes are decoded with protocol bounds, required to be canonical, and
-    /// never interpreted as a source of trust policy or signing secrets.
-    pub fn admit_governed_pricing_manifest(
-        &self,
-        canonical_envelope: &[u8],
-        admitted_at_unix: u64,
-    ) -> Result<GovernedPricingAdmissionOutcome, EconomicsRuntimeError> {
-        let governed = decode_governed_pricing_manifest(canonical_envelope)?;
-        let pricing_id = governed.pricing_id;
-        let effective_from_unix = governed.manifest.effective_from_unix;
-        let policy = self
-            .pricing_trust_policy
-            .as_deref()
-            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
-        if self.pricing_checkpoint_path.is_none() {
-            return Err(EconomicsRuntimeError::Checkpoint(
-                "governed pricing admission requires enabled durable storage".to_owned(),
-            ));
-        }
-        let _mutation_guard = self
-            .runtime_mutation_lock
-            .lock()
-            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
-        self.ensure_durability_healthy()
-            .map_err(EconomicsRuntimeError::Checkpoint)?;
-        let mut state = self
-            .governed_pricing
-            .write()
-            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
-        let previous = state.clone();
-        let series = state
-            .as_mut()
-            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
-        if let Err(error) = series.admit(policy, governed, admitted_at_unix) {
-            *state = previous;
-            return Err(error.into());
-        }
-        let admission_count = series.len();
-        if let Err(error) = self.persist_pricing_checkpoint_state(Some(series)) {
-            if !error.committed {
-                *state = previous;
-            }
-            return Err(EconomicsRuntimeError::Checkpoint(error.to_string()));
-        }
-        Ok(GovernedPricingAdmissionOutcome {
-            pricing_id,
-            effective_from_unix,
-            admitted_at_unix,
-            admission_count,
-        })
-    }
-
-    /// Return a validated clone of the durable governed-pricing series.
-    pub fn governed_pricing_series(
-        &self,
-    ) -> Result<GovernedPricingSeriesV1, EconomicsRuntimeError> {
-        let policy = self
-            .pricing_trust_policy
-            .as_deref()
-            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
-        let state = self
-            .governed_pricing
-            .read()
-            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
-        let series = state
-            .as_ref()
-            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
-        series.validate(policy)?;
-        Ok(series.clone())
-    }
-
-    /// Return the latest governed pricing manifest effective at `observed_at_unix`.
-    pub fn active_governed_pricing(
-        &self,
-        observed_at_unix: u64,
-    ) -> Result<Option<GovernedPricingManifestV1>, EconomicsRuntimeError> {
-        let policy = self
-            .pricing_trust_policy
-            .as_deref()
-            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
-        let state = self
-            .governed_pricing
-            .read()
-            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
-        let series = state
-            .as_ref()
-            .ok_or(EconomicsRuntimeError::PricingNotConfigured)?;
-        Ok(series.active_at(policy, observed_at_unix)?.cloned())
-    }
-
-    /// Admit one exact-canonical externally signed hedging-feed sample durably.
-    pub fn admit_signed_hedging_feed(
-        &self,
-        canonical_envelope: &[u8],
-        admitted_at_unix: u64,
-    ) -> Result<SignedHedgingFeedAdmissionOutcome, EconomicsRuntimeError> {
-        let envelope = decode_signed_hedging_price_feed(canonical_envelope)?;
-        let feed_id = envelope.feed.feed_id.clone();
-        let source = envelope.feed.source.clone();
-        let observed_at_unix = envelope.feed.observed_at_unix;
-        let policy = self
-            .hedging_feed_trust_policy
-            .as_deref()
-            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
-        if self.hedging_checkpoint_path.is_none() {
-            return Err(EconomicsRuntimeError::Checkpoint(
-                "signed hedging-feed admission requires enabled durable storage".to_owned(),
-            ));
-        }
-        let _mutation_guard = self
-            .runtime_mutation_lock
-            .lock()
-            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
-        self.ensure_durability_healthy()
-            .map_err(EconomicsRuntimeError::Checkpoint)?;
-        let mut state = self
-            .signed_hedging_feeds
-            .write()
-            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
-        let previous = state.clone();
-        let ledger = state
-            .as_mut()
-            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
-        if let Err(error) = ledger.admit(policy, envelope, admitted_at_unix) {
-            *state = previous;
-            return Err(error.into());
-        }
-        let feed_count = ledger.len();
-        if let Err(error) = self.persist_hedging_checkpoint_state(Some(ledger)) {
-            if !error.committed {
-                *state = previous;
-            }
-            return Err(EconomicsRuntimeError::Checkpoint(error.to_string()));
-        }
-        drop(state);
-        let cluster = self.config.alias().map_or("local", String::as_str);
-        global_or_default().set_sorafs_hedging_feed_lag_seconds(
-            cluster,
-            &source,
-            admitted_at_unix.saturating_sub(observed_at_unix),
-        );
-        Ok(SignedHedgingFeedAdmissionOutcome {
-            feed_id,
-            source,
-            observed_at_unix,
-            admitted_at_unix,
-            feed_count,
-        })
-    }
-
-    /// Return a validated clone of the durable signed-feed high-water ledger.
-    pub fn signed_hedging_feed_ledger(
-        &self,
-    ) -> Result<SignedHedgingFeedLedgerV1, EconomicsRuntimeError> {
-        let policy = self
-            .hedging_feed_trust_policy
-            .as_deref()
-            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
-        let state = self
-            .signed_hedging_feeds
-            .read()
-            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
-        let ledger = state
-            .as_ref()
-            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
-        ledger.validate(policy)?;
-        Ok(ledger.clone())
-    }
-
-    /// Return the latest authenticated sample retained for every feed id.
-    pub fn latest_signed_hedging_feeds(
-        &self,
-    ) -> Result<Vec<SignedHedgingPriceFeedV1>, EconomicsRuntimeError> {
-        let policy = self
-            .hedging_feed_trust_policy
-            .as_deref()
-            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
-        let state = self
-            .signed_hedging_feeds
-            .read()
-            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
-        let ledger = state
-            .as_ref()
-            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
-        ledger.latest_signed_feeds(policy).map_err(Into::into)
-    }
-
-    /// Return the maximum feed age authorized by the configured hedging policy.
-    pub fn hedging_max_sample_age_secs(&self) -> Result<u64, EconomicsRuntimeError> {
-        self.hedging_feed_trust_policy
-            .as_deref()
-            .map(|policy| policy.max_sample_age_secs)
-            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)
-    }
-
-    /// Derive a governed reference-price decision from durable latest samples.
-    pub fn derive_latest_hedging_reference_price(
-        &self,
-        effective_at_unix: u64,
-        admitted_at_unix: u64,
-        max_feed_age_secs: u64,
-        max_divergence_bps: u16,
-    ) -> Result<GovernedHedgingReferencePriceDecisionV1, EconomicsRuntimeError> {
-        let policy = self
-            .hedging_feed_trust_policy
-            .as_deref()
-            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
-        let state = self
-            .signed_hedging_feeds
-            .read()
-            .map_err(|_| EconomicsRuntimeError::StateLockPoisoned)?;
-        let ledger = state
-            .as_ref()
-            .ok_or(EconomicsRuntimeError::HedgingNotConfigured)?;
-        let governed = ledger.derive_latest_reference_price(
-            policy,
-            effective_at_unix,
-            admitted_at_unix,
-            max_feed_age_secs,
-            max_divergence_bps,
-        )?;
-        drop(state);
-        self.record_hedging_reference_price_metrics(&governed);
-        Ok(governed)
-    }
-
-    /// Apply an authenticated provider bond funding request at the exact next sequence.
-    ///
-    /// External callers must authenticate the request and bind `provider_id` to the admitted
-    /// provider identity before invoking this trusted runtime boundary.
-    pub fn fund_provider_bond_sequenced(
-        &self,
-        provider_id: ProviderId,
-        amount: XorQuantity,
-        funding_sequence: u64,
-    ) -> Result<ProviderSnapshot, DealEngineError> {
-        self.mutate_deal_engine_durably(|engine| {
-            engine
-                .deposit_provider_bond_sequenced(provider_id, amount, funding_sequence)
-                .map(|snapshot| (snapshot, true))
-        })
-    }
-
-    /// Deposit client credit without an external funding sequence in tests.
-    #[cfg(test)]
-    pub fn deposit_client_credit(
-        &self,
-        client_id: ClientId,
-        amount: XorQuantity,
-    ) -> Result<ClientSnapshot, DealEngineError> {
-        self.mutate_deal_engine_durably(|engine| {
-            engine
-                .deposit_client_credit(client_id, amount)
-                .map(|snapshot| (snapshot, true))
-        })
-    }
-
-    /// Apply an authenticated operator client-credit funding request at the exact next sequence.
-    ///
-    /// External callers must authenticate a configured operator before invoking this trusted
-    /// runtime boundary.
-    pub fn fund_client_credit_sequenced(
-        &self,
-        client_id: ClientId,
-        amount: XorQuantity,
-        funding_sequence: u64,
-    ) -> Result<ClientSnapshot, DealEngineError> {
-        self.mutate_deal_engine_durably(|engine| {
-            engine
-                .deposit_client_credit_sequenced(client_id, amount, funding_sequence)
-                .map(|snapshot| (snapshot, true))
-        })
-    }
-
-    /// Open a deal using the supplied proposal and activation epoch.
-    ///
-    /// External callers must authenticate a configured operator and require a current admitted
-    /// advert for the proposal's provider before invoking this trusted runtime boundary.
-    pub fn open_deal(
-        &self,
-        proposal: DealProposal,
-        activation_epoch: u64,
-    ) -> Result<DealRecord, DealEngineError> {
-        self.mutate_deal_engine_durably(|engine| {
-            engine
-                .open_deal(proposal, activation_epoch)
-                .map(|record| (record, true))
-        })
-    }
-
-    /// Record usage attributed to a deal and evaluate probabilistic micropayments.
-    ///
-    /// External callers must bind an authenticated request signer to the deal provider's current
-    /// admitted advert before invoking this trusted runtime boundary.
-    pub fn record_deal_usage(
-        &self,
-        report: DealUsageReport,
-    ) -> Result<UsageOutcome, DealEngineError> {
-        let outcome = self.mutate_deal_engine_durably(|engine| {
-            engine.record_usage(report).map(|outcome| (outcome, true))
-        })?;
-        let provider_hex = hex::encode(outcome.provider_id.as_bytes());
-        global_sorafs_node_otel().record_micropayment_sample(
-            &provider_hex,
-            MicropaymentCreditSnapshot {
-                deterministic_charge: outcome.deterministic_charge.clone().into_quantity(),
-                credit_generated: outcome
-                    .micropayment_credit_generated
-                    .clone()
-                    .into_quantity(),
-                credit_applied: outcome.micropayment_credit_applied.clone().into_quantity(),
-                credit_carry: outcome.micropayment_credit_carry.clone().into_quantity(),
-                outstanding: outcome.outstanding.clone().into_quantity(),
-            },
-            MicropaymentTicketCounters {
-                processed: outcome.tickets_processed as u64,
-                won: outcome.tickets_won as u64,
-                duplicate: outcome.tickets_duplicate as u64,
-            },
-        );
-        Ok(outcome)
     }
 
     /// Register a repair orchestrator used to rehydrate missing chunks remotely.
@@ -7849,6 +7615,28 @@ impl NodeHandle {
         Ok(())
     }
 
+    /// Return the immutable public trust policy loaded for reputation admission.
+    ///
+    /// The policy contains no signing material. Exposing the same `Arc` lets a
+    /// supervised committed projector bind publication verification to the
+    /// exact policy already admitted during node startup, avoiding a competing
+    /// file read or divergent policy authority.
+    #[must_use]
+    pub fn reputation_trust_policy(&self) -> Option<Arc<ReputationSnapshotTrustPolicyV1>> {
+        self.reputation_trust_policy.clone()
+    }
+
+    /// Return the immutable public trust policy loaded for signed hedging-feed
+    /// admission.
+    ///
+    /// A supervised billing projector reuses this exact `Arc` so feed
+    /// validation and billing period closure cannot observe divergent policy
+    /// files.
+    #[must_use]
+    pub fn hedging_feed_trust_policy(&self) -> Option<Arc<HedgingFeedTrustPolicyV1>> {
+        self.hedging_feed_trust_policy.clone()
+    }
+
     /// Return the latest reputation snapshot accepted by this node.
     #[must_use]
     pub fn latest_reputation_snapshot(&self) -> Option<ReputationSnapshotV1> {
@@ -9780,9 +9568,6 @@ impl NodeHandle {
         let capacity_runtime = self.capacity.checkpoint().map_err(|err| {
             GovernancePublishError::other(format!("export capacity runtime checkpoint: {err}"))
         })?;
-        let deal_runtime = self.deal_engine.checkpoint().map_err(|err| {
-            GovernancePublishError::other(format!("export deal runtime checkpoint: {err}"))
-        })?;
         let mut por_history = self
             .por_history
             .read()
@@ -9796,7 +9581,6 @@ impl NodeHandle {
                     last_failure_unix: entry.last_failure_unix,
                     failures_total: entry.failures_total,
                     consecutive_failures: entry.consecutive_failures,
-                    last_slash_unix: entry.last_slash_unix,
                 },
             )
             .collect::<Vec<_>>();
@@ -9902,7 +9686,6 @@ impl NodeHandle {
         Ok(AuxiliaryRuntimeCheckpointV2 {
             version: AUX_RUNTIME_STATE_VERSION_V2,
             capacity_runtime,
-            deal_runtime,
             por_tracker: self.por.checkpoint(),
             por_history,
             gc_eviction_intent_next_sequence,
@@ -9949,133 +9732,6 @@ impl NodeHandle {
                 self.config.runtime_retention().checkpoint_max_bytes(),
             ),
         )
-    }
-
-    fn mutate_deal_engine_durably<T>(
-        &self,
-        mutate: impl FnOnce(&DealEngine) -> Result<(T, bool), DealEngineError>,
-    ) -> Result<T, DealEngineError> {
-        let _checkpoint_guard = self
-            .auxiliary_checkpoint_lock
-            .lock()
-            .map_err(|_| DealEngineError::StateLockPoisoned)?;
-        self.ensure_durability_healthy()
-            .map_err(DealEngineError::Checkpoint)?;
-        let previous = self.deal_engine.checkpoint()?;
-        let (outcome, changed) = match mutate(&self.deal_engine) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous) {
-                    let message = self.record_unrecoverable_rollback(
-                        "failed to roll back rejected deal mutation",
-                        restore_err,
-                    );
-                    return Err(DealEngineError::Checkpoint(message));
-                }
-                return Err(err);
-            }
-        };
-        if !changed {
-            return Ok(outcome);
-        }
-        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            if err.committed {
-                return Err(DealEngineError::Checkpoint(err.to_string()));
-            }
-            if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous) {
-                let message = self.record_unrecoverable_rollback(
-                    "failed to roll back deal checkpoint failure",
-                    restore_err,
-                );
-                return Err(DealEngineError::Checkpoint(message));
-            }
-            return Err(DealEngineError::Checkpoint(err.to_string()));
-        }
-        Ok(outcome)
-    }
-
-    fn mutate_deal_engine_durably_with_governance<T>(
-        &self,
-        mutate: impl FnOnce(&DealEngine) -> Result<(T, bool), DealEngineError>,
-        artifact: impl FnOnce(&T) -> Result<(GovernanceOutboxKindV1, Vec<u8>), GovernancePublishError>,
-    ) -> Result<T, DealEngineError> {
-        let _checkpoint_guard = self
-            .auxiliary_checkpoint_lock
-            .lock()
-            .map_err(|_| DealEngineError::StateLockPoisoned)?;
-        self.ensure_durability_healthy()
-            .map_err(DealEngineError::Checkpoint)?;
-        let previous_deal = self.deal_engine.checkpoint()?;
-        let previous_outbox = self
-            .governance_outbox
-            .read()
-            .map_err(|_| DealEngineError::StateLockPoisoned)?
-            .clone();
-        let (outcome, changed) = match mutate(&self.deal_engine) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous_deal) {
-                    let message = self.record_unrecoverable_rollback(
-                        "failed to roll back rejected deal mutation",
-                        restore_err,
-                    );
-                    return Err(DealEngineError::Checkpoint(message));
-                }
-                return Err(err);
-            }
-        };
-        if !changed {
-            return Ok(outcome);
-        }
-        let (kind, payload_bytes) = match artifact(&outcome) {
-            Ok(artifact) => artifact,
-            Err(err) => {
-                if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous_deal) {
-                    let message = self.record_unrecoverable_rollback(
-                        "failed to roll back deal mutation after governance artifact failure",
-                        restore_err,
-                    );
-                    return Err(DealEngineError::Checkpoint(message));
-                }
-                return Err(DealEngineError::Checkpoint(err.to_string()));
-            }
-        };
-        if let Err(err) = self.enqueue_governance_outbox_unlocked(kind, payload_bytes) {
-            if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous_deal) {
-                let message = self.record_unrecoverable_rollback(
-                    "failed to roll back deal mutation after governance outbox rejection",
-                    restore_err,
-                );
-                return Err(DealEngineError::Checkpoint(message));
-            }
-            return Err(DealEngineError::Checkpoint(err.to_string()));
-        }
-        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            if err.committed {
-                return Err(DealEngineError::Checkpoint(err.to_string()));
-            }
-            if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous_deal) {
-                let message = self.record_unrecoverable_rollback(
-                    "failed to roll back deal checkpoint failure",
-                    restore_err,
-                );
-                return Err(DealEngineError::Checkpoint(message));
-            }
-            if self
-                .governance_outbox
-                .write()
-                .map(|mut outbox| *outbox = previous_outbox)
-                .is_err()
-            {
-                let message = self.record_unrecoverable_rollback(
-                    "failed to roll back governance outbox after deal checkpoint failure",
-                    "state lock poisoned",
-                );
-                return Err(DealEngineError::Checkpoint(message));
-            }
-            return Err(DealEngineError::Checkpoint(err.to_string()));
-        }
-        Ok(outcome)
     }
 
     fn mutate_capacity_durably<T>(
@@ -10249,7 +9905,6 @@ impl NodeHandle {
                         last_failure_unix: entry.last_failure_unix,
                         failures_total: entry.failures_total,
                         consecutive_failures: entry.consecutive_failures,
-                        last_slash_unix: entry.last_slash_unix,
                     },
                 )
                 .is_some()
@@ -10453,19 +10108,6 @@ impl NodeHandle {
         let validated_capacity_checkpoint = validated_capacity.checkpoint().map_err(|err| {
             GovernancePublishError::other(format!(
                 "failed to normalize capacity runtime auxiliary checkpoint: {err}"
-            ))
-        })?;
-        let validated_deal_engine = DealEngine::with_entry_limit(state_limit);
-        validated_deal_engine
-            .restore_checkpoint(checkpoint.deal_runtime)
-            .map_err(|err| {
-                GovernancePublishError::other(format!(
-                    "invalid deal runtime auxiliary checkpoint: {err}"
-                ))
-            })?;
-        let validated_deal_checkpoint = validated_deal_engine.checkpoint().map_err(|err| {
-            GovernancePublishError::other(format!(
-                "failed to normalize deal runtime auxiliary checkpoint: {err}"
             ))
         })?;
         let mut transparency_entries = BTreeMap::new();
@@ -10767,13 +10409,6 @@ impl NodeHandle {
             .write()
             .map_err(|_| GovernancePublishError::other("reputation event history poisoned"))? =
             reputation_events;
-        self.deal_engine
-            .restore_checkpoint(validated_deal_checkpoint)
-            .map_err(|err| {
-                GovernancePublishError::other(format!(
-                    "failed to install deal runtime auxiliary checkpoint: {err}"
-                ))
-            })?;
         self.capacity
             .restore_checkpoint(validated_capacity_checkpoint)
             .map_err(|err| {
@@ -10998,146 +10633,6 @@ impl NodeHandle {
         Ok(())
     }
 
-    fn pricing_checkpoint_max_bytes(&self) -> u64 {
-        self.config
-            .runtime_retention()
-            .checkpoint_max_bytes()
-            .min(u64::try_from(MAX_PRICING_RUNTIME_CHECKPOINT_BYTES).unwrap_or(u64::MAX))
-    }
-
-    fn hedging_checkpoint_max_bytes(&self) -> u64 {
-        self.config
-            .runtime_retention()
-            .checkpoint_max_bytes()
-            .min(u64::try_from(MAX_HEDGING_RUNTIME_CHECKPOINT_BYTES).unwrap_or(u64::MAX))
-    }
-
-    fn persist_pricing_checkpoint(&self) -> Result<(), RuntimeCheckpointPersistError> {
-        let state = self.governed_pricing.read().map_err(|_| {
-            RuntimeCheckpointPersistError::precommit(
-                "governed-pricing state lock poisoned while checkpointing",
-            )
-        })?;
-        self.persist_pricing_checkpoint_state(state.as_ref())
-    }
-
-    fn persist_pricing_checkpoint_state(
-        &self,
-        series: Option<&GovernedPricingSeriesV1>,
-    ) -> Result<(), RuntimeCheckpointPersistError> {
-        let Some(path) = self.pricing_checkpoint_path.as_ref() else {
-            return Ok(());
-        };
-        let bytes = encode_pricing_checkpoint(self.pricing_trust_policy.as_deref(), series)
-            .map_err(|error| {
-                RuntimeCheckpointPersistError::precommit(format!(
-                    "encode governed-pricing checkpoint `{}`: {error}",
-                    path.display()
-                ))
-            })?;
-        self.finish_local_checkpoint_write(
-            "governed pricing runtime",
-            path,
-            write_local_checkpoint_atomic_bounded(
-                path,
-                &bytes,
-                self.pricing_checkpoint_max_bytes(),
-            ),
-        )
-    }
-
-    fn load_pricing_checkpoint(&self) -> Result<(), NodeInitError> {
-        let Some(path) = self.pricing_checkpoint_path.as_ref() else {
-            return Ok(());
-        };
-        let Some(bytes) = read_local_checkpoint_bounded(path, self.pricing_checkpoint_max_bytes())
-            .map_err(|error| NodeInitError::checkpoint("governed pricing runtime", path, error))?
-        else {
-            return Ok(());
-        };
-        let restored = decode_pricing_checkpoint(&bytes, self.pricing_trust_policy.as_deref())
-            .map_err(|error| NodeInitError::checkpoint("governed pricing runtime", path, error))?;
-        *self.governed_pricing.write().map_err(|_| {
-            NodeInitError::checkpoint("governed pricing runtime", path, "state lock poisoned")
-        })? = restored;
-        Ok(())
-    }
-
-    fn persist_hedging_checkpoint(&self) -> Result<(), RuntimeCheckpointPersistError> {
-        let state = self.signed_hedging_feeds.read().map_err(|_| {
-            RuntimeCheckpointPersistError::precommit(
-                "signed hedging-feed state lock poisoned while checkpointing",
-            )
-        })?;
-        self.persist_hedging_checkpoint_state(state.as_ref())
-    }
-
-    fn persist_hedging_checkpoint_state(
-        &self,
-        ledger: Option<&SignedHedgingFeedLedgerV1>,
-    ) -> Result<(), RuntimeCheckpointPersistError> {
-        let Some(path) = self.hedging_checkpoint_path.as_ref() else {
-            return Ok(());
-        };
-        let bytes = encode_hedging_checkpoint(self.hedging_feed_trust_policy.as_deref(), ledger)
-            .map_err(|error| {
-                RuntimeCheckpointPersistError::precommit(format!(
-                    "encode signed hedging-feed checkpoint `{}`: {error}",
-                    path.display()
-                ))
-            })?;
-        self.finish_local_checkpoint_write(
-            "signed hedging-feed runtime",
-            path,
-            write_local_checkpoint_atomic_bounded(
-                path,
-                &bytes,
-                self.hedging_checkpoint_max_bytes(),
-            ),
-        )
-    }
-
-    fn load_hedging_checkpoint(&self) -> Result<(), NodeInitError> {
-        let Some(path) = self.hedging_checkpoint_path.as_ref() else {
-            return Ok(());
-        };
-        let Some(bytes) = read_local_checkpoint_bounded(path, self.hedging_checkpoint_max_bytes())
-            .map_err(|error| {
-                NodeInitError::checkpoint("signed hedging-feed runtime", path, error)
-            })?
-        else {
-            return Ok(());
-        };
-        let restored = decode_hedging_checkpoint(&bytes, self.hedging_feed_trust_policy.as_deref())
-            .map_err(|error| {
-                NodeInitError::checkpoint("signed hedging-feed runtime", path, error)
-            })?;
-        *self.signed_hedging_feeds.write().map_err(|_| {
-            NodeInitError::checkpoint("signed hedging-feed runtime", path, "state lock poisoned")
-        })? = restored;
-        Ok(())
-    }
-
-    fn record_hedging_reference_price_metrics(
-        &self,
-        governed: &GovernedHedgingReferencePriceDecisionV1,
-    ) {
-        let cluster = self.config.alias().map_or("local", String::as_str);
-        let reference = &governed.decision.xor_usd_price;
-        let metrics = global_or_default();
-        metrics.set_sorafs_hedging_reference_price_micro_usd(
-            cluster,
-            u64::try_from(quantity_to_metric_micro_saturating(reference)).unwrap_or(u64::MAX),
-        );
-        for feed in &governed.decision.feeds {
-            metrics.set_sorafs_hedging_feed_divergence_bps(
-                cluster,
-                &feed.source,
-                quantity_divergence_bps_saturating(&feed.xor_usd_price, reference),
-            );
-        }
-    }
-
     fn resolve_moderation_quarantine_object_path(
         &self,
         root: &Path,
@@ -11238,116 +10733,6 @@ impl NodeHandle {
             "removed unindexed moderation quarantine envelope left by an interrupted commit"
         );
         Ok(true)
-    }
-
-    /// Finalise a deal settlement for the supplied epoch.
-    ///
-    /// External callers must authenticate a configured operator before invoking this trusted
-    /// runtime boundary.
-    pub fn settle_deal(
-        &self,
-        deal_id: DealId,
-        settlement_epoch: u64,
-    ) -> Result<DealSettlementOutcome, DealEngineError> {
-        let outcome = self.mutate_deal_engine_durably_with_governance(
-            |engine| {
-                engine
-                    .settle(deal_id, settlement_epoch)
-                    .map(|outcome| (outcome, true))
-            },
-            |outcome| {
-                let encoded = norito::to_bytes(&outcome.governance).map_err(|err| {
-                    GovernancePublishError::other(format!(
-                        "encode deal settlement governance artifact: {err}"
-                    ))
-                })?;
-                Ok((GovernanceOutboxKindV1::DealSettlement, encoded))
-            },
-        )?;
-        let provider_hex = hex::encode(outcome.record.provider_id.as_bytes());
-        let status_label = match outcome.governance.status {
-            DealSettlementStatusV1::WindowSettled => "window_settled",
-            DealSettlementStatusV1::Completed => "completed",
-            DealSettlementStatusV1::Cancelled => "cancelled",
-            DealSettlementStatusV1::Defaulted => "defaulted",
-        };
-        global_sorafs_node_otel().record_deal_settlement(
-            &provider_hex,
-            status_label,
-            &outcome.record.expected_charge,
-            &outcome.record.client_credit_debit,
-            &outcome.record.bond_slash,
-            &outcome.record.outstanding,
-        );
-        if let Err(err) = self.flush_governance_outbox() {
-            global_sorafs_node_otel().record_settlement_publish(&provider_hex, "pending");
-            iroha_logger::warn!(
-                %err,
-                %provider_hex,
-                "SoraFS settlement artefact remains pending in the governance outbox"
-            );
-        } else {
-            let status = if self.pending_governance_publication_count() == 0 {
-                "success"
-            } else {
-                "pending"
-            };
-            global_sorafs_node_otel().record_settlement_publish(&provider_hex, status);
-        }
-        Ok(outcome)
-    }
-
-    /// Cancel an idle active deal at its exact next settlement boundary.
-    ///
-    /// The caller is a trusted runtime boundary and must authenticate a configured operator
-    /// authority before invoking this method.
-    pub fn cancel_deal(
-        &self,
-        deal_id: DealId,
-        cancellation_epoch: u64,
-        reason: String,
-    ) -> Result<DealSettlementOutcome, DealEngineError> {
-        let outcome = self.mutate_deal_engine_durably_with_governance(
-            |engine| {
-                engine
-                    .cancel(deal_id, cancellation_epoch, reason)
-                    .map(|outcome| (outcome, true))
-            },
-            |outcome| {
-                let encoded = norito::to_bytes(&outcome.governance).map_err(|err| {
-                    GovernancePublishError::other(format!(
-                        "encode deal cancellation governance artifact: {err}"
-                    ))
-                })?;
-                Ok((GovernanceOutboxKindV1::DealSettlement, encoded))
-            },
-        )?;
-        let provider_hex = hex::encode(outcome.record.provider_id.as_bytes());
-        let zero = Quantity::zero();
-        global_sorafs_node_otel().record_deal_settlement(
-            &provider_hex,
-            "cancelled",
-            &zero,
-            &zero,
-            &zero,
-            &zero,
-        );
-        if let Err(err) = self.flush_governance_outbox() {
-            global_sorafs_node_otel().record_settlement_publish(&provider_hex, "pending");
-            iroha_logger::warn!(
-                %err,
-                %provider_hex,
-                "SoraFS cancellation artefact remains pending in the governance outbox"
-            );
-        } else {
-            let status = if self.pending_governance_publication_count() == 0 {
-                "success"
-            } else {
-                "pending"
-            };
-            global_sorafs_node_otel().record_settlement_publish(&provider_hex, status);
-        }
-        Ok(outcome)
     }
 
     fn prepare_gc_eviction_intent(
@@ -11957,12 +11342,6 @@ impl NodeHandle {
         }
     }
 
-    /// Capture a snapshot of the deal ledger.
-    #[must_use]
-    pub fn deal_snapshot(&self, deal_id: DealId) -> Option<DealSnapshot> {
-        self.deal_engine.deal_snapshot(deal_id)
-    }
-
     /// Run a GC sweep against expired manifests using one complete finalized
     /// native repair-ledger projection.
     ///
@@ -12447,8 +11826,22 @@ impl NodeHandle {
         self.storage.is_some()
     }
 
+    /// Configured on-chain provider identity for finalized capacity reconciliation.
+    #[must_use]
+    pub fn capacity_provider_id(&self) -> Option<ProviderId> {
+        self.config.provider_id()
+    }
+
+    /// Return the finalized ledger identity backing the durable capacity projection.
+    pub fn capacity_finalized_cursor(
+        &self,
+    ) -> Result<Option<CapacityFinalizedCursorV1>, CapacityError> {
+        self.capacity.finalized_cursor()
+    }
+
     /// Record a capacity declaration captured by Torii.
-    pub fn record_capacity_declaration(
+    #[cfg(test)]
+    pub(crate) fn record_capacity_declaration(
         &self,
         record: &CapacityDeclarationRecord,
     ) -> Result<(), CapacityError> {
@@ -12466,6 +11859,52 @@ impl NodeHandle {
         Ok(())
     }
 
+    /// Rebuild the local provider scheduler from one complete finalized ledger snapshot.
+    ///
+    /// The configured provider identity is supplied by Torii. The capacity manager validates all
+    /// declaration and replication-order bytes before atomically installing the projection and
+    /// its exact finalized height/hash. Incremental advances are monotonic; fork replacement
+    /// requires [`CapacityReconcileModeV1::FullRebuild`].
+    pub fn reconcile_finalized_capacity(
+        &self,
+        finalized_cursor: CapacityFinalizedCursorV1,
+        mode: CapacityReconcileModeV1,
+        provider_id: ProviderId,
+        declaration: Option<&CapacityDeclarationRecord>,
+        replication_orders: &[ReplicationOrderRecord],
+    ) -> Result<CapacityReconciliationOutcomeV1, CapacityError> {
+        let outcome = self.mutate_capacity_durably(|capacity| {
+            let outcome = capacity.reconcile_finalized(
+                finalized_cursor,
+                mode,
+                provider_id,
+                declaration,
+                replication_orders,
+            )?;
+            Ok((outcome, outcome.changed))
+        })?;
+        if !outcome.changed {
+            return Ok(outcome);
+        }
+
+        let usage = self.capacity.usage_snapshot();
+        if let Some(record) = self.capacity.active_declaration_record()? {
+            self.meter.restore_capacity_runtime(
+                usage.committed_total_gib,
+                usage.declaration_window,
+                &usage.outstanding_orders,
+            );
+            self.seed_telemetry_accumulator(&record);
+        } else {
+            self.meter.clear_capacity_runtime();
+            *self
+                .telemetry
+                .write()
+                .map_err(|_| CapacityError::StateLockPoisoned)? = None;
+        }
+        Ok(outcome)
+    }
+
     /// Return a snapshot describing the currently tracked capacity usage.
     #[must_use]
     pub fn capacity_usage(&self) -> CapacityUsageSnapshot {
@@ -12473,7 +11912,8 @@ impl NodeHandle {
     }
 
     /// Schedule a replication order if the active declaration matches the provider.
-    pub fn schedule_replication_order(
+    #[cfg(test)]
+    pub(crate) fn schedule_replication_order(
         &self,
         order: &ReplicationOrderV1,
     ) -> Result<Option<ReplicationPlan>, CapacityError> {
@@ -12490,7 +11930,8 @@ impl NodeHandle {
     }
 
     /// Mark a replication order as completed and release its reserved capacity.
-    pub fn complete_replication_order(
+    #[cfg(test)]
+    pub(crate) fn complete_replication_order(
         &self,
         order_id: [u8; 32],
     ) -> Result<ReplicationRelease, CapacityError> {
@@ -12644,7 +12085,6 @@ impl NodeHandle {
                 stats,
                 repair_task_id: transition.repair_task_id,
                 consecutive_failures,
-                slash: None,
             });
         }
         let previous_history = self
@@ -12654,27 +12094,21 @@ impl NodeHandle {
                 PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
             })?
             .clone();
-        let (consecutive_failures, slash) =
-            match self
-                .update_por_history_entry(verdict)
-                .and_then(|consecutive_failures| {
-                    self.evaluate_por_penalty(verdict, &stats, consecutive_failures)
-                        .map(|slash| (consecutive_failures, slash))
-                }) {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    if let Err(rollback) =
-                        self.rollback_por_verdict_state(previous_tracker, previous_history)
-                    {
-                        let message = self.record_unrecoverable_rollback(
-                            "failed to roll back finalized PoR state after bookkeeping error",
-                            rollback,
-                        );
-                        return Err(PorTrackerError::RuntimeCheckpoint(message));
-                    }
-                    return Err(error);
+        let consecutive_failures = match self.update_por_history_entry(verdict) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if let Err(rollback) =
+                    self.rollback_por_verdict_state(previous_tracker, previous_history)
+                {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back finalized PoR state after bookkeeping error",
+                        rollback,
+                    );
+                    return Err(PorTrackerError::RuntimeCheckpoint(message));
                 }
-            };
+                return Err(error);
+            }
+        };
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
                 return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
@@ -12701,8 +12135,7 @@ impl NodeHandle {
         Ok(PorVerdictOutcome {
             stats,
             repair_task_id: transition.repair_task_id,
-            consecutive_failures: slash.as_ref().map_or(consecutive_failures, |_| 0),
-            slash,
+            consecutive_failures,
         })
     }
 
@@ -12785,9 +12218,15 @@ impl NodeHandle {
         receipt: PotrReceiptV1,
         gateway_public_key: &[u8; 32],
         admission: &AdmissionRecord,
+        admission_policy: &PotrAdmissionPolicyBindingV1,
     ) -> Result<PotrRecordOutcome, PotrTrackerError> {
-        self.potr
-            .record_receipt(receipt, gateway_public_key, admission, self)
+        self.potr.record_receipt(
+            receipt,
+            gateway_public_key,
+            admission,
+            admission_policy,
+            self,
+        )
     }
 
     /// Record a PoTR receipt using an explicit chain-authoritative repair handoff.
@@ -12796,10 +12235,24 @@ impl NodeHandle {
         receipt: PotrReceiptV1,
         gateway_public_key: &[u8; 32],
         admission: &AdmissionRecord,
+        admission_policy: &PotrAdmissionPolicyBindingV1,
         repair_handoff: &dyn potr::PotrLatencyRepairHandoff,
     ) -> Result<PotrRecordOutcome, PotrTrackerError> {
-        self.potr
-            .record_receipt(receipt, gateway_public_key, admission, repair_handoff)
+        self.potr.record_receipt(
+            receipt,
+            gateway_public_key,
+            admission,
+            admission_policy,
+            repair_handoff,
+        )
+    }
+
+    /// Return the exact durable PoTR admission-policy floor for a provider.
+    pub fn potr_admission_policy_floor(
+        &self,
+        provider_id: &[u8; 32],
+    ) -> Result<Option<PotrAdmissionPolicyBindingV1>, PotrTrackerError> {
+        self.potr.admission_policy_floor(provider_id)
     }
 
     /// Retrieve PoTR receipts matching the manifest/provider filters.
@@ -12844,7 +12297,292 @@ impl NodeHandle {
         self.storage.clone()
     }
 
+    #[cfg(test)]
+    fn enqueue_finalized_provider_ingest(
+        &self,
+        finalized_pin: &PinManifestFinalizedRecordV1,
+        order_id: [u8; 32],
+    ) -> Result<ProviderIngestEnqueueResultV1, FinalizedProviderIngestError> {
+        let outbox = self
+            .provider_ingest_outbox
+            .as_ref()
+            .ok_or(FinalizedProviderIngestError::Disabled)?;
+        let authorization =
+            self.finalized_provider_ingest_authorization(finalized_pin, order_id)?;
+        outbox.enqueue(authorization).map_err(Into::into)
+    }
+
+    #[cfg(test)]
+    fn claim_finalized_provider_ingest_source(
+        &self,
+        job_id: [u8; 32],
+        owner: ProviderIngestClaimOwnerV1,
+        now_ms: u64,
+        observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    ) -> Result<ProviderIngestSourceClaimV1, FinalizedProviderIngestError> {
+        self.provider_ingest_outbox
+            .as_ref()
+            .ok_or(FinalizedProviderIngestError::Disabled)?
+            .claim_source(job_id, owner, now_ms, observed_finalized_cursor)
+            .map_err(Into::into)
+    }
+
+    #[cfg(test)]
+    fn ingest_finalized_provider_payload<R: Read>(
+        &self,
+        claim: &ProviderIngestSourceClaimV1,
+        manifest: &ManifestV1,
+        plan: &CarBuildPlan,
+        reader: &mut R,
+        completed_at_ms: u64,
+        observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    ) -> Result<String, FinalizedProviderIngestError> {
+        let outbox = self
+            .provider_ingest_outbox
+            .as_ref()
+            .ok_or(FinalizedProviderIngestError::Disabled)?;
+        let authorization = claim.authorization();
+        if let Err(error) = validate_finalized_provider_payload(authorization, manifest, plan) {
+            return match outbox.schedule_source_retry(
+                claim,
+                completed_at_ms,
+                observed_finalized_cursor,
+                ProviderIngestFailureClassV1::SourceRejected,
+            )? {
+                ProviderIngestRetryOutcomeV1::RetryScheduled { .. } => Err(error),
+                ProviderIngestRetryOutcomeV1::DeadLettered => {
+                    Err(FinalizedProviderIngestError::DeadLettered)
+                }
+            };
+        }
+
+        let manifest_id = match self.ingest_manifest(manifest, plan, reader) {
+            Ok(manifest_id) => manifest_id,
+            Err(NodeStorageError::Storage(StorageError::ManifestExists { .. })) => {
+                match self.verify_existing_finalized_provider_manifest(authorization, manifest) {
+                    Ok(manifest_id) => manifest_id,
+                    Err(error) => {
+                        outbox.dead_letter_source(
+                            claim,
+                            completed_at_ms,
+                            observed_finalized_cursor,
+                            ProviderIngestDeadLetterReasonV1::StorageRejected,
+                            ProviderIngestFailureClassV1::StorageRejected,
+                        )?;
+                        return Err(error);
+                    }
+                }
+            }
+            Err(error) => {
+                return match outbox.schedule_source_retry(
+                    claim,
+                    completed_at_ms,
+                    observed_finalized_cursor,
+                    ProviderIngestFailureClassV1::StorageRejected,
+                )? {
+                    ProviderIngestRetryOutcomeV1::RetryScheduled { .. } => Err(error.into()),
+                    ProviderIngestRetryOutcomeV1::DeadLettered => {
+                        Err(FinalizedProviderIngestError::DeadLettered)
+                    }
+                };
+            }
+        };
+        outbox.mark_local_stored(claim, completed_at_ms, manifest_id.clone())?;
+        Ok(manifest_id)
+    }
+
+    /// Export one deterministic bounded page of payload-free ingest status.
+    pub fn finalized_provider_ingest_status_page(
+        &self,
+        after_job_id: Option<[u8; 32]>,
+        limit: usize,
+    ) -> Result<ProviderIngestStatusPageV1, FinalizedProviderIngestError> {
+        self.provider_ingest_outbox
+            .as_ref()
+            .ok_or(FinalizedProviderIngestError::Disabled)?
+            .statuses_page(after_job_id, limit)
+            .map_err(Into::into)
+    }
+
+    /// Return exact payload-free provider-ingest outbox counts from one bounded
+    /// cached snapshot.
+    pub fn finalized_provider_ingest_counts(
+        &self,
+    ) -> Result<ProviderIngestOutboxCountsV1, FinalizedProviderIngestError> {
+        self.provider_ingest_outbox
+            .as_ref()
+            .ok_or(FinalizedProviderIngestError::Disabled)?
+            .aggregate_counts()
+            .map_err(Into::into)
+    }
+
+    /// Construct the supervised finalized-ledger provider-ingest runtime.
+    ///
+    /// The configured provider identity and node-owned durable outbox cannot be
+    /// replaced by an adapter. Callers supply only the production boundaries
+    /// for finalized reads, authenticated fetch, local storage, payload
+    /// construction, isolated signing, transaction ingress, and runtime time.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_provider_ingest_runtime<
+        Ledger,
+        Fetch,
+        Storage,
+        Builder,
+        Resolver,
+        Ingress,
+        Clock,
+    >(
+        &self,
+        chain_id: ChainId,
+        claim_owner: ProviderIngestClaimOwnerV1,
+        policy: ProviderIngestRuntimePolicyV1,
+        ledger: Arc<Ledger>,
+        fetch: Arc<Fetch>,
+        storage: Arc<Storage>,
+        payload_builder: Arc<Builder>,
+        signer_resolver: Arc<Resolver>,
+        ingress: Arc<Ingress>,
+        clock: Arc<Clock>,
+    ) -> Result<
+        ProviderIngestRuntimeV1<Ledger, Fetch, Storage, Builder, Resolver, Ingress, Clock>,
+        FinalizedProviderIngestError,
+    >
+    where
+        Ledger: ProviderIngestFinalizedLedgerV1,
+        Fetch: ProviderIngestAuthenticatedSourceFetchV1,
+        Storage: ProviderIngestLocalStorageV1<Fetch::Fetched>,
+        Builder: ProviderIngestCompletionPayloadBuilderV1,
+        Resolver: ProviderIngestCompletionSignerResolverV1,
+        Ingress: ProviderIngestTransactionIngressV1,
+        Clock: ProviderIngestClockV1,
+    {
+        let provider_id =
+            self.config
+                .provider_id()
+                .ok_or(FinalizedProviderIngestError::BindingMismatch(
+                    "provider identity is not configured",
+                ))?;
+        let outbox = self
+            .provider_ingest_outbox
+            .clone()
+            .ok_or(FinalizedProviderIngestError::Disabled)?;
+        ProviderIngestRuntimeV1::new(
+            *provider_id.as_bytes(),
+            chain_id,
+            claim_owner,
+            policy,
+            outbox,
+            ledger,
+            fetch,
+            storage,
+            payload_builder,
+            signer_resolver,
+            ingress,
+            clock,
+        )
+        .map_err(Into::into)
+    }
+
+    #[cfg(test)]
+    fn finalized_provider_ingest_authorization(
+        &self,
+        finalized_pin: &PinManifestFinalizedRecordV1,
+        order_id: [u8; 32],
+    ) -> Result<FinalizedProviderIngestAuthorizationV1, FinalizedProviderIngestError> {
+        if !matches!(finalized_pin.manifest.status, PinStatus::Approved(_)) {
+            return Err(FinalizedProviderIngestError::BindingMismatch(
+                "pin manifest is not approved",
+            ));
+        }
+        let cursor = finalized_pin.finalized_cursor;
+        if cursor.height == 0 || cursor.block_hash == [0; 32] {
+            return Err(FinalizedProviderIngestError::BindingMismatch(
+                "pin finalized cursor is invalid",
+            ));
+        }
+        let capacity_cursor = self.capacity.finalized_cursor()?.ok_or(
+            FinalizedProviderIngestError::BindingMismatch(
+                "capacity projection has no finalized cursor",
+            ),
+        )?;
+        if capacity_cursor.height != cursor.height
+            || capacity_cursor.block_hash != cursor.block_hash
+        {
+            return Err(FinalizedProviderIngestError::BindingMismatch(
+                "pin and capacity projections use different finalized cursors",
+            ));
+        }
+        let configured_provider =
+            self.config
+                .provider_id()
+                .ok_or(FinalizedProviderIngestError::BindingMismatch(
+                    "provider identity is not configured",
+                ))?;
+        let binding: FinalizedReplicationBindingV1 = self
+            .capacity
+            .finalized_replication_binding(order_id)?
+            .ok_or(FinalizedProviderIngestError::BindingMismatch(
+                "replication order is not pending for this provider",
+            ))?;
+        if binding.provider_id != *configured_provider.as_bytes() {
+            return Err(FinalizedProviderIngestError::BindingMismatch(
+                "replication assignment targets another provider",
+            ));
+        }
+        if binding.manifest_digest != *finalized_pin.manifest.digest.as_bytes()
+            || binding.manifest_cid.as_slice() != finalized_pin.manifest.root_cid.as_bytes()
+            || binding.chunker_handle != finalized_pin.manifest.chunker.to_handle()
+        {
+            return Err(FinalizedProviderIngestError::BindingMismatch(
+                "replication order and finalized pin manifest disagree",
+            ));
+        }
+        FinalizedProviderIngestAuthorizationV1::from_finalized_state(
+            cursor.height,
+            cursor.block_hash,
+            binding.provider_id,
+            binding.order_id,
+            binding.manifest_digest,
+            binding.manifest_cid,
+            binding.chunker_handle,
+            finalized_pin.manifest.chunk_digest_sha3_256,
+            finalized_pin.manifest.por_root,
+            finalized_pin.manifest.content_length,
+        )
+        .map_err(Into::into)
+    }
+
+    #[cfg(test)]
+    fn verify_existing_finalized_provider_manifest(
+        &self,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        expected_manifest: &ManifestV1,
+    ) -> Result<String, FinalizedProviderIngestError> {
+        let stored = self.manifest_metadata_by_digest(&authorization.manifest_digest())?;
+        if stored.manifest_digest() != &authorization.manifest_digest()
+            || stored.manifest_cid() != authorization.manifest_cid()
+            || stored.content_length() != authorization.content_length()
+            || stored.chunk_profile_handle() != authorization.chunker_handle()
+        {
+            return Err(FinalizedProviderIngestError::BindingMismatch(
+                "existing local manifest metadata disagrees with finalized authorization",
+            ));
+        }
+        let stored_manifest = stored.load_manifest().map_err(NodeStorageError::from)?;
+        if &stored_manifest != expected_manifest {
+            return Err(FinalizedProviderIngestError::BindingMismatch(
+                "existing local manifest bytes disagree with finalized authorization",
+            ));
+        }
+        Ok(stored.manifest_id().to_owned())
+    }
+
     /// Ingest a manifest payload into the local storage backend.
+    ///
+    /// This raw primitive exists for tests, bootstrap fixtures, and non-provider
+    /// internal artifacts. Production provider replication supplies an exact
+    /// [`ProviderIngestLocalStorageV1`] implementation to
+    /// [`Self::build_provider_ingest_runtime`].
     pub fn ingest_manifest<R: Read>(
         &self,
         manifest: &ManifestV1,
@@ -13019,27 +12757,6 @@ impl NodeHandle {
         self.meter.snapshot()
     }
 
-    /// Record an uptime observation for the current declaration.
-    pub fn record_uptime_observation(&self, uptime_secs: u64, observed_secs: u64) {
-        let success = uptime_secs >= observed_secs && observed_secs > 0;
-        self.meter.record_uptime_sample(success);
-        if let Ok(mut guard) = self.telemetry.write()
-            && let Some(acc) = guard.as_mut()
-        {
-            let _ = acc.record_uptime_sample(uptime_secs.min(observed_secs), observed_secs);
-        }
-    }
-
-    /// Record a proof-of-retrievability observation for the current declaration.
-    pub fn record_por_observation(&self, success: bool) {
-        self.meter.record_por_sample(success);
-        if let Ok(mut guard) = self.telemetry.write()
-            && let Some(acc) = guard.as_mut()
-        {
-            acc.record_por_sample(success);
-        }
-    }
-
     /// Return the PoR ingestion status for the supplied manifest digest.
     pub fn por_ingestion_status(
         &self,
@@ -13075,24 +12792,6 @@ impl NodeHandle {
                 .then(left.provider_id.cmp(&right.provider_id))
         });
         entries
-    }
-
-    /// Record that a replication order ultimately failed and release the reservation.
-    ///
-    /// Returns `true` when the order was tracked and the failure counters were updated.
-    pub fn record_replication_failure(&self, order_id: [u8; 32]) -> bool {
-        let Some(sample) = self.meter.record_replication_failure(order_id) else {
-            return false;
-        };
-        if let Ok(mut guard) = self.telemetry.write()
-            && let Some(acc) = guard.as_mut()
-        {
-            acc.record_replication_failure();
-            if sample.slice_gib > 0 && sample.duration_secs > 0 {
-                let _ = acc.record_utilisation(sample.slice_gib, sample.duration_secs);
-            }
-        }
-        true
     }
 
     /// Build the current Norito telemetry payload, if the accumulator is initialised.
@@ -13154,62 +12853,6 @@ impl NodeHandle {
             (Ok(()), Err(tracker)) => Err(tracker),
             (Err(history), Err(tracker)) => Err(format!("{history}; {tracker}")),
         }
-    }
-
-    fn evaluate_por_penalty(
-        &self,
-        verdict: &AuditVerdictV1,
-        stats: &PorVerdictStats,
-        consecutive_failures: u64,
-    ) -> Result<Option<SlashRecommendation>, PorTrackerError> {
-        if stats.failed_samples == 0 {
-            return Ok(None);
-        }
-        let policy = self.config.penalty();
-        if consecutive_failures < u64::from(policy.strike_threshold) {
-            return Ok(None);
-        }
-
-        let mut history = self.por_history.write().map_err(|_| {
-            PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
-        })?;
-        let entry = history
-            .entry((verdict.manifest_digest, verdict.provider_id))
-            .or_default();
-        if let Some(last_slash) = entry.last_slash_unix {
-            let elapsed = verdict.decided_at.saturating_sub(last_slash);
-            if elapsed < policy.cooldown_secs {
-                return Ok(None);
-            }
-        }
-
-        let provider_id = ProviderId::new(verdict.provider_id);
-        let Some(snapshot) = self.deal_engine.provider_snapshot(provider_id) else {
-            return Ok(None);
-        };
-        let penalty = checked_por_penalty(
-            &snapshot.bond_available,
-            &snapshot.bond_locked,
-            policy.penalty_bond_bps,
-        )
-        .map_err(|error| PorTrackerError::PenaltyArithmetic(error.to_string()))?;
-        if penalty.is_zero() {
-            return Ok(None);
-        }
-
-        entry.last_slash_unix = Some(verdict.decided_at);
-        entry.consecutive_failures = 0;
-
-        Ok(Some(SlashRecommendation {
-            provider_id,
-            manifest_digest: verdict.manifest_digest,
-            penalty,
-            strikes: policy.strike_threshold,
-            reason: format!(
-                "PoR failure streak reached {} (threshold {}), slashing {} bps of bonded collateral",
-                consecutive_failures, policy.strike_threshold, policy.penalty_bond_bps
-            ),
-        }))
     }
 
     fn build_ingestion_status_map(
@@ -13303,6 +12946,7 @@ impl NodeHandle {
         }
     }
 
+    #[cfg(test)]
     fn record_replication_success(&self, _order_id: [u8; 32], usage: ReplicationUsageSample) {
         if let Ok(mut guard) = self.telemetry.write()
             && let Some(acc) = guard.as_mut()
@@ -13400,14 +13044,12 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature, SignatureOf};
     use iroha_data_model::{
+        ChainId,
+        isi::{InstructionBox, sorafs::CompleteReplicationOrder},
         metadata::Metadata,
         name::Name,
         sorafs::{
             capacity::{CapacityDeclarationRecord, ProviderId},
-            deal::{
-                BYTES_PER_GIB, ClientId, DealProposal, DealStatus, DealTerms, DealUsageReport,
-                GIB_HOURS_PER_MONTH, MicropaymentTicket,
-            },
             moderation::{
                 ADVERSARIAL_CORPUS_VERSION_V1, AdversarialCorpusManifestV1,
                 AdversarialPerceptualFamilyV1, AdversarialPerceptualVariantV1,
@@ -13422,9 +13064,14 @@ mod tests {
                 RepairLedgerStatusV1, RepairLedgerTaskPageV1, RepairLedgerTaskV1,
                 RepairLedgerTerminalKindV1, sorafs_repair_task_id_v1,
             },
-            pin_registry::StorageClass,
+            pin_registry::{
+                ChunkerProfileHandle, ManifestDigest, ManifestRootCid,
+                PinManifestFinalizedCursorV1, PinManifestRecord, PinPolicy as RegistryPinPolicy,
+                ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+            },
             reserve::{ReserveDuration, ReservePolicyV1, ReserveTier},
         },
+        transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use iroha_telemetry::metrics::global_or_default;
     use norito::to_bytes;
@@ -13452,7 +13099,7 @@ mod tests {
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
             ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1,
         },
-        deal::{DealSettlementStatusV1, DealSettlementV1},
+        deal::DealSettlementV1,
         repair::{
             GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1,
             REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1, RepairEvidenceV1,
@@ -13471,6 +13118,36 @@ mod tests {
     };
     use crate::repair_ledger_projection::RepairLedgerTaskProjectionBuilderV1;
 
+    #[test]
+    fn finalized_capacity_projection_has_no_production_local_mutation_entrypoints() {
+        let source = include_str!("lib.rs");
+        for retired in [
+            "pub fn record_capacity_declaration(",
+            "pub fn schedule_replication_order(",
+            "pub fn complete_replication_order(",
+            "fn record_uptime_observation(",
+            "fn record_por_observation(",
+            "fn record_replication_failure(",
+        ] {
+            assert!(
+                !source.contains(retired),
+                "retired local capacity mutation entrypoint reappeared: {retired}"
+            );
+        }
+        for test_only in [
+            "pub(crate) fn record_capacity_declaration(",
+            "pub(crate) fn schedule_replication_order(",
+            "pub(crate) fn complete_replication_order(",
+        ] {
+            let offset = source.find(test_only).expect("test-only capacity helper");
+            let prefix = &source[offset.saturating_sub(32)..offset];
+            assert!(
+                prefix.contains("#[cfg(test)]"),
+                "capacity mutation helper must remain cfg(test)-gated: {test_only}"
+            );
+        }
+    }
+
     #[derive(Debug)]
     struct SuccessfulPorRepairHandoff;
 
@@ -13485,10 +13162,6 @@ mod tests {
 
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
-    }
-
-    fn quantity(value: &str) -> Quantity {
-        value.parse().expect("canonical quantity")
     }
 
     fn manifest_builder_for_plan(payload: &[u8], plan: &CarBuildPlan) -> ManifestBuilder {
@@ -13530,6 +13203,470 @@ mod tests {
             .data_dir(root.join("storage"))
             .build();
         (cfg, temp_dir)
+    }
+
+    struct FinalizedProviderIngestFixture {
+        config: StorageConfig,
+        provider_id: ProviderId,
+        declaration: CapacityDeclarationRecord,
+        order: ReplicationOrderRecord,
+        finalized_pin: PinManifestFinalizedRecordV1,
+        manifest: ManifestV1,
+        plan: CarBuildPlan,
+        payload: Vec<u8>,
+        capacity_cursor: CapacityFinalizedCursorV1,
+        ingest_cursor: ProviderIngestFinalizedCursorV1,
+    }
+
+    fn finalized_provider_ingest_fixture(seed: u8) -> (FinalizedProviderIngestFixture, TempDir) {
+        let temp_dir = tempfile::tempdir().expect("create provider-ingest temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let provider_id = ProviderId::new([seed; 32]);
+        let config = StorageConfig::builder()
+            .enabled(true)
+            .provider_id(Some(provider_id))
+            .provider_ingest_outbox_policy(Some(ProviderIngestOutboxPolicyV1::default()))
+            .data_dir(root.join("storage"))
+            .build();
+        let authority_key =
+            KeyPair::try_from_seed(vec![seed.wrapping_add(1); 32], Algorithm::Ed25519)
+                .expect("provider-ingest fixture authority key");
+        let authority = AccountId::new(authority_key.public_key().clone());
+
+        let declaration_body = CapacityDeclarationV1 {
+            version: CAPACITY_DECLARATION_VERSION_V1,
+            provider_id: *provider_id.as_bytes(),
+            stake: sorafs_manifest::provider_advert::StakePointer {
+                pool_id: [seed.wrapping_add(2); 32],
+                stake_amount: xor("1"),
+            },
+            committed_capacity_gib: 8,
+            chunker_commitments: vec![ChunkerCommitmentV1 {
+                profile_id: "sorafs.sf1@1.0.0".into(),
+                profile_aliases: None,
+                committed_gib: 8,
+                capability_refs: Vec::new(),
+            }],
+            lane_commitments: vec![LaneCommitmentV1 {
+                lane_id: "default".into(),
+                max_gib: 8,
+            }],
+            pricing: None,
+            valid_from: 1,
+            valid_until: 100,
+            metadata: Vec::new(),
+        };
+        let declaration = CapacityDeclarationRecord::new(
+            provider_id,
+            to_bytes(&declaration_body).expect("encode provider-ingest capacity declaration"),
+            declaration_body.committed_capacity_gib,
+            1,
+            declaration_body.valid_from,
+            declaration_body.valid_until,
+            Metadata::default(),
+        );
+
+        let payload = format!("finalized-provider-ingest-{seed}").into_bytes();
+        let plan = CarBuildPlan::single_file(&payload).expect("provider-ingest CAR plan");
+        let root_cid = sorafs_manifest::canonical_manifest_root_cid([seed.wrapping_add(3); 32]);
+        let manifest = manifest_builder_for_plan(&payload, &plan)
+            .root_cid(root_cid.clone())
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(*plan.payload_digest.as_bytes())
+            .car_size(plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("provider-ingest manifest");
+        let manifest_digest: [u8; 32] = manifest.digest().expect("manifest digest").into();
+        let manifest_root_cid =
+            ManifestRootCid::try_from_slice(&manifest.root_cid).expect("canonical manifest CID");
+        let chunker = ChunkerProfileHandle {
+            profile_id: manifest.chunking.profile_id.0,
+            namespace: manifest.chunking.namespace.clone(),
+            name: manifest.chunking.name.clone(),
+            semver: manifest.chunking.semver.clone(),
+            multihash_code: manifest.chunking.multihash_code,
+        };
+        let order_id = [seed.wrapping_add(4); 32];
+        let order_body = ReplicationOrderV1 {
+            version: REPLICATION_ORDER_VERSION_V1,
+            order_id,
+            manifest_cid: root_cid,
+            manifest_digest,
+            chunking_profile: chunker.to_handle(),
+            target_replicas: 1,
+            assignments: vec![ReplicationAssignmentV1 {
+                provider_id: *provider_id.as_bytes(),
+                slice_gib: 1,
+                lane: Some("default".into()),
+            }],
+            issued_at: 2,
+            deadline_at: 50,
+            sla: ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 30,
+                min_availability_percent_milli: 99_000,
+                min_por_success_percent_milli: 99_000,
+            },
+            metadata: Vec::new(),
+        };
+        let order = ReplicationOrderRecord {
+            order_id: ReplicationOrderId::new(order_id),
+            manifest_digest: ManifestDigest::new(manifest_digest),
+            manifest_root_cid,
+            issued_by: authority.clone(),
+            issued_epoch: order_body.issued_at,
+            deadline_epoch: order_body.deadline_at,
+            canonical_order: to_bytes(&order_body).expect("encode replication order"),
+            provider_completions: Vec::new(),
+            status: ReplicationOrderStatus::Pending,
+        };
+        let mut pin = PinManifestRecord::new(
+            ManifestDigest::new(manifest_digest),
+            manifest_root_cid,
+            chunker,
+            manifest.chunk_digest_sha3_256,
+            manifest.por_root,
+            manifest.content_length,
+            RegistryPinPolicy {
+                min_replicas: manifest.pin_policy.min_replicas,
+                storage_class: StorageClass::Hot,
+                retention_epoch: manifest.pin_policy.retention_epoch,
+            },
+            authority,
+            2,
+            None,
+            None,
+            Metadata::default(),
+        );
+        pin.approve(3, Some([seed.wrapping_add(5); 32]));
+        let capacity_cursor = CapacityFinalizedCursorV1 {
+            height: 9,
+            block_hash: [seed.wrapping_add(6); 32],
+        };
+        let ingest_cursor = ProviderIngestFinalizedCursorV1 {
+            height: capacity_cursor.height,
+            block_hash: capacity_cursor.block_hash,
+        };
+        let finalized_pin = PinManifestFinalizedRecordV1 {
+            finalized_cursor: PinManifestFinalizedCursorV1 {
+                height: capacity_cursor.height,
+                block_hash: capacity_cursor.block_hash,
+            },
+            manifest: pin,
+        };
+        (
+            FinalizedProviderIngestFixture {
+                config,
+                provider_id,
+                declaration,
+                order,
+                finalized_pin,
+                manifest,
+                plan,
+                payload,
+                capacity_cursor,
+                ingest_cursor,
+            },
+            temp_dir,
+        )
+    }
+
+    #[test]
+    fn provider_ingest_outbox_is_not_opened_when_runtime_policy_is_absent() {
+        let (config, _temp_dir) = storage_config_with_temp_dir();
+        assert!(config.provider_ingest_outbox_policy().is_none());
+        let handle = NodeHandle::try_new(config).expect("open storage without provider ingest");
+        assert!(matches!(
+            handle.finalized_provider_ingest_status_page(None, 1),
+            Err(FinalizedProviderIngestError::Disabled)
+        ));
+    }
+
+    fn install_finalized_provider_ingest_projection(
+        handle: &NodeHandle,
+        fixture: &FinalizedProviderIngestFixture,
+    ) {
+        let outcome = handle
+            .reconcile_finalized_capacity(
+                fixture.capacity_cursor,
+                CapacityReconcileModeV1::FullRebuild,
+                fixture.provider_id,
+                Some(&fixture.declaration),
+                std::slice::from_ref(&fixture.order),
+            )
+            .expect("install finalized provider-ingest projection");
+        assert_eq!(outcome.pending_order_count, 1);
+    }
+
+    #[test]
+    fn finalized_provider_ingest_local_storage_awaits_signing_and_survives_restart() {
+        let (fixture, _temp_dir) = finalized_provider_ingest_fixture(0x71);
+        let handle = NodeHandle::new(fixture.config.clone());
+        install_finalized_provider_ingest_projection(&handle, &fixture);
+
+        let inserted = handle
+            .enqueue_finalized_provider_ingest(
+                &fixture.finalized_pin,
+                *fixture.order.order_id.as_bytes(),
+            )
+            .expect("enqueue finalized provider ingest");
+        assert!(matches!(
+            inserted,
+            ProviderIngestEnqueueResultV1::Inserted { .. }
+        ));
+        let replay = handle
+            .enqueue_finalized_provider_ingest(
+                &fixture.finalized_pin,
+                *fixture.order.order_id.as_bytes(),
+            )
+            .expect("replay finalized provider ingest admission");
+        assert!(matches!(
+            replay,
+            ProviderIngestEnqueueResultV1::ExistingActive { .. }
+        ));
+        assert_eq!(replay.job_id(), inserted.job_id());
+
+        let claim = handle
+            .claim_finalized_provider_ingest_source(
+                inserted.job_id(),
+                ProviderIngestClaimOwnerV1::new([0x72; 32]).expect("source owner"),
+                1_000,
+                fixture.ingest_cursor,
+            )
+            .expect("claim finalized provider ingest");
+        let mut reader = fixture.payload.as_slice();
+        let manifest_id = handle
+            .ingest_finalized_provider_payload(
+                &claim,
+                &fixture.manifest,
+                &fixture.plan,
+                &mut reader,
+                1_001,
+                fixture.ingest_cursor,
+            )
+            .expect("store finalized provider payload");
+        assert_eq!(
+            manifest_id,
+            hex::encode(
+                fixture
+                    .manifest
+                    .digest()
+                    .expect("manifest digest")
+                    .as_bytes()
+            )
+        );
+
+        let completion_epoch = 4;
+        let mut completion_builder = TransactionBuilder::new(
+            ChainId::from("provider-ingest-node-test"),
+            fixture.order.issued_by.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(CompleteReplicationOrder {
+            order_id: fixture.order.order_id,
+            provider_id: fixture.provider_id,
+            completion_epoch,
+        })]);
+        completion_builder.set_creation_time(Duration::from_secs(1));
+        completion_builder.set_ttl(Duration::from_secs(30));
+        let completion_payload = completion_builder
+            .into_payload()
+            .expect("exact provider completion payload");
+        let outbox = handle
+            .provider_ingest_outbox
+            .as_ref()
+            .expect("provider ingest outbox");
+        let signing_claim = outbox
+            .claim_completion_signing(
+                inserted.job_id(),
+                ProviderIngestCompletionSigningContextV1 {
+                    baseline_finalized_cursor: fixture.ingest_cursor,
+                    chain_id: completion_payload.chain.clone(),
+                    provider_owner: completion_payload.authority.clone(),
+                    completion_epoch,
+                    expected_payload: completion_payload,
+                },
+                1_002,
+            )
+            .expect("claim exact completion signing");
+        assert_eq!(signing_claim.job_id(), inserted.job_id());
+        assert_eq!(signing_claim.generation(), 1);
+        let signing_status = outbox
+            .status(inserted.job_id())
+            .expect("signing provider ingest status");
+        assert!(matches!(
+            &signing_status.state,
+            ProviderIngestDeliveryStateV1::LocalStored {
+                completion: ProviderIngestCompletionStateV1::Signing {
+                    completion_epoch: 4,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(!matches!(
+            &signing_status.state,
+            ProviderIngestDeliveryStateV1::FinalizedCompleted { .. }
+        ));
+        let signing_retry = outbox
+            .release_completion_signing(&signing_claim, 1_003, fixture.ingest_cursor)
+            .expect("release exact signing claim");
+        let next_signing_attempt_at_ms = match signing_retry {
+            ProviderIngestRetryOutcomeV1::RetryScheduled {
+                attempts: 1,
+                next_attempt_at_ms,
+            } => next_attempt_at_ms,
+            other => panic!("unexpected signing retry outcome: {other:?}"),
+        };
+
+        let page = handle
+            .finalized_provider_ingest_status_page(None, 1)
+            .expect("provider ingest status page");
+        assert_eq!(page.rows.len(), 1);
+        assert!(page.next_after_job_id.is_none());
+        assert_eq!(page.rows[0].job_id, inserted.job_id());
+        assert!(matches!(
+            &page.rows[0].state,
+            ProviderIngestDeliveryStateV1::LocalStored {
+                manifest_id: stored_manifest_id,
+                completion: ProviderIngestCompletionStateV1::Ready {
+                    attempts: 1,
+                    next_attempt_at_ms,
+                    last_failure_class: Some(
+                        ProviderIngestFailureClassV1::SignerUnavailable
+                    ),
+                },
+            } if stored_manifest_id == &manifest_id
+                && *next_attempt_at_ms == next_signing_attempt_at_ms
+        ));
+        assert!(
+            !matches!(
+                &page.rows[0].state,
+                ProviderIngestDeliveryStateV1::FinalizedCompleted { .. }
+            ),
+            "LocalStored must never imply finalized ledger completion"
+        );
+
+        drop(handle);
+        let restored = NodeHandle::new(fixture.config);
+        let restored_page = restored
+            .finalized_provider_ingest_status_page(None, 1)
+            .expect("restored provider ingest status page");
+        assert_eq!(restored_page, page);
+    }
+
+    #[test]
+    fn finalized_provider_ingest_source_mismatch_is_retryable_and_payload_free() {
+        let (fixture, _temp_dir) = finalized_provider_ingest_fixture(0x81);
+        let handle = NodeHandle::new(fixture.config.clone());
+        install_finalized_provider_ingest_projection(&handle, &fixture);
+        let inserted = handle
+            .enqueue_finalized_provider_ingest(
+                &fixture.finalized_pin,
+                *fixture.order.order_id.as_bytes(),
+            )
+            .expect("enqueue finalized provider ingest");
+        let claim = handle
+            .claim_finalized_provider_ingest_source(
+                inserted.job_id(),
+                ProviderIngestClaimOwnerV1::new([0x82; 32]).expect("source owner"),
+                2_000,
+                fixture.ingest_cursor,
+            )
+            .expect("claim finalized provider ingest");
+        let mut substituted_manifest = fixture.manifest.clone();
+        substituted_manifest.content_length = substituted_manifest.content_length.saturating_add(1);
+        let mut reader = fixture.payload.as_slice();
+        let error = handle
+            .ingest_finalized_provider_payload(
+                &claim,
+                &substituted_manifest,
+                &fixture.plan,
+                &mut reader,
+                2_001,
+                fixture.ingest_cursor,
+            )
+            .expect_err("substituted manifest must be rejected");
+        assert!(matches!(
+            error,
+            FinalizedProviderIngestError::BindingMismatch(
+                "manifest bytes disagree with finalized authorization"
+            )
+        ));
+        assert!(handle.storage().expect("storage").manifests().is_empty());
+
+        let page = handle
+            .finalized_provider_ingest_status_page(None, 1)
+            .expect("provider ingest status page");
+        assert_eq!(page.rows.len(), 1);
+        assert!(matches!(
+            &page.rows[0].state,
+            ProviderIngestDeliveryStateV1::RetryScheduled {
+                attempts: 1,
+                next_attempt_at_ms,
+                failure_class: ProviderIngestFailureClassV1::SourceRejected,
+            } if *next_attempt_at_ms > 2_001
+        ));
+        let checkpoint = std::fs::read(
+            fixture
+                .config
+                .data_dir()
+                .join(PROVIDER_INGEST_OUTBOX_FILE_V1),
+        )
+        .expect("read provider ingest checkpoint");
+        assert!(
+            !checkpoint
+                .windows(fixture.payload.len())
+                .any(|window| window == fixture.payload),
+            "provider-ingest checkpoint must remain payload-free"
+        );
+    }
+
+    #[test]
+    fn finalized_provider_ingest_uses_typed_cancellation_evidence() {
+        let (fixture, _temp_dir) = finalized_provider_ingest_fixture(0x91);
+        let handle = NodeHandle::new(fixture.config.clone());
+        install_finalized_provider_ingest_projection(&handle, &fixture);
+        let inserted = handle
+            .enqueue_finalized_provider_ingest(
+                &fixture.finalized_pin,
+                *fixture.order.order_id.as_bytes(),
+            )
+            .expect("enqueue finalized provider ingest");
+        let cancellation_cursor = ProviderIngestFinalizedCursorV1 {
+            height: fixture.ingest_cursor.height + 1,
+            block_hash: [0x92; 32],
+        };
+        handle
+            .provider_ingest_outbox
+            .as_ref()
+            .expect("provider ingest outbox")
+            .cancel(
+                inserted.job_id(),
+                ProviderIngestFinalizedCancellationV1 {
+                    finalized_cursor: cancellation_cursor,
+                    provider_id: *fixture.provider_id.as_bytes(),
+                    order_id: *fixture.order.order_id.as_bytes(),
+                    manifest_digest: fixture.manifest.digest().expect("manifest digest").into(),
+                    reason: ProviderIngestCancellationReasonV1::OrderExpired,
+                },
+            )
+            .expect("apply typed finalized cancellation");
+        let status = handle
+            .finalized_provider_ingest_status_page(None, 1)
+            .expect("cancelled provider ingest status");
+        assert!(matches!(
+            &status.rows[0].state,
+            ProviderIngestDeliveryStateV1::Cancelled {
+                reason: ProviderIngestCancellationReasonV1::OrderExpired,
+                observed_finalized_cursor,
+            } if *observed_finalized_cursor == cancellation_cursor
+        ));
     }
 
     #[test]
@@ -14210,41 +14347,6 @@ mod tests {
             action_receipts: Vec::new(),
             updated_at_unix_ms: report.submitted_at_unix * 1_000,
         }
-    }
-
-    #[test]
-    fn exact_quantity_metric_projection_is_explicit_and_saturating() {
-        assert_eq!(
-            quantity_to_metric_micro_saturating(&quantity("0.000001999")),
-            1
-        );
-        assert_eq!(
-            quantity_to_metric_micro_saturating(xor("0.0000001").as_quantity()),
-            0
-        );
-        assert_eq!(
-            quantity_to_metric_micro_saturating(&quantity(
-                "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
-            )),
-            u128::MAX
-        );
-    }
-
-    #[test]
-    fn exact_quantity_metric_divergence_rounds_toward_zero() {
-        let reference = quantity("2");
-        assert_eq!(
-            quantity_divergence_bps_saturating(&quantity("2.1"), &reference),
-            500
-        );
-        assert_eq!(
-            quantity_divergence_bps_saturating(&quantity("1.8"), &reference),
-            1_000
-        );
-        assert_eq!(
-            quantity_divergence_bps_saturating(&quantity("1"), &Quantity::zero()),
-            u64::MAX
-        );
     }
 
     #[test]
@@ -15876,6 +15978,36 @@ mod tests {
         .expect("appeal finance weekly rollup fixture")
     }
 
+    fn por_challenge_publication_fixture() -> PorChallengePublicationV1 {
+        PorChallengePublicationV1::try_new(por_sample_challenge(), 0)
+            .expect("PoR challenge publication fixture")
+    }
+
+    fn por_weekly_report_fixture() -> PorWeeklyReportV1 {
+        let report = PorWeeklyReportV1 {
+            version: sorafs_manifest::por::POR_WEEKLY_REPORT_VERSION_V1,
+            cycle: PorReportIsoWeek {
+                year: 2026,
+                week: 30,
+            },
+            generated_at: 1_800_604_800,
+            challenges_total: 2,
+            challenges_verified: 1,
+            challenges_failed: 1,
+            forced_challenges: 0,
+            repairs_enqueued: 1,
+            repairs_completed: 1,
+            mean_latency_ms: Some(80),
+            p95_latency_ms: Some(130),
+            slashing_events: Vec::new(),
+            providers_missing_vrf: Vec::new(),
+            top_offenders: Vec::new(),
+            notes: None,
+        };
+        report.validate().expect("PoR weekly report fixture");
+        report
+    }
+
     fn appeal_finance_settlement_receipt_fixture() -> SoraFsAppealFinanceSettlementReceiptV1 {
         SoraFsAppealFinanceSettlementReceiptV1 {
             version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
@@ -15883,7 +16015,10 @@ mod tests {
             case_id: "case-42".to_string(),
             round_id: Some("round-1".to_string()),
             generated_at_unix_ms: 1_800_000_032_000,
+            finalized_block_height: 42,
+            finalized_block_hash: [0x43; 32],
             appeal_finance_config_version: "baseline-v1".to_string(),
+            appeal_finance_policy_digest: [0x44; 32],
             outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
             escrow_id_hex: "11".repeat(32),
             payer_account: "payer-account".to_string(),
@@ -15894,9 +16029,9 @@ mod tests {
             amount_xor: xor("420"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
-            reconciliation_status: "pending_client_submission".to_string(),
-            observed_lifecycle_status: "locked".to_string(),
-            observed_remaining_xor: xor("420"),
+            reconciliation_status: "settled".to_string(),
+            observed_lifecycle_status: "drawn_down".to_string(),
+            observed_remaining_xor: xor("0"),
             deposit_xor: xor("420"),
             refund_xor: xor("0"),
             treasury_xor: xor("210"),
@@ -17565,386 +17700,6 @@ mod tests {
                 .expect("replay restored session at capacity"),
             sessions[0]
         );
-    }
-
-    #[test]
-    fn node_handle_registers_and_settles_deal() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-
-        let provider_id = ProviderId::new([0xDD; 32]);
-        let client_id = ClientId::new([0xCC; 32]);
-
-        handle
-            .deposit_provider_bond(provider_id, xor("3"))
-            .expect("deposit provider bond");
-        handle
-            .deposit_client_credit(client_id, xor("1"))
-            .expect("deposit client credit");
-
-        let terms = DealTerms {
-            storage_price_per_gib_month: quantity("0.2"),
-            egress_price_per_gib: quantity("0.05"),
-            settlement_window_epochs: 7,
-            micropayment_probability_bps: 10_000,
-            micropayment_payout: quantity("0.05"),
-        };
-
-        let activation_epoch = 1_700_000_000;
-        let proposal = DealProposal {
-            provider_id,
-            client_id,
-            storage_class: StorageClass::Hot,
-            capacity_gib: 4,
-            start_epoch: activation_epoch,
-            end_epoch: activation_epoch + 14,
-            terms,
-            metadata: Metadata::default(),
-        };
-
-        let record = handle
-            .open_deal(proposal, activation_epoch)
-            .expect("open deal");
-
-        let mut tickets = (1_u64..=5)
-            .map(|storage_gib_hours| MicropaymentTicket {
-                ticket_id: derive_micropayment_ticket_id(
-                    record.deal_id,
-                    activation_epoch + 1,
-                    storage_gib_hours,
-                    0,
-                ),
-                issued_epoch: activation_epoch + 1,
-                storage_gib_hours,
-                egress_bytes: 0,
-            })
-            .collect::<Vec<_>>();
-        tickets.sort_unstable_by_key(|ticket| ticket.ticket_id);
-        let usage = DealUsageReport {
-            deal_id: record.deal_id,
-            epoch: activation_epoch + 1,
-            storage_gib_hours: (4u128 * GIB_HOURS_PER_MONTH) as u64,
-            egress_bytes: BYTES_PER_GIB as u64,
-            tickets,
-        };
-
-        let usage_outcome = handle.record_deal_usage(usage).expect("record usage");
-        assert_eq!(usage_outcome.tickets_processed, 5);
-
-        let outcome = handle
-            .settle_deal(record.deal_id, activation_epoch + 7)
-            .expect("settle deal");
-        let settlement = &outcome.record;
-        assert_eq!(settlement.provider_id, provider_id);
-        assert_eq!(settlement.client_id, client_id);
-        assert_eq!(settlement.deal_id, record.deal_id);
-        assert_eq!(settlement.settlement_index, 1);
-        assert_eq!(settlement.expected_charge, quantity("0.85"));
-        assert_eq!(settlement.micropayment_credit, quantity("0.25"));
-        assert_eq!(settlement.client_credit_debit, quantity("0.6"));
-        assert_eq!(settlement.bond_slash, Quantity::zero());
-        assert_eq!(settlement.outstanding, Quantity::zero());
-
-        let governance = &outcome.governance;
-        assert_eq!(governance.deal_id, *record.deal_id.as_bytes());
-        assert_eq!(governance.status, DealSettlementStatusV1::WindowSettled);
-        assert_eq!(governance.settled_at, activation_epoch + 7);
-        let ledger = &governance.ledger;
-        assert_eq!(ledger.deal_id, *record.deal_id.as_bytes());
-        assert_eq!(ledger.provider_id, *provider_id.as_bytes());
-        assert_eq!(ledger.client_id, *client_id.as_bytes());
-        assert_eq!(ledger.provider_accrual, xor("0.85"));
-        assert_eq!(ledger.client_liability, xor("0.85"));
-        assert_eq!(ledger.bond_locked, xor("2.4"));
-        assert_eq!(ledger.bond_slashed, XorQuantity::zero());
-        assert_eq!(ledger.captured_at, activation_epoch + 7);
-
-        let snapshot = handle.deal_snapshot(record.deal_id).expect("snapshot");
-        assert!(matches!(snapshot.status, DealStatus::Active(_)));
-
-        let provider_snapshot = handle
-            .deal_engine()
-            .provider_snapshot(provider_id)
-            .expect("provider snapshot");
-        assert!(provider_snapshot.bond_locked >= xor("2.4"));
-    }
-
-    #[test]
-    fn authenticated_deal_funding_and_cancellation_survive_restart() {
-        let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
-            .build();
-        let provider_id = ProviderId::new([0xD7; 32]);
-        let client_id = ClientId::new([0xC7; 32]);
-        let activation_epoch = 1_720_000_000;
-        let source = NodeHandle::new(cfg.clone());
-
-        source
-            .fund_provider_bond_sequenced(provider_id, xor("0.000001"), 1)
-            .expect("persist first provider funding sequence");
-        source
-            .fund_client_credit_sequenced(client_id, xor("0.0000005"), 1)
-            .expect("persist first client funding sequence");
-        assert!(matches!(
-            source.fund_provider_bond_sequenced(provider_id, xor("0.00000001"), 1),
-            Err(DealEngineError::FundingSequenceMismatch {
-                expected: 2,
-                found: 1,
-                ..
-            })
-        ));
-        assert!(matches!(
-            source.fund_client_credit_sequenced(client_id, xor("0.00000001"), 3),
-            Err(DealEngineError::FundingSequenceMismatch {
-                expected: 2,
-                found: 3,
-                ..
-            })
-        ));
-
-        let record = source
-            .open_deal(
-                DealProposal {
-                    provider_id,
-                    client_id,
-                    storage_class: StorageClass::Hot,
-                    capacity_gib: 1,
-                    start_epoch: activation_epoch,
-                    end_epoch: activation_epoch + 10,
-                    terms: DealTerms {
-                        storage_price_per_gib_month: quantity("0.0000001"),
-                        egress_price_per_gib: quantity("0.00000001"),
-                        settlement_window_epochs: 5,
-                        micropayment_probability_bps: 1,
-                        micropayment_payout: quantity("0.000000001"),
-                    },
-                    metadata: Metadata::default(),
-                },
-                activation_epoch,
-            )
-            .expect("persist active deal");
-        let cancellation = source
-            .cancel_deal(
-                record.deal_id,
-                activation_epoch + 5,
-                "operator-approved client termination".to_owned(),
-            )
-            .expect("persist canonical cancellation");
-        assert_eq!(
-            cancellation.governance.status,
-            DealSettlementStatusV1::Cancelled
-        );
-        let expected_governance = norito::to_bytes(&cancellation.governance)
-            .expect("encode expected cancellation governance");
-        assert_eq!(source.pending_governance_publication_count(), 1);
-        drop(source);
-
-        let restored = NodeHandle::new(cfg);
-        assert_eq!(
-            restored.pending_governance_publication_count(),
-            1,
-            "cancellation governance outbox survives restart"
-        );
-        let deal = restored
-            .deal_snapshot(record.deal_id)
-            .expect("cancelled deal restored");
-        assert!(
-            matches!(deal.status, DealStatus::Cancelled(epoch) if epoch == activation_epoch + 5)
-        );
-        assert_eq!(deal.locked_bond, XorQuantity::zero());
-        let provider = restored
-            .deal_engine()
-            .provider_snapshot(provider_id)
-            .expect("provider restored");
-        assert_eq!(provider.funding_sequence, 1);
-        assert_eq!(provider.bond_available, xor("0.000001"));
-        let client = restored
-            .deal_engine()
-            .client_snapshot(client_id)
-            .expect("client restored");
-        assert_eq!(client.funding_sequence, 1);
-        assert_eq!(client.credit_balance, xor("0.0000005"));
-
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        restored
-            .try_set_governance_publisher(trait_publisher)
-            .expect("publisher registration replays restored cancellation outbox");
-        assert_eq!(publisher.take(), vec![expected_governance]);
-        assert_eq!(restored.pending_governance_publication_count(), 0);
-
-        restored
-            .fund_provider_bond_sequenced(provider_id, xor("0.00000001"), 2)
-            .expect("next sequence accepted after restart");
-        assert!(matches!(
-            restored.cancel_deal(
-                record.deal_id,
-                activation_epoch + 10,
-                "replay cancellation".to_owned(),
-            ),
-            Err(DealEngineError::DealInactive(deal_id)) if deal_id == record.deal_id
-        ));
-    }
-
-    #[test]
-    fn deal_runtime_balances_and_ticket_replay_survive_restart() {
-        let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
-            .runtime_retention(RuntimeRetentionPolicy::new(4, 8, 2 * 1024 * 1024))
-            .build();
-        let provider_id = ProviderId::new([0xD1; 32]);
-        let client_id = ClientId::new([0xC1; 32]);
-        let activation_epoch = 1_700_000_000;
-        let source = NodeHandle::new(cfg.clone());
-        source
-            .deposit_provider_bond(provider_id, xor("3"))
-            .expect("persist provider bond");
-        source
-            .deposit_client_credit(client_id, xor("1"))
-            .expect("persist client credit");
-        let record = source
-            .open_deal(
-                DealProposal {
-                    provider_id,
-                    client_id,
-                    storage_class: StorageClass::Hot,
-                    capacity_gib: 1,
-                    start_epoch: activation_epoch,
-                    end_epoch: activation_epoch + 14,
-                    terms: DealTerms {
-                        storage_price_per_gib_month: quantity("0.2"),
-                        egress_price_per_gib: quantity("0.05"),
-                        settlement_window_epochs: 7,
-                        micropayment_probability_bps: 10_000,
-                        micropayment_payout: quantity("0.05"),
-                    },
-                    metadata: Metadata::default(),
-                },
-                activation_epoch,
-            )
-            .expect("persist deal");
-        let replay_ticket = MicropaymentTicket {
-            ticket_id: derive_micropayment_ticket_id(record.deal_id, activation_epoch + 1, 1, 0),
-            issued_epoch: activation_epoch + 1,
-            storage_gib_hours: 1,
-            egress_bytes: 0,
-        };
-        source
-            .record_deal_usage(DealUsageReport {
-                deal_id: record.deal_id,
-                epoch: activation_epoch + 1,
-                storage_gib_hours: GIB_HOURS_PER_MONTH as u64,
-                egress_bytes: 0,
-                tickets: vec![replay_ticket.clone()],
-            })
-            .expect("persist usage");
-        drop(source);
-
-        let restored = NodeHandle::new(cfg);
-        assert!(restored.deal_snapshot(record.deal_id).is_some());
-        assert_eq!(
-            restored
-                .deal_engine()
-                .provider_snapshot(provider_id)
-                .expect("restored provider")
-                .bond_locked,
-            xor("0.6")
-        );
-        assert_eq!(
-            restored
-                .deal_engine()
-                .client_snapshot(client_id)
-                .expect("restored client")
-                .credit_balance,
-            xor("1")
-        );
-        let replay = restored
-            .record_deal_usage(DealUsageReport {
-                deal_id: record.deal_id,
-                epoch: activation_epoch + 1,
-                storage_gib_hours: GIB_HOURS_PER_MONTH as u64,
-                egress_bytes: 0,
-                tickets: vec![replay_ticket],
-            })
-            .expect_err("replayed usage epoch rejected");
-        assert!(matches!(
-            replay,
-            DealEngineError::UsageEpochNotMonotonic { .. }
-        ));
-    }
-
-    #[test]
-    fn settle_deal_publishes_governance_artifact() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
-
-        let provider_id = ProviderId::new([0xAB; 32]);
-        let client_id = ClientId::new([0xBC; 32]);
-
-        handle
-            .deposit_provider_bond(provider_id, xor("3"))
-            .expect("deposit provider bond");
-        handle
-            .deposit_client_credit(client_id, xor("1"))
-            .expect("deposit client credit");
-
-        let terms = DealTerms {
-            storage_price_per_gib_month: quantity("0.2"),
-            egress_price_per_gib: quantity("0.05"),
-            settlement_window_epochs: 7,
-            micropayment_probability_bps: 10_000,
-            micropayment_payout: quantity("0.05"),
-        };
-
-        let activation_epoch = 1_650_000_000;
-        let proposal = DealProposal {
-            provider_id,
-            client_id,
-            storage_class: StorageClass::Hot,
-            capacity_gib: 2,
-            start_epoch: activation_epoch,
-            end_epoch: activation_epoch + 14,
-            terms,
-            metadata: Metadata::default(),
-        };
-
-        let record = handle
-            .open_deal(proposal, activation_epoch)
-            .expect("open deal");
-
-        let usage = DealUsageReport {
-            deal_id: record.deal_id,
-            epoch: activation_epoch + 1,
-            storage_gib_hours: GIB_HOURS_PER_MONTH as u64,
-            egress_bytes: BYTES_PER_GIB as u64,
-            tickets: vec![],
-        };
-
-        handle
-            .record_deal_usage(usage)
-            .expect("record usage should succeed");
-
-        let outcome = handle
-            .settle_deal(record.deal_id, activation_epoch + 7)
-            .expect("settlement succeeds");
-
-        let published = publisher.take();
-        assert_eq!(published.len(), 1, "expected one governance publish");
-        let decoded: DealSettlementV1 =
-            norito::decode_from_bytes(&published[0]).expect("governance payload decodes");
-        assert_eq!(decoded.deal_id, *record.deal_id.as_bytes());
-        assert_eq!(decoded.ledger.provider_id, *provider_id.as_bytes());
-        assert_eq!(decoded.ledger.client_id, *client_id.as_bytes());
-        assert_eq!(decoded.status, outcome.governance.status);
-        assert_eq!(decoded.settled_at, outcome.governance.settled_at);
     }
 
     #[test]
@@ -20090,6 +19845,59 @@ mod tests {
     }
 
     #[test]
+    fn configured_governance_dir_requires_complete_runtime_signing_identity() {
+        let missing_identity_dir = tempfile::tempdir().expect("missing identity temp dir");
+        let missing_identity_root = missing_identity_dir
+            .path()
+            .canonicalize()
+            .expect("canonical missing identity root");
+        let missing_identity = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(missing_identity_root.join("storage"))
+            .governance_dir(Some(missing_identity_root.join("governance")))
+            .build();
+        let error = NodeHandle::try_new(missing_identity)
+            .expect_err("governance directory without a signed identity must fail");
+        assert!(matches!(
+            error,
+            NodeInitError::GovernancePublisher(message)
+                if message.contains("requires peer id, signer handle, public key")
+        ));
+
+        let signer = Arc::new(TestGovernanceDagSigner::new());
+        let signed_dir = tempfile::tempdir().expect("signed publisher temp dir");
+        let signed_root = signed_dir
+            .path()
+            .canonicalize()
+            .expect("canonical signed publisher root");
+        let signed_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(signed_root.join("storage"))
+            .governance_dir(Some(signed_root.join("governance")))
+            .governance_dag_publisher_peer_id(Some(
+                String::from_utf8(signer.publisher_peer_id().to_vec())
+                    .expect("test peer id is UTF-8"),
+            ))
+            .governance_dag_signer_handle(Some(signer.handle().to_owned()))
+            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
+            .build();
+        let error = NodeHandle::try_new(signed_config.clone())
+            .expect_err("configured identity without injected signer must fail");
+        assert!(matches!(
+            error,
+            NodeInitError::GovernancePublisher(message)
+                if message.contains("injected runtime signer")
+        ));
+
+        let handle = NodeHandle::try_new_with_runtime_deps(
+            signed_config,
+            NodeRuntimeDeps::default().with_governance_dag_signer(signer),
+        )
+        .expect("complete runtime-signed Governance DAG publisher starts");
+        assert!(handle.has_governance_publisher());
+    }
+
+    #[test]
     fn publish_appeal_finance_weekly_rollup_writes_governance_publisher() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
@@ -20126,166 +19934,65 @@ mod tests {
     }
 
     #[test]
-    fn settle_deal_writes_filesystem_governance_payloads() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let root = temp.path().canonicalize().expect("canonical temp dir");
-        let governance_dir = root.join("governance");
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(root.join("storage"))
-            .governance_dir(Some(governance_dir.clone()))
-            .build();
+    fn publish_por_governance_payloads_use_canonical_outbox_dispatch() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
-
-        let provider_id = ProviderId::new([0x10; 32]);
-        let client_id = ClientId::new([0x20; 32]);
+        let publisher = Arc::new(RecordingPublisher::default());
+        handle
+            .try_set_governance_publisher(publisher.clone())
+            .expect("register recording publisher");
+        let publication = por_challenge_publication_fixture();
+        let report = por_weekly_report_fixture();
+        let expected_publication =
+            to_bytes(&publication).expect("encode PoR challenge publication");
+        let expected_report = to_bytes(&report).expect("encode PoR weekly report");
 
         handle
-            .deposit_provider_bond(provider_id, xor("1"))
-            .expect("deposit provider bond");
+            .publish_por_challenge_publication(publication)
+            .expect("publish PoR challenge publication");
         handle
-            .deposit_client_credit(client_id, xor("1"))
-            .expect("deposit client credit");
+            .publish_por_weekly_report(report)
+            .expect("publish PoR weekly report");
 
-        let terms = DealTerms {
-            storage_price_per_gib_month: quantity("0.1"),
-            egress_price_per_gib: quantity("0.025"),
-            settlement_window_epochs: 5,
-            micropayment_probability_bps: 10_000,
-            micropayment_payout: quantity("0.001"),
-        };
-
-        let activation_epoch = 1_680_000_000;
-        let proposal = DealProposal {
-            provider_id,
-            client_id,
-            storage_class: StorageClass::Hot,
-            capacity_gib: 1,
-            start_epoch: activation_epoch,
-            end_epoch: activation_epoch + 10,
-            terms,
-            metadata: Metadata::default(),
-        };
-
-        let record = handle
-            .open_deal(proposal, activation_epoch)
-            .expect("open deal");
-
-        let usage = DealUsageReport {
-            deal_id: record.deal_id,
-            epoch: activation_epoch + 1,
-            storage_gib_hours: (GIB_HOURS_PER_MONTH / 2) as u64,
-            egress_bytes: (BYTES_PER_GIB / 4) as u64,
-            tickets: vec![],
-        };
-
-        handle
-            .record_deal_usage(usage)
-            .expect("record usage succeeds");
-
-        let outcome = handle
-            .settle_deal(record.deal_id, activation_epoch + 5)
-            .expect("settlement");
-
-        let deal_hex = hex::encode(record.deal_id.as_bytes());
-        let output_dir = governance_dir.join("settlements").join(deal_hex);
-        let entries = std::fs::read_dir(&output_dir)
-            .expect("settlement artefacts directory exists")
-            .map(|entry| entry.expect("dir entry").path())
-            .collect::<Vec<_>>();
-        assert!(
-            entries
-                .iter()
-                .any(|path| path.extension().map(|ext| ext == "to").unwrap_or(false)),
-            "encoded artefact missing"
+        assert_eq!(
+            publisher.take(),
+            vec![expected_publication, expected_report]
         );
-
-        let encoded_path = entries
-            .iter()
-            .find(|path| path.extension().map(|ext| ext == "to").unwrap_or(false))
-            .expect("encoded artefact present");
-        let encoded = std::fs::read(encoded_path).expect("read encoded artefact");
-        let decoded: DealSettlementV1 =
-            norito::decode_from_bytes(&encoded).expect("decode artefact");
-        assert_eq!(decoded.deal_id, *record.deal_id.as_bytes());
-        assert_eq!(decoded.status, outcome.governance.status);
-
-        let json_path = entries
-            .iter()
-            .find(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
-            .expect("json artefact present");
-        let json_bytes = std::fs::read(json_path).expect("read json artefact");
-        let value: norito::json::Value =
-            norito::json::from_slice(&json_bytes).expect("json parses");
-        let status = value
-            .get("metadata")
-            .and_then(|meta| meta.get("status"))
-            .and_then(norito::json::Value::as_str)
-            .expect("status present");
-        assert_eq!(status, "window_settled");
+        assert_eq!(handle.pending_governance_publication_count(), 0);
     }
 
     #[test]
-    fn settlement_publish_failure_is_best_effort() {
+    fn por_governance_payloads_remain_ordered_and_retryable_after_publish_failure() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
-
-        let publisher = Arc::new(FailingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
-
-        let provider_id = ProviderId::new([0xDE; 32]);
-        let client_id = ClientId::new([0xEF; 32]);
+        let failing = Arc::new(FailingPublisher::default());
+        handle
+            .try_set_governance_publisher(failing.clone())
+            .expect("register failing publisher before enqueue");
+        let publication = por_challenge_publication_fixture();
+        let report = por_weekly_report_fixture();
+        let expected_publication =
+            to_bytes(&publication).expect("encode PoR challenge publication");
+        let expected_report = to_bytes(&report).expect("encode PoR weekly report");
 
         handle
-            .deposit_provider_bond(provider_id, xor("3"))
-            .expect("deposit provider bond");
+            .publish_por_challenge_publication(publication)
+            .expect_err("challenge publish failure remains durable");
         handle
-            .deposit_client_credit(client_id, xor("1"))
-            .expect("deposit client credit");
+            .publish_por_weekly_report(report)
+            .expect_err("report publish failure remains durable");
+        assert_eq!(failing.attempts(), 2);
+        assert_eq!(handle.pending_governance_publication_count(), 2);
 
-        let terms = DealTerms {
-            storage_price_per_gib_month: quantity("0.2"),
-            egress_price_per_gib: quantity("0.05"),
-            settlement_window_epochs: 7,
-            micropayment_probability_bps: 10_000,
-            micropayment_payout: quantity("0.05"),
-        };
-
-        let activation_epoch = 1_700_100_000;
-        let proposal = DealProposal {
-            provider_id,
-            client_id,
-            storage_class: StorageClass::Hot,
-            capacity_gib: 3,
-            start_epoch: activation_epoch,
-            end_epoch: activation_epoch + 14,
-            terms,
-            metadata: Metadata::default(),
-        };
-
-        let record = handle
-            .open_deal(proposal, activation_epoch)
-            .expect("open deal");
-
-        let usage = DealUsageReport {
-            deal_id: record.deal_id,
-            epoch: activation_epoch + 1,
-            storage_gib_hours: (2 * GIB_HOURS_PER_MONTH) as u64,
-            egress_bytes: (BYTES_PER_GIB / 2) as u64,
-            tickets: vec![],
-        };
-
+        let recording = Arc::new(RecordingPublisher::default());
         handle
-            .record_deal_usage(usage)
-            .expect("record usage should succeed");
-
-        let outcome = handle
-            .settle_deal(record.deal_id, activation_epoch + 7)
-            .expect("settlement succeeds despite publish failure");
-        assert_eq!(publisher.attempts(), 1);
-        assert_eq!(handle.pending_governance_publication_count(), 1);
-        assert_eq!(outcome.record.deal_id, record.deal_id);
+            .try_set_governance_publisher(recording.clone())
+            .expect("retry queued PoR publications");
+        assert_eq!(
+            recording.take(),
+            vec![expected_publication, expected_report]
+        );
+        assert_eq!(handle.pending_governance_publication_count(), 0);
     }
 
     #[test]
@@ -20401,141 +20108,6 @@ mod tests {
             overview_after[0].last_failure_unix,
             Some(verdict.decided_at)
         );
-    }
-
-    #[test]
-    fn por_failures_trigger_slash_after_threshold() {
-        let (base_cfg, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base_cfg.data_dir().clone())
-            .penalty_strike_threshold(2)
-            .penalty_bond_bps(5_000)
-            .penalty_cooldown_secs(0)
-            .build();
-        let handle = NodeHandle::new(cfg);
-        let challenge = por_sample_challenge();
-        let provider = ProviderId::new(challenge.provider_id);
-
-        handle
-            .deposit_provider_bond(provider, xor("0.00001"))
-            .expect("deposit provider bond");
-
-        let mut verdict = por_sample_verdict(&challenge, [0; 32]);
-        verdict.outcome = AuditOutcomeV1::Failed;
-        verdict.failure_reason = Some("proof missing".to_string());
-        verdict.proof_digest = None;
-        resign_por_sample_verdict(&mut verdict);
-
-        handle
-            .record_por_challenge(&challenge)
-            .expect("record first challenge");
-        let first = handle
-            .record_por_verdict(
-                &verdict,
-                &por_sample_auditor_keys(),
-                1,
-                &SuccessfulPorRepairHandoff,
-            )
-            .expect("record first failure");
-        assert_eq!(first.consecutive_failures, 1);
-        assert!(first.slash.is_none());
-
-        let second_challenge = subsequent_por_challenge(&challenge, 10);
-        let mut second_verdict = por_sample_verdict(&second_challenge, [0; 32]);
-        second_verdict.outcome = AuditOutcomeV1::Failed;
-        second_verdict.failure_reason = Some("proof missing".to_owned());
-        second_verdict.proof_digest = None;
-        resign_por_sample_verdict(&mut second_verdict);
-        handle
-            .record_por_challenge(&second_challenge)
-            .expect("record second challenge");
-        let second = handle
-            .record_por_verdict(
-                &second_verdict,
-                &por_sample_auditor_keys(),
-                1,
-                &SuccessfulPorRepairHandoff,
-            )
-            .expect("record second failure");
-
-        let slash = second.slash.expect("slash recommendation expected");
-        assert_eq!(slash.provider_id, provider);
-        assert_eq!(slash.manifest_digest, challenge.manifest_digest);
-        assert_eq!(slash.penalty, xor("0.000005"));
-        assert_eq!(second.consecutive_failures, 0);
-    }
-
-    #[test]
-    fn por_slash_respects_cooldown() {
-        let (base_cfg, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base_cfg.data_dir().clone())
-            .penalty_strike_threshold(1)
-            .penalty_bond_bps(10_000)
-            .penalty_cooldown_secs(300)
-            .build();
-        let handle = NodeHandle::new(cfg);
-        let challenge = por_sample_challenge();
-        let provider = ProviderId::new(challenge.provider_id);
-        handle
-            .deposit_provider_bond(provider, xor("0.000002"))
-            .expect("deposit provider bond");
-
-        let mut verdict = por_sample_verdict(&challenge, [0; 32]);
-        verdict.outcome = AuditOutcomeV1::Failed;
-        verdict.failure_reason = Some("timeout".to_string());
-        verdict.proof_digest = None;
-        resign_por_sample_verdict(&mut verdict);
-
-        handle
-            .record_por_challenge(&challenge)
-            .expect("record challenge");
-        let first = handle
-            .record_por_verdict(
-                &verdict,
-                &por_sample_auditor_keys(),
-                1,
-                &SuccessfulPorRepairHandoff,
-            )
-            .expect("record verdict");
-        assert!(first.slash.is_some());
-
-        // Cooldown prevents an immediate second slash even though the strike threshold is 1.
-        let later_challenge = subsequent_por_challenge(&challenge, 120);
-        let mut later_verdict = por_sample_verdict(&later_challenge, [0; 32]);
-        later_verdict.outcome = AuditOutcomeV1::Failed;
-        later_verdict.failure_reason = Some("timeout".to_owned());
-        later_verdict.proof_digest = None;
-        resign_por_sample_verdict(&mut later_verdict);
-        handle
-            .record_por_challenge(&later_challenge)
-            .expect("record challenge after cooldown start");
-        let second = handle
-            .record_por_verdict(
-                &later_verdict,
-                &por_sample_auditor_keys(),
-                1,
-                &SuccessfulPorRepairHandoff,
-            )
-            .expect("record verdict during cooldown");
-        assert!(second.slash.is_none());
-        assert_eq!(second.consecutive_failures, 1);
-    }
-
-    #[test]
-    fn por_penalty_rejects_bond_sum_overflow() {
-        let maximum =
-            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
-                .parse::<XorQuantity>()
-                .expect("maximum canonical XOR quantity");
-        let one = "1".parse::<XorQuantity>().expect("canonical XOR quantity");
-
-        assert!(matches!(
-            checked_por_penalty(&maximum, &one, 10_000),
-            Err(sorafs_manifest::deal::DealAmountError::Overflow)
-        ));
     }
 
     #[test]
@@ -21534,13 +21106,25 @@ mod tests {
     fn node_handle_reconciliation_includes_appeal_finance_rollups() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let signer = Arc::new(TestGovernanceDagSigner::new());
         let cfg = StorageConfig::builder()
             .enabled(true)
             .data_dir(root.join("storage"))
             .governance_dir(Some(root.join("governance")))
+            .governance_dag_publisher_peer_id(Some(
+                String::from_utf8(signer.publisher_peer_id().to_vec())
+                    .expect("test peer id is UTF-8"),
+            ))
+            .governance_dag_signer_handle(Some(signer.handle().to_owned()))
+            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
             .build();
-        let handle =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
+        let handle = NodeHandle::try_new_with_policies_and_runtime_deps(
+            cfg,
+            enabled_repair_config(1),
+            GcConfig::default(),
+            NodeRuntimeDeps::default().with_governance_dag_signer(signer),
+        )
+        .expect("runtime-signed governance publisher");
         ensure_test_capacity_provider(&handle);
         assert!(handle.has_governance_publisher());
 
@@ -22833,6 +22417,56 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct TestGovernanceDagSigner {
+        handle: String,
+        publisher_peer_id: Vec<u8>,
+        key_pair: KeyPair,
+    }
+
+    impl TestGovernanceDagSigner {
+        fn new() -> Self {
+            Self {
+                handle: "pkcs11:governance-dag:node-test".to_owned(),
+                publisher_peer_id: b"12D3KooWNodeTestGovernancePublisher".to_vec(),
+                key_pair: KeyPair::try_from_seed(vec![0x39; 32], Algorithm::Ed25519)
+                    .expect("derive test Governance DAG key"),
+            }
+        }
+
+        fn public_key_bytes(&self) -> [u8; 32] {
+            let (algorithm, bytes) = self
+                .key_pair
+                .public_key()
+                .try_to_bytes()
+                .expect("serialize test Governance DAG public key");
+            assert_eq!(algorithm, Algorithm::Ed25519);
+            bytes.try_into().expect("Ed25519 public key width")
+        }
+    }
+
+    impl GovernanceDagRuntimeSigner for TestGovernanceDagSigner {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn publisher_peer_id(&self) -> &[u8] {
+            &self.publisher_peer_id
+        }
+
+        fn public_key(&self) -> [u8; 32] {
+            self.public_key_bytes()
+        }
+
+        fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+            IrohaSignature::try_new(self.key_pair.private_key(), payload)
+                .map_err(|_| "test Governance DAG signer refused request".to_owned())?
+                .payload()
+                .try_into()
+                .map_err(|_| "test Governance DAG signature width changed".to_owned())
+        }
+    }
+
+    #[derive(Debug)]
     struct FailingRepairOrchestrator {
         calls: Arc<AtomicUsize>,
     }
@@ -22877,6 +22511,26 @@ mod tests {
         fn publish_pdp_archive(
             &self,
             _archive: &PdpGovernanceArchiveV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
+        fn publish_por_challenge_publication(
+            &self,
+            _publication: &PorChallengePublicationV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
+        fn publish_por_weekly_report(
+            &self,
+            _report: &PorWeeklyReportV1,
             encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.payloads.lock().expect("publisher lock poisoned");
@@ -23000,6 +22654,26 @@ mod tests {
         fn publish_pdp_archive(
             &self,
             _archive: &PdpGovernanceArchiveV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_por_challenge_publication(
+            &self,
+            _publication: &PorChallengePublicationV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_por_weekly_report(
+            &self,
+            _report: &PorWeeklyReportV1,
             _encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");

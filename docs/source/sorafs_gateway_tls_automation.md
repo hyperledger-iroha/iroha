@@ -23,7 +23,7 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 > **Runtime ACME boundary (V1):** the repository does not ship a production
 > ACME client, DNS-provider adapter, account credential loader, or self-signed
 > fallback. `SelfSignedAcmeClient` exists only as a `cfg(test)` fixture.
-> Enabling `torii.sorafs_gateway.acme` without an audited runtime-injected
+> Enabling `sorafs.gateway.acme` without an audited runtime-injected
 > `AcmeClient` is a startup error. There is no production repository renewal
 > command or stored-certificate fallback. On renewal or validation failure,
 > withdraw the affected gateway until the audited adapter has atomically
@@ -34,7 +34,7 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 1. Stage ACME credentials only in the runtime adapter's sealed KMS/Vault
    namespace. Do not mirror account credentials or private keys to the bastion
    host or readiness artifacts.
-2. Fill in `torii.sorafs_gateway.acme` configuration with DNS-01 and
+2. Fill in `sorafs.gateway.acme` configuration with DNS-01 and
    TLS-ALPN-01 challenge preferences, enable ECH if supported, and set renewal
    thresholds.
 3. Deploy the embedding that injects the reviewed runtime ACME adapter. The
@@ -56,7 +56,7 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 |-------------|----------------|
 | Audited runtime ACME client supplied by the deployment embedding | Required before `acme.enabled = true`; the repository has no built-in production client. |
 | ACME account credentials stored in the runtime client's sealed KMS/Vault namespace | Credentials are owned by the injected client and must not enter config, logs, or repository artifacts. |
-| Offline copy of the latest `torii.sorafs_gateway` config bundle | Lets operators patch `ech_enabled`, host lists, or retry timing without waiting on config-management pipelines. |
+| Offline copy of the latest `sorafs.gateway` config bundle | Lets operators patch `ech_enabled`, host lists, or retry timing without waiting on config-management pipelines. |
 | Access to governance manifests (`manifest_signatures.json`, GAR envelopes) | Needed when publishing updated certificate fingerprints or rotating canonical host mappings. |
 | Repository checkout with Cargo/xtask access on the bastion host | Provides the self-cert wrapper, `sorafs-gateway-attest`, and `sorafs-gateway-probe` checks used in verification steps. |
 | Playbook template stored in incident tooling (PagerDuty/Notion) | Ensures the checklists in this guide are one click away during an incident. |
@@ -106,7 +106,7 @@ Add or update the following section in the Torii configuration bundle
 (e.g., `configs/production.toml`):
 
 ```toml
-[torii.sorafs_gateway.acme]
+[sorafs.gateway.acme]
 enabled = true
 account_email = "tls-ops@example.com"
 directory_url = "https://acme-v02.api.letsencrypt.org/directory"
@@ -117,7 +117,7 @@ retry_backoff = "30m"
 retry_jitter = "5m"
 ech_enabled = true
 
-[torii.sorafs_gateway.acme.challenges]
+[sorafs.gateway.acme.challenges]
 dns01 = true
 tls_alpn_01 = true
 ```
@@ -136,13 +136,13 @@ tls_alpn_01 = true
 
 | Key | Default | Production expectation | Compliance tie-in |
 |-----|---------|------------------------|-------------------|
-| `torii.sorafs_gateway.acme.enabled` | `false` | Enable only in a daemon embedding that injects the audited runtime adapter. | Enable/disable changes require an approved deployment record. |
-| `torii.sorafs_gateway.acme.directory_url` | Let’s Encrypt v2 | Override only when switching CA environments. | Governance requires publishing the selected CA in GAR manifests. |
-| `torii.sorafs_gateway.acme.dns_provider_id` | unset | Bind the exact reviewed adapter/provider configuration. | Adapter IAM and challenge permissions require periodic review. |
-| `torii.sorafs_gateway.acme.renewal_window` | `30d` | Keep enough headroom to withdraw and recover before expiry. | Window changes require risk-owner approval. |
-| `torii.sorafs_gateway.acme.retry_backoff` | `30m` | Keep bounded and alert on repeated failure. | Overrides require an incident/change record. |
-| `torii.sorafs_gateway.acme.retry_jitter` | `5m` | Keep deterministic and bounded across replicas. | Overrides require an incident/change record. |
-| `torii.sorafs_gateway.acme.ech_enabled` | `false` | Enable only when the adapter and public edge both install and validate ECH. | Every toggle must be documented with reason/evidence. |
+| `sorafs.gateway.acme.enabled` | `false` | Enable only in a daemon embedding that injects the audited runtime adapter. | Enable/disable changes require an approved deployment record. |
+| `sorafs.gateway.acme.directory_url` | Let’s Encrypt v2 | Override only when switching CA environments. | Governance requires publishing the selected CA in GAR manifests. |
+| `sorafs.gateway.acme.dns_provider_id` | unset | Bind the exact reviewed adapter/provider configuration. | Adapter IAM and challenge permissions require periodic review. |
+| `sorafs.gateway.acme.renewal_window` | `30d` | Keep enough headroom to withdraw and recover before expiry. | Window changes require risk-owner approval. |
+| `sorafs.gateway.acme.retry_backoff` | `30m` | Keep bounded and alert on repeated failure. | Overrides require an incident/change record. |
+| `sorafs.gateway.acme.retry_jitter` | `5m` | Keep deterministic and bounded across replicas. | Overrides require an incident/change record. |
+| `sorafs.gateway.acme.ech_enabled` | `false` | Enable only when the adapter and public edge both install and validate ECH. | Every toggle must be documented with reason/evidence. |
 
 When adjusting configuration by hand, stage the change in
 `iroha_config::actual::sorafs_gateway` (or your configuration management
@@ -349,7 +349,7 @@ with Nexus governance:
 - **Attestation retention:** archive every `scripts/sorafs_gateway_self_cert.sh`
   output under `artifacts/sorafs_gateway_tls/<YYYYMMDD>/` and grant auditors
   read-only access.
-- **Config change management:** record `torii.sorafs_gateway` changes in your
+- **Config change management:** record `sorafs.gateway` changes in your
   change-control system, including the reason for toggling `ech_enabled` or
   adjusting renewal thresholds.
 - **Drill execution:** run the drills defined in this guide and document the
@@ -362,7 +362,7 @@ with Nexus governance:
 | GAR alignment | Updated GAR manifest, signed certificate fingerprint bundle, incident/change ticket link. | 3 years | Governance liaison |
 | Policy logging | `torii_sorafs_gar_violations_total` exports, structured log excerpts, Alertmanager notifications. | 180 days | Observability |
 | Attestation retention | Self-cert JSON report, TLS header snapshot, OpenSSL fingerprint output. | 3 years | Gateway operations |
-| Change management | Config diff (`torii.sorafs_gateway`), approval record, deployment timestamp. | 2 years | Change manager |
+| Change management | Config diff (`sorafs.gateway`), approval record, deployment timestamp. | 2 years | Change manager |
 | Drill documentation | Drill tracker entry, participant list, follow-up issues. | 2 years | Chaos coordinator |
 | ECH toggle events | Config change log, signed bulletin to SDK/ops mailing list, telemetry snapshot before/after. | 2 years | Developer experience |
 
@@ -432,7 +432,7 @@ Use this play when CDNs or clients fail to consume ECH.
 1. Detect via `torii_sorafs_tls_ech_enabled == 0`, customer incidents citing `GREASE_ECH_MISMATCH`, or governance directives.
 2. Disable ECH:
    ```toml
-   [torii.sorafs_gateway.acme]
+   [sorafs.gateway.acme]
    ech_enabled = false
    ```
    Apply the config (or use `iroha_cli config apply`), then restart Torii. The `X-Sora-TLS-State` header should now advertise `ech-disabled`.

@@ -88,6 +88,7 @@ RELEASE_AUTH_ROOT_DOCUMENTS: tuple[str, ...] = (
     "status.md",
 )
 RELEASE_AUTH_DOCUMENT_EXTENSIONS = frozenset({".md", ".mdx", ".org"})
+RELEASE_AUTH_IGNORED_DIRECTORY_NAMES = frozenset({"node_modules"})
 MAX_RELEASE_AUTH_TREE_ENTRIES = 65_536
 MAX_RELEASE_AUTH_TREE_DEPTH = 16
 MAX_RELEASE_AUTH_DOCUMENTS = 60_000
@@ -213,13 +214,24 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/build_sorafs_reference_sdk_release_canary.py",
         "scripts/run_sorafs_reference_sdk_release_evidence.py",
         "scripts/check_workflow_action_pins.py",
+        '- "Dockerfile"',
         '- "scripts/build_release_bundle.sh"',
         '- "scripts/build_release_image.sh"',
+        '- "scripts/build_release_oci_archive.py"',
+        '- "scripts/build_release_tar_gz.py"',
+        '- "scripts/build_release_tar_zst.py"',
+        '- "scripts/capture_release_command.py"',
+        '- "scripts/copy_release_file.py"',
+        '- "scripts/copy_release_tree.py"',
         '- "scripts/generate_release_manifest.py"',
         '- "scripts/generate_sorafs_cli_release_manifest.py"',
+        '- "scripts/release_artifact_contract.py"',
         '- "scripts/release_manifest_signing.py"',
         '- "scripts/publish_plan.py"',
         '- "scripts/run_release_pipeline.py"',
+        '- "scripts/write_release_checksum.py"',
+        '- "scripts/write_release_sha256sums.py"',
+        '- "scripts/validate_release_image_bases.py"',
         '- "scripts/requirements.txt"',
         "python3 -m pip install -r scripts/requirements.txt",
         "python3 scripts/check_workflow_action_pins.py",
@@ -228,6 +240,11 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/package_sorafs_validate_release.sh",
         "scripts/package_sorafs_cli_candidate.py",
         "scripts/tests/package_sorafs_cli_candidate_test.py",
+        '- "scripts/tests/build_release_bundle_test.py"',
+        '- "scripts/tests/build_release_image_test.py"',
+        '- "scripts/tests/capture_release_command_test.py"',
+        '- "scripts/tests/release_artifact_contract_test.py"',
+        '- "scripts/tests/validate_release_image_bases_test.py"',
         '- "scripts/tests/release_profile_validation_test.py"',
         '- "scripts/tests/release_manifest_signing_test.py"',
         '- "scripts/tests/release_manifest_signing_test.sh"',
@@ -259,6 +276,10 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         'if [[ "$host_target" != "$target" ]]; then',
         "target: ${{ matrix.target }}",
         '--target "${{ matrix.target }}"',
+        'source_commit="${GITHUB_SHA}"',
+        'source_date_epoch="$(git show -s --format=%ct "$source_commit")"',
+        '--source-commit "$source_commit"',
+        '--source-date-epoch "$source_date_epoch"',
         'binary_suffix: ".exe"',
         "find . -type f ! -name SHA256SUMS -print",
         "done > SHA256SUMS",
@@ -456,6 +477,8 @@ def _release_auth_document_paths(root: Path) -> tuple[str, ...]:
             ) from error
 
         for entry in entries:
+            if entry.name in RELEASE_AUTH_IGNORED_DIRECTORY_NAMES:
+                continue
             visited_entries += 1
             if visited_entries > MAX_RELEASE_AUTH_TREE_ENTRIES:
                 raise ValueError(
@@ -1108,6 +1131,16 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             errors.append(
                 f"{relative}: deterministic reference-validator package must be "
                 "built exactly twice for byte-identical replay"
+            )
+        if source.count('--source-commit "$source_commit"') != 2:
+            errors.append(
+                f"{relative}: both reference-validator package replays must bind "
+                "the reviewed source commit"
+            )
+        if source.count('--source-date-epoch "$source_date_epoch"') != 2:
+            errors.append(
+                f"{relative}: both reference-validator package replays must bind "
+                "the canonical source epoch"
             )
         if source.count('cmp \\\n            "${first_out}/${package_name}') != 2:
             errors.append(

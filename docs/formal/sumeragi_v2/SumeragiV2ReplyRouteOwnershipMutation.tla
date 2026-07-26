@@ -352,13 +352,25 @@ RouteMutationInit ==
   /\ MutationRoute!ReplyRouteInit
   /\ serviceGeneration =
        [owner \in MutationOwners |->
-          [source \in MutationSources |-> 1]]
+          [source \in MutationSources |->
+             IF RouteMutationMode = "CapacityOverflowFixed"
+             THEN MutationDeliveryOrdinalLimit
+             ELSE 1]]
   /\ responderGeneration =
-       [source \in MutationSources |-> 1]
+       [source \in MutationSources |->
+          IF RouteMutationMode = "CapacityOverflowFixed"
+          THEN MutationDeliveryOrdinalLimit
+          ELSE 1]
   /\ durableResponderGeneration =
-       [source \in MutationSources |-> 1]
+       [source \in MutationSources |->
+          IF RouteMutationMode = "CapacityOverflowFixed"
+          THEN MutationDeliveryOrdinalLimit
+          ELSE 1]
   /\ requesterNextStreamEpoch =
-       [owner \in MutationOwners |-> 2]
+       [owner \in MutationOwners |->
+          IF RouteMutationMode = "CapacityOverflowFixed"
+          THEN MutationDeliveryOrdinalLimit + 1
+          ELSE 2]
   /\ requesterStreamEpoch =
        [owner \in MutationOwners |->
           [source \in MutationSources |-> 1]]
@@ -426,6 +438,33 @@ FutureGenerationRejectStep ==
        MutationRoute!RejectFutureGenerationWithoutMutation(
          0, 0, 3), 45)
 
+CapacityActiveObserveStep ==
+  /\ phase = 0
+  /\ RouteMutationMode = "CapacityOverflowFixed"
+  /\ AdvancePhase(
+       MutationRoute!ObserveNewReplySourceV2(
+         0, RequestA, 0), 50)
+
+CapacityActiveCompactionRejectStep ==
+  /\ phase = 50
+  /\ RouteMutationMode = "CapacityOverflowFixed"
+  /\ AdvancePhase(
+       MutationRoute!
+         RejectNonTerminalResponderCompactionWithoutMutation(0), 51)
+
+CapacityEpochOverflowRejectStep ==
+  /\ phase = 51
+  /\ RouteMutationMode = "CapacityOverflowFixed"
+  /\ AdvancePhase(
+       MutationRoute!
+         RejectRequesterEpochOverflowWithoutMutation(0), 52)
+
+CapacityGenerationOverflowRejectStep ==
+  /\ phase = 52
+  /\ RouteMutationMode = "CapacityOverflowFixed"
+  /\ AdvancePhase(
+       MutationRoute!RejectResponderGenerationOverflow(0), 53)
+
 RouteMutationNext ==
   \/ GenerationPersistStep
   \/ GenerationInstallStep
@@ -433,10 +472,15 @@ RouteMutationNext ==
   \/ GenerationHintPersistenceStep
   \/ GenerationDiscardStep
   \/ FutureGenerationRejectStep
+  \/ CapacityActiveObserveStep
+  \/ CapacityActiveCompactionRejectStep
+  \/ CapacityEpochOverflowRejectStep
+  \/ CapacityGenerationOverflowRejectStep
   \/ /\ phase = 0
      /\ RouteMutationMode \notin
           {"TargetSubstitution", "IntrinsicTenureSubstitution",
-           "SourceCapacitySubstitution", "GenerationEpochFixed"}
+           "SourceCapacitySubstitution", "GenerationEpochFixed",
+           "CapacityOverflowFixed"}
      /\ AdvancePhase(
           MutationRoute!ObserveNewReplySourceV2(0, RequestA, 0), 1)
   \/ /\ RouteMutationMode = "TargetSubstitution"
@@ -685,6 +729,22 @@ GenerationEpochLifecycleSafety ==
                    /\ Cardinality(discardedPartialIdentities) = 1
                    /\ MutationRoute!
                         ReplyStaleArtifactCannotAffectSuccessor)
+
+CapacityOverflowLifecycleSafety ==
+  /\ RouteMutationSafety
+  /\ RouteMutationMode # "CapacityOverflowFixed"
+       \/ /\ phase \in {0, 50, 51, 52, 53}
+          /\ responderGeneration[0] = MutationDeliveryOrdinalLimit
+          /\ durableResponderGeneration[0] =
+               MutationDeliveryOrdinalLimit
+          /\ requesterNextStreamEpoch[0] =
+               MutationDeliveryOrdinalLimit + 1
+          /\ (phase \in {50, 51, 52, 53} =>
+                /\ MutationRoute!ReplyAttemptOwned(
+                     0, RequestA, 0)
+                /\ ~MutationRoute!ReplyResponderStateTerminal(0)
+                /\ serviceGeneration[0][0] =
+                     MutationDeliveryOrdinalLimit)
 
 RouteMutationTemporalProperties ==
   /\ MutationRoute!ReplyTenureAwareReplay

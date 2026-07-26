@@ -573,7 +573,7 @@ slashing events, and VRF anomalies), while `--format=json` emits the canonical
 
 ## Roadmap
 
-The local CLI command set now covers manifest scaffolding, governance proposal
+The local CLI command set now covers canonical manifest construction, governance proposal
 export, gateway fetch authorization, PoR trigger/export/report flows, and PoTR
 proof streaming. Release signing and verification are deliberately outside the
 CLI and use the governed aggregate-manifest path described above.

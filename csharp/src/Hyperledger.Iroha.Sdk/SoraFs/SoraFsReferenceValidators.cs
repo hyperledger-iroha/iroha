@@ -36,6 +36,52 @@ public enum SoraFsPdpPayloadKind : uint
     Proof = 3,
 }
 
+/// <summary>
+/// Canonical V1 payload selectors accepted by heterogeneous fixture-bundle
+/// validation.
+/// </summary>
+public enum SoraFsFixtureBundlePayloadKind : uint
+{
+    /// <summary>A <c>ProviderAdvertV1</c>.</summary>
+    ProviderAdvert = 1,
+    /// <summary>A <c>ProviderAdmissionEnvelopeV1</c>.</summary>
+    ProviderAdmissionEnvelope = 2,
+    /// <summary>A <c>ReplicationOrderV1</c>.</summary>
+    ReplicationOrder = 3,
+    /// <summary>A <c>PorChallengeV1</c>.</summary>
+    PorChallenge = 4,
+    /// <summary>A <c>PorProofV1</c>.</summary>
+    PorProof = 5,
+    /// <summary>A <c>PotrReceiptV1</c>.</summary>
+    PotrReceipt = 6,
+    /// <summary>A <c>RepairEvidenceV1</c>.</summary>
+    RepairEvidence = 7,
+    /// <summary>A <c>RepairReportV1</c>.</summary>
+    RepairReport = 8,
+    /// <summary>A <c>RepairTaskRecordV1</c>.</summary>
+    RepairTaskRecord = 9,
+    /// <summary>A <c>RepairSlashProposalV1</c>.</summary>
+    RepairSlashProposal = 10,
+    /// <summary>A <c>RepairTaskEventV1</c>.</summary>
+    RepairTaskEvent = 11,
+    /// <summary>An <c>OrderRequestV1</c>.</summary>
+    OrderbookOrderRequest = 12,
+    /// <summary>An <c>OrderCancelV1</c>.</summary>
+    OrderbookOrderCancel = 13,
+    /// <summary>A <c>TradeEventV1</c>.</summary>
+    OrderbookTradeEvent = 14,
+    /// <summary>A <c>SettlementChannelV1</c>.</summary>
+    OrderbookSettlementChannel = 15,
+    /// <summary>A <c>SettlementReceiptV1</c>.</summary>
+    OrderbookSettlementReceipt = 16,
+    /// <summary>A <c>PdpCommitmentV1</c>.</summary>
+    PdpCommitment = 17,
+    /// <summary>A <c>PdpChallengeV1</c>.</summary>
+    PdpChallenge = 18,
+    /// <summary>A <c>PdpProofV1</c>.</summary>
+    PdpProof = 19,
+}
+
 /// <summary>Canonical V1 order side selector.</summary>
 public enum SoraFsOrderbookSide : uint
 {
@@ -106,6 +152,60 @@ public sealed class SoraFsGovernanceDagBlockInput
 }
 
 /// <summary>
+/// One typed canonical payload supplied to heterogeneous fixture-bundle
+/// validation.
+/// </summary>
+public sealed class SoraFsFixtureBundlePayloadInput
+{
+    private readonly byte[] noritoBytes;
+    private readonly string? explicitLabel;
+
+    /// <summary>
+    /// Creates an immutable snapshot of one canonical payload and its
+    /// diagnostic label.
+    /// </summary>
+    public SoraFsFixtureBundlePayloadInput(
+        SoraFsFixtureBundlePayloadKind kind,
+        byte[] noritoBytes,
+        string? label = null)
+    {
+        if (!Enum.IsDefined(kind))
+        {
+            throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+        Kind = kind;
+        this.noritoBytes = SoraFsReferenceValidators.CopyInput(
+            noritoBytes,
+            nameof(noritoBytes));
+        explicitLabel = label is null
+            ? null
+            : SoraFsReferenceValidators.ValidateLabel(label, label, nameof(label));
+    }
+
+    /// <summary>Gets the canonical payload selector.</summary>
+    public SoraFsFixtureBundlePayloadKind Kind { get; }
+
+    /// <summary>Gets a detached copy of the canonical Norito bytes.</summary>
+    public byte[] NoritoBytes => (byte[])noritoBytes.Clone();
+
+    /// <summary>Gets the explicit label or the canonical selector default.</summary>
+    public string Label => explicitLabel
+        ?? SoraFsReferenceValidators.FixtureBundleKindLabel(Kind);
+
+    internal NativeFixtureBundleInput Snapshot()
+    {
+        var label = SoraFsReferenceValidators.ValidateLabel(
+            explicitLabel,
+            SoraFsReferenceValidators.FixtureBundleKindLabel(Kind),
+            nameof(Label));
+        return new NativeFixtureBundleInput(
+            (uint)Kind,
+            (byte[])noritoBytes.Clone(),
+            SoraFsReferenceValidators.EncodeLabel(label, nameof(Label)));
+    }
+}
+
+/// <summary>
 /// Rust-backed SoraFS reference validators that return strict
 /// <c>ValidationOutcomeV1</c> JSON.
 /// </summary>
@@ -141,6 +241,11 @@ public static class SoraFsReferenceValidators
     /// Canonical byte length for every Governance DAG CID.
     /// </summary>
     public const int GovernanceDagCidBytesV1 = 32;
+
+    /// <summary>
+    /// Maximum payload count accepted by one heterogeneous fixture-bundle call.
+    /// </summary>
+    public const int FixtureBundleMaxPayloadsV1 = 64;
 
     /// <summary>Maximum canonical owner-account byte length for V1 orders.</summary>
     public const int OrderbookOwnerAccountMaxBytesV1 = 256;
@@ -192,7 +297,7 @@ public static class SoraFsReferenceValidators
 
     /// <summary>
     /// Reports whether the current native bridge exposes the complete ABI-21
-    /// Governance DAG reference surface.
+    /// governance log-node and DAG reference surface.
     /// </summary>
     public static bool IsAvailable()
     {
@@ -206,6 +311,15 @@ public static class SoraFsReferenceValidators
     public static bool IsOrderbookPdpAvailable()
     {
         return IsOrderbookPdpAvailable(PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>
+    /// Reports whether the current native bridge exposes heterogeneous
+    /// fixture-bundle validation.
+    /// </summary>
+    public static bool IsFixtureBundleAvailable()
+    {
+        return IsFixtureBundleAvailable(PInvokeSoraFsReferenceNativeBoundary.Instance);
     }
 
     /// <summary>
@@ -497,6 +611,40 @@ public static class SoraFsReferenceValidators
     }
 
     /// <summary>
+    /// Validates one canonical signed <c>GovernanceLogNodeV1</c> against its
+    /// required exact node CID.
+    /// </summary>
+    public static string ValidateGovernanceLogNode(
+        byte[] noritoBytes,
+        byte[] expectedNodeCid,
+        string? label = null)
+    {
+        return ValidateGovernanceLogNode(
+            noritoBytes,
+            expectedNodeCid,
+            label,
+            CurrentEpochSeconds());
+    }
+
+    /// <summary>
+    /// Validates one canonical signed <c>GovernanceLogNodeV1</c> against its
+    /// required exact node CID with a caller-bound outcome timestamp.
+    /// </summary>
+    public static string ValidateGovernanceLogNode(
+        byte[] noritoBytes,
+        byte[] expectedNodeCid,
+        string? label,
+        long generatedAtUnix)
+    {
+        return ValidateGovernanceLogNode(
+            noritoBytes,
+            expectedNodeCid,
+            label,
+            generatedAtUnix,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>
     /// Validates one canonical <c>GovernanceDagBlockV1</c>.
     /// </summary>
     public static string ValidateGovernanceDagBlockJson(
@@ -564,6 +712,33 @@ public static class SoraFsReferenceValidators
             PInvokeSoraFsReferenceNativeBoundary.Instance);
     }
 
+    /// <summary>
+    /// Validates a bounded heterogeneous bundle and its canonical cross-links.
+    /// The current epoch is used for both freshness and outcome generation.
+    /// </summary>
+    public static string ValidateFixtureBundleJson(
+        IReadOnlyList<SoraFsFixtureBundlePayloadInput> payloads)
+    {
+        var now = CurrentEpochSeconds();
+        return ValidateFixtureBundleJson(payloads, now, now);
+    }
+
+    /// <summary>
+    /// Validates a bounded heterogeneous bundle and its canonical cross-links
+    /// with caller-bound freshness and outcome timestamps.
+    /// </summary>
+    public static string ValidateFixtureBundleJson(
+        IReadOnlyList<SoraFsFixtureBundlePayloadInput> payloads,
+        long nowUnix,
+        long generatedAtUnix)
+    {
+        return ValidateFixtureBundleJson(
+            payloads,
+            nowUnix,
+            generatedAtUnix,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
     internal static bool IsAvailable(ISoraFsReferenceNativeBoundary native)
     {
         try
@@ -588,6 +763,86 @@ public static class SoraFsReferenceValidators
         {
             return false;
         }
+    }
+
+    internal static bool IsFixtureBundleAvailable(ISoraFsReferenceNativeBoundary native)
+    {
+        try
+        {
+            return native.AbiVersion() >= RequiredBridgeAbiVersion
+                && native.HasFixtureBundleSymbols();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    internal static string ValidateFixtureBundleJson(
+        IReadOnlyList<SoraFsFixtureBundlePayloadInput> payloads,
+        long nowUnix,
+        long generatedAtUnix,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(payloads);
+        ArgumentNullException.ThrowIfNull(native);
+        if (nowUnix < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(nowUnix),
+                "nowUnix must be non-negative.");
+        }
+        ValidateGeneratedAt(generatedAtUnix);
+        if (payloads.Count is < 1 or > FixtureBundleMaxPayloadsV1)
+        {
+            throw new ArgumentException(
+                $"payloads must contain 1..{FixtureBundleMaxPayloadsV1} entries.",
+                nameof(payloads));
+        }
+
+        var nativePayloads = new NativeFixtureBundleInput[payloads.Count];
+        long aggregateBytes = 0;
+        for (var index = 0; index < payloads.Count; index++)
+        {
+            var input = payloads[index];
+            if (input is null)
+            {
+                throw new ArgumentException(
+                    $"payloads[{index}] must not be null.",
+                    nameof(payloads));
+            }
+            var snapshot = input.Snapshot();
+            aggregateBytes = checked(
+                aggregateBytes + snapshot.Bytes.Length + snapshot.LabelBytes.Length);
+            if (aggregateBytes > MaxInputBytesV1)
+            {
+                throw new ArgumentException(
+                    $"Fixture-bundle inputs must not exceed {MaxInputBytesV1} aggregate bytes.",
+                    nameof(payloads));
+            }
+            nativePayloads[index] = snapshot;
+        }
+
+        RequireFixtureBundleBridge(native);
+        NativeValidationResult result;
+        try
+        {
+            result = native.ValidateFixtureBundle(
+                nativePayloads,
+                checked((ulong)nowUnix),
+                checked((ulong)generatedAtUnix));
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                "SoraFS fixture-bundle native validation failed.",
+                error);
+        }
+        return ReadAndValidateOutcome(
+            "SoraFS fixture-bundle validation",
+            result,
+            checked((ulong)generatedAtUnix),
+            native);
     }
 
     internal static string ValidateOrderbookPayloadJson(
@@ -1138,6 +1393,57 @@ public static class SoraFsReferenceValidators
             native);
     }
 
+    internal static string ValidateGovernanceLogNode(
+        byte[] noritoBytes,
+        byte[] expectedNodeCid,
+        string? label,
+        long generatedAtUnix,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        ValidateGeneratedAt(generatedAtUnix);
+        var payload = CopyInput(noritoBytes, nameof(noritoBytes));
+        var labelBytes = EncodeLabel(
+            ValidateLabel(label, "governance.to", nameof(label)),
+            nameof(label));
+        ArgumentNullException.ThrowIfNull(expectedNodeCid);
+        if (expectedNodeCid.Length != GovernanceDagCidBytesV1)
+        {
+            throw new ArgumentException(
+                $"Expected governance log node CID must contain exactly {GovernanceDagCidBytesV1} bytes.",
+                nameof(expectedNodeCid));
+        }
+        var expectedCid = CopyInput(expectedNodeCid, nameof(expectedNodeCid));
+        RequireAggregateBound(
+            "Governance log-node validation",
+            payload.Length,
+            labelBytes.Length,
+            expectedCid.Length);
+        RequireGovernanceBridge(native);
+
+        NativeValidationResult result;
+        try
+        {
+            result = native.ValidateGovernanceLogNode(
+                payload,
+                labelBytes,
+                expectedCid,
+                checked((ulong)generatedAtUnix));
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                "SoraFS governance log-node native validation failed.",
+                error);
+        }
+
+        return ReadAndValidateOutcome(
+            "SoraFS governance log-node validation",
+            result,
+            checked((ulong)generatedAtUnix),
+            native);
+    }
+
     internal static string ValidateGovernanceDagHeadChainJson(
         byte[] headNoritoBytes,
         IReadOnlyList<SoraFsGovernanceDagBlockInput> blocks,
@@ -1443,6 +1749,40 @@ public static class SoraFsReferenceValidators
         };
     }
 
+    internal static string FixtureBundleKindLabel(SoraFsFixtureBundlePayloadKind kind)
+    {
+        return kind switch
+        {
+            SoraFsFixtureBundlePayloadKind.ProviderAdvert => "provider-advert.to",
+            SoraFsFixtureBundlePayloadKind.ProviderAdmissionEnvelope =>
+                "provider-admission-envelope.to",
+            SoraFsFixtureBundlePayloadKind.ReplicationOrder => "replication-order.to",
+            SoraFsFixtureBundlePayloadKind.PorChallenge => "por-challenge.to",
+            SoraFsFixtureBundlePayloadKind.PorProof => "por-proof.to",
+            SoraFsFixtureBundlePayloadKind.PotrReceipt => "potr-receipt.to",
+            SoraFsFixtureBundlePayloadKind.RepairEvidence => "repair-evidence.to",
+            SoraFsFixtureBundlePayloadKind.RepairReport => "repair-report.to",
+            SoraFsFixtureBundlePayloadKind.RepairTaskRecord => "repair-task-record.to",
+            SoraFsFixtureBundlePayloadKind.RepairSlashProposal =>
+                "repair-slash-proposal.to",
+            SoraFsFixtureBundlePayloadKind.RepairTaskEvent => "repair-task-event.to",
+            SoraFsFixtureBundlePayloadKind.OrderbookOrderRequest =>
+                "orderbook-order-request.to",
+            SoraFsFixtureBundlePayloadKind.OrderbookOrderCancel =>
+                "orderbook-order-cancel.to",
+            SoraFsFixtureBundlePayloadKind.OrderbookTradeEvent =>
+                "orderbook-trade-event.to",
+            SoraFsFixtureBundlePayloadKind.OrderbookSettlementChannel =>
+                "orderbook-settlement-channel.to",
+            SoraFsFixtureBundlePayloadKind.OrderbookSettlementReceipt =>
+                "orderbook-settlement-receipt.to",
+            SoraFsFixtureBundlePayloadKind.PdpCommitment => "pdp-commitment.to",
+            SoraFsFixtureBundlePayloadKind.PdpChallenge => "pdp-challenge.to",
+            SoraFsFixtureBundlePayloadKind.PdpProof => "pdp-proof.to",
+            _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+        };
+    }
+
     private static void RequireAggregateBound(string operation, params int[] lengths)
     {
         long aggregate = 0;
@@ -1483,13 +1823,13 @@ public static class SoraFsReferenceValidators
         catch (Exception error)
         {
             throw new InvalidOperationException(
-                $"{LibraryName} does not expose the Governance DAG reference symbols.",
+                $"{LibraryName} does not expose the governance reference symbols.",
                 error);
         }
         if (!hasSymbols)
         {
             throw new InvalidOperationException(
-                $"{LibraryName} does not expose the Governance DAG reference symbols.");
+                $"{LibraryName} does not expose the governance reference symbols.");
         }
     }
 
@@ -1526,6 +1866,42 @@ public static class SoraFsReferenceValidators
         {
             throw new InvalidOperationException(
                 $"{LibraryName} does not expose the orderbook/PDP reference symbols.");
+        }
+    }
+
+    private static void RequireFixtureBundleBridge(ISoraFsReferenceNativeBoundary native)
+    {
+        uint version;
+        try
+        {
+            version = native.AbiVersion();
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} is unavailable; install ABI {RequiredBridgeAbiVersion} or later.",
+                error);
+        }
+        if (version < RequiredBridgeAbiVersion)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} ABI {RequiredBridgeAbiVersion} or later is required; found {version}.");
+        }
+        bool hasSymbols;
+        try
+        {
+            hasSymbols = native.HasFixtureBundleSymbols();
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} does not expose the fixture-bundle reference symbol.",
+                error);
+        }
+        if (!hasSymbols)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} does not expose the fixture-bundle reference symbol.");
         }
     }
 
@@ -1847,6 +2223,30 @@ public static class SoraFsReferenceValidators
         internal readonly UIntPtr LabelLength;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct NativeFixtureBundleInputDescriptor
+    {
+        internal NativeFixtureBundleInputDescriptor(
+            uint kind,
+            IntPtr bytesPointer,
+            UIntPtr bytesLength,
+            IntPtr labelPointer,
+            UIntPtr labelLength)
+        {
+            Kind = kind;
+            BytesPointer = bytesPointer;
+            BytesLength = bytesLength;
+            LabelPointer = labelPointer;
+            LabelLength = labelLength;
+        }
+
+        internal readonly uint Kind;
+        internal readonly IntPtr BytesPointer;
+        internal readonly UIntPtr BytesLength;
+        internal readonly IntPtr LabelPointer;
+        internal readonly UIntPtr LabelLength;
+    }
+
     private sealed class PInvokeSoraFsReferenceNativeBoundary
         : ISoraFsReferenceNativeBoundary
     {
@@ -1874,6 +2274,10 @@ public static class SoraFsReferenceValidators
             try
             {
                 return NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_validate_governance_json",
+                        out _)
+                    && NativeLibrary.TryGetExport(
                         handle,
                         "connect_norito_sorafs_reference_validate_governance_dag_block_json",
                         out _)
@@ -1940,6 +2344,30 @@ public static class SoraFsReferenceValidators
                     && NativeLibrary.TryGetExport(
                         handle,
                         "connect_norito_sorafs_reference_validate_pdp_bundle_json",
+                        out _)
+                    && NativeLibrary.TryGetExport(handle, "connect_norito_free", out _);
+            }
+            finally
+            {
+                NativeLibrary.Free(handle);
+            }
+        }
+
+        public bool HasFixtureBundleSymbols()
+        {
+            if (!NativeLibrary.TryLoad(
+                    LibraryName,
+                    typeof(SoraFsReferenceValidators).Assembly,
+                    null,
+                    out var handle))
+            {
+                return false;
+            }
+            try
+            {
+                return NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_validate_bundle_json",
                         out _)
                     && NativeLibrary.TryGetExport(handle, "connect_norito_free", out _);
             }
@@ -2186,6 +2614,43 @@ public static class SoraFsReferenceValidators
             return new NativeValidationResult(code, output, outputLength);
         }
 
+        public NativeValidationResult ValidateFixtureBundle(
+            NativeFixtureBundleInput[] payloads,
+            ulong nowUnix,
+            ulong generatedAt)
+        {
+            var handles = new List<GCHandle>(checked(payloads.Length * 2));
+            try
+            {
+                var descriptors =
+                    new NativeFixtureBundleInputDescriptor[payloads.Length];
+                for (var index = 0; index < payloads.Length; index++)
+                {
+                    descriptors[index] = new NativeFixtureBundleInputDescriptor(
+                        payloads[index].Kind,
+                        Pin(payloads[index].Bytes, handles),
+                        (UIntPtr)payloads[index].Bytes.Length,
+                        Pin(payloads[index].LabelBytes, handles),
+                        (UIntPtr)payloads[index].LabelBytes.Length);
+                }
+                var code = NativeValidateFixtureBundle(
+                    descriptors,
+                    (UIntPtr)descriptors.Length,
+                    nowUnix,
+                    generatedAt,
+                    out var output,
+                    out var outputLength);
+                return new NativeValidationResult(code, output, outputLength);
+            }
+            finally
+            {
+                foreach (var handle in handles)
+                {
+                    handle.Free();
+                }
+            }
+        }
+
         public NativeValidationResult ValidateGovernanceDagBlock(
             byte[] bytes,
             byte[] label,
@@ -2199,6 +2664,25 @@ public static class SoraFsReferenceValidators
                 (UIntPtr)label.Length,
                 expectedBlockCid,
                 (UIntPtr)expectedBlockCid.Length,
+                generatedAt,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
+        public NativeValidationResult ValidateGovernanceLogNode(
+            byte[] bytes,
+            byte[] label,
+            byte[] expectedNodeCid,
+            ulong generatedAt)
+        {
+            var code = NativeValidateGovernanceLogNode(
+                bytes,
+                (UIntPtr)bytes.Length,
+                label,
+                (UIntPtr)label.Length,
+                expectedNodeCid,
+                (UIntPtr)expectedNodeCid.Length,
                 generatedAt,
                 out var output,
                 out var outputLength);
@@ -3091,6 +3575,33 @@ public static class SoraFsReferenceValidators
 
         [DllImport(
             LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_validate_bundle_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidateFixtureBundle(
+            [In] NativeFixtureBundleInputDescriptor[] payloads,
+            UIntPtr payloadsLength,
+            ulong nowUnix,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_validate_governance_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidateGovernanceLogNode(
+            [In] byte[] bytesPointer,
+            UIntPtr bytesLength,
+            [In] byte[] labelPointer,
+            UIntPtr labelLength,
+            [In] byte[] expectedNodeCidPointer,
+            UIntPtr expectedNodeCidLength,
+            ulong generatedAt,
+            out IntPtr outputPointer,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
             EntryPoint =
                 "connect_norito_sorafs_reference_validate_governance_dag_block_json",
             CallingConvention = CallingConvention.Cdecl)]
@@ -3142,6 +3653,22 @@ internal sealed class NativeGovernanceInput
     internal byte[] LabelBytes { get; }
 }
 
+internal sealed class NativeFixtureBundleInput
+{
+    internal NativeFixtureBundleInput(uint kind, byte[] bytes, byte[] labelBytes)
+    {
+        Kind = kind;
+        Bytes = bytes;
+        LabelBytes = labelBytes;
+    }
+
+    internal uint Kind { get; }
+
+    internal byte[] Bytes { get; }
+
+    internal byte[] LabelBytes { get; }
+}
+
 internal readonly record struct NativeValidationResult(
     int Code,
     IntPtr Pointer,
@@ -3154,6 +3681,8 @@ internal interface ISoraFsReferenceNativeBoundary
     bool HasGovernanceDagSymbols();
 
     bool HasOrderbookPdpSymbols();
+
+    bool HasFixtureBundleSymbols();
 
     NativeValidationResult ValidateOrderbookPayload(
         uint kind,
@@ -3236,10 +3765,21 @@ internal interface ISoraFsReferenceNativeBoundary
         byte[] proofLabel,
         ulong generatedAt);
 
+    NativeValidationResult ValidateFixtureBundle(
+        NativeFixtureBundleInput[] payloads,
+        ulong nowUnix,
+        ulong generatedAt);
+
     NativeValidationResult ValidateGovernanceDagBlock(
         byte[] bytes,
         byte[] label,
         byte[] expectedBlockCid,
+        ulong generatedAt);
+
+    NativeValidationResult ValidateGovernanceLogNode(
+        byte[] bytes,
+        byte[] label,
+        byte[] expectedNodeCid,
         ulong generatedAt);
 
     NativeValidationResult ValidateGovernanceDagHeadChain(

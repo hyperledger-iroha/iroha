@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/sorafs_gateway_self_cert.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 9025ce477da25dc1b41c6874f4143a8e362ab8ffeb4b89d7df1d15119562021f
-source_last_modified: "2026-07-24T01:25:44.064394+00:00"
+source_hash: 3b8c87e6e8bcc8ffe629830edc89158f022fba74c2102c36c4450bb658a2f499
+source_last_modified: "2026-07-25T15:44:50.219732+00:00"
 translation_last_reviewed: null
 ---
 

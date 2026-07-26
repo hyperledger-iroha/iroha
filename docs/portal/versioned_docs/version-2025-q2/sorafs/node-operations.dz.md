@@ -81,7 +81,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. གཞི་རྟེན་༦༤ ཨིན་ཀོ་ཌིང་དང་གཅིག་ཁར་ གསལ་སྟོན་འདི་ཕུལ་ནི།
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -141,7 +141,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   ```དེ་ཡང་ `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, དང་ Torii, ཚུ་ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
 - ཌེཤ་བོརཌི་ཚུ་གིས་ བརྟག་ཞིབ་འབད་དགོ།
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` དང་ `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` དང་ `torii_sorafs_storage_fetch_inflight`
   - པོ་ཨར་ མཐར་འཁྱོལ་/འཐུས་ཤོར་གྱི་ གྱངས་ཁ་ཚུ་ `/v1/sorafs/capacity/state` བརྒྱུད་དེ་ ཐོན་ཡོདཔ།
   - གཞིས་ཆགས་དཔར་བསྐྲུན་འབད་ནི་ དཔའ་བཅམ་མི་ཚུ་ `sorafs_node_deal_publish_total{result=success|failure}` བརྒྱུད་དེ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
 

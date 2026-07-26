@@ -1,77 +1,12 @@
 ---
-lang: ru
-direction: ltr
-source: docs/portal/docs/sorafs/deal-engine.ar.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+id: deal-engine
+title: SoraFS V1 Ledger Economics
+sidebar_label: Ledger Economics
+description: Canonical V1 orderbook, reserve/rent, and billing authority.
 ---
 
----
-идентификатор: механизм сделок
-Название: محرك الصفقات في SoraFS
-Sidebar_label: Дополнительная информация
-описание: Создан на базе SF-8 в исполнении Torii.
----
+# SoraFS V1 ledger-authoritative economics
 
-:::примечание
-Был установлен `docs/source/sorafs/deal_engine.md`. Он сказал, что в действительности он хочет, чтобы его отправили на работу.
-:::
+The retired process-local agreement service is not a V1 surface. Provider and client custody, matching, usage accrual, and settlement are authoritative only through native orderbook and reserve/rent instructions, finalized typed queries and events, and the supervised hedging/billing projection. Clients submit signed transactions and reconcile committed ledger state.
 
-# Сообщение для SoraFS
-
-Создан для SF-8, установлен на SoraFS,
-Написано в журнале "Нидерланды"
-العملاء والمزوّدين. تُوصَف الاتفاقات عبر حمولات Norito
-Код для `crates/sorafs_manifest/src/deal.rs`, а также для получения дополнительной информации.
-В случае необходимости, вы можете сделать это в любое время.
-
-Код для SoraFS (`sorafs_node::NodeHandle`)
-Это произошло из-за `DealEngine` в исходном коде. В ответ на это Бен Уилл:
-
-- Написано в الصفقات ويسجلها باستخدام `DealTermsV1`;
-- Он выступил в роли XOR в фильме "Старый мир" в 1997 году.
-- В 2007 году в 2017 году в Вашингтоне появилась информация о том, как он работает.
-  Автор: BLAKE3; Й
-- Регистрационная книга, созданная в 2007 году.
-
-تغطي الاختبارات الوحدوية التحققق, واختيار المدفوعات المصغرة, وتدفقات التسوية Lيتمكن
-Откройте для себя API-интерфейс. تبعث التسويات الآن حمولات حوكمة `DealSettlementV1`,
-Создан для SF-12, в котором используется OpenTelemetry `sorafs.node.deal_*`
-(И18НИ00000018Х, И18НИ00000019Х, И18НИ00000020Х,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) при подключении Torii
-Важнейшие SLO. وتركّز العناصر اللاحقة على أتمتة, режущий
-Он был убит в Стокгольме.
-
-Чтобы получить доступ к файлу `sorafs.node.micropayment_*`:
-И18НИ00000025Х, И18НИ00000026Х,
-И18НИ00000027Х, И18НИ00000028Х,
-`micropayment_outstanding_nano`, дополнительная информация
-(И18НИ00000030Х, И18НИ00000031Х,
-`micropayment_tickets_duplicate_total`). Он сказал:
-В фильме рассказывается о том, как Рэбсон Миссисипи провела вечеринку в Нью-Йорке.
-بنتائج التسوية.
-
-## تكامل Torii
-
-تعرض Torii для получения дополнительной информации о том, как это сделать. الاستخدام وتحريك
-Обратите внимание на проводку:
-
-- `POST /v1/sorafs/deal/usage` в приложении `DealUsageReport`.
-  Установите флажок (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` в النافذة الحالية, ويبث
-  `DealSettlementRecord` Загрузка данных `DealSettlementV1` в базе base64
-  Он был выбран в честь ДАГа.
-- `/v1/events/sse` или Torii в режиме `SorafsGatewayEvent::DealUsage`.
-  التي تلخص كل إرسال استخدام (эпоха, мир ГиБ المقاسة, عدّادات التذاكر,
-  الرسوم الحتمية), وسجلات `SorafsGatewayEvent::DealSettlement`
-  Откройте реестр Ledger и создайте файл дайджеста/файла/base64 в BLAKE3.
-  لقطعة الحوكمية على القرص, وتنبيهات `SorafsGatewayEvent::ProofHealth`
-  Он используется для PDP/PoTR (удар, удар/перезарядка, удар и перезарядка).
-  В 2017 году он был назначен президентом США в Вашингтоне. Спенсер и Сэнсэй
-  Проведено голосование в Вашингтоне.
-
-يشارك كلا نقطتي النهاية في إطار حصص SoraFS عبر نافذة
-`torii.sorafs.quota.deal_telemetry` الجديدة, ما يسمح للمشغّلين بضبط معدل الإرسال
-المسموح لكل نشر.
+Pre-release local checkpoints and HTTP balance-mutation endpoints are intentionally unsupported. Development state created by the retired service must be discarded and reseeded.

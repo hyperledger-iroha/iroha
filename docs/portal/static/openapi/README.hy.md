@@ -1,22 +1,18 @@
+<!-- Auto-generated stub for Armenian (hy) translation. Replace this content with the full translation. -->
+
 ---
 lang: hy
 direction: ltr
 source: docs/portal/static/openapi/README.md
-status: complete
+status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 8ad316fefd99c4c3b9ddbade7de59f12aa2dbe9ee256784f61ac87bb4341f04a
-source_last_modified: "2025-12-29T18:16:35.902041+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 97a0d9a250d5d9cedd09453f613a61bd5b532f55592fa802983058f0b98bfa1f
+source_last_modified: "2026-07-25T18:42:25.944339+00:00"
+translation_last_reviewed: null
 ---
 
-OpenAPI ստորագրում
-----------------
+# Translation In Progress
 
-- Torii OpenAPI բնութագրիչը (`torii.json`) պետք է ստորագրված լինի, իսկ մանիֆեստը հաստատված է `cargo xtask openapi-verify`-ով:
-- Թույլատրված ստորագրող ստեղները գործում են `allowed_signers.json`-ում; պտտել այս ֆայլը, երբ ստորագրման բանալին փոխվի: Պահպանեք `version` դաշտը `1`-ում:
-- CI (`ci/check_openapi_spec.sh`) արդեն պարտադրում է թույլտվությունների ցանկը թե՛ վերջին, թե՛ ընթացիկ ակնարկների համար: Եթե ​​մեկ այլ պորտալ կամ խողովակաշար սպառում է ստորագրված հատկանիշը, ուղղեք դրա ստուգման քայլը նույն թույլտվությունների ցանկի ֆայլի վրա՝ շեղումից խուսափելու համար:
-- Բանալին պտտելուց հետո նորից ստորագրելու համար.
-  1. Թարմացրեք `allowed_signers.json`-ը նոր հանրային բանալիով:
-  2. Վերականգնել/ստորագրել հատկանիշը՝ `NORITO_SKIP_BINDINGS_SYNC=1 cargo xtask openapi --output docs/portal/static/openapi/torii.json --sign <ed25519-key-hex-path>`:
-  3. Կրկին գործարկեք `ci/check_openapi_spec.sh` (կամ `cargo xtask openapi-verify` ձեռքով)՝ հաստատելու, որ մանիֆեստը համապատասխանում է թույլտվությունների ցանկին:
+This file is a placeholder for the Armenian translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

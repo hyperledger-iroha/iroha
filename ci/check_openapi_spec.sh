@@ -38,6 +38,7 @@ run_xtask() {
   local -a args=("$@")
   NORITO_SKIP_BINDINGS_SYNC=1 cargo run \
     --locked \
+    --offline \
     -p xtask \
     --bin xtask \
     -- \
@@ -49,11 +50,16 @@ GENERATED_SPEC="${TMP_DIR}/torii.json"
 print_refresh_help() {
   cat >&2 <<'EOF'
 Refresh the canonical manifest before syncing snapshots:
-  development: cargo run --locked -p xtask --bin xtask -- openapi --unsigned-manifest
+  development: cargo run --locked --offline -p xtask --bin xtask -- openapi --unsigned-manifest
                (cd docs/portal && npm run sync-openapi -- --allow-unsigned)
-  release:     cargo run --locked -p xtask --bin xtask -- openapi --sign <key>
+  release payload:
+               cargo run --locked --offline -p xtask --bin xtask -- openapi \
+                 --unsigned-manifest --signing-payload <operator-staging>/openapi-manifest-v2.payload
+  release attach after the Ed25519 HSM signs those exact bytes:
+               cargo run --locked --offline -p xtask --bin xtask -- openapi \
+                 --signature-envelope <operator-staging>/openapi-manifest-v2.signature.json
                (cd docs/portal && npm run sync-openapi -- --allowed-signers=<operator-allowlist-path>)
-An operator signature envelope may be supplied instead of --sign for the release path.
+Local private-key signing is intentionally unavailable; release signing is detached-only.
 For an operator release, set OPENAPI_REQUIRE_SIGNED=1 and
 OPENAPI_ALLOWED_SIGNERS_FILE=<operator-allowlist-path> when running this gate.
 The checked-in allowlist is intentionally empty. The immutable 2025-q2

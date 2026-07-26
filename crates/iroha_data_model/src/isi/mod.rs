@@ -210,6 +210,31 @@ impl From<crate::isi::zk::PruneProofs> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::RegisterPrivacyProtocolActivationV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyProtocolActivationV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::PublishPrivacyRootV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::PublishPrivacyRootV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::BootstrapPrivacyPgcAccountsV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::BootstrapPrivacyPgcAccountsV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::SubmitPrivacyProofV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::SubmitPrivacyProofV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::bridge::SubmitBridgeProof> for InstructionBox {
     fn from(i: crate::isi::bridge::SubmitBridgeProof) -> Self {
         InstructionBox(Box::new(i))
@@ -3204,6 +3229,8 @@ pub mod nexus;
 pub mod offline;
 /// Oracle feed registration and aggregation instructions.
 pub mod oracle;
+/// First-release privacy governance and proof-admission instructions.
+pub mod privacy;
 /// Generic RAM-LFE program-policy instructions.
 pub mod ram_lfe;
 /// Registration-related instructions (accounts, assets, domains, etc.).
@@ -3255,6 +3282,7 @@ pub use mint_burn::*;
 pub use nexus::*;
 pub use offline::*;
 pub use oracle::*;
+pub use privacy::*;
 pub use ram_lfe::*;
 pub use register::*;
 pub use repo::*;
@@ -4061,6 +4089,11 @@ pub mod prelude {
         },
         ministry::SubmitAgendaProposal,
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
+        privacy::{
+            BootstrapPrivacyPgcAccountsV1, PublishPrivacyRootV1,
+            RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1,
+            TransitionPrivacyProtocolLifecycleV1,
+        },
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
         },

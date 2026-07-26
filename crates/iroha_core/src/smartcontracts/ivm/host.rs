@@ -4234,7 +4234,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     return Err(ivm::host::ERR_DISABLED);
                 }
             }
-            _ => return Err(ivm::host::ERR_BACKEND),
         }
         Ok(())
     }

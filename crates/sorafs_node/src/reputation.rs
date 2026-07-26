@@ -13,6 +13,8 @@
 //! This module defines the complete projection contract; ledger mutation,
 //! storage, and native query/Torii wiring remain outside this service layer.
 
+pub mod runtime;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -60,7 +62,7 @@ use sorafs_manifest::reputation::{
     ReputationSnapshotV1, ReputationWeightsV1, build_reputation_snapshot,
     signed::{
         REPUTATION_SCORING_EVIDENCE_VERSION_V1, ReputationScoringEvidenceV1,
-        snapshot_signing_digest,
+        ReputationSnapshotTrustPolicyV1, SignedReputationSnapshotV1, snapshot_signing_digest,
     },
 };
 use thiserror::Error;
@@ -73,6 +75,10 @@ pub const REPUTATION_INGEST_POLICY_VERSION_V1: u8 = 1;
 pub const REPUTATION_INGEST_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Unsigned signing-material schema version.
 pub const REPUTATION_UNSIGNED_MATERIAL_VERSION_V1: u8 = 1;
+/// Unsigned-material delivery schema version.
+pub const REPUTATION_UNSIGNED_MATERIAL_DELIVERY_VERSION_V1: u8 = 1;
+/// Unsigned-material acknowledgement schema version.
+pub const REPUTATION_UNSIGNED_MATERIAL_ACKNOWLEDGEMENT_VERSION_V1: u8 = 1;
 /// Canonical checkpoint file below the configured private state root.
 pub const REPUTATION_INGEST_CHECKPOINT_FILE_NAME_V1: &str = "reputation-committed-ingest-v1.to";
 /// Single-writer lock file below the configured private state root.
@@ -92,6 +98,8 @@ pub const REPUTATION_INGEST_MAX_CHECKPOINT_BYTES_V1: u64 = 64 * 1024 * 1024;
 pub const REPUTATION_INGEST_MIN_CHECKPOINT_BYTES_V1: u64 = 64 * 1024;
 /// Maximum UTF-8 chain identifier bytes bound into V1 ingest material.
 pub const REPUTATION_INGEST_MAX_CHAIN_ID_BYTES_V1: usize = 128;
+/// Hard cap on failed external delivery attempts retained for one release window.
+pub const REPUTATION_UNSIGNED_MATERIAL_MAX_DELIVERY_FAILURES_V1: u32 = 64;
 
 const CHECKPOINT_ELEMENT_AMPLIFICATION_LIMIT: usize = 16;
 const CHECKPOINT_ALLOCATION_AMPLIFICATION_LIMIT: usize = 16;
@@ -279,6 +287,8 @@ pub struct ReputationIngestPolicyV1 {
     pub max_replay_receipts: u32,
     /// Maximum native query pages accepted in one call.
     pub max_pages_per_batch: u32,
+    /// Failed external delivery attempts retained before dead-lettering material.
+    pub max_material_delivery_failures: u32,
     /// Maximum canonical checkpoint length.
     pub checkpoint_max_bytes: u64,
 }
@@ -305,6 +315,7 @@ impl ReputationIngestPolicyV1 {
             max_pending_events: REPUTATION_INGEST_MAX_PENDING_EVENTS_V1,
             max_replay_receipts: REPUTATION_INGEST_MAX_REPLAY_RECEIPTS_V1,
             max_pages_per_batch: REPUTATION_INGEST_MAX_PAGES_PER_BATCH_V1,
+            max_material_delivery_failures: REPUTATION_UNSIGNED_MATERIAL_MAX_DELIVERY_FAILURES_V1,
             checkpoint_max_bytes: REPUTATION_INGEST_MAX_CHECKPOINT_BYTES_V1,
         }
     }
@@ -332,6 +343,9 @@ impl ReputationIngestPolicyV1 {
             || self.max_replay_receipts > REPUTATION_INGEST_MAX_REPLAY_RECEIPTS_V1
             || self.max_pages_per_batch == 0
             || self.max_pages_per_batch > REPUTATION_INGEST_MAX_PAGES_PER_BATCH_V1
+            || self.max_material_delivery_failures == 0
+            || self.max_material_delivery_failures
+                > REPUTATION_UNSIGNED_MATERIAL_MAX_DELIVERY_FAILURES_V1
             || self.checkpoint_max_bytes < REPUTATION_INGEST_MIN_CHECKPOINT_BYTES_V1
             || self.checkpoint_max_bytes > REPUTATION_INGEST_MAX_CHECKPOINT_BYTES_V1
             || self.weights.validate().is_err()
@@ -385,6 +399,19 @@ pub struct ReputationSourceFinalityV1 {
     pub last_event: Option<ReputationCommittedEventIdentityV1>,
 }
 
+/// Restart-safe query position for one physical committed ledger feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ReputationCommittedFeedCursorV1 {
+    /// Physical native feed.
+    pub feed: ReputationCommittedFeedV1,
+    /// Last committed event durably projected, for the next query's `after` cursor.
+    pub after: Option<ReputationCommittedEventIdentityV1>,
+    /// Exact finalized view completely observed by this feed.
+    pub observed_through: Option<ReputationFinalizedIdentityV1>,
+    /// Finalized block timestamp paired with `observed_through`.
+    pub observed_at_unix_ms: u64,
+}
+
 /// Canonical unsigned material ready for independent threshold signers.
 ///
 /// The service returns the exact snapshot signing digest but contains no key,
@@ -419,6 +446,108 @@ pub struct ReputationUnsignedSigningMaterialV1 {
     pub snapshot_signing_digest: [u8; 32],
 }
 
+/// Durable state of one externally delivered unsigned-material item.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
+pub enum ReputationUnsignedMaterialDeliveryStateV1 {
+    /// The external threshold-signing worker may retry this item.
+    Pending,
+    /// The governed retry ceiling was reached without acknowledgement.
+    DeadLetter,
+}
+
+/// Canonical, payload-bounded item exposed to an external threshold-signing worker.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ReputationUnsignedMaterialDeliveryV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Stable one-based sequence within this immutable V1 release window.
+    pub sequence: u64,
+    /// Digest of the exact canonical `material` bytes.
+    pub material_digest: [u8; 32],
+    /// Deterministic unsigned snapshot material; no signing key or signature is present.
+    pub material: ReputationUnsignedSigningMaterialV1,
+    /// Number of distinct, durably recorded failed delivery attempts.
+    pub failed_attempts: u32,
+    /// Current retry/dead-letter state.
+    pub state: ReputationUnsignedMaterialDeliveryStateV1,
+}
+
+/// Payload-free durable acknowledgement retained after external delivery succeeds.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
+pub struct ReputationUnsignedMaterialAcknowledgementV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Exact acknowledged delivery sequence.
+    pub sequence: u64,
+    /// Digest of the exact unsigned material delivered.
+    pub material_digest: [u8; 32],
+    /// Canonical digest of the public trust policy used for verification.
+    pub trust_policy_digest: [u8; 32],
+    /// Authoritative finalized-chain admission time derived from the locked checkpoint.
+    pub verified_at_unix: u64,
+    /// Digest of the canonical externally signed result.
+    pub signed_result_digest: [u8; 32],
+}
+
+/// Result of durably enqueuing deterministic unsigned material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReputationMaterialEnqueueOutcomeV1 {
+    /// A new delivery item was durably enqueued.
+    Enqueued {
+        /// Stable delivery sequence.
+        sequence: u64,
+    },
+    /// The exact item was already present in the outbox.
+    ExactReplay {
+        /// Stable delivery sequence.
+        sequence: u64,
+        /// Current retry/dead-letter state.
+        state: ReputationUnsignedMaterialDeliveryStateV1,
+    },
+    /// The exact item was already acknowledged.
+    AlreadyAcknowledged {
+        /// Stable delivery sequence.
+        sequence: u64,
+    },
+}
+
+/// Result of recording one idempotent external-delivery failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReputationMaterialFailureOutcomeV1 {
+    /// A new failed attempt was durably recorded and retries remain.
+    RetryPending {
+        /// Number of distinct failures now retained.
+        failed_attempts: u32,
+        /// Attempts remaining before the item is dead-lettered.
+        remaining_attempts: u32,
+    },
+    /// This failure reached the governed retry ceiling.
+    DeadLettered {
+        /// Number of distinct failures retained.
+        failed_attempts: u32,
+    },
+    /// The exact failure receipt was already durably recorded.
+    ExactReplay {
+        /// Number of distinct failures retained.
+        failed_attempts: u32,
+        /// Current retry/dead-letter state.
+        state: ReputationUnsignedMaterialDeliveryStateV1,
+    },
+}
+
+/// Result of acknowledging one externally signed material delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReputationMaterialAcknowledgementOutcomeV1 {
+    /// The matching outbox item was durably acknowledged and removed.
+    Acknowledged,
+    /// The exact acknowledgement was already durable.
+    ExactReplay,
+}
+
 /// Payload-free service counters with no provider or event labels.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReputationIngestMetricsSnapshot {
@@ -446,6 +575,16 @@ pub struct ReputationIngestMetricsSnapshot {
     pub restart_reconciliations: u64,
     /// Signing-material requests rejected for incomplete sources.
     pub incomplete_material_rejections: u64,
+    /// Deterministic material items durably enqueued.
+    pub material_enqueued: u64,
+    /// Distinct external-delivery failures durably retained.
+    pub material_delivery_failures: u64,
+    /// Material items moved to the dead-letter state.
+    pub material_dead_letters: u64,
+    /// Material items durably acknowledged.
+    pub material_acknowledgements: u64,
+    /// Idempotent material enqueue/failure/acknowledgement replays.
+    pub material_exact_replays: u64,
 }
 
 #[derive(Debug, Default)]
@@ -462,6 +601,11 @@ struct ReputationIngestMetrics {
     checkpoint_failures: AtomicU64,
     restart_reconciliations: AtomicU64,
     incomplete_material_rejections: AtomicU64,
+    material_enqueued: AtomicU64,
+    material_delivery_failures: AtomicU64,
+    material_dead_letters: AtomicU64,
+    material_acknowledgements: AtomicU64,
+    material_exact_replays: AtomicU64,
 }
 
 impl ReputationIngestMetrics {
@@ -481,6 +625,11 @@ impl ReputationIngestMetrics {
             incomplete_material_rejections: self
                 .incomplete_material_rejections
                 .load(Ordering::Relaxed),
+            material_enqueued: self.material_enqueued.load(Ordering::Relaxed),
+            material_delivery_failures: self.material_delivery_failures.load(Ordering::Relaxed),
+            material_dead_letters: self.material_dead_letters.load(Ordering::Relaxed),
+            material_acknowledgements: self.material_acknowledgements.load(Ordering::Relaxed),
+            material_exact_replays: self.material_exact_replays.load(Ordering::Relaxed),
         }
     }
 }
@@ -514,6 +663,12 @@ pub struct ReputationIngestStatusV1 {
     pub providers: u32,
     /// Number of events staged for restart reconciliation.
     pub pending_events: u32,
+    /// Current unsigned-material outbox state, when an item awaits acknowledgement.
+    pub material_outbox_state: Option<ReputationUnsignedMaterialDeliveryStateV1>,
+    /// Distinct failed delivery attempts retained for the current outbox item.
+    pub material_delivery_failures: u32,
+    /// Whether this release window's material has a durable acknowledgement.
+    pub material_acknowledged: bool,
 }
 
 /// Deterministic ingest and persistence failures.
@@ -591,6 +746,18 @@ pub enum ReputationIngestError {
     /// A durably staged batch must be reconciled before material emission.
     #[error("reputation ingest batch reconciliation is pending")]
     ReconciliationPending,
+    /// A different unsigned-material item or acknowledgement occupies the V1 window.
+    #[error("reputation unsigned-material outbox conflicts with durable state")]
+    MaterialOutboxConflict,
+    /// A failure receipt or acknowledgement does not identify the durable item.
+    #[error("reputation unsigned-material delivery identity does not match")]
+    MaterialDeliveryMismatch,
+    /// A failure or signed-result receipt digest is empty or malformed.
+    #[error("reputation unsigned-material delivery receipt is invalid")]
+    InvalidDeliveryReceipt,
+    /// The governed delivery retry ceiling was already reached.
+    #[error("reputation unsigned-material delivery is dead-lettered")]
+    MaterialDeliveryDeadLettered,
     /// The durable checkpoint path is unsafe or inaccessible.
     #[error("reputation ingest checkpoint I/O failed")]
     CheckpointIo,
@@ -652,12 +819,31 @@ impl SourceProgressV1 {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
-enum ReputationCommittedFeedV1 {
+pub enum ReputationCommittedFeedV1 {
+    /// Native PDP/PoTR proof-outcome feed.
     Proof,
+    /// Unified native PoR/dispute/stream-token journal feed.
     Journal,
+    /// Native repair lifecycle feed.
     Repair,
+    /// Native orderbook lifecycle feed.
     Orderbook,
+    /// Native reserve/rent lifecycle feed.
     Reserve,
+}
+
+impl ReputationCommittedFeedV1 {
+    /// Stable bounded label for metrics and operational status.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Proof => "proof",
+            Self::Journal => "journal",
+            Self::Repair => "repair",
+            Self::Orderbook => "orderbook",
+            Self::Reserve => "reserve",
+        }
+    }
 }
 
 const ALL_COMMITTED_FEEDS: [ReputationCommittedFeedV1; 5] = [
@@ -950,6 +1136,16 @@ impl ProviderAccumulatorV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct ReputationUnsignedMaterialOutboxEntryV1 {
+    version: u8,
+    sequence: u64,
+    material_digest: [u8; 32],
+    failed_attempts: u32,
+    state: ReputationUnsignedMaterialDeliveryStateV1,
+    failure_receipts: Vec<[u8; 32]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationIngestCheckpointV1 {
     version: u8,
     policy_digest: [u8; 32],
@@ -959,6 +1155,8 @@ struct ReputationIngestCheckpointV1 {
     receipts: Vec<EventReceiptV1>,
     providers: Vec<ProviderAccumulatorV1>,
     pending: Option<PendingBatchV1>,
+    material_outbox: Option<ReputationUnsignedMaterialOutboxEntryV1>,
+    material_acknowledgement: Option<ReputationUnsignedMaterialAcknowledgementV1>,
 }
 
 impl ReputationIngestCheckpointV1 {
@@ -975,6 +1173,8 @@ impl ReputationIngestCheckpointV1 {
             receipts: Vec::new(),
             providers: Vec::new(),
             pending: None,
+            material_outbox: None,
+            material_acknowledgement: None,
         }
     }
 
@@ -1174,6 +1374,323 @@ impl ReputationIngestService {
         build_signing_material(checkpoint, &self.policy, self.policy_digest)
     }
 
+    /// Durably enqueue the exact deterministic material for external threshold signing.
+    ///
+    /// The V1 policy describes one immutable release window, so its outbox has
+    /// exactly one stable delivery sequence. Repeated calls are idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a source-completeness, persistence, or durable-state conflict
+    /// error. No signing key, signature, or private event payload is accepted.
+    pub fn enqueue_unsigned_signing_material(
+        &self,
+    ) -> Result<ReputationMaterialEnqueueOutcomeV1, ReputationIngestError> {
+        if self.durability_poisoned.load(Ordering::Acquire) {
+            return Err(ReputationIngestError::CheckpointDurabilityUncertain);
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ReputationIngestError::RuntimePoisoned)?;
+        if state.checkpoint.pending.is_some() {
+            self.reconcile_pending_locked(&mut state, false)?;
+        }
+        let material = build_signing_material(&state.checkpoint, &self.policy, self.policy_digest)?;
+        let material_digest = unsigned_material_digest(&material)?;
+        if let Some(acknowledgement) = state.checkpoint.material_acknowledgement {
+            if acknowledgement.sequence == 1 && acknowledgement.material_digest == material_digest {
+                saturating_increment(&self.metrics.material_exact_replays);
+                return Ok(ReputationMaterialEnqueueOutcomeV1::AlreadyAcknowledged {
+                    sequence: acknowledgement.sequence,
+                });
+            }
+            return Err(ReputationIngestError::MaterialOutboxConflict);
+        }
+        if let Some(entry) = &state.checkpoint.material_outbox {
+            if entry.sequence == 1 && entry.material_digest == material_digest {
+                saturating_increment(&self.metrics.material_exact_replays);
+                return Ok(ReputationMaterialEnqueueOutcomeV1::ExactReplay {
+                    sequence: entry.sequence,
+                    state: entry.state,
+                });
+            }
+            return Err(ReputationIngestError::MaterialOutboxConflict);
+        }
+
+        let mut updated = state.checkpoint.clone();
+        updated.material_outbox = Some(ReputationUnsignedMaterialOutboxEntryV1 {
+            version: REPUTATION_UNSIGNED_MATERIAL_DELIVERY_VERSION_V1,
+            sequence: 1,
+            material_digest,
+            failed_attempts: 0,
+            state: ReputationUnsignedMaterialDeliveryStateV1::Pending,
+            failure_receipts: Vec::new(),
+        });
+        ensure_checkpoint_size(&updated, &self.policy)?;
+        let fingerprint = self.commit_checkpoint(&updated, state.fingerprint)?;
+        state.checkpoint = updated;
+        state.fingerprint = Some(fingerprint);
+        saturating_increment(&self.metrics.material_enqueued);
+        Ok(ReputationMaterialEnqueueOutcomeV1::Enqueued { sequence: 1 })
+    }
+
+    /// Return the durable unsigned-material delivery, including dead letters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a durability or runtime-lock error.
+    pub fn unsigned_material_delivery(
+        &self,
+    ) -> Result<Option<ReputationUnsignedMaterialDeliveryV1>, ReputationIngestError> {
+        if self.durability_poisoned.load(Ordering::Acquire) {
+            return Err(ReputationIngestError::CheckpointDurabilityUncertain);
+        }
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ReputationIngestError::RuntimePoisoned)?;
+        let Some(entry) = &state.checkpoint.material_outbox else {
+            return Ok(None);
+        };
+        let material = build_signing_material(&state.checkpoint, &self.policy, self.policy_digest)?;
+        if unsigned_material_digest(&material)? != entry.material_digest {
+            return Err(ReputationIngestError::InvalidCheckpoint);
+        }
+        Ok(Some(ReputationUnsignedMaterialDeliveryV1 {
+            version: entry.version,
+            sequence: entry.sequence,
+            material_digest: entry.material_digest,
+            material,
+            failed_attempts: entry.failed_attempts,
+            state: entry.state,
+        }))
+    }
+
+    /// Return the payload-free durable acknowledgement, when present.
+    ///
+    /// # Errors
+    ///
+    /// Returns a durability or runtime-lock error.
+    pub fn unsigned_material_acknowledgement(
+        &self,
+    ) -> Result<Option<ReputationUnsignedMaterialAcknowledgementV1>, ReputationIngestError> {
+        if self.durability_poisoned.load(Ordering::Acquire) {
+            return Err(ReputationIngestError::CheckpointDurabilityUncertain);
+        }
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ReputationIngestError::RuntimePoisoned)?;
+        Ok(state.checkpoint.material_acknowledgement)
+    }
+
+    /// Durably record one failed external delivery attempt.
+    ///
+    /// `failure_receipt` is an opaque, payload-free idempotency digest created
+    /// by the external worker. Replaying it does not consume the retry budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identity, dead-letter, persistence, or runtime error.
+    pub fn record_unsigned_material_delivery_failure(
+        &self,
+        sequence: u64,
+        material_digest: [u8; 32],
+        failure_receipt: [u8; 32],
+    ) -> Result<ReputationMaterialFailureOutcomeV1, ReputationIngestError> {
+        if sequence == 0 || material_digest == [0; 32] || failure_receipt == [0; 32] {
+            return Err(ReputationIngestError::InvalidDeliveryReceipt);
+        }
+        if self.durability_poisoned.load(Ordering::Acquire) {
+            return Err(ReputationIngestError::CheckpointDurabilityUncertain);
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ReputationIngestError::RuntimePoisoned)?;
+        let entry = state
+            .checkpoint
+            .material_outbox
+            .as_ref()
+            .ok_or(ReputationIngestError::MaterialDeliveryMismatch)?;
+        if entry.sequence != sequence || entry.material_digest != material_digest {
+            return Err(ReputationIngestError::MaterialDeliveryMismatch);
+        }
+        if entry.failure_receipts.contains(&failure_receipt) {
+            saturating_increment(&self.metrics.material_exact_replays);
+            return Ok(ReputationMaterialFailureOutcomeV1::ExactReplay {
+                failed_attempts: entry.failed_attempts,
+                state: entry.state,
+            });
+        }
+        if entry.state == ReputationUnsignedMaterialDeliveryStateV1::DeadLetter {
+            return Err(ReputationIngestError::MaterialDeliveryDeadLettered);
+        }
+
+        let mut updated = state.checkpoint.clone();
+        let updated_entry = updated
+            .material_outbox
+            .as_mut()
+            .ok_or(ReputationIngestError::MaterialDeliveryMismatch)?;
+        updated_entry.failure_receipts.push(failure_receipt);
+        let failed_attempts = u32::try_from(updated_entry.failure_receipts.len())
+            .map_err(|_| ReputationIngestError::CapacityExceeded)?;
+        updated_entry.failed_attempts = failed_attempts;
+        let state_after = if failed_attempts == self.policy.max_material_delivery_failures {
+            updated_entry.state = ReputationUnsignedMaterialDeliveryStateV1::DeadLetter;
+            ReputationMaterialFailureOutcomeV1::DeadLettered { failed_attempts }
+        } else {
+            ReputationMaterialFailureOutcomeV1::RetryPending {
+                failed_attempts,
+                remaining_attempts: self
+                    .policy
+                    .max_material_delivery_failures
+                    .checked_sub(failed_attempts)
+                    .ok_or(ReputationIngestError::ArithmeticOverflow)?,
+            }
+        };
+        ensure_checkpoint_size(&updated, &self.policy)?;
+        let fingerprint = self.commit_checkpoint(&updated, state.fingerprint)?;
+        state.checkpoint = updated;
+        state.fingerprint = Some(fingerprint);
+        saturating_increment(&self.metrics.material_delivery_failures);
+        if matches!(
+            state_after,
+            ReputationMaterialFailureOutcomeV1::DeadLettered { .. }
+        ) {
+            saturating_increment(&self.metrics.material_dead_letters);
+        }
+        Ok(state_after)
+    }
+
+    /// Durably acknowledge an externally signed result and remove its outbox item.
+    ///
+    /// The signed envelope must be structurally canonical and exactly bind the
+    /// projected snapshot, scoring evidence, trust-policy digest, and signing
+    /// digest. `trust_policy` contains public verification material only; its
+    /// canonical digest must equal the governed ingest anchor. Full quorum,
+    /// revocation, signature, freshness, and future-skew verification uses the
+    /// authoritative finalized timestamp from the same locked checkpoint used
+    /// for exact material binding, and succeeds before the service retains the
+    /// canonical result digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an identity, receipt, persistence, or runtime error.
+    pub fn acknowledge_unsigned_material(
+        &self,
+        sequence: u64,
+        material_digest: [u8; 32],
+        signed_result: &SignedReputationSnapshotV1,
+        trust_policy: &ReputationSnapshotTrustPolicyV1,
+    ) -> Result<ReputationMaterialAcknowledgementOutcomeV1, ReputationIngestError> {
+        if sequence == 0 || material_digest == [0; 32] {
+            return Err(ReputationIngestError::InvalidDeliveryReceipt);
+        }
+        if self.durability_poisoned.load(Ordering::Acquire) {
+            return Err(ReputationIngestError::CheckpointDurabilityUncertain);
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ReputationIngestError::RuntimePoisoned)?;
+        let verified_at_unix =
+            checked_unix_millis_to_seconds(state.checkpoint.latest_finalized_at_unix_ms)
+                .ok_or(ReputationIngestError::InvalidCheckpoint)?;
+        let trust_policy_digest = trust_policy
+            .canonical_digest()
+            .map_err(|_| ReputationIngestError::InvalidDeliveryReceipt)?;
+        if trust_policy_digest != self.policy.snapshot_trust_policy_digest
+            || signed_result.policy_digest != trust_policy_digest
+        {
+            return Err(ReputationIngestError::MaterialDeliveryMismatch);
+        }
+        signed_result
+            .verify(trust_policy, verified_at_unix)
+            .map_err(|_| ReputationIngestError::InvalidDeliveryReceipt)?;
+        let material = build_signing_material(&state.checkpoint, &self.policy, self.policy_digest)?;
+        if unsigned_material_digest(&material)? != material_digest
+            || signed_result.policy_digest != material.snapshot_trust_policy_digest
+            || signed_result.snapshot != material.snapshot
+            || signed_result.scoring_evidence_digest != material.scoring_evidence_digest
+            || signed_result.scoring_evidence != material.scoring_evidence
+            || signed_result
+                .signing_digest()
+                .map_err(|_| ReputationIngestError::InvalidDeliveryReceipt)?
+                != material.snapshot_signing_digest
+        {
+            return Err(ReputationIngestError::MaterialDeliveryMismatch);
+        }
+        let signed_result_digest = canonical_signed_result_digest(signed_result)?;
+        let acknowledgement = ReputationUnsignedMaterialAcknowledgementV1 {
+            version: REPUTATION_UNSIGNED_MATERIAL_ACKNOWLEDGEMENT_VERSION_V1,
+            sequence,
+            material_digest,
+            trust_policy_digest,
+            verified_at_unix,
+            signed_result_digest,
+        };
+        if let Some(existing) = state.checkpoint.material_acknowledgement {
+            if existing == acknowledgement {
+                saturating_increment(&self.metrics.material_exact_replays);
+                return Ok(ReputationMaterialAcknowledgementOutcomeV1::ExactReplay);
+            }
+            return Err(ReputationIngestError::MaterialDeliveryMismatch);
+        }
+        let entry = state
+            .checkpoint
+            .material_outbox
+            .as_ref()
+            .ok_or(ReputationIngestError::MaterialDeliveryMismatch)?;
+        if entry.sequence != sequence || entry.material_digest != material_digest {
+            return Err(ReputationIngestError::MaterialDeliveryMismatch);
+        }
+
+        let mut updated = state.checkpoint.clone();
+        updated.material_outbox = None;
+        updated.material_acknowledgement = Some(acknowledgement);
+        ensure_checkpoint_size(&updated, &self.policy)?;
+        let fingerprint = self.commit_checkpoint(&updated, state.fingerprint)?;
+        state.checkpoint = updated;
+        state.fingerprint = Some(fingerprint);
+        saturating_increment(&self.metrics.material_acknowledgements);
+        Ok(ReputationMaterialAcknowledgementOutcomeV1::Acknowledged)
+    }
+
+    /// Return restart-safe cursors for the five physical committed feeds.
+    ///
+    /// The PoR, dispute, and stream-token semantic sources intentionally share
+    /// one `Journal` row so a worker cannot resume those interleaved records
+    /// from divergent positions.
+    ///
+    /// # Errors
+    ///
+    /// Returns a durability or runtime-lock error.
+    pub fn committed_feed_cursors(
+        &self,
+    ) -> Result<Vec<ReputationCommittedFeedCursorV1>, ReputationIngestError> {
+        if self.durability_poisoned.load(Ordering::Acquire) {
+            return Err(ReputationIngestError::CheckpointDurabilityUncertain);
+        }
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ReputationIngestError::RuntimePoisoned)?;
+        Ok(ALL_COMMITTED_FEEDS
+            .into_iter()
+            .map(|feed| {
+                let progress = checkpoint_progress_for_feed(&state.checkpoint, feed);
+                ReputationCommittedFeedCursorV1 {
+                    feed,
+                    after: progress.last_event,
+                    observed_through: progress.observed_through,
+                    observed_at_unix_ms: progress.observed_at_unix_ms,
+                }
+            })
+            .collect())
+    }
+
     /// Return payload-free service status.
     ///
     /// # Errors
@@ -1208,6 +1725,19 @@ impl ReputationIngestService {
                 u32::try_from(pending.events.len())
                     .map_err(|_| ReputationIngestError::CapacityExceeded)
             })?,
+            material_outbox_state: state
+                .checkpoint
+                .material_outbox
+                .as_ref()
+                .map(|entry| entry.state),
+            material_delivery_failures: state.checkpoint.material_outbox.as_ref().map_or(
+                Ok(0),
+                |entry| {
+                    u32::try_from(entry.failure_receipts.len())
+                        .map_err(|_| ReputationIngestError::CapacityExceeded)
+                },
+            )?,
+            material_acknowledged: state.checkpoint.material_acknowledgement.is_some(),
         })
     }
 
@@ -1913,7 +2443,7 @@ fn prepare_journal_pages(
             context.accept_event(
                 ReputationCommittedFeedV1::Journal,
                 identity,
-                event.entry.recorded_at_unix_ms,
+                event.recorded_at_unix_ms,
                 signal,
                 event,
             )?;
@@ -2004,7 +2534,7 @@ fn prepare_repair_pages(
         for event in &page.events {
             let identity = repair_event_identity(event);
             validate_page_event_order(&mut previous_page_event, identity)?;
-            let (terminal, breach, slashing) = match event.event.kind {
+            let (terminal, breach, slashing) = match event.event.kind() {
                 SorafsRepairLedgerEventKind::Completed => (true, false, false),
                 SorafsRepairLedgerEventKind::Failed => (true, true, false),
                 SorafsRepairLedgerEventKind::Escalated => (true, true, true),
@@ -2016,9 +2546,9 @@ fn prepare_repair_pages(
             context.accept_event(
                 ReputationCommittedFeedV1::Repair,
                 identity,
-                event.event.occurred_at_unix_ms,
+                *event.event.occurred_at_unix_ms(),
                 ReputationSignalV1::Repair {
-                    provider_id: event.event.provider_id,
+                    provider_id: *event.event.provider_id(),
                     terminal,
                     breach,
                     slashing,
@@ -2074,16 +2604,14 @@ fn prepare_orderbook_pages(
         for event in &page.events {
             let identity = orderbook_event_identity(event);
             validate_page_event_order(&mut previous_page_event, identity)?;
-            let signal = event
-                .event
-                .provider_id
+            let signal = (*event.event.provider_id())
                 .map_or(ReputationSignalV1::Noop, |provider_id| {
                     ReputationSignalV1::ProviderObserved { provider_id }
                 });
             context.accept_event(
                 ReputationCommittedFeedV1::Orderbook,
                 identity,
-                event.event.occurred_at_unix_ms,
+                *event.event.occurred_at_unix_ms(),
                 signal,
                 event,
             )?;
@@ -2136,16 +2664,14 @@ fn prepare_reserve_pages(
         for event in &page.events {
             let identity = reserve_event_identity(event);
             validate_page_event_order(&mut previous_page_event, identity)?;
-            let signal = event
-                .event
-                .provider_id
+            let signal = (*event.event.provider_id())
                 .map_or(ReputationSignalV1::Noop, |provider_id| {
                     ReputationSignalV1::ProviderObserved { provider_id }
                 });
             context.accept_event(
                 ReputationCommittedFeedV1::Reserve,
                 identity,
-                event.event.occurred_at_unix_ms,
+                *event.event.occurred_at_unix_ms(),
                 signal,
                 event,
             )?;
@@ -2676,10 +3202,8 @@ fn build_signing_material(
     if snapshot_id == [0; 16] {
         return Err(ReputationIngestError::CanonicalEncoding);
     }
-    let generated_at_unix = checkpoint.latest_finalized_at_unix_ms / 1_000;
-    if generated_at_unix == 0 {
-        return Err(ReputationIngestError::InvalidFinalizedIdentity);
-    }
+    let generated_at_unix = checked_unix_millis_to_seconds(checkpoint.latest_finalized_at_unix_ms)
+        .ok_or(ReputationIngestError::InvalidFinalizedIdentity)?;
     let snapshot = build_reputation_snapshot(
         snapshot_id,
         generated_at_unix,
@@ -2836,7 +3360,7 @@ fn validate_checkpoint(
                 .validate()
                 .map_err(|_| ReputationIngestError::InvalidCheckpoint)?;
             if identity.height > policy.window_end_height
-                || checkpoint.latest_finalized_at_unix_ms == 0
+                || checked_unix_millis_to_seconds(checkpoint.latest_finalized_at_unix_ms).is_none()
             {
                 return Err(ReputationIngestError::InvalidCheckpoint);
             }
@@ -2997,6 +3521,72 @@ fn validate_checkpoint(
     }
     if let Some(pending) = &checkpoint.pending {
         validate_pending(pending, checkpoint, policy)?;
+    }
+    validate_material_delivery_state(checkpoint, policy, policy_digest)?;
+    Ok(())
+}
+
+fn validate_material_delivery_state(
+    checkpoint: &ReputationIngestCheckpointV1,
+    policy: &ReputationIngestPolicyV1,
+    policy_digest: [u8; 32],
+) -> Result<(), ReputationIngestError> {
+    if checkpoint.material_outbox.is_some() && checkpoint.material_acknowledgement.is_some() {
+        return Err(ReputationIngestError::InvalidCheckpoint);
+    }
+    if checkpoint.pending.is_some()
+        && (checkpoint.material_outbox.is_some() || checkpoint.material_acknowledgement.is_some())
+    {
+        return Err(ReputationIngestError::InvalidCheckpoint);
+    }
+    if checkpoint.material_outbox.is_none() && checkpoint.material_acknowledgement.is_none() {
+        return Ok(());
+    }
+
+    let expected_material = build_signing_material(checkpoint, policy, policy_digest)
+        .map_err(|_| ReputationIngestError::InvalidCheckpoint)?;
+    let expected_digest = unsigned_material_digest(&expected_material)
+        .map_err(|_| ReputationIngestError::InvalidCheckpoint)?;
+    let expected_verified_at_unix =
+        checked_unix_millis_to_seconds(checkpoint.latest_finalized_at_unix_ms)
+            .ok_or(ReputationIngestError::InvalidCheckpoint)?;
+    if let Some(entry) = &checkpoint.material_outbox {
+        if entry.version != REPUTATION_UNSIGNED_MATERIAL_DELIVERY_VERSION_V1
+            || entry.sequence != 1
+            || entry.material_digest != expected_digest
+            || entry.failed_attempts
+                != u32::try_from(entry.failure_receipts.len())
+                    .map_err(|_| ReputationIngestError::InvalidCheckpoint)?
+            || entry.failed_attempts > policy.max_material_delivery_failures
+        {
+            return Err(ReputationIngestError::InvalidCheckpoint);
+        }
+        let expected_state = if entry.failed_attempts == policy.max_material_delivery_failures {
+            ReputationUnsignedMaterialDeliveryStateV1::DeadLetter
+        } else {
+            ReputationUnsignedMaterialDeliveryStateV1::Pending
+        };
+        if entry.state != expected_state {
+            return Err(ReputationIngestError::InvalidCheckpoint);
+        }
+        let mut unique_failure_receipts = BTreeSet::new();
+        if entry
+            .failure_receipts
+            .iter()
+            .any(|receipt| *receipt == [0; 32] || !unique_failure_receipts.insert(*receipt))
+        {
+            return Err(ReputationIngestError::InvalidCheckpoint);
+        }
+    }
+    if let Some(acknowledgement) = checkpoint.material_acknowledgement
+        && (acknowledgement.version != REPUTATION_UNSIGNED_MATERIAL_ACKNOWLEDGEMENT_VERSION_V1
+            || acknowledgement.sequence != 1
+            || acknowledgement.material_digest != expected_digest
+            || acknowledgement.trust_policy_digest != policy.snapshot_trust_policy_digest
+            || acknowledgement.verified_at_unix != expected_verified_at_unix
+            || acknowledgement.signed_result_digest == [0; 32])
+    {
+        return Err(ReputationIngestError::InvalidCheckpoint);
     }
     Ok(())
 }
@@ -3315,6 +3905,24 @@ fn hash_canonical<T: norito::NoritoSerialize>(
     Ok(*hasher.finalize().as_bytes())
 }
 
+fn unsigned_material_digest(
+    material: &ReputationUnsignedSigningMaterialV1,
+) -> Result<[u8; 32], ReputationIngestError> {
+    hash_canonical(b"sorafs-reputation-unsigned-material-delivery-v1", material)
+}
+
+fn canonical_signed_result_digest(
+    signed_result: &SignedReputationSnapshotV1,
+) -> Result<[u8; 32], ReputationIngestError> {
+    let canonical = signed_result
+        .canonical_bytes()
+        .map_err(|_| ReputationIngestError::InvalidDeliveryReceipt)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs-reputation-signed-material-result-v1");
+    update_len_prefixed(&mut hasher, &canonical)?;
+    Ok(*hasher.finalize().as_bytes())
+}
+
 fn update_len_prefixed(
     hasher: &mut blake3::Hasher,
     bytes: &[u8],
@@ -3345,10 +3953,15 @@ fn saturating_add(counter: &AtomicU64, value: u64) {
     });
 }
 
+fn checked_unix_millis_to_seconds(unix_ms: u64) -> Option<u64> {
+    unix_ms.checked_div(1_000).filter(|seconds| *seconds != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
 
+    use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
@@ -3378,6 +3991,11 @@ mod tests {
         },
     };
     use sorafs_manifest::deal::XorQuantity;
+    use sorafs_manifest::reputation::signed::{
+        REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1, REPUTATION_TRUSTED_SIGNER_VERSION_V1,
+        ReputationSnapshotSignatureV1, ReputationTrustedSignerV1,
+        SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+    };
     use tempfile::TempDir;
 
     use super::*;
@@ -3396,14 +4014,41 @@ mod tests {
         ProviderId::new([seed.max(1); 32])
     }
 
-    fn policy() -> ReputationIngestPolicyV1 {
+    fn trust_policy() -> ReputationSnapshotTrustPolicyV1 {
+        let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
+        ReputationSnapshotTrustPolicyV1 {
+            version: REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1,
+            policy_id: [0x91; 32],
+            valid_from_unix: FINALIZED_AT_MS / 1_000 - 1_000,
+            valid_until_unix: FINALIZED_AT_MS / 1_000 + 100_000,
+            max_snapshot_age_secs: 3_600,
+            max_future_skew_secs: 60,
+            min_signatures: 1,
+            signers: vec![ReputationTrustedSignerV1 {
+                version: REPUTATION_TRUSTED_SIGNER_VERSION_V1,
+                signer_id: "external-threshold-signer-1".to_owned(),
+                public_key: signing_key.verifying_key().to_bytes(),
+            }],
+            revoked_signer_ids: Vec::new(),
+        }
+    }
+
+    fn policy_for_trust_policy(
+        trust_policy: &ReputationSnapshotTrustPolicyV1,
+    ) -> ReputationIngestPolicyV1 {
         ReputationIngestPolicyV1::strict_v1(
             ChainId::from("reputation-test-chain"),
             1,
             TARGET_HEIGHT,
-            [0x91; 32],
+            trust_policy
+                .canonical_digest()
+                .expect("canonical trust policy digest"),
             ReputationWeightsV1::default(),
         )
+    }
+
+    fn policy() -> ReputationIngestPolicyV1 {
+        policy_for_trust_policy(&trust_policy())
     }
 
     fn proof_event(
@@ -3497,20 +4142,21 @@ mod tests {
             por_recorder_authority: account(9),
             dispute_recorder_authority: account(10),
             token_recorder_authority: account(11),
+            max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
 
     fn por_journal_entry(
         provider_id: ProviderId,
         marker: u8,
-        recorded_at_unix_ms: u64,
+        source_time_unix_ms: u64,
     ) -> ReputationJournalEntryV1 {
         let policy = journal_policy();
         ReputationJournalEntryV1::try_new(
             provider_id,
             policy.canonical_digest().expect("journal policy digest"),
             policy.por_recorder_authority,
-            recorded_at_unix_ms,
+            source_time_unix_ms,
             None,
             ReputationJournalPayloadV1::PorTerminal(PorTerminalOutcomeV1 {
                 challenge_id: [marker.max(1); 32],
@@ -3520,10 +4166,10 @@ mod tests {
                 forced: false,
                 sample_count: 4,
                 failed_samples: 0,
-                issued_at_unix_ms: recorded_at_unix_ms - 2_000,
-                deadline_at_unix_ms: recorded_at_unix_ms - 500,
-                responded_at_unix_ms: Some(recorded_at_unix_ms - 750),
-                decided_at_unix_ms: recorded_at_unix_ms,
+                issued_at_unix_ms: source_time_unix_ms - 2_000,
+                deadline_at_unix_ms: source_time_unix_ms - 500,
+                responded_at_unix_ms: Some(source_time_unix_ms - 750),
+                decided_at_unix_ms: source_time_unix_ms,
                 proof_digest: Some([0xA3; 32]),
                 repair_task_id: None,
                 verifier_latency_ms: Some(17),
@@ -3536,21 +4182,21 @@ mod tests {
     fn token_journal_entry(
         provider_id: ProviderId,
         marker: u8,
-        recorded_at_unix_ms: u64,
+        source_time_unix_ms: u64,
     ) -> ReputationJournalEntryV1 {
         let policy = journal_policy();
         ReputationJournalEntryV1::try_new(
             provider_id,
             policy.canonical_digest().expect("journal policy digest"),
             policy.token_recorder_authority,
-            recorded_at_unix_ms,
+            source_time_unix_ms,
             None,
             ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
                 validation_id: [marker.max(1); 32],
                 request_digest: [0xB2; 32],
                 token_body_digest: Some([0xB3; 32]),
                 token_key_version: Some(1),
-                validated_at_unix_ms: recorded_at_unix_ms,
+                validated_at_unix_ms: source_time_unix_ms,
                 status: StreamTokenValidationStatusV1::Accepted,
             }),
         )
@@ -3560,20 +4206,20 @@ mod tests {
     fn opened_dispute_entry(
         provider_id: ProviderId,
         marker: u8,
-        recorded_at_unix_ms: u64,
+        source_time_unix_ms: u64,
     ) -> ReputationJournalEntryV1 {
         let policy = journal_policy();
         ReputationJournalEntryV1::try_new(
             provider_id,
             policy.canonical_digest().expect("journal policy digest"),
             policy.dispute_recorder_authority,
-            recorded_at_unix_ms,
+            source_time_unix_ms,
             None,
             ReputationJournalPayloadV1::ProviderDispute(ProviderDisputeEventV1 {
                 dispute_id: CapacityDisputeId::new([marker.max(1); 32]),
                 kind: ProviderDisputeKindV1::ProofFailure,
                 evidence_digest: [marker.wrapping_add(1).max(1); 32],
-                submitted_at_unix_ms: recorded_at_unix_ms,
+                submitted_at_unix_ms: source_time_unix_ms,
                 status: ProviderDisputeStatusV1::Opened,
             }),
         )
@@ -3583,7 +4229,7 @@ mod tests {
     fn resolved_dispute_entry(
         provider_id: ProviderId,
         opened: &ReputationJournalEntryV1,
-        recorded_at_unix_ms: u64,
+        source_time_unix_ms: u64,
         outcome: CapacityDisputeOutcome,
     ) -> ReputationJournalEntryV1 {
         let policy = journal_policy();
@@ -3594,7 +4240,7 @@ mod tests {
             provider_id,
             policy.canonical_digest().expect("journal policy digest"),
             policy.dispute_recorder_authority,
-            recorded_at_unix_ms,
+            source_time_unix_ms,
             Some(opened.event_id),
             ReputationJournalPayloadV1::ProviderDispute(ProviderDisputeEventV1 {
                 dispute_id: dispute.dispute_id,
@@ -3603,7 +4249,7 @@ mod tests {
                 submitted_at_unix_ms: dispute.submitted_at_unix_ms,
                 status: ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                     outcome,
-                    resolved_at_unix_ms: recorded_at_unix_ms,
+                    resolved_at_unix_ms: source_time_unix_ms,
                     decision_digest: [0xC3; 32],
                     rationale: None,
                 }),
@@ -3617,11 +4263,13 @@ mod tests {
         event_index: u32,
         entry: ReputationJournalEntryV1,
     ) -> ReputationJournalFinalizedEventV1 {
+        let recorded_at_unix_ms = entry.source_time_unix_ms.saturating_add(100);
         ReputationJournalFinalizedEventV1 {
             sequence,
             block_height: 9,
             block_hash: [0x91; 32],
             event_index,
+            recorded_at_unix_ms,
             entry,
         }
     }
@@ -3830,6 +4478,87 @@ mod tests {
         }
     }
 
+    fn signed_material_result(
+        material: &ReputationUnsignedSigningMaterialV1,
+    ) -> SignedReputationSnapshotV1 {
+        signed_material_result_with_signer(
+            material,
+            "external-threshold-signer-1",
+            &SigningKey::from_bytes(&[0x5A; 32]),
+        )
+    }
+
+    fn signed_material_result_with_signer(
+        material: &ReputationUnsignedSigningMaterialV1,
+        signer_id: &str,
+        signing_key: &SigningKey,
+    ) -> SignedReputationSnapshotV1 {
+        SignedReputationSnapshotV1 {
+            version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
+            policy_digest: material.snapshot_trust_policy_digest,
+            snapshot: material.snapshot.clone(),
+            scoring_evidence_digest: material.scoring_evidence_digest,
+            scoring_evidence: material.scoring_evidence.clone(),
+            signatures: vec![ReputationSnapshotSignatureV1 {
+                signer_id: signer_id.to_owned(),
+                signature: signing_key
+                    .sign(&material.snapshot_signing_digest)
+                    .to_bytes(),
+            }],
+        }
+    }
+
+    fn signed_material_result_generated_at(
+        material: &ReputationUnsignedSigningMaterialV1,
+        generated_at_unix: u64,
+    ) -> SignedReputationSnapshotV1 {
+        let snapshot = sorafs_manifest::reputation::build_reputation_snapshot_with_trust_edges(
+            material.snapshot.snapshot_id,
+            generated_at_unix,
+            material.snapshot.weights,
+            &material.scoring_evidence.provider_inputs,
+            &material.scoring_evidence.trust_edges,
+            material.snapshot.previous_snapshot_id,
+        )
+        .expect("build time-adjusted snapshot");
+        let mut adjusted = material.clone();
+        adjusted.snapshot_signing_digest = snapshot_signing_digest(
+            &snapshot,
+            adjusted.snapshot_trust_policy_digest,
+            adjusted.scoring_evidence_digest,
+        )
+        .expect("time-adjusted signing digest");
+        adjusted.snapshot = snapshot;
+        signed_material_result(&adjusted)
+    }
+
+    fn ready_material_service(
+        verification_policy: &ReputationSnapshotTrustPolicyV1,
+        provider_seed: u8,
+    ) -> (
+        TempDir,
+        ReputationIngestService,
+        ReputationUnsignedMaterialDeliveryV1,
+    ) {
+        let root = TempDir::new().expect("ready material root");
+        let service = ReputationIngestService::open(
+            root.path(),
+            policy_for_trust_policy(verification_policy),
+        )
+        .expect("open ready material service");
+        service
+            .ingest_finalized_batch(all_sources_batch(provider(provider_seed)))
+            .expect("complete ready material sources");
+        service
+            .enqueue_unsigned_signing_material()
+            .expect("enqueue ready material");
+        let delivery = service
+            .unsigned_material_delivery()
+            .expect("read ready material")
+            .expect("pending ready material");
+        (root, service, delivery)
+    }
+
     #[test]
     fn exact_replay_is_idempotent_and_byte_identical() {
         let root = TempDir::new().expect("state root");
@@ -3912,6 +4641,22 @@ mod tests {
             assert_eq!(accumulator.token_observations, 1);
             assert_eq!(accumulator.token_violations, 0);
         }
+        let cursors = service
+            .committed_feed_cursors()
+            .expect("public committed-feed cursors");
+        assert_eq!(cursors.len(), ALL_COMMITTED_FEEDS.len());
+        let journal_cursor = cursors
+            .iter()
+            .find(|cursor| cursor.feed == ReputationCommittedFeedV1::Journal)
+            .expect("unified journal cursor");
+        assert_eq!(journal_cursor.after.expect("journal after").sequence, 2);
+        assert_eq!(
+            journal_cursor.observed_through,
+            Some(ReputationFinalizedIdentityV1 {
+                height: TARGET_HEIGHT,
+                block_hash: TARGET_HASH,
+            })
+        );
         assert_eq!(
             service
                 .ingest_finalized_batch(batch)
@@ -4251,6 +4996,20 @@ mod tests {
         assert_eq!(status.pending_events, 0);
         assert_eq!(status.providers, 1);
         assert_eq!(restored.metrics().restart_reconciliations, 1);
+        let proof_cursor = restored
+            .committed_feed_cursors()
+            .expect("restored public cursors")
+            .into_iter()
+            .find(|cursor| cursor.feed == ReputationCommittedFeedV1::Proof)
+            .expect("proof cursor");
+        assert_eq!(proof_cursor.after.expect("proof after").sequence, 1);
+        assert_eq!(
+            proof_cursor.observed_through,
+            Some(ReputationFinalizedIdentityV1 {
+                height: TARGET_HEIGHT,
+                block_hash: TARGET_HASH,
+            })
+        );
         let state = restored.state.lock().expect("restored state");
         assert_eq!(
             state
@@ -4347,6 +5106,24 @@ mod tests {
                 .expect_err("material read fails closed"),
             ReputationIngestError::CheckpointDurabilityUncertain
         );
+        assert_eq!(
+            service
+                .committed_feed_cursors()
+                .expect_err("cursor read fails closed"),
+            ReputationIngestError::CheckpointDurabilityUncertain
+        );
+        assert_eq!(
+            service
+                .unsigned_material_delivery()
+                .expect_err("outbox read fails closed"),
+            ReputationIngestError::CheckpointDurabilityUncertain
+        );
+        assert_eq!(
+            service
+                .enqueue_unsigned_signing_material()
+                .expect_err("outbox mutation fails closed"),
+            ReputationIngestError::CheckpointDurabilityUncertain
+        );
     }
 
     #[test]
@@ -4375,6 +5152,377 @@ mod tests {
             norito::to_bytes(&left_material).expect("left material bytes"),
             norito::to_bytes(&right_material).expect("right material bytes")
         );
+    }
+
+    #[test]
+    fn material_outbox_retry_dead_letter_and_acknowledgement_are_restart_safe() {
+        let root = TempDir::new().expect("material outbox root");
+        let verification_policy = trust_policy();
+        let mut ingest_policy = policy();
+        ingest_policy.max_material_delivery_failures = 2;
+        let material_digest;
+        let signed_result;
+        {
+            let service = ReputationIngestService::open(root.path(), ingest_policy.clone())
+                .expect("open material outbox");
+            service
+                .ingest_finalized_batch(all_sources_batch(provider(15)))
+                .expect("complete committed sources");
+            assert_eq!(
+                service
+                    .enqueue_unsigned_signing_material()
+                    .expect("enqueue deterministic material"),
+                ReputationMaterialEnqueueOutcomeV1::Enqueued { sequence: 1 }
+            );
+            let delivery = service
+                .unsigned_material_delivery()
+                .expect("read delivery")
+                .expect("pending delivery");
+            material_digest = delivery.material_digest;
+            signed_result = signed_material_result(&delivery.material);
+            assert_eq!(delivery.failed_attempts, 0);
+            assert_eq!(
+                delivery.state,
+                ReputationUnsignedMaterialDeliveryStateV1::Pending
+            );
+            assert_eq!(
+                service
+                    .record_unsigned_material_delivery_failure(1, material_digest, [0xD1; 32],)
+                    .expect("record first failure"),
+                ReputationMaterialFailureOutcomeV1::RetryPending {
+                    failed_attempts: 1,
+                    remaining_attempts: 1,
+                }
+            );
+        }
+
+        {
+            let restored = ReputationIngestService::open(root.path(), ingest_policy.clone())
+                .expect("restore pending material");
+            let delivery = restored
+                .unsigned_material_delivery()
+                .expect("read restored delivery")
+                .expect("restored pending delivery");
+            assert_eq!(delivery.material_digest, material_digest);
+            assert_eq!(delivery.failed_attempts, 1);
+            assert_eq!(
+                restored
+                    .record_unsigned_material_delivery_failure(1, material_digest, [0xD1; 32],)
+                    .expect("failure receipt replay"),
+                ReputationMaterialFailureOutcomeV1::ExactReplay {
+                    failed_attempts: 1,
+                    state: ReputationUnsignedMaterialDeliveryStateV1::Pending,
+                }
+            );
+            assert_eq!(
+                restored
+                    .record_unsigned_material_delivery_failure(1, material_digest, [0xD2; 32],)
+                    .expect("record terminal failure"),
+                ReputationMaterialFailureOutcomeV1::DeadLettered { failed_attempts: 2 }
+            );
+        }
+
+        {
+            let restored = ReputationIngestService::open(root.path(), ingest_policy.clone())
+                .expect("restore dead letter");
+            let delivery = restored
+                .unsigned_material_delivery()
+                .expect("read dead letter")
+                .expect("dead-letter delivery");
+            assert_eq!(
+                delivery.state,
+                ReputationUnsignedMaterialDeliveryStateV1::DeadLetter
+            );
+            assert_eq!(
+                restored
+                    .record_unsigned_material_delivery_failure(1, material_digest, [0xD3; 32],)
+                    .expect_err("dead letter rejects a new retry"),
+                ReputationIngestError::MaterialDeliveryDeadLettered
+            );
+            assert_eq!(
+                restored
+                    .acknowledge_unsigned_material(
+                        1,
+                        material_digest,
+                        &signed_result,
+                        &verification_policy,
+                    )
+                    .expect("late exact acknowledgement remains admissible"),
+                ReputationMaterialAcknowledgementOutcomeV1::Acknowledged
+            );
+            assert!(
+                restored
+                    .unsigned_material_delivery()
+                    .expect("read cleared outbox")
+                    .is_none()
+            );
+        }
+
+        let restored =
+            ReputationIngestService::open(root.path(), ingest_policy).expect("restore ack");
+        assert_eq!(
+            restored
+                .acknowledge_unsigned_material(
+                    1,
+                    material_digest,
+                    &signed_result,
+                    &verification_policy,
+                )
+                .expect("acknowledgement replay"),
+            ReputationMaterialAcknowledgementOutcomeV1::ExactReplay
+        );
+        assert_eq!(
+            restored
+                .enqueue_unsigned_signing_material()
+                .expect("enqueue replay after acknowledgement"),
+            ReputationMaterialEnqueueOutcomeV1::AlreadyAcknowledged { sequence: 1 }
+        );
+        let acknowledgement = restored
+            .unsigned_material_acknowledgement()
+            .expect("read acknowledgement")
+            .expect("durable acknowledgement");
+        assert_eq!(
+            acknowledgement.signed_result_digest,
+            canonical_signed_result_digest(&signed_result).expect("signed result digest")
+        );
+        assert_eq!(
+            acknowledgement.trust_policy_digest,
+            verification_policy
+                .canonical_digest()
+                .expect("trust policy digest")
+        );
+        assert_eq!(acknowledgement.verified_at_unix, FINALIZED_AT_MS / 1_000);
+    }
+
+    #[test]
+    fn material_outbox_corruption_and_substituted_receipts_fail_closed() {
+        let root = TempDir::new().expect("material corruption root");
+        let ingest_policy = policy();
+        let mut checkpoint;
+        let material_digest;
+        {
+            let service = ReputationIngestService::open(root.path(), ingest_policy.clone())
+                .expect("open material outbox");
+            service
+                .ingest_finalized_batch(all_sources_batch(provider(16)))
+                .expect("complete committed sources");
+            service
+                .enqueue_unsigned_signing_material()
+                .expect("enqueue material");
+            let delivery = service
+                .unsigned_material_delivery()
+                .expect("read delivery")
+                .expect("pending delivery");
+            material_digest = delivery.material_digest;
+            let mut substituted_result = signed_material_result(&delivery.material);
+            substituted_result.policy_digest = [0xF4; 32];
+            assert_eq!(
+                service
+                    .record_unsigned_material_delivery_failure(1, [0xF1; 32], [0xF2; 32])
+                    .expect_err("substituted material digest rejected"),
+                ReputationIngestError::MaterialDeliveryMismatch
+            );
+            assert_eq!(
+                service
+                    .acknowledge_unsigned_material(
+                        1,
+                        material_digest,
+                        &substituted_result,
+                        &trust_policy(),
+                    )
+                    .expect_err("substituted signed result rejected"),
+                ReputationIngestError::MaterialDeliveryMismatch
+            );
+            checkpoint = service
+                .state
+                .lock()
+                .expect("checkpoint state")
+                .checkpoint
+                .clone();
+        }
+
+        checkpoint
+            .material_outbox
+            .as_mut()
+            .expect("outbox entry")
+            .material_digest = [0xF3; 32];
+        fs::write(
+            root.path().join(REPUTATION_INGEST_CHECKPOINT_FILE_NAME_V1),
+            norito::to_bytes(&checkpoint).expect("encode corrupt checkpoint"),
+        )
+        .expect("write corrupt checkpoint");
+        assert_eq!(
+            ReputationIngestService::open(root.path(), ingest_policy)
+                .expect_err("substituted outbox material rejected"),
+            ReputationIngestError::InvalidCheckpoint
+        );
+    }
+
+    #[test]
+    fn material_acknowledgement_checkpoint_binds_authoritative_finalized_time() {
+        let verification_policy = trust_policy();
+        let ingest_policy = policy_for_trust_policy(&verification_policy);
+        let (root, service, delivery) = ready_material_service(&verification_policy, 17);
+        let signed_result = signed_material_result(&delivery.material);
+        service
+            .acknowledge_unsigned_material(
+                1,
+                delivery.material_digest,
+                &signed_result,
+                &verification_policy,
+            )
+            .expect("acknowledge exact externally signed material");
+        let mut checkpoint = service
+            .state
+            .lock()
+            .expect("checkpoint state")
+            .checkpoint
+            .clone();
+        drop(service);
+
+        checkpoint
+            .material_acknowledgement
+            .as_mut()
+            .expect("material acknowledgement")
+            .verified_at_unix += 1;
+        fs::write(
+            root.path().join(REPUTATION_INGEST_CHECKPOINT_FILE_NAME_V1),
+            norito::to_bytes(&checkpoint).expect("encode timestamp-substituted checkpoint"),
+        )
+        .expect("write timestamp-substituted checkpoint");
+        assert_eq!(
+            ReputationIngestService::open(root.path(), ingest_policy)
+                .expect_err("substituted acknowledgement time rejected"),
+            ReputationIngestError::InvalidCheckpoint
+        );
+    }
+
+    #[test]
+    fn material_ack_rejects_forged_revoked_duplicate_quorum_and_time_failures() {
+        let mut base_policy = trust_policy();
+        base_policy.valid_from_unix =
+            FINALIZED_AT_MS / 1_000 - base_policy.max_snapshot_age_secs - 100;
+        let (_root, service, delivery) = ready_material_service(&base_policy, 18);
+
+        let forged = signed_material_result_with_signer(
+            &delivery.material,
+            "external-threshold-signer-1",
+            &SigningKey::from_bytes(&[0x5B; 32]),
+        );
+        assert_eq!(
+            service
+                .acknowledge_unsigned_material(1, delivery.material_digest, &forged, &base_policy,)
+                .expect_err("forged signature rejected"),
+            ReputationIngestError::InvalidDeliveryReceipt
+        );
+
+        let mut duplicate = signed_material_result(&delivery.material);
+        duplicate.signatures.push(duplicate.signatures[0].clone());
+        assert_eq!(
+            service
+                .acknowledge_unsigned_material(
+                    1,
+                    delivery.material_digest,
+                    &duplicate,
+                    &base_policy,
+                )
+                .expect_err("duplicate signer rejected"),
+            ReputationIngestError::InvalidDeliveryReceipt
+        );
+
+        let stale = signed_material_result_generated_at(
+            &delivery.material,
+            FINALIZED_AT_MS / 1_000 - base_policy.max_snapshot_age_secs - 1,
+        );
+        assert_eq!(
+            service
+                .acknowledge_unsigned_material(1, delivery.material_digest, &stale, &base_policy,)
+                .expect_err("stale signed result rejected"),
+            ReputationIngestError::InvalidDeliveryReceipt
+        );
+        let future = signed_material_result_generated_at(
+            &delivery.material,
+            FINALIZED_AT_MS / 1_000 + base_policy.max_future_skew_secs + 1,
+        );
+        assert_eq!(
+            service
+                .acknowledge_unsigned_material(1, delivery.material_digest, &future, &base_policy,)
+                .expect_err("future signed result rejected"),
+            ReputationIngestError::InvalidDeliveryReceipt
+        );
+        assert!(
+            service
+                .unsigned_material_delivery()
+                .expect("failed acknowledgements retain outbox")
+                .is_some()
+        );
+
+        let second_signer = ReputationTrustedSignerV1 {
+            version: REPUTATION_TRUSTED_SIGNER_VERSION_V1,
+            signer_id: "external-threshold-signer-2".to_owned(),
+            public_key: SigningKey::from_bytes(&[0x5C; 32])
+                .verifying_key()
+                .to_bytes(),
+        };
+
+        let mut revoked_policy = trust_policy();
+        revoked_policy.signers.push(second_signer.clone());
+        revoked_policy.revoked_signer_ids = vec!["external-threshold-signer-1".to_owned()];
+        let (_revoked_root, revoked_service, revoked_delivery) =
+            ready_material_service(&revoked_policy, 19);
+        let revoked_result = signed_material_result(&revoked_delivery.material);
+        assert_eq!(
+            revoked_service
+                .acknowledge_unsigned_material(
+                    1,
+                    revoked_delivery.material_digest,
+                    &revoked_result,
+                    &revoked_policy,
+                )
+                .expect_err("revoked signer rejected"),
+            ReputationIngestError::InvalidDeliveryReceipt
+        );
+
+        let mut quorum_policy = trust_policy();
+        quorum_policy.signers.push(second_signer);
+        quorum_policy.min_signatures = 2;
+        let (_quorum_root, quorum_service, quorum_delivery) =
+            ready_material_service(&quorum_policy, 20);
+        let insufficient_quorum = signed_material_result(&quorum_delivery.material);
+        assert_eq!(
+            quorum_service
+                .acknowledge_unsigned_material(
+                    1,
+                    quorum_delivery.material_digest,
+                    &insufficient_quorum,
+                    &quorum_policy,
+                )
+                .expect_err("insufficient quorum rejected"),
+            ReputationIngestError::InvalidDeliveryReceipt
+        );
+    }
+
+    #[test]
+    fn public_failures_are_payload_free() {
+        let provider_id = provider(17);
+        let root = TempDir::new().expect("payload-free error root");
+        let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
+        let error = service
+            .ingest_finalized_batch(proof_only_batch(
+                TARGET_HASH,
+                vec![proof_event(2, 6, [0x61; 32], 0, provider_id, 0xAB)],
+            ))
+            .expect_err("gap rejected");
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+        for private_marker in [
+            hex::encode(provider_id.as_bytes()),
+            hex::encode([0x61; 32]),
+            hex::encode([0xAB; 32]),
+        ] {
+            assert!(!display.contains(&private_marker));
+            assert!(!debug.contains(&private_marker));
+        }
     }
 
     #[test]

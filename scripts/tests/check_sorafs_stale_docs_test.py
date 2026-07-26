@@ -37,21 +37,29 @@ def test_hedging_plan_uses_the_current_bridge_abi() -> None:
 
 def test_reference_sdk_plan_does_not_reopen_native_orderbook_work() -> None:
     plan = read("docs/source/sorafs_reference_sdk_plan.md")
+    normalized = " ".join(plan.split())
 
     assert (
         "runtime matcher service wiring, durable escrow mutation, and signature "
         "authorization remain"
-    ) not in plan
+    ) not in normalized
+    assert "release-wide signed fixture inventory" not in normalized
     for marker in (
         "authoritative native ledger and supervised worker now own bounded "
         "price-time matching",
         "atomic custody mutation",
         "authority/signature enforcement",
-        "release-wide signed fixture inventory",
+        "The canonical cross-domain fixture inventory is complete.",
+        "82 payload artifacts",
+        "30 `ValidationOutcomeV1` outcomes",
+        "38 negative payload vectors",
+        "ten exact parity profiles",
+        "JavaScript/TypeScript, Python, Swift, Kotlin/JVM, mirrored Java "
+        "Android, and C#",
         "published per-target archives and binding packages",
         "genuine downstream install/smoke evidence",
     ):
-        assert marker in plan
+        assert marker in normalized
 
 
 def test_gateway_tls_docs_require_withdrawal_and_runtime_adapter_recovery() -> None:
@@ -68,6 +76,41 @@ def test_gateway_tls_docs_require_withdrawal_and_runtime_adapter_recovery() -> N
         "Repository tooling neither issues nor installs production certificates"
         in automation
     )
+
+
+def test_stream_token_docs_use_the_runtime_signer_hard_cut() -> None:
+    protocol = read("docs/source/sorafs_node_client_protocol.md")
+    chunk_range = read("docs/source/sorafs_gateway_chunk_range.md")
+    handbook = read("docs/source/sorafs_gateway_deployment_handbook.md")
+    playbook = read("docs/source/sorafs_gateway_operator_playbook.md")
+    roadmap = read("roadmap.md")
+    status = read("status.md")
+    active = "\n".join((protocol, chunk_range, handbook, playbook, roadmap))
+    normalized_active = " ".join(active.split())
+    normalized_status = " ".join(status.split())
+
+    for stale in (
+        "SORAFS_STREAM_TOKENS_ENABLED",
+        "token_signing_sk",
+        "signing_key_path",
+        "when the signing key is not configured",
+        "sign_with_seed",
+    ):
+        assert stale not in active
+    for marker in (
+        "only when issuance is disabled in node TOML",
+        "No signing-seed file, key path, or environment enablement is accepted",
+        "There is no environment-variable enablement or signing-seed path",
+        "The former file-seed loader, environment enablement, standard-launcher "
+        "node-key derivation, and internal seed-signing API are deleted",
+    ):
+        assert marker in normalized_active
+    for marker in (
+        "Historical record: the Torii stream-token key-file parser",
+        "removed by the V1 hard cut",
+        "it has no file-key or environment fallback",
+    ):
+        assert marker in normalized_status
 
 
 def test_roadmap_does_not_preserve_retired_gateway_policy_tooling() -> None:

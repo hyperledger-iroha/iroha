@@ -226,13 +226,6 @@ pub fn parse_digest_hex(hex: &str) -> Result<[u8; 32], FetchPlanError> {
 ///
 /// This value is never a standalone plan. Use
 /// [`try_chunk_fetch_plan_to_json`] for interchange.
-pub fn chunk_fetch_specs_to_json(plan: &CarBuildPlan) -> Value {
-    let specs = plan.chunk_fetch_specs();
-    Value::Array(chunk_fetch_specs_to_array(&specs))
-}
-
-/// Fallible counterpart to [`chunk_fetch_specs_to_json`] for a typed embedded
-/// field in another canonical versioned envelope.
 pub fn try_chunk_fetch_specs_to_json(plan: &CarBuildPlan) -> Result<Value, CarPlanError> {
     let specs = plan.try_chunk_fetch_specs()?;
     Ok(Value::Array(chunk_fetch_specs_to_array(&specs)))
@@ -498,13 +491,16 @@ mod tests {
         let parsed = chunk_fetch_plan_from_json(&json).expect("parse plan");
 
         assert_eq!(parsed.payload_digest, *plan.payload_digest.as_bytes());
-        assert_eq!(parsed.chunk_fetch_specs, plan.chunk_fetch_specs());
+        assert_eq!(
+            parsed.chunk_fetch_specs,
+            plan.try_chunk_fetch_specs().expect("valid sample plan")
+        );
     }
 
     #[test]
     fn standalone_plan_rejects_retired_array_and_missing_payload_digest() {
         let plan = sample_plan();
-        let retired = chunk_fetch_specs_to_json(&plan);
+        let retired = try_chunk_fetch_specs_to_json(&plan).expect("valid sample plan");
         assert!(matches!(
             chunk_fetch_plan_from_json(&retired),
             Err(FetchPlanError::InvalidPlanRoot)
@@ -512,7 +508,10 @@ mod tests {
 
         let mut missing_digest = Map::new();
         missing_digest.insert("schema".into(), Value::from(CHUNK_FETCH_PLAN_SCHEMA_V1));
-        missing_digest.insert("chunk_fetch_specs".into(), chunk_fetch_specs_to_json(&plan));
+        missing_digest.insert(
+            "chunk_fetch_specs".into(),
+            try_chunk_fetch_specs_to_json(&plan).expect("valid sample plan"),
+        );
         let missing_digest = Value::Object(missing_digest);
         assert!(matches!(
             chunk_fetch_plan_from_json(&missing_digest),
@@ -525,7 +524,7 @@ mod tests {
     #[test]
     fn standalone_plan_rejects_zero_or_noncanonical_payload_digest() {
         let plan = sample_plan();
-        let specs = chunk_fetch_specs_to_json(&plan);
+        let specs = try_chunk_fetch_specs_to_json(&plan).expect("valid sample plan");
         for payload_digest in ["0".repeat(64), "A1".repeat(32), "deadbeef".to_owned()] {
             let mut value = Map::new();
             value.insert("schema".into(), Value::from(CHUNK_FETCH_PLAN_SCHEMA_V1));

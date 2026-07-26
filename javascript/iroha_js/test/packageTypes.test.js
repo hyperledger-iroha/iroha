@@ -356,8 +356,11 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
       path.join(tempRoot, "consumer.mts"),
       [
         ...imports,
-        `import { Crypto, Norito, NumericV1, Torii, ToriiClient, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { Crypto, Norito, NumericV1, Torii, ToriiClient, buildCancelAssetLockInstruction, type CancelAssetLockInstruction, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening } from ${JSON.stringify(PACKAGE_NAME)};`,
         'const algorithm: CryptoAlgorithm = "ed25519";',
+        'const cancelAssetLock: CancelAssetLockInstruction = buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: "15" });',
+        "// @ts-expect-error quantity-bearing APIs reject lossy JavaScript numbers.",
+        'buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: 15 });',
         "const toriiConstructor: typeof ToriiClient = Torii.ToriiClient;",
         "const encodeInstruction: typeof export10.noritoEncodeInstruction = Norito.noritoEncodeInstruction;",
         "const validateFrame: typeof export10.validateNoritoFrame = Norito.validateNoritoFrame;",
@@ -390,7 +393,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "// @ts-expect-error Norito does not expose crypto helpers.",
         "void Norito.generateKeyPair;",
         `void [${bindings.join(", ")}];`,
-        "void algorithm; void toriiConstructor; void encodeInstruction; void validateFrame; void generateKeyPair; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
+        "void algorithm; void cancelAssetLock; void toriiConstructor; void encodeInstruction; void validateFrame; void generateKeyPair; void quantityFrame; void quantityEnvelope; void quantityJson; void rootNumericKinds; void retiredRootAmount; void retiredRootU128; void checkIdentifierApiTypes;",
       ].join("\n"),
       "utf8",
     );

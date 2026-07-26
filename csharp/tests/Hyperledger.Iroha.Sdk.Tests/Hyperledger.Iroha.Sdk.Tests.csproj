@@ -34,6 +34,11 @@
     <None Include="../../../fixtures/sorafs_manifest/orderbook/**/*validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/orderbook/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/pdp/**/*.to" Link="Fixtures/sorafs_manifest/pdp/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/pdp/**/*validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/pdp/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/moderation/governance_node_v1.json" Link="Fixtures/sorafs_manifest/moderation/governance_node_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/moderation/governance_node_v1.to" Link="Fixtures/sorafs_manifest/moderation/governance_node_v1.to" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/moderation/governance_node_validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/moderation/governance_node_validation_outcome_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/replication_order/order_v1.to" Link="Fixtures/sorafs_manifest/replication_order/order_v1.to" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/por/proof_v1.to" Link="Fixtures/sorafs_manifest/por/proof_v1.to" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_0_v1.to" Link="Fixtures/sorafs_manifest/governance/dag_block_0_v1.to" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/governance/dag_block_validation_outcome_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_cid_mismatch_validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/governance/dag_block_cid_mismatch_validation_outcome_v1.json" CopyToOutputDirectory="PreserveNewest" />

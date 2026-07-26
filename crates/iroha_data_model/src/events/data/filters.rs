@@ -934,28 +934,6 @@ impl super::EventFilter for SorafsGatewayEventFilter {
                     .as_ref()
                     .is_none_or(|expected| &payload.detail == expected)
             }
-            super::sorafs::SorafsGatewayEvent::DealUsage(payload) => {
-                if self.manifest_digest_matcher.is_some()
-                    || self.policy_matcher.is_some()
-                    || self.detail_matcher.is_some()
-                {
-                    return false;
-                }
-                self.provider_matcher
-                    .as_ref()
-                    .is_none_or(|expected| &payload.provider_id == expected)
-            }
-            super::sorafs::SorafsGatewayEvent::DealSettlement(payload) => {
-                if self.manifest_digest_matcher.is_some()
-                    || self.policy_matcher.is_some()
-                    || self.detail_matcher.is_some()
-                {
-                    return false;
-                }
-                self.provider_matcher
-                    .as_ref()
-                    .is_none_or(|expected| &payload.record.provider_id == expected)
-            }
             super::sorafs::SorafsGatewayEvent::ProofHealth(payload) => {
                 if self.manifest_digest_matcher.is_some()
                     || self.policy_matcher.is_some()

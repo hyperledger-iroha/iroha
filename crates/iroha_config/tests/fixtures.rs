@@ -895,6 +895,7 @@ fn minimal_config_snapshot() {
                 },
                 sorafs_storage: SorafsStorage {
                     enabled: false,
+                    provider_id: None,
                     data_dir: "./storage/sorafs",
                     max_capacity_bytes: Bytes(
                         107374182400,
@@ -911,6 +912,10 @@ fn minimal_config_snapshot() {
                     moderation_screening_authority_bundle_digest: None,
                     pop_credentials: None,
                     moderation_orchestrator: None,
+                    evidence_viewer: None,
+                    reputation_runtime: None,
+                    hedging_billing_runtime: None,
+                    provider_ingest_runtime: None,
                     pdp_provider: SorafsPdpProviderPolicy {
                         max_pending_records: 4096,
                         max_terminal_records: 65536,
@@ -952,7 +957,8 @@ fn minimal_config_snapshot() {
                     },
                     stream_tokens: SorafsTokenConfig {
                         enabled: false,
-                        signing_key_path: None,
+                        signer_handle: None,
+                        signer_public_key: None,
                         key_version: 1,
                         default_ttl_secs: 900,
                         default_max_streams: 4,
@@ -985,7 +991,6 @@ fn minimal_config_snapshot() {
                         ),
                     },
                     reputation_trust_policy_path: None,
-                    pricing_trust_policy_path: None,
                     hedging_feed_trust_policy_path: None,
                     privacy_aggregates: SorafsPrivacyAggregateSchedule {
                         enabled: false,
@@ -1013,7 +1018,8 @@ fn minimal_config_snapshot() {
                     },
                     governance_dag_dir: None,
                     governance_dag_publisher_peer_id: None,
-                    governance_dag_signing_key_path: None,
+                    governance_dag_signer_handle: None,
+                    governance_dag_publisher_public_key_hex: None,
                     governance_dag_service: SorafsGovernanceDagService {
                         enabled: false,
                         state_dir: None,
@@ -1022,9 +1028,9 @@ fn minimal_config_snapshot() {
                         signed_head_url: None,
                         ipns_name: None,
                         ipns_key_name: None,
-                        ipfs_bearer_token_path: None,
-                        head_bearer_token_path: None,
-                        checkpoint_key_path: None,
+                        ipfs_authenticator_handle: None,
+                        head_authenticator_handle: None,
+                        checkpoint_store_handle: None,
                         publisher_public_key_hex: None,
                         poll_interval: 5s,
                         connect_timeout: 3s,
@@ -1047,16 +1053,6 @@ fn minimal_config_snapshot() {
                         allow_private_head_endpoint: false,
                         allow_head_bootstrap: false,
                         listen_addr: "127.0.0.1:9094",
-                    },
-                    pin: SorafsStoragePin {
-                        require_token: false,
-                        tokens: {},
-                        allow_cidrs: [],
-                        rate_limit: SorafsGatewayRateLimit {
-                            max_requests: None,
-                            window: 1s,
-                            ban: None,
-                        },
                     },
                 },
                 sorafs_repair: SorafsRepair {
@@ -1086,23 +1082,11 @@ fn minimal_config_snapshot() {
                         ),
                         window: 900s,
                     },
-                    deal_telemetry: SorafsQuotaWindow {
-                        max_events: Some(
-                            60,
-                        ),
-                        window: 900s,
-                    },
                     capacity_dispute: SorafsQuotaWindow {
                         max_events: Some(
                             2,
                         ),
                         window: 1800s,
-                    },
-                    storage_pin: SorafsQuotaWindow {
-                        max_events: Some(
-                            4,
-                        ),
-                        window: 3600s,
                     },
                     por_submission: SorafsQuotaWindow {
                         max_events: Some(
@@ -1178,7 +1162,7 @@ fn minimal_config_snapshot() {
                     enabled: false,
                     epoch_interval_secs: 3600,
                     response_window_secs: 900,
-                    governance_dag_dir: "./storage/sorafs/governance",
+                    state_dir: "./storage/sorafs/por",
                     drand: SorafsPorDrand {
                         scheme: "",
                         chain_hash: [
@@ -1323,9 +1307,9 @@ fn minimal_config_snapshot() {
                         max_body_bytes: 4096,
                         max_beacon_age_secs: 30,
                         max_future_skew_secs: 3,
-                        state_path: "./storage/sorafs/governance/drand-high-water.to",
+                        state_path: "./storage/sorafs/por/drand-high-water.to",
                     },
-                    vrf_state_path: "./storage/sorafs/governance/provider-vrf-state.to",
+                    vrf_state_path: "./storage/sorafs/por/provider-vrf-state.to",
                     vrf_submission_deadline_secs: 300,
                     vrf_max_entries: 65536,
                     vrf_retention_epochs: 168,
@@ -1333,9 +1317,320 @@ fn minimal_config_snapshot() {
                     auditor_signature_threshold: 1,
                 },
                 sorafs_appeal_finance_settlement: SorafsAppealFinanceSettlement {
+                    asset_definition_id: AssetDefinitionId {
+                        aid_bytes: [
+                            59,
+                            45,
+                            238,
+                            246,
+                            130,
+                            60,
+                            72,
+                            205,
+                            167,
+                            236,
+                            51,
+                            224,
+                            2,
+                            182,
+                            29,
+                            55,
+                        ],
+                        projection: None,
+                    },
+                    asset_scale: 9,
+                    pricing: SorafsAppealPricingPolicy {
+                        version: "baseline-v1",
+                        quote_ttl_secs: 900,
+                        default_panel_size: 7,
+                        urgency_multipliers: SorafsAppealUrgencyMultipliers {
+                            normal: Numeric {
+                                mantissa: 1,
+                                scale: 0,
+                            },
+                            high: Numeric {
+                                mantissa: 12,
+                                scale: 1,
+                            },
+                        },
+                        classes: SorafsAppealPricingClasses {
+                            content: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 150,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 50,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 100,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 2500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            access: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 200,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 30,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 50,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 2500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            fraud: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 20,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 50,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 5000,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            other: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 120,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 40,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 100,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 2500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                        },
+                    },
+                    settlement: SorafsAppealSettlementPolicy {
+                        version: "baseline-v1",
+                        default_panel_size: 7,
+                        panel_rewards: SorafsAppealPanelRewards {
+                            stipend_per_juror_xor: XorQuantity(
+                                Quantity(
+                                    Numeric {
+                                        mantissa: 25,
+                                        scale: 0,
+                                    },
+                                ),
+                            ),
+                            case_bonus_xor: XorQuantity(
+                                Quantity(
+                                    Numeric {
+                                        mantissa: 10,
+                                        scale: 0,
+                                    },
+                                ),
+                            ),
+                        },
+                        rules: SorafsAppealSettlementRules {
+                            decisions: SorafsAppealDecisionRules {
+                                uphold: SorafsAppealSettlementRule {
+                                    refund_rate: Numeric {
+                                        mantissa: 0,
+                                        scale: 0,
+                                    },
+                                    treasury_rate: Numeric {
+                                        mantissa: 1,
+                                        scale: 0,
+                                    },
+                                },
+                                overturn: SorafsAppealSettlementRule {
+                                    refund_rate: Numeric {
+                                        mantissa: 1,
+                                        scale: 0,
+                                    },
+                                    treasury_rate: Numeric {
+                                        mantissa: 0,
+                                        scale: 0,
+                                    },
+                                },
+                                modify: SorafsAppealSettlementRule {
+                                    refund_rate: Numeric {
+                                        mantissa: 1,
+                                        scale: 0,
+                                    },
+                                    treasury_rate: Numeric {
+                                        mantissa: 0,
+                                        scale: 0,
+                                    },
+                                },
+                            },
+                            withdrawn_before_panel: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 9,
+                                    scale: 1,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                            },
+                            withdrawn_after_panel: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            frivolous: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 5,
+                                    scale: 1,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 5,
+                                    scale: 1,
+                                },
+                            },
+                            escalated: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                            },
+                        },
+                    },
                     submitter_signers: [],
                     worker_scan_interval: 30s,
                     worker_max_retry_attempts: 3,
+                    worker_max_pending: 4096,
+                    worker_max_completed: 16384,
+                    worker_max_dead_letters: 1024,
+                    worker_checkpoint_max_bytes: 67108864,
                 },
                 transport: ToriiTransport {
                     trusted_proxy_cidrs: [],
@@ -4190,7 +4485,7 @@ fn full_config_parses_fine() {
     println!("sorafs parsed {sorafs:?}");
     assert!(
         sorafs.discovery_enabled,
-        "torii.sorafs.discovery_enabled not parsed"
+        "sorafs.discovery.discovery_enabled not parsed"
     );
     assert_eq!(
         sorafs.known_capabilities,
@@ -4208,7 +4503,7 @@ fn full_config_parses_fine() {
     let admission = sorafs
         .admission
         .as_ref()
-        .expect("torii.sorafs.admission_envelopes_dir missing");
+        .expect("sorafs.discovery.admission.envelopes_dir missing");
     assert_eq!(
         admission.envelopes_dir,
         PathBuf::from("tests/fixtures/sorafs_admission")
@@ -4227,7 +4522,7 @@ fn full_config_parses_fine() {
     assert_eq!(site_bindings.max_bytes.get(), 4_096);
     assert_eq!(site_bindings.max_sites.get(), 7);
     let storage = &cfg.torii.sorafs_storage;
-    assert!(storage.enabled, "torii.sorafs.storage.enabled not parsed");
+    assert!(storage.enabled, "sorafs.storage.enabled not parsed");
     assert_eq!(storage.data_dir, PathBuf::from("./storage/sorafs"));
     assert_eq!(storage.max_capacity_bytes.0, 107_374_182_400);
     assert_eq!(storage.max_parallel_fetches, 64);

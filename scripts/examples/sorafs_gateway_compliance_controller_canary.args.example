@@ -1,5 +1,9 @@
-# Canonicalize a real controller-runtime probe. No claim is synthesized.
+# Exercise canonicalization with an explicit non-production fixture.
 --kind controller_runtime
---probe-artifact /runtime/sorafs/gateway-compliance/probes/controller-runtime.json
+--probe-artifact scripts/examples/fixtures/gateway_compliance/controller_runtime.json
 --out artifacts/sorafs_gateway/controller-runtime-canary.json
---now-unix 1800100000
+--deployment-id sorafs-gateway-release-42
+--environment production
+--generated-at-unix 1800699940
+--now-unix 1800700000
+--non-production-fixture

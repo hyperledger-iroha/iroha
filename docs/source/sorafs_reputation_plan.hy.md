@@ -6,8 +6,8 @@ direction: ltr
 source: docs/source/sorafs_reputation_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: d56d9b7b53cd4a8910704ec709655bc1f5c24acbc310e8263b385753c206b7a8
-source_last_modified: "2026-07-25T14:47:50.986206+00:00"
+source_hash: 63fb01650e8c4d5ce508f2719fd5b9c7729051bff548d07e22dc93935852ee73
+source_last_modified: "2026-07-26T10:55:23.758567+00:00"
 translation_last_reviewed: null
 ---
 

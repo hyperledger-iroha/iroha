@@ -9,7 +9,10 @@
 use std::{collections::BTreeMap, fmt, str::FromStr};
 
 use iroha_data_model::account::AccountId;
-use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
+use iroha_primitives::numeric::{
+    Numeric, NumericOperationError, Quantity, RoundingMode, XOR_QUANTITY_SCALE, XorQuantity,
+    XorQuantityError,
+};
 use norito::json::{Map as JsonMap, Value};
 use thiserror::Error;
 
@@ -399,14 +402,122 @@ impl AppealPricingConfig {
             classes.insert(class, config);
         }
 
-        Ok(Self {
+        let config = Self {
             version,
             quote_ttl_secs,
             default_panel_size,
             urgency_normal_multiplier: urgency_normal,
             urgency_high_multiplier: urgency_high,
             classes,
-        })
+        };
+        config.validate_quote_domain()?;
+        Ok(config)
+    }
+
+    fn validate_quote_domain(&self) -> Result<(), AppealPricingManifestError> {
+        let maximum_input = Numeric::from(u32::MAX);
+        let xor_scale_factor = Numeric::from(
+            10_u64
+                .checked_pow(XOR_QUANTITY_SCALE)
+                .expect("nano-XOR scale factor fits u64"),
+        );
+        let maximum_panel_multiplier = maximum_input
+            .try_decimal_div_round(
+                &Numeric::from(self.default_panel_size),
+                APPEAL_CALCULATION_SCALE,
+                RoundingMode::NearestEven,
+            )
+            .map_err(|error| {
+                appeal_pricing_domain_error("maximum reachable panel multiplier", error)
+            })?;
+
+        for (class, class_config) in &self.classes {
+            let maximum_backlog_ratio = maximum_input
+                .try_decimal_div_round(
+                    &Numeric::from(class_config.backlog_target),
+                    APPEAL_CALCULATION_SCALE,
+                    RoundingMode::NearestEven,
+                )
+                .map_err(|error| {
+                    appeal_pricing_domain_error(
+                        &format!("classes.{class}.maximum reachable backlog ratio"),
+                        error,
+                    )
+                })?;
+            let maximum_backlog_multiplier = Numeric::one()
+                .try_decimal_add(&clamp_numeric(
+                    maximum_backlog_ratio,
+                    Numeric::zero(),
+                    class_config.backlog_cap.clone(),
+                ))
+                .map_err(|error| {
+                    appeal_pricing_domain_error(
+                        &format!("classes.{class}.maximum reachable backlog multiplier"),
+                        error,
+                    )
+                })?;
+            let maximum_size_ratio = maximum_input
+                .try_decimal_div_round(
+                    &class_config.size_divisor_mb,
+                    APPEAL_CALCULATION_SCALE,
+                    RoundingMode::NearestEven,
+                )
+                .map_err(|error| {
+                    appeal_pricing_domain_error(
+                        &format!("classes.{class}.maximum reachable size ratio"),
+                        error,
+                    )
+                })?;
+            let maximum_size_multiplier = Numeric::one()
+                .try_decimal_add(&clamp_numeric(
+                    maximum_size_ratio,
+                    Numeric::zero(),
+                    class_config.size_cap.clone(),
+                ))
+                .map_err(|error| {
+                    appeal_pricing_domain_error(
+                        &format!("classes.{class}.maximum reachable size multiplier"),
+                        error,
+                    )
+                })?;
+
+            for (urgency, urgency_multiplier) in [
+                ("normal", &self.urgency_normal_multiplier),
+                ("high", &self.urgency_high_multiplier),
+            ] {
+                let maximum_raw_deposit = class_config
+                    .base_rate_xor
+                    .try_product_decimals_round(
+                        [
+                            &maximum_backlog_multiplier,
+                            &maximum_size_multiplier,
+                            urgency_multiplier,
+                            &maximum_panel_multiplier,
+                            &class_config.surge_multiplier,
+                        ],
+                        XOR_QUANTITY_SCALE,
+                        RoundingMode::NearestEven,
+                    )
+                    .map_err(|error| {
+                        appeal_pricing_domain_error(
+                            &format!("classes.{class}.{urgency} maximum reachable raw deposit"),
+                            error,
+                        )
+                    })?;
+                maximum_raw_deposit
+                    .try_mul_decimal(&xor_scale_factor)
+                    .map_err(|error| {
+                        appeal_pricing_domain_error(
+                            &format!(
+                                "classes.{class}.{urgency} maximum reachable nano-XOR mantissa"
+                            ),
+                            error,
+                        )
+                    })?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Borrow a class configuration.
@@ -432,6 +543,19 @@ impl AppealPricingConfig {
         let class_cfg = self
             .class_config(input.class)
             .ok_or(AppealPricingError::MissingClassConfig { class: input.class })?;
+        for (field, amount) in [
+            ("base_rate_xor", &class_cfg.base_rate_xor),
+            ("min_deposit_xor", &class_cfg.min_deposit_xor),
+            ("max_deposit_xor", &class_cfg.max_deposit_xor),
+        ] {
+            XorQuantity::try_from_quantity(amount.clone()).map_err(|reason| {
+                AppealPricingError::InvalidXorQuantity {
+                    class: input.class,
+                    field,
+                    reason,
+                }
+            })?;
+        }
 
         if class_cfg.backlog_target == 0 {
             return Err(AppealPricingError::InvalidBacklogTarget { class: input.class });
@@ -472,13 +596,17 @@ impl AppealPricingConfig {
         )?;
 
         let backlog_multiplier = Numeric::one().try_decimal_add(&backlog_factor)?;
-        let raw = class_cfg.base_rate_xor.try_product_decimals([
-            &backlog_multiplier,
-            &size_multiplier,
-            urgency_multiplier,
-            &panel_multiplier,
-            &class_cfg.surge_multiplier,
-        ])?;
+        let raw = class_cfg.base_rate_xor.try_product_decimals_round(
+            [
+                &backlog_multiplier,
+                &size_multiplier,
+                urgency_multiplier,
+                &panel_multiplier,
+                &class_cfg.surge_multiplier,
+            ],
+            XOR_QUANTITY_SCALE,
+            RoundingMode::NearestEven,
+        )?;
         let clamped = clamp_quantity(
             raw.clone(),
             class_cfg.min_deposit_xor.clone(),
@@ -668,11 +796,19 @@ impl AppealSettlementRule {
     }
 
     fn refund_component(&self, deposit: &Quantity) -> Result<Quantity, NumericOperationError> {
-        deposit.try_mul_decimal(&self.refund_rate)
+        deposit.try_product_decimals_round(
+            [&self.refund_rate],
+            XOR_QUANTITY_SCALE,
+            RoundingMode::TowardZero,
+        )
     }
 
     fn treasury_component(&self, deposit: &Quantity) -> Result<Quantity, NumericOperationError> {
-        deposit.try_mul_decimal(&self.treasury_rate)
+        deposit.try_product_decimals_round(
+            [&self.treasury_rate],
+            XOR_QUANTITY_SCALE,
+            RoundingMode::TowardZero,
+        )
     }
 }
 
@@ -866,6 +1002,20 @@ impl AppealSettlementConfig {
         if panel_size == 0 {
             return Err(AppealSettlementError::InvalidPanelSize);
         }
+        for (field, amount) in [
+            ("deposit_xor", &deposit_xor),
+            (
+                "panel_rewards.stipend_per_juror_xor",
+                self.panel_rewards.stipend_per_juror(),
+            ),
+            (
+                "panel_rewards.case_bonus_xor",
+                self.panel_rewards.case_bonus(),
+            ),
+        ] {
+            XorQuantity::try_from_quantity(amount.clone())
+                .map_err(|reason| AppealSettlementError::InvalidXorQuantity { field, reason })?;
+        }
         let rule = match verdict {
             AppealVerdict::Decision(decision) => self
                 .decision_rules
@@ -951,7 +1101,7 @@ impl AppealSettlementConfig {
         let bonus_share = bonus
             .try_div_decimal_round(
                 &attending_count,
-                APPEAL_CALCULATION_SCALE,
+                XOR_QUANTITY_SCALE,
                 RoundingMode::TowardZero,
             )
             .map_err(AppealDisbursementError::Arithmetic)?;
@@ -1145,6 +1295,16 @@ pub enum AppealPricingError {
     /// Size divisor misconfiguration.
     #[error("size divisor for {class} must be greater than zero")]
     InvalidSizeDivisor { class: AppealClass },
+    /// A configured monetary amount violates XOR's canonical precision.
+    #[error("invalid `{field}` XOR quantity for {class}: {reason}")]
+    InvalidXorQuantity {
+        /// Appeal class containing the invalid amount.
+        class: AppealClass,
+        /// Stable configuration field label.
+        field: &'static str,
+        /// Nominal XOR-domain validation failure.
+        reason: XorQuantityError,
+    },
     /// Bounded decimal arithmetic failed.
     #[error("appeal pricing arithmetic failed: {0}")]
     Arithmetic(#[from] NumericOperationError),
@@ -1159,6 +1319,14 @@ pub enum AppealSettlementError {
     /// No rule was configured for the supplied decision.
     #[error("no settlement rule registered for {decision:?}")]
     MissingDecisionRule { decision: AppealDecision },
+    /// A monetary input or configured reward violates XOR precision.
+    #[error("invalid `{field}` XOR quantity: {reason}")]
+    InvalidXorQuantity {
+        /// Stable input or configuration field label.
+        field: &'static str,
+        /// Nominal XOR-domain validation failure.
+        reason: XorQuantityError,
+    },
     /// Bounded decimal arithmetic failed.
     #[error("appeal settlement arithmetic failed: {0}")]
     Arithmetic(#[from] NumericOperationError),
@@ -1184,6 +1352,15 @@ fn clamp_quantity(value: Quantity, min: Quantity, max: Quantity) -> Quantity {
     }
 }
 
+fn appeal_pricing_domain_error(
+    context: &str,
+    error: NumericOperationError,
+) -> AppealPricingManifestError {
+    AppealPricingManifestError::new(format!(
+        "appeal pricing manifest `{context}` is outside the bounded quote domain: {error}"
+    ))
+}
+
 /// Error returned when parsing a canonical XOR quantity literal.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("failed to parse `{label}` quantity `{raw}`: {reason}")]
@@ -1199,19 +1376,30 @@ pub fn parse_appeal_quantity_literal(
     raw: &str,
 ) -> Result<Quantity, AppealQuantityParseError> {
     let label = label.into();
-    let trimmed = raw.trim();
-    let parsed = Quantity::from_str(trimmed).map_err(|err| AppealQuantityParseError {
-        label: label.clone(),
-        raw: trimmed.to_string(),
-        reason: err.to_string(),
-    })?;
-    if parsed.to_string() != trimmed {
+    if raw != raw.trim() {
         return Err(AppealQuantityParseError {
             label,
-            raw: trimmed.to_string(),
+            raw: raw.to_owned(),
+            reason: "quantity must not contain surrounding whitespace".to_owned(),
+        });
+    }
+    let parsed = Quantity::from_str(raw).map_err(|err| AppealQuantityParseError {
+        label: label.clone(),
+        raw: raw.to_string(),
+        reason: err.to_string(),
+    })?;
+    if parsed.to_string() != raw {
+        return Err(AppealQuantityParseError {
+            label,
+            raw: raw.to_string(),
             reason: "quantity must use its canonical decimal spelling".to_owned(),
         });
     }
+    XorQuantity::try_from_quantity(parsed.clone()).map_err(|err| AppealQuantityParseError {
+        label,
+        raw: raw.to_string(),
+        reason: err.to_string(),
+    })?;
     Ok(parsed)
 }
 
@@ -1249,6 +1437,24 @@ mod tests {
             "339.3".parse::<Quantity>().expect("canonical quantity"),
             "expected 339.3 XOR"
         );
+    }
+
+    #[test]
+    fn baseline_quote_rounds_the_aggregate_product_once() {
+        let config = AppealPricingConfig::baseline_v1();
+        let quote = config
+            .quote(AppealQuoteInput {
+                class: AppealClass::Content,
+                backlog: 3,
+                evidence_size_mb: 8,
+                urgency: AppealUrgency::High,
+                panel_size: 5,
+            })
+            .expect("repeating panel ratio must produce a bounded deterministic quote");
+        assert_eq!(quote.deposit_xor.to_string(), "147.188571429");
+        assert_eq!(quote.breakdown.raw_deposit_xor, quote.deposit_xor);
+        XorQuantity::try_from_quantity(quote.deposit_xor)
+            .expect("quoted deposit must fit the canonical nano-XOR domain");
     }
 
     #[test]
@@ -1368,11 +1574,8 @@ mod tests {
                 urgency: AppealUrgency::Normal,
                 panel_size: 1,
             })
-            .expect("the final conceptual product has canonical scale 28");
-        assert_eq!(
-            quote.breakdown.raw_deposit_xor.to_string(),
-            "0.3333333333333333333333333333"
-        );
+            .expect("the final conceptual product rounds once at nano-XOR precision");
+        assert_eq!(quote.breakdown.raw_deposit_xor.to_string(), "0.333333333");
     }
 
     #[test]
@@ -1426,6 +1629,106 @@ mod tests {
             })
             .expect("quote");
         assert!(quote.deposit_xor > Quantity::zero());
+    }
+
+    #[test]
+    fn pricing_manifest_rejects_unrepresentable_reachable_raw_deposit() {
+        let manifest = norito::json!({
+            "version": "unsafe-wide-product",
+            "quote_ttl_secs": 900,
+            "default_panel_size": 1,
+            "urgency_multipliers": {
+                "normal": "1",
+                "high": "1"
+            },
+            "classes": {
+                "content": {
+                    "base_rate_xor": "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                    "backlog_target": 1,
+                    "backlog_cap": "0",
+                    "size_divisor_mb": "1",
+                    "size_cap": "0",
+                    "min_deposit_xor": "0",
+                    "max_deposit_xor": "1"
+                }
+            }
+        });
+        let error = AppealPricingConfig::from_manifest_value(&manifest)
+            .expect_err("policy whose reachable raw quote exceeds 512 bits must fail at load");
+        assert!(
+            error.to_string().contains("maximum reachable raw deposit"),
+            "unexpected validation error: {error}"
+        );
+    }
+
+    #[test]
+    fn pricing_manifest_reserves_mantissa_headroom_for_nano_xor_rounding() {
+        let manifest = norito::json!({
+            "version": "unsafe-nano-mantissa",
+            "quote_ttl_secs": 900,
+            "default_panel_size": 1,
+            "urgency_multipliers": {
+                "normal": "1",
+                "high": "1"
+            },
+            "classes": {
+                "content": {
+                    "base_rate_xor": "100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                    "backlog_target": 1,
+                    "backlog_cap": "0",
+                    "size_divisor_mb": "1",
+                    "size_cap": "0",
+                    "min_deposit_xor": "0",
+                    "max_deposit_xor": "1"
+                }
+            }
+        });
+        let error = AppealPricingConfig::from_manifest_value(&manifest)
+            .expect_err("policy must reserve 512-bit mantissa headroom at nano-XOR scale");
+        assert!(
+            error
+                .to_string()
+                .contains("maximum reachable nano-XOR mantissa"),
+            "unexpected validation error: {error}"
+        );
+    }
+
+    #[test]
+    fn pricing_manifest_bounds_caps_by_reachable_u32_inputs() {
+        let unreachable_cap = "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        let manifest = norito::json!({
+            "version": "reachable-input-bound",
+            "quote_ttl_secs": 900,
+            "default_panel_size": 1,
+            "urgency_multipliers": {
+                "normal": "1",
+                "high": "1"
+            },
+            "classes": {
+                "content": {
+                    "base_rate_xor": "1",
+                    "backlog_target": 1,
+                    "backlog_cap": unreachable_cap,
+                    "size_divisor_mb": "1",
+                    "size_cap": unreachable_cap,
+                    "min_deposit_xor": "0",
+                    "max_deposit_xor": "1"
+                }
+            }
+        });
+        let config = AppealPricingConfig::from_manifest_value(&manifest)
+            .expect("unreachable caps must not inflate the quote-domain bound");
+        let quote = config
+            .quote(AppealQuoteInput {
+                class: AppealClass::Content,
+                backlog: u32::MAX,
+                evidence_size_mb: u32::MAX,
+                urgency: AppealUrgency::High,
+                panel_size: u32::MAX,
+            })
+            .expect("maximum reachable quote must remain representable");
+        assert_eq!(quote.deposit_xor, Quantity::one());
+        assert!(quote.breakdown.raw_deposit_xor > quote.deposit_xor);
     }
 
     #[test]
@@ -1502,12 +1805,104 @@ mod tests {
             parse_appeal_quantity_literal("deposit_xor", "339.3").expect("quantity"),
             "339.3".parse::<Quantity>().expect("canonical quantity")
         );
-        for invalid in ["339.30", "-1", "not-a-number", "1e3", " 1"] {
+        for invalid in [
+            "339.30",
+            "-1",
+            "not-a-number",
+            "1e3",
+            " 1",
+            "1 ",
+            "0.0000000001",
+        ] {
             assert!(
                 parse_appeal_quantity_literal("deposit_xor", invalid).is_err(),
                 "`{invalid}` must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn pricing_manifest_rejects_sub_nano_xor_amounts() {
+        let manifest = norito::json!({
+            "version": "over-precision",
+            "quote_ttl_secs": 900,
+            "default_panel_size": 7,
+            "urgency_multipliers": {
+                "normal": "1",
+                "high": "1.2"
+            },
+            "classes": {
+                "content": {
+                    "base_rate_xor": "0.0000000001",
+                    "backlog_target": 50,
+                    "backlog_cap": "1",
+                    "size_divisor_mb": "100",
+                    "size_cap": "2",
+                    "min_deposit_xor": "0",
+                    "max_deposit_xor": "2500"
+                }
+            }
+        });
+        let error = AppealPricingConfig::from_manifest_value(&manifest)
+            .expect_err("sub-nano base rates must fail closed");
+        assert!(error.to_string().contains("valid XOR quantity"));
+    }
+
+    #[test]
+    fn settlement_rounds_partitions_toward_zero_and_conserves_nano_dust() {
+        let config = AppealSettlementConfig::baseline_v1();
+        let deposit: Quantity = "1.000000001".parse().expect("nano-XOR deposit");
+        let breakdown = config
+            .settle(deposit.clone(), 7, AppealVerdict::Frivolous)
+            .expect("bounded settlement");
+
+        assert_eq!(breakdown.refund_xor.to_string(), "0.5");
+        assert_eq!(breakdown.treasury_xor.to_string(), "0.5");
+        assert_eq!(breakdown.held_xor.to_string(), "0.000000001");
+        assert_eq!(
+            breakdown
+                .refund_xor
+                .try_add(&breakdown.treasury_xor)
+                .and_then(|partitioned| partitioned.try_add(&breakdown.held_xor))
+                .expect("bounded conservation sum"),
+            deposit
+        );
+        for amount in [
+            &breakdown.refund_xor,
+            &breakdown.treasury_xor,
+            &breakdown.held_xor,
+            &breakdown.panel_reward_per_juror_xor,
+            &breakdown.panel_reward_total_xor,
+        ] {
+            XorQuantity::try_from_quantity(amount.clone())
+                .expect("every settlement output must fit nano-XOR precision");
+        }
+    }
+
+    #[test]
+    fn settlement_manifest_rejects_sub_nano_reward_amounts() {
+        let manifest = norito::json!({
+            "version": "over-precision",
+            "default_panel_size": 7,
+            "panel_rewards": {
+                "stipend_per_juror_xor": "0.0000000001",
+                "case_bonus_xor": "10"
+            },
+            "rules": {
+                "decisions": {
+                    "uphold": { "refund_rate": "0", "treasury_rate": "1" },
+                    "overturn": { "refund_rate": "1", "treasury_rate": "0" },
+                    "modify": { "refund_rate": "1", "treasury_rate": "0" }
+                },
+                "withdrawn_before_panel": { "refund_rate": "0.9", "treasury_rate": "0" },
+                "withdrawn_after_panel": { "refund_rate": "0", "treasury_rate": "1" },
+                "frivolous": { "refund_rate": "0.5", "treasury_rate": "0.5" },
+                "escalated": { "refund_rate": "0", "treasury_rate": "0" }
+            }
+        });
+        let error = AppealSettlementConfig::from_manifest_value(&manifest)
+            .expect_err("sub-nano rewards must fail closed");
+        assert!(error.to_string().contains("valid XOR quantity"));
     }
 
     #[test]
@@ -1583,6 +1978,46 @@ mod tests {
                 .iter()
                 .all(|account| no_shows.contains(account))
         );
+    }
+
+    #[test]
+    fn disbursement_routes_fractional_bonus_dust_to_treasury() {
+        let config = AppealSettlementConfig::baseline_v1();
+        let panel_size = 3;
+        let domain: DomainId = DomainId::try_new("panel-dust", "universal").expect("domain id");
+        let jurors: Vec<AccountId> = (0..panel_size)
+            .map(|i| make_account(u8::try_from(i).expect("fits"), &domain))
+            .collect();
+        let refund_account = make_account(100, &domain);
+        let treasury_account = make_account(101, &domain);
+        let escrow_account = make_account(102, &domain);
+
+        let plan = config
+            .disburse(AppealDisbursementInput {
+                deposit_xor: Quantity::from(100_u32),
+                panel_size,
+                verdict: AppealVerdict::Decision(AppealDecision::Overturn),
+                jurors: &jurors,
+                no_shows: &[],
+                refund_account: &refund_account,
+                treasury_account: &treasury_account,
+                escrow_account: &escrow_account,
+            })
+            .expect("bounded disbursement");
+
+        assert_eq!(plan.juror_payouts.len(), 3);
+        for payout in &plan.juror_payouts {
+            assert_eq!(payout.bonus_xor.to_string(), "3.333333333");
+            XorQuantity::try_from_quantity(payout.total().expect("bounded juror payout"))
+                .expect("juror payout must fit nano-XOR precision");
+        }
+        assert_eq!(plan.rewards_available_xor.to_string(), "85");
+        assert_eq!(plan.rewards_paid_total_xor.to_string(), "84.999999999");
+        assert_eq!(
+            plan.rewards_forfeited_treasury_xor.to_string(),
+            "0.000000001"
+        );
+        assert_eq!(plan.total_treasury_xor, plan.rewards_forfeited_treasury_xor);
     }
 
     #[test]
@@ -1733,6 +2168,9 @@ fn parse_quantity_from_map(
             "`{label}` must use canonical quantity spelling `{parsed}`"
         )));
     }
+    XorQuantity::try_from_quantity(parsed.clone()).map_err(|err| {
+        AppealPricingManifestError::new(format!("`{label}` is not a valid XOR quantity: {err}"))
+    })?;
     Ok(parsed)
 }
 

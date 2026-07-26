@@ -197,8 +197,9 @@ fn validate_builtin_initial_query_permission(
 ) -> Result<(), ValidationFail> {
     // Mirror the query visitors supplied by the default executor while a chain
     // still runs the native Initial executor. Standard Iroha queries are public;
-    // only authoritative SoraFS finance state, complete moderation snapshots,
-    // and per-juror eligibility records carry additional confidentiality rules.
+    // only authoritative SoraFS finance state, the governed reputation
+    // authority policy, complete moderation snapshots, and per-juror
+    // eligibility records carry additional confidentiality rules.
     if latest_block.is_none_or(BlockHeader::is_genesis) {
         return Ok(());
     }
@@ -248,6 +249,25 @@ fn validate_builtin_initial_query_permission(
             } else {
                 Err(ValidationFail::NotPermitted(
                     "Can't read authoritative SoraFS reserve state".to_owned(),
+                ))
+            }
+        }
+        SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(_) => {
+            let can_manage_reputation_policy: Permission =
+                executor_permission::sorafs::CanManageSorafsReputationJournalPolicy.into();
+            let can_record_reputation: Permission =
+                executor_permission::sorafs::CanRecordSorafsReputationJournal.into();
+            let can_resolve_dispute: Permission =
+                executor_permission::sorafs::CanResolveSorafsCapacityDispute.into();
+            if authority_has_permission(world, authority, &can_manage_reputation_policy)?
+                || authority_has_permission(world, authority, &can_record_reputation)?
+                || authority_has_permission(world, authority, &can_resolve_dispute)?
+            {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "Can't read the active authoritative SoraFS reputation-journal authority policy"
+                        .to_owned(),
                 ))
             }
         }
@@ -10457,10 +10477,12 @@ fn can_transfer_asset(
     transfer: &Transfer<Asset, Quantity, Account>,
 ) -> Result<bool, ValidationFail> {
     if let Some(context) = contract_runtime_context {
-        let live_subject = code::bound_contract_subject_from_world(world, &context.contract_address);
+        let live_subject =
+            code::bound_contract_subject_from_world(world, &context.contract_address);
         if context.contract_subject != *authority
             || context.contract_address.subject_id() != context.contract_subject
             || live_subject.as_ref() != Some(authority)
+            || world.contract_subject_addresses().get(authority) != Some(&context.contract_address)
         {
             return Ok(false);
         }
@@ -16648,18 +16670,14 @@ mod tests {
         let transfer = extract_transfer_asset(&instruction)
             .expect("expected to extract asset transfer from instruction");
 
-        let stx = block.transaction();
+        let mut stx = block.transaction();
         let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
         assert!(
             !allowed,
             "asset-definition domain ownership must not authorize transfers from another account"
         );
-        let result = super::Executor::Initial.execute_instruction(
-            &mut block.transaction(),
-            &alice_id,
-            instruction,
-        );
+        let result = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, instruction);
         assert!(
             matches!(
                 result,
@@ -16684,10 +16702,8 @@ mod tests {
         let alias_domain_owner = ALICE_ID.clone();
         let source = checked_account_id();
         let destination = checked_account_id();
-        let alias_domain_id =
-            DomainId::try_new("fi", "universal").expect("alias domain id");
-        let asset_domain_id =
-            DomainId::try_new("assets", "universal").expect("asset domain id");
+        let alias_domain_id = DomainId::try_new("fi", "universal").expect("alias domain id");
+        let asset_domain_id = DomainId::try_new("assets", "universal").expect("asset domain id");
         let asset_definition_id =
             AssetDefinitionId::new(asset_domain_id.clone(), "coin".parse().unwrap());
         let source_asset_id = AssetId::new(asset_definition_id.clone(), source.clone());
@@ -16704,17 +16720,12 @@ mod tests {
             [AssetDefinition::numeric(asset_definition_id)
                 .with_name("coin".to_owned())
                 .build(&source)],
-            [Asset::new(
-                source_asset_id.clone(),
-                Quantity::from(10_u64),
-            )],
+            [Asset::new(source_asset_id.clone(), Quantity::from(10_u64))],
             [],
         );
         let alias = AccountAlias::new(
             "customer".parse().expect("alias label"),
-            Some(AccountAliasDomain::new(
-                "fi".parse().expect("alias domain"),
-            )),
+            Some(AccountAliasDomain::new("fi".parse().expect("alias domain"))),
             DataSpaceId::UNIVERSAL,
         );
         let selector = crate::sns::selector_for_account_alias(&alias, &DataSpaceCatalog::default())
@@ -16734,10 +16745,17 @@ mod tests {
         world
             .smart_contract_state_mut_for_testing()
             .insert(crate::sns::record_storage_key(&selector), lease.encode());
-        world.account_aliases.insert(alias, source.clone());
+        world.account_aliases.insert(alias.clone(), source.clone());
+        world
+            .account_aliases_by_account
+            .insert(source.clone(), BTreeSet::from([alias.clone()]));
+        world.account_rekey_records.insert(
+            alias.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, source.clone()),
+        );
 
         assert!(
-            authority_owns_any_alias_domain(&world, &alias_domain_owner, &source, 50)
+            authority_owns_any_alias_domain(&world.view(), &alias_domain_owner, &source, 50)
                 .expect("active alias-domain ownership check"),
             "fixture must prove that the attacker owns an active alias domain for the source"
         );
@@ -16749,11 +16767,9 @@ mod tests {
         );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
         let mut transaction = block.transaction();
-        let transfer =
-            Transfer::asset_quantity(source_asset_id, 1_u32, destination.clone());
+        let transfer = Transfer::asset_quantity(source_asset_id, 1_u32, destination.clone());
         let boxed = InstructionBox::from(transfer.clone());
-        let concrete =
-            concrete_instruction_box!(Transfer<Asset, Quantity, Account>, transfer);
+        let concrete = concrete_instruction_box!(Transfer<Asset, Quantity, Account>, transfer);
 
         let boxed_result = super::Executor::Initial.execute_instruction(
             &mut transaction,
@@ -16769,19 +16785,14 @@ mod tests {
             "active alias-domain ownership must not authorize TransferBox::Asset: {boxed_result:?}"
         );
 
-        let concrete_result =
-            super::Executor::Initial.execute_borrowed_overlay_instruction(
-                &mut transaction,
-                &alias_domain_owner,
-                &concrete,
-                None,
-            );
+        let concrete_result = super::Executor::Initial.execute_borrowed_overlay_instruction(
+            &mut transaction,
+            &alias_domain_owner,
+            &concrete,
+            None,
+        );
         assert!(
-            matches!(
-                concrete_result,
-                Err(ValidationFail::NotPermitted(ref message))
-                    if message.contains("source asset owner must sign")
-            ),
+            matches!(concrete_result, Err(ValidationFail::NotPermitted(_))),
             "active alias-domain ownership must not authorize a borrowed concrete transfer: {concrete_result:?}"
         );
     }
@@ -16852,6 +16863,212 @@ mod tests {
                 "initial executor should deny asset transfer without owner signature, got: {other:?}"
             ),
         }
+    }
+
+    #[test]
+    fn initial_executor_allows_source_owner_and_both_exact_transfer_permissions() {
+        let asset_domain_id = DomainId::try_new("assets", "universal").expect("asset domain id");
+        let definition_owner = checked_account_id();
+        let source = checked_account_id();
+        let delegate = checked_account_id();
+        let destination = checked_account_id();
+        let asset_definition_id =
+            AssetDefinitionId::new(asset_domain_id.clone(), "coin".parse().unwrap());
+        let source_asset_id = AssetId::new(asset_definition_id.clone(), source.clone());
+
+        let authorities = [
+            ("source owner", source.clone(), None),
+            (
+                "asset-specific permission",
+                delegate.clone(),
+                Some(Permission::from(
+                    executor_permission::asset::CanTransferAsset {
+                        asset: source_asset_id.clone(),
+                    },
+                )),
+            ),
+            (
+                "asset-definition permission",
+                delegate.clone(),
+                Some(Permission::from(
+                    executor_permission::asset::CanTransferAssetWithDefinition {
+                        asset_definition: asset_definition_id.clone(),
+                    },
+                )),
+            ),
+        ];
+
+        for (case, authority, permission) in authorities {
+            let mut world = World::with_assets(
+                [Domain::new(asset_domain_id.clone()).build(&definition_owner)],
+                [
+                    Account::new(definition_owner.clone()).build(&definition_owner),
+                    Account::new(source.clone()).build(&source),
+                    Account::new(delegate.clone()).build(&delegate),
+                    Account::new(destination.clone()).build(&destination),
+                ],
+                [AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name("coin".to_owned())
+                    .build(&definition_owner)],
+                [Asset::new(source_asset_id.clone(), Quantity::from(10_u64))],
+                [],
+            );
+            if let Some(permission) = permission {
+                world
+                    .account_permissions
+                    .insert(authority.clone(), BTreeSet::from([permission]));
+            }
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                query::store::LiveQueryStore::start_test(),
+            );
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut transaction = block.transaction();
+            transaction.tx_call_hash = Some(Hash::new(case.as_bytes()));
+            let result = super::Executor::Initial.execute_instruction(
+                &mut transaction,
+                &authority,
+                Transfer::asset_quantity(source_asset_id.clone(), 1_u32, destination.clone())
+                    .into(),
+            );
+            assert!(
+                result.is_ok(),
+                "{case} must authorize only its exact asset transfer: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn initial_executor_requires_an_active_consistent_contract_context_for_contract_assets() {
+        let deployer = checked_account_id();
+        let destination = checked_account_id();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &deployer,
+            808,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let contract_subject = contract_address.subject_id();
+        let asset_definition_id = AssetDefinitionId::from_uuid_bytes([
+            0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0x48, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8, 0xa8,
+            0xa8, 0xa8,
+        ])
+        .expect("opaque asset definition");
+        let source_asset_id = AssetId::new(asset_definition_id.clone(), contract_subject.clone());
+        let mut world = World::with_assets(
+            [],
+            [
+                Account::new(deployer.clone()).build(&deployer),
+                Account::new(contract_subject.clone()).build(&contract_subject),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [AssetDefinition::numeric(asset_definition_id)
+                .with_name("contract coin".to_owned())
+                .build(&deployer)],
+            [Asset::new(source_asset_id.clone(), Quantity::from(10_u64))],
+            [],
+        );
+        let code_hash = Hash::new(b"contract-transfer-context");
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        world.contract_subject_bindings.insert(
+            contract_address.clone(),
+            crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address),
+        );
+        world
+            .contract_subject_addresses
+            .insert(contract_subject.clone(), contract_address.clone());
+
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+        transaction.tx_call_hash = Some(Hash::new(b"contract-transfer-test"));
+        let context = ContractRuntimeExecutionContext {
+            contract_address: contract_address.clone(),
+            contract_subject: contract_subject.clone(),
+            contract_alias: None,
+            entrypoint: "execute".to_owned(),
+        };
+        let transfer =
+            Transfer::asset_quantity(source_asset_id.clone(), 1_u32, destination.clone());
+        let boxed = InstructionBox::from(transfer.clone());
+        let concrete = concrete_instruction_box!(Transfer<Asset, Quantity, Account>, transfer);
+
+        super::Executor::Initial
+            .execute_borrowed_overlay_instruction(
+                &mut transaction,
+                &contract_subject,
+                &boxed,
+                Some(&context),
+            )
+            .expect("active contract subject must be able to transfer its own asset");
+        let concrete_result = super::Executor::Initial.execute_borrowed_overlay_instruction(
+            &mut transaction,
+            &contract_subject,
+            &concrete,
+            Some(&context),
+        );
+        assert!(
+            matches!(concrete_result, Err(ValidationFail::NotPermitted(_))),
+            "borrowed concrete transfers must remain outside the admitted native surface: \
+             {concrete_result:?}"
+        );
+
+        transaction
+            .world
+            .contract_subject_addresses
+            .remove(contract_subject.clone());
+        let missing_reverse_binding = super::Executor::Initial
+            .execute_instruction_with_contract_runtime_context(
+                &mut transaction,
+                &contract_subject,
+                Transfer::asset_quantity(source_asset_id.clone(), 1_u32, destination.clone())
+                    .into(),
+                Some(&context),
+            );
+        assert!(
+            matches!(
+                missing_reverse_binding,
+                Err(ValidationFail::NotPermitted(_))
+            ),
+            "a contract context without the canonical reverse subject binding must fail closed: \
+             {missing_reverse_binding:?}"
+        );
+        transaction
+            .world
+            .contract_subject_addresses
+            .insert(contract_subject.clone(), contract_address.clone());
+
+        let inactive_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &deployer,
+            809,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("inactive contract address");
+        let inconsistent_context = ContractRuntimeExecutionContext {
+            contract_address: inactive_address,
+            contract_subject: contract_subject.clone(),
+            contract_alias: None,
+            entrypoint: "execute".to_owned(),
+        };
+        let rejected = super::Executor::Initial.execute_instruction_with_contract_runtime_context(
+            &mut transaction,
+            &contract_subject,
+            Transfer::asset_quantity(source_asset_id, 1_u32, destination).into(),
+            Some(&inconsistent_context),
+        );
+        assert!(
+            matches!(rejected, Err(ValidationFail::NotPermitted(_))),
+            "an inactive or inconsistent contract context must fail closed: {rejected:?}"
+        );
     }
 
     #[test]
@@ -19908,7 +20125,8 @@ seiyaku IdentityRequired {
     fn initial_executor_mirrors_default_private_query_permissions() {
         use iroha_data_model::query::sorafs::prelude::{
             FindSorafsModerationEvents, FindSorafsModerationJurorEligibility,
-            FindSorafsModerationSnapshot, FindSorafsOrderbookPolicy, FindSorafsReserveEvents,
+            FindSorafsModerationSnapshot, FindSorafsOrderbookPolicy,
+            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReserveEvents,
         };
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -19926,6 +20144,8 @@ seiyaku IdentityRequired {
         let orderbook = QueryRequest::Singular(FindSorafsOrderbookPolicy.into());
         let reserve_events =
             QueryRequest::Singular(FindSorafsReserveEvents::new(None, None, 16).into());
+        let reputation_policy =
+            QueryRequest::Singular(FindSorafsReputationJournalAuthorityPolicy.into());
         let own_eligibility = QueryRequest::Singular(
             FindSorafsModerationJurorEligibility::new(
                 "case-1".to_owned(),
@@ -19974,6 +20194,18 @@ seiyaku IdentityRequired {
             )
             .expect_err("reserve committed events must remain governance-readable");
         assert!(matches!(reserve_error, ValidationFail::NotPermitted(_)));
+        let reputation_policy_error = executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &reputation_policy,
+            )
+            .expect_err("reputation authority policy must remain operator-readable");
+        assert!(matches!(
+            reputation_policy_error,
+            ValidationFail::NotPermitted(_)
+        ));
         executor
             .validate_query_with_world_parts(
                 &state_transaction.world,
@@ -20014,6 +20246,11 @@ seiyaku IdentityRequired {
             BTreeSet::from([
                 Permission::from(executor_permission::sorafs::CanSetSorafsPricing),
                 Permission::from(executor_permission::sorafs::CanSetSorafsReservePolicy),
+                Permission::from(
+                    executor_permission::sorafs::CanManageSorafsReputationJournalPolicy,
+                ),
+                Permission::from(executor_permission::sorafs::CanRecordSorafsReputationJournal),
+                Permission::from(executor_permission::sorafs::CanResolveSorafsCapacityDispute),
                 Permission::from(executor_permission::sorafs::CanManageSorafsModeration),
             ]),
         );
@@ -20033,6 +20270,14 @@ seiyaku IdentityRequired {
                 &reserve_events,
             )
             .expect("reserve governors must be able to read committed reserve events");
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &reputation_policy,
+            )
+            .expect("reputation policy managers must be able to read the active authority policy");
         executor
             .validate_query_with_world_parts(
                 &state_transaction.world,

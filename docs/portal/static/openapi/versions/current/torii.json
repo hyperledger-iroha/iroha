@@ -1467,6 +1467,210 @@
         ],
         "type": "object"
       },
+      "BillingAcknowledgementProofBodyV1": {
+        "additionalProperties": false,
+        "description": "Documentation schema for the sole canonical Norito acknowledgement request body; the HTTP route accepts no JSON representation.",
+        "properties": {
+          "authentication_proof": {
+            "description": "Opaque proof consumed only by the runtime-injected acknowledgement authority and never echoed.",
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 65536,
+            "minItems": 1,
+            "type": "array",
+            "writeOnly": true
+          },
+          "request_nonce": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1",
+            "description": "Non-zero client-generated idempotency nonce covered by both canonical Torii authentication and the external owner proof."
+          }
+        },
+        "required": [
+          "request_nonce",
+          "authentication_proof"
+        ],
+        "type": "object"
+      },
+      "BillingStatementAcknowledgementProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "account_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "acknowledged_at_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "acknowledgement_id": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "request_binding_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "statement_id": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          }
+        },
+        "required": [
+          "acknowledgement_id",
+          "statement_id",
+          "account_digest",
+          "request_binding_digest",
+          "acknowledged_at_unix"
+        ],
+        "type": "object"
+      },
+      "BillingStatementAcknowledgementResponseV1": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledgement": {
+            "$ref": "#/components/schemas/BillingStatementAcknowledgementProjectionV1"
+          },
+          "anchor": {
+            "$ref": "#/components/schemas/HedgingBillingProjectionAnchorV1"
+          }
+        },
+        "required": [
+          "anchor",
+          "acknowledgement"
+        ],
+        "type": "object"
+      },
+      "BillingStatementListItemV1": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledgement_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "due_at_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "net_due_xor": {
+            "$ref": "#/components/schemas/XorQuantity"
+          },
+          "period_end_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "period_start_unix": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "publication_receipt_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "signed_statement_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "statement_id": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BillingStatementOwnerStatusV1"
+          }
+        },
+        "required": [
+          "statement_id",
+          "period_start_unix",
+          "period_end_unix",
+          "due_at_unix",
+          "net_due_xor",
+          "signed_statement_digest",
+          "publication_receipt_digest",
+          "status",
+          "acknowledgement_id"
+        ],
+        "type": "object"
+      },
+      "BillingStatementOwnerStatusV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "published",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "acknowledged",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "status",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "BillingStatementPageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/HedgingBillingProjectionAnchorV1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BillingStatementListItemV1"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner_account_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          }
+        },
+        "required": [
+          "anchor",
+          "owner_account_digest",
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
       "BlockExecutionReceiptProof": {
         "additionalProperties": false,
         "properties": {
@@ -2032,32 +2236,6 @@
           "version",
           "block_header",
           "finality_artifact"
-        ],
-        "type": "object"
-      },
-      "CancelDealRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "cancellation_epoch": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "deal_id_hex": {
-            "pattern": "^[0-9A-Fa-f]{64}$",
-            "type": "string"
-          },
-          "reason": {
-            "description": "Canonical trimmed, control-free rationale bounded to 1024 UTF-8 bytes.",
-            "maxLength": 1024,
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "deal_id_hex",
-          "cancellation_epoch",
-          "reason"
         ],
         "type": "object"
       },
@@ -2839,101 +3017,6 @@
           "required_replicas",
           "storage_class",
           "governance_tag"
-        ],
-        "type": "object"
-      },
-      "DealSettlementResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "bond_slash": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "client_credit_debit": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "deal_id_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "expected_charge": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "governance_settlement_b64": {
-            "contentEncoding": "base64",
-            "type": "string"
-          },
-          "micropayment_credit": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "outstanding": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "settled_epoch": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "settlement_index": {
-            "format": "uint64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "deal_id_hex",
-          "settlement_index",
-          "settled_epoch",
-          "expected_charge",
-          "micropayment_credit",
-          "client_credit_debit",
-          "bond_slash",
-          "outstanding",
-          "governance_settlement_b64"
-        ],
-        "type": "object"
-      },
-      "DealUsageTicket": {
-        "additionalProperties": false,
-        "anyOf": [
-          {
-            "properties": {
-              "storage_gib_hours": {
-                "minimum": 1
-              }
-            }
-          },
-          {
-            "properties": {
-              "egress_bytes": {
-                "minimum": 1
-              }
-            }
-          }
-        ],
-        "properties": {
-          "egress_bytes": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "issued_epoch": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "storage_gib_hours": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "ticket_id_hex": {
-            "pattern": "^[0-9A-Fa-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "ticket_id_hex",
-          "issued_epoch",
-          "storage_gib_hours",
-          "egress_bytes"
         ],
         "type": "object"
       },
@@ -3841,118 +3924,6 @@
         ],
         "type": "object"
       },
-      "FundClientCreditRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "client_id_hex": {
-            "pattern": "^[0-9A-Fa-f]{64}$",
-            "type": "string"
-          },
-          "funding_sequence": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "client_id_hex",
-          "amount",
-          "funding_sequence"
-        ],
-        "type": "object"
-      },
-      "FundClientCreditResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "client_id_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "credit_balance": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "credit_debited": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "credit_deposited": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "funding_sequence": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "client_id_hex",
-          "funding_sequence",
-          "credit_deposited",
-          "credit_balance",
-          "credit_debited"
-        ],
-        "type": "object"
-      },
-      "FundProviderBondRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "amount": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "funding_sequence": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "provider_id_hex": {
-            "pattern": "^[0-9A-Fa-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "provider_id_hex",
-          "amount",
-          "funding_sequence"
-        ],
-        "type": "object"
-      },
-      "FundProviderBondResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "bond_available": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "bond_deposited": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "bond_locked": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "bond_slashed": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "funding_sequence": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "provider_id_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "provider_id_hex",
-          "funding_sequence",
-          "bond_deposited",
-          "bond_available",
-          "bond_locked",
-          "bond_slashed"
-        ],
-        "type": "object"
-      },
       "GovernedContractResponse": {
         "oneOf": [
           {
@@ -4032,6 +4003,586 @@
         "description": "Canonical Norito JSON hash literal. Consumers must also verify the CRC16 checksum and Iroha marker bit.",
         "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
         "type": "string"
+      },
+      "HedgeIntentDirectionV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "direction": {
+                "const": "sell_xor",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "direction",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "HedgeIntentDispositionV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "disposition": {
+                "const": "executable",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "disposition",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "disposition": {
+                "const": "governed_overflow",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "disposition",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "HedgeIntentPageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/HedgingBillingProjectionAnchorV1"
+          },
+          "automatic_execution_enabled": {
+            "const": false,
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HedgeIntentV1"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "anchor",
+          "items",
+          "next_cursor",
+          "automatic_execution_enabled"
+        ],
+        "type": "object"
+      },
+      "HedgeIntentV1": {
+        "additionalProperties": false,
+        "properties": {
+          "automatic_execution": {
+            "const": false,
+            "type": "boolean"
+          },
+          "chain_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/HedgeIntentDirectionV1"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/HedgeIntentDispositionV1"
+          },
+          "expires_at_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "finalized_cursor": {
+            "$ref": "#/components/schemas/HedgingBillingFinalizedCursorV1"
+          },
+          "intent_id": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "max_slippage_bps": {
+            "format": "uint16",
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "period_close_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "period_end_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reference_price_decision_id": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "service_policy_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "statement_bundle_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "version": {
+            "enum": [
+              1
+            ],
+            "format": "uint8",
+            "type": "integer"
+          },
+          "xor_amount": {
+            "$ref": "#/components/schemas/XorQuantity"
+          }
+        },
+        "required": [
+          "version",
+          "intent_id",
+          "chain_id",
+          "service_policy_digest",
+          "period_close_digest",
+          "period_end_unix",
+          "finalized_cursor",
+          "reference_price_decision_id",
+          "statement_bundle_digest",
+          "direction",
+          "disposition",
+          "xor_amount",
+          "max_slippage_bps",
+          "expires_at_unix",
+          "automatic_execution"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingApiErrorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "acknowledgement_proof_body_required",
+              "acknowledgement_proof_body_too_large",
+              "acknowledgement_request_binding_unavailable",
+              "billing_acknowledgement_conflict",
+              "billing_manager_role_required",
+              "billing_statement_not_found",
+              "canonical_account_encoding_unavailable",
+              "canonical_authentication_required",
+              "canonical_norito_content_type_required",
+              "duplicate_query_parameter",
+              "hedging_billing_projection_changed",
+              "hedging_billing_resource_exhausted",
+              "hedging_billing_runtime_busy",
+              "hedging_billing_runtime_unavailable",
+              "invalid_bounded_canonical_norito_acknowledgement",
+              "invalid_hedging_billing_request",
+              "invalid_lower_hex_digest",
+              "invalid_page_limit",
+              "method_not_allowed",
+              "query_too_long",
+              "required_query_parameter_missing",
+              "too_many_query_parameters",
+              "treasury_or_hedging_observer_role_required",
+              "unexpected_query",
+              "unknown_query_parameter",
+              "zero_digest_forbidden"
+            ],
+            "type": "string"
+          },
+          "schema": {
+            "const": "sorafs.hedging_billing.error.v1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "code"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingBytes32V1": {
+        "description": "Exact native Norito JSON representation of one 32-byte digest or cursor as uppercase hexadecimal. HTTP query and path parameters use their separately documented lowercase form.",
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9A-F]{64}$",
+        "type": "string"
+      },
+      "HedgingBillingDaemonStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/HedgingBillingProjectionAnchorV1"
+          },
+          "automatic_hedge_execution_enabled": {
+            "const": false,
+            "type": "boolean"
+          },
+          "external_dependencies_healthy": {
+            "type": "boolean"
+          },
+          "finalized_head_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_lag_blocks": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_projection_ready": {
+            "type": "boolean"
+          },
+          "last_tick_fresh": {
+            "type": "boolean"
+          },
+          "last_tick_healthy": {
+            "type": "boolean"
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "service": {
+            "$ref": "#/components/schemas/HedgingBillingServiceStatusV1"
+          }
+        },
+        "required": [
+          "anchor",
+          "service",
+          "live",
+          "external_dependencies_healthy",
+          "last_tick_healthy",
+          "last_tick_fresh",
+          "finalized_projection_ready",
+          "finalized_head_height",
+          "finalized_lag_blocks",
+          "automatic_hedge_execution_enabled",
+          "ready"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingExposureItemV1": {
+        "additionalProperties": false,
+        "properties": {
+          "automatic_execution": {
+            "const": false,
+            "type": "boolean"
+          },
+          "cursor": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "finalized_cursor": {
+            "$ref": "#/components/schemas/HedgingBillingFinalizedCursorV1"
+          },
+          "hedge_intent_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hedge_threshold_reached": {
+            "type": "boolean"
+          },
+          "period_close_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "period_end_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "statement_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "xor_exposure": {
+            "$ref": "#/components/schemas/XorQuantity"
+          }
+        },
+        "required": [
+          "cursor",
+          "period_close_digest",
+          "period_end_unix",
+          "finalized_cursor",
+          "statement_count",
+          "xor_exposure",
+          "hedge_threshold_reached",
+          "hedge_intent_id",
+          "automatic_execution"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingExposurePageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/HedgingBillingProjectionAnchorV1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HedgingBillingExposureItemV1"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "anchor",
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingFinalizedCursorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "block_hash": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "finalized_at_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "height",
+          "block_hash",
+          "finalized_at_unix"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingProjectionAnchorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "active_epoch_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "active_policy_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "checkpoint_fingerprint": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "compacted_through_period_end_unix": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HedgingBillingFinalizedCursorV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_event_sequence": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "retention_scope": {
+            "$ref": "#/components/schemas/HedgingBillingRetentionScopeV1"
+          },
+          "service_policy_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          }
+        },
+        "required": [
+          "checkpoint_fingerprint",
+          "finalized_cursor",
+          "next_event_sequence",
+          "active_epoch_sequence",
+          "active_policy_revision",
+          "service_policy_digest",
+          "compacted_through_period_end_unix",
+          "retention_scope"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingReconciliationStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/HedgingBillingProjectionAnchorV1"
+          },
+          "failed_ticks": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_tick_healthy": {
+            "type": "boolean"
+          },
+          "pending_delivery_operations": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "successful_ticks": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "anchor",
+          "last_tick_healthy",
+          "successful_ticks",
+          "failed_ticks",
+          "pending_delivery_operations"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingRetentionScopeV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "scope": {
+                "const": "active_epoch_only",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "scope",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "HedgingBillingServiceStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dead_letter": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hedge_intents": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_event_sequence": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_period_end_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "publication_ambiguous": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "published": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ready_for_publication": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ready_for_signing": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signing": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "next_event_sequence",
+          "finalized_height",
+          "next_period_end_unix",
+          "ready_for_signing",
+          "signing",
+          "ready_for_publication",
+          "publication_ambiguous",
+          "published",
+          "acknowledged",
+          "dead_letter",
+          "hedge_intents"
+        ],
+        "type": "object"
       },
       "IdentifierClaimLookupResponse": {
         "additionalProperties": false,
@@ -8962,62 +9513,6 @@
         ],
         "type": "object"
       },
-      "OpenDealRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "activation_epoch": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "proposal": {
-            "$ref": "#/components/schemas/SorafsDealProposal"
-          }
-        },
-        "required": [
-          "proposal",
-          "activation_epoch"
-        ],
-        "type": "object"
-      },
-      "OpenDealResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "activation_epoch": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "client_id_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "deal_id_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "end_epoch": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "provider_id_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "start_epoch": {
-            "format": "uint64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "deal_id_hex",
-          "provider_id_hex",
-          "client_id_hex",
-          "activation_epoch",
-          "start_epoch",
-          "end_epoch"
-        ],
-        "type": "object"
-      },
       "OperatorWebAuthnLoginResponse": {
         "additionalProperties": false,
         "properties": {
@@ -10673,121 +11168,6 @@
         "required": [
           "kind",
           "signature"
-        ],
-        "type": "object"
-      },
-      "RecordDealUsageRequest": {
-        "additionalProperties": false,
-        "anyOf": [
-          {
-            "properties": {
-              "storage_gib_hours": {
-                "minimum": 1
-              }
-            }
-          },
-          {
-            "properties": {
-              "egress_bytes": {
-                "minimum": 1
-              }
-            }
-          },
-          {
-            "properties": {
-              "tickets": {
-                "minItems": 1
-              }
-            }
-          }
-        ],
-        "properties": {
-          "deal_id_hex": {
-            "pattern": "^[0-9A-Fa-f]{64}$",
-            "type": "string"
-          },
-          "egress_bytes": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "epoch": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "storage_gib_hours": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "tickets": {
-            "default": [],
-            "items": {
-              "$ref": "#/components/schemas/DealUsageTicket"
-            },
-            "maxItems": 4096,
-            "type": "array"
-          }
-        },
-        "required": [
-          "deal_id_hex",
-          "epoch",
-          "storage_gib_hours",
-          "egress_bytes"
-        ],
-        "type": "object"
-      },
-      "RecordDealUsageResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "deal_id_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "deterministic_charge": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "epoch": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "micropayment_credit_applied": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "micropayment_credit_carry": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "micropayment_credit_generated": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "outstanding": {
-            "$ref": "#/components/schemas/XorQuantity"
-          },
-          "tickets_duplicate": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "tickets_processed": {
-            "format": "uint64",
-            "type": "integer"
-          },
-          "tickets_won": {
-            "format": "uint64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "deal_id_hex",
-          "epoch",
-          "deterministic_charge",
-          "micropayment_credit_generated",
-          "micropayment_credit_applied",
-          "micropayment_credit_carry",
-          "outstanding",
-          "tickets_processed",
-          "tickets_won",
-          "tickets_duplicate"
         ],
         "type": "object"
       },
@@ -14111,25 +14491,6 @@
         ],
         "type": "object"
       },
-      "SettleDealRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "deal_id_hex": {
-            "pattern": "^[0-9A-Fa-f]{64}$",
-            "type": "string"
-          },
-          "settlement_epoch": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "deal_id_hex",
-          "settlement_epoch"
-        ],
-        "type": "object"
-      },
       "SoracloudTxInstruction": {
         "additionalProperties": false,
         "properties": {
@@ -14146,404 +14507,6 @@
         "required": [
           "kind",
           "payload_hex"
-        ],
-        "type": "object"
-      },
-      "SorafsDealFixed32Bytes": {
-        "description": "Norito JSON representation of an explicitly adapted 32-byte SoraFS deal identifier.",
-        "items": {
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "maxItems": 32,
-        "minItems": 32,
-        "type": "array"
-      },
-      "SorafsDealProposal": {
-        "additionalProperties": false,
-        "properties": {
-          "capacity_gib": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "client_id": {
-            "$ref": "#/components/schemas/SorafsDealFixed32Bytes"
-          },
-          "end_epoch": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "metadata": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "description": "Canonical Name-keyed metadata object; its exact Norito encoding is bounded to 65536 bytes by the deal engine.",
-            "type": "object"
-          },
-          "provider_id": {
-            "$ref": "#/components/schemas/SorafsDealFixed32Bytes"
-          },
-          "start_epoch": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "storage_class": {
-            "$ref": "#/components/schemas/SorafsDealStorageClass"
-          },
-          "terms": {
-            "$ref": "#/components/schemas/SorafsDealTerms"
-          }
-        },
-        "required": [
-          "provider_id",
-          "client_id",
-          "storage_class",
-          "capacity_gib",
-          "start_epoch",
-          "end_epoch",
-          "terms",
-          "metadata"
-        ],
-        "type": "object"
-      },
-      "SorafsDealStorageClass": {
-        "additionalProperties": false,
-        "description": "Adjacent-tag Norito JSON representation of the unit-variant SoraFS storage class.",
-        "properties": {
-          "type": {
-            "enum": [
-              "Hot",
-              "Warm",
-              "Cold"
-            ],
-            "type": "string"
-          },
-          "value": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "type",
-          "value"
-        ],
-        "type": "object"
-      },
-      "SorafsDealTerms": {
-        "additionalProperties": false,
-        "properties": {
-          "egress_price_per_gib": {
-            "$ref": "#/components/schemas/PositiveXorQuantity"
-          },
-          "micropayment_payout": {
-            "$ref": "#/components/schemas/PositiveXorQuantity"
-          },
-          "micropayment_probability_bps": {
-            "format": "uint16",
-            "maximum": 10000,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "settlement_window_epochs": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "storage_price_per_gib_month": {
-            "$ref": "#/components/schemas/PositiveXorQuantity"
-          }
-        },
-        "required": [
-          "storage_price_per_gib_month",
-          "egress_price_per_gib",
-          "settlement_window_epochs",
-          "micropayment_probability_bps",
-          "micropayment_payout"
-        ],
-        "type": "object"
-      },
-      "SorafsEconomicsActivePricingResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "governed_pricing": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Canonical Norito JSON representation of GovernedPricingManifestV1, retaining exact XorQuantity strings."
-          },
-          "observed_at_unix": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "schema": {
-            "enum": [
-              "sorafs.economics.active_pricing.v1"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "schema",
-          "observed_at_unix",
-          "governed_pricing"
-        ],
-        "type": "object"
-      },
-      "SorafsEconomicsHedgingAdmissionResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "admitted_at_unix": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "feed_count": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "feed_id": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "observed_at_unix": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "schema": {
-            "enum": [
-              "sorafs.economics.hedging_feed_admission.v1"
-            ],
-            "type": "string"
-          },
-          "source": {
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "schema",
-          "feed_id",
-          "source",
-          "observed_at_unix",
-          "admitted_at_unix",
-          "feed_count"
-        ],
-        "type": "object"
-      },
-      "SorafsEconomicsHedgingReferenceResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "admitted_at_unix": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "governed_reference_price": {
-            "$ref": "#/components/schemas/JsonValue",
-            "description": "Canonical Norito JSON representation of GovernedHedgingReferencePriceDecisionV1, retaining exact XorQuantity strings."
-          },
-          "schema": {
-            "enum": [
-              "sorafs.economics.hedging_reference.v1"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "schema",
-          "admitted_at_unix",
-          "governed_reference_price"
-        ],
-        "type": "object"
-      },
-      "SorafsEconomicsHedgingStatus": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "configured": {
-                "const": false
-              }
-            },
-            "required": [
-              "configured"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "configured": {
-                "const": true
-              },
-              "feed_count": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "last_admitted_at_unix": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "max_sample_age_secs": {
-                "format": "uint64",
-                "minimum": 1,
-                "type": "integer"
-              },
-              "policy_digest_hex": {
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              }
-            },
-            "required": [
-              "configured",
-              "policy_digest_hex",
-              "max_sample_age_secs",
-              "feed_count",
-              "last_admitted_at_unix"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      "SorafsEconomicsPricingAdmissionResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "admission_count": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "admitted_at_unix": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "effective_from_unix": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "pricing_id_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "schema": {
-            "enum": [
-              "sorafs.economics.pricing_admission.v1"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "schema",
-          "pricing_id_hex",
-          "effective_from_unix",
-          "admitted_at_unix",
-          "admission_count"
-        ],
-        "type": "object"
-      },
-      "SorafsEconomicsPricingHead": {
-        "additionalProperties": false,
-        "properties": {
-          "admitted_at_unix": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "effective_from_unix": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "pricing_id_hex": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "pricing_id_hex",
-          "effective_from_unix",
-          "admitted_at_unix"
-        ],
-        "type": "object"
-      },
-      "SorafsEconomicsPricingStatus": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "configured": {
-                "const": false
-              }
-            },
-            "required": [
-              "configured"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "admission_count": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "configured": {
-                "const": true
-              },
-              "head": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/SorafsEconomicsPricingHead"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "policy_digest_hex": {
-                "pattern": "^[0-9a-f]{64}$",
-                "type": "string"
-              }
-            },
-            "required": [
-              "configured",
-              "policy_digest_hex",
-              "admission_count",
-              "head"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      "SorafsEconomicsStatusResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "hedging": {
-            "$ref": "#/components/schemas/SorafsEconomicsHedgingStatus"
-          },
-          "pricing": {
-            "$ref": "#/components/schemas/SorafsEconomicsPricingStatus"
-          },
-          "schema": {
-            "enum": [
-              "sorafs.economics.status.v1"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "schema",
-          "pricing",
-          "hedging"
         ],
         "type": "object"
       },
@@ -35623,6 +35586,1324 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/sorafs/billing/reconciliation": {
+      "get": {
+        "description": "Return the payload-free exact projector anchor, supervised tick health, and bounded count of non-terminal statement-delivery operations. The authenticated account must hold the governed sorafs_billing_manager role. Queries are forbidden. Every response is private, no-store and varies on the canonical authentication headers.",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingReconciliationStatusV1"
+                }
+              }
+            },
+            "description": "Payload-free billing delivery reconciliation status.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The query is missing a required field, noncanonical, duplicated, unknown, or exceeds the fixed V1 query bound.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "Canonical account-signature authentication is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The authenticated account does not hold the governed sorafs_billing_manager role.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The bounded runtime-call pool or deterministic projection resource budget is exhausted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The supervised finalized-ledger hedging/billing runtime cannot safely answer.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch billing delivery reconciliation status.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/billing/statements": {
+      "get": {
+        "description": "Return one owner-isolated active-epoch page of terminally published statements from the exact expected checkpoint. The exclusive after_statement_id cursor and required limit are bounded; raw canonical owner bytes and authentication proof material are never returned. Every response is private, no-store and varies on the canonical authentication headers.",
+        "parameters": [
+          {
+            "description": "Required canonical lowercase non-zero BLAKE3 fingerprint from the preceding projector response. A changed projection returns 409.",
+            "in": "query",
+            "name": "expected_checkpoint_fingerprint",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional exclusive non-zero lowercase statement-id cursor from the preceding anchored page.",
+            "in": "query",
+            "name": "after_statement_id",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required canonical decimal page size in 1..=100.",
+            "in": "query",
+            "name": "limit",
+            "required": true,
+            "schema": {
+              "format": "uint16",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingStatementPageV1"
+                }
+              }
+            },
+            "description": "One bounded owner-isolated terminal statement page.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The query is missing a required field, noncanonical, duplicated, unknown, or exceeds the fixed V1 query bound.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "Canonical account-signature authentication is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The supplied checkpoint fingerprint is no longer current; restart from the latest anchored page.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The bounded runtime-call pool or deterministic projection resource budget is exhausted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The supervised finalized-ledger hedging/billing runtime cannot safely answer.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List owned published billing statements.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/billing/statements/{statement_id}": {
+      "get": {
+        "description": "Return the exact canonical Norito BillingPublishedStatementV1 envelope only to its authenticated owner. Absent, foreign, unpublished, and compacted statements share the same 404 response. Every response is private, no-store and varies on the canonical authentication headers.",
+        "parameters": [
+          {
+            "description": "Canonical lowercase non-zero 32-byte statement identifier.",
+            "in": "path",
+            "name": "statement_id",
+            "required": true,
+            "schema": {
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required canonical lowercase non-zero BLAKE3 fingerprint from the preceding projector response. A changed projection returns 409.",
+            "in": "query",
+            "name": "expected_checkpoint_fingerprint",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of `BillingPublishedStatementV1`.",
+                  "format": "binary",
+                  "maxLength": 23068672,
+                  "type": "string",
+                  "x-iroha-norito-schema": "BillingPublishedStatementV1"
+                }
+              }
+            },
+            "description": "Exact signed governed statement, immutable publisher receipt, checkpoint anchor, and optional payload-free acknowledgement.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The query is missing a required field, noncanonical, duplicated, unknown, or exceeds the fixed V1 query bound.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "Canonical account-signature authentication is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The statement is absent, not owned by the authenticated account, or not terminally published.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The supplied checkpoint fingerprint is no longer current; restart from the latest anchored page.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The bounded runtime-call pool or deterministic projection resource budget is exhausted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The supervised finalized-ledger hedging/billing runtime cannot safely answer.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch one exact owned published billing statement.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/sorafs/billing/statements/{statement_id}/acknowledgements": {
+      "post": {
+        "description": "Authenticate the statement owner, derive a stable method/path/sorted-query/body/account/chain request binding which excludes rotating authentication headers, and invoke the authoritative acknowledgement boundary exactly once. Every response is private, no-store and varies on the canonical authentication headers.",
+        "parameters": [
+          {
+            "description": "Canonical lowercase non-zero 32-byte statement identifier.",
+            "in": "path",
+            "name": "statement_id",
+            "required": true,
+            "schema": {
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required canonical lowercase non-zero BLAKE3 fingerprint from the preceding projector response. A changed projection returns 409.",
+            "in": "query",
+            "name": "expected_checkpoint_fingerprint",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 69632,
+                "minLength": 1,
+                "type": "string",
+                "x-iroha-norito-schema": "BillingAcknowledgementProofBodyV1"
+              }
+            }
+          },
+          "description": "Exact canonical Norito `BillingAcknowledgementProofBodyV1`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingStatementAcknowledgementResponseV1"
+                }
+              }
+            },
+            "description": "The owner acknowledgement is durably reconciled and returned without authentication-proof bytes.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The path, query, or exact bounded canonical Norito acknowledgement body is invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "Canonical account-signature authentication is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The statement is absent, not owned by the authenticated account, or not terminally published.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The checkpoint changed or an immutable acknowledgement exists with a different stable request binding.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The acknowledgement proof body exceeds the fixed 69,632-byte HTTP bound.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "Content-Type must be exactly application/x-norito with no parameters.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The bounded runtime-call pool or deterministic projection resource budget is exhausted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The supervised runtime, canonical account encoder, or server clock cannot safely answer.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Acknowledge one owned billing statement.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/billing/status": {
+      "get": {
+        "description": "Return the exact current projection anchor plus payload-free health and bounded delivery counters from the supervised finalized-ledger projector. Any canonically authenticated account may use this response to bootstrap subsequent anchor-bound owner or observer reads. Queries are forbidden. Every response is private, no-store and varies on the canonical authentication headers.",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingDaemonStatusV1"
+                }
+              }
+            },
+            "description": "Current anchor and payload-free supervised billing projector status.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The query is missing a required field, noncanonical, duplicated, unknown, or exceeds the fixed V1 query bound.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "Canonical account-signature authentication is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The bounded runtime-call pool or deterministic projection resource budget is exhausted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
+                }
+              }
+            },
+            "description": "The supervised finalized-ledger hedging/billing runtime cannot safely answer.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch supervised billing projector status.",
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/sorafs/capacity/complete": {
       "post": {
         "description": "Submit a capacity completion notice.",
@@ -35849,426 +37130,6 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/sorafs/deal/cancel": {
-      "post": {
-        "description": "Cancel an idle deal at its exact next settlement boundary and record the non-empty operator rationale. The request requires canonical operator-signature authentication.",
-        "parameters": [
-          {
-            "description": "Iroha multihash public key of the canonical request signer.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Public-Key",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Timestamp-Ms",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Nonce",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Signature",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CancelDealRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DealSettlementResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Cancel an idle storage deal.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/deal/fund-client": {
-      "post": {
-        "description": "Apply the exact next sequenced credit increment for a deal client. XOR amounts are canonical exact decimal strings; nano-unit aliases and JSON numbers are rejected. The request requires canonical operator-signature authentication.",
-        "parameters": [
-          {
-            "description": "Iroha multihash public key of the canonical request signer.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Public-Key",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Timestamp-Ms",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Nonce",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Signature",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FundClientCreditRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FundClientCreditResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fund client deal credit.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/deal/fund-provider": {
-      "post": {
-        "description": "Apply the exact next sequenced collateral increment for an admitted provider. XOR amounts are canonical exact decimal strings; nano-unit aliases and JSON numbers are rejected. The operator-signature key must be Ed25519 and match the provider's current admitted advert key.",
-        "parameters": [
-          {
-            "description": "Iroha multihash public key of the canonical request signer.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Public-Key",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Timestamp-Ms",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Nonce",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Signature",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FundProviderBondRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FundProviderBondResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fund provider deal collateral.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/deal/open": {
-      "post": {
-        "description": "Validate the proposal against current provider admission and atomically lock its exact collateral and client credit requirements. The request requires canonical operator-signature authentication.",
-        "parameters": [
-          {
-            "description": "Iroha multihash public key of the canonical request signer.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Public-Key",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Timestamp-Ms",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Nonce",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Signature",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OpenDealRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OpenDealResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Open a funded storage deal.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/deal/settle": {
-      "post": {
-        "description": "Settle the next eligible window for a funded deal and return exact XOR accounting plus the canonical governance payload. The request requires canonical operator-signature authentication.",
-        "parameters": [
-          {
-            "description": "Iroha multihash public key of the canonical request signer.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Public-Key",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Timestamp-Ms",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Nonce",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Signature",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SettleDealRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DealSettlementResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit deal settlement.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/deal/usage": {
-      "post": {
-        "description": "Submit one bounded usage sample and its micropayment tickets. Every returned XOR amount is a canonical exact decimal string. The operator-signature key must be Ed25519 and match the deal provider's current admitted advert key.",
-        "parameters": [
-          {
-            "description": "Iroha multihash public key of the canonical request signer.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Public-Key",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Timestamp-Ms",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into the operator request signature.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Nonce",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce.",
-            "in": "header",
-            "name": "X-Iroha-Operator-Signature",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RecordDealUsageRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RecordDealUsageResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit deal usage.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sorafs/denylist/catalog": {
       "get": {
         "description": "Fetch the configured SoraFS gateway denylist catalog. The returned `packs`, `opt_out_packs`, and `extra_packs` arrays are bounded by `limit` (default 50, max 500) while full counts remain visible.",
@@ -36336,352 +37197,42 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sorafs/economics/hedging/feeds": {
-      "post": {
-        "description": "Submit canonical Norito bytes for one externally signed hedging-feed observation. The request must carry valid X-Iroha canonical request headers from an account with the `sorafs_economics_operator` role.",
-        "parameters": [
-          {
-            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
-            "in": "header",
-            "name": "X-Iroha-Witness",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string",
-                "x-iroha-norito-schema": "SignedHedgingFeedV1"
-              }
-            }
-          },
-          "description": "Canonical Norito bytes; JSON and fixed-unit amount aliases are not accepted.",
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SorafsEconomicsHedgingAdmissionResponse"
-                }
-              }
-            },
-            "description": "The signed economics record was durably admitted.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The signed payload or bounded request parameters are invalid.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Canonical X-Iroha request authentication is missing or invalid.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The authenticated account lacks the sorafs_economics_operator role.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The admission conflicts with a durable predecessor, clock, replay, or equivocation record.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "412": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The configured bounded economics ledger cannot admit another distinct record.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The in-process economics state or response encoder is unavailable.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The SoraFS economics feature, policy, or durable checkpoint is unavailable.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Admit a signed hedging feed.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/economics/hedging/reference": {
+    "/v1/sorafs/hedging/exposure": {
       "get": {
-        "description": "Derive the exact governed reference price from durable signed feeds. Requires X-Iroha canonical request authentication and the `sorafs_economics_operator` role.",
+        "description": "Return one exact-checkpoint active-epoch page of finalized period exposure, including below-threshold periods. The authenticated account must hold sorafs_treasury_observer or sorafs_hedging_observer. Automatic execution is always false. Every response is private, no-store and varies on the canonical authentication headers.",
         "parameters": [
           {
-            "description": "Optional non-zero Unix second used to select effective feed observations.",
+            "description": "Required canonical lowercase non-zero BLAKE3 fingerprint from the preceding projector response. A changed projection returns 409.",
             "in": "query",
-            "name": "effective_at_unix",
-            "required": false,
+            "name": "expected_checkpoint_fingerprint",
+            "required": true,
             "schema": {
-              "format": "uint64",
-              "minimum": 1,
-              "type": "integer"
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
             }
           },
           {
-            "description": "Optional non-zero maximum admitted feed age in seconds.",
+            "description": "Optional exclusive non-zero lowercase opaque exposure cursor from the preceding anchored page.",
             "in": "query",
-            "name": "max_feed_age_secs",
+            "name": "after",
             "required": false,
             "schema": {
-              "format": "uint64",
-              "minimum": 1,
-              "type": "integer"
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
             }
           },
           {
-            "description": "Optional maximum source divergence in basis points.",
+            "description": "Required canonical decimal page size in 1..=100.",
             "in": "query",
-            "name": "max_divergence_bps",
-            "required": false,
+            "name": "limit",
+            "required": true,
             "schema": {
               "format": "uint16",
-              "maximum": 10000,
+              "maximum": 100,
               "minimum": 1,
               "type": "integer"
             }
@@ -36737,27 +37288,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SorafsEconomicsHedgingReferenceResponse"
+                  "$ref": "#/components/schemas/HedgingBillingExposurePageV1"
                 }
               }
             },
-            "description": "The authorized economics view.",
+            "description": "One bounded finalized active-epoch exposure page.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
@@ -36767,27 +37316,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "The signed payload or bounded request parameters are invalid.",
+            "description": "The query is missing a required field, noncanonical, duplicated, unknown, or exceeds the fixed V1 query bound.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
@@ -36797,27 +37344,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "Canonical X-Iroha request authentication is missing or invalid.",
+            "description": "Canonical account-signature authentication is missing or invalid.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
@@ -36827,27 +37372,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "The authenticated account lacks the sorafs_economics_operator role.",
+            "description": "The authenticated account holds neither sorafs_treasury_observer nor sorafs_hedging_observer.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
@@ -36857,87 +37400,53 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "The admission conflicts with a durable predecessor, clock, replay, or equivocation record.",
+            "description": "The supplied checkpoint fingerprint is no longer current; restart from the latest anchored page.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
             }
           },
-          "412": {
+          "429": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "The configured bounded economics ledger cannot admit another distinct record.",
+            "description": "The bounded runtime-call pool or deterministic projection resource budget is exhausted.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The in-process economics state or response encoder is unavailable.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
@@ -36947,51 +37456,74 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "The SoraFS economics feature, policy, or durable checkpoint is unavailable.",
+            "description": "The supervised finalized-ledger hedging/billing runtime cannot safely answer.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
             }
           }
         },
-        "summary": "Derive a governed hedging reference price.",
+        "summary": "List finalized retained XOR exposure.",
         "tags": [
           "SoraFS"
         ],
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sorafs/economics/pricing/active": {
+    "/v1/sorafs/hedging/intents": {
       "get": {
-        "description": "Return the latest governed pricing manifest effective at `observed_at_unix`, or at the server clock when omitted. Requires X-Iroha canonical request authentication and the `sorafs_economics_operator` role.",
+        "description": "Return one exact-checkpoint active-epoch page of deterministic governed hedge intents without statement/feed envelopes or any execution mutation. The authenticated account must hold sorafs_treasury_observer or sorafs_hedging_observer. Automatic execution is disabled for V1. Every response is private, no-store and varies on the canonical authentication headers.",
         "parameters": [
           {
-            "description": "Optional non-zero Unix second at which pricing must be effective.",
+            "description": "Required canonical lowercase non-zero BLAKE3 fingerprint from the preceding projector response. A changed projection returns 409.",
             "in": "query",
-            "name": "observed_at_unix",
+            "name": "expected_checkpoint_fingerprint",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional exclusive non-zero lowercase hedge-intent id from the preceding anchored page.",
+            "in": "query",
+            "name": "after",
             "required": false,
             "schema": {
-              "format": "uint64",
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required canonical decimal page size in 1..=100.",
+            "in": "query",
+            "name": "limit",
+            "required": true,
+            "schema": {
+              "format": "uint16",
+              "maximum": 100,
               "minimum": 1,
               "type": "integer"
             }
@@ -37047,27 +37579,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SorafsEconomicsActivePricingResponse"
+                  "$ref": "#/components/schemas/HedgeIntentPageV1"
                 }
               }
             },
-            "description": "The authorized economics view.",
+            "description": "One bounded finalized active-epoch hedge-intent page.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
@@ -37077,27 +37607,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "The signed payload or bounded request parameters are invalid.",
+            "description": "The query is missing a required field, noncanonical, duplicated, unknown, or exceeds the fixed V1 query bound.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
@@ -37107,27 +37635,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "Canonical X-Iroha request authentication is missing or invalid.",
+            "description": "Canonical account-signature authentication is missing or invalid.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
@@ -37137,57 +37663,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "The authenticated account lacks the sorafs_economics_operator role.",
+            "description": "The authenticated account holds neither sorafs_treasury_observer nor sorafs_hedging_observer.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "No governed pricing manifest is effective at the requested time.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
@@ -37197,87 +37691,53 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "The admission conflicts with a durable predecessor, clock, replay, or equivocation record.",
+            "description": "The supplied checkpoint fingerprint is no longer current; restart from the latest anchored page.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
             }
           },
-          "412": {
+          "429": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "The configured bounded economics ledger cannot admit another distinct record.",
+            "description": "The bounded runtime-call pool or deterministic projection resource budget is exhausted.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The in-process economics state or response encoder is unavailable.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
@@ -37287,645 +37747,32 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/HedgingBillingApiErrorV1"
                 }
               }
             },
-            "description": "The SoraFS economics feature, policy, or durable checkpoint is unavailable.",
+            "description": "The supervised finalized-ledger hedging/billing runtime cannot safely answer.",
             "headers": {
               "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
+                "description": "Account- and role-scoped response cache policy.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
+                  "const": "private, no-store",
                   "type": "string"
                 }
               },
               "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
+                "description": "Canonical account-authentication inputs which select the representation.",
+                "required": true,
                 "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
                   "type": "string"
                 }
               }
             }
           }
         },
-        "summary": "Read active governed pricing.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sorafs/economics/pricing/manifests": {
-      "post": {
-        "description": "Submit canonical Norito bytes for one threshold-signed governed pricing manifest. The request must carry valid X-Iroha canonical request headers from an account with the `sorafs_economics_operator` role.",
-        "parameters": [
-          {
-            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
-            "in": "header",
-            "name": "X-Iroha-Witness",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string",
-                "x-iroha-norito-schema": "GovernedPricingManifestV1"
-              }
-            }
-          },
-          "description": "Canonical Norito bytes; JSON and fixed-unit amount aliases are not accepted.",
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SorafsEconomicsPricingAdmissionResponse"
-                }
-              }
-            },
-            "description": "The signed economics record was durably admitted.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The signed payload or bounded request parameters are invalid.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Canonical X-Iroha request authentication is missing or invalid.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The authenticated account lacks the sorafs_economics_operator role.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The admission conflicts with a durable predecessor, clock, replay, or equivocation record.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "412": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The configured bounded economics ledger cannot admit another distinct record.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The in-process economics state or response encoder is unavailable.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The SoraFS economics feature, policy, or durable checkpoint is unavailable.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Admit a governed pricing manifest.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/economics/status": {
-      "get": {
-        "description": "Return policy bindings and durable admission high-water marks without secret material. Requires X-Iroha canonical request authentication and the `sorafs_economics_operator` role.",
-        "parameters": [
-          {
-            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
-            "in": "header",
-            "name": "X-Iroha-Witness",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SorafsEconomicsStatusResponse"
-                }
-              }
-            },
-            "description": "The authorized economics view.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The signed payload or bounded request parameters are invalid.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Canonical X-Iroha request authentication is missing or invalid.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The authenticated account lacks the sorafs_economics_operator role.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The admission conflicts with a durable predecessor, clock, replay, or equivocation record.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "412": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The configured bounded economics ledger cannot admit another distinct record.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The in-process economics state or response encoder is unavailable.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The SoraFS economics feature, policy, or durable checkpoint is unavailable.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Economics responses contain operator-scoped state and are never cacheable by shared or private caches.",
-                "schema": {
-                  "enum": [
-                    "private, no-store"
-                  ],
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical request-authentication headers that select the authorized representation.",
-                "schema": {
-                  "enum": [
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                  ],
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Read SoraFS economics status.",
+        "summary": "List governed hedge intents.",
         "tags": [
           "SoraFS"
         ],
@@ -39303,27 +39150,79 @@
     },
     "/v1/sorafs/pin/register": {
       "post": {
-        "description": "Submit a SoraFS manifest registration transaction. The request must include `content_length`; optional `manifest_b64` carries a Norito `ManifestV1` for full Torii-side validation and is required when governance requires council signatures. Execution collects the public pin fee and records the committed fee receipt on-chain.",
+        "description": "Submit a caller-signed, versioned `SignedTransaction` containing exactly one native `RegisterPinManifest` instruction. The transaction signature binds the authority, canonical manifest bytes, submitted epoch, alias, predecessor digest, and fee intent. Torii validates the signature and instruction shape, queues the original transaction unchanged, and returns HTTP 202 with `status = submitted`, its admission hash, and the submitted manifest digest. Submitted never means committed or finalized. The response is not a finality, fee, custody, or pin-status receipt; Torii never accepts or handles a private key.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/VersionedSignedTransactionJson"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "x-iroha-norito-schema": "SignedTransaction"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
+            "description": "Signed transaction accepted into the local admission queue; finality is not implied.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/SorafsPinRegisterResponseV1"
                 }
               }
-            },
-            "description": "Successful response"
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported request content type.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "summary": "Register paid pin manifest.",
@@ -40935,38 +40834,6 @@
           "SoraFS"
         ],
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/sorafs/storage/pin": {
-      "post": {
-        "description": "Submit a storage pin request. The manifest must already have an approved on-chain paid pin record matching the digest, chunker profile, policy, content length, chunk plan digest, and fee receipt payer.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Pin storage content.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/sorafs/storage/plan/{manifest_id}": {

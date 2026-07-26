@@ -6,7 +6,7 @@ import path from 'node:path';
 import {tmpdir} from 'node:os';
 
 import {buildTryItRelease} from '../tryit-proxy-release.mjs';
-import {signPayload} from './helpers/openapi-signing.mjs';
+import {buildOpenApiManifest} from './helpers/openapi-signing.mjs';
 
 test('buildTryItRelease copies sources and writes manifest', async () => {
   const tmpRoot = await mkdtemp(path.join(tmpdir(), 'tryit-release-'));
@@ -17,23 +17,13 @@ test('buildTryItRelease copies sources and writes manifest', async () => {
     await mkdir(manifestDir, {recursive: true});
     const specBuffer = Buffer.from('{"openapi":"3.1.0","info":{"title":"test"}}', 'utf8');
     const digest = createHash('sha256').update(specBuffer).digest('hex');
-    const signature = signPayload(specBuffer);
     const specPath = path.join(manifestDir, 'torii.json');
     await writeFile(specPath, specBuffer);
     const manifestPath = path.join(manifestDir, 'manifest.json');
-    const manifestPayload = {
-      version: 1,
-      artifact: {
-        path: 'torii.json',
-        bytes: specBuffer.length,
-        sha256_hex: digest,
-        signature: {
-          algorithm: 'ed25519',
-          public_key_hex: signature.publicKeyHex,
-          signature_hex: signature.signatureHex,
-        },
-      },
-    };
+    const manifestPayload = buildOpenApiManifest({
+      artifactBytes: specBuffer,
+      sha256Hex: digest,
+    });
     await writeFile(manifestPath, JSON.stringify(manifestPayload, null, 2), 'utf8');
 
     const {release, releasePath, checksumPath} = await buildTryItRelease({

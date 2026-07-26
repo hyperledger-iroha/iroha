@@ -53,6 +53,23 @@
       "manifest_digest_hex": "37600e2aa821481f3d0753fe0fabf3b9642f187b47b9b1dec0d970fc97ff817f",
       "manifest_root_cid_hex": "01711f20aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "order_id_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "provider_completions": [
+        {
+          "completed_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
+          "completion_epoch": 25,
+          "provider_id_hex": "5151515151515151515151515151515151515151515151515151515151515151"
+        },
+        {
+          "completed_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
+          "completion_epoch": 25,
+          "provider_id_hex": "5252525252525252525252525252525252525252525252525252525252525252"
+        },
+        {
+          "completed_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
+          "completion_epoch": 25,
+          "provider_id_hex": "5353535353535353535353535353535353535353535353535353535353535353"
+        }
+      ],
       "sla_ingest_deadline_secs": 86400,
       "sla_min_availability_percent_milli": 99500,
       "sla_min_por_success_percent_milli": 98000,

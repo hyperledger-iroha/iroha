@@ -38,16 +38,6 @@ capacity_declaration_window_secs = 3600
 capacity_telemetry_window_secs = 3600
 capacity_dispute_window_secs = 86400
 por_submission_window_secs = 3600
-deal_telemetry_window_secs = 3600
-
-[torii.sorafs]
-
-[torii.sorafs.quota]
-capacity_declaration_window_secs = 3600
-capacity_telemetry_window_secs = 3600
-capacity_dispute_window_secs = 86400
-por_submission_window_secs = 3600
-deal_telemetry_window_secs = 3600
 
 [logger]
 format = "pretty"

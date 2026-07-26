@@ -1,11 +1,11 @@
 #![allow(unexpected_cfgs)]
 
-//! Deal, bond, and micropayment schemas for the SoraFS incentives engine.
+//! Governed settlement, bond, and micropayment schemas for SoraFS economics.
 //!
 //! These payloads describe the lifecycle of storage and retrieval agreements
-//! tracked under the SF-8 “Deal Engine & Incentives” roadmap item. They enable
-//! deterministic Norito encoding for agreement terms, probabilistic
-//! micropayment receipts, and audit-driven settlement records.
+//! projected from native ledger state. They enable deterministic Norito
+//! encoding for agreement terms, probabilistic micropayment receipts, and
+//! audit-driven settlement records without introducing a second authority.
 
 #[cfg(test)]
 use iroha_crypto::numeric::Quantity;
@@ -49,7 +49,7 @@ pub const MAX_DEAL_METADATA_VALUE_BYTES: usize = 1_024;
 pub struct MicropaymentPolicyV1 {
     /// Schema version (`MICROPAYMENT_POLICY_VERSION_V1`).
     pub version: u8,
-    /// Window length in seconds at which the deal engine evaluates payouts.
+    /// Window length in seconds at which the governed settlement policy evaluates payouts.
     pub window_secs: u32,
     /// Probability of emitting a payout per window (basis points, 10_000 = 100%).
     pub probability_bps: u16,

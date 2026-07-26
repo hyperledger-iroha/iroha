@@ -948,7 +948,6 @@ fn extract_confidential_public_columns(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8
                     .ok()
                     .map(|proof| proof.public_inputs)
             }
-            _ => None,
         };
     }
     super::extract_pasta_instance_columns_bytes(proof_bytes)

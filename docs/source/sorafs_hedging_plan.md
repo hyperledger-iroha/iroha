@@ -120,9 +120,10 @@ collection planner/runner for reviewed staged evidence. It accepts explicit
 payload-free canary artifacts, supports shell-style `@ARGFILE` inputs, forwards
 the gate thresholds, preflights the verifier script and output targets before
 printing dry-run plans, and invokes the checker with a reproducible summary
-path. The planner does not replace the missing live collector, hedging, billing,
-publication, or governance services; operators must still capture those service
-canary artifacts before promotion can pass.
+path. The planner does not replace live feed acquisition, the deployment-owned
+finalized-query/journal-verifier/signer/publisher/acknowledgement/witness
+adapters, governance approval, or genuine deployment evidence; operators must
+still capture those canary artifacts before promotion can pass.
 `scripts/build_sorafs_hedging_canary.py` is a payload-free SFM-5 hedging/billing canary builder
 for feed collector, reference price, billing
 cycle, statement publication, reconciliation, metrics/alerts, native-bridge
@@ -148,20 +149,25 @@ reconciliation canaries require reviewed `--line-item` labels in the
 `billing-line-item-*` family whose unique inventory matches `--line-item-count`
 before locally generated evidence exercises the same policy-bound promotion
 path. The builder is an evidence
-packaging aid; it does not replace the missing collector service, daemonized
-pricing/exposure engine, billing aggregator, statement publisher, complete
-runtime service API, or native bridge release process.
+packaging aid; it does not replace live feed acquisition, deployment-owned
+finalized-query and journal-verifier adapters, the HSM/KMS signer, immutable
+publisher, acknowledgement authority, sealed witness store, deployment of the
+authenticated runtime API, or native bridge release process.
 
 This is not yet a complete production hedging and billing stack. There is still no
-shipped `hedgingd`, price-feed collector service, `billingd`, statement
-publisher, complete SoraFS hedging/billing service API, service-management CLI, released
-native bridge artifacts, or captured staged rollout evidence that
-passes the SFM-5 gate. The checked-in fixture generator, fixture manifest,
-README, and generated `.to`/`.json` byte suite now define the canonical SFM-5
-feed, reference-price, line-item, statement, and negative fixture set. A
-checked-in Grafana dashboard plus Prometheus alert/test fixtures and telemetry
-helper methods now define the hedging/billing observability contract that
-deployed services must satisfy.
+price-feed collector, concrete production finalized-query/journal-verifier
+adapter, externally administered HSM/KMS signer, immutable publication service,
+acknowledgement authority, sealed epoch-witness store, service-management CLI,
+released native bridge artifacts, deployed instance of the shipped API, or
+captured staged rollout evidence that passes the SFM-5 gate. The supervised
+projector/delivery worker and its authenticated Torii API are shipped as
+`irohad` source modules rather than a separate `hedgingd` or `billingd` binary.
+The checked-in fixture generator,
+fixture manifest, README, and generated `.to`/`.json` byte suite define the
+canonical SFM-5 feed, reference-price, line-item, statement, and negative
+fixture set. A checked-in Grafana dashboard plus Prometheus alert/test fixtures
+and runtime telemetry define the local hedging/billing alert contract; live
+scrapes, alert routing, and response evidence remain deployment work.
 `HedgingPriceFeedV1.evidence_digest` remains an intrinsic evidence binding only;
 the raw payload by itself does not authenticate an external feed signer. The
 manifest crate now ships `SignedHedgingPriceFeedV1` and an external
@@ -179,39 +185,50 @@ evidence digests, malformed ordering, and tampered restart checkpoints. Updates
 replace the prior per-feed high-water mark, so the checkpoint stays bounded for
 an indefinitely running collector; every governed decision still retains its
 complete signed input set for immutable audit history. Deployment admission
-must still remain disabled until the
-collector, hedging daemon, and statement publisher load the external policy and
-accept only these governed wrappers at their runtime boundaries.
+must remain disabled until the live collector and every deployment-owned
+runtime adapter load the reviewed policy and accept only these governed
+wrappers at their trust boundaries.
 
-The embedded `sorafs_node` runtime now supplies that local governed boundary.
-When `hedging_feed_trust_policy_path` names a secure canonical policy file, the
-node accepts bounded exact-canonical `SignedHedgingPriceFeedV1` envelopes,
-persists one replay-validated latest high-water mark per feed in
-`economics/signed-hedging-feeds.to`, restores it on restart, and derives
-governed reference-price decisions only from those retained signed samples.
-Pre-commit persistence failures roll memory back; uncertain post-rename
-durability disables further durable mutation. Successful admission and decision
-derivation populate the existing feed-lag, reference-price, and divergence
-metric families. This is an in-process trusted boundary, not a collector or
-collector service. Torii now exposes its minimum authenticated operator surface:
-`POST /v1/sorafs/economics/hedging/feeds`,
-`GET /v1/sorafs/economics/status`, and
-`GET /v1/sorafs/economics/hedging/reference`. Every route requires exact
-X-Iroha canonical request authentication plus the
-`sorafs_economics_operator` role and returns `Cache-Control: private, no-store`.
-The reference route accepts optional `effective_at_unix`,
-`max_feed_age_secs`, and `max_divergence_bps` parameters, rejects duplicate or
-unknown parameters, defaults the age ceiling to the configured trust-policy
-maximum, and derives only from the durable latest signed high-water marks.
-These routes do not fetch feeds, manage secrets, execute hedges, aggregate
-billing events, or publish statements.
+The pre-release embedded economics authority has been hard-cut. `sorafs_node`
+does not admit or query an independent governed-pricing series or signed-feed
+ledger, and Torii does not mount the former `/v1/sorafs/economics/*` mutation or
+read family. The `sorafs_economics_operator` role is retired. The non-secret
+`hedging_feed_trust_policy_path` remains only as a configuration-pinned input to
+the committed hedging/billing runtime, which validates signed feeds while
+reconciling finalized ledger pages. It is not a second source of pricing,
+billing, or feed truth.
 
-Implemented adjacent foundations include SoraFS reserve quote/ledger tooling,
-DA rent/bonus telemetry, reserve ledger digest dashboards, generic subscription
-billing code, and generic oracle/feed tests. Those pieces do not yet constitute
-the SoraFS hedging or statement service pipeline described here. The sections
-below distinguish the shipped local payload/math foundation from the remaining
-runtime implementation.
+Development state created by the retired implementation is deliberately not
+migrated. Before starting a V1 node on a reused development data directory,
+operators must archive or delete `economics/governed-pricing.to` and
+`economics/signed-hedging-feeds.to`, then reseed through the canonical ledger
+and committed-service path. Production backups and restore procedures must not
+classify either retired file as authoritative state.
+
+The separate `sorafs_node::hedging_billing_service` and supervised
+`irohad::sorafs_hedging_billing_runtime` now implement the local committed
+service pipeline. The bounded finalized-query and consensus-journal-verifier
+interfaces ingest contiguous typed event pages and authenticated period closes.
+The durable projector deterministically derives open accruals, per-account
+governed statements, aggregate XOR exposure, and never-automatic hedge intents;
+it retains exact finalized cursors, replay receipts, delivery state, dead
+letters, acknowledgements, and sealed epoch-transition witnesses. The
+supervised worker signs through a runtime-only HSM/KMS interface, publishes
+through an identity-pinned immutable sink, reconciles ambiguous publications
+and authoritative acknowledgements, and emits payload-free readiness, cursor,
+delivery, dead-letter, and hedge-intent metrics. `iroha_config` contains only
+the public policy path/digest, bounded work cadence, private state directory,
+and opaque adapter handles; missing, test-marked, unready, or identity-drifting
+dependencies fail startup. No worker or timer accepts a hedge-execution
+adapter. Every generated intent sets `automatic_execution=false`, and the
+separate explicitly authorized submission helper rejects adapters that claim
+automatic execution.
+
+These source boundaries do not supply live market feeds or concrete production
+implementations of the finalized query, journal verifier, signer, publisher,
+acknowledgement authority, sealed witness store, or governed venue adapter.
+Those independently administered providers, HSM/KMS custody, and deployment
+evidence remain external release inputs.
 
 ## Goals & Scope
 - Maintain a resilient XOR/USD reference price for SoraFS billing and economic reporting.
@@ -222,11 +239,11 @@ runtime implementation.
 ## Target Architecture
 | Component | Responsibility | Current workspace status |
 |-----------|----------------|--------------------------|
-| Hedging engine | Aggregate price feeds, derive the reference XOR/USD rate, track exposure, and optionally execute hedges. | Local pure reference-price helpers plus the durable `sorafs_node` governed signed-feed high-water runtime, restart checkpoint, metric emission, and authenticated Torii admission/status/reference routes are shipped; daemon, exposure tracking, collector automation, and hedge execution are not shipped. |
+| Hedging engine | Aggregate price feeds, derive the reference XOR/USD rate, track exposure, and optionally execute hedges. | Local pure reference-price helpers and the supervised finalized-ledger projector ship deterministic exposure totals and bounded hedge intents. There is no competing embedded feed ledger. Live collector automation and a production venue adapter remain external. Automatic execution is absent; only an explicitly authorized, idempotent helper may call an adapter that reports automatic execution disabled. |
 | Price feed collectors | Fetch primary/secondary/tertiary feeds and normalize them into signed price payloads. | Not shipped for SoraFS hedging. |
-| Billing aggregator | Consume settlement, rent, egress, fee, and penalty events and produce account accruals. | Local line-item and statement builders are shipped; event ingestion and accrual service are not shipped. |
-| Statement publisher | Store, sign, publish, notify, and track acknowledgements for statements. | Not shipped. |
-| Alerting service | Monitor feed divergence, escrow runway, exposure limits, and statement failures. | Checked-in Grafana/Prometheus fixtures and telemetry helpers are shipped; the embedded node emits feed lag/reference/divergence when its governed APIs are invoked, while always-on collector emission and service management are not shipped. |
+| Billing aggregator | Consume settlement, rent, egress, fee, and penalty events and produce account accruals. | The local service consumes typed finalized storage, orderbook-settlement, reserve/rent, egress, orchestrator-fee, incentive, penalty, and governance-adjustment events; it durably projects accruals and deterministic fixed-period governed statements. The production finalized-query and journal-verifier implementations remain external. |
+| Statement publisher | Store, sign, publish, notify, and track acknowledgements for statements. | The local delivery state machine persists signing claims, signed statements, ambiguous publication state, immutable receipts, acknowledgements, retry limits, and dead letters. Private-key-free runtime interfaces and opaque identity bindings are shipped; the actual HSM/KMS, immutable publisher, and acknowledgement service are deployment-owned. |
+| Alerting service | Monitor feed divergence, escrow runway, exposure limits, and statement failures. | Checked-in Grafana/Prometheus alert fixtures and payload-free runtime metrics cover feed/reference state plus worker readiness, dependency health, finalized progress, signing/publication/acknowledgement backlogs, dead letters, and hedge intents. Production scrapes, alert routing, and response evidence remain open. |
 
 ## Target Price Feeds And Decisions
 - Primary feed: governance-approved on-chain XOR/USD or XOR/stablecoin TWAP.
@@ -246,24 +263,56 @@ keys, limits, failover rules, and reconciliation evidence.
 ## Target Billing Pipeline
 - Event sources: orderbook settlement receipts, reserve/rent ledgers, egress accounting, orchestrator fees, provider incentives, and governance penalties.
 - Hourly accruals update account-level usage and projected escrow runway.
+- Implemented locally: bounded contiguous finalized pages, authenticated journal
+  commitments, and typed period closes drive the durable accrual projector; the
+  configured finalized-query and journal-verifier implementations are injected
+  external adapters.
 - Implemented locally: weekly/ad-hoc statements finalize line items,
   adjustments, XOR totals, USD equivalents, reference-price binding, and due
   dates.
 - Implemented locally: statement payloads are Norito-first; PDF/email delivery
   remains a presentation layer over the signed payload.
+- Implemented locally: statement signing claims, immutable publication,
+  ambiguous-write lookup, authenticated acknowledgement, reconciliation,
+  retry/dead-letter state, and exposure-derived hedge intents are durable and
+  idempotent. Signing and publication cross runtime-only adapter interfaces;
+  their production services and credentials are not repository artifacts.
 - Statement hashes should be publishable into governance evidence once the governance DAG pipeline is available.
 
 ## Target APIs And CLI
-The minimum authenticated local economics operator routes described above are
-shipped. No complete hedging or billing service routes under
-`/v1/sorafs/hedging` or `/v1/sorafs/billing` are currently shipped. The
-intended full service API surface is:
+The five pre-release local economics routes are retired and must return 404;
+there are no aliases or compatibility handlers. Public hedging and billing
+views come from the committed runtime API and never from process-local pricing
+or feed checkpoints. Torii now mounts exactly this V1 family:
 
-- Latest XOR/USD reference price and feed status.
-- Hedging status, inventory, and exposure.
-- Billing statement list, fetch, acknowledgement, and accrual queries.
-- Escrow balance/runway queries.
-- Billing and hedging configuration inspection.
+- `GET /v1/sorafs/billing/status`
+- `GET /v1/sorafs/billing/statements`
+- `GET /v1/sorafs/billing/statements/{statement_id}`
+- `POST /v1/sorafs/billing/statements/{statement_id}/acknowledgements`
+- `GET /v1/sorafs/billing/reconciliation`
+- `GET /v1/sorafs/hedging/exposure`
+- `GET /v1/sorafs/hedging/intents`
+
+Every route requires canonical account authentication, bounds
+query/body/page inputs, and returns `Cache-Control: private, no-store`.
+Authenticated `GET /v1/sorafs/billing/status` is the bootstrap-anchor route:
+any canonically authenticated account may call it, it is not gated by the
+`sorafs_billing_manager` role, and its payload-free response carries the exact
+current projection anchor required by subsequent owner and finance reads.
+Manager-only reconciliation and the owner/governed-finance boundaries remain
+on their narrower routes. Every catalogued `GET` route also accepts its
+implicit authenticated `HEAD` request.
+
+The acknowledgement route accepts one exact canonical Norito body containing a
+required non-zero client `request_nonce` plus the bounded
+`authentication_proof`. The proof-independent acknowledgement digest binds the
+statement, canonical owner account, and request nonce; proof bytes are
+deliberately excluded from their own preimage. Native Norito JSON response
+fields backed by `[u8; 32]` use exactly 64 uppercase hexadecimal characters,
+while the separately documented HTTP query and path digest parameters remain
+lowercase hexadecimal. Statement lookup collapses absent, unpublished, and
+wrong-owner cases to the same response. The family exposes no feed-ingestion,
+automatic-execution, or local-authority mutation route.
 
 Implemented local validator CLI: `sorafs-validate hedging` validates Norito
 feed, reference-price decision, billing-line, and statement payloads. Target
@@ -280,19 +329,25 @@ selectors and receive the canonical reference-validator JSON outcome.
 The checked-in SFM-5 observability pack includes
 `dashboards/grafana/sorafs_hedging_billing.json`,
 `dashboards/alerts/sorafs_hedging_billing_rules.yml`, and
-`dashboards/alerts/tests/sorafs_hedging_billing_rules.test.yml`. The telemetry
-registry exposes helper methods for the dashboard/alert metric families below,
-but runtime services still need to call them from the feed, hedging, and billing
-jobs:
+`dashboards/alerts/tests/sorafs_hedging_billing_rules.test.yml`. The governed
+committed runtime emits feed/reference metrics, and the supervised billing
+worker emits bounded status for readiness, external dependency health,
+finalized height/sequence, statement signing/publication/acknowledgement state,
+dead letters, retained hedge intents, automatic-execution state, and tick
+results. Runtime status can report `ready=true` only when its latest successful
+tick remains inside the fixed freshness window and the projection contains a
+non-zero finalized cursor and height within the configured
+`max_finalized_lag_blocks` distance from the authenticated query head; an
+empty, lagging, or stale projection remains unready. The alert pack covers:
 
 - XOR/USD reference price and feed lag.
 - Feed divergence and exposure drift.
 - Statement generation count, failures, and overdue acknowledgements.
 - Escrow runway by account type.
 
-Additional service-level target metrics, including decision result counters,
-statement latency, hedge inventory, and billing line items by category, remain
-runtime implementation work.
+Additional public-service metrics, including decision result counters,
+statement latency, venue inventory, and billing line items by category, still
+require the deployment-owned collector, publisher, and service/API adapters.
 
 The alert pack covers feed divergence, primary feed staleness, exposure drift,
 statement generation failure, acknowledgement backlog, and escrow runway below
@@ -426,15 +481,24 @@ Required before rollout:
   also rechecks cycle-bound and policy-bound artifact fingerprints against
   `valid_cycle_bindings` and `valid_policy_digests`. The hedging gate
   fail-closes when more than one valid cycle tuple or policy anchor appears,
-  and clears the mixed `valid_cycle_bindings` or `valid_policy_digests` set
-  before aggregate promotion can report ready.
-- Remaining: implement collector service, daemonized pricing/exposure engine,
-  billing aggregator, statement publisher, signed exposure/billing/statement
-  APIs beyond the local economics operator boundary, runtime CLI helpers,
-  always-on service emission of the checked-in metric families, released
-  native bridge artifacts, reconciliation tests, governance approval flow, and
-  at least two successful staged billing cycles whose evidence passes the SFM-5
-  gate.
+	  and clears the mixed `valid_cycle_bindings` or `valid_policy_digests` set
+	  before aggregate promotion can report ready.
+- Done locally in source: the `sorafs_node` committed projector and supervised
+  `irohad` worker provide bounded finalized ingest, deterministic
+  accrual/exposure/statement/hedge-intent derivation, durable signing and
+  publication state, acknowledgement and ambiguous-write reconciliation,
+  retry/dead-letter handling, strict `iroha_config` policy/identity binding,
+  private-key-free external signer/publisher interfaces, and payload-free
+  health/alert metrics. Automatic hedge execution is unconditionally disabled
+  in the worker.
+- Remaining: run focused Rust verification; deploy the live feed collector and
+  genuine finalized-query, journal-verifier, HSM/KMS signer, immutable
+  publisher, acknowledgement-authority, sealed-witness, and any manually
+  governed venue adapters; deploy and exercise the shipped authenticated
+  exposure/billing/statement API and add runtime CLI helpers; validate
+  production scrapes and alert routing; release native bridge artifacts;
+  complete governance approval; and capture at least two successful staged
+  billing cycles whose evidence passes the SFM-5 gate.
 
 The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
 The shared runner plan guard also rejects non-canonical nested required-kind,

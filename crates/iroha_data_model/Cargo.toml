@@ -150,6 +150,11 @@ name = "cbsi_offline_vectors"
 path = "src/bin/cbsi_offline_vectors.rs"
 required-features = ["test-fixtures", "transparent_api"]
 
+[[bin]]
+name = "cancel_asset_lock_fixtures"
+path = "src/bin/cancel_asset_lock_fixtures.rs"
+required-features = ["test-fixtures", "json"]
+
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
 [[test]]
