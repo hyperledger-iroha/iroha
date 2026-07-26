@@ -267,6 +267,35 @@ Executable batches must be non-empty. Contract-call entries require a positive
 signature-bound gas limit and an exact lowercase V1 Bech32m contract address;
 invalid payloads are rejected before signing.
 
+### Cancel an asset lock with an exact state precondition
+
+`CancelAssetLockInstructionV1` implements the first-release two-field
+compare-and-cancel contract. The convenience initializer hashes exact,
+nonblank lock-id text without surrounding whitespace or a BOM with native
+Blake2b-256, sets Iroha's hash marker bit, and emits the checksummed `EscrowId`
+literal. The preimage is bounded by
+`CancelAssetLockInstructionV1.maxLockIdUTF8BytesV1` (4,096 UTF-8 bytes, not
+characters), while the on-wire `EscrowId` remains 32 bytes. Internal bytes are
+never trimmed or normalized. The expected remaining amount must use canonical
+positive `Quantity` spelling:
+
+```swift
+let cancellation = try CancelAssetLockInstructionV1(
+    lockId: "appeal-case-2048",
+    expectedRemainingAmount: "250"
+)
+let instructionJSON = try cancellation.noritoJSON()
+let instructionFrame = try cancellation.transactionInstructionFrame()
+```
+
+Use the `escrowId:` initializer when the exact canonical marked hash literal
+comes from finalized ledger state. `noritoArchive()`, `decodeNoritoArchive(_:)`,
+`decodeBareJSON(_:)`, and `decodeInstructionJSON(_:)` enforce the byte-canonical
+two-field V1 shape. Missing `expected_remaining_amount`, zero or noncanonical
+quantities, aliases, extra fields, malformed hash literals, legacy one-field
+archives, and trailing bytes all fail closed. Old development state carrying
+the retired one-field layout must be discarded and reseeded.
+
 Lease renewal and native auto-renew use the same local-signing flow through
 `planAliasLeaseRenewal`, `planAliasAutoRenew`, and
 `submitAliasLifecyclePlan`. An exact auto-renew no-op returns without creating

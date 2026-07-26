@@ -9012,7 +9012,9 @@ public sealed class ToriiClientTests
             Assert.Equal("/v1/sorafs/pin/register", request.RequestUri!.AbsolutePath);
             Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal("application/json", request.Headers.Accept.Single().MediaType);
-            Assert.Equal(transaction.NoritoBytes, request.Content.ReadAsByteArray());
+            Assert.Equal(
+                transaction.NoritoBytes,
+                request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
             return JsonResponse(
                 $$"""{"status":"submitted","tx_hash_hex":"{{transactionHashHex}}","manifest_digest_hex":"{{manifestDigestHex}}"}""",
                 HttpStatusCode.Accepted);

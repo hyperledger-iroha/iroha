@@ -4052,9 +4052,12 @@ const cancel = buildCancelAssetLockInstruction({
 ```
 
 The builder derives the native `EscrowId` with Blake2b-256 and emits only
-`escrow_id` plus `expected_remaining_amount`. The precondition is mandatory,
-positive, and canonically spelled; the retired one-field cancellation and
-lossy JavaScript numbers are rejected before encoding.
+`escrow_id` plus `expected_remaining_amount`. The lock-ID preimage must be
+nonempty exact text without surrounding whitespace or a BOM and is bounded by
+`CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1` (4,096 UTF-8 bytes, not
+characters); the on-wire `EscrowId` remains 32 bytes. The precondition is
+mandatory, positive, and canonically spelled; the retired one-field
+cancellation and lossy JavaScript numbers are rejected before encoding.
 
 ### SoraFS replication-order instructions
 

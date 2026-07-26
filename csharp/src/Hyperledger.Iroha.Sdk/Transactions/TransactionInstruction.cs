@@ -242,4 +242,18 @@ public abstract record class TransactionInstruction
         return new ExpireReplicationOrderInstruction(orderId, expirationEpoch);
     }
 
+    public static CancelAssetLockInstruction CancelAssetLock(
+        string lockId,
+        string expectedRemainingAmount)
+    {
+        return new CancelAssetLockInstruction(lockId, expectedRemainingAmount);
+    }
+
+    public static CancelAssetLockInstruction CancelAssetLock(
+        string lockId,
+        NumericV1.QuantityValue expectedRemainingAmount)
+    {
+        return new CancelAssetLockInstruction(lockId, expectedRemainingAmount);
+    }
+
 }

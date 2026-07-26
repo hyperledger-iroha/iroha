@@ -52,6 +52,11 @@ tasks.test {
     )
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/peer_transport_v1.json"))
+    inputs.dir(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("fixtures/sorafs_manifest/appeal_finance"),
+    )
 
     // Release CI supplies a freshly built, isolated ABI-21 bridge. Local
     // development retains the conventional root target/debug fallback.

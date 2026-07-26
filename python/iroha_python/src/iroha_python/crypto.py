@@ -59,6 +59,9 @@ ED25519_SIGNATURE_LENGTH: Final[int] = 64
 _ED25519_MULTIHASH_PREFIX: Final[str] = "ed0120"
 _DEFAULT_I105_DISCRIMINANT: Final[int] = 0x02F1
 _MAX_CONTRACT_ARGUMENT_RECORD_BYTES: Final[int] = 1024 * 1024
+# Keep this byte bound aligned with the native V1 CancelAssetLock builders in
+# every SDK. The derived EscrowId remains a fixed 32-byte wire value.
+CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1: Final[int] = 4_096
 ContractArguments: TypeAlias = Union[bytes, bytearray, memoryview]
 
 SM2_PRIVATE_KEY_LENGTH: Final[int] = 32
@@ -111,6 +114,7 @@ __all__ = [
     "SM2_PUBLIC_KEY_LENGTH",
     "SM2_SIGNATURE_LENGTH",
     "SM2_DEFAULT_DISTINGUISHED_ID",
+    "CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1",
     "CryptoKeyPair",
     "Ed25519KeyPair",
     "Sm2KeyPair",
@@ -269,11 +273,52 @@ else:
             seen.add(account)
         return accounts
 
+    def _require_cancel_asset_lock_id(value: Any) -> str:
+        if not isinstance(value, str):
+            raise TypeError("escrow_id lock-ID preimage must be a string")
+        if not value:
+            raise ValueError("escrow_id lock-ID preimage must be non-empty")
+        if (
+            value[0].isspace()
+            or value[-1].isspace()
+            or value[0] == "\ufeff"
+            or value[-1] == "\ufeff"
+        ):
+            raise ValueError(
+                "escrow_id lock-ID preimage must not contain surrounding whitespace or BOM"
+            )
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("escrow_id lock-ID preimage must be valid UTF-8 text") from exc
+        if len(encoded) > CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1:
+            raise ValueError(
+                "escrow_id lock-ID preimage must be at most "
+                f"{CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1} UTF-8 bytes"
+            )
+        return value
+
     class _InstructionFacadeMeta(type):
         def __getattr__(cls, name: str) -> Any:
             return getattr(_NativeInstruction, name)
 
     class Instruction(metaclass=_InstructionFacadeMeta):
+        @staticmethod
+        def cancel_asset_lock(
+            escrow_id: str,
+            expected_remaining_amount: str,
+        ) -> Any:
+            """Build V1 cancellation from an exact lock-ID preimage.
+
+            ``escrow_id`` is bounded by
+            :data:`CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1` before hashing.
+            """
+
+            return _NativeInstruction.cancel_asset_lock(
+                _require_cancel_asset_lock_id(escrow_id),
+                expected_remaining_amount,
+            )
+
         @staticmethod
         def register_zk_ace_identity_commitment(
             asset_definition_id: str,

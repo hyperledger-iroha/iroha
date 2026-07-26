@@ -252,6 +252,24 @@ public sealed class TransactionBuilder
             expirationEpoch));
     }
 
+    public TransactionBuilder CancelAssetLock(
+        string lockId,
+        string expectedRemainingAmount)
+    {
+        return AddInstruction(TransactionInstruction.CancelAssetLock(
+            lockId,
+            expectedRemainingAmount));
+    }
+
+    public TransactionBuilder CancelAssetLock(
+        string lockId,
+        NumericV1.QuantityValue expectedRemainingAmount)
+    {
+        return AddInstruction(TransactionInstruction.CancelAssetLock(
+            lockId,
+            expectedRemainingAmount));
+    }
+
     public TransactionBuilder SetCreationTimeMilliseconds(ulong creationTimeMilliseconds)
     {
         if (creationTimeMilliseconds == 0)

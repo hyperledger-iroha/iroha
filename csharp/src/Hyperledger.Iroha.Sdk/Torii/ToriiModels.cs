@@ -3575,7 +3575,7 @@ internal static class ToriiExplorerDirectMetadata
         catch (Hyperledger.Iroha.Numeric.NumericV1.NumericException exception)
         {
             throw new ArgumentException(
-                "Value must be a canonical Kotodama V1 Quantity string.",
+                "Value must be a canonical non-negative numeric Kotodama V1 Quantity string.",
                 paramName,
                 exception);
         }

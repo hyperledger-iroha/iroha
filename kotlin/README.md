@@ -257,6 +257,32 @@ Bech32m literals, and any batch containing a contract call needs one positive,
 signature-bound gas limit in its `FeePaymentIntent`; these constraints are
 checked before the payload can be encoded or signed.
 
+### Native asset-lock cancellation
+
+`CancelAssetLockInstruction` implements the V1 compare-and-cancel contract.
+Supply the exact application lock ID and the positive canonical Quantity read
+from finalized ledger state:
+
+```kotlin
+import org.hyperledger.iroha.sdk.core.model.instructions.CancelAssetLockInstruction
+
+val cancel = CancelAssetLockInstruction(
+    lockId = "appeal:case-42",
+    expectedRemainingAmount = "20",
+)
+val instructionBox = cancel.toInstructionBox()
+```
+
+The typed constructor derives the native `EscrowId` with Blake2b-256 and emits
+only `escrow_id` plus `expected_remaining_amount` under the registered
+`iroha_data_model::isi::escrow::CancelAssetLock` Norito wire name. The lock-ID
+preimage must be nonempty exact text without surrounding whitespace or a BOM
+and is bounded by `CancelAssetLockInstruction.MAX_LOCK_ID_UTF8_BYTES_V1`
+(4,096 UTF-8 bytes, not characters); the on-wire `EscrowId` remains 32 bytes.
+The retired one-field shape, aliases, extra fields, zero, and alternate numeric
+spellings are rejected; stale expected amounts are rejected atomically by the
+ledger.
+
 ### Torii server-sent events
 
 `HttpClientTransport.newEventStreamClient()` opens SSE feeds with the same base

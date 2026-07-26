@@ -869,11 +869,11 @@ class TransactionDraft:
         escrow_id: str,
         expected_remaining_amount: QuantityLike,
     ) -> TransactionDraft:
-        """Append a compare-and-cancel `CancelAssetLock` instruction."""
+        """Append cancellation from an exact, bounded lock-ID preimage."""
 
         self.add_instruction(
             Instruction.cancel_asset_lock(
-                _require_non_empty_string(escrow_id, "escrow_id"),
+                _require_exact_non_empty_string(escrow_id, "escrow_id"),
                 _normalize_positive_quantity(
                     expected_remaining_amount,
                     "expected_remaining_amount",

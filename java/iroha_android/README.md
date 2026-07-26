@@ -275,6 +275,34 @@ addresses must be canonical lowercase V1 Bech32m literals, and any batch that
 contains a contract call must provide one positive signature-bound gas limit in
 the `FeePaymentIntent`; these constraints are checked before signing.
 
+## Native asset-lock cancellation
+
+`CancelAssetLockInstruction` implements the V1 compare-and-cancel contract.
+Supply the exact application lock ID and the positive canonical Quantity read
+from finalized ledger state:
+
+```java
+import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.instructions.CancelAssetLockInstruction;
+
+CancelAssetLockInstruction cancel =
+    CancelAssetLockInstruction.builder()
+        .setLockId("appeal:case-42")
+        .setExpectedRemainingAmount("20")
+        .build();
+InstructionBox instructionBox = cancel.toInstructionBox();
+```
+
+The builder derives the native escrow hash with Blake2b-256 and emits only
+`escrow_id` plus `expected_remaining_amount` under the registered
+`iroha_data_model::isi::escrow::CancelAssetLock` Norito wire name. The lock-ID
+preimage must be nonempty exact text without surrounding whitespace or a BOM
+and is bounded by `CancelAssetLockInstruction.MAX_LOCK_ID_UTF8_BYTES_V1`
+(4,096 UTF-8 bytes, not characters); the on-wire `EscrowId` remains 32 bytes.
+The retired one-field shape, aliases, extra fields, zero, and alternate numeric
+spellings are rejected; stale expected amounts are rejected atomically by the
+ledger.
+
 ## Account addresses
 
 ```java
