@@ -14024,14 +14024,52 @@ export function inspectSubscriptionTriggerAction(
 ): SubscriptionTriggerActionSummary;
 
 /**
+ * Exact first-release PLAIN eligibility rule bound into validation-fee proposals.
+ */
+export interface ValidationFeePlainEligibilityRuleV1 {
+  readonly rule: "proposal_operator_at_or_before_gate_others_after_gate";
+  readonly value: null;
+}
+
+/**
+ * Exact first-release PLAIN electorate contract bound into a proposal fingerprint.
+ */
+export interface ValidationFeePlainElectorateRulesV1 {
+  readonly voting_asset_id: string;
+  readonly ballot_amount: string;
+  readonly ballot_duration_blocks: string;
+  readonly citizenship_amount: string;
+  readonly max_members: string;
+  readonly conviction_step_blocks: string;
+  readonly max_conviction: string;
+  readonly min_turnout: string;
+  readonly approval_threshold_numerator: string;
+  readonly approval_threshold_denominator: string;
+  readonly eligibility_rule: Readonly<ValidationFeePlainEligibilityRuleV1>;
+}
+
+/**
  * Compute the exact native Parliament fingerprint for a validation-fee policy.
  *
  * The policy must use the native snake-case `ValidationFeePolicyV1` JSON
+ * contract. The electorate rules must use the exact first-release PLAIN
  * contract. Missing, unknown, and legacy fields are rejected natively.
  */
 export function computeValidationFeePolicyProposalFingerprintV1(
   policy: Readonly<Record<string, JsonValue>>,
-  payoutLifecycleProposalId?: string | null,
+  payoutLifecycleProposalId: string | null,
+  plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>,
+): string;
+
+/**
+ * Compute the exact native Parliament fingerprint for a validation-fee payout lifecycle.
+ *
+ * Both arguments must use their exact native snake-case JSON contracts.
+ * Missing, unknown, legacy, and non-canonical fields are rejected natively.
+ */
+export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
+  payoutBinding: Readonly<Record<string, JsonValue>>,
+  plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>,
 ): string;
 
 export interface LaneRelaySample {

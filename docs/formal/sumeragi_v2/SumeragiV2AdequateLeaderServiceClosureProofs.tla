@@ -335,6 +335,16 @@ BY Isa
    DEF ExecutePersistDecision, CommandMatches,
        PersistDecision, NodeHasDecision
 
+THEOREM PersistDecisionFramesEveryOtherTargetDecision ==
+  \A request:
+    \A target \in ValidatorIds:
+      /\ TypeInvariant
+      /\ PersistDecision(request)
+      /\ target # request.node
+      => (NodeHasDecision(target)' <=> NodeHasDecision(target))
+BY Isa
+   DEF PersistDecision, NodeHasDecision, TypeInvariant
+
 (***************************************************************************
 Exit trichotomy.
 
@@ -3667,6 +3677,16 @@ the finite lexicographic product of phase 1..5 and the concrete inner
 positions 0..9, so the reduction below uses ordinary well-founded induction
 rather than assuming the aggregate leader-service conclusion.
 
+The aggregate frontier immediately below is retained only as diagnostic
+vocabulary for the minimum-rank counterexample and the owned action anchor.
+It is not used by the release-facing composition at the end of this module.
+`PersistDecision` at the minimum realizable rank <<1, 2>> decides only its
+selected voter; another responsive voter may retain an equal PersistDecision
+or a higher Decision/Commit owner, and the selected voter's recovery
+successor may move back to a Proposal/body rank.  The release-facing
+composition therefore uses the target-indexed frontier defined after the
+finite Decision-prefix proof.
+
 The source exposure is necessarily stated at each release antecedent.  Every
 non-terminal target below is nevertheless narrower: a wire handoff retains
 one fixed packet/item plus its current context, responsive recipient, view,
@@ -3927,139 +3947,736 @@ BY SMT
        ExactLeaderSemanticRankCarrier,
        SemanticRankLess, LexPairOrdering, OpToRel
 
-AdequateLeaderSemanticCompositionProperty(specification) ==
+THEOREM PersistDecisionHasMinimumRealizableLeaderSemanticRank ==
+  \A candidate, rank:
+    /\ candidate.kind = "PersistDecision"
+    /\ ExactLeaderPhaseRank(candidate, rank)
+    => /\ rank = DecisionSemanticRank(2)
+       /\ \A other, otherRank:
+            ExactLeaderPhaseRank(other, otherRank)
+              => ~SemanticRankLess(otherRank, rank)
+BY IsaT(120)
+   DEF ExactLeaderPhaseRank,
+       ExactLeaderViewChangeRank,
+       ExactLeaderProposalRank,
+       ExactLeaderPrepareRank,
+       ExactLeaderPrepareStaticRank,
+       ExactLeaderPrepareSignRank,
+       ExactLeaderCommitRank,
+       ExactLeaderCommitStaticRank,
+       ExactLeaderCommitSignRank,
+       ExactLeaderDecisionRank,
+       ViewChangeSemanticRank, ProposalSemanticRank,
+       PrepareSemanticRank, CommitSemanticRank,
+       DecisionSemanticRank, SemanticRankLess
+
+(***************************************************************************
+Target-indexed Decision aggregation.
+
+The semantic pipeline must first establish Decision for one frozen responsive
+target.  Only after that local theorem is available may the release proof
+aggregate over the finite frozen voter roster.  The prefix below performs
+exactly that aggregation and uses the action-level durability of each target's
+Decision receipt.  It does not assume that a Decision at one validator is a
+terminal outcome for any other validator.
+
+`AdequateLeaderTargetDecisionConvergenceProperty` is deliberately a property
+declaration.  A target/leader/view/subject-indexed semantic frontier must
+discharge it separately; this section proves only the finite composition from
+local convergence to the aggregate Decide-mode clause.
+***************************************************************************)
+
+AdequateLeaderTargetDecisionSource(target) ==
+  /\ gst
+  /\ AdequateResponsiveHonestLeaderViewReached
+  /\ target \in AsyncCurrentResponsiveVoters
+  /\ ~NodeHasDecision(target)
+
+AdequateLeaderTargetDecisionConvergenceProperty(specification) ==
   specification
-    => /\ \A mode \in AdequateLeaderCompositionModes:
-             AdequateLeaderModeSource(mode)
-               ~> (AdequateLeaderModeGoal(mode)
-                    \/ AdequateLeaderProductivePhysicalResidual
-                    \/ \E rank \in ExactLeaderSemanticRankCarrier:
-                         AdequateLeaderModeRankFrontier(mode, rank))
-       /\ \A mode \in AdequateLeaderCompositionModes,
-             packet \in AsyncPacketSet,
-             leaderContext \in ContextRecords,
-             witness \in ValidatorIds,
-             roundView \in Views,
-             subject \in SubjectOrNone:
-             (/\ AdequateLeaderModeActive(mode)
-              /\ leaderContext = context
-              /\ LeaderWireExactSemanticIdentity(
-                   packet.item, leaderContext, witness,
-                   roundView, subject)
-              /\ LeaderWireTransportHandoff(packet))
-               ~> (AdequateLeaderModeGoal(mode)
-                    \/ \E rank \in ExactLeaderSemanticRankCarrier:
-                         AdequateLeaderModeRankFrontier(mode, rank))
-       /\ \A mode \in AdequateLeaderCompositionModes,
-             item \in AsyncNetworkItems,
-             leaderContext \in ContextRecords,
-             witness \in ValidatorIds,
-             roundView \in Views,
-             subject \in SubjectOrNone:
-             (/\ AdequateLeaderModeActive(mode)
-              /\ leaderContext = context
-              /\ LeaderWireExactSemanticIdentity(
-                   item, leaderContext, witness, roundView, subject)
-              /\ LeaderWireRunnerAdmissionHandoff(item))
-               ~> (AdequateLeaderModeGoal(mode)
-                    \/ \E rank \in ExactLeaderSemanticRankCarrier:
-                         AdequateLeaderModeRankFrontier(mode, rank))
-       /\ \A mode \in AdequateLeaderCompositionModes,
-             item \in AsyncNetworkItems,
-             leaderContext \in ContextRecords,
-             witness \in ValidatorIds,
-             roundView \in Views,
-             subject \in SubjectOrNone:
-             (/\ AdequateLeaderModeActive(mode)
-              /\ leaderContext = context
-              /\ LeaderWireExactSemanticIdentity(
-                   item, leaderContext, witness, roundView, subject)
-              /\ item.kind = "CertifiedResponse"
-              /\ CertifiedResponsePhysicalCompletionHandoff(item))
-               ~> (AdequateLeaderModeGoal(mode)
-                    \/ \E rank \in ExactLeaderSemanticRankCarrier:
-                         AdequateLeaderModeRankFrontier(mode, rank))
-       /\ \A mode \in AdequateLeaderCompositionModes,
-             node \in ValidatorIds,
-             roundView \in Views:
-             (/\ AdequateLeaderModeActive(mode)
-              /\ node \in AsyncCurrentResponsiveVoters
-              /\ TimeoutQuorumViewRotationHandoff(node, roundView))
-               ~> (AdequateLeaderModeGoal(mode)
-                    \/ \E rank \in ExactLeaderSemanticRankCarrier:
-                         AdequateLeaderModeRankFrontier(mode, rank))
-       /\ \A mode \in AdequateLeaderCompositionModes,
-             rank \in ExactLeaderSemanticRankCarrier:
-            AdequateLeaderModeRankFrontier(mode, rank)
-              ~> (AdequateLeaderModeGoal(mode)
-                   \/ \E lowerRank \in
-                          SetLessThan(
-                            rank,
-                            ExactLeaderSemanticRankOrdering,
-                            ExactLeaderSemanticRankCarrier):
-                        AdequateLeaderModeRankFrontier(
-                          mode, lowerRank))
+    => \A target \in ValidatorIds:
+         AdequateLeaderTargetDecisionSource(target)
+           ~> NodeHasDecision(target)
 
-\* TODO: prove the semantic-composition property from exact timeout/view
-\* rotation, leader selection, and command-successor phase mappings.
+AdequateLeaderDecisionPrefixAt(initialContext, limit) ==
+  \A target \in AsyncVotersAt(initialContext) \cap (0..limit):
+    NodeHasDecision(target)
 
-THEOREM ExactCandidateHandoffsLowerSemanticRank ==
+THEOREM AdequateLeaderCoreBracketStepPreservesTargetDecision ==
+  \A target:
+    NodeHasDecision(target)
+      /\ [Next]_vars
+      => NodeHasDecision(target)'
+PROOF
+  <1>1. ASSUME NEW target,
+                NodeHasDecision(target),
+                [Next]_vars
+         PROVE NodeHasDecision(target)'
+    <2>1. CASE UNCHANGED vars
+      BY <1>1, <2>1, Isa DEF NodeHasDecision, vars
+    <2>2. CASE Next
+      <3>1. UNCHANGED context
+        BY <2>2, CoreNextLeavesContext
+      <3>2. \/ UNCHANGED <<decisions, applied>>
+             \/ (\E request \in pendingDecision:
+                   PersistDecision(request))
+             \/ (\E owner \in ValidatorIds,
+                        qc \in DecisionQcValues:
+                   ApplyDecision(owner, qc))
+        BY <2>2, NextDurableReceiptActionClassification
+      <3>3. CASE UNCHANGED <<decisions, applied>>
+        BY <1>1, <3>1, <3>3, Isa DEF NodeHasDecision
+      <3>4. CASE \E request \in pendingDecision:
+                    PersistDecision(request)
+        <4>1. PICK request \in pendingDecision:
+                 PersistDecision(request)
+          BY <3>4
+        <4> QED BY <1>1, <3>1, <4>1, Isa
+             DEF PersistDecision, NodeHasDecision
+      <3>5. CASE \E owner \in ValidatorIds,
+                        qc \in DecisionQcValues:
+                    ApplyDecision(owner, qc)
+        <4>1. PICK owner \in ValidatorIds,
+                     qc \in DecisionQcValues:
+                 ApplyDecision(owner, qc)
+          BY <3>5
+        <4> QED BY <1>1, <3>1, <4>1, Isa
+             DEF ApplyDecision, NodeHasDecision
+      <3> QED BY <3>2, <3>3, <3>4, <3>5
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM AdequateLeaderAsyncBracketStepPreservesTargetDecision ==
+  \A target:
+    NodeHasDecision(target)
+      /\ [AsyncNext]_AsyncAllVars
+      => NodeHasDecision(target)'
+PROOF
+  <1>1. ASSUME NEW target,
+                NodeHasDecision(target),
+                [AsyncNext]_AsyncAllVars
+         PROVE NodeHasDecision(target)'
+    <2>1. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>1, Isa
+         DEF NodeHasDecision, AsyncAllVars, AsyncSchedulerVars, vars
+    <2>2. CASE AsyncNext
+      <3>1. [Next]_vars
+        BY <2>2, AsyncStepRefinementObligation
+      <3> QED BY <1>1, <3>1,
+           AdequateLeaderCoreBracketStepPreservesTargetDecision
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM AdequateLeaderDecisionPrefixAtIsStable ==
   \A initialContext:
-    AdequateLeaderSemanticCompositionProperty(
+    \A limit \in Nat:
+      AdequateLeaderDecisionPrefixAt(initialContext, limit)
+        /\ [AsyncNext]_AsyncAllVars
+        => AdequateLeaderDecisionPrefixAt(initialContext, limit)'
+BY Isa, AdequateLeaderAsyncBracketStepPreservesTargetDecision
+   DEF AdequateLeaderDecisionPrefixAt
+
+THEOREM FrozenContextFullAdequateLeaderDecisionPrefixImpliesResponsiveDecide ==
+  \A initialContext:
+    /\ ModelConfiguration
+    /\ AsyncFrozenContextAt(initialContext)
+    /\ AdequateLeaderDecisionPrefixAt(initialContext, N - 1)
+    => ResponsiveNodesDecide
+BY FrozenContextFixesResponsiveVoters, Isa
+   DEF AdequateLeaderDecisionPrefixAt, ResponsiveNodesDecide,
+       AsyncVotersAt, ValidatorIds, ModelConfiguration,
+       QuorumConfiguration
+
+THEOREM AdequateLeaderTargetConvergenceDecidesFixedFrozenVoter ==
+  \A initialContext:
+    \A target \in AsyncVotersAt(initialContext):
+      /\ AsyncLiveSpecAt(initialContext)
+      /\ AdequateLeaderTargetDecisionConvergenceProperty(
+           AsyncLiveSpecAt(initialContext))
+      => (gst
+            /\ AdequateResponsiveHonestLeaderViewReached
+            /\ ~ResponsiveNodesDecide)
+           ~> NodeHasDecision(target)
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                NEW target \in AsyncVotersAt(initialContext),
+                AsyncLiveSpecAt(initialContext),
+                AdequateLeaderTargetDecisionConvergenceProperty(
+                  AsyncLiveSpecAt(initialContext))
+         PROVE (gst
+                  /\ AdequateResponsiveHonestLeaderViewReached
+                  /\ ~ResponsiveNodesDecide)
+                 ~> NodeHasDecision(target)
+    <2>1. [](AsyncCurrentResponsiveVoters
+               = AsyncVotersAt(initialContext))
+      BY <1>1, AsyncLiveSpecProjectsAsyncSpec,
+         AsyncSpecAlwaysUsesFixedResponsiveVoters
+    <2>2. \A currentTarget \in ValidatorIds:
+             AdequateLeaderTargetDecisionSource(currentTarget)
+               ~> NodeHasDecision(currentTarget)
+      BY <1>1
+         DEF AdequateLeaderTargetDecisionConvergenceProperty
+    <2>3. AdequateLeaderTargetDecisionSource(target)
+             ~> NodeHasDecision(target)
+      BY <1>1, <2>1, <2>2, PTL
+         DEF AsyncVotersAt, ValidatorIds
+    <2>4. []((gst
+                /\ AdequateResponsiveHonestLeaderViewReached
+                /\ ~ResponsiveNodesDecide)
+               => \/ NodeHasDecision(target)
+                  \/ AdequateLeaderTargetDecisionSource(target))
+      BY <1>1, <2>1, PTL
+         DEF AdequateLeaderTargetDecisionSource
+    <2> QED BY <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM AdequateLeaderTargetConvergenceReachesEveryDecisionPrefix ==
+  \A initialContext:
+    /\ AsyncLiveSpecAt(initialContext)
+    /\ AdequateLeaderTargetDecisionConvergenceProperty(
+         AsyncLiveSpecAt(initialContext))
+    => \A limit \in Nat:
+         (gst
+           /\ AdequateResponsiveHonestLeaderViewReached
+           /\ ~ResponsiveNodesDecide)
+           ~> AdequateLeaderDecisionPrefixAt(initialContext, limit)
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncLiveSpecAt(initialContext),
+                AdequateLeaderTargetDecisionConvergenceProperty(
+                  AsyncLiveSpecAt(initialContext))
+         PROVE \A limit \in Nat:
+                 (gst
+                   /\ AdequateResponsiveHonestLeaderViewReached
+                   /\ ~ResponsiveNodesDecide)
+                   ~> AdequateLeaderDecisionPrefixAt(
+                        initialContext, limit)
+    <2> DEFINE P(limit) ==
+           (gst
+             /\ AdequateResponsiveHonestLeaderViewReached
+             /\ ~ResponsiveNodesDecide)
+             ~> AdequateLeaderDecisionPrefixAt(initialContext, limit)
+    <2>1. P(0)
+      <3>1. CASE 0 \in AsyncVotersAt(initialContext)
+        <4>1. (gst
+                 /\ AdequateResponsiveHonestLeaderViewReached
+                 /\ ~ResponsiveNodesDecide)
+                 ~> NodeHasDecision(0)
+          BY <1>1, <3>1,
+             AdequateLeaderTargetConvergenceDecidesFixedFrozenVoter
+        <4> QED BY <4>1, PTL
+             DEF P, AdequateLeaderDecisionPrefixAt
+      <3>2. CASE 0 \notin AsyncVotersAt(initialContext)
+        BY <3>2, PTL DEF P, AdequateLeaderDecisionPrefixAt
+      <3> QED BY <3>1, <3>2
+    <2>2. ASSUME NEW limit \in Nat,
+                  P(limit)
+           PROVE P(limit + 1)
+      <3>1. CASE limit + 1 \in AsyncVotersAt(initialContext)
+        <4>1. (gst
+                 /\ AdequateResponsiveHonestLeaderViewReached
+                 /\ ~ResponsiveNodesDecide)
+                 ~> NodeHasDecision(limit + 1)
+          BY <1>1, <3>1,
+             AdequateLeaderTargetConvergenceDecidesFixedFrozenVoter
+        <4>2. AdequateLeaderDecisionPrefixAt(
+                 initialContext, limit)
+                 /\ [AsyncNext]_AsyncAllVars
+                 => AdequateLeaderDecisionPrefixAt(
+                      initialContext, limit)'
+          BY <2>2, AdequateLeaderDecisionPrefixAtIsStable
+        <4>3. NodeHasDecision(limit + 1)
+                 /\ [AsyncNext]_AsyncAllVars
+                 => NodeHasDecision(limit + 1)'
+          BY AdequateLeaderAsyncBracketStepPreservesTargetDecision
+        <4>4. AdequateLeaderDecisionPrefixAt(
+                 initialContext, limit + 1)
+                 <=> /\ AdequateLeaderDecisionPrefixAt(
+                           initialContext, limit)
+                     /\ NodeHasDecision(limit + 1)
+          BY <2>2, <3>1, Isa
+             DEF AdequateLeaderDecisionPrefixAt
+        <4> QED BY <2>2, <4>1, <4>2, <4>3, <4>4, PTL DEF P
+      <3>2. CASE limit + 1 \notin AsyncVotersAt(initialContext)
+        <4>1. AdequateLeaderDecisionPrefixAt(
+                 initialContext, limit)
+                 => AdequateLeaderDecisionPrefixAt(
+                      initialContext, limit + 1)
+          BY <2>2, <3>2, Isa
+             DEF AdequateLeaderDecisionPrefixAt
+        <4> QED BY <2>2, <4>1, PTL DEF P
+      <3> QED BY <3>1, <3>2
+    <2>3. \A limit \in Nat: P(limit)
+      BY <2>1, <2>2, NatInduction
+    <2> QED BY <2>3 DEF P
+  <1> QED BY <1>1
+
+THEOREM AdequateLeaderTargetDecisionConvergenceSuppliesDecisionMode ==
+  \A initialContext:
+    AdequateLeaderTargetDecisionConvergenceProperty(
       AsyncLiveSpecAt(initialContext))
       => (AsyncLiveSpecAt(initialContext)
-            => \A mode \in AdequateLeaderCompositionModes,
-                  rank \in ExactLeaderSemanticRankCarrier:
-                 AdequateLeaderModeRankFrontier(mode, rank)
-                   ~> (AdequateLeaderModeGoal(mode)
-                        \/ \E lowerRank \in
-                               SetLessThan(
-                                 rank,
-                                 ExactLeaderSemanticRankOrdering,
-                                 ExactLeaderSemanticRankCarrier):
-                             AdequateLeaderModeRankFrontier(
-                               mode, lowerRank)))
-BY DEF AdequateLeaderSemanticCompositionProperty
+            => (gst
+                  /\ AdequateResponsiveHonestLeaderViewReached
+                  /\ ~ResponsiveNodesDecide)
+                 ~> ResponsiveNodesDecide)
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AdequateLeaderTargetDecisionConvergenceProperty(
+                  AsyncLiveSpecAt(initialContext))
+         PROVE AsyncLiveSpecAt(initialContext)
+                 => (gst
+                       /\ AdequateResponsiveHonestLeaderViewReached
+                       /\ ~ResponsiveNodesDecide)
+                      ~> ResponsiveNodesDecide
+    <2>1. ASSUME AsyncLiveSpecAt(initialContext)
+           PROVE (gst
+                    /\ AdequateResponsiveHonestLeaderViewReached
+                    /\ ~ResponsiveNodesDecide)
+                   ~> ResponsiveNodesDecide
+      <3>1. ModelConfiguration
+        BY <2>1, AsyncLiveSpecProjectsAsyncSpec,
+           AsyncSpecAlwaysStrongTypeInvariant, PTL
+           DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
+               Safety, TypeInvariant
+      <3>2. N - 1 \in Nat
+        BY <3>1, SMT DEF ModelConfiguration, QuorumConfiguration
+      <3>3. (gst
+               /\ AdequateResponsiveHonestLeaderViewReached
+               /\ ~ResponsiveNodesDecide)
+               ~> AdequateLeaderDecisionPrefixAt(
+                    initialContext, N - 1)
+        BY <1>1, <2>1, <3>2,
+           AdequateLeaderTargetConvergenceReachesEveryDecisionPrefix
+      <3>4. []AsyncFrozenContextAt(initialContext)
+        BY <2>1, AsyncLiveSpecProjectsAsyncSpec,
+           AsyncSpecAlwaysKeepsFrozenContext
+      <3>5. [](AdequateLeaderDecisionPrefixAt(
+                   initialContext, N - 1)
+                 => ResponsiveNodesDecide)
+        BY <3>1, <3>4,
+           FrozenContextFullAdequateLeaderDecisionPrefixImpliesResponsiveDecide,
+           PTL
+      <3> QED BY <3>3, <3>5, PTL
+    <2> QED BY <2>1
+  <1> QED BY <1>1
 
-THEOREM ExactCandidateSemanticRanksReachModeGoal ==
+(***************************************************************************
+Target-indexed adequate-leader semantic frontier.
+
+View reach and Decision service are separate temporal modes.  The view-reach
+property below is exactly the first adequate-leader service clause.  The
+Decision mode freezes one target together with one context, adequate honest
+leader, leader view, and protocol subject.  Its semantic rank excludes phase
+5: timeout/view rotation belongs to view reach, not to the fixed-view
+Decision corridor.
+
+A target frontier may use work owned by the target or by the fixed leader.
+Decision commands are stricter: BeginDecision and PersistDecision are
+frontier candidates only when their owner is the indexed target.  A
+non-target leader's rebroadcasting PersistDecision remains relevant, but as
+an explicit producer/transport residual which must expose the CommitQC wire
+handoff.  Once that other node has decided, its Fetch/Store/Validate/Apply
+recovery continuation is not a target frontier.
+
+The producer/transport residual is deliberately exhaustive.  It names an
+exact rebroadcast owner, due transport, runner admission, certified-response
+capacity, or the remaining fixed-corridor producer gap.  No theorem below
+claims that the implementation discharges those edges.  The only
+well-founded reduction is conditional on both their declared closure and the
+target-local semantic descent property.
+***************************************************************************)
+
+AdequateLeaderTargetSemanticRankCarrier == (1..4) \X (0..9)
+
+AdequateLeaderTargetSemanticRankOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), OpToRel(<, Nat), 1..4, 0..9)
+
+AdequateLeaderFrozenTargetCorridor(
+    target, leaderContext, leader, leaderView) ==
+  /\ gst
+  /\ leaderContext \in ContextRecords
+  /\ leaderContext = context
+  /\ target \in Responsive \cap VotingRoster(leaderContext.epoch)
+  /\ leader \in Responsive \cap VotingRoster(leaderContext.epoch)
+  /\ leader \in Honest
+  /\ leaderView \in Views
+  /\ nodeView[leader] = leaderView
+  /\ nodeView[target] = leaderView
+  /\ Leader(leaderContext, leaderView) = leader
+  /\ AsyncViewTimeout(leaderView) > AsyncWorstCaseServiceBudget
+  /\ ~NodeHasDecision(target)
+
+AdequateLeaderTargetCandidateRole(candidate, target, leader) ==
+  /\ candidate.node \in {target, leader}
+  /\ IF candidate.kind \in {"BeginDecision", "PersistDecision"}
+     THEN candidate.node = target
+     ELSE IF candidate.node # target
+          THEN ~NodeHasDecision(candidate.node)
+          ELSE TRUE
+
+AdequateLeaderTargetCandidateIdentity(
+    candidate, rank, target, leaderContext, leader, leaderView, subject) ==
+  /\ rank \in AdequateLeaderTargetSemanticRankCarrier
+  /\ subject \in Subjects
+  /\ AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  /\ ExactLeaderCurrentRankWitness(
+       candidate, rank, leaderContext, candidate.node,
+       leaderView, subject)
+  /\ AdequateLeaderTargetCandidateRole(candidate, target, leader)
+
+AdequateLeaderTargetRankFrontier(
+    target, leaderContext, leader, leaderView, subject, rank) ==
+  \E candidate \in AsyncCandidateSet:
+    AdequateLeaderTargetCandidateIdentity(
+      candidate, rank, target, leaderContext, leader, leaderView, subject)
+
+AdequateLeaderTargetRankOwnerSet(
+    target, leaderContext, leader, leaderView, subject, rank) ==
+  {candidate \in AsyncCandidateSet:
+     AdequateLeaderTargetCandidateIdentity(
+       candidate, rank, target, leaderContext, leader, leaderView, subject)}
+
+\* This is a distinct-logical-owner count.  On `AsyncLiveSpecAt` traces,
+\* `AsyncProgressOwnershipInvariant` rules out two scheduler locations owning
+\* one equal candidate value; the count must not be read as a physical-copy
+\* theorem in an arbitrary typed state.
+AdequateLeaderTargetRankOwnerCount(
+    target, leaderContext, leader, leaderView, subject, rank) ==
+  Cardinality(
+    AdequateLeaderTargetRankOwnerSet(
+      target, leaderContext, leader, leaderView, subject, rank))
+
+AdequateLeaderTargetOccurrenceRankCarrier ==
+  AdequateLeaderTargetSemanticRankCarrier \X Nat
+
+AdequateLeaderTargetOccurrenceRankOrdering ==
+  LexPairOrdering(
+    AdequateLeaderTargetSemanticRankOrdering,
+    OpToRel(<, Nat),
+    AdequateLeaderTargetSemanticRankCarrier,
+    Nat)
+
+AdequateLeaderTargetOccurrenceRankFrontier(
+    target, leaderContext, leader, leaderView, subject, occurrenceRank) ==
+  /\ occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier
+  /\ occurrenceRank[2] > 0
+  /\ IsFiniteSet(
+       AdequateLeaderTargetRankOwnerSet(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank[1]))
+  /\ AdequateLeaderTargetRankFrontier(
+       target, leaderContext, leader, leaderView, subject, occurrenceRank[1])
+  /\ occurrenceRank[2] =
+       AdequateLeaderTargetRankOwnerCount(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank[1])
+
+THEOREM AdequateLeaderTargetOccurrenceFrontierProjectsSemanticFrontier ==
+  \A target, leaderContext, leader, leaderView, subject, occurrenceRank:
+    AdequateLeaderTargetOccurrenceRankFrontier(
+      target, leaderContext, leader, leaderView, subject, occurrenceRank)
+      => AdequateLeaderTargetRankFrontier(
+           target, leaderContext, leader, leaderView,
+           subject, occurrenceRank[1])
+BY DEF AdequateLeaderTargetOccurrenceRankFrontier
+
+THEOREM AdequateLeaderDecisionPhaseFrontierIsTargetOwned ==
+  \A candidate, rank, target, leaderContext, leader, leaderView, subject:
+    /\ AdequateLeaderTargetCandidateIdentity(
+         candidate, rank, target, leaderContext,
+         leader, leaderView, subject)
+    /\ candidate.kind \in {"BeginDecision", "PersistDecision"}
+    => candidate.node = target
+BY DEF AdequateLeaderTargetCandidateIdentity,
+       AdequateLeaderTargetCandidateRole
+
+THEOREM AdequateLeaderOtherNodePostDecisionRecoveryIsNotTargetFrontier ==
+  \A candidate, rank, target, leaderContext, leader, leaderView, subject:
+    /\ candidate.node # target
+    /\ NodeHasDecision(candidate.node)
+    => ~AdequateLeaderTargetCandidateIdentity(
+          candidate, rank, target, leaderContext,
+          leader, leaderView, subject)
+BY Isa
+   DEF AdequateLeaderTargetCandidateIdentity,
+       AdequateLeaderTargetCandidateRole
+
+THEOREM AdequateLeaderTargetPersistDecisionExecutionReachesIndexedGoal ==
+  \A candidate, rank, target, leaderContext, leader, leaderView, subject:
+    /\ AdequateLeaderTargetCandidateIdentity(
+         candidate, rank, target, leaderContext,
+         leader, leaderView, subject)
+    /\ candidate.kind = "PersistDecision"
+    /\ ExecutePersistDecision(candidate)
+    => NodeHasDecision(target)'
+BY AdequateLeaderDecisionPhaseFrontierIsTargetOwned,
+   ExecutePersistDecisionCreatesExactDecisionMilestone, Isa
+
+AdequateLeaderTargetWireIdentity(
+    item, target, leaderContext, leader, leaderView, subject) ==
+  /\ AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  /\ subject \in Subjects
+  /\ item.envelope.recipient \in {target, leader}
+  /\ LeaderWireExactSemanticIdentity(
+       item, leaderContext, item.envelope.recipient,
+       leaderView, subject)
+  /\ LeaderWireProductiveTransportIdentity(item)
+
+\* A locally formed CommitQC is first persisted by the forming leader.  That
+\* non-target PersistDecision is not terminal for `target`; its only accepted
+\* target-corridor outcome is the exact rebroadcast/transport handoff.
+AdequateLeaderTargetCommitQcRebroadcastResidual(
+    target, leaderContext, leader, leaderView, subject) ==
+  /\ target # leader
+  /\ AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  /\ subject \in Subjects
+  /\ \E candidate \in AsyncCandidateSet:
+       /\ ExactLeaderCurrentRankWitness(
+            candidate, DecisionSemanticRank(2), leaderContext,
+            leader, leaderView, subject)
+       /\ candidate.kind = "PersistDecision"
+       /\ \E request \in PersistDecisionRequests(candidate):
+            request.rebroadcast
+
+AdequateLeaderTargetDueTransportResidual(
+    target, leaderContext, leader, leaderView, subject) ==
+  \E packet \in OverdueResponsivePackets:
+    /\ AdequateLeaderTargetWireIdentity(
+         packet.item, target, leaderContext, leader, leaderView, subject)
+    /\ LeaderWireDueTransportResidual(packet)
+
+AdequateLeaderTargetRunnerAdmissionResidual(
+    target, leaderContext, leader, leaderView, subject) ==
+  \E item \in AsyncNetworkItems:
+    /\ AdequateLeaderTargetWireIdentity(
+         item, target, leaderContext, leader, leaderView, subject)
+    /\ LeaderWireRunnerAdmissionResidual(item)
+
+AdequateLeaderTargetCertifiedResponseCapacityResidual(
+    target, leaderContext, leader, leaderView, subject) ==
+  \E item \in AsyncNetworkItems:
+    /\ AdequateLeaderTargetWireIdentity(
+         item, target, leaderContext, leader, leaderView, subject)
+    /\ CertifiedResponsePhysicalCompletionDebtResidual(item)
+
+\* Before any fixed-subject owner exists, the adequate leader's exact
+\* proposal selector is the only admissible source of a new corridor
+\* subject.  This prevents the producer residual from manufacturing an
+\* arbitrary member of `Subjects` merely to satisfy an existential entry.
+AdequateLeaderTargetProtocolSubjectSource(
+    target, leaderContext, leader, leaderView, subject) ==
+  /\ AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  /\ subject \in Subjects
+  /\ subject = AsyncProposalSubject(leader)
+
+\* This last arm is the exact fixed-corridor producer debt: no ranked owner,
+\* rebroadcast owner, due packet, ingress owner, or certified-response
+\* capacity owner currently carries the frozen target/leader/view/subject.
+\* It includes a not-yet-due packet and a missing proposal/vote/QC producer;
+\* those cases require separate time/producer arguments before this residual
+\* can be discharged.
+AdequateLeaderTargetProducerResidual(
+    target, leaderContext, leader, leaderView, subject) ==
+  /\ AdequateLeaderTargetProtocolSubjectSource(
+       target, leaderContext, leader, leaderView, subject)
+  /\ ~(\E rank \in AdequateLeaderTargetSemanticRankCarrier:
+         AdequateLeaderTargetRankFrontier(
+           target, leaderContext, leader, leaderView, subject, rank))
+  /\ ~AdequateLeaderTargetCommitQcRebroadcastResidual(
+       target, leaderContext, leader, leaderView, subject)
+  /\ ~AdequateLeaderTargetDueTransportResidual(
+       target, leaderContext, leader, leaderView, subject)
+  /\ ~AdequateLeaderTargetRunnerAdmissionResidual(
+       target, leaderContext, leader, leaderView, subject)
+  /\ ~AdequateLeaderTargetCertifiedResponseCapacityResidual(
+       target, leaderContext, leader, leaderView, subject)
+
+\* A target-local action can replenish the exact same semantic rank without
+\* deciding the target.  This action is not a rank decrease: a discharge of
+\* the temporal descent property must prove that such producer episodes are
+\* finite, coalesced, or themselves governed by a prior well-founded debt.
+AdequateLeaderTargetRankReplenishmentAction(
+    target, leaderContext, leader, leaderView, subject, rank) ==
+  /\ rank \in AdequateLeaderTargetSemanticRankCarrier
+  /\ subject \in Subjects
+  /\ AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  /\ IsFiniteSet(
+       AdequateLeaderTargetRankOwnerSet(
+         target, leaderContext, leader, leaderView, subject, rank))
+  /\ IsFiniteSet(
+       AdequateLeaderTargetRankOwnerSet(
+         target, leaderContext, leader, leaderView, subject, rank)')
+  /\ AsyncNext
+  /\ ~NodeHasDecision(target)'
+  /\ AdequateLeaderTargetRankOwnerCount(
+       target, leaderContext, leader, leaderView, subject, rank)'
+       > AdequateLeaderTargetRankOwnerCount(
+           target, leaderContext, leader, leaderView, subject, rank)
+
+AdequateLeaderTargetRankReplenishmentResidual(
+    target, leaderContext, leader, leaderView, subject, rank) ==
+  /\ AdequateLeaderTargetRankFrontier(
+       target, leaderContext, leader, leaderView, subject, rank)
+  /\ ENABLED
+       <<AdequateLeaderTargetRankReplenishmentAction(
+           target, leaderContext, leader, leaderView,
+           subject, rank)>>_AsyncAllVars
+
+AdequateLeaderTargetProducerTransportResidual(
+    target, leaderContext, leader, leaderView, subject) ==
+  \/ AdequateLeaderTargetCommitQcRebroadcastResidual(
+       target, leaderContext, leader, leaderView, subject)
+  \/ AdequateLeaderTargetDueTransportResidual(
+       target, leaderContext, leader, leaderView, subject)
+  \/ AdequateLeaderTargetRunnerAdmissionResidual(
+       target, leaderContext, leader, leaderView, subject)
+  \/ AdequateLeaderTargetCertifiedResponseCapacityResidual(
+       target, leaderContext, leader, leaderView, subject)
+  \/ AdequateLeaderTargetProducerResidual(
+       target, leaderContext, leader, leaderView, subject)
+
+AdequateLeaderTargetOpenFrontier(
+    target, leaderContext, leader, leaderView, subject) ==
+  \/ AdequateLeaderTargetProducerTransportResidual(
+       target, leaderContext, leader, leaderView, subject)
+  \/ \E occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier:
+       AdequateLeaderTargetOccurrenceRankFrontier(
+         target, leaderContext, leader, leaderView, subject, occurrenceRank)
+
+AdequateLeaderViewReachCompositionProperty(specification) ==
+  specification
+    => (gst /\ ~ResponsiveNodesDecide)
+         ~> (AdequateResponsiveHonestLeaderViewReached
+               \/ ResponsiveNodesDecide)
+
+AdequateLeaderTargetCorridorEntryProperty(specification) ==
+  specification
+    => \A target \in ValidatorIds:
+         AdequateLeaderTargetDecisionSource(target)
+           ~> (NodeHasDecision(target)
+                \/ \E leaderContext \in ContextRecords,
+                      leader \in ValidatorIds,
+                      leaderView \in Views,
+                      subject \in Subjects:
+                     AdequateLeaderTargetOpenFrontier(
+                       target, leaderContext, leader, leaderView, subject))
+
+AdequateLeaderTargetProducerTransportClosureProperty(specification) ==
+  specification
+    => \A target \in ValidatorIds,
+          leaderContext \in ContextRecords,
+          leader \in ValidatorIds,
+          leaderView \in Views,
+          subject \in Subjects:
+         AdequateLeaderTargetProducerTransportResidual(
+           target, leaderContext, leader, leaderView, subject)
+           ~> (NodeHasDecision(target)
+                \/ \E occurrenceRank \in
+                       AdequateLeaderTargetOccurrenceRankCarrier:
+                     AdequateLeaderTargetOccurrenceRankFrontier(
+                       target, leaderContext, leader,
+                       leaderView, subject, occurrenceRank))
+
+\* Target indexing removes the unsound cross-voter terminal step, but it does
+\* not by itself prove this descent.  The second component below counts every
+\* distinct current target/leader owner at the frozen semantic rank, so
+\* servicing one owner while another remains is no longer mistaken for a
+\* semantic decrease.  Equal-count replacement and count-increasing producer
+\* steps still are not progress; the replenishment residual above exposes the
+\* latter explicitly.  A concrete discharge must prove exact coalescing or a
+\* finite prior producer debt.
+AdequateLeaderTargetRankDescentProperty(specification) ==
+  specification
+    => \A target \in ValidatorIds,
+          leaderContext \in ContextRecords,
+          leader \in ValidatorIds,
+          leaderView \in Views,
+          subject \in Subjects,
+          occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier:
+         AdequateLeaderTargetOccurrenceRankFrontier(
+           target, leaderContext, leader,
+           leaderView, subject, occurrenceRank)
+           ~> (NodeHasDecision(target)
+                \/ \E lowerOccurrenceRank \in
+                       SetLessThan(
+                         occurrenceRank,
+                         AdequateLeaderTargetOccurrenceRankOrdering,
+                         AdequateLeaderTargetOccurrenceRankCarrier):
+                     AdequateLeaderTargetOccurrenceRankFrontier(
+                       target, leaderContext, leader,
+                       leaderView, subject, lowerOccurrenceRank))
+
+AdequateLeaderTargetSemanticCompositionProperty(specification) ==
+  /\ AdequateLeaderTargetCorridorEntryProperty(specification)
+  /\ AdequateLeaderTargetProducerTransportClosureProperty(specification)
+  /\ AdequateLeaderTargetRankDescentProperty(specification)
+
+AdequateLeaderSemanticCompositionProperty(specification) ==
+  /\ AdequateLeaderViewReachCompositionProperty(specification)
+  /\ AdequateLeaderTargetSemanticCompositionProperty(specification)
+
+\* TODO: discharge the fixed-corridor producer/transport property and the
+\* occurrence-rank replenishment residual using timeout-window arithmetic,
+\* per-item fairness, exact logical-owner coalescing, and target-preserving
+\* command-successor mappings.
+
+THEOREM AdequateLeaderTargetSemanticRankOrderingWellFounded ==
+  IsWellFoundedOn(
+    AdequateLeaderTargetSemanticRankOrdering,
+    AdequateLeaderTargetSemanticRankCarrier)
+BY NatLessThanWellFounded, IsWellFoundedOnSubset,
+   WFLexPairOrdering, SMT
+   DEF AdequateLeaderTargetSemanticRankOrdering,
+       AdequateLeaderTargetSemanticRankCarrier
+
+THEOREM AdequateLeaderTargetOccurrenceRankOrderingWellFounded ==
+  IsWellFoundedOn(
+    AdequateLeaderTargetOccurrenceRankOrdering,
+    AdequateLeaderTargetOccurrenceRankCarrier)
+BY AdequateLeaderTargetSemanticRankOrderingWellFounded,
+   NatLessThanWellFounded, WFLexPairOrdering
+   DEF AdequateLeaderTargetOccurrenceRankOrdering,
+       AdequateLeaderTargetOccurrenceRankCarrier
+
+THEOREM AdequateLeaderTargetRanksReachIndexedDecision ==
   \A initialContext:
-    (/\ ExactLeaderCandidateSemanticHandoffProperty(
-          AsyncLiveSpecAt(initialContext))
-     /\ AdequateLeaderSemanticCompositionProperty(
-          AsyncLiveSpecAt(initialContext)))
+    AdequateLeaderTargetRankDescentProperty(
+      AsyncLiveSpecAt(initialContext))
       => (AsyncLiveSpecAt(initialContext)
-            => \A mode \in AdequateLeaderCompositionModes,
-                  rank \in ExactLeaderSemanticRankCarrier:
-                 AdequateLeaderModeRankFrontier(mode, rank)
-                   ~> AdequateLeaderModeGoal(mode))
-BY ExactCandidateHandoffsLowerSemanticRank,
-   ExactLeaderSemanticRankOrderingWellFounded,
+            => \A target \in ValidatorIds,
+                  leaderContext \in ContextRecords,
+                  leader \in ValidatorIds,
+                  leaderView \in Views,
+                  subject \in Subjects,
+                  occurrenceRank \in
+                    AdequateLeaderTargetOccurrenceRankCarrier:
+                 AdequateLeaderTargetOccurrenceRankFrontier(
+                   target, leaderContext, leader,
+                   leaderView, subject, occurrenceRank)
+                   ~> NodeHasDecision(target))
+BY AdequateLeaderTargetOccurrenceRankOrderingWellFounded,
    WellFoundedLeadsTo
+   DEF AdequateLeaderTargetRankDescentProperty
 
-THEOREM ExactPhysicalResidualsReachRankOrModeGoal ==
+THEOREM AdequateLeaderTargetSemanticCompositionSuppliesTargetConvergence ==
   \A initialContext:
-    (/\ AdequateLeaderExactPhysicalResidualConvergenceProperty(
-          AsyncLiveSpecAt(initialContext))
-     /\ AdequateLeaderSemanticCompositionProperty(
-          AsyncLiveSpecAt(initialContext)))
-      => (AsyncLiveSpecAt(initialContext)
-            => \A mode \in AdequateLeaderCompositionModes:
-                 (gst /\ AdequateLeaderProductivePhysicalResidual)
-                   ~> (AdequateLeaderModeGoal(mode)
-                        \/ \E rank \in ExactLeaderSemanticRankCarrier:
-                             AdequateLeaderModeRankFrontier(mode, rank)))
-BY AsyncLiveSpecProjectsAsyncSpec,
-   AsyncSpecKeepsGstOnceSet, Isa, PTL
-   DEF AdequateLeaderExactPhysicalResidualConvergenceProperty,
-       AdequateLeaderSemanticCompositionProperty,
-       AdequateLeaderProductivePhysicalResidual,
-       AdequateLeaderModeGoal,
-       AdequateLeaderModeActive,
-       LeaderWireCurrentContextWitnessIdentity,
-       LeaderWireTransportHandoff,
-       LeaderWireRunnerAdmissionHandoff,
-       CertifiedResponsePhysicalCompletionHandoff,
-       TimeoutQuorumViewRotationHandoff
+    AdequateLeaderTargetSemanticCompositionProperty(
+      AsyncLiveSpecAt(initialContext))
+      => AdequateLeaderTargetDecisionConvergenceProperty(
+           AsyncLiveSpecAt(initialContext))
+BY AdequateLeaderTargetRanksReachIndexedDecision, PTL
+   DEF AdequateLeaderTargetSemanticCompositionProperty,
+       AdequateLeaderTargetCorridorEntryProperty,
+       AdequateLeaderTargetProducerTransportClosureProperty,
+       AdequateLeaderTargetOpenFrontier,
+       AdequateLeaderTargetDecisionConvergenceProperty
 
 THEOREM ExactAdequateLeaderSubkernelsReduceToServiceKernel ==
   \A initialContext:
@@ -4069,19 +4686,10 @@ THEOREM ExactAdequateLeaderSubkernelsReduceToServiceKernel ==
          AsyncLiveSpecAt(initialContext))
     => AdequateLeaderServiceKernelProperty(
          AsyncLiveSpecAt(initialContext))
-BY ExactResidualKernelSuppliesCandidateSemanticHandoffs,
-   ExactResidualKernelSuppliesExactPhysicalConvergence,
-   ExactCandidateSemanticRanksReachModeGoal,
-   ExactPhysicalResidualsReachRankOrModeGoal,
-   AsyncLiveSpecProjectsAsyncSpec,
-   AsyncSpecKeepsGstOnceSet, PTL
-   DEF AdequateLeaderExactResidualKernelProperty,
-       AdequateLeaderSemanticCompositionProperty,
-       AdequateLeaderCompositionModes,
-       AdequateLeaderModeSource, AdequateLeaderModeGoal,
-       AdequateLeaderModeRankFrontier,
-       AdequateLeaderProductivePhysicalResidual,
-       ExactLeaderSemanticRankCarrier,
+BY AdequateLeaderTargetSemanticCompositionSuppliesTargetConvergence,
+   AdequateLeaderTargetDecisionConvergenceSuppliesDecisionMode
+   DEF AdequateLeaderSemanticCompositionProperty,
+       AdequateLeaderViewReachCompositionProperty,
        AdequateLeaderServiceKernelProperty
 
 =============================================================================

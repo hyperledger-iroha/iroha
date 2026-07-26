@@ -2924,7 +2924,9 @@ FetchCertifiedBodyReady(node, qc) ==
 
 ApplyDecisionReady(node, qc) ==
   LET application == [node |-> node, qc |-> qc]
-  IN /\ application \in decisions
+  \* Keep readiness on the same exact current-context Commit authority as the
+  \* state-changing action; command evidence is independent provenance.
+  IN /\ DecisionCertifiedBodyRecoveryAuthority(node, qc)
      /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
      /\ \E validation \in validatedBodies:
            /\ validation.node = node

@@ -95,7 +95,9 @@ use iroha_data_model::{
     domain::{Domain, DomainId, NewDomain},
     escrow::EscrowId,
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
-    governance::types::{ProposalKind, ValidationFeePolicyProposal},
+    governance::types::{
+        ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+    },
     isi::{
         Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger, Grant, GrantBox,
         Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
@@ -169,7 +171,10 @@ use iroha_data_model::{
         Trigger, TriggerId,
         action::{Action, Repeats},
     },
-    validation_fee::ValidationFeePolicyV1,
+    validation_fee::{
+        ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
+        ValidationFeeTreasuryPayoutBindingV1,
+    },
     zk::{ZkAcePublicInputsV1, ZkAceWitnessV1},
 };
 use iroha_primitives::{
@@ -2208,18 +2213,45 @@ pub fn norito_decode_instruction(bytes: Uint8Array) -> napi::Result<String> {
 pub fn validation_fee_policy_proposal_fingerprint_v1(
     policy_json: String,
     payout_lifecycle_proposal_id: Option<Uint8Array>,
+    plain_electorate_rules_json: String,
 ) -> napi::Result<Buffer> {
     let policy_value: json::Value = json::from_json(&policy_json).map_err(norito_to_napi)?;
     let policy = validation_fee_policy_from_json_value(policy_value)?;
     let payout_lifecycle_proposal_id = payout_lifecycle_proposal_id
         .map(|value| validation_fee_fixed_hash(&value, "payout lifecycle proposal id"))
         .transpose()?;
+    let plain_electorate_rules =
+        validation_fee_plain_electorate_rules_from_json(&plain_electorate_rules_json)?;
     validate_validation_fee_policy_proposal(&policy, payout_lifecycle_proposal_id.as_ref())?;
     let fingerprint = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         policy,
         payout_lifecycle_proposal_id,
+        plain_electorate_rules,
     })
     .fingerprint();
+    Ok(Buffer::from(fingerprint.to_vec()))
+}
+
+/// Compute the canonical native fingerprint for one validation-fee payout lifecycle proposal.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+    payout_binding_json: String,
+    plain_electorate_rules_json: String,
+) -> napi::Result<Buffer> {
+    let payout_binding_value: json::Value =
+        json::from_json(&payout_binding_json).map_err(norito_to_napi)?;
+    let payout_binding =
+        validation_fee_payout_binding_from_json_value(payout_binding_value, "payout binding")?;
+    validate_validation_fee_payout_binding(&payout_binding)?;
+    let plain_electorate_rules =
+        validation_fee_plain_electorate_rules_from_json(&plain_electorate_rules_json)?;
+    let fingerprint =
+        ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+            payout_binding,
+            plain_electorate_rules,
+        })
+        .fingerprint();
     Ok(Buffer::from(fingerprint.to_vec()))
 }
 
@@ -8118,6 +8150,120 @@ fn validation_fee_policy_from_json_value(
         }
     }
     json::from_value(value).map_err(norito_to_napi)
+}
+
+fn validation_fee_payout_binding_from_json_value(
+    value: json::Value,
+    context: &str,
+) -> napi::Result<ValidationFeeTreasuryPayoutBindingV1> {
+    const PAYOUT_BINDING_FIELDS: &[&str] = &[
+        "contract_address",
+        "code_hash",
+        "entrypoint",
+        "treasury_account_id",
+        "sbd_asset_id",
+        "xor_asset_id",
+        "pool_vault_account_id",
+        "batch_sbd",
+        "min_xor_out",
+        "max_xor_out",
+        "recipients",
+    ];
+    const RECIPIENT_FIELDS: &[&str] = &["account_id", "share"];
+
+    let json::Value::Object(fields) = &value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be an object"),
+        ));
+    };
+    require_exact_json_fields(fields, PAYOUT_BINDING_FIELDS, context)?;
+    let Some(json::Value::Array(recipients)) = fields.get("recipients") else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context}.recipients must be an array"),
+        ));
+    };
+    for (index, recipient) in recipients.iter().enumerate() {
+        let json::Value::Object(recipient_fields) = recipient else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("{context}.recipients[{index}] must be an object"),
+            ));
+        };
+        require_exact_json_fields(
+            recipient_fields,
+            RECIPIENT_FIELDS,
+            &format!("{context}.recipients[{index}]"),
+        )?;
+    }
+    json::from_value(value).map_err(norito_to_napi)
+}
+
+fn validate_validation_fee_payout_binding(
+    payout_binding: &ValidationFeeTreasuryPayoutBindingV1,
+) -> napi::Result<()> {
+    if let Some(reason) = payout_binding.invariant_error() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid validation-fee payout binding: {reason}"),
+        ));
+    }
+    if payout_binding.contract_address.subject_id() != payout_binding.treasury_account_id {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "validation-fee payout contract subject must equal the payout treasury",
+        ));
+    }
+    Ok(())
+}
+
+fn validation_fee_plain_electorate_rules_from_json(
+    payload: &str,
+) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
+    const RULES_FIELDS: &[&str] = &[
+        "voting_asset_id",
+        "ballot_amount",
+        "ballot_duration_blocks",
+        "citizenship_amount",
+        "max_members",
+        "conviction_step_blocks",
+        "max_conviction",
+        "min_turnout",
+        "approval_threshold_numerator",
+        "approval_threshold_denominator",
+        "eligibility_rule",
+    ];
+    const ELIGIBILITY_RULE_FIELDS: &[&str] = &["rule", "value"];
+
+    let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
+    let json::Value::Object(fields) = &value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "plain electorate rules must be an object",
+        ));
+    };
+    require_exact_json_fields(fields, RULES_FIELDS, "plain electorate rules")?;
+    let Some(json::Value::Object(eligibility_rule)) = fields.get("eligibility_rule") else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "plain electorate rules.eligibility_rule must be an object",
+        ));
+    };
+    require_exact_json_fields(
+        eligibility_rule,
+        ELIGIBILITY_RULE_FIELDS,
+        "plain electorate rules.eligibility_rule",
+    )?;
+    let rules: ValidationFeePlainElectorateRulesV1 =
+        json::from_value(value).map_err(norito_to_napi)?;
+    if let Some(reason) = rules.invariant_error() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid plain electorate rules: {reason}"),
+        ));
+    }
+    Ok(rules)
 }
 
 fn validate_validation_fee_policy_proposal(
@@ -16839,6 +16985,7 @@ mod tests {
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
+            ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateRulesV1,
             ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
             initial_validation_fee_amount, validation_fee_payout_batch_sbd,
             validation_fee_payout_max_xor, validation_fee_payout_min_xor,
@@ -23621,6 +23768,27 @@ seiyaku Privacy {
         )
     }
 
+    fn validation_fee_plain_electorate_rules_fixture() -> ValidationFeePlainElectorateRulesV1 {
+        ValidationFeePlainElectorateRulesV1 {
+            voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
+                .parse()
+                .expect("validation-fee voting asset"),
+            ballot_amount: "150".parse().expect("validation-fee ballot amount"),
+            ballot_duration_blocks: 3_600,
+            citizenship_amount: "10000"
+                .parse()
+                .expect("validation-fee citizenship amount"),
+            max_members: 256,
+            conviction_step_blocks: 100,
+            max_conviction: 6,
+            min_turnout: 1,
+            approval_threshold_numerator: 1,
+            approval_threshold_denominator: 2,
+            eligibility_rule:
+                ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
+        }
+    }
+
     fn validation_fee_payout_binding_fixture() -> ValidationFeeTreasuryPayoutBindingV1 {
         let contract_address: ContractAddress =
             "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
@@ -23812,19 +23980,69 @@ seiyaku Privacy {
                 Some([0x56; 32]),
             ),
         ] {
+            let plain_electorate_rules = validation_fee_plain_electorate_rules_fixture();
             let expected = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
                 policy: policy.clone(),
                 payout_lifecycle_proposal_id,
+                plain_electorate_rules: plain_electorate_rules.clone(),
             })
             .fingerprint();
             let policy_json = json::to_json(&policy).expect("validation-fee policy JSON");
+            let rules_json =
+                json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON");
             let actual = validation_fee_policy_proposal_fingerprint_v1(
                 policy_json,
                 payout_lifecycle_proposal_id.map(|id| Uint8Array::from(id.to_vec())),
+                rules_json,
             )
             .expect("validation-fee policy fingerprint");
             assert_eq!(actual.as_ref(), expected);
         }
+    }
+
+    #[test]
+    fn validation_fee_payout_lifecycle_proposal_fingerprint_matches_native_kind() {
+        let payout_binding = validation_fee_payout_binding_fixture();
+        let plain_electorate_rules = validation_fee_plain_electorate_rules_fixture();
+        let expected =
+            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                payout_binding: payout_binding.clone(),
+                plain_electorate_rules: plain_electorate_rules.clone(),
+            })
+            .fingerprint();
+        let actual = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+            json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
+            json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON"),
+        )
+        .expect("validation-fee payout lifecycle fingerprint");
+        assert_eq!(actual.as_ref(), expected);
+    }
+
+    #[test]
+    fn validation_fee_proposal_fingerprints_match_wallet_release_vectors() {
+        let plain_electorate_rules = validation_fee_plain_electorate_rules_fixture();
+        let policy = validation_fee_policy_fixture(None);
+        let policy_fingerprint = validation_fee_policy_proposal_fingerprint_v1(
+            json::to_json(&policy).expect("validation-fee policy JSON"),
+            None,
+            json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON"),
+        )
+        .expect("validation-fee policy fingerprint");
+        assert_eq!(
+            hex::encode(policy_fingerprint.as_ref()),
+            "dc8dd81d73e9f562e57b7cb6cacc9d3da84fa6663da7cffd96b7282c4b0f68b6"
+        );
+
+        let payout_binding = validation_fee_payout_binding_fixture();
+        let payout_fingerprint = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+            json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
+            json::to_json(&plain_electorate_rules).expect("plain electorate rules JSON"),
+        )
+        .expect("validation-fee payout lifecycle fingerprint");
+        assert_eq!(
+            hex::encode(payout_fingerprint.as_ref()),
+            "f6bf20196ea6985c4fbbfdb902a77079e12c78638f760b6611b6916b9ec3e27e"
+        );
     }
 
     #[test]
@@ -23841,6 +24059,8 @@ seiyaku Privacy {
         let result = validation_fee_policy_proposal_fingerprint_v1(
             json::to_json(&value).expect("legacy validation-fee policy JSON"),
             None,
+            json::to_json(&validation_fee_plain_electorate_rules_fixture())
+                .expect("plain electorate rules JSON"),
         );
         let error = match result {
             Ok(_) => panic!("legacy policy alias must be rejected"),
@@ -23857,6 +24077,8 @@ seiyaku Privacy {
         let result = validation_fee_policy_proposal_fingerprint_v1(
             json::to_json(&policy).expect("mismatched validation-fee policy JSON"),
             Some(Uint8Array::from(vec![0x56; 32])),
+            json::to_json(&validation_fee_plain_electorate_rules_fixture())
+                .expect("plain electorate rules JSON"),
         );
         let error = match result {
             Ok(_) => panic!("mismatched payout contract subject must be rejected"),
@@ -23867,6 +24089,40 @@ seiyaku Privacy {
                 .reason
                 .contains("contract subject must equal the policy treasury")
         );
+    }
+
+    #[test]
+    fn validation_fee_proposal_fingerprints_reject_non_exact_plain_rules() {
+        let rules = validation_fee_plain_electorate_rules_fixture();
+        let mut value = json::to_value(&rules).expect("plain electorate rules JSON");
+        value
+            .as_object_mut()
+            .expect("plain electorate rules fields")
+            .insert(
+                "voting_mode".to_owned(),
+                json::Value::String("Plain".to_owned()),
+            );
+        let error = validation_fee_policy_proposal_fingerprint_v1(
+            json::to_json(&validation_fee_policy_fixture(None))
+                .expect("validation-fee policy JSON"),
+            None,
+            json::to_json(&value).expect("legacy plain electorate rules JSON"),
+        )
+        .expect_err("unknown plain electorate rule fields must fail closed");
+        assert!(error.reason.contains("must contain exactly"));
+    }
+
+    #[test]
+    fn validation_fee_payout_lifecycle_fingerprint_rejects_invalid_binding() {
+        let mut payout_binding = validation_fee_payout_binding_fixture();
+        payout_binding.code_hash = [0; 32];
+        let error = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+            json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
+            json::to_json(&validation_fee_plain_electorate_rules_fixture())
+                .expect("plain electorate rules JSON"),
+        )
+        .expect_err("invalid payout binding must fail closed");
+        assert!(error.reason.contains("code hash must be non-zero"));
     }
 
     #[test]

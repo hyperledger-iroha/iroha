@@ -8989,6 +8989,12 @@ pub struct GovernanceStageApprovals {
     /// Recorded approvals per parliament body.
     #[norito(default)]
     pub stages: BTreeMap<ParliamentBody, GovernanceStageApproval>,
+    /// First height at which every required Parliament body reached approval quorum.
+    ///
+    /// This immutable gate is retained so proposal-bound electorate eligibility
+    /// never depends on mutable configuration or reconstructed event history.
+    #[norito(default)]
+    pub approval_gate_height: Option<u64>,
 }
 
 impl GovernanceStageApprovals {
@@ -28468,7 +28474,20 @@ impl State {
                     super::state::GovernanceReferendumStatus::Open
                         if rec.h_end.checked_add(1) == Some(now_h) =>
                     {
-                        Some((rid.clone(), rec.h_end))
+                        let validation_fee = hex::decode(rid)
+                            .ok()
+                            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                            .and_then(|proposal_id| {
+                                wtx.governance_proposals.get(&proposal_id)
+                            })
+                            .is_some_and(|proposal| {
+                                matches!(
+                                    proposal.kind,
+                                    iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+                                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+                                )
+                            });
+                        (!validation_fee).then(|| (rid.clone(), rec.h_end))
                     }
                     _ => None,
                 })

@@ -486,6 +486,10 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
         ROOT_DIR
         / "scripts"
         / "formal"
+        / "run_sumeragi_v2_apply_authority_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
         / "run_sumeragi_v2_replay_locked_body_carrier_mutation.sh",
         ROOT_DIR
         / "scripts"
@@ -760,6 +764,87 @@ def test_persist_install_validation_mutation_is_release_gated_and_pinned() -> No
     assert "PROPERTY InstallCompletes\n" in fixed
     assert mutant.count('CONSTANT Mode = "RetainStaleValidation"') == 1
     assert "INVARIANT NoOrphanedValidationReceipt\n" in mutant
+
+
+def test_apply_authority_mutation_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    assert 'readonly TLA2TOOLS_VERSION="1.7.4"' in runner
+    assert (
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"'
+        in runner
+    )
+    assert (
+        'readonly MODEL="SumeragiV2ApplyAuthorityMutation.tla"'
+        in runner
+    )
+    assert (
+        'readonly SANY_SUCCESS_MARKER="Semantic processing of module '
+        'SumeragiV2ApplyAuthorityMutation"'
+        in runner
+    )
+    assert (
+        "sany_last_nonblank=\"$(awk 'NF { line = $0 } END { print line }' "
+        '\"${run_dir}/sany.log\")\"'
+        in runner
+    )
+    assert '[[ "$sany_last_nonblank" == "$SANY_SUCCESS_MARKER" ]]' in runner
+    assert "-fp 81 -seed 913765123" in runner
+    assert "resolve_java.sh" in runner
+    assert '"$JAVA_BIN"' in runner
+    assert (
+        "run_case repaired-current-decision \\\n"
+        "  apply_authority_fixed.cfg 0 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Model checking completed. No error has been found."'
+        in runner
+    )
+    assert (
+        "run_case missing-current-decision-authority \\\n"
+        "  apply_authority_missing_guard_bug.cfg 12 \\\n"
+        '  "Invariant HistoricalRetirementTransfersTimedOwner is violated."'
+        in runner
+    )
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    model = (
+        formal_dir / "SumeragiV2ApplyAuthorityMutation.tla"
+    ).read_text(encoding="utf-8")
+    assert (
+        "CurrentCommitDecisionAuthority(qc) ==\n"
+        "  /\\ RawDecisionAuthority(qc)\n"
+        "  /\\ qc.context = CurrentContext\n"
+        '  /\\ qc.phase = "Commit"'
+        in model
+    )
+    assert "/\\ CurrentCommitDecisionAuthority(CurrentQc)" in model
+    assert "/\\ RawDecisionAuthority(OldQc)" in model
+    assert (
+        "HistoricalRetirementTransfersTimedOwner ==\n"
+        "  Node \\notin historicalRecoveryTargets => "
+        "NodeHasCurrentApplication"
+        in model
+    )
+    fixed = (formal_dir / "apply_authority_fixed.cfg").read_text(
+        encoding="utf-8"
+    )
+    mutant = (
+        formal_dir / "apply_authority_missing_guard_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert fixed.count('CONSTANT Mode = "Repaired"') == 1
+    assert "INVARIANT HistoricalRetirementTransfersTimedOwner\n" in fixed
+    assert "PROPERTY ApplyCompletes\n" in fixed
+    assert mutant.count('CONSTANT Mode = "MissingAuthority"') == 1
+    assert "INVARIANT HistoricalRetirementTransfersTimedOwner\n" in mutant
 
 
 def test_replay_locked_body_carrier_mutation_is_release_gated_and_pinned() -> None:

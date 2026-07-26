@@ -2479,7 +2479,14 @@ fn canonical_validation_fee_draft_instruction(
             "validation-fee governance supports plain referendum voting only"
         ));
     }
-    let proposal_kind = request.proposal.proposal_kind();
+    if let Some(reason) = request.plain_electorate_rules.invariant_error() {
+        return Err(eyre!(
+            "invalid validation-fee PLAIN electorate rules: {reason}"
+        ));
+    }
+    let proposal_kind = request
+        .proposal
+        .proposal_kind(&request.plain_electorate_rules);
     let instruction = match &request.proposal {
         ValidationFeeProposalDraftPayloadV1::Policy {
             policy,
@@ -2509,6 +2516,7 @@ fn canonical_validation_fee_draft_instruction(
                 iroha_data_model::governance::types::ValidationFeePolicyProposal {
                     policy: policy.clone(),
                     payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
+                    plain_electorate_rules: request.plain_electorate_rules.clone(),
                 },
             );
             debug_assert_eq!(kind, proposal_kind);
@@ -2517,6 +2525,7 @@ fn canonical_validation_fee_draft_instruction(
                 payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
                 referendum_window: request.referendum_window,
                 mode: Some(VotingMode::Plain),
+                plain_electorate_rules: request.plain_electorate_rules.clone(),
             }
             .into();
             instruction
@@ -2537,6 +2546,7 @@ fn canonical_validation_fee_draft_instruction(
                 payout_binding: payout_binding.clone(),
                 referendum_window: request.referendum_window,
                 mode: Some(VotingMode::Plain),
+                plain_electorate_rules: request.plain_electorate_rules.clone(),
             }
             .into();
             instruction

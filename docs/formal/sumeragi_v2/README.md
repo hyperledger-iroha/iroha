@@ -102,8 +102,12 @@ certificate round.
   config, and 43 mutation configs (48 artifacts total). The shared matrix owns
   42 mutations; the dedicated repeated-handoff mutant bypasses the one-shot
   predecessor-transport gate after restart restore. The proof module contains
-  38 theorem declarations: 26 retain proof bodies and 12 remain proofless
-  (10 safety and 2 liveness). Production ordinary rollover requires a changed
+  38 theorem declarations: 29 retain proof bodies and 9 remain proofless
+  (7 safety and 2 liveness). Bootstrap root replacement now binds the selected
+  durable snapshot to the exact initial snapshot for the current target roster;
+  the existing wrong-bootstrap-projection mutant changes that target while
+  publishing the old candidate and is rejected by this exact binding.
+  Production ordinary rollover requires a changed
   certified roster and authenticated predecessor terminality. A sealed,
   move-only durable handoff or a semantically validated restart may instead
   fence active predecessor responder state, but only through the durable
@@ -320,15 +324,17 @@ certificate round.
   proof-premise repairs remain outstanding.
   Logical views are unbounded in the deductive liveness abstraction; finite
   TLC configurations remain counterexample searches only.
-- `SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla` registers the four
-  exact proofless release residuals
+- `SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla` registers exactly
+  three proofless temporal release residuals:
   `IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation`,
-  `IndexedHistoricalCertificateRankProgressResidualObligation`,
-  `IndexedHistoricalDecisionStageOwnershipResidualObligation`, and
+  `IndexedHistoricalCertificateRankProgressResidualObligation`, and
   `IndexedHistoricalDecisionRankProgressResidualObligation`. Its proved
-  composition wrappers consume those residual properties as antecedents; they
-  do not discharge them. All four ledger entries remain
-  `specified_unproved`.
+  `IndexedHistoricalDecisionStageOwnershipResidualObligation` is a separate
+  safety support theorem derived from `IndexedChainSpec`, and both composition
+  wrappers obtain ownership through that theorem rather than a temporal
+  antecedent. The three temporal leaves remain transitively
+  `specified_unproved`; proving ownership does not promote top-level
+  `height-liveness`.
 - `SumeragiV2LockedBodyProposalActionProofs.tla` is a helper-only release
   module. It proves action-frame preservation and exit lemmas used by the
   locked-body corridor, but owns no ledger obligation and cannot discharge or
@@ -520,13 +526,14 @@ scheduler choice matches the source-linked production kernel:
 Textual TLA+ disjunction order is never treated as priority; the selected-work
 operator makes the branches mutually exclusive.
 
-Local admission has a separate two-source cursor for producer completions and
-causal work. If a producer turn is taken while causal work is waiting, the
-model records sticky causal-admission debt and advances the cursor. The debt is
-cleared only by selecting the causal source; once its head is admissible, debt
-makes that source the deterministic preference under the existing fair
-`RunNode` action. Thus a continuously replenished producer cannot erase the
-causal source's turn.
+Local admission alternates producer-completion and causal-work sources. The
+current proof source gives an Init/full-action induction for
+`asyncCausalAdmissionOwed[node] => CausalQueueNonempty(node)` on `AsyncSpecAt`
+traces; `AsyncStrongTypeInvariant` alone does not imply this fact. Reachable
+causal-debt replenishment therefore reduces to the two local metadata setters,
+and owed admissible causal work receives deterministic preference under fair
+runner service. This does not bound how often distinct causal heads can
+replenish the debt, so it is not yet a temporal convergence proof.
 
 Body transport is typed syntactically over all `Subjects`, not only
 `ValidSubjects`. This keeps authenticated-but-invalid reconstructed bodies in
@@ -647,6 +654,23 @@ production all-voter scheduler. The source-fidelity guard separately seals the
 serialized height loop, bounded runtime/ingress/completion/sidecar turns,
 watchdog poll, and four finite `IDLE_POLL` edges. Those structural checks do not
 prove OS scheduling or admitted-work latency, which remain explicitly trusted.
+
+`ApplyDecision` and `ApplyDecisionReady` now require
+`DecisionCertifiedBodyRecoveryAuthority`: the durable Decision selected for
+application must be the exact current-context Commit certificate before
+`ExecuteApply` retires that node's historical-recovery target. The serialized
+command's `evidence` remains causal provenance and is not overloaded as the
+application certificate. The non-regular readiness proof states this authority
+on both the executable and readiness sides while preserving their existing
+enabledness equivalence. `SumeragiV2ApplyAuthorityMutation.tla` is the paired
+bounded regression: its missing-guard branch applies a same-view/same-subject
+old-context Decision and loses the non-voter's timed-service owner, while the
+repaired branch transfers that ownership to the current application. This is
+an action-boundary counterexample, not a claim that the adversarial initial
+state is reachable from the full async `Init`; a fresh pinned SANY/TLAPS/TLC
+run remains required before citing the new artifacts as machine-checked
+evidence.
+
 `AsyncFairActionAt` inventories the same
 quantified actions as `AsyncFairnessAt`. `AsyncFairActionsRefineAsyncNext` is
 the typed source claim; the dedicated
@@ -702,6 +726,24 @@ completion is evaluated over the same 54 obligations and must contain 44
 `ExactDecisionOffSchedulerResidualConvergenceObligation` are the two explicit
 proofless residual theorems in the aggregate temporal closure. Their downstream
 wrappers do not constitute proofs and cannot promote either obligation.
+
+The target-local closure boundary is split across
+`SumeragiV2AdequateLeaderServiceClosureProofs.tla`,
+`SumeragiV2ExactDecisionStageServiceClosureProofs.tla`, and
+`SumeragiV2AsyncTemporalClosureProofs.tla`. The adequate-leader residual does
+not treat another validator's Decision as terminal for the indexed target. Its
+occurrence rank counts every distinct target/leader owner at the frozen
+semantic rank, so servicing one owner cannot hide another. Equal-count
+replacement and count-increasing replenishment remain explicit non-progress
+cases and require a prior finite or coalesced producer argument.
+
+The exact-Decision producer audit narrows causal replenishment to reachable
+local debt setters; Serve-capacity growth to ordinary or historical request
+drain, fresh causal Completion admission, or local Control enqueue; and
+priority growth to exact network-claim admission or the same archive's normal,
+recovery, or historical runner. Each classification is action-local. No
+current state expression decreases across every producer episode, so the five
+exact off-scheduler convergence leaves remain proofless.
 
 The target statement is exactly: after GST, with a responsive dual quorum and
 terminating local work, every height eventually decides and every responsive
@@ -795,6 +837,13 @@ failure-free suffix for terminating local work. The release-facing activation
 theorem now carries an explicit candidate proof: suffix-local weak fairness
 exits every rank, well-founded composition reaches publication/supersession,
 and a temporal persistence lemma lifts that result across the eventual suffix.
+Its progress-preservation leaf explicitly requires the chain-epoch invariant
+and proves the canonical next context admissible from exact durable parent
+application, node-context typing, certified-prefix validity, and the
+no-outrun bound. This prevents a failure latch from retaining an exact recovery
+owner outside the admissible indexed product. The repaired caller chain and
+fail-closed mutations are SANY-clean, but not yet a strict deductive
+discharge.
 It remains ledgered `specified_unproved` until strict TLAPS verifies the full
 proof; source composition and SANY parsing are not a machine-checked discharge.
 The separate production-refinement seam is also intentionally stronger than
@@ -829,14 +878,16 @@ rule conditional on exact next-step preservation. Clock/readiness, discovery
 preservation, authenticated request-to-Decision delivery, and the historical
 Decision/body/application corridor remain named operator premises; the child
 does not promote either endpoint from those premises. The checker exposes the
-remaining historical corridor as four exact proofless support wrappers:
+remaining historical corridor as exactly three proofless temporal support
+wrappers:
 `IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation`,
 `IndexedHistoricalCertificateRankProgressResidualObligation`,
-`IndexedHistoricalDecisionStageOwnershipResidualObligation`, and
-`IndexedHistoricalDecisionRankProgressResidualObligation`. The downstream
-exact-recovery composition assumes their residual properties and therefore
-cannot serve as proof of them. They are source-bound transitively through the
-top-level `height-liveness` row rather than promoted into four extra claims.
+and `IndexedHistoricalDecisionRankProgressResidualObligation`. The separate
+`IndexedHistoricalDecisionStageOwnershipResidualObligation` is proved as a
+safety theorem from `IndexedChainSpec`; downstream exact-recovery composition
+derives ownership from it and assumes only the three remaining temporal
+residual properties. Those three debts are source-bound transitively through
+the top-level `height-liveness` row rather than promoted into extra claims.
 The release-facing theorem itself remains proofless, explicit
 `specified_unproved` debt until its prerequisites are discharged and a fresh
 pinned strict proof succeeds
@@ -1007,7 +1058,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 705 named tests
+Before network startup, the executable wrapper inventories 733 named tests
 across 38 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -1084,7 +1135,10 @@ increase of 18. Rejecting replay of a proposal superseded by a same-round lock
 adds one exact reducer regression. Preserving that proposal's exact tag, round,
 and subject through runner startup adds one exact runner regression. Two
 cross-platform lifecycle V3 crash regressions cover state replacement before
-directory sync and root replacement before predecessor cleanup. The current inventory therefore contains 732 tests across 38 modules.
+directory sync and root replacement before predecessor cleanup. Those changes
+produced the 732-test checkpoint. Rejecting a matching CommitQC from a foreign
+height context before Apply schedules any work adds one exact `v2_effects`
+regression. The current inventory therefore contains 733 tests across 38 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 81 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1159,7 +1213,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`e4f9c69b5465ae3203d289394f490b4d98adb895dae8a6e0362092d7549a7169`.
+`e75c51803aac27dd973d1a31e786dec2da0b0be3d984c2f333c3efbb853f3a66`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1280,7 +1334,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and the exact
-732-test inventory, the pinned harness lock and resolved toolchain, the formal
+733-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

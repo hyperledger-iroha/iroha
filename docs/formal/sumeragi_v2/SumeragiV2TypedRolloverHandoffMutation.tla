@@ -678,31 +678,26 @@ CleanupRetainsInactiveSlot ==
           !.cleanupPerformed = TRUE]
 
 WrongBootstrapLifecycleProjection ==
-  /\ state.lifecycleCommitPhase = "Bootstrap"
+  /\ state.lifecycleCommitPhase = "BootstrapStatePublished"
   /\ state.durableLifecycleRootV3 = BootstrapLifecycleRootV3
+  /\ state.candidatePresent
+  /\ state.candidateSemanticallyValidated
+  /\ LifecycleStateDirectoryIsSynced(state)
+  /\ state.targetRoster = state.currentRoster
+  /\ state.currentRoster = state.baselineRoster
+  /\ state.compactionCause = "NoCompaction"
   /\ ~state.restartRequired
-  /\ LET wrong ==
-           LifecycleSnapshotV3(
-             InitialRootGeneration,
-             state.targetRoster,
-             InitialServiceGeneration,
-             1,
-             1,
-             "Active",
-             "Active",
-             0)
+  /\ LET wrongTarget ==
+           IF state.targetRoster = "RosterA"
+             THEN "RosterB"
+             ELSE "RosterA"
      IN state' =
        [state EXCEPT
-          !.durableLifecycleStateSlotsV3[
-            LifecycleStateSlot(InitialRootGeneration)] = wrong,
-          !.syncedLifecycleStateSlotsV3[
-            LifecycleStateSlot(InitialRootGeneration)] = wrong,
-          !.candidateLifecycleSnapshotV3 = wrong,
-          !.candidatePresent = TRUE,
-          !.candidateStateSlot =
-            LifecycleStateSlot(InitialRootGeneration),
-          !.lifecycleCommitPhase = "BootstrapStatePublished",
-          !.crashArtifactsPresent = TRUE]
+          !.targetRoster = wrongTarget,
+          !.compactionCause = "RosterGeometryReplacement",
+          !.durableLifecycleRootV3 =
+            LifecycleRootV3(state.candidateLifecycleSnapshotV3),
+          !.lifecycleCommitPhase = "BootstrapRootReplaced"]
 
 SkipBootstrapCrashHistory ==
   /\ state.lifecycleCommitPhase = "BootstrapStatePublished"

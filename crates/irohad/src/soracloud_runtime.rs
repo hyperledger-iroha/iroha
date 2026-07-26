@@ -273,7 +273,7 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
             )
         }
         .map_err(|error| {
-            eyre::eyre!("quote internal Soracloud runtime mutation at `{endpoint}`: {error}")
+            eyre::eyre!("quote internal Soracloud runtime mutation at `{endpoint}`: {error:?}")
         })?;
         payload.fee_payment = quote.recommended_intent;
         let tx = sign_soracloud_runtime_submission_payload(payload, &self.key_pair, endpoint)?;

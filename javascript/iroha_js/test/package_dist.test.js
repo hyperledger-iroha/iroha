@@ -291,6 +291,8 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
     "buildTransaction",
     "buildCancelAssetLockInstruction",
     "CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1",
+    "computeValidationFeePayoutLifecycleProposalFingerprintV1",
+    "computeValidationFeePolicyProposalFingerprintV1",
     "noritoEncodeInstruction",
     "privacyCapabilitiesV1",
   ]) {

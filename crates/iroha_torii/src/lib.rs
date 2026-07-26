@@ -12651,6 +12651,19 @@ pub fn ensure_mandatory_offline_configuration(
     offline_config: &iroha_config::parameters::actual::Offline,
     command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
 ) -> Result<(), String> {
+    if !offline_config.enabled {
+        if !offline_config.escrow_accounts.is_empty()
+            || offline_config.kagemusha_release_policy_path.is_some()
+            || offline_config.kagemusha_artifact_dir.is_some()
+            || command_config.is_some()
+        {
+            return Err(
+                "settlement.offline.enabled=false forbids dormant escrow, release, and command configuration"
+                    .to_owned(),
+            );
+        }
+        return Ok(());
+    }
     if !offline_config.escrow_required {
         return Err("settlement.offline.escrow_required must be true".to_owned());
     }
@@ -12802,6 +12815,9 @@ pub fn ensure_mandatory_offline_startup_readiness(
     fee_asset_selector: &str,
 ) -> Result<(), String> {
     ensure_mandatory_offline_configuration(offline_config, command_config)?;
+    if !offline_config.enabled {
+        return Ok(());
+    }
     let command_config = command_config
         .cloned()
         .ok_or_else(|| "torii.kagemusha_commands is mandatory for offline cash".to_owned())?;
@@ -13395,13 +13411,18 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn mandatory_health_and_readyz_status_fail_closed_with_http_503() {
         assert_eq!(
-            mandatory_offline_probe_status(false),
+            mandatory_offline_probe_status(true, false),
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "both mandatory offline readiness probes must reject an offline-incomplete node",
         );
         assert_eq!(
-            mandatory_offline_probe_status(true),
+            mandatory_offline_probe_status(true, true),
             axum::http::StatusCode::OK,
+        );
+        assert_eq!(
+            mandatory_offline_probe_status(false, false),
+            axum::http::StatusCode::OK,
+            "an explicitly disabled optional service cannot fail node readiness",
         );
     }
 
@@ -13478,6 +13499,27 @@ mod offline_kagemusha_readiness_tests {
         let error = ensure_mandatory_offline_configuration(&offline, None)
             .expect_err("missing issuer command authority must fail closed");
         assert!(error.contains("torii.kagemusha_commands is mandatory"));
+    }
+
+    #[test]
+    fn explicit_disabled_offline_profile_is_empty_and_accepted() {
+        let mut offline = iroha_config::parameters::actual::Offline {
+            enabled: false,
+            ..iroha_config::parameters::actual::Offline::default()
+        };
+        ensure_mandatory_offline_configuration(&offline, None)
+            .expect("an explicit empty disabled profile is valid");
+
+        let asset_definition_id = AssetDefinitionId::new(
+            iroha_data_model::domain::DomainId::try_new("boi", "is").expect("fixture asset domain"),
+            "ds".parse().expect("fixture asset name"),
+        );
+        offline
+            .escrow_accounts
+            .insert(asset_definition_id, iroha_test_samples::ALICE_ID.clone());
+        let error = ensure_mandatory_offline_configuration(&offline, None)
+            .expect_err("disabled profiles must reject dormant escrow configuration");
+        assert!(error.contains("enabled=false"));
     }
 
     #[test]
@@ -17280,6 +17322,19 @@ fn mandatory_offline_status_snapshot(
     app: &AppState,
 ) -> iroha_torii_shared::offline_api::OfflineStatus {
     let offline_config = app.state.view().settlement.offline.clone();
+    if !offline_config.enabled {
+        return iroha_torii_shared::offline_api::OfflineStatus {
+            mandatory: false,
+            cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
+            required_bridge_abi_version:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
+            ready: false,
+            assets: Vec::new(),
+            blockers: Vec::new(),
+        };
+    }
     let command_config = app
         .offline_commands
         .as_deref()
@@ -17351,8 +17406,8 @@ fn mandatory_offline_status_snapshot(
 }
 
 #[cfg(feature = "app_api")]
-fn mandatory_offline_probe_status(ready: bool) -> StatusCode {
-    if ready {
+fn mandatory_offline_probe_status(mandatory: bool, ready: bool) -> StatusCode {
+    if !mandatory || ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
@@ -17362,6 +17417,7 @@ fn mandatory_offline_probe_status(ready: bool) -> StatusCode {
 #[cfg(feature = "app_api")]
 fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
     let offline_config = app.state.view().settlement.offline.clone();
+    let mandatory = offline_config.enabled;
     let command_config = app
         .offline_commands
         .as_deref()
@@ -17374,12 +17430,17 @@ fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
         command_config.as_ref(),
         &fee_asset_selector,
     );
-    let ready = result.is_ok();
-    let blockers = result.err().into_iter().collect::<Vec<_>>();
+    let ready = mandatory && result.is_ok();
+    let blockers = if mandatory {
+        result.err().into_iter().collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     crate::utils::respond_json_value_with_status(
-        mandatory_offline_probe_status(ready),
+        mandatory_offline_probe_status(mandatory, ready),
         json_object([
             json_entry("live", true),
+            json_entry("mandatory", mandatory),
             json_entry("ready", ready),
             json_entry(
                 "cash_handoff_capability",

@@ -27,6 +27,10 @@ use iroha_data_model::{
     isi::governance::{CouncilDerivationKind, ParliamentDecision},
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
     smart_contract::manifest::{EntryPointKind, ManifestProvenance},
+    validation_fee::{
+        VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeePlainElectorateEligibilityRuleV1,
+        ValidationFeePlainElectorateRulesV1,
+    },
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
@@ -923,6 +927,28 @@ pub const GOVERNANCE_CAPABILITIES_SCHEMA_V1: &str = "iroha.governance.capabiliti
 /// Current strict governance readiness projection version.
 pub const GOVERNANCE_CAPABILITIES_VERSION_V1: u16 = 1;
 
+/// Project the exact first-release validation-fee PLAIN electorate contract
+/// from the active governance configuration.
+#[must_use]
+pub(crate) fn validation_fee_plain_electorate_rules(
+    gov: &iroha_config::parameters::actual::Governance,
+) -> ValidationFeePlainElectorateRulesV1 {
+    ValidationFeePlainElectorateRulesV1 {
+        voting_asset_id: gov.voting_asset_id.clone(),
+        ballot_amount: gov.min_bond_amount.clone(),
+        ballot_duration_blocks: gov.window_span,
+        citizenship_amount: gov.citizenship_bond_amount.clone(),
+        max_members: VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
+        conviction_step_blocks: gov.conviction_step_blocks,
+        max_conviction: gov.max_conviction,
+        min_turnout: gov.min_turnout,
+        approval_threshold_numerator: gov.approval_threshold_q_num,
+        approval_threshold_denominator: gov.approval_threshold_q_den,
+        eligibility_rule:
+            ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
+    }
+}
+
 /// Configured target sizes for all seven SORA Parliament bodies.
 #[derive(Debug, Clone, JsonSerialize)]
 pub struct GovernanceTargetBodySizesV1 {
@@ -967,14 +993,24 @@ pub struct GovernanceCapabilitiesV1 {
     pub plain_voting_enabled: bool,
     /// Whether PLAIN referenda deterministically finalize after their inclusive end height.
     pub auto_finalize_plain: bool,
+    /// Exact scope in which deterministic PLAIN auto-finalization remains enabled.
+    pub auto_finalize_plain_scope: String,
+    /// Validation-fee PLAIN referenda require an explicit typed finalization instruction.
+    pub validation_fee_plain_requires_explicit_finalization: bool,
     /// Citizenship bond asset.
     pub citizenship_asset_id: String,
     /// Exact citizenship bond as a decimal string.
     pub citizenship_bond_amount: String,
+    /// Account that custodies citizenship bonds.
+    pub citizenship_escrow_account: String,
     /// Citizen ballot bond asset.
     pub voting_asset_id: String,
     /// Exact minimum citizen ballot bond as a decimal string.
     pub min_bond_amount: String,
+    /// Account that custodies citizen ballot bonds.
+    pub bond_escrow_account: String,
+    /// Exact immutable PLAIN electorate rules required by validation-fee proposals.
+    pub validation_fee_plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
     /// Conviction step in blocks.
     pub conviction_step_blocks: String,
     /// Maximum conviction multiplier.
@@ -1035,6 +1071,7 @@ pub async fn handle_gov_capabilities(
             ))
         })?;
     let gov = state.governance_snapshot();
+    let validation_fee_plain_electorate_rules = validation_fee_plain_electorate_rules(&gov);
     let world = state.world_view();
     Ok(JsonBody(GovernanceCapabilitiesV1 {
         schema: GOVERNANCE_CAPABILITIES_SCHEMA_V1.to_owned(),
@@ -1050,10 +1087,15 @@ pub async fn handle_gov_capabilities(
         approval_mode: governance_approval_mode(state.as_ref()),
         plain_voting_enabled: gov.plain_voting_enabled,
         auto_finalize_plain: true,
+        auto_finalize_plain_scope: "GENERIC_NON_VALIDATION_FEE_ONLY".to_owned(),
+        validation_fee_plain_requires_explicit_finalization: true,
         citizenship_asset_id: gov.citizenship_asset_id.to_string(),
         citizenship_bond_amount: gov.citizenship_bond_amount.to_string(),
+        citizenship_escrow_account: gov.citizenship_escrow_account.to_string(),
         voting_asset_id: gov.voting_asset_id.to_string(),
         min_bond_amount: gov.min_bond_amount.to_string(),
+        bond_escrow_account: gov.bond_escrow_account.to_string(),
+        validation_fee_plain_electorate_rules,
         conviction_step_blocks: gov.conviction_step_blocks.to_string(),
         max_conviction: gov.max_conviction.to_string(),
         min_enactment_delay: gov.min_enactment_delay.to_string(),
@@ -1081,6 +1123,7 @@ pub async fn handle_gov_capabilities(
             "/v1/validation-fee/proposals".to_owned(),
             "/v1/validation-fee/proposals/{proposal_id}".to_owned(),
             "/v1/validation-fee/proposals/draft".to_owned(),
+            "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft".to_owned(),
             "/v1/gov/parliament/ballots".to_owned(),
             "/v1/gov/ballots/plain".to_owned(),
             "/v1/gov/enact".to_owned(),

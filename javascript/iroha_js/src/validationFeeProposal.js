@@ -4,16 +4,12 @@ import { getNativeBinding } from "./native.js";
 
 const LOWER_HEX_32 = /^[0-9a-f]{64}$/u;
 
-function nativeBinding() {
+function nativeFunction(name, rustName) {
   const native = globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
-  if (
-    typeof native?.validationFeePolicyProposalFingerprintV1 !== "function"
-  ) {
-    throw new Error(
-      "native binding 'validation_fee_policy_proposal_fingerprint_v1' is unavailable",
-    );
+  if (typeof native?.[name] !== "function") {
+    throw new Error(`native binding '${rustName}' is unavailable`);
   }
-  return native;
+  return native[name].bind(native);
 }
 
 function exactLifecycleProposalId(value) {
@@ -32,46 +28,82 @@ function exactLifecycleProposalId(value) {
   return bytes;
 }
 
+function exactJsonObject(value, name) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${name} must be an exact native object`);
+  }
+  let encoded;
+  try {
+    encoded = JSON.stringify(value);
+  } catch (error) {
+    throw new TypeError(
+      `${name} must be JSON-serializable: ${error?.message ?? error}`,
+    );
+  }
+  if (typeof encoded !== "string") {
+    throw new TypeError(`${name} must be an exact native object`);
+  }
+  return encoded;
+}
+
+function exactFingerprint(value, proposalName) {
+  const fingerprint = Buffer.from(value);
+  if (fingerprint.length !== 32) {
+    throw new Error(
+      `native ${proposalName} proposal fingerprint must contain exactly 32 bytes`,
+    );
+  }
+  return fingerprint.toString("hex");
+}
+
 /**
  * Compute the exact native Parliament fingerprint for a validation-fee policy.
  *
  * The policy must use the native snake-case `ValidationFeePolicyV1` JSON
+ * contract. The electorate rules must use the exact first-release PLAIN
  * contract. Native validation rejects missing, unknown, and legacy fields.
  *
  * @param {Record<string, unknown>} policy
- * @param {string | null} [payoutLifecycleProposalId]
+ * @param {string | null} payoutLifecycleProposalId
+ * @param {Record<string, unknown>} plainElectorateRules
  * @returns {string} lowercase 32-byte proposal fingerprint
  */
 export function computeValidationFeePolicyProposalFingerprintV1(
   policy,
-  payoutLifecycleProposalId = null,
+  payoutLifecycleProposalId,
+  plainElectorateRules,
 ) {
-  if (
-    policy === null ||
-    typeof policy !== "object" ||
-    Array.isArray(policy)
-  ) {
-    throw new TypeError("policy must be an exact native ValidationFeePolicyV1 object");
-  }
-  let policyJson;
-  try {
-    policyJson = JSON.stringify(policy);
-  } catch (error) {
-    throw new TypeError(`policy must be JSON-serializable: ${error?.message ?? error}`);
-  }
-  if (typeof policyJson !== "string") {
-    throw new TypeError("policy must be an exact native ValidationFeePolicyV1 object");
-  }
-  const fingerprint = Buffer.from(
-    nativeBinding().validationFeePolicyProposalFingerprintV1(
-      policyJson,
-      exactLifecycleProposalId(payoutLifecycleProposalId),
-    ),
+  const fingerprint = nativeFunction(
+    "validationFeePolicyProposalFingerprintV1",
+    "validation_fee_policy_proposal_fingerprint_v1",
+  )(
+    exactJsonObject(policy, "policy"),
+    exactLifecycleProposalId(payoutLifecycleProposalId),
+    exactJsonObject(plainElectorateRules, "plainElectorateRules"),
   );
-  if (fingerprint.length !== 32) {
-    throw new Error(
-      "native validation-fee proposal fingerprint must contain exactly 32 bytes",
-    );
-  }
-  return fingerprint.toString("hex");
+  return exactFingerprint(fingerprint, "validation-fee policy");
+}
+
+/**
+ * Compute the exact native Parliament fingerprint for a validation-fee payout lifecycle.
+ *
+ * Both arguments must use their exact native snake-case JSON contracts.
+ * Native validation rejects missing, unknown, legacy, and non-canonical fields.
+ *
+ * @param {Record<string, unknown>} payoutBinding
+ * @param {Record<string, unknown>} plainElectorateRules
+ * @returns {string} lowercase 32-byte proposal fingerprint
+ */
+export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
+  payoutBinding,
+  plainElectorateRules,
+) {
+  const fingerprint = nativeFunction(
+    "validationFeePayoutLifecycleProposalFingerprintV1",
+    "validation_fee_payout_lifecycle_proposal_fingerprint_v1",
+  )(
+    exactJsonObject(payoutBinding, "payoutBinding"),
+    exactJsonObject(plainElectorateRules, "plainElectorateRules"),
+  );
+  return exactFingerprint(fingerprint, "validation-fee payout lifecycle");
 }

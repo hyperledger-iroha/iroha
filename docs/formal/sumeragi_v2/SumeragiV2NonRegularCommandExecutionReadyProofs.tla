@@ -515,6 +515,31 @@ FixedApplyExecute(witness) ==
                  asyncTransport, asyncIngressLanes, asyncIngressReady,
                  asyncHeldChunks>>
 
+\* Both sides of the readiness/execution equivalence expose the same durable
+\* current-context Commit authority.  Causal command evidence is not reused as
+\* the Decision certificate.
+THEOREM ExecuteApplyUsesCurrentCommitAuthority ==
+  \A command:
+    ExecuteApply(command)
+      => \E qc \in DecisionQcValues:
+           /\ CommandMatches(command, command.node,
+                             qc.view, qc.subject)
+           /\ DecisionCertifiedBodyRecoveryAuthority(command.node, qc)
+           /\ ApplyDecision(command.node, qc)
+BY Isa
+   DEF ExecuteApply, ApplyDecision
+
+THEOREM ExecuteApplyReadyUsesCurrentCommitAuthority ==
+  \A command:
+    ExecuteApplyReady(command)
+      => \E qc \in DecisionQcValues:
+           /\ CommandMatches(command, command.node,
+                             qc.view, qc.subject)
+           /\ DecisionCertifiedBodyRecoveryAuthority(command.node, qc)
+           /\ ApplyDecisionReady(command.node, qc)
+BY Isa
+   DEF ExecuteApplyReady, ApplyDecisionReady
+
 THEOREM FixedApplyReadyIffEnabled ==
   \A witness:
     FixedApplyReady(witness) <=> ENABLED FixedApplyExecute(witness)
