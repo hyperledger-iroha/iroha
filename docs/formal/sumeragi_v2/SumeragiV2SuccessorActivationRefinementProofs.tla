@@ -248,14 +248,75 @@ BY Isa DEF IndexedChainInit, SuccessorActivationProtocolInvariant,
            SuccessorActivationPending,
            IndexedSuccessorActivationPending
 
+(***************************************************************************
+An exact durable application identifies the canonical next context, but its
+subject is known to be valid only through the ChainEpoch receipt invariant.
+Keeping that premise explicit prevents the failure latch from using an
+arbitrary admissible witness for the outer progress-step existential and then
+leaving a failed owner whose exact recovery context is outside the admissible
+indexed product.
+***************************************************************************)
+THEOREM ExactDurableParentApplicationHasAdmissibleSuccessorContext ==
+  \A parentContext \in AdmissibleContextRecords,
+     node \in ValidatorIds,
+     application \in Chain!DecisionEvidenceSet:
+    /\ Chain!ChainEpochInvariant
+    /\ ExactDurableParentApplication(parentContext, node, application)
+    => CanonicalIndexedContext(parentContext.height + 1)
+         \in AdmissibleContextRecords
+PROOF
+  <1>1. ASSUME NEW parentContext \in AdmissibleContextRecords,
+              NEW node \in ValidatorIds,
+              NEW application \in Chain!DecisionEvidenceSet,
+              Chain!ChainEpochInvariant,
+              ExactDurableParentApplication(
+                parentContext, node, application)
+         PROVE CanonicalIndexedContext(parentContext.height + 1)
+                  \in AdmissibleContextRecords
+    <2>1. parentContext.height + 1 \in Heights
+      BY <1>1, Isa
+         DEF ExactDurableParentApplication,
+             AdmissibleContextRecords, FrozenContextAdmissible,
+             ContextRecords, LineagesAt, Heights
+    <2>2. CanonicalIndexedContext(parentContext.height + 1)
+             \in ContextRecords
+      BY <1>1, Isa
+         DEF ExactDurableParentApplication,
+             Chain!ChainEpochInvariant,
+             Chain!ChainEpochTypeInvariant
+    <2>3. parentContext.height + 1 <= certifiedHeight
+      BY <1>1, Isa
+         DEF ExactDurableParentApplication,
+             Chain!ChainEpochInvariant,
+             Chain!NodesDoNotOutrunCertificates
+    <2>4. \A index \in 1..(parentContext.height + 1):
+             decidedAt[index] \in ValidSubjects
+      BY <1>1, <2>3, Isa
+         DEF Chain!ChainEpochInvariant,
+             Chain!CertifiedPrefixBacked
+    <2>5. \A index \in
+               DOMAIN CanonicalIndexedContext(
+                 parentContext.height + 1).lineage:
+             CanonicalIndexedContext(
+               parentContext.height + 1).lineage[index]
+               \in ValidSubjects
+      BY <2>1, <2>4, Isa
+         DEF CanonicalIndexedContext,
+             Chain!ContextRecord, Chain!HistoryThrough
+    <2> QED BY <2>2, <2>5
+         DEF AdmissibleContextRecords, FrozenContextAdmissible
+  <1> QED BY <1>1
+
 THEOREM SuccessorActivationProgressPreservesProtocolInvariant ==
   \A selectedParent \in AdmissibleContextRecords,
      selectedNode \in ValidatorIds:
-    SuccessorActivationProtocolInvariant
+    Chain!ChainEpochInvariant
+      /\ SuccessorActivationProtocolInvariant
       /\ IndexedSuccessorActivationProgressStep(
            selectedParent, selectedNode)
       => SuccessorActivationProtocolInvariant'
-BY ExpandENABLED, Isa
+BY ExactDurableParentApplicationHasAdmissibleSuccessorContext,
+   ExpandENABLED, Isa
    DEF SuccessorActivationProtocolInvariant,
        SuccessorActivationPending,
        SuccessorActivationHasDurableParentWitness,
@@ -378,6 +439,7 @@ PROOF
                     parentContext, node)
       BY <1>1, <2>2,
          SuccessorActivationProgressPreservesProtocolInvariant
+         DEF IndexedCompositionInvariant
     <2> QED BY <1>1, <2>1, <2>2 DEF IndexedChainNext
   <1> QED BY <1>1
 
@@ -781,6 +843,7 @@ THEOREM SuccessorActivationFailureFreeProgressExitsCurrentRank ==
   \A parentContext \in AdmissibleContextRecords,
      node \in Responsive,
      rank \in SuccessorActivationRankCarrier:
+    /\ Chain!ChainEpochInvariant
     /\ SuccessorActivationProtocolInvariant
     /\ SuccessorActivationAtRank(parentContext, node, rank)
     /\ SuccessorActivationFailureAbsent(parentContext, node)
@@ -976,14 +1039,17 @@ PROOF
                 <<IndexedSuccessorActivationProgressStep(
                     parentContext, node)>>_(IndexedChainVars)
       BY <1>1, SuccessorActivationAtRankEnablesFairProgress
-    <2>8. /\ SuccessorActivationProtocolInvariant
+    <2>8. /\ Chain!ChainEpochInvariant
+            /\ SuccessorActivationProtocolInvariant
             /\ SuccessorActivationAtRank(parentContext, node, rank)
             /\ SuccessorActivationFailureAbsent(parentContext, node)
             /\ SuccessorActivationFailureAbsent(parentContext, node)'
             /\ <<IndexedSuccessorActivationProgressStep(
                    parentContext, node)>>_(IndexedChainVars)
            => SuccessorActivationRankExit(parentContext, node, rank)'
-      BY <1>1, SuccessorActivationFailureFreeProgressExitsCurrentRank
+      BY <1>1, <2>1,
+         SuccessorActivationFailureFreeProgressExitsCurrentRank, PTL
+         DEF IndexedCompositionInvariant
     <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7,
                   <2>8, PTL
   <1> QED BY <1>1

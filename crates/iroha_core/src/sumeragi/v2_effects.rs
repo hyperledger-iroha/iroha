@@ -18220,6 +18220,48 @@ mod tests {
     }
 
     #[test]
+    fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor
+            .admit_local_proposal(
+                tag(0),
+                fixture.manifest.clone(),
+                fixture.body.clone(),
+                &mut services,
+            )
+            .expect("local proposal");
+        complete_local_proposal_chain(&mut executor, &mut services);
+
+        let mut foreign_context = fixture.context.clone();
+        foreign_context.chain_id = "foreign-v2-effect-executor-test".into();
+        let mut foreign_commit = fixture.qc(wire::GlobalPhase::Commit);
+        foreign_commit.round.context_id = foreign_context.id();
+        foreign_commit.proposal_round.context_id = foreign_context.id();
+        assert_eq!(foreign_commit.round.height, fixture.manifest.round.height);
+        assert_eq!(foreign_commit.round.view, fixture.manifest.round.view);
+        assert_eq!(foreign_commit.subject, fixture.manifest.subject);
+        assert!(
+            foreign_commit.validate(&foreign_context).is_ok(),
+            "the adversarial certificate must be internally valid for its foreign context"
+        );
+
+        assert!(matches!(
+            executor.begin_apply(
+                tag(0),
+                fixture.manifest.subject,
+                foreign_commit,
+                &mut services,
+            ),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("frozen height's exact CommitQC")
+        ));
+        assert!(executor.pending_applications.is_empty());
+        assert!(services.apply_tasks.is_empty());
+    }
+
+    #[test]
     fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         let fixture = Fixture::new();
         let directory = TempDir::new().expect("body-store directory");

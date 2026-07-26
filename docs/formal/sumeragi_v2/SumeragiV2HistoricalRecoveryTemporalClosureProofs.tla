@@ -1002,6 +1002,28 @@ BY IndexedHistoricalDecisionOwnerHasVisibleExactStage, Isa
    DEF IndexedDecisionWitnessSupport,
        IndexedHistoricalDecisionStageOwnershipResidual
 
+THEOREM IndexedHistoricalDecisionStageOwnershipResidualObligation ==
+  IndexedChainSpec
+    => IndexedHistoricalDecisionStageOwnershipResidualProperty
+PROOF
+  <1>1. ASSUME IndexedChainSpec
+         PROVE IndexedHistoricalDecisionStageOwnershipResidualProperty
+    <2>1. []IndexedDecisionWitnessSupport
+      BY <1>1, IndexedChainSpecAlwaysDecisionWitnessSupport
+    <2>2. []IndexedResponsiveRecoveryDormant
+      BY <1>1, IndexedChainSpecKeepsResponsiveRecoveryDormant
+    <2>3. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant
+    <2>4. [](\A initialContext \in AdmissibleContextRecords,
+                  node \in Responsive:
+               ~IndexedHistoricalDecisionStageOwnershipResidual(
+                  initialContext, node))
+      BY <2>1, <2>2, <2>3,
+         IndexedHistoricalDecisionStageOwnershipResidualIsEmpty, PTL
+    <2> QED BY <2>4, PTL
+         DEF IndexedHistoricalDecisionStageOwnershipResidualProperty
+  <1> QED BY <1>1
+
 IndexedHistoricalDecisionRankProgressAt(
     initialContext, node, rank) ==
   IndexedHistoricalDecisionStageAt(initialContext, node, rank)
@@ -1365,13 +1387,11 @@ IndexedExactHistoricalRecoveryFromAuthorityProgress ==
 THEOREM IndexedHistoricalServiceKernelsDischargeAuthorityReadyProgress ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalCertificateRankProgressResidualProperty
-  /\ IndexedHistoricalDecisionStageOwnershipResidualProperty
   /\ IndexedHistoricalDecisionRankProgressResidualProperty
   => IndexedExactHistoricalRecoveryFromAuthorityProgress
 PROOF
   <1>1. ASSUME IndexedChainSpec,
               IndexedHistoricalCertificateRankProgressResidualProperty,
-              IndexedHistoricalDecisionStageOwnershipResidualProperty,
               IndexedHistoricalDecisionRankProgressResidualProperty,
               NEW initialContext \in AdmissibleContextRecords,
               NEW node \in Responsive
@@ -1430,7 +1450,7 @@ PROOF
               initialContext, node)
               ~> IndexedHistoricalDecisionStageGoal(
                    initialContext, node)
-      BY <1>1
+      BY <1>1, IndexedHistoricalDecisionStageOwnershipResidualObligation
          DEF IndexedHistoricalDecisionStageOwnershipResidualProperty
     <2>11. (\E rank \in 1..6:
               IndexedHistoricalDecisionStageAt(
@@ -1510,9 +1530,10 @@ ValidateBody, and Apply owners.  No item in this inventory assumes
 (***************************************************************************
 Exact proof-debt declarations.
 
-The three proofless theorem wrappers make every remaining temporal kernel
-visible to the release ledger.  The Decision-stage ownership wrapper has a
-proof below; the proved composition still consumes all four properties.
+Exactly three proofless theorem wrappers make every remaining temporal kernel
+visible to the release ledger.  The Decision-stage ownership safety theorem is
+proved above from `IndexedChainSpec`; composition derives that property rather
+than assuming it as a fourth temporal kernel.
 
 TODO: discharge the three remaining wrappers from the exact ordinary-consensus,
 historical packet/service, target-runner, and body/application fairness actions
@@ -1564,28 +1585,6 @@ THEOREM IndexedHistoricalCertificateRankProgressResidualObligation ==
   IndexedChainSpec
     => IndexedHistoricalCertificateRankProgressResidualProperty
 
-THEOREM IndexedHistoricalDecisionStageOwnershipResidualObligation ==
-  IndexedChainSpec
-    => IndexedHistoricalDecisionStageOwnershipResidualProperty
-PROOF
-  <1>1. ASSUME IndexedChainSpec
-         PROVE IndexedHistoricalDecisionStageOwnershipResidualProperty
-    <2>1. []IndexedDecisionWitnessSupport
-      BY <1>1, IndexedChainSpecAlwaysDecisionWitnessSupport
-    <2>2. []IndexedResponsiveRecoveryDormant
-      BY <1>1, IndexedChainSpecKeepsResponsiveRecoveryDormant
-    <2>3. []IndexedCompositionInvariant
-      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant
-    <2>4. [](\A initialContext \in AdmissibleContextRecords,
-                  node \in Responsive:
-               ~IndexedHistoricalDecisionStageOwnershipResidual(
-                  initialContext, node))
-      BY <2>1, <2>2, <2>3,
-         IndexedHistoricalDecisionStageOwnershipResidualIsEmpty, PTL
-    <2> QED BY <2>4, PTL
-         DEF IndexedHistoricalDecisionStageOwnershipResidualProperty
-  <1> QED BY <1>1
-
 THEOREM IndexedHistoricalDecisionRankProgressResidualObligation ==
   IndexedChainSpec
     => IndexedHistoricalDecisionRankProgressResidualProperty
@@ -1593,7 +1592,6 @@ THEOREM IndexedHistoricalDecisionRankProgressResidualObligation ==
 IndexedHistoricalRecoveryTemporalResidualKernels ==
   /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
   /\ IndexedHistoricalCertificateRankProgressResidualProperty
-  /\ IndexedHistoricalDecisionStageOwnershipResidualProperty
   /\ IndexedHistoricalDecisionRankProgressResidualProperty
 
 THEOREM IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress ==
@@ -1611,7 +1609,7 @@ PROOF
     <2>3. IndexedHistoricalCertificateRankProgressResidualProperty
       BY <1>1 DEF IndexedHistoricalRecoveryTemporalResidualKernels
     <2>4. IndexedHistoricalDecisionStageOwnershipResidualProperty
-      BY <1>1 DEF IndexedHistoricalRecoveryTemporalResidualKernels
+      BY <1>1, IndexedHistoricalDecisionStageOwnershipResidualObligation
     <2>5. IndexedHistoricalDecisionRankProgressResidualProperty
       BY <1>1 DEF IndexedHistoricalRecoveryTemporalResidualKernels
     <2>6. IndexedHistoricalApplicationReceiptHandoffProperty

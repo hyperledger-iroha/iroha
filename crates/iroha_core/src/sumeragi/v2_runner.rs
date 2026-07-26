@@ -4229,7 +4229,10 @@ mod tests {
         second_request.request_id = second_request.canonical_request_id();
         let requests = [fixture.request, second_request];
         let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 2);
+        // The shared lane fixture reserves the production test corridor for
+        // eight authenticated sources. Each capability must advertise that
+        // exact geometry even though this case exercises one source.
+        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
 
         for request in &requests {
             let reply_route = routes.mint_via(request.requester.clone(), hub.clone());

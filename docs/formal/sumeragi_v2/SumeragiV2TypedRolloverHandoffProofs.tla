@@ -81,6 +81,11 @@ THEOREM BootstrapCrashRecoveryObligation ==
     /\ state'.serviceOwnerNonce = NoIdentity
     /\ state'.transportOwnerNonce = NoIdentity
     /\ state'.receiptStage \in {"Absent", "Lost"}
+PROOF
+  BY Isa DEF CrashAfterBootstrapStateReplacement,
+                 CrashAfterBootstrapStatePublication,
+                 CrashAfterBootstrapRootReplacement,
+                 CrashClearedProcessLocalRolloverState
 
 THEOREM BootstrapFirstCommitSelectsExactInitialPairObligation ==
   /\ TypedRolloverSafetyInvariant
@@ -97,6 +102,18 @@ THEOREM BootstrapFirstCommitSelectsExactInitialPairObligation ==
          InitialLifecycleSnapshotV3(state.targetRoster)
     /\ RootSelectedLifecyclePairMatches(state')
     /\ LifecycleMemory(state') = LifecycleMemory(state)
+PROOF
+  BY Isa DEF CommitInitialLifecycleRootV3,
+                 TypedRolloverSafetyInvariant,
+                 LifecycleCommitPhaseInvariant,
+                 RootAnchoredLifecycleV3Invariant,
+                 RootSelectedLifecyclePairMatches,
+                 RootSelectedLifecyclePairIsPresent,
+                 DurableSnapshot, SelectedLifecycleStateSlot,
+                 SelectedLifecycleSnapshotV3, LifecycleStateSlot,
+                 LifecycleRootV3, LifecycleSnapshotDigest,
+                 InitialLifecycleSnapshotV3, LifecycleSnapshotV3,
+                 LifecycleMemory
 
 THEOREM ExactOwnerPairRequiredForRetainedHandoffObligation ==
   /\ TypedRolloverSafetyInvariant
@@ -220,6 +237,71 @@ THEOREM ValidationFailurePreservesArtifactsObligation ==
     /\ ~state'.cleanupPerformed
     /\ ~state'.durableJournalValidated
     /\ ~state'.successorActive
+PROOF
+  BY Isa DEF TypedRolloverSafetyInvariant, FailureLatchInvariant, Next,
+                 CreateServiceTransportOwnerPair, ValidateFinality,
+                 CloseWorkerIngress, ClearOneWorkerExactOutput,
+                 BuildImmediateSuccessor, SealAppliedHeightOutputHandoff,
+                 RejectLateExactOutputEnqueue,
+                 PresentForeignOwnerReceiptCandidate,
+                 PresentPredecessorContextMismatchCandidate,
+                 PresentPredecessorArtifactMismatchCandidate,
+                 PresentWrongImmediateSuccessorCandidate,
+                 RejectForeignOwnerReceipt,
+                 RejectPredecessorContextMismatch,
+                 RejectPredecessorArtifactMismatch,
+                 RejectWrongImmediateSuccessor, RetainExactHandoffReceipt,
+                 PublishInitialLifecycleStateSlotV3,
+                 SyncInitialLifecycleStateDirectoryV3,
+                 CrashAfterBootstrapStateReplacement,
+                 CrashAfterBootstrapStatePublication,
+                 ValidateBootstrapLifecycleCandidateV3,
+                 ValidateBootstrapLifecycleWithoutCandidateV3,
+                 ReplaceInitialLifecycleRootV3,
+                 CrashAfterBootstrapRootReplacement,
+                 CommitInitialLifecycleRootV3,
+                 ValidateRootSelectedLifecycleV3,
+                 RejectLifecycleRootShapeMismatchV3,
+                 RejectLifecycleSelectedStateMissingV3,
+                 RejectLifecycleGenerationHashMismatchV3,
+                 RejectLifecycleSemanticValidationFailureV3,
+                 RejectInvalidLifecycleStartupV3,
+                 ResyncValidatedLifecycleStateDirectoryV3,
+                 ResyncValidatedLifecycleRootDirectoryV3,
+                 CrashDuringValidatedRestartBeforeRootResyncV3,
+                 CleanupValidatedLifecycleArtifactsV3,
+                 CompleteBootstrapRestartWithoutCandidateV3,
+                 PersistFreshRequesterEpoch, PublishFreshRequesterEpoch,
+                 CompleteRequesterEpoch, ReopenRequesterEpochAllocator,
+                 CrashAfterRequesterEpochPersistence,
+                 RestoreRequesterEpochCounterAfterCrash,
+                 RejectRequesterEpochOverflow,
+                 RejectActiveOrdinaryRollover, RejectSameRosterFullTable,
+                 AuthenticateServerClosePrefix, TerminalizeRequestGate,
+                 TerminalizeTransfer, TerminalizeFlush,
+                 PublishSuccessorLifecycleStateSlotV3,
+                 PublishSuccessorLifecycleStateSlotV3WithAuthority,
+                 FailSuccessorLifecycleStateSlotV3Persistence,
+                 CrashBeforeLifecycleStateSlotV3Publication,
+                 CrashAfterLifecycleStateReplacement,
+                 SyncSuccessorLifecycleStateDirectoryV3,
+                 CrashAfterLifecycleStateSlotV3Publication,
+                 FailSuccessorLifecycleRootV3Persistence,
+                 ReplaceSuccessorLifecycleRootV3,
+                 CrashAfterLifecycleRootReplacement,
+                 RecoverPredecessorLifecycleV3,
+                 CommitSuccessorLifecycleRootV3,
+                 CleanupCommittedLifecyclePredecessorV3,
+                 CrashAfterLifecycleRootV3Commit,
+                 RestoreSuccessorLifecycleV3AfterCrash,
+                 PublishCommittedLifecycleV3ToMemory,
+                 ActivateRestoredLifecycleV3Successor,
+                 ActivateSameRosterSuccessor,
+                 RejectServiceGenerationOverflow,
+                 FailLifecycleRootGenerationExhaustion,
+                 ObserveLateOldWriterCallback,
+                 CrashClearedProcessLocalRolloverState,
+                 DurableLifecycle, CandidateLifecycle
 
 THEOREM SemanticValidationPrecedesArtifactCleanupObligation ==
   /\ TypedRolloverSafetyInvariant

@@ -62,7 +62,7 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 732-test,
+  mutations before promotion, then finish the remaining 733-test,
   38-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -95,12 +95,28 @@ production-reducer replay tests are fresh and green at exactly 100 normalized
 actions; that trace result alone does not promote a theorem. In particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` remain explicit
-proofless residuals. Adequate-leader closure still needs full-`AsyncNext`
-scheduler-origin preservation, four fixed-target physical handoff families,
-and a non-circular anchored semantic rank. Exact-decision closure still needs
-the request clock/runtime, request head/gate, request ingress-runner, and
-response deadline-prefix leaves; the normal ingress proof must also bound
-claimed-response priority so broad runner fairness cannot starve the target.
+proofless residuals. Adequate-leader closure now freezes one
+target/context/adequate-leader/view/subject corridor, requires Decision
+commands to be target-owned, aggregates durable target Decisions over the
+finite frozen voter roster, and ranks each frontier by semantic rank plus the
+number of distinct logical owners at that rank. Remaining debt includes the
+full-`AsyncNext` scheduler-origin invariant; transport, ordinary runner
+admission, and timeout/view convergence; target-corridor entry and
+producer/transport closure; and a finite or coalesced producer argument.
+Equal-count replacement and count-increasing replenishment are explicitly not
+progress. The certified-response physical-capacity arm already has a source
+proof body.
+
+Exact-Decision closure is pinned to five leaves:
+`ExactDecisionRequestClockOwnerConvergenceProperty`,
+`ExactDecisionRequestRuntimePrefixConvergenceProperty`,
+`ExactDecisionRequestHeadGateOwnerConvergenceProperty`,
+`ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty`, and
+`ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty`.
+The causal, Serve-capacity, and priority-debt audits identify their exact
+producer actions, but simultaneous capacity bounds do not bound repeated
+producer episodes. A durable well-founded producer budget and the remaining
+temporal convergence proofs are still required.
 The independent
 `ResponsiveStrongFairnessToReceiptResidual` now has a SANY-clean proof script
 that derives receipt publication from responsive strong fairness, but it and
@@ -25275,6 +25291,15 @@ proceeds through production effective-lock refinement, progress ownership,
 protected service ranks and starvation freedom, then timeout/view/leader,
 application, successor, and indexed-height composition.
 
+The Apply boundary now requires the exact durable current-context Commit
+Decision in both execution and readiness; it no longer permits an old-context
+Decision to retire a non-voter's historical-recovery target. The paired
+deductive assertions, source-fidelity mutations, and bounded repaired/bug model
+are authored. Before this slice can be promoted to machine-checked evidence,
+run the pinned SANY and strict TLAPS checks for the changed modules, execute
+`scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh`, and archive the
+green repaired trace plus the expected missing-guard counterexample.
+
 The exact-output corridor now freezes the height-roster Safety/Lane/Bulk
 reservation set, adds a distinct shared budget, and deterministically matches
 at most one unique reserve to each retained fanout. This closes the discovered
@@ -25800,7 +25825,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
-732-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+733-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -25819,9 +25844,11 @@ and run with an isolated configuration-free `CARGO_HOME`; exact tool paths,
 versions, and hashes are receipt-bound.
 
 The current release-support suites are green at 11/11 seed-matrix, 189/189
-release-receipt, and 71/71 protected-bootstrap tests. The complete settled-tree
-proof-fidelity selection remains a separate pending rerun and is not promoted
-as green release evidence.
+release-receipt, and 71/71 protected-bootstrap tests. Mechanical collection
+now pins the proof-fidelity preflight at exactly 1,686 cases and the
+formal-launcher preflight at exactly 24; the latter is green at 24/24. The
+complete settled-tree 1,686-case proof-fidelity execution remains a separate
+pending rerun and is not promoted as green release evidence.
 
 The receipt is published only at the exact bootstrap-owned path with mode
 `0400`, one link, exclusive staging, complete writes, no-clobber linking, and
@@ -25850,7 +25877,14 @@ The 54-entry top-level ledger contains 35 `tlaps_proved`, 12
 `specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope` entries;
 machine-checked completion remains false. Sixteen source-bound decomposition
 leaves are checked transitively through those reviewed consumers rather than
-being additional release claims. In particular,
+being additional release claims. Historical recovery now accounts for exactly
+three proofless temporal leaves—authority acquisition, certificate-rank
+progress, and Decision/body rank progress—plus one proved Decision-stage
+ownership safety leaf. Composition derives that ownership property from
+`IndexedChainSpec`; it is not a fourth temporal premise. The three temporal
+leaves and top-level `height-liveness` remain `specified_unproved`, so this
+accounting repair changes neither the 54-row ledger nor its status counts. In
+particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` remain explicit
 proofless residuals; neither may be promoted through assumption, circular
@@ -25929,18 +25963,18 @@ runtime premise on the final signed source.
   waiters, or persist every returned rank across producer restart;
   current local writer-flush and actor-backlog tests are necessary but not
   sufficient evidence;
-- discharge the ledgered abstract progress-ownership invariant and the Stage-4
-  ready/causal, nonce-unique Serve FIFO, and Stage-5 Consensus-I/O FIFO rank
-  leaves before composing `protected-service-rank`. Progress ownership consumes
-  a freshly reproved async type closure; Stage 4 and Serve FIFO also consume a
-  freshly reproved exact fair-action refinement; Stage 5 still waits for progress
-  ownership. Keep
+- preserve source-bound evidence for the already-`tlaps_proved`
+  async-progress-ownership, Stage-4 ready/causal, nonce-unique Serve FIFO, and
+  Stage-5 Consensus-I/O FIFO leaves. Remaining work at this layer is the
+  aggregate `protected-service-rank`, productive deadlock/starvation
+  composition, Stage-2/3/6 closure, and the production
+  admission/runtime/ingress/actor-to-flush refinements. Historical proof counts
+  must not be reused after source drift. Keep
   production candidate admission, runtime, ingress, and actor-to-flush identity
-  refinement outside these abstract leaves. Rerun the repaired Stage-4 proof
-  strictly and preserve its
+  refinement outside these abstract leaves. Preserve the repaired Stage-4
   counterexample gate (four causal refill lassos, causal replacement,
   Commit-certificate discovery debt, all-I/O indexing, and the 983,041-state
-  ownership check). The historical 196/196 run is superseded because 48
+  ownership check). The historical 196/196 run was superseded because 48
   heterogeneous grouped binders constrained their supporting rank, budget,
   capacity, or position variable to the wrong carrier. The checker and
   representative mutants now reject that form. Extend the repaired proof to
@@ -26023,10 +26057,17 @@ runtime premise on the final signed source.
 - discharge the ledgered
   `SuccessorActivationStarvationFreedomObligation` by proving that every exact
   queued/running activation owned by a responsive validator has an enabled step
-  and the minimal `0..19` decreasing rank, including the one-time pre-failure
-  `+9` offset, until exact publication or legitimate later-height supersession.
+  and the finite `0..21` decreasing rank: Published predecessor ownership uses
+  `11 +` the `0..10` pipeline distance, while recovered/absent ownership uses
+  that distance directly, until exact publication or legitimate later-height
+  supersession.
   Do not strengthen this to validators outside `Responsive`: an honest node may
-  queue work before GST and subsequently become nonresponsive;
+  queue work before GST and subsequently become nonresponsive. The canonical
+  proof now derives the next context's admissibility from the exact durable
+  parent application and chain-epoch receipt invariants before failure/restart
+  progress may preserve the protocol invariant. Its 47-module import closure
+  and fail-closed mutation checks are green, but strict TLAPS for that repaired
+  leaf and the downstream finite-rank chain is still outstanding;
 - discharge
   `SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation`
   by
@@ -26120,7 +26161,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  732-test target above supersedes that checkpoint. The 38-module pre-network
+  733-test target above supersedes that checkpoint. The 38-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

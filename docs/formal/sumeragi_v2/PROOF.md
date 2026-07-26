@@ -440,12 +440,14 @@ This removes the known local parent-residual obstruction, but no production
 refinement or theorem currently establishes remote receipt, downstream
 consumption, or broadcast starvation freedom.
 
-Local admission alternates a producer-completion source with the causal-work
-source. A producer selection while causal work waits records sticky causal
-debt and advances the source cursor; only causal selection clears that debt.
-Once the causal head is admissible, the debt makes it the deterministic
-preference under fair `RunNode` service, so repeated producer replenishment
-cannot reset the causal owner's position.
+Local admission alternates producer-completion and causal-work sources. The
+current proof source gives an Init/full-action induction for
+`asyncCausalAdmissionOwed[node] => CausalQueueNonempty(node)` on `AsyncSpecAt`
+traces; `AsyncStrongTypeInvariant` alone does not imply this fact. Reachable
+causal-debt replenishment therefore reduces to the two local metadata setters,
+and owed admissible causal work receives deterministic preference under fair
+runner service. This does not bound how often distinct causal heads can
+replenish the debt, so it is not yet a temporal convergence proof.
 
 An individual signed Vote cannot establish its own execution-commitment
 authority. It is serviceable only after a local validated receipt, verified WAL
@@ -760,15 +762,17 @@ for that owner and the weak-fair CommitQC discovery rule conditional on exact
 pending-state preservation. It leaves clock/readiness, preservation across all
 unrelated actions, the authenticated request/response-to-Decision corridor,
 and the historical Decision/body/application corridor as visible operator
-premises. The remaining exact historical closure is registered as four
-proofless release targets:
+premises. The remaining exact historical closure is registered as exactly
+three proofless temporal release targets:
 `IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation`,
 `IndexedHistoricalCertificateRankProgressResidualObligation`,
-`IndexedHistoricalDecisionStageOwnershipResidualObligation`, and
-`IndexedHistoricalDecisionRankProgressResidualObligation`. The downstream
-composition theorem takes their residual properties as antecedents; it is
-dependency wiring, not their proof. Consequently all four remain
-`specified_unproved`, and neither the exact properties nor the ledger are
+and `IndexedHistoricalDecisionRankProgressResidualObligation`. The separate
+`IndexedHistoricalDecisionStageOwnershipResidualObligation` is now a proved
+safety support theorem: `IndexedChainSpec` establishes the composition,
+Decision-witness, and recovery-dormancy invariants that make its residual
+empty. Downstream composition derives that ownership property and assumes only
+the three temporal residuals. Consequently those three remain transitively
+`specified_unproved`, and neither the top-level ledger nor exact liveness is
 promoted. The release-facing theorem remains proofless and ledgered
 `specified_unproved` until those prerequisites are discharged and the whole
 theorem passes a fresh pinned strict proof
@@ -782,7 +786,13 @@ tier. Thus clean exact-complete-tip restart is a strict descent into the
 absent-owner attempt, and snapshot-bootstrap authority is kept distinct from
 the complete-tip credential. Applied failure retains Running until restart
 and a Recovered attempt may fail repeatedly, so failure history is not a
-ranking counter; `IndexedChainSpec` instead includes an explicit eventual
+ranking counter. Progress preservation now also consumes the chain-epoch
+invariant: an exact durable parent application derives that its canonical next
+context is admissible from the typed node context, certified valid-subject
+prefix, and no-outrun clauses before a failure/restart owner can be retained.
+This closes the former arbitrary-witness hole in the local protocol invariant;
+the helper, caller chain, and fail-closed mutations are SANY-clean, but still
+await strict TLAPS. `IndexedChainSpec` includes an explicit eventual
 failure-free suffix premise. It makes
 no progress claim for an honest validator outside `Responsive`, which may stop
 with pre-GST local work still queued. Its release-facing theorem contains a
@@ -925,6 +935,21 @@ The aggregate temporal closure deliberately leaves
 theorems which consume them are dependency wiring, not evidence that either
 residual has been discharged.
 
+The adequate-leader residual is target-local rather than aggregate: another
+validator's Decision is not terminal for the indexed target. Its occurrence
+rank counts every distinct target/leader owner at the frozen semantic rank,
+preventing one serviced owner from hiding another. Equal-count replacement
+and count-increasing replenishment remain explicit non-progress cases and
+require a prior finite or coalesced producer argument.
+
+The exact-Decision producer audit narrows causal replenishment to reachable
+local debt setters; Serve-capacity growth to ordinary or historical request
+drain, fresh causal Completion admission, or local Control enqueue; and
+priority growth to exact network-claim admission or the same archive's normal,
+recovery, or historical runner. Each classification is action-local. No
+current state expression decreases across every producer episode, so the five
+exact off-scheduler convergence leaves remain proofless.
+
 TLC runs exhaustive constant checks and bounded asynchronous counterexample
 searches. It cannot upgrade a proof status. The scheduler corridor runs nine
 mutation/repair pairs: equal-value replacement/coalescing, deferred-owner
@@ -1064,7 +1089,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 732 tests across thirty-eight Rust
+The current pre-network release inventory names 733 tests across thirty-eight Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1140,8 +1165,10 @@ a same-round lock adds one exact reducer regression, yielding the 724-test
 checkpoint. Preserving that replayed proposal's tag, round, and subject through
 runner startup adds one exact regression. Two cross-platform lifecycle V3
 crash regressions cover state replacement before directory sync and root
-replacement before predecessor cleanup, yielding the current
-732-test, 38-module inventory. The complete source-sealed
+replacement before predecessor cleanup, yielding the 732-test checkpoint.
+The foreign-context CommitQC Apply rejection adds one exact `v2_effects`
+regression, yielding the current
+733-test, 38-module inventory. The complete source-sealed
 pre-network corridor
 contains 81 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
@@ -1212,7 +1239,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`e4f9c69b5465ae3203d289394f490b4d98adb895dae8a6e0362092d7549a7169`.
+`e75c51803aac27dd973d1a31e786dec2da0b0be3d984c2f333c3efbb853f3a66`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

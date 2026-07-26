@@ -10,21 +10,19 @@ yet entered `AsyncTimedServiceNodes`.  After GST, responsive membership,
 online membership, and the current roster cannot regress.  Opening historical
 recovery adds one target.
 
-The requested global timed-owner monotonicity edge is false in the concrete
-relation.  `ExecuteApply(command)` chooses a matching member of
-`DecisionQcValues`, but does not require either `qc.context = context` or
-`command.evidence = qc`.  An old-context Decision with the same view/subject
-can therefore remove an out-of-roster historical target without adding a
-current-context `NodeHasApplication`.  The exact mismatch action and its
-one-step latent-debt increase are exposed below.  The sound current-context
-Apply transfer is proved separately.
+`ApplyDecision` and `ApplyDecisionReady` require
+`DecisionCertifiedBodyRecoveryAuthority`.  Consequently every
+`ExecuteApply` witness is a current-context Commit Decision.  Historical
+Apply adds the same node to the responsive applied-archive arm before
+removing it from the target arm, so the timed owner set is monotone.
 
 The next local handoffs cover stale empty I/O gates and due node/I/O service:
 
   * every concrete enqueue owner removes a due empty gate before making that
     node an active I/O blocker;
-  * service of the last due I/O job empties the queue and moves its I/O
-    deadline strictly above the frozen clock; and
+  * service of any due nonempty I/O queue pops exactly one job, moves its I/O
+    deadline strictly above the frozen clock, and removes its active blocker;
+    the last-job case additionally empties the queue; and
   * every due runner service action moves its node deadline strictly above the
     frozen clock.
 
@@ -112,36 +110,43 @@ BY Isa
        NodeHasApplication, CurrentVoters, CurrentEpoch,
        AsyncSchedulerExceptHistoricalRecoveryTargets, vars
 
-HistoricalExecuteApplyWithQc(command, qc) ==
-  /\ ExecuteApply(command)
+HistoricalExecuteApplyCurrentCommit(command, qc) ==
   /\ qc \in DecisionQcValues
   /\ CommandMatches(
        command, command.node, qc.view, qc.subject)
+  /\ DecisionCertifiedBodyRecoveryAuthority(command.node, qc)
   /\ ApplyDecision(command.node, qc)
 
-HistoricalExecuteApplyCurrentContext(command, qc) ==
-  /\ HistoricalExecuteApplyWithQc(command, qc)
-  /\ qc.context = context
+THEOREM HistoricalExecuteApplySelectsCurrentCommitDecision ==
+  \A command:
+    ExecuteApply(command)
+      => \E qc:
+           /\ HistoricalExecuteApplyCurrentCommit(command, qc)
+           /\ qc.context = context
+           /\ qc.phase = "Commit"
+           /\ [node |-> command.node, qc |-> qc]
+                \in decisions
+BY Isa
+   DEF HistoricalExecuteApplyCurrentCommit,
+       ExecuteApply, ApplyDecision,
+       DecisionCertifiedBodyRecoveryAuthority
 
-HistoricalExecuteApplyContextMismatch(command, qc) ==
-  /\ HistoricalExecuteApplyWithQc(command, qc)
-  /\ qc.context # context
-
-THEOREM HistoricalCurrentContextApplyTransfersTimedServiceOwner ==
-  \A command, qc:
+THEOREM HistoricalExecuteApplyTransfersTimedServiceOwner ==
+  \A command:
     /\ AsyncStrongTypeInvariant
     /\ HistoricalRecoveryTarget(command.node)
-    /\ HistoricalExecuteApplyCurrentContext(command, qc)
+    /\ ExecuteApply(command)
     => /\ ~HistoricalRecoveryTarget(command.node)'
        /\ command.node \in AsyncResponsiveAppliedArchiveServers'
        /\ AsyncTimedServiceNodes' = AsyncTimedServiceNodes
-BY AsyncStrongTypeProjectsAsyncType, HistoricalRecoveryTargetsAreValidators,
+BY HistoricalExecuteApplySelectsCurrentCommitDecision,
+   AsyncStrongTypeProjectsAsyncType, HistoricalRecoveryTargetsAreValidators,
    Isa
    DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
        AsyncSchedulerTypeInvariant, AsyncHistoricalRecoveryTypeInvariant,
-       HistoricalExecuteApplyCurrentContext,
-       HistoricalExecuteApplyWithQc,
+       HistoricalExecuteApplyCurrentCommit,
        HistoricalRecoveryTarget, ExecuteApply, ApplyDecision,
+       DecisionCertifiedBodyRecoveryAuthority,
        CommandMatches, NodeHasApplication,
        AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
        AsyncResponsiveAppliedArchiveServers,
@@ -151,48 +156,14 @@ BY AsyncStrongTypeProjectsAsyncType, HistoricalRecoveryTargetsAreValidators,
        AsyncArchiveServerIds, CurrentVoters, CurrentEpoch,
        vars
 
-THEOREM HistoricalContextMismatchApplyDropsNonVoterTimedOwner ==
-  \A command, qc:
+THEOREM HistoricalTargetOwnerSurvivesOrTransfersAfterGst ==
+  \A owner \in asyncHistoricalRecoveryTargets:
     /\ AsyncStrongTypeInvariant
-    /\ HistoricalRecoveryTarget(command.node)
-    /\ command.node \notin AsyncCurrentResponsiveVoters
-    /\ HistoricalExecuteApplyContextMismatch(command, qc)
-    => /\ command.node \in AsyncTimedServiceNodes
-       /\ ~HistoricalRecoveryTarget(command.node)'
-       /\ command.node
-            \notin AsyncResponsiveAppliedArchiveServers'
-       /\ command.node \notin AsyncTimedServiceNodes'
-       /\ AsyncTimedServiceNodes
-            \not\subseteq AsyncTimedServiceNodes'
-BY AsyncStrongTypeProjectsAsyncType, HistoricalRecoveryTargetsAreValidators,
-   Isa
-   DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
-       AsyncSchedulerTypeInvariant, AsyncHistoricalRecoveryTypeInvariant,
-       HistoricalExecuteApplyContextMismatch,
-       HistoricalExecuteApplyWithQc,
-       HistoricalRecoveryTarget, ExecuteApply, ApplyDecision,
-       CommandMatches, NodeHasApplication,
-       AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
-       AsyncResponsiveAppliedArchiveServers,
-       AsyncResponsiveOnlineArchiveServers,
-       AsyncResponsiveArchiveServers,
-       AsyncCurrentResponsiveVoters,
-       AsyncArchiveServerIds, CurrentVoters, CurrentEpoch,
-       vars
-
-THEOREM HistoricalTimedOwnerMonotonicityOrExactApplyMismatch ==
-  /\ AsyncStrongTypeInvariant
-  /\ gst
-  /\ [AsyncNext]_AsyncAllVars
-  => \/ AsyncTimedServiceNodes
-          \subseteq AsyncTimedServiceNodes'
-     \/ \E command, qc:
-          /\ HistoricalRecoveryTarget(command.node)
-          /\ command.node
-               \notin AsyncCurrentResponsiveVoters
-          /\ HistoricalExecuteApplyContextMismatch(command, qc)
-BY HistoricalCurrentContextApplyTransfersTimedServiceOwner,
-   HistoricalContextMismatchApplyDropsNonVoterTimedOwner, Isa
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    => owner \in asyncHistoricalRecoveryTargets'
+         \/ owner \in AsyncResponsiveAppliedArchiveServers'
+BY HistoricalExecuteApplyTransfersTimedServiceOwner, Isa
    DEF HistoricalRecoveryTarget, AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
@@ -201,11 +172,7 @@ BY HistoricalCurrentContextApplyTransfersTimedServiceOwner,
        ExecuteCommand, ExecuteApply, OpenHistoricalRecovery,
        PreGstCrash, PreGstResponsiveCrash,
        PreGstResponsiveRestart, PreGstResponsiveReplay,
-       ResetNodeSchedulerForRestart,
-       HistoricalExecuteApplyContextMismatch,
-       HistoricalExecuteApplyWithQc,
-       AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
-       AsyncAllVars
+       ResetNodeSchedulerForRestart, AsyncAllVars
 
 THEOREM HistoricalAppliedArchiveOwnersAreMonotoneAfterGst ==
   /\ gst
@@ -219,39 +186,61 @@ BY AsyncBracketApplicationEvidenceIsMonotone,
        AsyncResponsiveArchiveServers,
        NodeHasApplication, AsyncArchiveServerIds
 
+THEOREM HistoricalTimedServiceNodesAreMonotoneAfterGst ==
+  /\ AsyncStrongTypeInvariant
+  /\ gst
+  /\ [AsyncNext]_AsyncAllVars
+  => AsyncTimedServiceNodes \subseteq AsyncTimedServiceNodes'
+BY HistoricalDiscoveryPostGstUpAndRosterAreStable,
+   HistoricalAppliedArchiveOwnersAreMonotoneAfterGst,
+   HistoricalTargetOwnerSurvivesOrTransfersAfterGst, Isa
+   DEF AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes
+
 (***************************************************************************
 Latent-owner debt.
 ***************************************************************************)
 
-THEOREM HistoricalContextMismatchApplyIncreasesLatentDebtAtFixedClock ==
-  \A command, qc, clockValue \in Nat:
+THEOREM HistoricalLatentTimedOwnersAreAntitoneAfterGst ==
+  /\ AsyncStrongTypeInvariant
+  /\ gst
+  /\ [AsyncNext]_AsyncAllVars
+  => HistoricalDiscoveryLatentTimedOwners'
+       \subseteq HistoricalDiscoveryLatentTimedOwners
+BY HistoricalTimedServiceNodesAreMonotoneAfterGst, Isa
+   DEF HistoricalDiscoveryLatentTimedOwners,
+       HistoricalDiscoveryPotentialServiceCohort
+
+THEOREM HistoricalLatentOwnerDebtCannotIncreaseAtFixedClock ==
+  \A clockValue \in Nat:
     /\ AsyncStrongTypeInvariant
     /\ gst
     /\ asyncNow = clockValue
     /\ asyncNow' = clockValue
-    /\ HistoricalRecoveryTarget(command.node)
-    /\ command.node \notin AsyncCurrentResponsiveVoters
-    /\ HistoricalExecuteApplyContextMismatch(command, qc)
-    => /\ HistoricalDiscoveryLatentTimedOwners' =
-             HistoricalDiscoveryLatentTimedOwners
-               \cup {command.node}
-       /\ HistoricalDiscoveryLatentOwnerDebt' =
-             HistoricalDiscoveryLatentOwnerDebt + 1
-BY HistoricalContextMismatchApplyDropsNonVoterTimedOwner,
+    /\ [AsyncNext]_AsyncAllVars
+    => HistoricalDiscoveryLatentOwnerDebt'
+         <= HistoricalDiscoveryLatentOwnerDebt
+BY HistoricalLatentTimedOwnersAreAntitoneAfterGst,
    StrongTypeHasFiniteHistoricalDiscoveryCohorts,
-   FS_AddElement, FS_CardinalityType, Isa
+   FS_Subset, FS_CardinalityType, SMT
+   DEF HistoricalDiscoveryLatentOwnerDebt
+
+THEOREM HistoricalLatentOwnerEntryStrictlyDecreasesDebt ==
+  \A owner \in Responsive:
+    /\ AsyncStrongTypeInvariant
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    /\ owner \in HistoricalDiscoveryLatentTimedOwners
+    /\ owner \in AsyncTimedServiceNodes'
+    => /\ HistoricalDiscoveryLatentTimedOwners'
+             \subseteq HistoricalDiscoveryLatentTimedOwners
+       /\ owner \notin HistoricalDiscoveryLatentTimedOwners'
+       /\ HistoricalDiscoveryLatentOwnerDebt'
+             < HistoricalDiscoveryLatentOwnerDebt
+BY HistoricalLatentTimedOwnersAreAntitoneAfterGst,
+   StrongTypeHasFiniteHistoricalDiscoveryCohorts,
+   FS_Subset, FS_CardinalityType, SMT
    DEF HistoricalDiscoveryLatentTimedOwners,
-       HistoricalDiscoveryLatentOwnerDebt,
-       HistoricalDiscoveryPotentialServiceCohort,
-       AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
-       AsyncResponsiveAppliedArchiveServers,
-       AsyncResponsiveOnlineArchiveServers,
-       AsyncResponsiveArchiveServers,
-       AsyncCurrentResponsiveVoters,
-       HistoricalExecuteApplyContextMismatch,
-       HistoricalExecuteApplyWithQc,
-       HistoricalRecoveryTarget, ExecuteApply, ApplyDecision,
-       NodeHasApplication, CurrentVoters, CurrentEpoch, vars
+       HistoricalDiscoveryLatentOwnerDebt
 
 THEOREM OpenPreviouslyLatentOwnerSpendsExactlyOneDebt ==
   \A owner \in Responsive, clockValue \in Nat:
@@ -307,11 +296,12 @@ HistoricalDiscoveryDormantGateHandoff(node, clockValue) ==
        HistoricalDiscoveryDormantIoDebt(clockValue)
 
 THEOREM SingleIoEnqueueSpendsDueDormantGate ==
-  \A node \in ValidatorIds, job, clockValue \in Nat:
-    /\ AsyncStrongTypeInvariant
-    /\ HistoricalDiscoverySingleIoEnqueue(
-         node, job, clockValue)
-    => HistoricalDiscoveryDormantGateHandoff(node, clockValue)
+  \A job:
+    \A node \in ValidatorIds, clockValue \in Nat:
+      /\ AsyncStrongTypeInvariant
+      /\ HistoricalDiscoverySingleIoEnqueue(
+           node, job, clockValue)
+      => HistoricalDiscoveryDormantGateHandoff(node, clockValue)
 BY StrongTypeHasFiniteHistoricalDiscoveryCohorts,
    FS_RemoveElement, FS_AddElement, FS_CardinalityType,
    LenProperties, Isa
@@ -420,14 +410,87 @@ BY ConcreteIoEnqueueOwnersHaveSingleEnqueueFrame,
    SingleIoEnqueueSpendsDueDormantGate
 
 (***************************************************************************
-Last due I/O job service.
+Due nonempty I/O queue service.
+***************************************************************************)
+
+HistoricalDiscoveryDueIoQueue(node, clockValue) ==
+  /\ asyncNow = clockValue
+  /\ node \in AsyncTimedServiceNodes
+  /\ AsyncIoQueueDepth(node) > 0
+  /\ asyncIoServiceDeadlines[node] <= clockValue
+
+HistoricalDiscoveryDueIoQueueServiceOutcome(node, clockValue) ==
+  /\ asyncNow' = clockValue
+  /\ asyncIoQueues'[node] = Tail(asyncIoQueues[node])
+  /\ AsyncIoQueueDepth(node)' + 1 = AsyncIoQueueDepth(node)
+  /\ asyncIoServiceDeadlines'[node] > clockValue
+  /\ node \notin
+       HistoricalDiscoveryDormantIoGatesAt(clockValue)'
+  /\ node \notin
+       HistoricalDiscoveryActiveIoBlockersAt(clockValue)'
+  /\ HistoricalDiscoveryDormantIoGatesAt(clockValue)' =
+       HistoricalDiscoveryDormantIoGatesAt(clockValue)
+  /\ HistoricalDiscoveryActiveIoBlockersAt(clockValue)' =
+       HistoricalDiscoveryActiveIoBlockersAt(clockValue) \ {node}
+  /\ HistoricalDiscoveryDormantIoDebt(clockValue)' =
+       HistoricalDiscoveryDormantIoDebt(clockValue)
+  /\ HistoricalDiscoveryActiveIoBlockerDebt(clockValue)' + 1 =
+       HistoricalDiscoveryActiveIoBlockerDebt(clockValue)
+
+THEOREM ServiceDueIoQueueWorkRemovesExactActiveBlocker ==
+  \A node \in ValidatorIds, clockValue \in Nat:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDiscoveryDueIoQueue(node, clockValue)
+    /\ ServiceIoWorkerWork(node)
+    => HistoricalDiscoveryDueIoQueueServiceOutcome(
+         node, clockValue)
+BY StrongTypeHasFiniteHistoricalDiscoveryCohorts,
+   FS_RemoveElement, FS_CardinalityType,
+   HeadTailProperties, LenProperties, Isa
+   DEF HistoricalDiscoveryDueIoQueue,
+       HistoricalDiscoveryDueIoQueueServiceOutcome,
+       HistoricalDiscoveryDormantIoGatesAt,
+       HistoricalDiscoveryActiveIoBlockersAt,
+       HistoricalDiscoveryDormantIoDebt,
+       HistoricalDiscoveryActiveIoBlockerDebt,
+       ServiceIoWorkerWork, PublishEphemeralItems,
+       AsyncIoQueueDepth, AsyncTimedServiceNodes,
+       AsyncArchiveIoServiceNodes,
+       AsyncResponsiveAppliedArchiveServers,
+       AsyncResponsiveOnlineArchiveServers,
+       AsyncResponsiveArchiveServers,
+       AsyncConfiguration, NodeHasApplication,
+       CurrentVoters, CurrentEpoch, vars
+
+THEOREM ConcreteDueIoServiceActionsRemoveExactActiveBlocker ==
+  \A node \in ValidatorIds, clockValue \in Nat:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDiscoveryDueIoQueue(node, clockValue)
+    => /\ (ServiceIoWorker(node)
+              => HistoricalDiscoveryDueIoQueueServiceOutcome(
+                   node, clockValue))
+       /\ (ServiceHistoricalRecoveryIoWorker(node)
+              => HistoricalDiscoveryDueIoQueueServiceOutcome(
+                   node, clockValue))
+       /\ (PostGstServiceIoWorker(node)
+              => HistoricalDiscoveryDueIoQueueServiceOutcome(
+                   node, clockValue))
+       /\ (PostGstServiceHistoricalRecoveryIoWorker(node)
+              => HistoricalDiscoveryDueIoQueueServiceOutcome(
+                   node, clockValue))
+BY ServiceDueIoQueueWorkRemovesExactActiveBlocker
+   DEF ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       PostGstServiceIoWorker,
+       PostGstServiceHistoricalRecoveryIoWorker
+
+(***************************************************************************
+The former last-job surface remains as a direct corollary of the nonempty
+queue result.  Its proofs do not expand the worker action again.
 ***************************************************************************)
 
 HistoricalDiscoveryDueLastIoJob(node, clockValue) ==
-  /\ asyncNow = clockValue
-  /\ node \in AsyncTimedServiceNodes
+  /\ HistoricalDiscoveryDueIoQueue(node, clockValue)
   /\ AsyncIoQueueDepth(node) = 1
-  /\ asyncIoServiceDeadlines[node] <= clockValue
 
 HistoricalDiscoveryLastIoJobServiceOutcome(node, clockValue) ==
   /\ asyncNow' = clockValue
@@ -446,6 +509,21 @@ HistoricalDiscoveryLastIoJobServiceOutcome(node, clockValue) ==
   /\ HistoricalDiscoveryActiveIoBlockerDebt(clockValue)' + 1 =
        HistoricalDiscoveryActiveIoBlockerDebt(clockValue)
 
+THEOREM LastDueIoJobOutcomeFollowsGenericOutcome ==
+  \A node \in ValidatorIds, clockValue \in Nat:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDiscoveryDueLastIoJob(node, clockValue)
+    /\ HistoricalDiscoveryDueIoQueueServiceOutcome(
+         node, clockValue)
+    => HistoricalDiscoveryLastIoJobServiceOutcome(
+         node, clockValue)
+BY HeadTailProperties, LenProperties, Isa
+   DEF HistoricalDiscoveryDueLastIoJob,
+       HistoricalDiscoveryDueIoQueue,
+       HistoricalDiscoveryDueIoQueueServiceOutcome,
+       HistoricalDiscoveryLastIoJobServiceOutcome,
+       AsyncIoQueueDepth
+
 THEOREM ServiceLastDueIoJobCannotRefillDormantDebt ==
   \A node \in ValidatorIds, clockValue \in Nat:
     /\ AsyncStrongTypeInvariant
@@ -453,23 +531,9 @@ THEOREM ServiceLastDueIoJobCannotRefillDormantDebt ==
     /\ ServiceIoWorkerWork(node)
     => HistoricalDiscoveryLastIoJobServiceOutcome(
          node, clockValue)
-BY StrongTypeHasFiniteHistoricalDiscoveryCohorts,
-   FS_RemoveElement, FS_CardinalityType,
-   HeadTailProperties, LenProperties, Isa
-   DEF HistoricalDiscoveryDueLastIoJob,
-       HistoricalDiscoveryLastIoJobServiceOutcome,
-       HistoricalDiscoveryDormantIoGatesAt,
-       HistoricalDiscoveryActiveIoBlockersAt,
-       HistoricalDiscoveryDormantIoDebt,
-       HistoricalDiscoveryActiveIoBlockerDebt,
-       ServiceIoWorkerWork, PublishEphemeralItems,
-       AsyncIoQueueDepth, AsyncTimedServiceNodes,
-       AsyncArchiveIoServiceNodes,
-       AsyncResponsiveAppliedArchiveServers,
-       AsyncResponsiveOnlineArchiveServers,
-       AsyncResponsiveArchiveServers,
-       AsyncConfiguration, NodeHasApplication,
-       CurrentVoters, CurrentEpoch, vars
+BY ServiceDueIoQueueWorkRemovesExactActiveBlocker,
+   LastDueIoJobOutcomeFollowsGenericOutcome, Isa
+   DEF HistoricalDiscoveryDueLastIoJob
 
 THEOREM ConcreteLastDueIoServiceActionsCannotRefillDormantDebt ==
   \A node \in ValidatorIds, clockValue \in Nat:
@@ -487,10 +551,9 @@ THEOREM ConcreteLastDueIoServiceActionsCannotRefillDormantDebt ==
        /\ (PostGstServiceHistoricalRecoveryIoWorker(node)
               => HistoricalDiscoveryLastIoJobServiceOutcome(
                    node, clockValue))
-BY ServiceLastDueIoJobCannotRefillDormantDebt
-   DEF ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
-       PostGstServiceIoWorker,
-       PostGstServiceHistoricalRecoveryIoWorker
+BY ConcreteDueIoServiceActionsRemoveExactActiveBlocker,
+   LastDueIoJobOutcomeFollowsGenericOutcome, Isa
+   DEF HistoricalDiscoveryDueLastIoJob
 
 (***************************************************************************
 Due node-service reset.
@@ -552,21 +615,20 @@ BY DueNodeServiceWorkResetsDeadlineAboveFixedClock
        PostGstRunHistoricalServer
 
 (***************************************************************************
-Coverage and exact failed edge.
+Coverage.
 
-The requested global monotonicity and latent-debt non-refill claims are false.
-`HistoricalExecuteApplyContextMismatch` is the exact action branch: for an
-out-of-roster historical target, a matching old-context Decision removes the
-target but does not satisfy current-context `NodeHasApplication`.  The node
-leaves `AsyncTimedServiceNodes`, and the latent-owner debt grows by one at the
-same clock.  Current-context Apply still performs the intended atomic
-target-to-applied-archive transfer.
+The accepted current-Commit authority guard closes the owner prefix:
 
-The remaining requested local edges are closed:
-
-  * Open strictly spends one latent-owner debt for a previously latent owner;
+  * `ExecuteApply` selects a current Commit Decision;
+  * historical Apply atomically transfers target membership to the
+    applied-archive arm;
+  * `AsyncTimedServiceNodes` is monotone after GST;
+  * latent-owner debt is antitone at a fixed clock and strictly descends when
+    a previously latent owner enters;
+  * Open spends exactly one latent-owner debt for a previously latent owner;
   * all four I/O FIFO append owners spend a stale empty gate first;
-  * last-job I/O service cannot recreate a dormant stale gate; and
+  * any due nonempty I/O service pops one job, spends its active blocker, and
+    cannot recreate a dormant stale gate; and
   * ordinary, historical-target, and applied-archive runner actions reset the
     serviced node deadline above the frozen clock.
 
