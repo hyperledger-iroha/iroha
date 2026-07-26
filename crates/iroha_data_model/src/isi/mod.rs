@@ -215,6 +215,16 @@ impl From<crate::isi::privacy::RegisterPrivacyProtocolActivationV1> for Instruct
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1> for InstructionBox {
     fn from(i: crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1) -> Self {
         InstructionBox(Box::new(i))
@@ -4091,7 +4101,8 @@ pub mod prelude {
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         privacy::{
             BootstrapPrivacyPgcAccountsV1, PublishPrivacyRootV1,
-            RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1,
+            RegisterPrivacyProtocolActivationV1, SchedulePrivacyConsensusPolicyTighteningV1,
+            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
             TransitionPrivacyProtocolLifecycleV1,
         },
         ram_lfe::{

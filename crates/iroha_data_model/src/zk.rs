@@ -12,7 +12,7 @@ use crate::{
 /// Canonical ZK-ACE circuit identifier for post-quantum authorization v0.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID: &str = "zk_ace_pq_authorization_v0";
 
-/// Production backend label used by ZK-ACE authorization v0.
+/// Canonical verifier-registry label used by ZK-ACE authorization v0.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND: &str = "stark/fri/sha256-goldilocks";
 
 /// Canonical backend family identifier for native STARK/FRI verification.
@@ -43,7 +43,7 @@ pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
     "stark/fri/sha256_goldilocks.v1",
 ];
 
-const STARK_FRI_V1_PRODUCTION_PROFILES: &[&str] = &[
+const STARK_FRI_V1_REGISTRY_PROFILES: &[&str] = &[
     "sha256-goldilocks",
     "poseidon2-goldilocks",
     "sha256_goldilocks.v1",
@@ -56,7 +56,7 @@ pub fn is_stark_fri_v1_backend_label(backend: &str) -> bool {
     backend == ZK_BACKEND_STARK_FRI_V1
         || backend
             .strip_prefix("stark/fri/")
-            .is_some_and(|profile| STARK_FRI_V1_PRODUCTION_PROFILES.contains(&profile))
+            .is_some_and(|profile| STARK_FRI_V1_REGISTRY_PROFILES.contains(&profile))
 }
 
 /// Domain tag used when deriving ZK-ACE identity commitments and replay nullifiers.

@@ -460,7 +460,7 @@ fn validate_privacy_proof_envelope_metadata(
 ) -> Result<(), Error> {
     let Some(expected_backend) = zk::verifier_backend_registry_tag_v1(configured_backend) else {
         return Err(privacy_error(
-            "privacy proof verifier backend is not admitted by the production verifier registry",
+            "privacy proof verifier backend is not admitted by the native verifier registry",
         ));
     };
     if expected_backend != record_backend {
@@ -582,15 +582,15 @@ mod tests {
             "kaigi/roster",
             commitment,
         )
-        .expect_err("production-claim verifier backend must reject");
+        .expect_err("readiness-claim verifier backend must reject");
         let Error::InvalidParameter(
             iroha_data_model::isi::error::InvalidParameterError::SmartContract(message),
         ) = err
         else {
-            panic!("unexpected production-claim backend rejection: {err:?}");
+            panic!("unexpected readiness-claim backend rejection: {err:?}");
         };
         assert!(
-            message.contains("production verifier registry"),
+            message.contains("native verifier registry"),
             "unexpected error: {message}"
         );
 

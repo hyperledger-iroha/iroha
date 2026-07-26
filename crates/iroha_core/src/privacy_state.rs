@@ -11,11 +11,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
     PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PrivacyActivationValidationError, PrivacyCommitmentV1,
-    PrivacyConsensusLimitsV1, PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyP256CiphertextV1,
-    PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
-    PrivacyPgcBootstrapProofDigestV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-    PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1,
-    PrivacyStatementDigestV1,
+    PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1, PrivacyNamespaceV1, PrivacyNullifierV1,
+    PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
+    PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
+    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootManagementV1,
+    PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -56,12 +56,12 @@ pub(crate) enum PrivacyActivationPromotionErrorV1 {
     /// A persisted activation record is structurally invalid.
     #[error(transparent)]
     InvalidActivation(Box<PrivacyInvalidActivationV1>),
-    /// A persisted activation carries non-canonical chain-wide limits.
-    #[error(transparent)]
-    ConsensusLimitsMismatch(Box<PrivacyActivationConsensusLimitsMismatchV1>),
     /// A structurally valid record does not match executable consensus code.
     #[error(transparent)]
     CompiledProfile(Box<PrivacyActivationCompiledProfileMismatchV1>),
+    /// A scheduled protocol-limit transition was not applied at its exact height.
+    #[error(transparent)]
+    MissedProtocolLimits(Box<PrivacyActivationMissedProtocolLimitsV1>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
@@ -81,16 +81,20 @@ pub(crate) struct PrivacyInvalidActivationV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
-#[error("persisted privacy activation {protocol_id:?} has non-canonical consensus limits")]
-pub(crate) struct PrivacyActivationConsensusLimitsMismatchV1 {
-    protocol_id: PrivacyProtocolIdV1,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
 #[error("persisted privacy activation {protocol_id:?} is not compiled: {source}")]
 pub(crate) struct PrivacyActivationCompiledProfileMismatchV1 {
     protocol_id: PrivacyProtocolIdV1,
     source: crate::privacy_profiles::CompiledPrivacyProfileValidationErrorV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[error(
+    "privacy activation {protocol_id:?} missed protocol-limit effective height {effective_at_height} before incoming height {incoming_height}"
+)]
+pub(crate) struct PrivacyActivationMissedProtocolLimitsV1 {
+    protocol_id: PrivacyProtocolIdV1,
+    effective_at_height: u64,
+    incoming_height: u64,
 }
 
 /// Prevalidate and plan every scheduled activation promotion due at `current_height`.
@@ -107,7 +111,7 @@ pub(crate) struct PrivacyActivationCompiledProfileMismatchV1 {
 /// chain-wide limits before returning an update.
 pub(crate) fn plan_due_privacy_activation_promotions_v1(
     activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
-    current_height: u64,
+    incoming_height: u64,
 ) -> Result<
     Vec<(PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1)>,
     PrivacyActivationPromotionErrorV1,
@@ -130,13 +134,6 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
                 },
             ))
         })?;
-        if record.limits != PrivacyConsensusLimitsV1::taira_default() {
-            return Err(PrivacyActivationPromotionErrorV1::ConsensusLimitsMismatch(
-                Box::new(PrivacyActivationConsensusLimitsMismatchV1 {
-                    protocol_id: record.protocol_id,
-                }),
-            ));
-        }
         crate::privacy_profiles::validate_compiled_privacy_activation_v1(record).map_err(
             |source| {
                 PrivacyActivationPromotionErrorV1::CompiledProfile(Box::new(
@@ -148,11 +145,26 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
             },
         )?;
 
+        let mut promoted = *record;
         let lifecycle =
-            crate::privacy::effective_privacy_lifecycle_v1(record.lifecycle, current_height);
-        if lifecycle != record.lifecycle {
-            let mut promoted = *record;
-            promoted.lifecycle = lifecycle;
+            crate::privacy::effective_privacy_lifecycle_v1(record.lifecycle, incoming_height);
+        promoted.lifecycle = lifecycle;
+        if let Some(pending) = record.pending_protocol_limits_tightening {
+            if pending.effective_at_height < incoming_height {
+                return Err(PrivacyActivationPromotionErrorV1::MissedProtocolLimits(
+                    Box::new(PrivacyActivationMissedProtocolLimitsV1 {
+                        protocol_id: record.protocol_id,
+                        effective_at_height: pending.effective_at_height,
+                        incoming_height,
+                    }),
+                ));
+            }
+            if pending.effective_at_height == incoming_height {
+                promoted.protocol_limits = pending.next_limits;
+                promoted.pending_protocol_limits_tightening = None;
+            }
+        }
+        if promoted != *record {
             promoted.validate().map_err(|source| {
                 PrivacyActivationPromotionErrorV1::InvalidActivation(Box::new(
                     PrivacyInvalidActivationV1 {
@@ -161,10 +173,54 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
                     },
                 ))
             })?;
+            crate::privacy_profiles::validate_compiled_privacy_activation_v1(&promoted).map_err(
+                |source| {
+                    PrivacyActivationPromotionErrorV1::CompiledProfile(Box::new(
+                        PrivacyActivationCompiledProfileMismatchV1 {
+                            protocol_id: promoted.protocol_id,
+                            source,
+                        },
+                    ))
+                },
+            )?;
             promotions.push((*key, promoted));
         }
     }
     Ok(promotions)
+}
+
+/// Validate that every restored protocol-limit schedule is still future.
+///
+/// A transition effective at `E` is valid in a snapshot committed at `E - 1`
+/// and invalid once committed height `E` has already been reached.
+pub(crate) fn validate_privacy_activation_schedules_at_committed_height_v1(
+    activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
+    committed_height: u64,
+) -> Result<(), String> {
+    for (key, record) in activations.iter() {
+        if key.protocol_id() != record.protocol_id {
+            return Err(format!(
+                "privacy activation key protocol {:?} differs from record protocol {:?}",
+                key.protocol_id(),
+                record.protocol_id
+            ));
+        }
+        record.validate().map_err(|error| {
+            format!(
+                "persisted privacy activation {:?} is invalid: {error}",
+                record.protocol_id
+            )
+        })?;
+        if let Some(pending) = record.pending_protocol_limits_tightening
+            && pending.effective_at_height <= committed_height
+        {
+            return Err(format!(
+                "privacy activation {:?} protocol-limit effective height {} is not after committed height {committed_height}",
+                record.protocol_id, pending.effective_at_height
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Exact encrypted-account key in one Anonymous PGC pool.
@@ -995,6 +1051,7 @@ pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
 /// duplicate root epoch, missing/inconsistent head, or PGC account/root
 /// mismatch cannot enter consensus state.
 pub(crate) fn validate_privacy_persisted_state_v1(
+    policy: &PrivacyConsensusPolicyV1,
     activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
     pgc_accounts: &impl StorageReadOnly<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>,
     pgc_pool_invariants: &impl StorageReadOnly<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>,
@@ -1003,6 +1060,9 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
 ) -> Result<(), String> {
+    policy
+        .validate()
+        .map_err(|error| format!("invalid privacy consensus policy: {error}"))?;
     plan_due_privacy_activation_promotions_v1(activations, 0)
         .map_err(|error| format!("invalid privacy activation registry: {error}"))?;
 
@@ -1061,10 +1121,14 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     }
 
     for ((namespace, role), history) in &history_by_scope {
-        let activation = activations
-            .get(&PrivacyActivationKeyV1::new(namespace.protocol_id()))
-            .expect("activation existence checked while grouping roots");
-        let retained = usize::try_from(activation.limits.retained_root_count)
+        let retained_root_count = if namespace.protocol_id()
+            == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
+        {
+            policy.current_limits.retained_root_count
+        } else {
+            policy.admission_retained_root_count()
+        };
+        let retained = usize::try_from(retained_root_count)
             .map_err(|_| "privacy retained-root count cannot be represented".to_owned())?;
         if history.len() > retained {
             return Err(format!(
@@ -2200,6 +2264,44 @@ pub(crate) fn plan_privacy_root_retention_reduction_v1(
     Ok(plans)
 }
 
+/// Validate that every non-PGC history already satisfies a future retention cap.
+///
+/// Non-PGC histories have no typed parent anchor in the first release and
+/// therefore cannot be pruned implicitly. Governance must not schedule a
+/// chain-wide retention tightening which would orphan one of those histories.
+pub(crate) fn validate_non_pgc_privacy_root_retention_v1(
+    roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
+    retained_root_count: u32,
+) -> Result<(), String> {
+    if retained_root_count == 0 {
+        return Err("privacy retained-root count must be non-zero".to_owned());
+    }
+    let retained = usize::try_from(retained_root_count)
+        .map_err(|_| "privacy retained-root count cannot be represented".to_owned())?;
+    let mut counts = BTreeMap::<(PrivacyNamespaceV1, PrivacyRootRoleV1), usize>::new();
+    for (key, _) in roots.iter() {
+        key.validate()
+            .map_err(|error| format!("invalid privacy root key: {error}"))?;
+        if key.namespace().protocol_id() == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+            continue;
+        }
+        let count = counts
+            .entry((key.namespace(), key.role()))
+            .or_default();
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| "privacy root-history count overflow".to_owned())?;
+    }
+    for ((namespace, role), count) in counts {
+        if count > retained {
+            return Err(format!(
+                "non-PGC privacy root history for {namespace:?}/{role:?} has {count} roots, exceeding scheduled retention {retained}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn encode_storage_key<T: Encode>(value: &T, out: &mut String) {
     let encoded = norito::to_bytes(value).expect("fixed privacy storage keys always encode");
     json::write_json_string(&hex::encode_upper(encoded), out);
@@ -2385,6 +2487,7 @@ mod tests {
     impl PgcPersistedFixture {
         fn validate(&self) -> Result<(), String> {
             validate_privacy_persisted_state_v1(
+                &PrivacyConsensusPolicyV1::taira_default(),
                 &self.activations.view(),
                 &self.pgc_accounts.view(),
                 &self.pgc_pool_invariants.view(),
@@ -2759,17 +2862,32 @@ mod tests {
     }
 
     #[test]
-    fn promotion_rejects_noncanonical_chain_limits() {
+    fn promotion_rejects_a_missed_protocol_limit_schedule() {
         let mut proposal = activation_proposal();
-        proposal.limits.max_proof_bytes_per_action -= 1;
+        let mut next_limits = proposal.protocol_limits;
+        let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            ref mut limits,
+        ) = next_limits
+        else {
+            unreachable!("VeRange fixture")
+        };
+        limits.max_aggregation_count -= 1;
+        proposal.pending_protocol_limits_tightening =
+            Some(iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
+                scheduled_at_height: 1_000,
+                effective_at_height: 1_300,
+                next_limits,
+            });
         let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
         let mut activations = Storage::new();
         activations.insert(key, proposal);
 
         assert!(matches!(
-            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_300),
-            Err(PrivacyActivationPromotionErrorV1::ConsensusLimitsMismatch(error))
+            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_301),
+            Err(PrivacyActivationPromotionErrorV1::MissedProtocolLimits(error))
                 if error.protocol_id == proposal.protocol_id
+                    && error.effective_at_height == 1_300
+                    && error.incoming_height == 1_301
         ));
     }
 
@@ -3562,6 +3680,7 @@ mod tests {
         );
 
         let error = validate_privacy_persisted_state_v1(
+            &PrivacyConsensusPolicyV1::taira_default(),
             &activations.view(),
             &pgc_accounts.view(),
             &pgc_pool_invariants.view(),

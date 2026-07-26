@@ -417,7 +417,7 @@ pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
 }
 
 /// Returns `true` for backend labels that require a trusted setup and are not
-/// admitted into the production verifier registry.
+/// admitted into the native verifier registry.
 #[inline]
 #[must_use]
 pub fn is_trusted_setup_backend_label(backend: &str) -> bool {
@@ -512,7 +512,7 @@ const DEVELOPER_ONLY_COMPACT_BACKEND_FRAGMENTS: &[&str] = &[
     "replacebeforemainnet",
     "draftonly",
 ];
-const PRODUCTION_CLAIM_BACKEND_FRAGMENTS: &[&str] = &[
+const READINESS_CLAIM_BACKEND_FRAGMENTS: &[&str] = &[
     "productionready",
     "productionhardened",
     "productionenabled",
@@ -574,7 +574,7 @@ fn is_developer_only_compact_backend_run(run: &str) -> bool {
 }
 
 /// Returns `true` for developer-only backend labels that must not enter
-/// production proof admission, preverification, or verifier dispatch.
+/// proof admission, preverification, or native verifier dispatch.
 #[inline]
 #[must_use]
 pub fn is_developer_only_backend_label(backend: &str) -> bool {
@@ -613,7 +613,7 @@ pub fn is_developer_only_backend_label(backend: &str) -> bool {
 #[must_use]
 pub fn is_verifier_readiness_claim_label(backend: &str) -> bool {
     let compact = compact_ascii_lowercase_label(backend);
-    PRODUCTION_CLAIM_BACKEND_FRAGMENTS
+    READINESS_CLAIM_BACKEND_FRAGMENTS
         .iter()
         .any(|fragment| compact.contains(fragment))
 }
@@ -629,14 +629,14 @@ pub fn is_ivm_execution_backend(backend: &str) -> bool {
 }
 
 /// Return the expected OpenVerify backend tag for labels admitted by native
-/// production verifier dispatch.
+/// verifier dispatch.
 #[must_use]
 pub fn verifier_backend_registry_tag_v1(backend: &str) -> Option<iroha_data_model::zk::BackendTag> {
     iroha_data_model::zk::verifier_backend_registry_tag_v1(backend)
 }
 
 /// Returns `true` when `backend` names a verifier family that can reach native
-/// production verifier dispatch.
+/// verifier dispatch.
 #[inline]
 #[must_use]
 pub fn is_verifier_backend_registry_label_v1(backend: &str) -> bool {
@@ -1282,7 +1282,7 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
     if vk_payload.version != 1 {
         return Err("unsupported STARK verifying key payload version".to_owned());
     }
-    crate::zk_stark::validate_stark_fri_production_verifying_key_payload(
+    crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
         &vk_payload,
         &vk_payload.circuit_id,
         "OpenVerify",
@@ -1882,7 +1882,7 @@ mod zk_ace_stark_prover_tests {
         let weak_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 - 1,
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1,
             blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
             fold_arity: 2,
             queries: crate::zk_stark::ZK_ACE_STARK_FRI_V1_QUERIES,
@@ -1903,7 +1903,7 @@ mod zk_ace_stark_prover_tests {
         )
         .expect_err("ZK-ACE prover must reject below-floor STARK VK payloads");
         assert!(
-            err.contains("below production floor"),
+            err.contains("below consensus floor"),
             "unexpected weak VK rejection: {err}"
         );
     }
@@ -3221,10 +3221,6 @@ fn verify_with_registry(
         }
     }
     None
-}
-
-fn verifier_registry_accepts_backend(backend: &str) -> bool {
-    verifier_registry().iter().any(|ver| ver.accepts(backend))
 }
 
 /// Unified ZK envelope helpers (`ZK1 | TLV*`).
@@ -6203,9 +6199,7 @@ pub fn preverify_with_budget(
     if is_developer_only_backend_label(proof.backend.as_str()) {
         return PreverifyResult::UnsupportedBackend;
     }
-    if expected_preverify_envelope_backend_tag(proof.backend.as_str()).is_none()
-        && !verifier_registry_accepts_backend(proof.backend.as_str())
-    {
+    if expected_preverify_envelope_backend_tag(proof.backend.as_str()).is_none() {
         return PreverifyResult::UnsupportedBackend;
     }
     if !vk_active {
@@ -6396,14 +6390,14 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if vk_payload.hash_fn != STARK_HASH_SHA256_V1 && vk_payload.hash_fn != STARK_HASH_POSEIDON2_V1 {
         return reject("unsupported STARK verifying key hash_fn");
     }
-    if crate::zk_stark::validate_stark_fri_production_verifying_key_payload(
+    if crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
         &vk_payload,
         &vk_payload.circuit_id,
         "OpenVerify",
     )
     .is_err()
     {
-        return reject("invalid STARK production verifying key payload");
+        return reject("invalid canonical STARK verifying key payload");
     }
     if let Some(expected_hash_fn) = expected_hash_fn {
         if vk_payload.hash_fn != expected_hash_fn {
@@ -6739,9 +6733,10 @@ mod debug_backend_tests {
 mod stark_backend_tag_tests {
     use super::{
         ZK_BACKEND_STARK_FRI_V1, is_developer_only_backend_label, is_ivm_execution_backend,
-        is_verifier_readiness_claim_label, is_verifier_backend_registry_label_v1,
-        is_stark_fri_v1_backend, is_trusted_setup_backend_label, verifier_backend_registry_tag_v1,
-        stark_open_verify_circuit_id_matches_backend, verify_backend,
+        is_stark_fri_v1_backend, is_trusted_setup_backend_label,
+        is_verifier_backend_registry_label_v1, is_verifier_readiness_claim_label,
+        stark_open_verify_circuit_id_matches_backend, verifier_backend_registry_tag_v1,
+        verify_backend,
     };
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
     use iroha_data_model::zk::BackendTag;
@@ -6822,7 +6817,7 @@ mod stark_backend_tag_tests {
     }
 
     #[test]
-    fn production_claim_classifier_catches_readiness_and_audit_labels() {
+    fn readiness_claim_classifier_catches_readiness_and_audit_labels() {
         for backend in [
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",
@@ -6849,20 +6844,20 @@ mod stark_backend_tag_tests {
         ] {
             assert!(
                 is_verifier_readiness_claim_label(backend),
-                "production-claim backend {backend} must be classified before allowlists"
+                "readiness-claim backend {backend} must be classified before allowlists"
             );
             assert!(
                 !is_stark_fri_v1_backend(backend),
-                "production-claim backend {backend} must not match the STARK family allowlist"
+                "readiness-claim backend {backend} must not match the STARK family allowlist"
             );
             assert_eq!(
                 verifier_backend_registry_tag_v1(backend),
                 None,
-                "production-claim backend {backend} must not map to an OpenVerify tag"
+                "readiness-claim backend {backend} must not map to an OpenVerify tag"
             );
             assert!(
                 !is_verifier_backend_registry_label_v1(backend),
-                "production-claim backend {backend} must stay fail-closed"
+                "readiness-claim backend {backend} must stay fail-closed"
             );
         }
 
@@ -6876,7 +6871,7 @@ mod stark_backend_tag_tests {
         ] {
             assert!(
                 !is_verifier_readiness_claim_label(backend),
-                "backend {backend} must not be rejected by production-claim text alone"
+                "backend {backend} must not be rejected by readiness-claim text alone"
             );
         }
     }
@@ -7108,7 +7103,7 @@ mod stark_backend_tag_tests {
     }
 
     #[test]
-    fn verify_backend_rejects_production_claim_labels_before_dispatch() {
+    fn verify_backend_rejects_readiness_claim_labels_before_dispatch() {
         for backend in [
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",
@@ -7129,7 +7124,7 @@ mod stark_backend_tag_tests {
             let vk = VerifyingKeyBox::new(backend.to_owned(), vec![5, 6, 7, 8]);
             assert!(
                 !verify_backend(backend, &proof, Some(&vk)),
-                "production-claim backend {backend} must not reach a native verifier"
+                "readiness-claim backend {backend} must not reach a native verifier"
             );
         }
     }
@@ -7338,8 +7333,8 @@ mod stark_prover_tests {
     };
     use crate::zk_stark::{
         STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkCompositionValueV1, StarkFriParamsV1,
-        StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1, ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
-        ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+        StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1, ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+        ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2, ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
     };
     use iroha_crypto::Hash;
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
@@ -7360,10 +7355,10 @@ mod stark_prover_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -7384,10 +7379,10 @@ mod stark_prover_tests {
         StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id,
-            n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 - 1,
-            blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1,
+            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: if backend.contains("/poseidon2-") {
                 crate::zk_stark::STARK_HASH_POSEIDON2_V1
@@ -7535,7 +7530,7 @@ mod stark_prover_tests {
         )
         .expect_err("generic STARK builder must reject below-floor VK payloads");
         assert!(
-            err.contains("below production floor"),
+            err.contains("below consensus floor"),
             "unexpected below-floor VK rejection: {err}"
         );
     }
@@ -7570,10 +7565,10 @@ mod stark_prover_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -7602,10 +7597,10 @@ mod stark_prover_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -7689,10 +7684,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.to_owned(),
-                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7778,10 +7773,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.to_owned(),
-                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7815,10 +7810,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7851,10 +7846,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7887,10 +7882,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7923,10 +7918,10 @@ mod stark_prover_tests {
             let vk_payload = StarkFriVerifyingKeyV1 {
                 version: 1,
                 circuit_id: circuit_id.clone(),
-                n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                 fold_arity: 2,
-                queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: 2,
                 hash_fn: STARK_HASH_SHA256_V1,
             };
@@ -7963,10 +7958,10 @@ mod stark_prover_tests {
                 let vk_payload = StarkFriVerifyingKeyV1 {
                     version: 1,
                     circuit_id: circuit_id.clone(),
-                    n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                    blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                    n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                    blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                     fold_arity: 2,
-                    queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                    queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
                     merkle_arity: 2,
                     hash_fn: if backend.contains("/poseidon2-") {
                         STARK_HASH_POSEIDON2_V1
@@ -8008,10 +8003,10 @@ mod stark_prover_tests {
                 let vk_payload = StarkFriVerifyingKeyV1 {
                     version: 1,
                     circuit_id: circuit_id.clone(),
-                    n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                    blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+                    n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                    blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
                     fold_arity: 2,
-                    queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                    queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
                     merkle_arity: 2,
                     hash_fn: if backend.contains("/poseidon2-") {
                         STARK_HASH_POSEIDON2_V1
@@ -8272,10 +8267,10 @@ mod stark_prover_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -8302,10 +8297,10 @@ mod stark_prover_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -8420,7 +8415,7 @@ pub fn verify_backend_with_timing_guardrails(
     if is_verifier_readiness_claim_label(backend) {
         iroha_logger::debug!(
             backend,
-            "production-claim proof backends are not admitted by production guardrails"
+            "readiness-claim proof backends are not admitted by node verifier guardrails"
         );
         return VerifyReport {
             ok: false,
@@ -8430,7 +8425,7 @@ pub fn verify_backend_with_timing_guardrails(
     if is_trusted_setup_backend_label(backend) {
         iroha_logger::debug!(
             backend,
-            "trusted-setup proof backends are not admitted by production guardrails"
+            "trusted-setup proof backends are not admitted by node verifier guardrails"
         );
         return VerifyReport {
             ok: false,
@@ -8440,7 +8435,7 @@ pub fn verify_backend_with_timing_guardrails(
     if is_developer_only_backend_label(backend) {
         iroha_logger::debug!(
             backend,
-            "developer-only proof backends are not admitted by production guardrails"
+            "developer-only proof backends are not admitted by node verifier guardrails"
         );
         return VerifyReport {
             ok: false,
@@ -8450,7 +8445,7 @@ pub fn verify_backend_with_timing_guardrails(
     if !is_verifier_backend_registry_label_v1(backend) {
         iroha_logger::debug!(
             backend,
-            "unsupported proof backends are not admitted by production guardrails"
+            "unsupported proof backends are not admitted by node verifier guardrails"
         );
         return VerifyReport {
             ok: false,
@@ -8912,7 +8907,7 @@ mod guardrails_tests {
     }
 
     #[test]
-    fn guardrails_reject_production_claim_backends_before_dispatch() {
+    fn guardrails_reject_readiness_claim_backends_before_dispatch() {
         for backend in [
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",
@@ -9486,8 +9481,8 @@ mod guardrails_tests {
     fn guardrails_stark_proof_limit_applies_to_inner_envelope_not_outer_wrapper() {
         use crate::zk_stark::{
             STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
-            ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
         };
 
         let backend = "stark/fri/sha256-goldilocks";
@@ -9495,10 +9490,10 @@ mod guardrails_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -9544,8 +9539,8 @@ mod guardrails_tests {
     fn guardrails_reject_stark_proof_backend_alias_mismatch_before_dispatch() {
         use crate::zk_stark::{
             STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1,
-            ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2, ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
         };
 
         let backend = "stark/fri/sha256-goldilocks";
@@ -9553,10 +9548,10 @@ mod guardrails_tests {
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
-            n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -16049,7 +16044,7 @@ mod preverified_key_tests {
                     true,
                 ),
                 PreverifyResult::Accepted,
-                "production backend {backend} should preverify with a matching envelope"
+                "registry backend {backend} should preverify with a matching envelope"
             );
 
             let mut raw_dedup = DedupCache::new();
@@ -16065,7 +16060,7 @@ mod preverified_key_tests {
                     true,
                 ),
                 PreverifyResult::MalformedProof,
-                "production backend {backend} must require OpenVerifyEnvelope metadata"
+                "registry backend {backend} must require OpenVerifyEnvelope metadata"
             );
 
             let wrong_envelope_backend = match envelope_backend {
@@ -16087,7 +16082,7 @@ mod preverified_key_tests {
                     true,
                 ),
                 PreverifyResult::MalformedProof,
-                "production backend {backend} must reject mismatched envelope backend tags"
+                "registry backend {backend} must reject mismatched envelope backend tags"
             );
             assert_eq!(
                 preverify_with_budget(
@@ -16212,7 +16207,7 @@ mod preverified_key_tests {
     }
 
     #[test]
-    fn preverify_rejects_production_claim_backends_before_dedup() {
+    fn preverify_rejects_readiness_claim_backends_before_dedup() {
         for backend in [
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",

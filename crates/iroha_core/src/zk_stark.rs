@@ -43,11 +43,11 @@ pub const ZK_ACE_STARK_FRI_V1_QUERIES: u16 = 24;
 /// Canonical max proof size for hardened ZK-ACE v0 STARK/FRI proofs.
 pub const ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES: u32 = 1024 * 1024;
 /// Minimum ZK-ACE STARK domain size accepted by ledger-grade admission.
-pub const ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2: u8 = ZK_ACE_STARK_FRI_V1_N_LOG2;
+pub const ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2: u8 = ZK_ACE_STARK_FRI_V1_N_LOG2;
 /// Minimum ZK-ACE FRI blowup accepted by ledger-grade admission.
-pub const ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2: u8 = ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2;
+pub const ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2: u8 = ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2;
 /// Minimum ZK-ACE FRI query count accepted by ledger-grade admission.
-pub const ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES: u16 = ZK_ACE_STARK_FRI_V1_QUERIES;
+pub const ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES: u16 = ZK_ACE_STARK_FRI_V1_QUERIES;
 /// Trace width of the generic OpenVerify binding AIR used by STARK/FRI v1 proofs.
 pub const STARK_BINDING_AIR_TRACE_WIDTH_V1: u16 = 6;
 
@@ -729,16 +729,16 @@ mod tests {
                 payload.merkle_arity = 4;
             }),
             ("n_log2_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.n_log2 = ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 - 1;
+                payload.n_log2 = ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
             }),
             ("blowup_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.blowup_log2 = ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2 - 1;
+                payload.blowup_log2 = ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2 - 1;
             }),
             ("blowup_domain", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.blowup_log2 = payload.n_log2 + 1;
             }),
             ("queries_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.queries = ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES - 1;
+                payload.queries = ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES - 1;
             }),
             ("domain_limit", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.n_log2 = MAX_DOMAIN_LOG2 + 1;
@@ -758,24 +758,24 @@ mod tests {
     }
 
     #[test]
-    fn stark_fri_production_verifying_key_payload_validation_fails_closed() {
-        const CIRCUIT_ID: &str = "soracloud:test-production-circuit";
+    fn stark_fri_canonical_verifying_key_payload_validation_fails_closed() {
+        const CIRCUIT_ID: &str = "soracloud:test-canonical-circuit";
         let valid = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: CIRCUIT_ID.to_owned(),
-            n_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
-        validate_stark_fri_production_verifying_key_payload(&valid, CIRCUIT_ID, "test")
-            .expect("production STARK/FRI payload is accepted");
+        validate_stark_fri_canonical_verifying_key_payload(&valid, CIRCUIT_ID, "test")
+            .expect("canonical STARK/FRI payload is accepted");
 
         let mut poseidon = valid.clone();
         poseidon.hash_fn = STARK_HASH_POSEIDON2_V1;
-        validate_stark_fri_production_verifying_key_payload(&poseidon, CIRCUIT_ID, "test")
+        validate_stark_fri_canonical_verifying_key_payload(&poseidon, CIRCUIT_ID, "test")
             .expect("Poseidon2 STARK/FRI payload is accepted");
 
         let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 11] = [
@@ -795,16 +795,16 @@ mod tests {
                 payload.merkle_arity = 4;
             }),
             ("n_log2_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.n_log2 = ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 - 1;
+                payload.n_log2 = ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
             }),
             ("blowup_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.blowup_log2 = ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2 - 1;
+                payload.blowup_log2 = ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2 - 1;
             }),
             ("blowup_domain", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.blowup_log2 = payload.n_log2 + 1;
             }),
             ("queries_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.queries = ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES - 1;
+                payload.queries = ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES - 1;
             }),
             ("domain_limit", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.n_log2 = MAX_DOMAIN_LOG2 + 1;
@@ -817,7 +817,7 @@ mod tests {
             let mut invalid = valid.clone();
             mutate(&mut invalid);
             assert!(
-                validate_stark_fri_production_verifying_key_payload(&invalid, CIRCUIT_ID, "test")
+                validate_stark_fri_canonical_verifying_key_payload(&invalid, CIRCUIT_ID, "test")
                     .is_err(),
                 "{label} mutation must fail closed"
             );
@@ -827,14 +827,14 @@ mod tests {
         for circuit_id in [
             "",
             " ",
-            "soracloud:test production-circuit",
+            "soracloud:test canonical-circuit",
             "soracloud:test\tproduction-circuit",
             overlong_circuit_id.as_str(),
         ] {
             let mut invalid = valid.clone();
             invalid.circuit_id = circuit_id.to_owned();
             assert!(
-                validate_stark_fri_production_verifying_key_payload(&invalid, circuit_id, "test")
+                validate_stark_fri_canonical_verifying_key_payload(&invalid, circuit_id, "test")
                     .is_err(),
                 "matching noncanonical circuit id {circuit_id:?} must fail closed"
             );
@@ -4622,7 +4622,7 @@ pub struct StarkFriVerifyingKeyV1 {
 /// This is a control-plane floor for proof-system admission. It rejects historical
 /// PoC-sized STARK/FRI parameters while still leaving circuit-specific algebraic
 /// validation to the verifier for each proof.
-pub fn validate_stark_fri_production_verifying_key_payload(
+pub fn validate_stark_fri_canonical_verifying_key_payload(
     payload: &StarkFriVerifyingKeyV1,
     circuit_id: &str,
     label: &str,
@@ -4655,16 +4655,16 @@ pub fn validate_stark_fri_production_verifying_key_payload(
             "{label} STARK/FRI verifier key must use binary Merkle paths"
         ));
     }
-    if payload.n_log2 < ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 {
+    if payload.n_log2 < ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 {
         return Err(format!(
-            "{label} STARK/FRI n_log2 {} is below production floor {}",
-            payload.n_log2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2
+            "{label} STARK/FRI n_log2 {} is below consensus floor {}",
+            payload.n_log2, ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2
         ));
     }
-    if payload.blowup_log2 < ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2 {
+    if payload.blowup_log2 < ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2 {
         return Err(format!(
-            "{label} STARK/FRI blowup_log2 {} is below production floor {}",
-            payload.blowup_log2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2
+            "{label} STARK/FRI blowup_log2 {} is below consensus floor {}",
+            payload.blowup_log2, ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2
         ));
     }
     if payload.blowup_log2 > payload.n_log2 {
@@ -4673,10 +4673,10 @@ pub fn validate_stark_fri_production_verifying_key_payload(
             payload.blowup_log2, payload.n_log2
         ));
     }
-    if payload.queries < ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES {
+    if payload.queries < ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES {
         return Err(format!(
-            "{label} STARK/FRI queries {} is below production floor {}",
-            payload.queries, ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES
+            "{label} STARK/FRI queries {} is below consensus floor {}",
+            payload.queries, ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES
         ));
     }
     if payload.n_log2 > MAX_DOMAIN_LOG2
@@ -4698,7 +4698,7 @@ pub fn validate_stark_fri_production_verifying_key_payload(
 pub fn validate_zk_ace_stark_fri_verifying_key_payload(
     payload: &StarkFriVerifyingKeyV1,
 ) -> Result<(), String> {
-    validate_stark_fri_production_verifying_key_payload(
+    validate_stark_fri_canonical_verifying_key_payload(
         payload,
         iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
         "ZK-ACE",
@@ -6684,7 +6684,7 @@ pub fn prove_stark_fri_zero_composition_air_envelope_bytes(
 /// hash and uses the crypto-derived explicit public-padding opening schedule.
 /// BFV execution AIR proofs are emitted under the canonical base transcript
 /// label only, so equivalent suffixed-label proof bytes cannot become
-/// alternate encodings of the same governed statement. Public production proof
+/// alternate encodings of the same governed statement. Public native proof
 /// generation must use the Soracloud release/audit-aware entry points, which
 /// validate caller-owned governed artifacts before reaching this crate-scoped
 /// helper.

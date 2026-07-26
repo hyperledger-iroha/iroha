@@ -478,6 +478,12 @@ define_instruction_handlers! {
         iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1
     >,
     dispatch_instruction::<
+        iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1
+    >,
+    dispatch_instruction::<
         iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1
     >,
     dispatch_instruction::<iroha_data_model::isi::privacy::PublishPrivacyRootV1>,

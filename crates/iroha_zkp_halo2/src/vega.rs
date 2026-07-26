@@ -21,16 +21,24 @@ use thiserror::Error;
 
 #[path = "vega/algebra.rs"]
 mod algebra;
+#[path = "vega/circuit.rs"]
+mod circuit;
 #[path = "vega/commitment.rs"]
 mod commitment;
 #[path = "vega/curve.rs"]
 mod curve;
+#[path = "vega/figure9_layout.rs"]
+mod figure9_layout;
 #[path = "vega/hyrax.rs"]
 mod hyrax;
 #[path = "vega/nifs.rs"]
 mod nifs;
+#[path = "vega/p256.rs"]
+mod p256;
 #[path = "vega/r1cs.rs"]
 mod r1cs;
+#[path = "vega/sha256.rs"]
+mod sha256;
 #[path = "vega/spartan.rs"]
 mod spartan;
 #[path = "vega/sponge.rs"]

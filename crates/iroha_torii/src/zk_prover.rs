@@ -29,8 +29,8 @@ use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use iroha_core::{
     state::{State as CoreState, WorldReadOnly},
     zk::{
-        hash_proof, hash_vk, is_developer_only_backend_label, is_verifier_readiness_claim_label,
-        is_verifier_backend_registry_label_v1, is_trusted_setup_backend_label, verify_backend,
+        hash_proof, hash_vk, is_developer_only_backend_label, is_trusted_setup_backend_label,
+        is_verifier_backend_registry_label_v1, is_verifier_readiness_claim_label, verify_backend,
         verify_backend_with_timing_checked,
     },
 };
@@ -1819,11 +1819,11 @@ mod tests {
         ] {
             assert!(
                 backend_allowed(backend, &[]),
-                "production backend {backend} should pass an empty prover allowlist"
+                "registry backend {backend} should pass an empty prover allowlist"
             );
             assert!(
                 backend_allowed(backend, &broad_backends),
-                "production backend {backend} should pass matching broad prover allowlists"
+                "registry backend {backend} should pass matching broad prover allowlists"
             );
         }
     }

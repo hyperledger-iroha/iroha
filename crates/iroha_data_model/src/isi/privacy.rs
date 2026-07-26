@@ -6,7 +6,8 @@
 
 use super::*;
 use crate::privacy::{
-    PrivacyPgcAccountBootstrapV1, PrivacyPgcBootstrapProofBytesV1, PrivacyProofEnvelopeV1,
+    PrivacyConsensusLimitsV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcBootstrapProofBytesV1,
+    PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1,
     PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     PrivacyRootPublicationV1,
 };
@@ -33,6 +34,78 @@ impl RegisterPrivacyProtocolActivationV1 {
     #[must_use]
     pub fn new(activation: PrivacyProtocolActivationRecordV1) -> Self {
         Self { activation }
+    }
+}
+
+isi! {
+    /// Schedule a delayed component-wise tightening of the chain-wide privacy policy.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct SchedulePrivacyConsensusPolicyTighteningV1 {
+        /// Exact incoming height at which the successor becomes effective.
+        pub effective_at_height: u64,
+        /// Complete component-wise-lower successor limits.
+        pub next_limits: PrivacyConsensusLimitsV1,
+    }
+}
+
+impl crate::seal::Instruction for SchedulePrivacyConsensusPolicyTighteningV1 {}
+
+impl SchedulePrivacyConsensusPolicyTighteningV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str =
+        "iroha.privacy.schedule_consensus_policy_tightening.v1";
+
+    /// Construct a chain-wide privacy-policy schedule.
+    #[must_use]
+    pub const fn new(
+        effective_at_height: u64,
+        next_limits: PrivacyConsensusLimitsV1,
+    ) -> Self {
+        Self {
+            effective_at_height,
+            next_limits,
+        }
+    }
+}
+
+isi! {
+    /// Schedule a delayed component-wise tightening for one privacy protocol.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct SchedulePrivacyProtocolLimitsTighteningV1 {
+        /// Exact registered protocol whose limits will be tightened.
+        pub protocol_id: PrivacyProtocolIdV1,
+        /// Exact incoming height at which the successor becomes effective.
+        pub effective_at_height: u64,
+        /// Complete protocol-tagged successor limits.
+        pub next_limits: PrivacyProtocolActivationLimitsV1,
+    }
+}
+
+impl crate::seal::Instruction for SchedulePrivacyProtocolLimitsTighteningV1 {}
+
+impl SchedulePrivacyProtocolLimitsTighteningV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str =
+        "iroha.privacy.schedule_protocol_limits_tightening.v1";
+
+    /// Construct a protocol-specific limit schedule.
+    #[must_use]
+    pub const fn new(
+        protocol_id: PrivacyProtocolIdV1,
+        effective_at_height: u64,
+        next_limits: PrivacyProtocolActivationLimitsV1,
+    ) -> Self {
+        Self {
+            protocol_id,
+            effective_at_height,
+            next_limits,
+        }
     }
 }
 
@@ -182,6 +255,15 @@ macro_rules! impl_privacy_decode_from_slice {
 impl_privacy_decode_from_slice!(RegisterPrivacyProtocolActivationV1 {
     activation: PrivacyProtocolActivationRecordV1,
 });
+impl_privacy_decode_from_slice!(SchedulePrivacyConsensusPolicyTighteningV1 {
+    effective_at_height: u64,
+    next_limits: PrivacyConsensusLimitsV1,
+});
+impl_privacy_decode_from_slice!(SchedulePrivacyProtocolLimitsTighteningV1 {
+    protocol_id: PrivacyProtocolIdV1,
+    effective_at_height: u64,
+    next_limits: PrivacyProtocolActivationLimitsV1,
+});
 impl_privacy_decode_from_slice!(TransitionPrivacyProtocolLifecycleV1 {
     protocol_id: PrivacyProtocolIdV1,
     next_lifecycle: PrivacyProtocolLifecycleV1,
@@ -238,7 +320,6 @@ mod tests {
                 proposed_at_height: 100,
                 activate_at_height: 400,
             }),
-            limits: PrivacyConsensusLimitsV1::taira_default(),
             protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
                 JindoActivationLimitsV1 {
                     max_polynomial_count: 4,
@@ -246,6 +327,7 @@ mod tests {
                     max_multilinear_variable_count: 32,
                 },
             ),
+            pending_protocol_limits_tightening: None,
             assurance: PrivacyAssuranceV1::Experimental,
         }
     }
@@ -352,6 +434,25 @@ mod tests {
     #[test]
     fn privacy_isis_roundtrip_through_direct_slice_decoders() {
         assert_slice_roundtrip(RegisterPrivacyProtocolActivationV1::new(activation()));
+        let mut next_consensus_limits = PrivacyConsensusLimitsV1::taira_default();
+        next_consensus_limits.max_actions_per_block = 1;
+        assert_slice_roundtrip(SchedulePrivacyConsensusPolicyTighteningV1::new(
+            700,
+            next_consensus_limits,
+        ));
+        let activation = activation();
+        let mut next_protocol_limits = activation.protocol_limits;
+        let PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(ref mut limits) =
+            next_protocol_limits
+        else {
+            unreachable!("Jindo fixture")
+        };
+        limits.max_evaluation_query_count -= 1;
+        assert_slice_roundtrip(SchedulePrivacyProtocolLimitsTighteningV1::new(
+            activation.protocol_id,
+            700,
+            next_protocol_limits,
+        ));
         assert_slice_roundtrip(TransitionPrivacyProtocolLifecycleV1::new(
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
             PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
@@ -413,6 +514,8 @@ mod tests {
     fn stable_wire_ids_have_no_retired_compatibility_names() {
         for wire_id in [
             RegisterPrivacyProtocolActivationV1::WIRE_ID,
+            SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
+            SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
             TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
             PublishPrivacyRootV1::WIRE_ID,
             BootstrapPrivacyPgcAccountsV1::WIRE_ID,

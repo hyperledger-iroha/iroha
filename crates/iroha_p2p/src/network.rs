@@ -4408,39 +4408,84 @@ pub struct NetworkActorAdmissionTicketTestFixture {
 
 #[cfg(any(test, feature = "test-fixtures"))]
 impl NetworkActorAdmissionTicketTestFixture {
-    /// Create an isolated one-source actor admission budget.
+    /// Create an active admission ticket bound to an exact canonical reply.
     #[must_use]
-    pub fn new() -> Self {
-        Self {
-            budget: NetworkActorProgressBudget::new(1, 1, 1)
-                .expect("test actor admission geometry must fit"),
-        }
+    pub fn for_reply<T>(
+        post: &Post<T>,
+        route: &NetworkReplyRoute,
+    ) -> (Self, NetworkActorAdmissionTicket)
+    where
+        T: Pload + message::ClassifyTopic,
+    {
+        Self::for_reply_at_attempt(post, route, 0)
     }
 
-    /// Issue one active rank-one ticket whose drop cancels its exact waiter.
+    /// Create a reply admission ticket bound to one adaptive timeout generation.
     #[must_use]
-    pub fn issue(&self) -> NetworkActorAdmissionTicket {
+    pub fn for_reply_at_attempt<T>(
+        post: &Post<T>,
+        route: &NetworkReplyRoute,
+        reply_writer_timeout_attempt: u8,
+    ) -> (Self, NetworkActorAdmissionTicket)
+    where
+        T: Pload + message::ClassifyTopic,
+    {
+        assert!(
+            route.is_reply_writable(),
+            "test reply route must accept admission"
+        );
+        assert_eq!(
+            &post.peer_id,
+            route.semantic_target(),
+            "test reply post must retain the route's semantic target"
+        );
+        let topic = post.data.topic();
+        let subscriber_route = post.data.subscriber_route();
+        assert!(
+            is_reliable_progress_route(topic, subscriber_route),
+            "test reply post must use a reliable-progress route"
+        );
+        let mut canonical_post = post.clone();
+        canonical_post.priority =
+            canonical_outbound_priority(topic, subscriber_route, canonical_post.priority);
+        let stream_wire_bytes = ncore::encoded_payload_len(&canonical_post.data)
+            .expect("test reply payload must have a canonical Norito encoding")
+            .max(1);
+        let canonical = NetworkMessage::Post(canonical_post);
+        let class = ActorProgressClass::for_route(topic, subscriber_route)
+            .expect("reliable test reply route must have an actor class");
+        let authority = ProgressDeliveryAuthority::Reply(route.clone());
         let shape = ProgressTicketShape {
-            topic: message::Topic::Consensus,
-            stream_wire_bytes: 1,
+            topic,
+            stream_wire_bytes,
             broadcast: false,
-            reply_writer_timeout_attempt: None,
-            request_digest: Hash::new(b"network-actor-admission-ticket-test-fixture"),
-            authority: None,
+            reply_writer_timeout_attempt: Some(reply_writer_timeout_attempt),
+            request_digest: progress_ticket_request_digest(&canonical),
+            authority: Some(authority.identity()),
         };
         let source = ActorProgressSource {
-            target: None,
-            class: ActorProgressClass::Lane,
+            target: Some(route.tenure.delivery_peer.clone()),
+            class,
         };
-        let ProgressLeaseAttempt::Ready { lease, ticket } = self
-            .budget
-            .try_reserve_for_source(1, shape, source, None, None)
-        else {
+        let fixture = Self {
+            budget: NetworkActorProgressBudget::new(stream_wire_bytes, 1, 1)
+                .expect("test actor admission geometry must fit"),
+        };
+        let ProgressLeaseAttempt::Ready { lease, ticket } = fixture.budget.try_reserve_for_source(
+            stream_wire_bytes,
+            shape,
+            source,
+            Some(&authority),
+            None,
+        ) else {
             panic!("fresh test actor admission ticket must own rank one");
         };
+        // This is the state returned to a caller when actor-queue admission
+        // fails after budget reservation: the lease returns to the budget,
+        // while the exact waiter ticket and canonical post stay caller-owned.
         drop(lease);
         debug_assert_eq!(ticket.rank(), Some(1));
-        ticket
+        (fixture, ticket)
     }
 
     /// Return the number of live waiters in this isolated budget.
@@ -4461,13 +4506,6 @@ impl NetworkActorAdmissionTicketTestFixture {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .ticket_drop_cancellations
-    }
-}
-
-#[cfg(any(test, feature = "test-fixtures"))]
-impl Default for NetworkActorAdmissionTicketTestFixture {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

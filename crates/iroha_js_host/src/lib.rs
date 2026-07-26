@@ -12171,7 +12171,7 @@ const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
 
 const PRIVACY_COMPONENT_ALGORITHM_IDS: &[&str] = &["verange-transparent-range-v1"];
 const PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS: &[&str] = &[];
-const PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS: &[&str] = &[
+const PRIVACY_EXPOSED_READINESS_CLAIM_FRAGMENTS: &[&str] = &[
     "productionready",
     "productionhardened",
     "productionenabled",
@@ -13413,7 +13413,7 @@ fn privacy_entrypoint_compact_lowercase(entrypoint: &str) -> String {
 
 fn privacy_exposed_label_claims_production_readiness(value: &str) -> bool {
     let compact = privacy_entrypoint_compact_lowercase(value);
-    PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS
+    PRIVACY_EXPOSED_READINESS_CLAIM_FRAGMENTS
         .iter()
         .any(|fragment| compact.contains(fragment))
 }
@@ -14154,7 +14154,7 @@ fn privacy_request_has_invalid_catalog_shape(request: &PrivacyProofRequestV1) ->
         || !privacy_sdk_entrypoint_is_portable(&request.entrypoint)
 }
 
-fn privacy_request_has_exposed_production_claim_text_field(
+fn privacy_request_has_exposed_readiness_claim_text_field(
     request: &PrivacyProofRequestV1,
 ) -> bool {
     privacy_request_text_fields(request)
@@ -14330,7 +14330,7 @@ fn privacy_result_for_request(
             );
         }
 
-        if privacy_request_has_exposed_production_claim_text_field(&request) {
+        if privacy_request_has_exposed_readiness_claim_text_field(&request) {
             return privacy_failure_result(
                 PRIVACY_FFI_ERROR_INVALID_REQUEST,
                 "privacy proof request text fields must not claim production/mainnet/audit readiness",
@@ -18692,7 +18692,7 @@ seiyaku Privacy {
     }
 
     #[test]
-    fn privacy_request_rejects_exposed_production_claims_without_reflection() {
+    fn privacy_request_rejects_exposed_readiness_claims_without_reflection() {
         for (field, value) in [
             ("algorithm_id", "forged-mainnet-ready-algorithm"),
             ("algorithm_id", "claimed-mainnet-algorithm"),
@@ -18731,7 +18731,7 @@ seiyaku Privacy {
             assert_subslice_absent(
                 &encoded,
                 value.as_bytes(),
-                "production-claim request failure result",
+                "readiness-claim request failure result",
             );
         }
     }

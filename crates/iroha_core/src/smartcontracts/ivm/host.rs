@@ -26807,7 +26807,7 @@ seiyaku DurableOwner {
     }
 
     #[test]
-    fn set_verifying_keys_rejects_production_claim_and_unsupported_backend_labels() {
+    fn set_verifying_keys_rejects_readiness_claim_and_unsupported_backend_labels() {
         crate::test_alias::ensure();
         for (backend, backend_tag) in [
             ("halo2/ipa:production-ready", BackendTag::Halo2IpaPasta),
@@ -29983,10 +29983,10 @@ seiyaku DurableOwner {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_string(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };

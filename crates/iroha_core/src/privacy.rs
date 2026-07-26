@@ -192,8 +192,8 @@ pub fn validate_privacy_registration_v1(
     record
         .validate()
         .map_err(PrivacyRegistryError::InvalidActivation)?;
-    if record.limits != *chain_limits {
-        return Err(PrivacyRegistryError::ConsensusLimitsMismatch);
+    if record.pending_protocol_limits_tightening.is_some() {
+        return Err(PrivacyRegistryError::RegistrationHasPendingProtocolLimits);
     }
     validate_compiled_privacy_activation_v1(record)
         .map_err(PrivacyRegistryError::CompiledProfile)?;
@@ -304,9 +304,9 @@ pub enum PrivacyRegistryError {
     /// Governed artifacts or limits differ from the executable native profile.
     #[error("privacy activation does not match compiled native profile: {0}")]
     CompiledProfile(CompiledPrivacyProfileValidationErrorV1),
-    /// Per-activation limits differ from the unambiguous chain-wide limits.
-    #[error("privacy activation limits differ from chain-wide limits")]
-    ConsensusLimitsMismatch,
+    /// A new activation cannot smuggle in an already-pending policy change.
+    #[error("a newly registered privacy activation cannot contain pending protocol limits")]
+    RegistrationHasPendingProtocolLimits,
     /// A newly registered record was not in the proposed state.
     #[error("a privacy activation must be registered in the proposed state")]
     RegistrationMustBeProposed,
@@ -409,6 +409,12 @@ impl PrivacyBlockBudgetV1 {
     #[must_use]
     pub const fn bytes(&self) -> u64 {
         self.bytes
+    }
+
+    /// Exact chain-wide limits bound to this block budget.
+    #[must_use]
+    pub const fn limits(&self) -> &PrivacyConsensusLimitsV1 {
+        &self.limits
     }
 }
 
@@ -688,14 +694,27 @@ mod tests {
     }
 
     #[test]
-    fn registration_rejects_limit_downgrade_ambiguity() {
+    fn registration_rejects_prepopulated_protocol_limit_schedule() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         let mut registry = PrivacyProtocolRegistryV1::new(limits).expect("valid limits");
         let mut mismatched = proposal();
-        mismatched.limits.max_proof_bytes_per_action -= 1;
+        let mut next_limits = mismatched.protocol_limits;
+        let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            ref mut next,
+        ) = next_limits
+        else {
+            unreachable!("VeRange fixture")
+        };
+        next.max_aggregation_count -= 1;
+        mismatched.pending_protocol_limits_tightening =
+            Some(iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
+                scheduled_at_height: PROPOSAL_HEIGHT,
+                effective_at_height: ACTIVATION_HEIGHT,
+                next_limits,
+            });
         assert_eq!(
             registry.register(mismatched, PROPOSAL_HEIGHT),
-            Err(PrivacyRegistryError::ConsensusLimitsMismatch)
+            Err(PrivacyRegistryError::RegistrationHasPendingProtocolLimits)
         );
     }
 

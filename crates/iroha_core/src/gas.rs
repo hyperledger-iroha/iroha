@@ -981,7 +981,7 @@ mod tests {
             assert_eq!(
                 halo2_public_input_count(&rejected_attachment),
                 None,
-                "non-production backend {backend} must not be decoded for gas metadata"
+                "non-registry backend {backend} must not be decoded for gas metadata"
             );
         }
 

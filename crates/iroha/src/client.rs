@@ -4614,7 +4614,10 @@ fn validate_optional_json_backend_object(
     Ok(())
 }
 
-fn require_verifier_backend_registry_label_v1<'a>(backend: &'a str, context: &str) -> Result<&'a str> {
+fn require_verifier_backend_registry_label_v1<'a>(
+    backend: &'a str,
+    context: &str,
+) -> Result<&'a str> {
     if !is_verifier_backend_registry_label_v1(backend) {
         return Err(eyre!(
             "{context} is not an exact supported verifier-registry label: `{backend}`"
@@ -6985,7 +6988,7 @@ impl Client {
                 "offline readiness response contains both {field} and a {unavailable_blocker} blocker"
             ));
         }
-        if verifier.id.backend != ZK_PRODUCTION_BACKEND_HALO2_IPA
+        if verifier.id.backend != "halo2/ipa"
             || verifier.id.name != expected_role
             || verifier.circuit_id != expected_circuit_id
         {
@@ -21698,7 +21701,8 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_vk_json(&self, backend: &str, name: &str) -> Result<norito::json::Value> {
-        let backend = require_verifier_backend_registry_label_v1(backend, "zk verifying key backend")?;
+        let backend =
+            require_verifier_backend_registry_label_v1(backend, "zk verifying key backend")?;
         let name = require_non_empty_path_segment(name, "zk verifying key name")?;
         let url = join_torii_url_with_path_segments(&self.torii_url, "v1/zk/vk", &[backend, name]);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;

@@ -13,7 +13,7 @@ use iroha_data_model::privacy::{
     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
     AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
     PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
-    PrivacyAssuranceV1, PrivacyConsensusLimitsV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
+    PrivacyAssuranceV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
     PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
     PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
     PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1,
@@ -111,8 +111,8 @@ impl CompiledPrivacyProfileV1 {
             statement_schema_digest: self.statement_schema_digest,
             engine_manifest_digest: self.engine_manifest_digest,
             lifecycle,
-            limits: PrivacyConsensusLimitsV1::taira_default(),
             protocol_limits: self.protocol_limits,
+            pending_protocol_limits_tightening: None,
             assurance: PrivacyAssuranceV1::Experimental,
         }
     }
@@ -188,9 +188,6 @@ pub fn validate_compiled_privacy_activation_v1(
         .protocol_limits
         .validate_with_ceiling(&compiled.protocol_limits)
         .map_err(|_| CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch)?;
-    if activation.limits != PrivacyConsensusLimitsV1::taira_default() {
-        return Err(CompiledPrivacyProfileValidationErrorV1::ConsensusLimitsMismatch);
-    }
     if activation.assurance != PrivacyAssuranceV1::Experimental {
         return Err(CompiledPrivacyProfileValidationErrorV1::AssuranceMismatch);
     }
@@ -733,9 +730,6 @@ pub enum CompiledPrivacyProfileValidationErrorV1 {
     /// the compiled hard ceilings.
     #[error("privacy activation protocol limits are outside the compiled profile ceilings")]
     ProtocolLimitsMismatch,
-    /// Chain-wide Taira limits differ.
-    #[error("privacy activation consensus limits differ from compiled Taira profile")]
-    ConsensusLimitsMismatch,
     /// The first-release assurance tag differs.
     #[error("privacy activation assurance differs from compiled testnet profile")]
     AssuranceMismatch,

@@ -25,9 +25,9 @@ pub(super) enum HyraxError {
     #[error(transparent)]
     Commitment(#[from] CommitmentError),
     #[error(transparent)]
-    Transcript(#[from] VegaTranscriptError),
-    #[error(transparent)]
     Curve(#[from] VegaCurveError),
+    #[error(transparent)]
+    Transcript(#[from] VegaTranscriptError),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

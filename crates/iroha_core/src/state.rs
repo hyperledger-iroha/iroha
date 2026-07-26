@@ -637,6 +637,7 @@ macro_rules! build_world_block {
             pedersen_params: $state.pedersen_params.$method(),
             poseidon_params: $state.poseidon_params.$method(),
             runtime_upgrades: $state.runtime_upgrades.$method(),
+            privacy_consensus_policy: $state.privacy_consensus_policy.$method(),
             privacy_activations: $state.privacy_activations.$method(),
             privacy_pgc_accounts: $state.privacy_pgc_accounts.$method(),
             privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.$method(),
@@ -875,6 +876,7 @@ macro_rules! build_world_transaction {
             pedersen_params: $state.pedersen_params.transaction(),
             poseidon_params: $state.poseidon_params.transaction(),
             runtime_upgrades: $state.runtime_upgrades.transaction(),
+            privacy_consensus_policy: $state.privacy_consensus_policy.transaction(),
             privacy_activations: $state.privacy_activations.transaction(),
             privacy_pgc_accounts: $state.privacy_pgc_accounts.transaction(),
             privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.transaction(),
@@ -3839,6 +3841,9 @@ pub struct World {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Singleton chain-wide privacy admission policy and pending tightening.
+    pub(crate) privacy_consensus_policy:
+        Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Immutable governed privacy activations keyed by closed protocol identity.
     pub(crate) privacy_activations: Storage<
         crate::privacy_state::PrivacyActivationKeyV1,
@@ -4416,6 +4421,9 @@ pub struct WorldBlock<'world> {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Singleton chain-wide privacy admission policy for this block scope.
+    pub(crate) privacy_consensus_policy:
+        CellBlock<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Immutable governed privacy activations keyed by closed protocol identity.
     pub(crate) privacy_activations: StorageBlock<
         'world,
@@ -4984,6 +4992,7 @@ impl<'world> WorldBlock<'world> {
             governance_last_unlock_sweep_height,
             sccp_registry,
             sccp_outbound_pending_usage,
+            privacy_consensus_policy,
             merge_hint_roots,
             merge_global_state_root,
         );
@@ -5473,6 +5482,9 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Singleton chain-wide privacy admission policy for this transaction.
+    pub(crate) privacy_consensus_policy:
+        CellTransaction<'block, 'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Immutable governed privacy activations keyed by closed protocol identity.
     pub(crate) privacy_activations: StorageTransaction<
         'block,
@@ -7085,6 +7097,9 @@ pub struct WorldView<'world> {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Singleton chain-wide privacy admission policy view.
+    pub(crate) privacy_consensus_policy:
+        CellView<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Immutable governed privacy activations keyed by closed protocol identity.
     pub(crate) privacy_activations: StorageView<
         'world,
@@ -10939,16 +10954,106 @@ impl<'state> StateBlock<'state> {
         &self.axt_envelopes
     }
 
+    fn apply_due_privacy_consensus_policy(&mut self) {
+        let incoming_height = self._curr_block.height().get();
+        let policy = *self.world.privacy_consensus_policy.get();
+        policy.validate().unwrap_or_else(|error| {
+            panic!(
+                "persisted privacy consensus policy is invalid at incoming block height \
+                 {incoming_height}: {error}"
+            )
+        });
+        let Some(pending) = policy.pending_tightening else {
+            return;
+        };
+        if pending.effective_at_height < incoming_height {
+            panic!(
+                "privacy consensus policy missed effective height {} before incoming block \
+                 height {incoming_height}",
+                pending.effective_at_height
+            );
+        }
+        if pending.effective_at_height > incoming_height {
+            return;
+        }
+
+        crate::privacy_state::validate_non_pgc_privacy_root_retention_v1(
+            &self.world.privacy_roots,
+            pending.next_limits.retained_root_count,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "scheduled privacy retention tightening is invalid at incoming block height \
+                 {incoming_height}: {error}"
+            )
+        });
+        let plans = crate::privacy_state::plan_privacy_root_retention_reduction_v1(
+            &self.world.privacy_roots,
+            iroha_data_model::privacy::PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            pending.next_limits.retained_root_count,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "scheduled Anonymous PGC retention tightening failed at incoming block height \
+                 {incoming_height}: {error}"
+            )
+        });
+        let mut head_updates = Vec::with_capacity(plans.len());
+        for plan in &plans {
+            let head = self
+                .world
+                .privacy_root_heads
+                .get(&plan.head_key)
+                .copied()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Anonymous PGC retention plan has no head at incoming block height \
+                         {incoming_height}"
+                    )
+                });
+            let next_head = crate::privacy_state::PrivacyRootHeadRecordV1::new(
+                head.epoch(),
+                head.root(),
+                head.provenance(),
+                Some(plan.new_anchor),
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "Anonymous PGC retention anchor is invalid at incoming block height \
+                     {incoming_height}: {error}"
+                )
+            });
+            head_updates.push((plan.head_key, next_head));
+        }
+
+        for plan in plans {
+            for key in plan.removal_keys {
+                self.world.privacy_roots.remove(key);
+            }
+        }
+        for (key, head) in head_updates {
+            self.world.privacy_root_heads.insert(key, head);
+        }
+        *self.world.privacy_consensus_policy.get_mut() =
+            iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
+                current_limits: pending.next_limits,
+                pending_tightening: None,
+            };
+        self.privacy_budget_in_block =
+            crate::privacy::PrivacyBlockBudgetV1::new(pending.next_limits)
+                .expect("validated scheduled privacy limits construct a block budget");
+    }
+
     fn promote_due_privacy_activations(&mut self) {
-        let current_height = self._curr_block.height().get();
+        let incoming_height = self._curr_block.height().get();
         let promotions = crate::privacy_state::plan_due_privacy_activation_promotions_v1(
             &self.world.privacy_activations,
-            current_height,
+            incoming_height,
         )
         .unwrap_or_else(|error| {
             panic!(
                 "persisted privacy activation registry is invalid at block height \
-                     {current_height}: {error}"
+                     {incoming_height}: {error}"
             )
         });
         for (key, record) in promotions {
@@ -19087,6 +19192,7 @@ impl World {
             pedersen_params: self.pedersen_params.view(),
             poseidon_params: self.poseidon_params.view(),
             runtime_upgrades: self.runtime_upgrades.view(),
+            privacy_consensus_policy: self.privacy_consensus_policy.view(),
             privacy_activations: self.privacy_activations.view(),
             privacy_pgc_accounts: self.privacy_pgc_accounts.view(),
             privacy_pgc_pool_invariants: self.privacy_pgc_pool_invariants.view(),
@@ -21876,6 +21982,7 @@ impl<'world> WorldBlock<'world> {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            privacy_consensus_policy,
             privacy_activations,
             privacy_pgc_accounts,
             privacy_pgc_pool_invariants,
@@ -21994,6 +22101,7 @@ impl<'world> WorldBlock<'world> {
         pedersen_params.commit();
         poseidon_params.commit();
         runtime_upgrades.commit();
+        privacy_consensus_policy.commit();
         privacy_activations.commit();
         privacy_pgc_accounts.commit();
         privacy_pgc_pool_invariants.commit();
@@ -23266,6 +23374,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            privacy_consensus_policy,
             privacy_activations,
             privacy_pgc_accounts,
             privacy_pgc_pool_invariants,
@@ -23370,6 +23479,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         pedersen_params.apply();
         poseidon_params.apply();
         runtime_upgrades.apply();
+        privacy_consensus_policy.apply();
         privacy_activations.apply();
         privacy_pgc_accounts.apply();
         privacy_pgc_pool_invariants.apply();
@@ -27931,6 +28041,10 @@ impl State {
             drop(world);
             std::thread::yield_now();
         };
+        let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
+            world.privacy_consensus_policy.get().current_limits,
+        )
+        .expect("persisted privacy consensus policy was validated before block construction");
         let mut sb = StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
@@ -27990,7 +28104,7 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
-            privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1::default(),
+            privacy_budget_in_block,
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -28012,6 +28126,9 @@ impl State {
             trust_committed_execution_results: false,
         };
         stage(&mut sb)?;
+        // Chain-wide privacy policy changes take effect at the start of their
+        // exact incoming height, before protocol promotions or transactions.
+        sb.apply_due_privacy_consensus_policy();
         // Privacy lifecycle is persisted state, not a verifier-time projection.
         // Plan every due promotion before applying any of them so malformed
         // restored state cannot leave the block overlay partially promoted.
@@ -28596,6 +28713,10 @@ impl State {
             drop(world);
             std::thread::yield_now();
         };
+        let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
+            world.privacy_consensus_policy.get().current_limits,
+        )
+        .expect("persisted privacy consensus policy was validated before block construction");
         StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
@@ -28655,7 +28776,7 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
-            privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1::default(),
+            privacy_budget_in_block,
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -28698,6 +28819,10 @@ impl State {
         let block_hashes = self.block_hashes.block_and_revert();
         let world = self.world.block_and_revert();
         let sccp_registry = self.sccp_registry_snapshot_from_world(world.sccp_registry.get());
+        let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
+            world.privacy_consensus_policy.get().current_limits,
+        )
+        .expect("persisted privacy consensus policy was validated before block construction");
         let mut autoscale_sample_history = self.autoscale_sample_history_snapshot();
         autoscale_sample_history.retain(|record| record.block_height <= target_height);
         StateBlock {
@@ -28760,7 +28885,7 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
-            privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1::default(),
+            privacy_budget_in_block,
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -50978,7 +51103,7 @@ impl StateTransaction<'_, '_> {
     ) -> crate::zk::PreverifyResult {
         // Backend tag acceptance against node policy (curve allow-list via config)
         let backend = proof.backend.as_str();
-        // Only apply curve gating after production backend admission; unsupported
+        // Only apply curve gating after verifier-registry admission; unsupported
         // Halo2-looking labels must fail as UnsupportedBackend in the pre-verifier.
         if matches!(
             crate::zk::verifier_backend_registry_tag_v1(backend),
@@ -60593,7 +60718,7 @@ impl StateTransaction<'_, '_> {
             ));
         }
 
-        let limits = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default();
+        let limits = *self.privacy_budget_after_block.limits();
         let next_actions = self
             .privacy_actions_in_tx
             .checked_add(1)
@@ -63501,6 +63626,27 @@ pub(crate) mod deserialize {
             let chain_id: ChainId = take_required(&mut map, "chain_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
                 take_required(&mut map, "block_hashes")?;
+            let committed_height =
+                u64::try_from(block_hashes_vec.len()).map_err(|_| json::Error::InvalidField {
+                    field: "state.block_hashes".to_owned(),
+                    message: "committed height does not fit u64".to_owned(),
+                })?;
+            world
+                .privacy_consensus_policy
+                .get()
+                .validate_at_committed_height(committed_height)
+                .map_err(|error| json::Error::InvalidField {
+                    field: "state.world.privacy_consensus_policy".to_owned(),
+                    message: error.to_string(),
+                })?;
+            crate::privacy_state::validate_privacy_activation_schedules_at_committed_height_v1(
+                &world.privacy_activations.view(),
+                committed_height,
+            )
+            .map_err(|message| json::Error::InvalidField {
+                field: "state.world.privacy_activations".to_owned(),
+                message,
+            })?;
             let (
                 restored_nexus,
                 lane_incarnations,
@@ -64516,6 +64662,9 @@ pub(crate) mod deserialize {
         let pedersen_params = take_optional_default(&mut map, "pedersen_params")?;
         let poseidon_params = take_optional_default(&mut map, "poseidon_params")?;
         let runtime_upgrades = take_optional_default(&mut map, "runtime_upgrades")?;
+        let privacy_consensus_policy: Cell<
+            iroha_data_model::privacy::PrivacyConsensusPolicyV1,
+        > = take_required(&mut map, "privacy_consensus_policy")?;
         let privacy_activations: Storage<
             crate::privacy_state::PrivacyActivationKeyV1,
             iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
@@ -64545,6 +64694,7 @@ pub(crate) mod deserialize {
             crate::privacy_state::PrivacyRootHeadRecordV1,
         > = take_required(&mut map, "privacy_root_heads")?;
         crate::privacy_state::validate_privacy_persisted_state_v1(
+            privacy_consensus_policy.get(),
             &privacy_activations.view(),
             &privacy_pgc_accounts.view(),
             &privacy_pgc_pool_invariants.view(),
@@ -64758,6 +64908,7 @@ pub(crate) mod deserialize {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            privacy_consensus_policy,
             privacy_activations,
             privacy_pgc_accounts,
             privacy_pgc_pool_invariants,

@@ -5734,16 +5734,16 @@ mod tests {
         let directive =
             |locked_subject: Option<wire::BlockSubject>,
              decided_subject: Option<wire::BlockSubject>| LocalProposalDirective {
-            tag,
-            leader: context.leader(tag.view()),
-            locked_round: locked_subject.map(|_| wire::ConsensusRound {
-                context_id: context.id(),
-                height: context.height,
-                view: 1,
-            }),
-            locked_subject,
-            decided_subject,
-        };
+                tag,
+                leader: context.leader(tag.view()),
+                locked_round: locked_subject.map(|_| wire::ConsensusRound {
+                    context_id: context.id(),
+                    height: context.height,
+                    view: 1,
+                }),
+                locked_subject,
+                decided_subject,
+            };
         let unlocked = directive(None, None);
         assert_eq!(
             LocalProposalState::from_replayed_proposal(Some(replayed), unlocked).attempted,

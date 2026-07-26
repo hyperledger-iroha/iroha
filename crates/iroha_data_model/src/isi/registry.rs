@@ -295,6 +295,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<zk::VerifyProof>,
     InstructionRegistry::register_slice::<zk::PruneProofs>,
     InstructionRegistry::register_slice::<privacy::RegisterPrivacyProtocolActivationV1>,
+    InstructionRegistry::register_slice::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>,
+    InstructionRegistry::register_slice::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>,
     InstructionRegistry::register_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>,
     InstructionRegistry::register_slice::<privacy::PublishPrivacyRootV1>,
     InstructionRegistry::register_slice::<privacy::BootstrapPrivacyPgcAccountsV1>,
@@ -430,6 +432,14 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<privacy::RegisterPrivacyProtocolActivationV1>(
         privacy::RegisterPrivacyProtocolActivationV1::WIRE_ID,
     );
+    registry =
+        registry.register_with_id_slice::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>(
+            privacy::SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
+        );
+    registry =
+        registry.register_with_id_slice::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>(
+            privacy::SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
+        );
     registry = registry.register_with_id_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>(
         privacy::TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
     );

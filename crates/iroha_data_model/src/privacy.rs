@@ -54,6 +54,8 @@ pub const TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1: u32 = 8;
 pub const TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1: u32 = 8;
 /// Number of recent privacy roots retained by the Taira first-release profile.
 pub const TAIRA_PRIVACY_RETAINED_ROOT_COUNT_V1: u32 = 2_048;
+/// Minimum on-chain notice before a privacy-policy tightening becomes effective.
+pub const MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1: u64 = 300;
 
 /// Canonical first-release privacy protocol identity.
 ///
@@ -1642,6 +1644,87 @@ impl PrivacyConsensusLimitsV1 {
         )?;
         Ok(())
     }
+
+    /// Validate `next` as a strict component-wise tightening of this policy.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid profiles, any increased component, and a no-op update.
+    pub fn validate_tightening_to(
+        &self,
+        next: &Self,
+    ) -> Result<(), PrivacyConsensusLimitsTighteningErrorV1> {
+        self.validate()
+            .map_err(PrivacyConsensusLimitsTighteningErrorV1::InvalidCurrent)?;
+        next.validate()
+            .map_err(PrivacyConsensusLimitsTighteningErrorV1::InvalidNext)?;
+
+        let fields = [
+            (
+                PrivacyLimitFieldV1::ActionsPerTransaction,
+                self.max_actions_per_transaction,
+                next.max_actions_per_transaction,
+            ),
+            (
+                PrivacyLimitFieldV1::ActionsPerBlock,
+                self.max_actions_per_block,
+                next.max_actions_per_block,
+            ),
+            (
+                PrivacyLimitFieldV1::ProofBytesPerAction,
+                self.max_proof_bytes_per_action,
+                next.max_proof_bytes_per_action,
+            ),
+            (
+                PrivacyLimitFieldV1::ActionBytes,
+                self.max_action_bytes,
+                next.max_action_bytes,
+            ),
+            (
+                PrivacyLimitFieldV1::PrivacyBytesPerTransaction,
+                self.max_privacy_bytes_per_transaction,
+                next.max_privacy_bytes_per_transaction,
+            ),
+            (
+                PrivacyLimitFieldV1::PrivacyBytesPerBlock,
+                self.max_privacy_bytes_per_block,
+                next.max_privacy_bytes_per_block,
+            ),
+            (
+                PrivacyLimitFieldV1::StatementAndEncryptedOutputBytesPerTransaction,
+                self.max_statement_and_encrypted_output_bytes_per_transaction,
+                next.max_statement_and_encrypted_output_bytes_per_transaction,
+            ),
+            (
+                PrivacyLimitFieldV1::NullifiersPerAction,
+                self.max_nullifiers_per_action,
+                next.max_nullifiers_per_action,
+            ),
+            (
+                PrivacyLimitFieldV1::CommitmentsPerAction,
+                self.max_commitments_per_action,
+                next.max_commitments_per_action,
+            ),
+            (
+                PrivacyLimitFieldV1::RetainedRootCount,
+                self.retained_root_count,
+                next.retained_root_count,
+            ),
+        ];
+        for (field, current, candidate) in fields {
+            if candidate > current {
+                return Err(PrivacyConsensusLimitsTighteningErrorV1::Increase {
+                    field,
+                    current,
+                    candidate,
+                });
+            }
+        }
+        if self == next {
+            return Err(PrivacyConsensusLimitsTighteningErrorV1::NoChange);
+        }
+        Ok(())
+    }
 }
 
 impl Default for PrivacyConsensusLimitsV1 {
@@ -1700,6 +1783,226 @@ pub enum PrivacyConsensusLimitsValidationError {
         /// Value of the containing field.
         larger_value: u32,
     },
+}
+
+/// Validation failure for a component-wise consensus-policy tightening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PrivacyConsensusLimitsTighteningErrorV1 {
+    /// The currently persisted policy is malformed.
+    #[error("current privacy consensus limits are invalid: {0}")]
+    InvalidCurrent(PrivacyConsensusLimitsValidationError),
+    /// The proposed successor policy is malformed.
+    #[error("next privacy consensus limits are invalid: {0}")]
+    InvalidNext(PrivacyConsensusLimitsValidationError),
+    /// A purported tightening increases one component.
+    #[error(
+        "privacy limit {field:?} cannot increase from {current} to {candidate} in a tightening"
+    )]
+    Increase {
+        /// Increased component.
+        field: PrivacyLimitFieldV1,
+        /// Current component value.
+        current: u32,
+        /// Rejected successor value.
+        candidate: u32,
+    },
+    /// A tightening must change at least one component.
+    #[error("privacy consensus policy tightening is a no-op")]
+    NoChange,
+}
+
+/// Scheduled successor for the singleton chain-wide privacy policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivacyConsensusPolicyTighteningV1 {
+    /// Exact block which admitted this schedule.
+    pub scheduled_at_height: u64,
+    /// Exact incoming block at whose start the successor becomes effective.
+    pub effective_at_height: u64,
+    /// Complete component-wise-lower successor policy.
+    pub next_limits: PrivacyConsensusLimitsV1,
+}
+
+impl PrivacyConsensusPolicyTighteningV1 {
+    /// Validate schedule timing and component-wise monotonicity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero/overflowing heights, insufficient notice, an invalid
+    /// successor, any increase, or a no-op.
+    pub fn validate_against(
+        &self,
+        current_limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<(), PrivacyPolicyValidationErrorV1> {
+        validate_privacy_policy_schedule_heights_v1(
+            self.scheduled_at_height,
+            self.effective_at_height,
+        )?;
+        current_limits
+            .validate_tightening_to(&self.next_limits)
+            .map_err(PrivacyPolicyValidationErrorV1::ConsensusTightening)
+    }
+}
+
+/// Singleton chain-wide privacy admission policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivacyConsensusPolicyV1 {
+    /// Limits effective for the current committed state.
+    pub current_limits: PrivacyConsensusLimitsV1,
+    /// At most one delayed, component-wise tightening.
+    pub pending_tightening: Option<PrivacyConsensusPolicyTighteningV1>,
+}
+
+impl PrivacyConsensusPolicyV1 {
+    /// Construct the first-release Taira policy with no pending change.
+    #[must_use]
+    pub const fn taira_default() -> Self {
+        Self {
+            current_limits: PrivacyConsensusLimitsV1::taira_default(),
+            pending_tightening: None,
+        }
+    }
+
+    /// Validate the complete persisted policy independent of chain height.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid current limits or a malformed pending tightening.
+    pub fn validate(&self) -> Result<(), PrivacyPolicyValidationErrorV1> {
+        self.current_limits
+            .validate()
+            .map_err(PrivacyPolicyValidationErrorV1::InvalidCurrentLimits)?;
+        if let Some(pending) = self.pending_tightening {
+            pending.validate_against(&self.current_limits)?;
+        }
+        Ok(())
+    }
+
+    /// Validate a restored policy against the latest committed block height.
+    ///
+    /// A pending transition at height `E` is valid in a snapshot committed at
+    /// `E - 1`, and invalid in a snapshot already committed at `E`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an intrinsically invalid policy or a missed/due transition.
+    pub fn validate_at_committed_height(
+        &self,
+        committed_height: u64,
+    ) -> Result<(), PrivacyPolicyValidationErrorV1> {
+        self.validate()?;
+        if let Some(pending) = self.pending_tightening
+            && pending.effective_at_height <= committed_height
+        {
+            return Err(PrivacyPolicyValidationErrorV1::PendingNotFuture {
+                effective_at_height: pending.effective_at_height,
+                committed_height,
+            });
+        }
+        Ok(())
+    }
+
+    /// Root-retention cap enforced while admitting new roots.
+    ///
+    /// During the notice window new histories must already satisfy the pending
+    /// lower limit so the effective-height transition is deterministic.
+    #[must_use]
+    pub const fn admission_retained_root_count(&self) -> u32 {
+        match self.pending_tightening {
+            Some(pending)
+                if pending.next_limits.retained_root_count
+                    < self.current_limits.retained_root_count =>
+            {
+                pending.next_limits.retained_root_count
+            }
+            _ => self.current_limits.retained_root_count,
+        }
+    }
+}
+
+impl Default for PrivacyConsensusPolicyV1 {
+    fn default() -> Self {
+        Self::taira_default()
+    }
+}
+
+/// Validation failure for a singleton privacy-policy value or schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PrivacyPolicyValidationErrorV1 {
+    /// Current limits are malformed.
+    #[error("current privacy policy limits are invalid: {0}")]
+    InvalidCurrentLimits(PrivacyConsensusLimitsValidationError),
+    /// A scheduled consensus tightening is invalid.
+    #[error("privacy consensus limits tightening is invalid: {0}")]
+    ConsensusTightening(PrivacyConsensusLimitsTighteningErrorV1),
+    /// Schedule admission height must be a real block height.
+    #[error("privacy policy scheduled-at height must be non-zero")]
+    ZeroScheduledHeight,
+    /// Effective height must be strictly later than schedule admission.
+    #[error(
+        "privacy policy effective height {effective_at_height} must be later than scheduled height {scheduled_at_height}"
+    )]
+    EffectiveNotLater {
+        /// Exact admission height.
+        scheduled_at_height: u64,
+        /// Rejected effective height.
+        effective_at_height: u64,
+    },
+    /// The schedule does not provide the consensus minimum notice.
+    #[error(
+        "privacy policy effective height {effective_at_height} is earlier than minimum {earliest_effective_height}"
+    )]
+    LeadTimeTooShort {
+        /// Rejected effective height.
+        effective_at_height: u64,
+        /// Earliest admissible effective height.
+        earliest_effective_height: u64,
+    },
+    /// Adding the minimum notice overflows the height domain.
+    #[error("privacy policy schedule height overflow")]
+    HeightOverflow,
+    /// A restored state retained a schedule which is already due or missed.
+    #[error(
+        "privacy policy effective height {effective_at_height} is not after committed height {committed_height}"
+    )]
+    PendingNotFuture {
+        /// Persisted effective height.
+        effective_at_height: u64,
+        /// Latest committed height.
+        committed_height: u64,
+    },
+}
+
+fn validate_privacy_policy_schedule_heights_v1(
+    scheduled_at_height: u64,
+    effective_at_height: u64,
+) -> Result<(), PrivacyPolicyValidationErrorV1> {
+    if scheduled_at_height == 0 {
+        return Err(PrivacyPolicyValidationErrorV1::ZeroScheduledHeight);
+    }
+    if effective_at_height <= scheduled_at_height {
+        return Err(PrivacyPolicyValidationErrorV1::EffectiveNotLater {
+            scheduled_at_height,
+            effective_at_height,
+        });
+    }
+    let earliest_effective_height = scheduled_at_height
+        .checked_add(MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1)
+        .ok_or(PrivacyPolicyValidationErrorV1::HeightOverflow)?;
+    if effective_at_height < earliest_effective_height {
+        return Err(PrivacyPolicyValidationErrorV1::LeadTimeTooShort {
+            effective_at_height,
+            earliest_effective_height,
+        });
+    }
+    Ok(())
 }
 
 /// Proposed lifecycle state fields.
@@ -2014,7 +2317,7 @@ pub enum PrivacyLifecycleTransitionError {
 )]
 #[cfg_attr(feature = "json", norito(tag = "assurance", content = "value"))]
 pub enum PrivacyAssuranceV1 {
-    /// Testnet-only experimental activation pending production review gates.
+    /// Testnet-only experimental; not security-audited and not a production-readiness claim.
     Experimental,
 }
 
@@ -2544,6 +2847,61 @@ pub enum PrivacyProtocolActivationLimitsValidationError {
     },
 }
 
+/// Scheduled component-wise tightening for one protocol activation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivacyProtocolLimitsTighteningV1 {
+    /// Exact block which admitted this schedule.
+    pub scheduled_at_height: u64,
+    /// Exact incoming block at whose start the successor becomes effective.
+    pub effective_at_height: u64,
+    /// Complete protocol-tagged successor limit set.
+    pub next_limits: PrivacyProtocolActivationLimitsV1,
+}
+
+impl PrivacyProtocolLimitsTighteningV1 {
+    /// Validate schedule timing and strict component-wise monotonicity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects insufficient notice, a protocol mismatch, invalid limits, an
+    /// increase, or a no-op.
+    pub fn validate_against(
+        &self,
+        current_limits: &PrivacyProtocolActivationLimitsV1,
+    ) -> Result<(), PrivacyProtocolLimitsTighteningValidationErrorV1> {
+        validate_privacy_policy_schedule_heights_v1(
+            self.scheduled_at_height,
+            self.effective_at_height,
+        )
+        .map_err(PrivacyProtocolLimitsTighteningValidationErrorV1::Schedule)?;
+        self.next_limits
+            .validate_with_ceiling(current_limits)
+            .map_err(PrivacyProtocolLimitsTighteningValidationErrorV1::Limits)?;
+        if self.next_limits == *current_limits {
+            return Err(PrivacyProtocolLimitsTighteningValidationErrorV1::NoChange);
+        }
+        Ok(())
+    }
+}
+
+/// Validation failure for a scheduled protocol-specific tightening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PrivacyProtocolLimitsTighteningValidationErrorV1 {
+    /// Scheduled/effective heights violate the chain-wide notice rule.
+    #[error("privacy protocol-limit schedule is invalid: {0}")]
+    Schedule(PrivacyPolicyValidationErrorV1),
+    /// Successor limits are invalid, mismatched, or increase a component.
+    #[error("privacy protocol-limit tightening is invalid: {0}")]
+    Limits(PrivacyProtocolActivationLimitsValidationError),
+    /// A tightening must change at least one component.
+    #[error("privacy protocol-limit tightening is a no-op")]
+    NoChange,
+}
+
 /// Governed activation record for one exact privacy protocol implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2569,10 +2927,10 @@ pub struct PrivacyProtocolActivationRecordV1 {
     pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
     /// Current governed lifecycle.
     pub lifecycle: PrivacyProtocolLifecycleV1,
-    /// Consensus resource limits for this activation.
-    pub limits: PrivacyConsensusLimitsV1,
     /// Protocol-specific governed count limits.
     pub protocol_limits: PrivacyProtocolActivationLimitsV1,
+    /// At most one delayed, component-wise protocol-limit tightening.
+    pub pending_protocol_limits_tightening: Option<PrivacyProtocolLimitsTighteningV1>,
     /// Testnet assurance classification.
     pub assurance: PrivacyAssuranceV1,
 }
@@ -2626,12 +2984,14 @@ impl PrivacyProtocolActivationRecordV1 {
         self.protocol_limits
             .validate()
             .map_err(PrivacyActivationValidationError::ProtocolLimits)?;
+        if let Some(pending) = self.pending_protocol_limits_tightening {
+            pending
+                .validate_against(&self.protocol_limits)
+                .map_err(PrivacyActivationValidationError::PendingProtocolLimits)?;
+        }
         self.lifecycle
             .validate()
-            .map_err(PrivacyActivationValidationError::Lifecycle)?;
-        self.limits
-            .validate()
-            .map_err(PrivacyActivationValidationError::Limits)
+            .map_err(PrivacyActivationValidationError::Lifecycle)
     }
 }
 
@@ -2686,12 +3046,12 @@ pub enum PrivacyActivationValidationError {
     /// Protocol-specific activation limits are invalid.
     #[error("privacy activation protocol limits are invalid: {0}")]
     ProtocolLimits(PrivacyProtocolActivationLimitsValidationError),
+    /// A pending protocol-specific tightening is invalid.
+    #[error("privacy activation pending protocol limits are invalid: {0}")]
+    PendingProtocolLimits(PrivacyProtocolLimitsTighteningValidationErrorV1),
     /// Lifecycle is invalid.
     #[error("privacy activation lifecycle is invalid: {0}")]
     Lifecycle(PrivacyLifecycleValidationError),
-    /// Consensus limits are invalid.
-    #[error("privacy activation limits are invalid: {0}")]
-    Limits(PrivacyConsensusLimitsValidationError),
 }
 
 /// Closed Anonymous PGC anonymity-set sizes in the first release.
@@ -5935,6 +6295,7 @@ impl PrivacyProofEnvelopeV1 {
     pub fn validate_against_activation(
         &self,
         activation: &PrivacyProtocolActivationRecordV1,
+        consensus_limits: &PrivacyConsensusLimitsV1,
         current_height: u64,
     ) -> Result<(), PrivacyProofEnvelopeValidationError> {
         activation
@@ -5998,7 +6359,7 @@ impl PrivacyProofEnvelopeV1 {
             .protocol_limits
             .validate_statement(&self.statement)
             .map_err(PrivacyProofEnvelopeValidationError::ActivationStatementLimits)?;
-        self.validate_with_limits(&activation.limits)
+        self.validate_with_limits(consensus_limits)
     }
 }
 
@@ -6752,8 +7113,8 @@ mod tests {
                 activated_at_height: 2,
                 state_since_height: 2,
             }),
-            limits: PrivacyConsensusLimitsV1::taira_default(),
             protocol_limits: protocol_limits(envelope.protocol_id),
+            pending_protocol_limits_tightening: None,
             assurance: PrivacyAssuranceV1::Experimental,
         }
     }
@@ -6959,7 +7320,7 @@ mod tests {
             let activation = activation(&envelope);
             activation.validate().expect("valid activation");
             envelope
-                .validate_against_activation(&activation, 2)
+                .validate_against_activation(&activation, &limits, 2)
                 .expect("valid active envelope");
 
             let bytes = norito::to_bytes(&envelope).expect("frame envelope");
@@ -8241,6 +8602,7 @@ mod tests {
 
     #[test]
     fn activation_effective_height_uses_active_lifecycle_payload() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
         let envelope = envelope(statement_for(
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
         ));
@@ -8252,7 +8614,7 @@ mod tests {
         });
 
         assert_eq!(
-            envelope.validate_against_activation(&activation, 4),
+            envelope.validate_against_activation(&activation, &limits, 4),
             Err(
                 PrivacyProofEnvelopeValidationError::ActivationNotEffective {
                     current_height: 4,
@@ -8260,7 +8622,10 @@ mod tests {
                 }
             )
         );
-        assert_eq!(envelope.validate_against_activation(&activation, 5), Ok(()));
+        assert_eq!(
+            envelope.validate_against_activation(&activation, &limits, 5),
+            Ok(())
+        );
     }
 
     #[test]
@@ -8315,25 +8680,37 @@ mod tests {
         assert!(base.validate_with_limits(&proof_limited).is_err());
 
         let mut governed = activation(&base);
-        base.validate_against_activation(&governed, 2)
+        base.validate_against_activation(&governed, &limits, 2)
             .expect("active matching activation");
-        assert!(base.validate_against_activation(&governed, 1).is_err());
+        assert!(
+            base.validate_against_activation(&governed, &limits, 1)
+                .is_err()
+        );
         governed.parameter_digest = PrivacyParameterDigestV1::new(raw(222));
-        assert!(base.validate_against_activation(&governed, 2).is_err());
+        assert!(
+            base.validate_against_activation(&governed, &limits, 2)
+                .is_err()
+        );
         governed = activation(&base);
         governed.lifecycle = PrivacyProtocolLifecycleV1::Suspended(PrivacySuspendedLifecycleV1 {
             proposed_at_height: 1,
             activated_at_height: 2,
             state_since_height: 3,
         });
-        assert!(base.validate_against_activation(&governed, 3).is_err());
+        assert!(
+            base.validate_against_activation(&governed, &limits, 3)
+                .is_err()
+        );
         governed = activation(&base);
         governed.protocol_limits = PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
             VeRangeActivationLimitsV1 {
                 max_aggregation_count: 1,
             },
         );
-        assert!(base.validate_against_activation(&governed, 2).is_err());
+        assert!(
+            base.validate_against_activation(&governed, &limits, 2)
+                .is_err()
+        );
 
         let framed = norito::to_bytes(&base).expect("frame envelope");
         let mut truncated = framed.clone();

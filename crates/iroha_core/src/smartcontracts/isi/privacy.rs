@@ -11,15 +11,18 @@ use iroha_data_model::{
         error::{InstructionExecutionError as Error, InvalidParameterError},
         privacy::{
             BootstrapPrivacyPgcAccountsV1, PublishPrivacyRootV1,
-            RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1,
+            RegisterPrivacyProtocolActivationV1, SchedulePrivacyConsensusPolicyTighteningV1,
+            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
             TransitionPrivacyProtocolLifecycleV1,
         },
     },
     permission::Permission,
     prelude::AccountId,
     privacy::{
-        PrivacyNamespaceV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-        PrivacyRootManagementV1, PrivacyRootRoleV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+        PrivacyConsensusPolicyTighteningV1, PrivacyNamespaceV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1,
+        PrivacyRootManagementV1, PrivacyRootRoleV1,
+        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
@@ -45,6 +48,7 @@ use crate::{
         PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
         PrivacyRootRetentionAnchorV1, compute_privacy_pgc_account_state_root_v1,
         load_privacy_pgc_pool_snapshot_v1, plan_privacy_root_history_update_v1,
+        validate_non_pgc_privacy_root_retention_v1,
     },
     privacy_verifier::{
         PrivacyAnonymousPgcStateFailureCodeV1, PrivacyPgcVerificationStateV1,
@@ -136,7 +140,11 @@ impl Execute for RegisterPrivacyProtocolActivationV1 {
         let current_height = state_transaction._curr_block.height().get();
         let key = PrivacyActivationKeyV1::new(self.activation.protocol_id);
         validate_privacy_registration_v1(
-            &iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default(),
+            &state_transaction
+                .world
+                .privacy_consensus_policy
+                .get()
+                .current_limits,
             state_transaction.world.privacy_activations.get(&key),
             &self.activation,
             current_height,
@@ -149,6 +157,117 @@ impl Execute for RegisterPrivacyProtocolActivationV1 {
             .world
             .privacy_activations
             .insert(key, self.activation);
+        Ok(())
+    }
+}
+
+impl Execute for SchedulePrivacyConsensusPolicyTighteningV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+
+        let incoming_height = state_transaction.block_height();
+        let current = *state_transaction.world.privacy_consensus_policy.get();
+        current.validate().map_err(|error| {
+            Error::InvariantViolation(
+                format!("persisted privacy consensus policy is invalid: {error}").into(),
+            )
+        })?;
+        if current.pending_tightening.is_some() {
+            return Err(invalid_privacy_parameter(
+                "privacy consensus policy already has a pending tightening",
+            ));
+        }
+        let pending = PrivacyConsensusPolicyTighteningV1 {
+            scheduled_at_height: incoming_height,
+            effective_at_height: self.effective_at_height,
+            next_limits: self.next_limits,
+        };
+        pending
+            .validate_against(&current.current_limits)
+            .map_err(|error| {
+                invalid_privacy_parameter(format!(
+                    "privacy consensus policy tightening rejected: {error}"
+                ))
+            })?;
+        validate_non_pgc_privacy_root_retention_v1(
+            &state_transaction.world.privacy_roots,
+            self.next_limits.retained_root_count,
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!(
+                "privacy consensus policy tightening rejected: {error}"
+            ))
+        })?;
+
+        *state_transaction.world.privacy_consensus_policy.get_mut() =
+            iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
+                current_limits: current.current_limits,
+                pending_tightening: Some(pending),
+            };
+        Ok(())
+    }
+}
+
+impl Execute for SchedulePrivacyProtocolLimitsTighteningV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+
+        let incoming_height = state_transaction.block_height();
+        let key = PrivacyActivationKeyV1::new(self.protocol_id);
+        let current = state_transaction
+            .world
+            .privacy_activations
+            .get(&key)
+            .copied()
+            .ok_or_else(|| {
+                invalid_privacy_parameter(format!(
+                    "privacy protocol {:?} is not registered",
+                    self.protocol_id
+                ))
+            })?;
+        current.validate().map_err(|error| {
+            Error::InvariantViolation(
+                format!("persisted privacy activation is invalid: {error}").into(),
+            )
+        })?;
+        if current.pending_protocol_limits_tightening.is_some() {
+            return Err(invalid_privacy_parameter(format!(
+                "privacy protocol {:?} already has a pending limit tightening",
+                self.protocol_id
+            )));
+        }
+        let pending = PrivacyProtocolLimitsTighteningV1 {
+            scheduled_at_height: incoming_height,
+            effective_at_height: self.effective_at_height,
+            next_limits: self.next_limits,
+        };
+        pending
+            .validate_against(&current.protocol_limits)
+            .map_err(|error| {
+                invalid_privacy_parameter(format!(
+                    "privacy protocol-limit tightening rejected: {error}"
+                ))
+            })?;
+        let mut executable_successor = current;
+        executable_successor.protocol_limits = self.next_limits;
+        executable_successor.pending_protocol_limits_tightening = None;
+        validate_compiled_privacy_activation_v1(&executable_successor).map_err(|error| {
+            invalid_privacy_parameter(format!(
+                "privacy protocol-limit tightening is not executable: {error}"
+            ))
+        })?;
+
+        let mut next = current;
+        next.pending_protocol_limits_tightening = Some(pending);
+        state_transaction.world.privacy_activations.insert(key, next);
         Ok(())
     }
 }
@@ -295,7 +414,11 @@ impl Execute for PublishPrivacyRootV1 {
         let removals = plan_privacy_root_history_update_v1(
             &state_transaction.world.privacy_roots,
             &[root_key],
-            activation.limits.retained_root_count,
+            state_transaction
+                .world
+                .privacy_consensus_policy
+                .get()
+                .admission_retained_root_count(),
         )
         .map_err(|error| {
             invalid_privacy_parameter(format!("privacy root publication rejected: {error}"))
@@ -608,7 +731,12 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
         let removals = plan_privacy_root_history_update_v1(
             &state_transaction.world.privacy_roots,
             &[root_key],
-            activation.limits.retained_root_count,
+            state_transaction
+                .world
+                .privacy_consensus_policy
+                .get()
+                .current_limits
+                .retained_root_count,
         )
         .map_err(|error| {
             invalid_privacy_parameter(format!("privacy PGC bootstrap root rejected: {error}"))
@@ -683,7 +811,12 @@ impl Execute for SubmitPrivacyProofV1 {
                 Some(
                     load_privacy_pgc_pool_snapshot_v1(
                         namespace,
-                        activation.limits.retained_root_count,
+                        state_transaction
+                            .world
+                            .privacy_consensus_policy
+                            .get()
+                            .current_limits
+                            .retained_root_count,
                         &state_transaction.world.privacy_pgc_accounts,
                         &state_transaction.world.privacy_pgc_pool_invariants,
                         &state_transaction.world.privacy_roots,
@@ -716,6 +849,11 @@ impl Execute for SubmitPrivacyProofV1 {
             &self.envelope,
             PrivacyVerificationContextV1 {
                 activation: &activation,
+                consensus_limits: &state_transaction
+                    .world
+                    .privacy_consensus_policy
+                    .get()
+                    .current_limits,
                 chain_id: &state_transaction.chain_id,
                 genesis_hash,
                 current_height: state_transaction.block_height(),
@@ -843,7 +981,12 @@ impl Execute for SubmitPrivacyProofV1 {
                 let removals = plan_privacy_root_history_update_v1(
                     &state_transaction.world.privacy_roots,
                     &[root_key],
-                    activation.limits.retained_root_count,
+                    state_transaction
+                        .world
+                        .privacy_consensus_policy
+                        .get()
+                        .current_limits
+                        .retained_root_count,
                 )
                 .map_err(|error| {
                     invalid_privacy_parameter(format!(

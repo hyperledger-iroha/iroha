@@ -1053,11 +1053,11 @@ mod tests {
     #[test]
     fn zk_ace_stark_fri_params_meet_ledger_admission_floor() {
         let params = zk_ace_stark_fri_params_v1();
-        assert!(params.n_log2 >= iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2);
+        assert!(params.n_log2 >= iroha_core::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2);
         assert!(
-            params.blowup_log2 >= iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2
+            params.blowup_log2 >= iroha_core::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2
         );
-        assert!(params.queries >= iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES);
+        assert!(params.queries >= iroha_core::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES);
 
         let vk = zk_ace_verifying_key_box_v1().expect("vk");
         let payload: iroha_core::zk_stark::StarkFriVerifyingKeyV1 =

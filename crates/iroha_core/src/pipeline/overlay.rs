@@ -7161,10 +7161,10 @@ seiyaku ProtectedProvedOverlay {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
@@ -7310,10 +7310,10 @@ seiyaku ProtectedProvedOverlay {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
@@ -10724,13 +10724,14 @@ where
             "verifying key is not Active".to_owned(),
         ));
     }
-    let expected_record_backend =
-        crate::zk::verifier_backend_registry_tag_v1(attachment.backend.as_str()).ok_or_else(|| {
-            OverlayBuildError::ZkProof(
-                "proof attachment backend is not admitted by the production verifier registry"
-                    .to_owned(),
-            )
-        })?;
+    let expected_record_backend = crate::zk::verifier_backend_registry_tag_v1(
+        attachment.backend.as_str(),
+    )
+    .ok_or_else(|| {
+        OverlayBuildError::ZkProof(
+            "proof attachment backend is not admitted by the native verifier registry".to_owned(),
+        )
+    })?;
     if vk_record.backend != expected_record_backend {
         return Err(OverlayBuildError::ZkProof(
             "verifying key backend tag mismatch".to_owned(),
