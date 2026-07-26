@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_SCRIPT="${SCRIPT_DIR}/check_mcp_rollout.sh"
+export OFFLINE_ASSET_DEFINITION_ID="6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 
 cleanup_paths=()
 
@@ -23,7 +24,144 @@ make_fake_repo() {
     "${root}/scripts" \
     "${root}/mockbin" \
     "${root}/state"
-  cp "$SOURCE_SCRIPT" "${root}/configs/soranexus/taira/check_mcp_rollout.sh"
+  cp "$SOURCE_SCRIPT" "${root}/configs/soranexus/taira/check_mcp_rollout.real.sh"
+  cat >"${root}/configs/soranexus/taira/check_mcp_rollout.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+VALIDATOR_ALIGNMENT_ATTEMPTS=1 VALIDATOR_PROGRESS_DELAY_SECONDS=0 \
+exec "${SCRIPT_DIR}/check_mcp_rollout.real.sh" \
+  --validator-root validator-1=https://validator-1.test \
+  --validator-root validator-2=https://validator-2.test \
+  --validator-root validator-3=https://validator-3.test \
+  --validator-root validator-4=https://validator-4.test \
+  --require-all-validators \
+  --expected-git-sha 490dacc287f00d490dacc287f00d490dacc287f0 \
+  "$@"
+SH
+
+  cat >"${root}/state/offline-readiness.json" <<'JSON'
+{
+  "cash_handoff_capability": "cash_handoff_v1",
+  "required_bridge_abi_version": 21,
+  "max_hops": 8,
+  "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+  "asset_scale": 2,
+  "evaluated_block_height": 707,
+  "evaluated_block_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "active_transfer_verifier": {
+    "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
+    "version": 1,
+    "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+    "commitment": "0101010101010101010101010101010101010101010101010101010101010101",
+    "public_inputs_schema_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+    "max_proof_bytes": 65536,
+    "activation_height": 1,
+    "withdrawal_height": null
+  },
+  "active_topup_shield_verifier": {
+    "id": {"backend": "halo2/ipa", "name": "kagemusha_topup_shield_v2_verifier_record"},
+    "version": 2,
+    "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+    "commitment": "0202020202020202020202020202020202020202020202020202020202020202",
+    "public_inputs_schema_hash": "1212121212121212121212121212121212121212121212121212121212121212",
+    "max_proof_bytes": 196608,
+    "activation_height": 1,
+    "withdrawal_height": null
+  },
+  "active_unshield_verifier": {
+    "id": {"backend": "halo2/ipa", "name": "confidential_unshield_v3_verifier_record"},
+    "version": 3,
+    "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+    "commitment": "0303030303030303030303030303030303030303030303030303030303030303",
+    "public_inputs_schema_hash": "1313131313131313131313131313131313131313131313131313131313131313",
+    "max_proof_bytes": 196608,
+    "activation_height": 1,
+    "withdrawal_height": null
+  },
+  "active_recursive_step_eq_verifier": {
+    "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_eq_v4_verifier_record"},
+    "version": 4,
+    "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
+    "commitment": "0404040404040404040404040404040404040404040404040404040404040404",
+    "public_inputs_schema_hash": "1414141414141414141414141414141414141414141414141414141414141414",
+    "max_proof_bytes": 196608,
+    "activation_height": 1,
+    "withdrawal_height": 9999
+  },
+  "active_recursive_step_ep_verifier": {
+    "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_ep_v4_verifier_record"},
+    "version": 5,
+    "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
+    "commitment": "0505050505050505050505050505050505050505050505050505050505050505",
+    "public_inputs_schema_hash": "1515151515151515151515151515151515151515151515151515151515151515",
+    "max_proof_bytes": 196608,
+    "activation_height": 1,
+    "withdrawal_height": 9999
+  },
+  "artifact_set": {
+    "generation": "release-v4",
+    "manifest_sha256": "2121212121212121212121212121212121212121212121212121212121212121",
+    "release_policy_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "release_attestation_sha256": "2323232323232323232323232323232323232323232323232323232323232323",
+    "activation_height": 1,
+    "withdrawal_height": 9999,
+    "max_proof_bytes": 196608,
+    "asset_scale": 2
+  },
+  "proof_backend_available": true,
+  "recursive_lineage_supported": true,
+  "ready": true,
+  "blockers": []
+}
+JSON
+
+  local expected_identity_path="${root}.offline-expected-identity.json"
+  cleanup_paths+=("$expected_identity_path")
+  python3 - "${root}/state/offline-readiness.json" "$expected_identity_path" <<'PY'
+import json
+import sys
+
+source, destination = sys.argv[1:]
+with open(source, encoding="utf-8") as stream:
+    payload = json.load(stream)
+role_fields = (
+    "active_transfer_verifier",
+    "active_topup_shield_verifier",
+    "active_unshield_verifier",
+    "active_recursive_step_eq_verifier",
+    "active_recursive_step_ep_verifier",
+)
+verifiers = {}
+for field in role_fields:
+    verifier = payload[field]
+    verifiers[field] = {
+        "backend": verifier["id"]["backend"],
+        "name": verifier["id"]["name"],
+        **{key: verifier[key] for key in (
+            "version",
+            "circuit_id",
+            "commitment",
+            "public_inputs_schema_hash",
+            "max_proof_bytes",
+            "activation_height",
+            "withdrawal_height",
+        )},
+    }
+identity = {
+    "cash_handoff_capability": payload["cash_handoff_capability"],
+    "required_bridge_abi_version": payload["required_bridge_abi_version"],
+    "max_hops": payload["max_hops"],
+    "asset_definition_id": payload["asset_definition_id"],
+    "asset_scale": payload["asset_scale"],
+    "artifact_set": payload["artifact_set"],
+    "verifiers": verifiers,
+}
+with open(destination, "w", encoding="utf-8") as stream:
+    json.dump(identity, stream, sort_keys=True)
+PY
+  export OFFLINE_EXPECTED_IDENTITY_PATH="$expected_identity_path"
 
   cat >"${root}/scripts/taira_bootstrap_canary.py" <<'PY'
 #!/usr/bin/env python3
@@ -155,6 +293,28 @@ if [[ -z "$connect_timeout" || -z "$max_time" ]]; then
 fi
 
 scenario="${MOCK_SCENARIO:-}"
+validator_index=""
+validator_sample=0
+validator_height=0
+validator_block_hash=""
+if [[ "$url" =~ ^https://validator-([1-4])\.test/ ]]; then
+  validator_index="${BASH_REMATCH[1]}"
+  if [[ "$method" == "GET" && "$url" == */v1/offline/readiness\?asset_definition_id=* && "$validator_index" == "1" ]]; then
+    validator_sample="$(cat "${MOCK_STATE_DIR:?}/validator_sample" 2>/dev/null || printf '0')"
+    validator_sample=$((validator_sample + 1))
+    printf '%s\n' "$validator_sample" >"${MOCK_STATE_DIR}/validator_sample"
+  else
+    validator_sample="$(cat "${MOCK_STATE_DIR:?}/validator_sample" 2>/dev/null || printf '1')"
+  fi
+  validator_height=$((706 + validator_sample))
+  validator_block_hash="$(printf '%064x' "$validator_height")"
+  if [[ "$scenario" == "fleet_block_mismatch" && "$validator_index" == "4" ]]; then
+    validator_block_hash="ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  elif [[ "$scenario" == "fleet_stale_offline_progress" && "$validator_sample" -gt 1 ]]; then
+    validator_height=707
+    validator_block_hash="$(printf '%064x' "$validator_height")"
+  fi
+fi
 after_ping=0
 if [[ -n "${MOCK_STATE_DIR:-}" && -f "${MOCK_STATE_DIR}/ping_seen" ]]; then
   after_ping=1
@@ -164,7 +324,119 @@ status="200"
 content_type="application/json"
 body='{}'
 
-if [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/mcp" ]]; then
+if [[ -n "$validator_index" && "$method" == "GET" && "$url" == */v1/offline/readiness\?asset_definition_id=* ]]; then
+  body="$(python3 - "${MOCK_STATE_DIR:?}/offline-readiness.json" "$validator_height" "$validator_block_hash" "$scenario" "$validator_index" "$validator_sample" <<'PY'
+import json
+import sys
+
+source, height_raw, block_hash, scenario, validator_index, sample_raw = sys.argv[1:]
+with open(source, encoding="utf-8") as stream:
+    payload = json.load(stream)
+payload["evaluated_block_height"] = int(height_raw)
+payload["evaluated_block_hash"] = block_hash
+sample = int(sample_raw)
+if scenario == "fleet_verifier_mismatch" and validator_index == "4":
+    payload["active_recursive_step_ep_verifier"]["commitment"] = "06" * 32
+if scenario == "fleet_release_changes_between_samples" and sample > 1:
+    payload["artifact_set"]["manifest_sha256"] = "24" * 32
+print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+PY
+)"
+elif [[ -n "$validator_index" && "$method" == "GET" && "$url" == "https://validator-${validator_index}.test/status" ]]; then
+  body="$(python3 - "$validator_height" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "build": {"git_commit_sha": "490dacc287f00d490dacc287f00d490dacc287f0"},
+    "peers": 4,
+    "blocks": int(sys.argv[1]),
+    "queue_size": 0,
+    "teu_dataspace_backlog": [{"backlog": 0}],
+}, separators=(",", ":")))
+PY
+)"
+elif [[ -n "$validator_index" && "$method" == "GET" && "$url" == */v1/sumeragi/status ]]; then
+  body="$(python3 - "$validator_index" "$validator_height" "$validator_block_hash" <<'PY'
+import json
+import sys
+
+validator_index, committed_height_raw, block_hash = sys.argv[1:]
+committed_height = int(committed_height_raw)
+node_hex = {"1": "A", "2": "B", "3": "C", "4": "D"}[validator_index] * 64
+subject = {
+    "block_hash": "hash:" + block_hash.upper(),
+    "payload_hash": "hash:" + "F" * 64,
+}
+payload = {
+    "protocol_version": 3,
+    "restart_required": False,
+    "node_fingerprint": "hash:" + node_hex,
+    "build_fingerprint": "hash:" + "B" * 64,
+    "config_fingerprint": "hash:" + "C" * 64,
+    "height_context_id": ["hash:" + "D" * 64],
+    "height": committed_height + 1,
+    "view": 0,
+    "phase": {"phase": "prepare", "details": None},
+    "leader": 0,
+    "body_state": {"state": "missing", "details": None},
+    "last_committed_height": committed_height,
+    "last_committed_subject": subject,
+    "height_context": {
+        "epoch": 1,
+        "epoch_end_height": 9999,
+        "mode": {"mode": "permissioned", "details": None},
+        "epoch_seed": "0" * 64,
+        "validator_count": 4,
+        "quorum": {"min_signers": 3, "total_power": 4},
+    },
+    "last_commit_qc": {
+        "certificate": {
+            "round": {"height": committed_height, "view": 0},
+            "phase": {"phase": "commit", "details": None},
+            "subject": subject,
+        },
+        "validator_count": 4,
+        "signer_count": 3,
+        "min_signers": 3,
+        "signed_power": 3,
+        "total_power": 4,
+    },
+    "lane_settlement_commitments": [],
+    "lane_relay_envelopes": [],
+    "lane_payload_ownerships": [],
+    "committed_lane_blocks": [],
+    "lane_block_sessions": [],
+    "local_peer_removed": False,
+    "operator": {
+        "view_change_install_total": 2,
+        "busy_deferral_total": 0,
+        "adapter_queues": {
+            "ingress_keys": 0,
+            "ingress_capacity": 64,
+            "deferred_completion": 0,
+            "deferred_progress": 0,
+            "deferred_progress_capacity": 64,
+            "deferred_normal": 0,
+            "deferred_normal_capacity": 64,
+        },
+        "tx_queue": {
+            "tracked_transactions": 1,
+            "queued_transactions": 1,
+            "capacity": 100,
+            "retained_bytes": 128,
+            "max_retained_bytes": 8192,
+            "oldest_queued_age_ms": 5,
+            "saturated_by_count": False,
+            "saturated_by_bytes": False,
+            "saturated_by_age": False,
+        },
+    },
+}
+print(json.dumps(payload, separators=(",", ":")))
+PY
+)"
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/mcp" ]]; then
   if [[ $after_ping -eq 1 && "$scenario" == "public_503_mcp" ]]; then
     status="503"
     content_type="text/plain"
@@ -183,6 +455,20 @@ elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$pa
   body=''
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$payload" == *'"method":"tools/list"'* ]]; then
   body='{"result":{"tools":[{"name":"iroha.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.time.now","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.search","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.release.get","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.yank_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
+elif [[ "$method" == "GET" && "$url" == https://taira.sora.org/v1/offline/readiness\?asset_definition_id=* ]]; then
+  body="$(cat "${MOCK_STATE_DIR:?}/offline-readiness.json")"
+  if [[ "$scenario" == "offline_not_ready" ]]; then
+    body="${body/\"ready\": true/\"ready\": false}"
+    body="${body/\"blockers\": \[\]/\"blockers\": [{\"code\": \"issuer_unavailable\", \"message\": \"issuer unavailable\"}]}"
+  elif [[ "$scenario" == "offline_asset_mismatch" ]]; then
+    body="${body/6TEAJqbb8oEPmLncoNiMRbLEK6tw/5TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+  elif [[ "$scenario" == "offline_scale_mismatch" ]]; then
+    body="${body/\"asset_scale\": 2/\"asset_scale\": 9}"
+  elif [[ "$scenario" == "offline_release_mismatch" ]]; then
+    body="${body/2121212121212121212121212121212121212121212121212121212121212121/2424242424242424242424242424242424242424242424242424242424242424}"
+  elif [[ "$scenario" == "offline_verifier_mismatch" ]]; then
+    body="${body/0505050505050505050505050505050505050505050505050505050505050505/0606060606060606060606060606060606060606060606060606060606060606}"
+  fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/status" ]]; then
   if [[ $after_ping -eq 1 && "$scenario" == "public_502" ]]; then
     status="502"
@@ -199,7 +485,7 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/status" ]]; then
   elif [[ "$scenario" == "status_build_sha_mismatch" ]]; then
     body='{"build":{"git_commit_sha":"94dcbf7c28"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   else
-    body='{"build":{"git_commit_sha":"490dacc287"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
+    body='{"build":{"git_commit_sha":"490dacc287f00d490dacc287f00d490dacc287f0"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/status" ]]; then
   body='{"protocol_version":3,"restart_required":false,"node_fingerprint":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","build_fingerprint":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","config_fingerprint":"hash:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC","height_context_id":["hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","payload_hash":"hash:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","payload_hash":"hash:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"view_change_install_total":2,"busy_deferral_total":0,"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":1,"queued_transactions":1,"capacity":100,"retained_bytes":128,"max_retained_bytes":8192,"oldest_queued_age_ms":5,"saturated_by_count":false,"saturated_by_bytes":false,"saturated_by_age":false}}}'
@@ -349,6 +635,7 @@ SH
 
   chmod +x \
     "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.real.sh" \
     "${root}/scripts/taira_bootstrap_canary.py" \
     "${root}/scripts/taira_faucet_canary.py" \
     "${root}/mockbin/curl" \
@@ -455,9 +742,14 @@ run_case public_502 'public Torii ingress looks degraded' 'HTTP 502'
 run_case public_503 'public Torii ingress looks degraded' 'HTTP 503'
 run_case public_503_mcp 'public MCP ingress looks degraded' 'HTTP 503'
 run_case initialized_timeout 'initialized notification failed with HTTP curl_error_28' 'Operation timed out'
+run_case offline_not_ready 'offline readiness gate failed: ready is not true'
+run_case offline_asset_mismatch 'offline readiness gate failed: asset_definition_id does not match the requested Digital Shekel definition'
+run_case offline_scale_mismatch 'offline readiness gate failed: asset_scale is not exact Digital Shekel scale 2'
+run_case offline_release_mismatch 'offline readiness gate failed: live release identity does not match the external operator-reviewed identity'
+run_case offline_verifier_mismatch 'offline readiness gate failed: live release identity does not match the external operator-reviewed identity'
 run_case status_build_sha_missing '/status did not publish build.git_commit_sha' '' '490dacc'
 run_case status_build_sha_too_short '/status build git SHA 490dac is not a 7 to 40 character hexadecimal SHA prefix' '' '490dacc'
-run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not match expected 490dacc' '' '490dacc'
+run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not exactly match release commit 490dacc287f00d490dacc287f00d490dacc287f0' '' '490dacc'
 run_case sumeragi_missing_restart_required 'v2 status restart_required must be a boolean'
 run_case sumeragi_invalid_restart_required 'v2 status restart_required must be a boolean'
 run_case sumeragi_highest_qc_behind_commit 'durable CommitQC height does not match last_committed_height'
@@ -468,12 +760,112 @@ run_case canonical_status_missing 'canonical pipeline transaction-status route s
 run_case canonical_status_wrong_error "canonical pipeline transaction-status route should reject a missing hash returned error code 'bad_request'"
 run_case retired_status_alias_mounted 'retired transaction-status compatibility route must remain unmounted failed with HTTP 200'
 run_case retired_status_wrong_error "retired transaction-status compatibility route must remain unmounted returned error code 'not_found'"
+run_case fleet_block_mismatch 'disagrees with validator-1 on offline_block_hash'
+run_case fleet_verifier_mismatch 'live release identity does not match the external operator-reviewed identity'
+run_case fleet_release_changes_between_samples 'live release identity does not match the external operator-reviewed identity'
+run_case fleet_stale_offline_progress 'validator fleet offline readiness did not advance a common evaluated block'
 run_invalid_canary_identity_case \
   archived-chain \
   'write canary config must target the public Sumeragi-v2 Taira chain'
 run_invalid_canary_identity_case \
   wrong-discriminant \
   'write canary config must use Taira chain discriminant 369'
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if env -u OFFLINE_EXPECTED_IDENTITY_PATH \
+    PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --skip-write-canary \
+      >"${root}/missing-offline-identity-output.log" 2>&1; then
+  echo "missing offline identity case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/missing-offline-identity-output.log" >&2 || true
+  exit 1
+fi
+grep -q -- '--offline-expected-identity is mandatory' \
+  "${root}/missing-offline-identity-output.log"
+
+cp "$OFFLINE_EXPECTED_IDENTITY_PATH" "${root}/checked-in-offline-identity.json"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    OFFLINE_EXPECTED_IDENTITY_PATH="${root}/checked-in-offline-identity.json" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --skip-write-canary \
+      >"${root}/checked-in-offline-identity-output.log" 2>&1; then
+  echo "checked-in offline identity case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/checked-in-offline-identity-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'operator-reviewed offline identity must remain outside the source repository' \
+  "${root}/checked-in-offline-identity-output.log"
+
+release_script="${root}/configs/soranexus/taira/check_mcp_rollout.real.sh"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "$release_script" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --offline-asset-definition-id "$OFFLINE_ASSET_DEFINITION_ID" \
+      --offline-expected-identity "$OFFLINE_EXPECTED_IDENTITY_PATH" \
+      --skip-write-canary \
+      >"${root}/release-without-fleet-output.log" 2>&1; then
+  echo "public release without validator fleet unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q 'public Taira rollout requires --require-all-validators' \
+  "${root}/release-without-fleet-output.log"
+
+release_fleet_args=(
+  --validator-root validator-1=https://validator-1.test
+  --validator-root validator-2=https://validator-2.test
+  --validator-root validator-3=https://validator-3.test
+  --validator-root validator-4=https://validator-4.test
+  --require-all-validators
+)
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "$release_script" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --offline-asset-definition-id "$OFFLINE_ASSET_DEFINITION_ID" \
+      --offline-expected-identity "$OFFLINE_EXPECTED_IDENTITY_PATH" \
+      "${release_fleet_args[@]}" \
+      --skip-write-canary \
+      >"${root}/release-without-sha-output.log" 2>&1; then
+  echo "public release without exact git SHA unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q 'public Taira rollout requires --expected-git-sha with the exact full 40-character commit' \
+  "${root}/release-without-sha-output.log"
+
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    VALIDATOR_PROGRESS_SAMPLES=2 \
+    "$release_script" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --offline-asset-definition-id "$OFFLINE_ASSET_DEFINITION_ID" \
+      --offline-expected-identity "$OFFLINE_EXPECTED_IDENTITY_PATH" \
+      "${release_fleet_args[@]}" \
+      --expected-git-sha 490dacc287f00d490dacc287f00d490dacc287f0 \
+      --skip-write-canary \
+      >"${root}/release-too-few-samples-output.log" 2>&1; then
+  echo "public release with fewer than three fleet samples unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q 'public Taira rollout requires at least three advancing validator fleet samples' \
+  "${root}/release-too-few-samples-output.log"
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")

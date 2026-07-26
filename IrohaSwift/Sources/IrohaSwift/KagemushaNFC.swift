@@ -129,7 +129,7 @@ public enum KagemushaNFCError: Error, Equatable, LocalizedError, Sendable {
         case .checksumMismatch:
             return "The NFC payload checksum does not match."
         case .acknowledgementPending:
-            return "The payment may have been delivered; its acknowledgement is pending."
+            return "The cash handoff is final; its delivery receipt is pending."
         case .invalidState:
             return "The NFC exchange operation is invalid in its current state."
         case .completedSession:
@@ -152,9 +152,9 @@ public enum KagemushaNFCError: Error, Equatable, LocalizedError, Sendable {
         }
     }
 
-    /// Once the commit APDU succeeds, a later status word cannot prove the
-    /// spend was rolled back. Preserve the payment and retry acknowledgement
-    /// recovery instead of constructing another spend.
+    /// Once the wallet commits `cash_handoff_v1`, transport failure cannot
+    /// roll back the spend. Preserve and retransmit only the exact committed
+    /// payment while recovering the acknowledgement receipt.
     static func afterCommittedPayment(_ error: Self) -> Self {
         error == .acknowledgementPending ? error : .acknowledgementPending
     }
@@ -979,7 +979,7 @@ public final class KagemushaNFCReader: NSObject, @unchecked Sendable {
 
     public func sendPayment(
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void = { _ in },
-        createPayment: @escaping @Sendable (
+        commitPaymentForHandoff: @escaping @Sendable (
             KagemushaRecipientReceiveOfferV2
         ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
@@ -1008,15 +1008,19 @@ public final class KagemushaNFCReader: NSObject, @unchecked Sendable {
                 throw KagemushaNFCError.invalidPeer
             }
             onEvent(.receiveRequestRead(request))
-            let payment = try await createPayment(request)
+            // This closure must atomically consume the parents and durably
+            // bind/sign the exact payment before returning. From this point the
+            // cash handoff is final even when no transport byte is delivered.
+            let payment = try await commitPaymentForHandoff(request)
+            committedPayment = payment
             onEvent(.paymentPrepared(payment))
+            onEvent(.paymentCommitted(payment))
             try await writePayload(
                 .payment(payment),
                 to: tag,
                 onEvent: onEvent,
-                onCommitAttempted: { committedPayment = payment }
+                onCommitAttempted: {}
             )
-            onEvent(.paymentCommitted(payment))
             let acknowledgementPayload = try await readPayload(
                 expectedKind: .acknowledgement,
                 from: tag,
@@ -1391,12 +1395,12 @@ public final class KagemushaNFCReader: @unchecked Sendable {
     public func cancel() {}
     public func sendPayment(
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void = { _ in },
-        createPayment: @escaping @Sendable (
+        commitPaymentForHandoff: @escaping @Sendable (
             KagemushaRecipientReceiveOfferV2
         ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
         _ = onEvent
-        _ = createPayment
+        _ = commitPaymentForHandoff
         throw KagemushaNFCError.unavailable
     }
 }

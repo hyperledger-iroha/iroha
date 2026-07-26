@@ -213,7 +213,10 @@ let package = Package(
             targets: ["IrohaSwift"]),
         .library(
             name: "IrohaSwiftMobileTransports",
-            targets: ["IrohaSwiftMobileTransports"])
+            targets: ["IrohaSwiftMobileTransports"]),
+        .library(
+            name: "IrohaSwiftTransferUI",
+            targets: ["IrohaSwiftTransferUI"])
     ],
     dependencies: packageDependencies,
     targets: targets + [
@@ -230,6 +233,12 @@ let package = Package(
             name: "IrohaSwiftMobileTransports",
             dependencies: mobileTransportDependencies,
             path: "Sources/IrohaSwiftMobileTransports",
+            swiftSettings: swiftSettings
+        ),
+        .target(
+            name: "IrohaSwiftTransferUI",
+            dependencies: ["IrohaSwift"],
+            path: "Sources/IrohaSwiftTransferUI",
             swiftSettings: swiftSettings
         ),
         .testTarget(

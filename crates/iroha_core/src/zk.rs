@@ -46,6 +46,10 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+mod offline_note_compat;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub use offline_note_compat::*;
 /// Constant-depth Pasta IPA accumulation and terminal decisions for Kagemusha.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_accumulation;
@@ -10292,9 +10296,198 @@ mod pasta_tiny {
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
         halo2curves::pasta::Fp as Scalar,
-        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression, Selector},
         poly::Rotation,
     };
+
+    /// Semantic circuit retained for the BOI legacy note load/audit/redeem API.
+    ///
+    /// This circuit is not a peer-payment mode. ABI-21/V4 `cash_handoff_v1`
+    /// remains the only runtime-advertised peer handoff. The compatibility
+    /// circuit proves the bounded note corridor used when old BOI clients load
+    /// a note, optionally anchor an audit, or redeem it online.
+    #[derive(Clone)]
+    pub struct OfflineNoteSemantic {
+        /// Public values bound to the proof envelope.
+        pub public_values: [Scalar; super::OFFLINE_NOTE_INSTANCE_COLUMNS],
+        /// Private, scale-normalized input amount slots.
+        pub input_amounts: [Scalar; super::OFFLINE_NOTE_MAX_INPUT_AMOUNTS],
+        /// Private, scale-normalized output amount slots.
+        pub output_amounts: [Scalar; super::OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS],
+    }
+
+    impl Default for OfflineNoteSemantic {
+        fn default() -> Self {
+            Self {
+                public_values: [Scalar::from(0); super::OFFLINE_NOTE_INSTANCE_COLUMNS],
+                input_amounts: [Scalar::from(0); super::OFFLINE_NOTE_MAX_INPUT_AMOUNTS],
+                output_amounts: [Scalar::from(0); super::OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS],
+            }
+        }
+    }
+
+    impl Circuit<Scalar> for OfflineNoteSemantic {
+        type Config = (
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::OFFLINE_NOTE_INSTANCE_COLUMNS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::OFFLINE_NOTE_MAX_INPUT_AMOUNTS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
+                super::OFFLINE_NOTE_INSTANCE_COLUMNS],
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            meta.set_minimum_degree(6);
+            let public_adv = std::array::from_fn(|_| meta.advice_column());
+            let input_adv = std::array::from_fn(|_| meta.advice_column());
+            let output_adv = std::array::from_fn(|_| meta.advice_column());
+            let inst = std::array::from_fn(|_| meta.instance_column());
+            let selector = meta.selector();
+            meta.create_gate("offline_note_semantic", |meta| {
+                let enabled = meta.query_selector(selector);
+                let constant = |value: u64| Expression::Constant(Scalar::from(value));
+                let public = public_adv
+                    .iter()
+                    .map(|column| meta.query_advice(*column, Rotation::cur()))
+                    .collect::<Vec<_>>();
+                let inputs = input_adv
+                    .iter()
+                    .map(|column| meta.query_advice(*column, Rotation::cur()))
+                    .collect::<Vec<_>>();
+                let outputs = output_adv
+                    .iter()
+                    .map(|column| meta.query_advice(*column, Rotation::cur()))
+                    .collect::<Vec<_>>();
+
+                let mode = public[4].clone();
+                let input_count = public[5].clone();
+                let output_count = public[6].clone();
+                let input_sum_public = public[7].clone();
+                let output_sum_public = public[8].clone();
+                let mut constraints = Vec::with_capacity(30);
+
+                for index in 0..super::OFFLINE_NOTE_INSTANCE_COLUMNS {
+                    constraints.push(
+                        enabled.clone()
+                            * (public[index].clone()
+                                - meta.query_instance(inst[index], Rotation::cur())),
+                    );
+                }
+
+                // Mode is redeem or audit; counts remain within the old BOI
+                // proof shape, with redeem fixed to one output.
+                constraints.push(
+                    enabled.clone()
+                        * (mode.clone() - constant(super::OFFLINE_NOTE_MODE_REDEEM))
+                        * (mode - constant(super::OFFLINE_NOTE_MODE_AUDIT)),
+                );
+                constraints.push(
+                    enabled.clone()
+                        * (input_count.clone() - constant(1))
+                        * (input_count.clone() - constant(2))
+                        * (input_count.clone() - constant(3))
+                        * (input_count.clone() - constant(4)),
+                );
+                constraints.push(
+                    enabled.clone()
+                        * (output_count.clone() - constant(1))
+                        * (output_count.clone() - constant(2)),
+                );
+                constraints.push(
+                    enabled.clone()
+                        * (public[4].clone() - constant(super::OFFLINE_NOTE_MODE_AUDIT))
+                        * (output_count.clone() - constant(1)),
+                );
+
+                let input_sum_private = inputs
+                    .iter()
+                    .cloned()
+                    .reduce(|a, b| a + b)
+                    .expect("the offline compatibility circuit has at least one input slot");
+                let output_sum_private = outputs
+                    .iter()
+                    .cloned()
+                    .reduce(|a, b| a + b)
+                    .expect("the offline compatibility circuit has at least one output slot");
+                constraints.push(enabled.clone() * (input_sum_private - input_sum_public.clone()));
+                constraints
+                    .push(enabled.clone() * (output_sum_private - output_sum_public.clone()));
+                constraints.push(enabled.clone() * (input_sum_public - output_sum_public));
+
+                // Unused private amount slots must be zero.
+                constraints.push(
+                    enabled.clone()
+                        * inputs[1].clone()
+                        * (input_count.clone() - constant(2))
+                        * (input_count.clone() - constant(3))
+                        * (input_count.clone() - constant(4)),
+                );
+                constraints.push(
+                    enabled.clone()
+                        * inputs[2].clone()
+                        * (input_count.clone() - constant(3))
+                        * (input_count.clone() - constant(4)),
+                );
+                constraints.push(enabled.clone() * inputs[3].clone() * (input_count - constant(4)));
+                constraints.push(enabled * outputs[1].clone() * (output_count - constant(2)));
+                constraints
+            });
+            (public_adv, input_adv, output_adv, inst, selector)
+        }
+
+        fn synthesize(
+            &self,
+            (public_adv, input_adv, output_adv, _inst, selector): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let public_values = self.public_values;
+            let input_amounts = self.input_amounts;
+            let output_amounts = self.output_amounts;
+            layouter.assign_region(
+                || "offline_note_semantic",
+                |mut region| {
+                    selector.enable(&mut region, 0)?;
+                    for (index, column) in public_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("public{index}"),
+                            *column,
+                            0,
+                            || Value::known(public_values[index]),
+                        )?;
+                    }
+                    for (index, column) in input_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("input_amount{index}"),
+                            *column,
+                            0,
+                            || Value::known(input_amounts[index]),
+                        )?;
+                    }
+                    for (index, column) in output_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("output_amount{index}"),
+                            *column,
+                            0,
+                            || Value::known(output_amounts[index]),
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
 
     #[derive(Clone, Default)]
     pub struct Add;
@@ -14171,6 +14364,27 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_h2.as_ref(),
                 proof_payload.as_slice(),
                 &col_refs,
+            )
+        }
+        "halo2/pasta/offline-note-recursive" => {
+            if col_refs.len() != OFFLINE_NOTE_INSTANCE_COLUMNS
+                || col_refs.iter().any(|column| column.len() != 1)
+            {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::OfflineNoteSemantic::default(),
+                |vk| {
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
+                }
             )
         }
         "halo2/pasta/tiny-anon-transfer-2x2" => {

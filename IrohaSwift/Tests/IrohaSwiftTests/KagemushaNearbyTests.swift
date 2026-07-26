@@ -248,7 +248,7 @@ final class KagemushaNearbyTests: XCTestCase {
                     recorder.record()
                     return .accepted
                 },
-                createPayment: { _ in
+                commitPaymentForHandoff: { _ in
                     recorder.record()
                     throw KagemushaNearbyError.invalidMessage
                 }

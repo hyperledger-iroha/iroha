@@ -8467,6 +8467,8 @@ mod offline_client_tests {
 
     fn first_release_readiness(asset_definition_id: &AssetDefinitionId) -> OfflineReadiness {
         OfflineReadiness {
+            cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
@@ -16631,6 +16633,24 @@ impl Client {
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
     pub fn post_asset_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/assets/aliases/resolve");
+        let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
+    /// Compatibility helper: POST `/v1/aliases/resolve` with an account-alias literal.
+    ///
+    /// New code should prefer [`Self::resolve_account_alias_unsigned`] or
+    /// [`Self::resolve_account_alias_authenticated`] for strict typed response
+    /// substitution checks.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, JSON serialization, or the HTTP call fails.
+    pub fn post_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
         let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
         self.default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)

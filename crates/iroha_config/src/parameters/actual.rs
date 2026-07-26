@@ -10399,7 +10399,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            escrow_required: false,
+            escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
@@ -11866,8 +11866,9 @@ mod tests {
     }
 
     #[test]
-    fn offline_defaults_leave_kagemusha_release_unconfigured() {
+    fn offline_defaults_require_escrow_even_before_release_configuration() {
         let offline = Offline::default();
+        assert!(offline.escrow_required);
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
         assert_eq!(

@@ -1062,9 +1062,12 @@ recipient peer-payment archive.
 The receiver calls `verifySpendV4`, checks the exact asset, scale, amount,
 recipient commitment, verifier window, hop bound, and lineage requirements,
 then durably stores the bundle before creating a
-`KagemushaReceiverAcknowledgement`. The sender marks its reserved inputs spent
-only after `verifiedForSender` accepts that acknowledgement. Replayed peer
-payments and acknowledgements remain idempotent at the wallet operation layer.
+`KagemushaReceiverAcknowledgement`. Under `cash_handoff_v1`, the sender has
+already irreversibly consumed its inputs and durably bound/signed the exact
+payment before transport handoff. `verifiedForSender` verifies a delivery
+receipt only; it can never accept, roll back, replace, or claw back the spend.
+Replayed peer payments and acknowledgements remain idempotent at the wallet
+operation layer.
 
 Redemption uses `KagemushaRecursiveSpendRedeemLocalRequestV4`, the retained
 unshield-v3 primitive proof APIs, and

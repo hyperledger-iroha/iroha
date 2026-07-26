@@ -7045,8 +7045,14 @@ fn authorize_kura_runtime_start(
 
 fn apply_state_runtime_config_before_snapshot_auth(state: &mut State, config: &Config) {
     // These fields are process-local execution policy and do not touch Kura-owned geometry.
+    // Settlement must be installed before replay because configured offline
+    // assets and every top-up/redemption transition resolve policy through
+    // `State::settlement`. Installing it only after the mandatory readiness
+    // gate would validate an empty/default catalog and replay historical
+    // offline transitions under the wrong policy.
     state.set_crypto(config.crypto.clone());
     state.set_pipeline(config.pipeline.clone());
+    state.set_settlement(config.settlement.clone());
 }
 
 fn apply_state_geometry_config_before_kura_replay(
@@ -7687,6 +7693,15 @@ impl Iroha {
         let mut supervisor = Supervisor::new();
         let startup_trace_started_at = Instant::now();
         log_startup_trace("irohad.start.enter", startup_trace_started_at);
+        iroha_torii::ensure_mandatory_offline_configuration(
+            &config.settlement.offline,
+            config.torii.kagemusha_commands.as_ref(),
+        )
+        .map_err(|error| {
+            Report::new(StartError::InitKura).attach(format!(
+                "mandatory offline cash configuration failed: {error}"
+            ))
+        })?;
 
         // Log detailed backtraces if a lock-order deadlock occurs so we can
         // diagnose stalls during long-running scenarios (e.g., integration tests).
@@ -7939,7 +7954,9 @@ impl Iroha {
             config.settlement.offline.kagemusha_artifact_dir.as_deref(),
         ) {
             (None, None) => {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
+                return Err(Report::new(StartError::InitKura).attach(
+                    "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
+                ));
             }
             (Some(policy_path), Some(artifact_dir)) => {
                 iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
@@ -8175,17 +8192,16 @@ impl Iroha {
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
         {
-            let world = state.world.view();
-            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-            iroha_core::smartcontracts::isi::offline::ensure_kagemusha_active_release_material_v4(
-                &world,
-                &state.kagemusha_release_catalog,
-                height,
+            iroha_torii::ensure_mandatory_offline_startup_readiness(
+                &state,
+                &config.common.chain,
+                &config.settlement.offline,
+                config.torii.kagemusha_commands.as_ref(),
+                &config.nexus.fees.fee_asset_id,
             )
             .map_err(|error| {
-                Report::new(StartError::InitKura).attach(format!(
-                    "active Kagemusha V4 release material is unavailable: {error}"
-                ))
+                Report::new(StartError::InitKura)
+                    .attach(format!("mandatory offline cash readiness failed: {error}"))
             })?;
         }
         // No Kura writer is live while trust selection or replay can still fail. Only the fully
@@ -8884,7 +8900,6 @@ impl Iroha {
         let sumeragi_cfg = config.sumeragi.clone();
         let fraud_cfg = config.fraud_monitoring.clone();
         let zk_cfg = config.zk.clone();
-        let settlement_cfg = config.settlement.clone();
         let gov_cfg = config.gov.clone();
         let oracle_cfg = config.oracle.clone();
         let streaming_cfg = config.streaming.clone();
@@ -8900,7 +8915,9 @@ impl Iroha {
         state.set_oracle(oracle_cfg);
         state.set_streaming(streaming_cfg);
         state.set_fraud_monitoring(fraud_cfg);
-        state.set_settlement(settlement_cfg);
+        // Settlement was installed before Kura replay and authenticated by the
+        // mandatory offline gate. Do not replace that post-replay snapshot
+        // after Kura has started.
         state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
         log_startup_trace(
@@ -13510,7 +13527,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn installs_actual_zk_config_for_fresh_state_before_kura_replay() {
+        fn installs_actual_zk_and_settlement_config_before_kura_replay() {
             let config_table = toml::toml! {
                 chain = "00000000-0000-0000-0000-000000000000"
                 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
@@ -13541,6 +13558,16 @@ mod tests {
                 std::num::NonZeroU64::new(7).expect("nonzero message cap");
             config.zk.sccp.max_pending_outbound_payload_bytes =
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
+            let offline_asset_definition_id = AssetDefinitionId::new(
+                iroha_data_model::domain::DomainId::try_new("boi", "is")
+                    .expect("offline asset domain"),
+                "ds".parse().expect("offline asset name"),
+            );
+            let offline_escrow_account_id = iroha_test_samples::ALICE_ID.clone();
+            config.settlement.offline.escrow_accounts.insert(
+                offline_asset_definition_id.clone(),
+                offline_escrow_account_id.clone(),
+            );
 
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -13548,6 +13575,7 @@ mod tests {
 
             install_zk_config_before_kura_replay(&mut state, &config)
                 .expect("fresh state accepts actual ZK configuration");
+            apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
 
             let installed = state.zk_snapshot();
             assert_eq!(
@@ -13557,6 +13585,15 @@ mod tests {
             assert_eq!(
                 installed.sccp.max_pending_outbound_payload_bytes,
                 config.zk.sccp.max_pending_outbound_payload_bytes
+            );
+            assert_eq!(
+                state
+                    .settlement()
+                    .offline
+                    .escrow_accounts
+                    .get(&offline_asset_definition_id),
+                Some(&offline_escrow_account_id),
+                "the exact offline escrow catalog must be installed before Kura replay",
             );
         }
     }

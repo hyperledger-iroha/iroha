@@ -2752,7 +2752,7 @@ fn minimal_config_snapshot() {
                     collateral_substitution_matrix: {},
                 },
                 offline: Offline {
-                    escrow_required: false,
+                    escrow_required: true,
                     escrow_accounts: {},
                     kagemusha_release_policy_path: None,
                     kagemusha_artifact_dir: None,

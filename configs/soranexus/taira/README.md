@@ -116,7 +116,14 @@ config rather than wrapper-local defaults:
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, with wire-revision-3 reducer health read
   from `/v1/sumeragi/status` and an optional signed write canary for final
-  public cutover.
+  public cutover. Every invocation must pass `--offline-asset-definition-id`
+  with the operator-provisioned canonical ID for the registered scale-2
+  `ds#boi.is` asset and `--offline-expected-identity` with an absolute path to
+  the external, operator-reviewed JSON identity. The identity seals the exact
+  capability, ABI, asset ID/scale, authenticated artifact set, and every field
+  of all five governed verifier identities. It must remain outside the source
+  repository. The script never falls back to the faucet/gas asset, a checked-in
+  digest, or a validator-selected release.
 - `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
   canary that catches stale validators still missing the capacity/order ISI
   dispatch table.
@@ -155,6 +162,10 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    `public_address` plus its own direct `torii_public_address` in the public
    roster, then put the matching validator `private_key` values and the shared
    `account_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`,
+   `kagemusha_commands_private_key`, `offline_asset_alias = "ds#boi.is"`,
+   the operator-provisioned canonical `offline_asset_definition_id`,
+   `offline_asset_scale = 2`, and canonical Taira I105
+   `offline_escrow_account`,
    `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
    values in the runtime file. SoraFS council roots must be canonical Ed25519
    governance keys; never substitute validator, node identity, or provider
@@ -184,6 +195,12 @@ council placeholder remains or the configured quorum is zero, duplicated, or
 larger than the trusted set. It also requires explicit per-validator
 `torii_public_address` values so direct public Torii hostnames are part of the
 checked operator input instead of a hard-coded shared edge default.
+It also refuses every render that omits offline cash inputs, retains a
+`REPLACE_WITH_` placeholder, uses an asset other than the registered scale-2
+`ds#boi.is`, supplies a non-canonical asset-definition ID, or binds escrow to a
+non-canonical Taira I105 account. The checked-in config contains no guessed DS
+asset ID; the operator-provisioned ID is injected into
+`settlement.offline.escrow_accounts` at render time.
 
 ## Private profiles
 
@@ -441,6 +458,8 @@ done
 bash configs/soranexus/taira/check_mcp_rollout.sh \
   --skip-public \
   --local-root http://127.0.0.1:28080 \
+  --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" \
+  --offline-expected-identity /run/secrets/taira-offline-release-identity.json \
   --skip-write-canary
 ```
 
@@ -657,10 +676,20 @@ Nexus/Torii deployments should keep the same `/v1/mcp` path and be added as
 user-local MCP servers with the exact public root under test.
 
 For final public rollout, do not stop at MCP discovery. Run the repo smoke with
-both the public endpoint, the expected deployment git SHA, and a runtime-only
-canary signer config:
+the public endpoint, the exact full 40-character deployment git SHA, all four
+direct validator roots, the external reviewed offline identity, and a
+runtime-only canary signer config. Define the non-optional fleet arguments once:
 
-- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+```bash
+TAIRA_VALIDATOR_ARGS=(
+  --validator-root validator-1=https://taira-validator-1.sora.org
+  --validator-root validator-2=https://taira-validator-2.sora.org
+  --validator-root validator-3=https://taira-validator-3.sora.org
+  --validator-root validator-4=https://taira-validator-4.sora.org
+)
+```
+
+- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
 
 Then gate the SoraFS path on the same public node:
 
@@ -932,9 +961,9 @@ available as an optional convenience for environments that do have Compose.
    - `sudo systemctl daemon-reload`
    - `sudo systemctl enable --now taira-validator-container.service`
 8. Prove the local MCP surface before any public cutover:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --skip-write-canary`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --skip-write-canary`
    - for a signed local write-path check:
-     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --write-config /run/secrets/taira-canary-client.toml --write-target local`
+     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --write-target local`
 
 Optional container overrides:
 
@@ -1013,21 +1042,21 @@ away from the shipped MCP-enabled config:
    - verify `/tmp/taira-trace-config.txt` includes `nexus.fees.fee_asset_id = "xor#universal"`
 7. Prove the validator's loopback Torii endpoint exposes MCP and the expected
    direct-ingress routes before any public cutover:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --skip-write-canary`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --skip-write-canary`
    - for a full local write-path check, use a runtime-only canary signer:
-     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --write-config /run/secrets/taira-canary-client.toml --write-target local`
+     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --write-target local`
 8. After the public node is back, prove the direct hostname is healthy before
    any convenience host or client cutover:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
    - if contract deploy/view health still fails after the route checks pass,
      redeploy SoraSwap with the updated `../soraswap` `deploy-testnet` flow
      before blaming the frontend
 9. Before declaring public Codex/Torii rollout complete, require the SoraSwap
    gate to pass behind the same runtime candidate:
    - probe-only:
-     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml`
+     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml`
    - full gate:
-     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml --run-release-checklist --allow-testnet-mutations`
+     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml --run-release-checklist --allow-testnet-mutations`
    - the wrapper runs the focused `iroha_core` SoraSwap deploy-route router
      regression and three-hop nested transfer canary, `check_mcp_rollout.sh`,
      `check_sorafs_rollout.sh`, the trader app-api CID probe when a bundle is
@@ -1207,10 +1236,10 @@ From `../iroha2-block-explorer-web`:
    - on the shared macOS/Homebrew host, use `nginx -t && nginx -s reload`
 6. Run the MCP rollout smoke from any host that can see the validator loopback
    and the public endpoint:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
    - when you are validating edge-local SNI before public DNS or TLS is fully
      live, pin the public host to the edge IP explicitly:
-     `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org --resolve-host taira.sora.org:443:127.0.0.1 --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+     `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --resolve-host taira.sora.org:443:127.0.0.1 --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
    - the public check auto-bootstraps a runtime-only canary config when
     `--write-config` is omitted, preferring `/run/secrets` only when that
     directory is writable and otherwise using the local temp directory; when
