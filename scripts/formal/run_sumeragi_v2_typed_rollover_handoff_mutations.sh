@@ -26,7 +26,7 @@ usage() {
 usage: $0 [--help]
 
 Parse the typed rollover-handoff base, mutation, and proof modules with SANY,
-then run the fixed TLC model and all 35 deterministic mutation configurations.
+then run the fixed TLC model and all 42 deterministic mutation configurations.
 
 Environment overrides:
   JAVA_BIN       Java 21.0.12 executable or containing directory
@@ -183,9 +183,10 @@ run_case typed-rollover-fixed \
   "Model checking completed. No error has been found."
 
 readonly INVARIANT_MARKER="Error: Invariant TypedRolloverSafetyInvariant is violated."
-readonly EXPECTED_MUTATION_COUNT=35
+readonly EXPECTED_MUTATION_COUNT=42
 
 mutation_cases=(
+  "accept-semantic-invalid-lifecycle-state|typed_rollover_handoff_accept_semantic_invalid_lifecycle_state_bug.cfg|12|${INVARIANT_MARKER}"
   "active-state-roll|typed_rollover_handoff_active_state_roll_bug.cfg|12|${INVARIANT_MARKER}"
   "changed-roster-without-generation-advance|typed_rollover_handoff_changed_roster_without_generation_advance_bug.cfg|12|${INVARIANT_MARKER}"
   "clean-state-slot-v3-persistence-failure|typed_rollover_handoff_clean_state_slot_v3_persistence_failure_bug.cfg|12|${INVARIANT_MARKER}"
@@ -195,10 +196,12 @@ mutation_cases=(
   "clean-predecessor-artifact-reject|typed_rollover_handoff_clean_predecessor_artifact_reject_bug.cfg|12|${INVARIANT_MARKER}"
   "clean-predecessor-context-reject|typed_rollover_handoff_clean_predecessor_context_reject_bug.cfg|12|${INVARIANT_MARKER}"
   "clean-wrong-successor-reject|typed_rollover_handoff_clean_wrong_successor_reject_bug.cfg|12|${INVARIANT_MARKER}"
+  "cleanup-before-root-parent-resync|typed_rollover_handoff_cleanup_before_root_parent_resync_bug.cfg|12|${INVARIANT_MARKER}"
   "cleanup-before-semantic-validation|typed_rollover_handoff_cleanup_before_validation_bug.cfg|12|${INVARIANT_MARKER}"
+  "cleanup-retains-inactive-slot|typed_rollover_handoff_cleanup_retains_inactive_slot_bug.cfg|12|${INVARIANT_MARKER}"
+  "cross-service-transport-owner-pair|typed_rollover_handoff_cross_service_transport_owner_pair_bug.cfg|12|${INVARIANT_MARKER}"
   "crossed-lifecycle-root-shape|typed_rollover_handoff_crossed_root_shape_bug.cfg|12|${INVARIANT_MARKER}"
   "epoch-overflow|typed_rollover_handoff_epoch_overflow_bug.cfg|12|${INVARIANT_MARKER}"
-  "epoch-reuse-after-crash|typed_rollover_handoff_epoch_reuse_after_crash_bug.cfg|12|${INVARIANT_MARKER}"
   "epoch-use-before-persist|typed_rollover_handoff_epoch_use_before_persist_bug.cfg|12|${INVARIANT_MARKER}"
   "forged-authenticated-close-prefix|typed_rollover_handoff_forged_authenticated_close_prefix_bug.cfg|12|${INVARIANT_MARKER}"
   "foreign-candidate-ignored|typed_rollover_handoff_foreign_candidate_ignored_bug.cfg|12|${INVARIANT_MARKER}"
@@ -207,20 +210,24 @@ mutation_cases=(
   "service-generation-overflow|typed_rollover_handoff_generation_overflow_bug.cfg|12|${INVARIANT_MARKER}"
   "late-callback|typed_rollover_handoff_late_callback_bug.cfg|12|${INVARIANT_MARKER}"
   "late-enqueue|typed_rollover_handoff_late_enqueue_bug.cfg|12|${INVARIANT_MARKER}"
+  "lose-requester-incarnation-after-crash|typed_rollover_handoff_lose_requester_incarnation_after_crash_bug.cfg|12|${INVARIANT_MARKER}"
   "missing-root-selected-state|typed_rollover_handoff_missing_selected_state_bug.cfg|12|${INVARIANT_MARKER}"
   "predecessor-artifact-accept|typed_rollover_handoff_predecessor_artifact_accept_bug.cfg|12|${INVARIANT_MARKER}"
   "predecessor-context-accept|typed_rollover_handoff_predecessor_context_accept_bug.cfg|12|${INVARIANT_MARKER}"
   "premature-mint|typed_rollover_handoff_premature_mint_bug.cfg|12|${INVARIANT_MARKER}"
+  "preserve-process-receipt-across-crash|typed_rollover_handoff_preserve_process_receipt_across_crash_bug.cfg|12|${INVARIANT_MARKER}"
   "publish-memory-before-lifecycle-root-v3-commit|typed_rollover_handoff_publish_memory_before_lifecycle_root_v3_commit_bug.cfg|12|${INVARIANT_MARKER}"
   "retry-loss|typed_rollover_handoff_retry_loss_bug.cfg|12|${INVARIANT_MARKER}"
   "reuse-root-selected-state-slot|typed_rollover_handoff_reuse_root_selected_state_slot_bug.cfg|12|${INVARIANT_MARKER}"
   "root-commit-before-state-slot|typed_rollover_handoff_root_commit_before_state_slot_bug.cfg|12|${INVARIANT_MARKER}"
   "root-generation-overflow|typed_rollover_handoff_root_generation_overflow_bug.cfg|12|${INVARIANT_MARKER}"
   "same-roster-generation-roll|typed_rollover_handoff_same_roster_generation_roll_bug.cfg|12|${INVARIANT_MARKER}"
+  "skip-bootstrap-crash-history|typed_rollover_handoff_skip_bootstrap_crash_history_bug.cfg|12|${INVARIANT_MARKER}"
   "skip-lifecycle-root-v3-crash-history|typed_rollover_handoff_skip_lifecycle_root_v3_crash_history_bug.cfg|12|${INVARIANT_MARKER}"
   "split-lifecycle-generation-hash|typed_rollover_handoff_split_generation_hash_bug.cfg|12|${INVARIANT_MARKER}"
   "recover-uncommitted-state-slot|typed_rollover_handoff_recover_uncommitted_state_slot_bug.cfg|12|${INVARIANT_MARKER}"
   "untyped-force|typed_rollover_handoff_untyped_force_bug.cfg|12|${INVARIANT_MARKER}"
+  "wrong-bootstrap-lifecycle-projection|typed_rollover_handoff_wrong_bootstrap_lifecycle_projection_bug.cfg|12|${INVARIANT_MARKER}"
 )
 
 actual_configs=("${FORMAL_DIR}"/typed_rollover_handoff_*_bug.cfg)
@@ -255,4 +262,4 @@ for case_spec in "${mutation_cases[@]}"; do
   run_case "$label" "$MUTATION_MODEL" "$config" "$expected_status" "$expected_marker"
 done
 
-echo "[tlc] typed rollover-handoff fixed model and 35-mutant root-anchored V3 matrix passed"
+echo "[tlc] typed rollover-handoff fixed model and 42-mutant root-anchored V3 matrix passed"

@@ -1373,7 +1373,7 @@ public sealed partial class ToriiClient : IDisposable
         string name,
         CancellationToken cancellationToken = default)
     {
-        var normalizedBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+        var normalizedBackend = VerifierBackendRegistryLabels.RequireSupportedLabel(
             backend,
             nameof(backend));
         var normalizedName = NormalizeVerifyingKeyName(name, nameof(name));
@@ -5112,7 +5112,7 @@ public sealed partial class ToriiClient : IDisposable
             }
 
             var backend = RequireJsonString(backendNode, $"{context}.{eventKind}.id_matcher.backend");
-            var normalizedBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+            var normalizedBackend = VerifierBackendRegistryLabels.RequireSupportedLabel(
                 backend,
                 $"{context}.{eventKind}.id_matcher.backend");
             if (!string.Equals(normalizedBackend, backend, StringComparison.Ordinal))
@@ -6158,7 +6158,7 @@ public sealed partial class ToriiClient : IDisposable
     private static ToriiVerifyingKeyRegisterRequest NormalizeVerifyingKeyRegisterRequest(
         ToriiVerifyingKeyRegisterRequest request)
     {
-        var normalizedBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+        var normalizedBackend = VerifierBackendRegistryLabels.RequireSupportedLabel(
             request.Backend,
             nameof(request.Backend));
         var vkBytes = NormalizeOptionalVerifierBytes(
@@ -6204,7 +6204,7 @@ public sealed partial class ToriiClient : IDisposable
     private static ToriiVerifyingKeyUpdateRequest NormalizeVerifyingKeyUpdateRequest(
         ToriiVerifyingKeyUpdateRequest request)
     {
-        var normalizedBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+        var normalizedBackend = VerifierBackendRegistryLabels.RequireSupportedLabel(
             request.Backend,
             nameof(request.Backend));
         var vkBytes = NormalizeOptionalVerifierBytes(
@@ -6355,7 +6355,7 @@ public sealed partial class ToriiClient : IDisposable
     {
         try
         {
-            VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(value, field);
+            VerifierBackendRegistryLabels.RequireSupportedLabel(value, field);
         }
         catch (ArgumentException error)
         {

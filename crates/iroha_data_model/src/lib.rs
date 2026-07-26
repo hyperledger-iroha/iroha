@@ -141,10 +141,10 @@ pub mod peer;
 pub mod permission;
 /// Petal stream framing for offline payload handoff.
 pub mod petal_stream;
-/// Zero-knowledge proof payload types
-pub mod proof;
 /// Canonical protocol-bound privacy proof and activation types.
 pub mod privacy;
+/// Zero-knowledge proof payload types
+pub mod proof;
 /// QR stream framing types for offline payload handoff.
 pub mod qr_stream;
 /// Query builders, predicates, and parameter types.

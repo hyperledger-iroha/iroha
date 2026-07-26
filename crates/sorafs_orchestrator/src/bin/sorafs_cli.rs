@@ -11820,6 +11820,7 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
             }
             AppealSettlementError::InvalidPanelSize
             | AppealSettlementError::InvalidXorQuantity { .. }
+            | AppealSettlementError::DecimalProduct(_)
             | AppealSettlementError::Arithmetic(_) => err.to_string(),
         })?;
 

@@ -5731,17 +5731,19 @@ mod tests {
         assert_eq!(replayed_proposal_sign(&effects[..1]), None);
         assert_eq!(replayed_proposal_sign(&[]), None);
 
-        let directive = |locked_subject, decided_subject| LocalProposalDirective {
-            tag,
-            leader: context.leader(tag.view()),
-            locked_round: locked_subject.map(|_| wire::ConsensusRound {
-                context_id: context.id(),
-                height: context.height,
-                view: 1,
-            }),
-            locked_subject,
-            decided_subject,
-        };
+        let directive =
+            |locked_subject: Option<wire::BlockSubject>,
+             decided_subject: Option<wire::BlockSubject>| LocalProposalDirective {
+                tag,
+                leader: context.leader(tag.view()),
+                locked_round: locked_subject.map(|_| wire::ConsensusRound {
+                    context_id: context.id(),
+                    height: context.height,
+                    view: 1,
+                }),
+                locked_subject,
+                decided_subject,
+            };
         let unlocked = directive(None, None);
         assert_eq!(
             LocalProposalState::from_replayed_proposal(Some(replayed), unlocked).attempted,

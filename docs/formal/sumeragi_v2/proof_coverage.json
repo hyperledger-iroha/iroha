@@ -340,6 +340,69 @@
       "status": "specified_unproved"
     },
     {
+      "id": "autoscale-lifecycle-production-refinement",
+      "requirement": "The deterministic production autoscaler refines the bounded creation, storage-before-activation, evidence-aware drain, archive-before-destruction, and fresh-incarnation recreation model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
+      "module": "SumeragiV2AutoscaleLifecycle",
+      "symbol": "AutoscaleLifecycleProductionRefinementObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "native-application-evidence-production-refinement",
+      "requirement": "Production Native AMX participant evidence refines the bounded finality-to-immutable-per-height-manifest-to-immutable-per-height-receipt-to-descriptor-bound-exact-latest-pointer-to-replicated-frontier order, QC-authenticated proof validation after body pruning, recoverable versioned route/incarnation/artifact-hash-bound pair-prune intents across every partial-unlink crash boundary, and same-route control-only model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
+      "module": "SumeragiV2NativeApplicationEvidence",
+      "symbol": "NativeApplicationEvidenceProductionRefinementObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "autonomous-reservation-carrier-production-refinement",
+      "requirement": "Production queue reservations and canonical global merge application refine the bounded single-owner, unchanged-identity, at-most-once application, loss-release, and commit-before-forget model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
+      "module": "SumeragiV2AutonomousReservationCarrier",
+      "symbol": "AutonomousReservationCarrierProductionRefinementObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "reply-writer-deadline-local-termination",
+      "requirement": "In the orthogonal executable model, every exact-reply actor occurrence acquires one absolute, adaptively scaled deadline at its first actor dispatch before peer-writer admission; full-queue retries preserve that deadline, only peer-writer publication establishes the immutable flush witness, timeout is distinct from flush, Closed and reconnect preserve the adaptive attempt, a ready witnessed receipt wins retirement and timeout races, stale timeout can retire only its accepting connection, topology output acquires no exact deadline, and local actor ownership terminates without fairness for peer-writer flush publication. Production source seals and focused tests constrain alignment with this abstraction but do not prove a Rust-to-TLA semantic refinement theorem",
+      "module": "SumeragiV2ReplyWriterDeadlineProofs",
+      "symbol": "ReplyWriterDeadlineModelObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "reply-writer-conditional-responsive-cursor-liveness",
+      "requirement": "In the orthogonal executable model, given the explicit responsive writer-receipt assumption that every outstanding exact reply eventually reaches a ready witnessed receipt, receipt polling advances that exact reply cursor. This conditional theorem intentionally isolates receipt publication; the separate responsive strong-fairness proof script supplies that bridge. Neither theorem is a Rust-to-TLA semantic refinement theorem",
+      "module": "SumeragiV2ReplyWriterDeadlineProofs",
+      "symbol": "ConditionalResponsiveWriterCursorLiveness",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "reply-writer-responsive-strong-fairness-to-receipt",
+      "requirement": "In the orthogonal executable model, the current SANY-clean proof script derives ResponsiveWriterReceiptAssumption from persistent exact ownership, weakly fair reconnect and first dispatch, and strongly fair admission and publication across fragmented WriterPending intervals. It remains specified_unproved until fresh strict TLAPS succeeds; finite responsive TLC is bounded evidence only",
+      "module": "SumeragiV2ReplyWriterDeadlineProofs",
+      "symbol": "ResponsiveStrongFairnessToReceiptResidual",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "typed-rollover-handoff-model-safety",
+      "requirement": "In the orthogonal authority-gated, root-anchored V3 typed rollover model, the proofless obligations require TypedRolloverSpec to preserve TypedRolloverSafetyInvariant. Service and transport ownership are independently represented and must form one exact pair before a move-only receipt can be retained. Every crash clears process-local owners, construction, receipt identities, candidate, and authority; only validation of the exact root-selected snapshot followed by ordered state-directory and root-directory resynchronization and inactive-slot cleanup may authorize RestartRestore fencing. State-slot and root replacement are distinct from their parent-directory synchronization; the first crash may expose either the replacement or the last synchronized value, and a second crash before root resynchronization rolls visible storage back to the synchronized predecessor without cleanup. Fresh bootstrap persists the target roster at service generation one, high-water and requester incarnation zero, empty requester/server tables and gates, and zero Close prefix. Root-shape, selected-state-missing, generation/digest-split, and semantic validation failures are reachable, fail closed, and preserve artifacts. Cleanup deletes the inactive durable slot only after validation and both directory synchronizations. Requester high-water is the exact last issued epoch and restart restores that exact persisted incarnation without reuse or a skip. Ordinary changed-roster rollover requires authenticated terminality, while durable exact output and validated restart are distinct active-state fencing authorities; same-roster handoff preserves service generation and responder ownership; forced fencing cannot forge an authenticated Close prefix. Active/full-table, service-generation, and requester-epoch exhaustion return Capacity fail-atomically, while lifecycle-root exhaustion poisons the journal and requires restart without reporting Capacity. Finite TLC and the 42-control mutation matrix are bounded evidence only; no Rust-to-TLA semantic refinement theorem is claimed",
+      "module": "SumeragiV2TypedRolloverHandoffProofs",
+      "symbol": "TypedRolloverSpecAlwaysSafeObligation / TypedRolloverNextPreservesSafetyObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "typed-rollover-handoff-conditional-local-liveness",
+      "requirement": "In the orthogonal typed rollover model, ResponsiveDurableExactOutputRolloverLiveness is a proofless temporal target restricted to a healthy live process, a changed roster, counter headroom, the move-only durable-exact-output authority, state/root directory synchronization, and the explicitly weak-fair local actions in that corridor. It does not include crash recovery, RestartRestore authority, ordinary-terminalization progress, network delivery, writer flush, repeated rollover, distributed progress, or Rust-to-TLA refinement",
+      "module": "SumeragiV2TypedRolloverHandoffProofs",
+      "symbol": "ResponsiveDurableExactOutputRolloverLivenessObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "typed-rollover-handoff-restart-restore-local-liveness",
+      "requirement": "In the orthogonal typed rollover model, ResponsiveRestartRestoreRolloverLiveness is a separate proofless temporal target beginning with an unvalidated restart and no process-local receipt. Under the corridor's explicit weak fairness and counter headroom, exact root-selected validation, ordered state/root parent-directory resynchronization, inactive-slot cleanup, predecessor recovery, and the distinct RestartRestore authority eventually publish the successor. It does not establish recovery from validation failure, repeated crash tolerance, network or writer progress, distributed liveness, or Rust-to-TLA refinement",
+      "module": "SumeragiV2TypedRolloverHandoffProofs",
+      "symbol": "ResponsiveRestartRestoreRolloverLivenessObligation",
+      "status": "specified_unproved"
+    },
+    {
       "id": "cryptography",
       "requirement": "Signature authenticity and hash collision resistance",
       "module": "trusted-boundary",

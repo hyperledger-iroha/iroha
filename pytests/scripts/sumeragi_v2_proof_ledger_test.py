@@ -588,85 +588,53 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
     by_id = {
         obligation["id"]: obligation for obligation in ledger["obligations"]
     }
-    typed_safety = by_id["typed-rollover-handoff-model-safety"]
-    assert typed_safety["module"] == "SumeragiV2TypedRolloverHandoffProofs"
-    assert typed_safety["symbol"] == (
+    assert "typed-rollover-handoff-model-safety" not in by_id
+    typed_safety = module.SUPPORT_PROOF_OBLIGATION_INVENTORY[
+        "typed-rollover-handoff-model-safety"
+    ]
+    assert typed_safety == (
+        "SumeragiV2TypedRolloverHandoffProofs",
         "TypedRolloverSpecAlwaysSafeObligation / "
-        "TypedRolloverNextPreservesSafetyObligation"
+        "TypedRolloverNextPreservesSafetyObligation",
     )
-    assert typed_safety["status"] == "specified_unproved"
-    assert "authority-gated, root-anchored V3 typed rollover model" in (
-        typed_safety["requirement"]
-    )
-    assert "generation-zero bootstrap root has no selected state" in (
-        typed_safety["requirement"]
-    )
-    assert "parity-addressed LifecycleSnapshotV3" in (
-        typed_safety["requirement"]
-    )
-    assert "requester epochs are durable-before-use and never reused" in (
-        typed_safety["requirement"]
-    )
-    assert "no Rust-to-TLA semantic refinement theorem is claimed" in (
-        typed_safety["requirement"]
-    )
-
-    typed_liveness = by_id[
+    assert module.SUPPORT_PROOF_CONSUMER_BY_ID[
+        "typed-rollover-handoff-model-safety"
+    ] == "successor-activation-exact-recovery-production-refinement"
+    assert "typed-rollover-handoff-conditional-local-liveness" not in by_id
+    typed_liveness = module.SUPPORT_PROOF_OBLIGATION_INVENTORY[
         "typed-rollover-handoff-conditional-local-liveness"
     ]
-    assert typed_liveness["module"] == (
-        "SumeragiV2TypedRolloverHandoffProofs"
+    assert typed_liveness == (
+        "SumeragiV2TypedRolloverHandoffProofs",
+        "ResponsiveDurableExactOutputRolloverLivenessObligation / "
+        "ResponsiveRestartRestoreRolloverLivenessObligation",
     )
-    assert typed_liveness["symbol"] == (
-        "ResponsiveChangedRosterRolloverLivenessObligation"
+    assert len(module.SUPPORT_PROOF_OBLIGATION_INVENTORY) == 16
+    assert set(module.SUPPORT_PROOF_OBLIGATION_INVENTORY).isdisjoint(by_id)
+    assert tuple(module.SUPPORT_PROOF_CONSUMER_BY_ID) == tuple(
+        module.SUPPORT_PROOF_OBLIGATION_INVENTORY
     )
-    assert typed_liveness["status"] == "specified_unproved"
-    assert "proofless temporal target" in (
-        typed_liveness["requirement"]
-    )
-    assert "No derivation from fairness is claimed" in (
-        typed_liveness["requirement"]
-    )
+    assert set(module.SUPPORT_PROOF_CONSUMER_BY_ID.values()) <= set(by_id)
 
     assert tuple(
         obligation["id"]
         for obligation in ledger["obligations"]
         if obligation["status"] == "specified_unproved"
     ) == (
-        "chain-durable-receipt-agreement",
-        "terminal-ingress-process-lifetime-absorbency",
         "effective-lock-body-acquisition-production-refinement",
         "progress-witness-production-refinement",
-        "adequate-leader-exact-closure-residual",
-        "exact-decision-off-scheduler-residual-convergence",
         "post-gst-deadlock-freedom",
         "post-gst-starvation-freedom",
         "timeout-view-liveness",
         "locked-body-reproposal",
         "rotating-leader-liveness",
         "application-liveness",
-        "historical-recovery-authority-acquisition",
-        "historical-recovery-certificate-rank-progress",
-        "historical-recovery-decision-stage-ownership",
-        "historical-recovery-decision-rank-progress",
         "successor-activation-starvation-freedom",
         "successor-activation-exact-recovery-production-refinement",
         "genesis-height-successor-handoff",
         "height-liveness",
-        "autoscale-lifecycle-production-refinement",
-        "native-application-evidence-production-refinement",
-        "autonomous-reservation-carrier-production-refinement",
-        "reply-writer-deadline-local-termination",
-        "reply-writer-conditional-responsive-cursor-liveness",
-        "reply-writer-responsive-strong-fairness-to-receipt",
-        "typed-rollover-handoff-model-safety",
-        "typed-rollover-handoff-conditional-local-liveness",
     )
     assert module.PROOF_STATUS_DEPENDENCIES == {
-        "chain-durable-receipt-agreement": (
-            "agreement",
-            "no-conflicting-commit-qcs",
-        ),
         "effective-lock-body-acquisition-production-refinement": (
             "effective-lock-body-acquisition-model",
         ),
@@ -749,35 +717,10 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
             "progress-witness-preservation",
             "post-gst-starvation-freedom",
         ),
-        "historical-recovery-authority-acquisition": (
-            "chain-durable-receipt-agreement",
-            "rotating-leader-liveness",
-            "application-liveness",
-        ),
-        "historical-recovery-certificate-rank-progress": (
-            "async-type-invariant",
-            "async-fair-action-refinement",
-            "progress-witness-preservation",
-            "post-gst-starvation-freedom",
-        ),
-        "historical-recovery-decision-stage-ownership": (
-            "async-type-invariant",
-            "decision-recovery-across-restart",
-            "progress-witness-preservation",
-            "post-gst-starvation-freedom",
-        ),
-        "historical-recovery-decision-rank-progress": (
-            "async-type-invariant",
-            "async-fair-action-refinement",
-            "decision-recovery-across-restart",
-            "progress-witness-preservation",
-            "post-gst-starvation-freedom",
-        ),
         "successor-activation-exact-recovery-production-refinement": (
             "epoch-boundary",
             "decision-recovery-across-restart",
             "successor-activation-starvation-freedom",
-            "terminal-ingress-process-lifetime-absorbency",
         ),
         "genesis-height-successor-handoff": (
             "rotating-leader-liveness",
@@ -785,50 +728,28 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
             "successor-activation-starvation-freedom",
         ),
         "height-liveness": (
+            "agreement",
+            "no-conflicting-commit-qcs",
             "rotating-leader-liveness",
             "application-liveness",
-            "historical-recovery-authority-acquisition",
-            "historical-recovery-certificate-rank-progress",
-            "historical-recovery-decision-stage-ownership",
-            "historical-recovery-decision-rank-progress",
             "successor-activation-starvation-freedom",
-        ),
-        "typed-rollover-handoff-conditional-local-liveness": (
-            "typed-rollover-handoff-model-safety",
+            "successor-activation-exact-recovery-production-refinement",
+            "genesis-height-successor-handoff",
         ),
     }
     assert module._proof_status_dependency_errors(ledger["obligations"]) == []
     obligations = ledger["obligations"]
 
-    assert len(obligations) == 70
-    assert (
-        module.MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS
-        == (
-            "adequate-leader-exact-closure-residual",
-            "exact-decision-off-scheduler-residual-convergence",
-            "autoscale-lifecycle-production-refinement",
-            "native-application-evidence-production-refinement",
-            "autonomous-reservation-carrier-production-refinement",
-            "reply-writer-deadline-local-termination",
-            "reply-writer-conditional-responsive-cursor-liveness",
-            "reply-writer-responsive-strong-fairness-to-receipt",
-            "typed-rollover-handoff-model-safety",
-            "typed-rollover-handoff-conditional-local-liveness",
-        )
+    assert len(obligations) == 54
+    assert len(module.MACHINE_CHECKED_COMPLETION_TARGET_IDS) == 54
+    assert module.MACHINE_CHECKED_COMPLETION_TARGET_IDS == tuple(
+        module.REQUIRED_PROOF_OBLIGATION_INVENTORY
     )
-    assert len(module.MACHINE_CHECKED_COMPLETION_TARGET_IDS) == 60
-    assert (
-        set(module.MACHINE_CHECKED_COMPLETION_TARGET_IDS)
-        | set(module.MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS)
-        == set(module.REQUIRED_PROOF_OBLIGATION_INVENTORY)
-    )
-    assert (
-        set(module.MACHINE_CHECKED_COMPLETION_TARGET_IDS)
-        & set(module.MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS)
-        == set()
+    assert set(module.MACHINE_CHECKED_COMPLETION_TARGET_IDS).isdisjoint(
+        module.SUPPORT_PROOF_OBLIGATION_INVENTORY
     )
     assert module.MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_COUNTS == {
-        "tlaps_proved": 50,
+        "tlaps_proved": 44,
         "cross_tool_proved": 3,
         "specified_unproved": 0,
         "trusted_contract": 6,
@@ -848,16 +769,10 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
     assert current_target_counts == {
         "tlaps_proved": 35,
         "cross_tool_proved": 0,
-        "specified_unproved": 18,
+        "specified_unproved": 12,
         "trusted_contract": 6,
         "out_of_scope": 1,
     }
-    assert all(
-        by_id[obligation_id]["status"] == "specified_unproved"
-        for obligation_id in (
-            module.MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS
-        )
-    )
 
     complete = copy.deepcopy(ledger)
     complete["machine_checked_completion"] = True
@@ -876,15 +791,8 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         == []
     )
     complete_by_id = {
-        obligation["id"]: obligation
-        for obligation in complete["obligations"]
+        obligation["id"]: obligation for obligation in complete["obligations"]
     }
-    assert all(
-        complete_by_id[obligation_id]["status"] == "specified_unproved"
-        for obligation_id in (
-            module.MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS
-        )
-    )
 
     complete_by_id["height-liveness"]["status"] = "specified_unproved"
     errors = module._machine_checked_completion_status_errors(
@@ -916,27 +824,30 @@ def test_every_declared_proof_dependency_fails_closed_on_early_promotion() -> No
             ) in errors
 
 
-def test_typed_rollover_deductive_liveness_remains_unproved_until_strict() -> None:
+def test_typed_rollover_liveness_remains_source_bound_support() -> None:
     module = load_checker()
-    liveness = next(
-        obligation
-        for obligation in module.load_ledger()["obligations"]
-        if obligation["id"]
-        == "typed-rollover-handoff-conditional-local-liveness"
-    )
+    ledger = module.load_ledger()
+    by_id = {
+        obligation["id"]: obligation for obligation in ledger["obligations"]
+    }
+    support_id = "typed-rollover-handoff-conditional-local-liveness"
+    support_module, symbols = module.SUPPORT_PROOF_OBLIGATION_INVENTORY[
+        support_id
+    ]
+    consumer_id = module.SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+    assert support_id not in by_id
+    assert by_id[consumer_id]["status"] == "specified_unproved"
+    assert support_module in module.RELEASE_PROOF_MODULES
     source = (
-        module.FORMAL_DIR / "SumeragiV2TypedRolloverHandoffProofs.tla"
+        module.FORMAL_DIR / f"{support_module}.tla"
     ).read_text(encoding="utf-8")
-
-    assert liveness["status"] == "specified_unproved"
-    assert liveness["module"] in module.RELEASE_PROOF_MODULES
-    assert module._symbol_exists(source, liveness["symbol"])
-    assert module._symbol_exists(
-        source, liveness["symbol"], theorem_only=True
-    )
-    assert "fresh strict TLAPS proof establishes the target" in (
-        liveness["requirement"]
-    )
+    for symbol in symbols.split(" / "):
+        assert module._symbol_exists(source, symbol)
+        assert module._symbol_exists(
+            source,
+            symbol,
+            theorem_only=True,
+        )
 
 
 @pytest.mark.parametrize(
@@ -4364,18 +4275,12 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
         ),
         "post-decision-timeout-exclusion": "tlaps_proved",
         "decision-recovery-across-restart": "tlaps_proved",
-        "chain-durable-receipt-agreement": "specified_unproved",
-        "terminal-ingress-process-lifetime-absorbency": "specified_unproved",
         "progress-witness-production-refinement": "specified_unproved",
         "async-type-invariant": "tlaps_proved",
         "async-progress-ownership-invariant": "tlaps_proved",
         "protected-service-rank-stage4-ready-causal": "tlaps_proved",
         "protected-service-rank-serve-fifo": "tlaps_proved",
         "protected-service-rank-stage5-consensus-fifo": "tlaps_proved",
-        "historical-recovery-authority-acquisition": "specified_unproved",
-        "historical-recovery-certificate-rank-progress": "specified_unproved",
-        "historical-recovery-decision-stage-ownership": "specified_unproved",
-        "historical-recovery-decision-rank-progress": "specified_unproved",
         "successor-activation-starvation-freedom": "specified_unproved",
         "successor-activation-exact-recovery-production-refinement": (
             "specified_unproved"
@@ -4480,7 +4385,7 @@ def test_audited_progress_and_rank_leaves_are_tlaps_proved() -> None:
     obligations = ledger["obligations"]
     by_id = {obligation["id"]: obligation for obligation in obligations}
 
-    assert len(obligations) == 70
+    assert len(obligations) == 54
     assert sum(
         obligation["status"] == "tlaps_proved"
         for obligation in obligations
@@ -4488,7 +4393,7 @@ def test_audited_progress_and_rank_leaves_are_tlaps_proved() -> None:
     assert sum(
         obligation["status"] == "specified_unproved"
         for obligation in obligations
-    ) == 28
+    ) == 12
     assert by_id["async-runner-scheduler-preservation"]["status"] == "tlaps_proved"
     assert by_id["async-type-invariant"]["status"] == "tlaps_proved"
     expected = {
@@ -9602,9 +9507,9 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "                        update,\n                    });",
-            "                        update: NetworkReplyRouteSourceUpdate::Exact,\n"
-            "                    });",
+            "                    update,\n                });",
+            "                    update: NetworkReplyRouteSourceUpdate::Exact,\n"
+            "                });",
             "same-source coalescing must preserve the retained source cursor while updating only its authenticated route capability",
         ),
         (
@@ -10065,7 +9970,7 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn reclaim_inactive_outbound_attempts(",
-            "journal.persist(&projected)?;",
+            "self.persist_lifecycle_projection(projected)?;",
             "drop(projected);",
             "inactive sidecar reclamation must publish every projected durable cursor before removing ephemeral writers or shared bytes",
         ),
@@ -10086,7 +9991,7 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn next_server_request_materialization(",
-            "journal.persist(&projected)?;",
+            "self.persist_lifecycle_projection(projected)?;",
             "drop(projected);",
             "fair sidecar materialization must persist the selected requester cursor before granting any live terminating lookup authority",
         ),
@@ -10129,14 +10034,14 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "struct MergeSidecarRuntimeGeometryV2",
+            "struct MergeSidecarRuntimeGeometryV3",
             "semantic_peer_capacity: u64,",
             "semantic_peer_capacity: u32,",
             "durable sidecar geometry must advertise its validator-scoped semantic-peer bound",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn lifecycle_runtime_geometry_v2(",
+            "fn lifecycle_runtime_geometry_v3(",
             "semantic_peer_capacity: as_u64(MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)?,",
             "semantic_peer_capacity: as_u64(self.reply_source_capacity)?,",
             "lifecycle geometry must fingerprint the validator-scoped semantic-peer bound independently of concurrent reply sources",
@@ -10158,7 +10063,7 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "fn advance_piggybacked_close_floor(",
-            "journal.persist(&projected)?;",
+            "self.persist_lifecycle_projection(projected)?;",
             "drop(projected);",
             "publish the sole V2 projection before updating live cancellation, gate, or transfer state without rematerializing",
         ),
@@ -10199,18 +10104,16 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn roll_server_service_generation(",
-            "self.server_streams.len() < self.server_stream_capacity",
-            "self.server_streams.len() <= self.server_stream_capacity",
+            "fn transition_server_service_generation(",
+            "if !self.server_generation_is_terminal() {",
+            "if false && !self.server_generation_is_terminal() {",
             "ordinary responder generation rollover must occur only for a full terminal table",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn admit_server_request(",
-            "self.roll_server_service_generation()?;",
-            'return Err(MergeSidecarError::Capacity(\n'
-            '                "server semantic requester geometry",\n'
-            "            ));",
+            "self.ensure_server_stream_slot(sender)?;",
+            "let _ = sender;",
             "full responder table may roll only through checked terminal compaction",
         ),
         (
@@ -10226,7 +10129,7 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn new(payload: MergeSidecarLifecyclePayloadV2)",
+            "fn new(payload: MergeSidecarLifecyclePayloadV3)",
             "let payload_hash = HashOf::new(&payload);",
             "let payload_hash = HashOf::new(&());",
             "merge-sidecar crash-safe lifecycle production seam",
@@ -10240,15 +10143,15 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn load(&self) -> Result<Option<MergeSidecarLifecycleSnapshotV2>",
+            "fn decode_snapshot(",
             "if !snapshot.integrity_is_valid() {",
             "if false && !snapshot.integrity_is_valid() {",
-            "lifecycle recovery must accept only canonical integrity-bound V2 state",
+            "lifecycle recovery must accept only canonical integrity-bound V3 state",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn load(&self) -> Result<Option<MergeSidecarLifecycleSnapshotV2>",
-            "decode_from_bytes::<MergeSidecarLifecycleSnapshotV2>",
+            "fn decode_snapshot(",
+            "decode_from_bytes::<MergeSidecarLifecycleSnapshotV3>",
             "decode_from_bytes::<UnsupportedMergeSidecarLifecycleSnapshotV1>",
             "production lifecycle recovery must never decode the legacy V1 negative-test fixture",
         ),
@@ -10304,17 +10207,17 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn persist(&self, snapshot: &MergeSidecarLifecycleSnapshotV2)",
-            "if !snapshot.integrity_is_valid() {",
-            "if false && !snapshot.integrity_is_valid() {",
-            "lifecycle publication must reject an in-memory snapshot whose typed payload digest is stale",
+            "fn persist_next(",
+            "snapshot.payload_hash = HashOf::new(&snapshot.payload);",
+            "snapshot.payload_hash = HashOf::new(&());",
+            "V3 lifecycle publication must recompute the typed payload digest before each state-slot publication",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn persist(&self, snapshot: &MergeSidecarLifecycleSnapshotV2)",
-            "file.sync_all()",
-            "file.flush()",
-            "lifecycle publication must create and fsync one exclusive temporary file",
+            "fn persist_next(",
+            "Self::sync_directory(&self.directory)?;",
+            "let _ = &self.directory;",
+            "V3 lifecycle publication must sync the replaced state slot before publishing its root",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -10367,7 +10270,7 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "struct ServerPendingChunkLifecycleV2",
+            "struct ServerPendingChunkLifecycleV3",
             "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
             "semantic_sequence: u64,",
             "the durable pending marker must bind the complete generation-scoped request, response, payload, and chunk identity",
@@ -10381,7 +10284,7 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "struct ServerRequestGateLifecycleV2",
+            "struct ServerRequestGateLifecycleV3",
             "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
             "semantic_sequence: u64,",
             "each durable responder gate must retain the full canonical request and every generation, epoch, sequence, source, and pending-marker coordinate",
@@ -10395,43 +10298,38 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "struct MergeSidecarLifecyclePayloadV2",
+            "struct MergeSidecarLifecyclePayloadV3",
             "server_service_generation: CertifiedMergeSidecarServiceGenerationV1,",
             "server_service_generation: u64,",
-            "the sole V2 durable sidecar snapshot must bind canonical runtime and roster geometry",
+            "the sole V3 durable sidecar snapshot must bind canonical runtime, root generation, and roster geometry",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "fn open(",
             "for legacy in LEGACY_LIFECYCLE_JOURNAL_DIRS {",
             "for legacy in [] {",
-            "lifecycle startup must fail closed on every legacy directory before opening or creating sole V2 state",
+            "lifecycle startup must fail closed on every legacy directory before opening or creating sole V3 state",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "fn open(",
-            "if !directory_exists {\n"
-            "            fs::create_dir(&directory)",
-            "if directory_exists {\n"
-            "            fs::create_dir(&directory)",
-            "lifecycle startup must create and durably publish only the sole V2 state directory",
+            "journal.publish_bootstrap_marker()?;",
+            "let _ = &journal;",
+            "lifecycle startup must durably publish the generation-zero root before creating the V3 state directory",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "fn open(",
-            'let snapshot = snapshot.ok_or_else(|| {\n'
-            "            MergeSidecarError::LifecycleJournal(\n"
-            '                "lifecycle journal state disappeared during recovery".to_owned(),',
-            "let snapshot = snapshot.unwrap_or_else(|| {\n"
-            "            MergeSidecarLifecycleSnapshotV2::new(todo!())",
-            "existing sole V2 directory loses its state",
+            "let marker = journal.decode_root_high_water(&journal.root_high_water_path())?;",
+            "let marker = MergeSidecarLifecycleRootHighWaterV3::bootstrap();",
+            "existing V3 lifecycle state must be selected by the exact durable root high-water",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn load(&self) -> Result<Option<MergeSidecarLifecycleSnapshotV2>",
-            "snapshot.payload.version != LIFECYCLE_JOURNAL_VERSION_V2",
-            "snapshot.payload.version == LIFECYCLE_JOURNAL_VERSION_V2",
-            "lifecycle recovery must accept only canonical integrity-bound V2 state",
+            "fn decode_snapshot(",
+            "snapshot.payload.version != LIFECYCLE_JOURNAL_VERSION_V3",
+            "snapshot.payload.version == LIFECYCLE_JOURNAL_VERSION_V3",
+            "lifecycle recovery must accept only canonical integrity-bound V3 state",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -10464,16 +10362,16 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn acknowledge_generation_hint(",
-            "journal.persist(&snapshot)?;",
+            "self.persist_lifecycle_projection(snapshot)?;",
             "drop(snapshot);",
             "requester generation replacement must persist the new generation and unique epoch before retiring any process-local old-generation attempt",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "fn commit_server_service_generation_transition(",
-            "journal.persist(&snapshot)?;",
+            "self.persist_lifecycle_projection(snapshot)?;",
             "drop(snapshot);",
-            "publish the incremented generation and empty responder tables in the sole V2 snapshot before mutating memory",
+            "publish the incremented generation and empty responder tables in the root-anchored V3 snapshot before mutating memory",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -10782,7 +10680,7 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn apply_certified_merge_sidecar_closed_prefixes(",
-            ".close_certified_merge_sidecar_prefix(&prefix)",
+            ".close_certified_merge_sidecar_prefix(prefix)",
             ".retry_pending_exact_output()",
             "runner must move every lane close prefix into the worker exact-output owner before later dispatch",
         ),
@@ -11103,11 +11001,9 @@ def test_exact_output_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/merge_sidecar.rs",
             "pub(crate) fn rehydrate_with_exact_geometry_after_durable_handoff(",
-            "drop(authority);\n"
-            "        self.rehydrate_with_exact_geometry(",
-            "drop(authority);\n"
-            "        self.rehydrate_with_exact_geometry_after_durable_handoff(",
-            "durable sidecar rehydration must consume the exact rollover authority and delegate to the ordinary terminal-checked geometry transition",
+            "self.requeue_retained_outbound_after_height_rollover();",
+            "let _ = &self;",
+            "durable sidecar rehydration must preserve and requeue retained exact outbound ownership after validating the rollover authority",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -11242,18 +11138,10 @@ LOCAL THEOREM LocalPending == TRUE
     )
 
 
-def test_typed_rollover_proofless_support_uses_exact_aggregate_debt() -> None:
+def test_typed_rollover_proofless_support_uses_exact_top_level_consumer() -> None:
     module = load_checker()
     ledger = module.load_ledger()
-    obligations = [
-        obligation
-        for obligation in ledger["obligations"]
-        if obligation["id"]
-        in {
-            "typed-rollover-handoff-model-safety",
-            "typed-rollover-handoff-conditional-local-liveness",
-        }
-    ]
+    obligations = ledger["obligations"]
     source = (
         module.FORMAL_DIR / "SumeragiV2TypedRolloverHandoffProofs.tla"
     ).read_text(encoding="utf-8")
@@ -11263,33 +11151,36 @@ def test_typed_rollover_proofless_support_uses_exact_aggregate_debt() -> None:
         obligations, sources
     ) == []
 
-    wrong_symbol = copy.deepcopy(obligations)
-    safety = next(
+    consumer_id = "successor-activation-exact-recovery-production-refinement"
+    missing_consumer = [
         obligation
-        for obligation in wrong_symbol
-        if obligation["id"] == "typed-rollover-handoff-model-safety"
+        for obligation in obligations
+        if obligation["id"] != consumer_id
+    ]
+    errors = module._proofless_release_theorem_errors(
+        missing_consumer,
+        sources,
     )
-    safety["symbol"] = "TypedRolloverSpecAlwaysSafeObligation"
-    errors = module._proofless_release_theorem_errors(wrong_symbol, sources)
     assert any(
-        "TypedRolloverInitEstablishesSafetyObligation must have exactly one "
-        "ledger entry" in error
+        "TypedRolloverInitEstablishesSafetyObligation must be transitively "
+        f"accounted for by exact reviewed consumer {consumer_id}" in error
         for error in errors
     ), errors
 
-    falsely_proved = copy.deepcopy(obligations)
-    safety = next(
+    wrong_symbol = copy.deepcopy(obligations)
+    consumer = next(
         obligation
-        for obligation in falsely_proved
-        if obligation["id"] == "typed-rollover-handoff-model-safety"
+        for obligation in wrong_symbol
+        if obligation["id"] == consumer_id
     )
-    safety["status"] = "tlaps_proved"
+    consumer["symbol"] = "TypedRolloverSpecAlwaysSafeObligation"
     errors = module._proofless_release_theorem_errors(
-        falsely_proved, sources
+        wrong_symbol,
+        sources,
     )
     assert any(
-        "TypedRolloverInitEstablishesSafetyObligation must be ledgered "
-        "specified_unproved" in error
+        "TypedRolloverInitEstablishesSafetyObligation must be transitively "
+        f"accounted for by exact reviewed consumer {consumer_id}" in error
         for error in errors
     ), errors
 
@@ -11488,10 +11379,14 @@ def test_new_fixed_obligation_theorem_statements_cannot_weaken_to_true(
     module = load_checker()
     ledger = module.load_ledger()
     obligations = ledger["obligations"]
+    exact_targets = {
+        **module.FIXED_PROOF_OBLIGATION_TARGETS,
+        **module.SUPPORT_PROOF_OBLIGATION_INVENTORY,
+    }
     relevant_modules = {
         target_module
         for target_module, _ in (
-            module.FIXED_PROOF_OBLIGATION_TARGETS[item]
+            exact_targets[item]
             for item in module.EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS
         )
     }
@@ -11501,7 +11396,7 @@ def test_new_fixed_obligation_theorem_statements_cannot_weaken_to_true(
     }
     assert not module._proof_obligation_architecture_errors(obligations, sources)
 
-    target_module, symbol = module.FIXED_PROOF_OBLIGATION_TARGETS[obligation_id]
+    target_module, symbol = exact_targets[obligation_id]
     exact_statement = module.EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS[obligation_id]
     weakened = dict(sources)
     weakened[target_module] = mutate_tla_theorem(
@@ -11926,7 +11821,7 @@ def test_new_obligation_composition_proof_dependencies_fail_closed(
     ), errors
 
 
-def test_historical_residual_wrappers_remain_explicit_proof_debt() -> None:
+def test_proved_historical_support_does_not_promote_top_level_consumer() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
@@ -11934,7 +11829,7 @@ def test_historical_residual_wrappers_remain_explicit_proof_debt() -> None:
         encoding="utf-8"
     )
     obligation_id = "historical-recovery-authority-acquisition"
-    _, symbol = module.FIXED_PROOF_OBLIGATION_TARGETS[obligation_id]
+    _, symbol = module.SUPPORT_PROOF_OBLIGATION_INVENTORY[obligation_id]
     property_name = (
         "IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty"
     )
@@ -11952,10 +11847,12 @@ def test_historical_residual_wrappers_remain_explicit_proof_debt() -> None:
         sources,
     )
 
-    assert any(
-        f"proof-debt theorem {symbol} must remain proofless" in error
-        for error in errors
-    ), errors
+    assert errors == []
+    by_id = {
+        obligation["id"]: obligation for obligation in ledger["obligations"]
+    }
+    assert obligation_id not in by_id
+    assert by_id["height-liveness"]["status"] == "specified_unproved"
 
 
 def test_protected_service_rank_contract_cannot_drop_serve_fifo_rank(

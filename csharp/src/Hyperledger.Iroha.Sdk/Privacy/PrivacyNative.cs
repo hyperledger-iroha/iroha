@@ -507,18 +507,6 @@ public static class PrivacyNative
         return BuildProofV1(requestArchive);
     }
 
-    public static PrivacyProofResultArchive buildSilentThresholdCredentialShowingProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildSilentThresholdCredentialShowingProofV0(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive BuildSilentThresholdCredentialShowingProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildProofV1(requestArchive);
-    }
-
     public static PrivacyProofResultArchive buildVegaCredentialPredicateProofV0(
         ReadOnlySpan<byte> requestArchive)
     {
@@ -538,18 +526,6 @@ public static class PrivacyNative
     }
 
     public static PrivacyProofResultArchive BuildZkAmsAdmissionBatchProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive buildZkAtPolicyProofV1(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildZkAtPolicyProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive BuildZkAtPolicyProofV1(
         ReadOnlySpan<byte> requestArchive)
     {
         return BuildProofV1(requestArchive);
@@ -587,18 +563,6 @@ public static class PrivacyNative
         return VerifyProofV1(requestArchive);
     }
 
-    public static PrivacyProofResultArchive verifySilentThresholdCredentialShowingProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifySilentThresholdCredentialShowingProofV0(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive VerifySilentThresholdCredentialShowingProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyProofV1(requestArchive);
-    }
-
     public static PrivacyProofResultArchive verifyVegaCredentialPredicateProofV0(
         ReadOnlySpan<byte> requestArchive)
     {
@@ -618,18 +582,6 @@ public static class PrivacyNative
     }
 
     public static PrivacyProofResultArchive VerifyZkAmsAdmissionBatchProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive verifyZkAtPolicyProofV1(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyZkAtPolicyProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive VerifyZkAtPolicyProofV1(
         ReadOnlySpan<byte> requestArchive)
     {
         return VerifyProofV1(requestArchive);

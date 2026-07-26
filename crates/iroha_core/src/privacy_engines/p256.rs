@@ -7,12 +7,12 @@
 use core::fmt;
 
 use p256::{
+    AffinePoint, EncodedPoint, FieldBytes, NistP256, ProjectivePoint, Scalar,
     elliptic_curve::{
+        Field, Group, PrimeField,
         hash2curve::{ExpandMsgXmd, GroupDigest},
         sec1::{FromEncodedPoint, ToEncodedPoint},
-        Field, Group, PrimeField,
     },
-    AffinePoint, EncodedPoint, FieldBytes, NistP256, ProjectivePoint, Scalar,
 };
 use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};

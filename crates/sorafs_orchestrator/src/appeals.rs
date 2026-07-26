@@ -10,8 +10,8 @@ use std::{collections::BTreeMap, fmt, str::FromStr};
 
 use iroha_data_model::account::AccountId;
 use iroha_primitives::numeric::{
-    Numeric, NumericOperationError, Quantity, RoundingMode, XOR_QUANTITY_SCALE, XorQuantity,
-    XorQuantityError,
+    DecimalProductError, Numeric, NumericOperationError, Quantity, RoundingMode,
+    XOR_QUANTITY_SCALE, XorQuantity, XorQuantityError,
 };
 use norito::json::{Map as JsonMap, Value};
 use thiserror::Error;
@@ -795,7 +795,7 @@ impl AppealSettlementRule {
         })
     }
 
-    fn refund_component(&self, deposit: &Quantity) -> Result<Quantity, NumericOperationError> {
+    fn refund_component(&self, deposit: &Quantity) -> Result<Quantity, DecimalProductError> {
         deposit.try_product_decimals_round(
             [&self.refund_rate],
             XOR_QUANTITY_SCALE,
@@ -803,7 +803,7 @@ impl AppealSettlementRule {
         )
     }
 
-    fn treasury_component(&self, deposit: &Quantity) -> Result<Quantity, NumericOperationError> {
+    fn treasury_component(&self, deposit: &Quantity) -> Result<Quantity, DecimalProductError> {
         deposit.try_product_decimals_round(
             [&self.treasury_rate],
             XOR_QUANTITY_SCALE,
@@ -1305,6 +1305,9 @@ pub enum AppealPricingError {
         /// Nominal XOR-domain validation failure.
         reason: XorQuantityError,
     },
+    /// Aggregate decimal product failed.
+    #[error("appeal pricing aggregate decimal product failed: {0}")]
+    DecimalProduct(#[from] DecimalProductError),
     /// Bounded decimal arithmetic failed.
     #[error("appeal pricing arithmetic failed: {0}")]
     Arithmetic(#[from] NumericOperationError),
@@ -1327,6 +1330,9 @@ pub enum AppealSettlementError {
         /// Nominal XOR-domain validation failure.
         reason: XorQuantityError,
     },
+    /// Aggregate decimal product failed.
+    #[error("appeal settlement aggregate decimal product failed: {0}")]
+    DecimalProduct(#[from] DecimalProductError),
     /// Bounded decimal arithmetic failed.
     #[error("appeal settlement arithmetic failed: {0}")]
     Arithmetic(#[from] NumericOperationError),
@@ -1354,7 +1360,7 @@ fn clamp_quantity(value: Quantity, min: Quantity, max: Quantity) -> Quantity {
 
 fn appeal_pricing_domain_error(
     context: &str,
-    error: NumericOperationError,
+    error: impl fmt::Display,
 ) -> AppealPricingManifestError {
     AppealPricingManifestError::new(format!(
         "appeal pricing manifest `{context}` is outside the bounded quote domain: {error}"
@@ -1437,6 +1443,33 @@ mod tests {
             "339.3".parse::<Quantity>().expect("canonical quantity"),
             "expected 339.3 XOR"
         );
+    }
+
+    #[test]
+    fn decimal_product_errors_preserve_their_class() {
+        let product_error = DecimalProductError::TooManyFactors;
+        assert_eq!(
+            AppealPricingError::from(product_error),
+            AppealPricingError::DecimalProduct(product_error)
+        );
+        assert_eq!(
+            AppealSettlementError::from(product_error),
+            AppealSettlementError::DecimalProduct(product_error)
+        );
+        assert_eq!(
+            AppealDisbursementError::from(AppealSettlementError::from(product_error)),
+            AppealDisbursementError::Settlement(AppealSettlementError::DecimalProduct(
+                product_error
+            ))
+        );
+    }
+
+    #[test]
+    fn appeal_pricing_manifest_preserves_decimal_product_error() {
+        let error =
+            appeal_pricing_domain_error("aggregate product", DecimalProductError::TooManyFactors);
+        assert!(error.to_string().contains("more than 64 factors"));
+        assert!(!error.to_string().contains("invalid scale"));
     }
 
     #[test]

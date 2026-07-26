@@ -240,8 +240,17 @@ pub enum NumericOperationError {
     NegativeQuantity,
     /// Quantity subtraction would produce a negative result
     QuantityUnderflow,
-    /// Aggregate decimal product contains more than 64 factors
+}
+
+/// Failures produced while multiplying a quantity by aggregate decimal factors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum DecimalProductError {
+    /// Aggregate decimal product contains more than 64 factors.
+    #[error("aggregate decimal product contains more than 64 factors")]
     TooManyFactors,
+    /// An exact decimal or quantity operation failed.
+    #[error(transparent)]
+    Numeric(#[from] NumericOperationError),
 }
 
 /// Errors raised while constructing or manipulating XOR quantities.
@@ -1596,7 +1605,7 @@ impl Quantity {
     /// Rejects more than 64 factors, a noncanonical factor, or a canonical
     /// final result outside the decimal scale, signed-mantissa, or non-negative
     /// quantity domain.
-    pub fn try_product_decimals<'a, I>(&self, factors: I) -> Result<Self, NumericOperationError>
+    pub fn try_product_decimals<'a, I>(&self, factors: I) -> Result<Self, DecimalProductError>
     where
         I: IntoIterator<Item = &'a Numeric>,
     {
@@ -1607,7 +1616,7 @@ impl Quantity {
 
         for (index, factor) in factors.into_iter().enumerate() {
             if index >= MAX_DECIMAL_PRODUCT_FACTORS {
-                return Err(NumericOperationError::TooManyFactors);
+                return Err(DecimalProductError::TooManyFactors);
             }
             factor.validate_decimal()?;
             product *= factor.mantissa().inner();
@@ -1629,14 +1638,14 @@ impl Quantity {
         }
 
         if scale > u128::from(MAX_DECIMAL_SCALE) {
-            return Err(NumericOperationError::ScaleOverflow);
+            return Err(NumericOperationError::ScaleOverflow.into());
         }
         let scale = u32::try_from(scale).expect("validated decimal scale fits u32");
-        Self::from_canonical_numeric(infallible_observed(
+        Ok(Self::from_canonical_numeric(infallible_observed(
             canonical_decimal_from_unbounded_observed(product, scale, &mut |_| {
                 Ok::<_, core::convert::Infallible>(())
             }),
-        )?)
+        )?)?)
     }
 
     /// Multiply this quantity by decimal factors as one unbounded conceptual
@@ -1656,12 +1665,12 @@ impl Quantity {
         factors: I,
         output_scale: u32,
         mode: RoundingMode,
-    ) -> Result<Self, NumericOperationError>
+    ) -> Result<Self, DecimalProductError>
     where
         I: IntoIterator<Item = &'a Numeric>,
     {
         if output_scale > MAX_DECIMAL_SCALE {
-            return Err(NumericOperationError::InvalidScale);
+            return Err(NumericOperationError::InvalidScale.into());
         }
         self.0.validate_decimal()?;
         let ten = UnboundedBigInt::from(10_u8);
@@ -1670,7 +1679,7 @@ impl Quantity {
 
         for (index, factor) in factors.into_iter().enumerate() {
             if index >= MAX_DECIMAL_PRODUCT_FACTORS {
-                return Err(NumericOperationError::TooManyFactors);
+                return Err(DecimalProductError::TooManyFactors);
             }
             factor.validate_decimal()?;
             product *= factor.mantissa().inner();
@@ -1701,11 +1710,11 @@ impl Quantity {
                 .expect("validated output scale difference fits u32");
             product * ten.pow(expansion)
         };
-        Self::from_canonical_numeric(infallible_observed(
+        Ok(Self::from_canonical_numeric(infallible_observed(
             canonical_decimal_from_unbounded_observed(rounded, output_scale, &mut |_| {
                 Ok::<_, core::convert::Infallible>(())
             }),
-        )?)
+        )?)?)
     }
 
     /// Compare `self * self_multiplier` with `other * other_multiplier`.
@@ -2228,7 +2237,6 @@ impl From<NumericOperationError> for XorQuantityError {
             | NumericOperationError::RepeatingDecimal
             | NumericOperationError::ExactDivisionScaleOverflow
             | NumericOperationError::InvalidScale
-            | NumericOperationError::TooManyFactors
             | NumericOperationError::NonCanonical => Self::Overflow,
         }
     }
@@ -3496,12 +3504,14 @@ mod tests {
                 &tiny,
                 &decimal("10000000000000000000000000000"),
             ]),
-            Quantity::try_from_numeric(tiny.clone()),
+            Ok(Quantity::try_from_numeric(tiny.clone()).expect("tiny is a quantity")),
             "final normalization, rather than the scale-56 temporary, controls success"
         );
         assert_eq!(
             Quantity::one().try_product_decimals([&decimal("-1")]),
-            Err(NumericOperationError::NegativeQuantity)
+            Err(DecimalProductError::Numeric(
+                NumericOperationError::NegativeQuantity
+            ))
         );
     }
 
@@ -3517,7 +3527,7 @@ mod tests {
             Quantity::one().try_product_decimals(
                 core::iter::repeat(&one).take(MAX_DECIMAL_PRODUCT_FACTORS + 1)
             ),
-            Err(NumericOperationError::TooManyFactors)
+            Err(DecimalProductError::TooManyFactors)
         );
     }
 
@@ -3573,7 +3583,9 @@ mod tests {
                 MAX_DECIMAL_SCALE + 1,
                 RoundingMode::NearestEven,
             ),
-            Err(NumericOperationError::InvalidScale)
+            Err(DecimalProductError::Numeric(
+                NumericOperationError::InvalidScale
+            ))
         );
     }
 
@@ -3594,7 +3606,7 @@ mod tests {
                 MAX_DECIMAL_SCALE,
                 RoundingMode::NearestEven,
             ),
-            Err(NumericOperationError::TooManyFactors)
+            Err(DecimalProductError::TooManyFactors)
         );
     }
 
