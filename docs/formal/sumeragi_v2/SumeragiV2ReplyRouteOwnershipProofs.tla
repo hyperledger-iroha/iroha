@@ -6176,11 +6176,22 @@ PROOF
       <3>4. rrRequesterNextSequence'
                \in [ReplyOwners ->
                      1..(ReplyDeliveryOrdinalLimit + 1)]
-        <4>1. rrRequesterNextSequence[owner] + 1
+        <4>1. rrRequesterNextSequence[owner]
+                 \in 1..ReplyDeliveryOrdinalLimit
+          BY <3>1
+             DEF ReplyLifecycleTypeInvariant,
+                 ReplySemanticSequences
+        <4>2. ReplyDeliveryOrdinalLimit \in Nat
+          BY <1>1
+             DEF ReplyRouteLifecycleInductiveInvariant,
+                 ReplyRouteFullSafetyInvariant,
+                 ReplyRouteInductiveInvariant,
+                 ReplyRouteConfiguration
+        <4>3. rrRequesterNextSequence[owner] + 1
                  \in 1..(ReplyDeliveryOrdinalLimit + 1)
-          BY <3>1, SMT
+          BY <4>1, <4>2, SMT
              DEF ReplySemanticSequences
-        <4> QED BY <3>1, <3>15, <4>1,
+        <4> QED BY <3>1, <3>15, <4>3,
              ReplyFunctionalUpdatePreservesType
              DEF ReplyLifecycleTypeInvariant
       <3>5. /\ rrRequesterClosedThrough'
@@ -7490,8 +7501,7 @@ THEOREM ReplyRouteSpecProvidesLifecycleJournal ==
   ReplyRouteSpec => ReplyLifecycleJournal
 PROOF
   <1>1. ReplyRouteSpec => []ReplyRouteLifecycleInductiveInvariant
-    BY ReplyRouteSpecAlwaysFullSafetyInvariant, PTL
-       DEF ReplyRouteLifecycleInductiveInvariant
+    BY ReplyRouteSpecAlwaysLifecycleInductiveInvariant
   <1>2. /\ ReplyRouteLifecycleInductiveInvariant
            /\ [ReplyRouteNext]_ReplyRouteVars
           => [ReplyLifecycleJournalStep]_ReplyRouteVars
@@ -7775,17 +7785,77 @@ PROOF
                      \/ rrSemanticSequence[
                           witness.requester][oldAttempt.semantic]
                           > witness.closedThrough)
-          <5>1. /\ oldAttempt.owner = witness.requester
-                 /\ rrSemanticSequence[
-                      oldAttempt.owner][oldAttempt.semantic]
-                      <= witness.closedThrough
-            BY <4>3, SMTT(5)
-          <5>2. ReplyAttemptCoveredByCloseStep(oldAttempt)
-            BY <1>1, <3>1, <4>1, <5>1, SMTT(30)
-               DEF CloseSemanticRequest,
-                   ReplyAttemptCoveredByCloseStep,
-                   ReplySemanticActive, ReplySemanticBound
-          <5> QED BY <5>2
+          <5>1. oldAttempt.owner = witness.requester
+            BY <4>3
+          <5>2. /\ rrSemanticSequence[
+                        oldAttempt.owner][oldAttempt.semantic]
+                        \in 0..ReplyDeliveryOrdinalLimit
+                 /\ witness.closedThrough
+                        \in 0..ReplyDeliveryOrdinalLimit
+            BY <1>1, <3>1
+               DEF ReplyRouteLifecycleInductiveInvariant,
+                   ReplyRouteFullSafetyInvariant,
+                   ReplyRouteSafetyInvariant,
+                   ReplyRouteTypeInvariant, ReplyAttemptSet,
+                   ReplyRouteLifecycleInvariant,
+                   ReplyLifecycleTypeInvariant,
+                   CloseSemanticRequest, ReplyCloseWitnessSet
+          <5>3. rrSemanticSequence[
+                   oldAttempt.owner][oldAttempt.semantic]
+                   <= witness.closedThrough
+            BY <4>3, <5>1, <5>2, SMT
+          <5>4. ReplySemanticBound(
+                   oldAttempt.owner, oldAttempt.semantic)
+            BY <4>1 DEF ReplySemanticActive
+          <5>5. /\ rrSemanticSequence' = rrSemanticSequence
+                 /\ rrSemanticHash' = rrSemanticHash
+            BY <1>1 DEF CloseSemanticRequest
+          <5>6. /\ rrSemanticSequence'[
+                        oldAttempt.owner][oldAttempt.semantic] =
+                        rrSemanticSequence[
+                          oldAttempt.owner][oldAttempt.semantic]
+                 /\ rrSemanticHash'[
+                        oldAttempt.owner][oldAttempt.semantic] =
+                        rrSemanticHash[
+                          oldAttempt.owner][oldAttempt.semantic]
+            BY <5>5
+          <5>7. /\ rrRequesterClosedThrough' =
+                       [rrRequesterClosedThrough EXCEPT
+                          ![witness.requester] =
+                            witness.closedThrough]
+                 /\ witness.closedThrough >
+                       rrRequesterClosedThrough[witness.requester]
+            BY <1>1 DEF CloseSemanticRequest
+          <5>8. /\ oldAttempt.owner \in ReplyOwners
+                 /\ rrRequesterClosedThrough
+                       \in [ReplyOwners ->
+                             0..ReplyDeliveryOrdinalLimit]
+            BY <1>1, <3>1
+               DEF ReplyRouteLifecycleInductiveInvariant,
+                   ReplyRouteFullSafetyInvariant,
+                   ReplyRouteSafetyInvariant,
+                   ReplyRouteTypeInvariant, ReplyAttemptSet,
+                   ReplyRouteLifecycleInvariant,
+                   ReplyLifecycleTypeInvariant
+          <5>9. rrRequesterClosedThrough'[oldAttempt.owner] =
+                   witness.closedThrough
+            BY <5>1, <5>7, <5>8,
+               ReplyFunctionalUpdateAtKey
+          <5>10. rrRequesterClosedThrough'[oldAttempt.owner] >
+                    rrRequesterClosedThrough[oldAttempt.owner]
+            BY <5>1, <5>7, <5>9
+          <5>11. rrSemanticSequence[
+                    oldAttempt.owner][oldAttempt.semantic] >
+                    rrRequesterClosedThrough[oldAttempt.owner]
+            BY <4>1 DEF ReplySemanticActive
+          <5>12. rrSemanticSequence[
+                    oldAttempt.owner][oldAttempt.semantic] <=
+                    rrRequesterClosedThrough'[oldAttempt.owner]
+            BY <5>3, <5>9
+          <5>13. ReplyAttemptCoveredByCloseStep(oldAttempt)
+            BY <5>4, <5>6, <5>10, <5>11, <5>12
+               DEF ReplyAttemptCoveredByCloseStep
+          <5> QED BY <5>13
         <4> QED BY <4>2, <4>3
       <3> QED BY <3>1
     <2>2. ReplyAttemptReplayStep
@@ -7815,14 +7885,52 @@ PROOF
          DEF ReplyAttemptSurvivalStep,
              SameReplyAttemptIdentity
     <2>5. ReplyOtherCursorIsolationStep
-      BY <1>1, SMTT(90)
-         DEF CloseSemanticRequest, ReplyAttemptsAfterClose,
-             ReplyOtherCursorIsolationStep,
-             ReplyAttemptCursor, SameReplyAttemptIdentity,
-             ReplyRouteLifecycleInductiveInvariant,
-             ReplyRouteFullSafetyInvariant,
-             ReplyRouteSafetyInvariant,
-             ReplyRouteOwnershipInvariant
+      <3>1. ASSUME NEW changedBefore \in rrAttempts,
+                    NEW changedAfter \in rrAttempts'
+             PROVE LET sameAttempt ==
+                         SameReplyAttemptIdentity(
+                           changedBefore, changedAfter)
+                       attemptChanged ==
+                         ReplyAttemptCursor(changedAfter) #
+                           ReplyAttemptCursor(changedBefore)
+                   IN (sameAttempt /\ attemptChanged) =>
+                        \A otherBefore \in rrAttempts:
+                          (otherBefore.owner = changedBefore.owner
+                            /\ ~SameReplyAttemptIdentity(
+                                 otherBefore, changedBefore))
+                          => \E otherAfter \in rrAttempts':
+                               /\ SameReplyAttemptIdentity(
+                                    otherBefore, otherAfter)
+                               /\ ReplyAttemptCursor(otherAfter) =
+                                    ReplyAttemptCursor(otherBefore)
+        <4>1. changedAfter \in rrAttempts
+          BY <1>1, <3>1
+             DEF CloseSemanticRequest,
+                 ReplyAttemptsAfterClose
+        <4>2. ASSUME SameReplyAttemptIdentity(
+                        changedBefore, changedAfter)
+                      /\ ReplyAttemptCursor(changedAfter) #
+                           ReplyAttemptCursor(changedBefore)
+               PROVE \A otherBefore \in rrAttempts:
+                       (otherBefore.owner = changedBefore.owner
+                         /\ ~SameReplyAttemptIdentity(
+                              otherBefore, changedBefore))
+                       => \E otherAfter \in rrAttempts':
+                            /\ SameReplyAttemptIdentity(
+                                 otherBefore, otherAfter)
+                            /\ ReplyAttemptCursor(otherAfter) =
+                                 ReplyAttemptCursor(otherBefore)
+          <5>1. changedBefore = changedAfter
+            BY <1>1, <3>1, <4>1, <4>2,
+               ReplySameOwnedAttemptIdentityUnique
+               DEF ReplyRouteLifecycleInductiveInvariant,
+                   ReplyRouteFullSafetyInvariant
+          <5>2. FALSE
+            BY <4>2, <5>1
+          <5> QED BY <5>2
+        <4> QED BY <4>2
+      <3> QED BY <3>1
+           DEF ReplyOtherCursorIsolationStep
     <2> QED BY <2>2, <2>3, <2>4, <2>5
          DEF ReplyTenureAwareReplayStep,
              ReplySourceIsolationStep
@@ -8144,8 +8252,8 @@ PROOF
              ReplyRouteSafetyInvariant
     <2>12. CASE \E owner \in ReplyOwners, source \in ReplySources:
                   RecoverReplyRouteState(owner, source)
-      BY <1>1, <2>12, SMTT(30)
-         DEF RecoverReplyRouteState, ReplyRouteNext
+      BY <2>4, <2>12
+         DEF RecoverReplyRouteState
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
          <2>7, <2>8, <2>9, <2>10, <2>11, <2>12
          DEF ReplyRouteNext
@@ -8167,8 +8275,7 @@ PROOF
   <1>1. ReplyRouteSpec => []ReplyRouteInductiveInvariant
     BY ReplyRouteSpecAlwaysInductiveInvariant
   <1>2. ReplyRouteSpec => []ReplyRouteLifecycleInductiveInvariant
-    BY ReplyRouteSpecAlwaysFullSafetyInvariant, PTL
-       DEF ReplyRouteLifecycleInductiveInvariant
+    BY ReplyRouteSpecAlwaysLifecycleInductiveInvariant
   <1>3. /\ ReplyRouteInductiveInvariant
            /\ ReplyRouteLifecycleInductiveInvariant
            /\ [ReplyRouteNext]_ReplyRouteVars
@@ -8481,72 +8588,83 @@ PROOF
              /\ oldAttempt.messageCursor = messageCursor
              /\ oldAttempt.chunkCursor = chunkCursor
       BY <2>1
-    <2>3. \E newAttempt \in rrAttempts':
-             ReplyAttemptReplayValid(oldAttempt, newAttempt)
+    <2>3. \/ ReplyAttemptCoveredByCloseStep(oldAttempt)
+           \/ \E newAttempt \in rrAttempts':
+                ReplyAttemptReplayValid(oldAttempt, newAttempt)
       BY <1>1, <2>2
          DEF ReplyTenureAwareReplayStep,
              ReplyAttemptReplayStep
-    <2>4. PICK newAttempt \in rrAttempts':
-             ReplyAttemptReplayValid(oldAttempt, newAttempt)
-      BY <2>3
-    <2>5. /\ newAttempt \in ReplyAttemptSet
-           /\ SameReplyAttemptIdentity(oldAttempt, newAttempt)
-      BY <1>1, <2>2, <2>4, SMTT(20)
-         DEF ReplyRouteSafetyInvariant,
-             ReplyRouteTypeInvariant,
-             ReplyAttemptReplayValid,
-             SameReplyAttemptIdentity
-    <2>6. newAttempt =
-             ReplyAttemptFor(owner, semantic, source)'
-      BY <1>1, <2>2, <2>4, <2>5,
-         ReplySameOwnedAttemptIdentityUniquePrime, SMTT(30)
-         DEF ReplyAttemptOwned, ReplyAttemptFor,
-             ReplyAttemptsForSource, ReplyAttemptsFor,
-             SameReplyAttemptIdentity
-    <2>7. \/ ReplyAttemptCursor(newAttempt) =
-                  ReplyAttemptCursor(oldAttempt)
-           \/ ReplyAttemptRank(newAttempt) >
-                  ReplyAttemptRank(oldAttempt)
-      BY <1>1, <2>2, <2>4, <2>5,
-         ReplyReplayValidCursorUnchangedOrRankAdvances
-    <2>8. CASE ReplyAttemptCursor(newAttempt) =
-                  ReplyAttemptCursor(oldAttempt)
-      <3>1. /\ newAttempt.messageCursor = messageCursor
-             /\ newAttempt.chunkCursor = chunkCursor
-             /\ ~ReplyAttemptComplete(newAttempt)
-        BY <2>2, <2>8, SMTT(10)
-           DEF ReplyAttemptCursor, ReplyAttemptComplete
-      <3>2. ReplyAttemptOwned(owner, semantic, source)'
-        BY <2>2, <2>4, <2>5
-           DEF ReplyAttemptOwned, ReplyAttemptsForSource,
-               ReplyAttemptsFor, SameReplyAttemptIdentity
-      <3>3. ReplySourceAtCursor(
-               owner, semantic, source,
-               messageCursor, chunkCursor)'
-        BY <2>6, <3>1, <3>2
-           DEF ReplySourceAtCursor
-      <3> QED BY <3>3
-    <2>9. CASE ReplyAttemptRank(newAttempt) >
-                  ReplyAttemptRank(oldAttempt)
-      <3>1. ReplyAttemptOwned(owner, semantic, source)'
-        BY <2>2, <2>4, <2>5
-           DEF ReplyAttemptOwned, ReplyAttemptsForSource,
-               ReplyAttemptsFor, SameReplyAttemptIdentity
-      <3>2. ReplyAttemptRank(oldAttempt) =
-               messageCursor * (ReplyChunkCount + 1)
-                 + chunkCursor
-        BY <2>2 DEF ReplyAttemptRank
-      <3>3. ReplyAttemptRank(newAttempt) >
-               messageCursor * (ReplyChunkCount + 1)
-                 + chunkCursor
-        BY <2>9, <3>2
-      <3>4. ReplySourceAdvancedFrom(
-               owner, semantic, source,
-               messageCursor, chunkCursor)'
-        BY <2>6, <3>1, <3>3
+    <2>4. CASE ReplyAttemptCoveredByCloseStep(oldAttempt)
+      <3>1. ReplySemanticClosed(owner, semantic)'
+        BY <2>2, <2>4
+           DEF ReplyAttemptCoveredByCloseStep,
+               ReplySemanticClosed, ReplySemanticBound
+      <3> QED BY <3>1
            DEF ReplySourceAdvancedFrom
-      <3> QED BY <3>4
-    <2> QED BY <2>7, <2>8, <2>9
+    <2>5. CASE \E newAttempt \in rrAttempts':
+                  ReplyAttemptReplayValid(oldAttempt, newAttempt)
+      <3>1. PICK newAttempt \in rrAttempts':
+               ReplyAttemptReplayValid(oldAttempt, newAttempt)
+        BY <2>5
+      <3>2. /\ newAttempt \in ReplyAttemptSet
+             /\ SameReplyAttemptIdentity(oldAttempt, newAttempt)
+        BY <1>1, <2>2, <3>1, SMTT(20)
+           DEF ReplyRouteSafetyInvariant,
+               ReplyRouteTypeInvariant,
+               ReplyAttemptReplayValid,
+               SameReplyAttemptIdentity
+      <3>3. newAttempt =
+               ReplyAttemptFor(owner, semantic, source)'
+        BY <1>1, <2>2, <3>1, <3>2,
+           ReplySameOwnedAttemptIdentityUniquePrime, SMTT(30)
+           DEF ReplyAttemptOwned, ReplyAttemptFor,
+               ReplyAttemptsForSource, ReplyAttemptsFor,
+               SameReplyAttemptIdentity
+      <3>4. \/ ReplyAttemptCursor(newAttempt) =
+                    ReplyAttemptCursor(oldAttempt)
+             \/ ReplyAttemptRank(newAttempt) >
+                    ReplyAttemptRank(oldAttempt)
+        BY <1>1, <2>2, <3>1, <3>2,
+           ReplyReplayValidCursorUnchangedOrRankAdvances
+      <3>5. CASE ReplyAttemptCursor(newAttempt) =
+                    ReplyAttemptCursor(oldAttempt)
+        <4>1. /\ newAttempt.messageCursor = messageCursor
+               /\ newAttempt.chunkCursor = chunkCursor
+               /\ ~ReplyAttemptComplete(newAttempt)
+          BY <2>2, <3>5, SMTT(10)
+             DEF ReplyAttemptCursor, ReplyAttemptComplete
+        <4>2. ReplyAttemptOwned(owner, semantic, source)'
+          BY <2>2, <3>1, <3>2
+             DEF ReplyAttemptOwned, ReplyAttemptsForSource,
+                 ReplyAttemptsFor, SameReplyAttemptIdentity
+        <4>3. ReplySourceAtCursor(
+                 owner, semantic, source,
+                 messageCursor, chunkCursor)'
+          BY <3>3, <4>1, <4>2
+             DEF ReplySourceAtCursor
+        <4> QED BY <4>3
+      <3>6. CASE ReplyAttemptRank(newAttempt) >
+                    ReplyAttemptRank(oldAttempt)
+        <4>1. ReplyAttemptOwned(owner, semantic, source)'
+          BY <2>2, <3>1, <3>2
+             DEF ReplyAttemptOwned, ReplyAttemptsForSource,
+                 ReplyAttemptsFor, SameReplyAttemptIdentity
+        <4>2. ReplyAttemptRank(oldAttempt) =
+                 messageCursor * (ReplyChunkCount + 1)
+                   + chunkCursor
+          BY <2>2 DEF ReplyAttemptRank
+        <4>3. ReplyAttemptRank(newAttempt) >
+                 messageCursor * (ReplyChunkCount + 1)
+                   + chunkCursor
+          BY <3>6, <4>2
+        <4>4. ReplySourceAdvancedFrom(
+                 owner, semantic, source,
+                 messageCursor, chunkCursor)'
+          BY <3>3, <4>1, <4>3
+             DEF ReplySourceAdvancedFrom
+        <4> QED BY <4>4
+      <3> QED BY <3>4, <3>5, <3>6
+    <2> QED BY <2>3, <2>4, <2>5
   <1> QED BY <1>1
 
 THEOREM ReplyAdvancedStepIsStable ==
@@ -8557,10 +8675,13 @@ THEOREM ReplyAdvancedStepIsStable ==
     /\ ReplyRouteConfiguration
     /\ ReplyRouteSafetyInvariant
     /\ ReplyRouteSafetyInvariant'
+    /\ ReplyLifecycleTypeInvariant
+    /\ ReplyLifecycleTypeInvariant'
     /\ ReplySourceAdvancedFrom(
          owner, semantic, source, messageCursor, chunkCursor)
     /\ ReplyTenureAwareReplayStep
     /\ ReplySourceIsolationStep
+    /\ ReplyLifecycleJournalStep
     => ReplySourceAdvancedFrom(
          owner, semantic, source, messageCursor, chunkCursor)'
 PROOF
@@ -8572,106 +8693,165 @@ PROOF
                 ReplyRouteConfiguration,
                 ReplyRouteSafetyInvariant,
                 ReplyRouteSafetyInvariant',
+                ReplyLifecycleTypeInvariant,
+                ReplyLifecycleTypeInvariant',
                 ReplySourceAdvancedFrom(
                   owner, semantic, source,
                   messageCursor, chunkCursor),
                 ReplyTenureAwareReplayStep,
-                ReplySourceIsolationStep
+                ReplySourceIsolationStep,
+                ReplyLifecycleJournalStep
          PROVE ReplySourceAdvancedFrom(
                   owner, semantic, source,
                   messageCursor, chunkCursor)'
-    <2>1. \E oldAttempt \in rrAttempts:
-             /\ oldAttempt =
-                  ReplyAttemptFor(owner, semantic, source)
-             /\ oldAttempt \in ReplyAttemptSet
-             /\ oldAttempt.owner = owner
-             /\ oldAttempt.semantic = semantic
-             /\ oldAttempt.source = source
-             /\ \/ ReplyAttemptComplete(oldAttempt)
-                \/ ReplyAttemptRank(oldAttempt) >
-                     messageCursor * (ReplyChunkCount + 1)
-                       + chunkCursor
-      BY <1>1, ReplyOwnedAttemptIdentity, SMTT(30)
-         DEF ReplySourceAdvancedFrom,
-             ReplyRouteSafetyInvariant,
-             ReplyRouteTypeInvariant
-    <2>2. PICK oldAttempt \in rrAttempts:
-             /\ oldAttempt =
-                  ReplyAttemptFor(owner, semantic, source)
-             /\ oldAttempt \in ReplyAttemptSet
-             /\ oldAttempt.owner = owner
-             /\ oldAttempt.semantic = semantic
-             /\ oldAttempt.source = source
-             /\ \/ ReplyAttemptComplete(oldAttempt)
-                \/ ReplyAttemptRank(oldAttempt) >
-                     messageCursor * (ReplyChunkCount + 1)
-                       + chunkCursor
-      BY <2>1
-    <2>3. \E newAttempt \in rrAttempts':
-             ReplyAttemptReplayValid(oldAttempt, newAttempt)
-      BY <1>1, <2>2
-         DEF ReplyTenureAwareReplayStep,
-             ReplyAttemptReplayStep
-    <2>4. PICK newAttempt \in rrAttempts':
-             ReplyAttemptReplayValid(oldAttempt, newAttempt)
-      BY <2>3
-    <2>5. /\ newAttempt \in ReplyAttemptSet
-           /\ SameReplyAttemptIdentity(oldAttempt, newAttempt)
-      BY <1>1, <2>2, <2>4, SMTT(20)
-         DEF ReplyRouteSafetyInvariant,
-             ReplyRouteTypeInvariant,
-             ReplyAttemptReplayValid,
-             SameReplyAttemptIdentity
-    <2>6. newAttempt =
-             ReplyAttemptFor(owner, semantic, source)'
-      BY <1>1, <2>2, <2>4, <2>5,
-         ReplySameOwnedAttemptIdentityUniquePrime, SMTT(30)
-         DEF ReplyAttemptOwned, ReplyAttemptFor,
-             ReplyAttemptsForSource, ReplyAttemptsFor,
-             SameReplyAttemptIdentity
-    <2>7. ReplyAttemptOwned(owner, semantic, source)'
-      BY <2>2, <2>4, <2>5
-         DEF ReplyAttemptOwned, ReplyAttemptsForSource,
-             ReplyAttemptsFor, SameReplyAttemptIdentity
-    <2>8. \/ ReplyAttemptCursor(newAttempt) =
-                  ReplyAttemptCursor(oldAttempt)
-           \/ ReplyAttemptRank(newAttempt) >
-                  ReplyAttemptRank(oldAttempt)
-      BY <1>1, <2>2, <2>4, <2>5,
-         ReplyReplayValidCursorUnchangedOrRankAdvances
-    <2>9. CASE ReplyAttemptComplete(oldAttempt)
-      <3>1. ReplyAttemptComplete(newAttempt)
-        BY <2>2, <2>4, <2>5, <2>9,
-           ReplyReplayValidPreservesCompletion
-      <3> QED BY <2>6, <2>7, <3>1
+    <2>1. CASE ReplySemanticClosed(owner, semantic)
+      <3>1. /\ rrRequesterClosedThrough'[owner] >=
+                    rrRequesterClosedThrough[owner]
+             /\ rrSemanticSequence'[owner][semantic] =
+                    rrSemanticSequence[owner][semantic]
+             /\ rrSemanticHash'[owner][semantic] =
+                    rrSemanticHash[owner][semantic]
+        BY <1>1, <2>1
+           DEF ReplyLifecycleJournalStep,
+               ReplySemanticClosed, ReplySemanticBound
+      <3>2. ReplySemanticBound(owner, semantic)'
+        BY <2>1, <3>1
+           DEF ReplySemanticClosed, ReplySemanticBound
+      <3>3. rrSemanticSequence[owner][semantic] <=
+               rrRequesterClosedThrough[owner]
+        BY <2>1 DEF ReplySemanticClosed
+      <3>4. rrSemanticSequence'[owner][semantic] =
+               rrSemanticSequence[owner][semantic]
+        BY <3>1
+      <3>5. rrRequesterClosedThrough[owner] <=
+               rrRequesterClosedThrough'[owner]
+        BY <3>1
+      <3>6. /\ rrSemanticSequence[owner][semantic] \in Nat
+             /\ rrSemanticSequence'[owner][semantic] \in Nat
+             /\ rrRequesterClosedThrough[owner] \in Nat
+             /\ rrRequesterClosedThrough'[owner] \in Nat
+        BY <1>1, SMTT(10)
+           DEF ReplyLifecycleTypeInvariant,
+               ReplyRouteConfiguration
+      <3>7. rrSemanticSequence'[owner][semantic] <=
+               rrRequesterClosedThrough'[owner]
+        BY <3>3, <3>4, <3>5, <3>6, SMT
+      <3>8. ReplySemanticClosed(owner, semantic)'
+        BY <3>2, <3>7 DEF ReplySemanticClosed
+      <3> QED BY <3>8
            DEF ReplySourceAdvancedFrom
-    <2>10. CASE ReplyAttemptRank(oldAttempt) >
-                   messageCursor * (ReplyChunkCount + 1)
-                     + chunkCursor
-      <3>1. CASE ReplyAttemptCursor(newAttempt) =
-                    ReplyAttemptCursor(oldAttempt)
-        <4>1. ReplyAttemptRank(newAttempt) =
-                 ReplyAttemptRank(oldAttempt)
-          BY <3>1, ReplyEqualCursorPreservesRankAndCompletion
-        <4> QED BY <2>6, <2>7, <2>10, <4>1
+    <2>2. CASE /\ ReplyAttemptOwned(owner, semantic, source)
+                /\ LET attempt ==
+                         ReplyAttemptFor(owner, semantic, source)
+                       oldRank ==
+                         messageCursor * (ReplyChunkCount + 1)
+                           + chunkCursor
+                   IN \/ ReplyAttemptComplete(attempt)
+                      \/ ReplyAttemptRank(attempt) > oldRank
+      <3>1. \E oldAttempt \in rrAttempts:
+               /\ oldAttempt =
+                    ReplyAttemptFor(owner, semantic, source)
+               /\ oldAttempt \in ReplyAttemptSet
+               /\ oldAttempt.owner = owner
+               /\ oldAttempt.semantic = semantic
+               /\ oldAttempt.source = source
+               /\ \/ ReplyAttemptComplete(oldAttempt)
+                  \/ ReplyAttemptRank(oldAttempt) >
+                       messageCursor * (ReplyChunkCount + 1)
+                         + chunkCursor
+        BY <1>1, <2>2, ReplyOwnedAttemptIdentity, SMTT(30)
+           DEF ReplyRouteSafetyInvariant,
+               ReplyRouteTypeInvariant
+      <3>2. PICK oldAttempt \in rrAttempts:
+               /\ oldAttempt =
+                    ReplyAttemptFor(owner, semantic, source)
+               /\ oldAttempt \in ReplyAttemptSet
+               /\ oldAttempt.owner = owner
+               /\ oldAttempt.semantic = semantic
+               /\ oldAttempt.source = source
+               /\ \/ ReplyAttemptComplete(oldAttempt)
+                  \/ ReplyAttemptRank(oldAttempt) >
+                       messageCursor * (ReplyChunkCount + 1)
+                         + chunkCursor
+        BY <3>1
+      <3>3. \/ ReplyAttemptCoveredByCloseStep(oldAttempt)
+             \/ \E newAttempt \in rrAttempts':
+                  ReplyAttemptReplayValid(oldAttempt, newAttempt)
+        BY <1>1, <3>2
+           DEF ReplyTenureAwareReplayStep,
+               ReplyAttemptReplayStep
+      <3>4. CASE ReplyAttemptCoveredByCloseStep(oldAttempt)
+        <4>1. ReplySemanticClosed(owner, semantic)'
+          BY <3>2, <3>4
+             DEF ReplyAttemptCoveredByCloseStep,
+                 ReplySemanticClosed, ReplySemanticBound
+        <4> QED BY <4>1
              DEF ReplySourceAdvancedFrom
-      <3>2. CASE ReplyAttemptRank(newAttempt) >
-                    ReplyAttemptRank(oldAttempt)
-        <4>1. /\ ReplyAttemptRank(newAttempt) \in Nat
-               /\ ReplyAttemptRank(oldAttempt) \in Nat
-               /\ messageCursor * (ReplyChunkCount + 1)
-                    + chunkCursor \in Nat
-          BY <1>1, <2>2, <2>5,
-             ReplyAttemptRankTyped, ReplyCursorRankTyped
-        <4>2. ReplyAttemptRank(newAttempt) >
-                 messageCursor * (ReplyChunkCount + 1)
-                   + chunkCursor
-          BY <2>10, <3>2, <4>1,
-             ReplyNaturalStrictTransitive
-        <4> QED BY <2>6, <2>7, <4>2
-             DEF ReplySourceAdvancedFrom
-      <3> QED BY <2>8, <3>1, <3>2
-    <2> QED BY <2>2, <2>9, <2>10
+      <3>5. CASE \E newAttempt \in rrAttempts':
+                    ReplyAttemptReplayValid(oldAttempt, newAttempt)
+        <4>1. PICK newAttempt \in rrAttempts':
+                 ReplyAttemptReplayValid(oldAttempt, newAttempt)
+          BY <3>5
+        <4>2. /\ newAttempt \in ReplyAttemptSet
+               /\ SameReplyAttemptIdentity(oldAttempt, newAttempt)
+          BY <1>1, <3>2, <4>1, SMTT(20)
+             DEF ReplyRouteSafetyInvariant,
+                 ReplyRouteTypeInvariant,
+                 ReplyAttemptReplayValid,
+                 SameReplyAttemptIdentity
+        <4>3. newAttempt =
+                 ReplyAttemptFor(owner, semantic, source)'
+          BY <1>1, <3>2, <4>1, <4>2,
+             ReplySameOwnedAttemptIdentityUniquePrime, SMTT(30)
+             DEF ReplyAttemptOwned, ReplyAttemptFor,
+                 ReplyAttemptsForSource, ReplyAttemptsFor,
+                 SameReplyAttemptIdentity
+        <4>4. ReplyAttemptOwned(owner, semantic, source)'
+          BY <3>2, <4>1, <4>2
+             DEF ReplyAttemptOwned, ReplyAttemptsForSource,
+                 ReplyAttemptsFor, SameReplyAttemptIdentity
+        <4>5. \/ ReplyAttemptCursor(newAttempt) =
+                      ReplyAttemptCursor(oldAttempt)
+               \/ ReplyAttemptRank(newAttempt) >
+                      ReplyAttemptRank(oldAttempt)
+          BY <1>1, <3>2, <4>1, <4>2,
+             ReplyReplayValidCursorUnchangedOrRankAdvances
+        <4>6. CASE ReplyAttemptComplete(oldAttempt)
+          <5>1. ReplyAttemptComplete(newAttempt)
+            BY <3>2, <4>1, <4>2, <4>6,
+               ReplyReplayValidPreservesCompletion
+          <5> QED BY <4>3, <4>4, <5>1
+               DEF ReplySourceAdvancedFrom
+        <4>7. CASE ReplyAttemptRank(oldAttempt) >
+                      messageCursor * (ReplyChunkCount + 1)
+                        + chunkCursor
+          <5>1. CASE ReplyAttemptCursor(newAttempt) =
+                        ReplyAttemptCursor(oldAttempt)
+            <6>1. ReplyAttemptRank(newAttempt) =
+                     ReplyAttemptRank(oldAttempt)
+              BY <5>1, ReplyEqualCursorPreservesRankAndCompletion
+            <6> QED BY <4>3, <4>4, <4>7, <6>1
+                 DEF ReplySourceAdvancedFrom
+          <5>2. CASE ReplyAttemptRank(newAttempt) >
+                        ReplyAttemptRank(oldAttempt)
+            <6>1. /\ ReplyAttemptRank(newAttempt) \in Nat
+                   /\ ReplyAttemptRank(oldAttempt) \in Nat
+                   /\ messageCursor * (ReplyChunkCount + 1)
+                        + chunkCursor \in Nat
+              BY <1>1, <3>2, <4>2,
+                 ReplyAttemptRankTyped, ReplyCursorRankTyped
+            <6>2. ReplyAttemptRank(newAttempt) >
+                     messageCursor * (ReplyChunkCount + 1)
+                       + chunkCursor
+              BY <4>7, <5>2, <6>1,
+                 ReplyNaturalStrictTransitive
+            <6> QED BY <4>3, <4>4, <6>2
+                 DEF ReplySourceAdvancedFrom
+          <5> QED BY <4>5, <5>1, <5>2
+        <4> QED BY <3>2, <4>6, <4>7
+      <3> QED BY <3>3, <3>4, <3>5
+    <2> QED BY <1>1, <2>1, <2>2
+         DEF ReplySourceAdvancedFrom
   <1> QED BY <1>1
 
 THEOREM ReplyAttemptLookupStutters ==
@@ -8769,12 +8949,11 @@ THEOREM ReplyAdvancedBracketIsStable ==
      messageCursor \in 0..ReplyMessageCount,
     chunkCursor \in 0..ReplyChunkCount:
     /\ ReplyRouteConfiguration
-    /\ ReplyRouteSafetyInvariant
-    /\ ReplyRouteSafetyInvariant'
+    /\ ReplyRouteFullSafetyInvariant
+    /\ ReplyRouteFullSafetyInvariant'
     /\ ReplySourceAdvancedFrom(
          owner, semantic, source, messageCursor, chunkCursor)
-    /\ [ReplyTenureAwareReplayStep]_ReplyRouteVars
-    /\ [ReplySourceIsolationStep]_ReplyRouteVars
+    /\ [ReplyRouteNext]_ReplyRouteVars
     => ReplySourceAdvancedFrom(
          owner, semantic, source, messageCursor, chunkCursor)'
 PROOF
@@ -8784,23 +8963,36 @@ PROOF
                 NEW messageCursor \in 0..ReplyMessageCount,
                 NEW chunkCursor \in 0..ReplyChunkCount,
                 ReplyRouteConfiguration,
-                ReplyRouteSafetyInvariant,
-                ReplyRouteSafetyInvariant',
+                ReplyRouteFullSafetyInvariant,
+                ReplyRouteFullSafetyInvariant',
                 ReplySourceAdvancedFrom(
                   owner, semantic, source,
                   messageCursor, chunkCursor),
-                [ReplyTenureAwareReplayStep]_ReplyRouteVars,
-                [ReplySourceIsolationStep]_ReplyRouteVars
+                [ReplyRouteNext]_ReplyRouteVars
          PROVE ReplySourceAdvancedFrom(
                   owner, semantic, source,
                   messageCursor, chunkCursor)'
-    <2>1. \/ /\ ReplyTenureAwareReplayStep
-                  /\ ReplySourceIsolationStep
+    <2>1. \/ ReplyRouteNext
            \/ UNCHANGED ReplyRouteVars
-      BY <1>1, SMTT(10) DEF ReplyRouteVars
-    <2>2. CASE /\ ReplyTenureAwareReplayStep
-                   /\ ReplySourceIsolationStep
-      <3> QED BY <1>1, <2>2, ReplyAdvancedStepIsStable
+      BY <1>1
+    <2>2. CASE ReplyRouteNext
+      <3>1. /\ ReplyRouteInductiveInvariant
+             /\ ReplyRouteLifecycleInductiveInvariant
+        BY <1>1
+           DEF ReplyRouteInductiveInvariant,
+               ReplyRouteLifecycleInductiveInvariant,
+               ReplyRouteFullSafetyInvariant
+      <3>2. /\ ReplyTenureAwareReplayStep
+             /\ ReplySourceIsolationStep
+        BY <2>2, <3>1,
+           ReplyRouteNextProvidesReplayAndIsolation
+      <3>3. ReplyLifecycleJournalStep
+        BY <2>2, <3>1,
+           ReplyRouteNextProvidesLifecycleJournalStep
+      <3> QED BY <1>1, <3>2, <3>3,
+           ReplyAdvancedStepIsStable
+           DEF ReplyRouteFullSafetyInvariant,
+               ReplyRouteLifecycleInvariant
     <2>3. CASE UNCHANGED ReplyRouteVars
       <3>1. rrAttempts' = rrAttempts
         BY <2>3 DEF ReplyRouteVars
@@ -8811,8 +9003,14 @@ PROOF
                /\ ReplyAttemptFor(owner, semantic, source)' =
                     ReplyAttemptFor(owner, semantic, source)
         BY <3>1, ReplyAttemptLookupStutters
-      <3> QED BY <1>1, <3>2
-           DEF ReplySourceAdvancedFrom
+      <3>3. /\ rrSemanticSequence' = rrSemanticSequence
+             /\ rrSemanticHash' = rrSemanticHash
+             /\ rrRequesterClosedThrough' =
+                  rrRequesterClosedThrough
+        BY <2>3 DEF ReplyRouteVars
+      <3> QED BY <1>1, <3>2, <3>3
+           DEF ReplySourceAdvancedFrom,
+               ReplySemanticClosed, ReplySemanticBound
     <2> QED BY <2>1, <2>2, <2>3
   <1> QED BY <1>1
 
@@ -8833,12 +9031,11 @@ ReplyCursorBracketObligation(
 ReplyAdvancedBracketObligation(
     owner, semantic, source, messageCursor, chunkCursor) ==
   /\ ReplyRouteConfiguration
-  /\ ReplyRouteSafetyInvariant
-  /\ ReplyRouteSafetyInvariant'
+  /\ ReplyRouteFullSafetyInvariant
+  /\ ReplyRouteFullSafetyInvariant'
   /\ ReplySourceAdvancedFrom(
        owner, semantic, source, messageCursor, chunkCursor)
-  /\ [ReplyTenureAwareReplayStep]_ReplyRouteVars
-  /\ [ReplySourceIsolationStep]_ReplyRouteVars
+  /\ [ReplyRouteNext]_ReplyRouteVars
   => ReplySourceAdvancedFrom(
        owner, semantic, source, messageCursor, chunkCursor)'
 
@@ -8862,13 +9059,94 @@ THEOREM ReplyAdvancedBracketObligationsHold ==
 BY ReplyAdvancedBracketIsStable
    DEF ReplyAdvancedBracketObligation
 
+THEOREM ReplyCursorOrAdvancedStepPersists ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources,
+     messageCursor \in 0..ReplyMessageCount,
+     chunkCursor \in 0..ReplyChunkCount:
+    /\ ReplyRouteConfiguration
+    /\ ReplyRouteFullSafetyInvariant
+    /\ ReplyRouteFullSafetyInvariant'
+    /\ [ReplyTenureAwareReplayStep]_ReplyRouteVars
+    /\ [ReplySourceIsolationStep]_ReplyRouteVars
+    /\ [ReplyRouteNext]_ReplyRouteVars
+    /\ (\/ ReplySourceAtCursor(
+             owner, semantic, source, messageCursor, chunkCursor)
+        \/ ReplySourceAdvancedFrom(
+             owner, semantic, source, messageCursor, chunkCursor))
+    => (\/ ReplySourceAtCursor(
+             owner, semantic, source, messageCursor, chunkCursor)'
+        \/ ReplySourceAdvancedFrom(
+             owner, semantic, source, messageCursor, chunkCursor)')
+PROOF
+  <1>1. ASSUME NEW owner \in ReplyOwners,
+                NEW semantic \in ReplySemantics,
+                NEW source \in ReplySources,
+                NEW messageCursor \in 0..ReplyMessageCount,
+                NEW chunkCursor \in 0..ReplyChunkCount,
+                ReplyRouteConfiguration,
+                ReplyRouteFullSafetyInvariant,
+                ReplyRouteFullSafetyInvariant',
+                [ReplyTenureAwareReplayStep]_ReplyRouteVars,
+                [ReplySourceIsolationStep]_ReplyRouteVars,
+                [ReplyRouteNext]_ReplyRouteVars,
+                \/ ReplySourceAtCursor(
+                     owner, semantic, source,
+                     messageCursor, chunkCursor)
+                 \/ ReplySourceAdvancedFrom(
+                     owner, semantic, source,
+                     messageCursor, chunkCursor)
+         PROVE \/ ReplySourceAtCursor(
+                     owner, semantic, source,
+                     messageCursor, chunkCursor)'
+               \/ ReplySourceAdvancedFrom(
+                     owner, semantic, source,
+                     messageCursor, chunkCursor)'
+    <2>1. /\ ReplyRouteSafetyInvariant
+           /\ ReplyRouteSafetyInvariant'
+      BY <1>1 DEF ReplyRouteFullSafetyInvariant
+    <2>2. CASE ReplySourceAtCursor(
+                  owner, semantic, source,
+                  messageCursor, chunkCursor)
+      <3> QED BY <1>1, <2>1, <2>2,
+           ReplyCursorBracketPersistsOrAdvances
+    <2>3. CASE ReplySourceAdvancedFrom(
+                  owner, semantic, source,
+                  messageCursor, chunkCursor)
+      <3> QED BY <1>1, <2>3,
+           ReplyAdvancedBracketIsStable
+    <2> QED BY <1>1, <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM ReplyCursorBracketObligationHoldsAt ==
+  ASSUME NEW owner \in ReplyOwners,
+         NEW semantic \in ReplySemantics,
+         NEW source \in ReplySources,
+         NEW messageCursor \in 0..ReplyMessageCount,
+         NEW chunkCursor \in 0..ReplyChunkCount
+  PROVE ReplyCursorBracketObligation(
+          owner, semantic, source, messageCursor, chunkCursor)
+BY ReplyCursorBracketPersistsOrAdvances
+   DEF ReplyCursorBracketObligation
+
+THEOREM ReplyAdvancedBracketObligationHoldsAt ==
+  ASSUME NEW owner \in ReplyOwners,
+         NEW semantic \in ReplySemantics,
+         NEW source \in ReplySources,
+         NEW messageCursor \in 0..ReplyMessageCount,
+         NEW chunkCursor \in 0..ReplyChunkCount
+  PROVE ReplyAdvancedBracketObligation(
+          owner, semantic, source, messageCursor, chunkCursor)
+BY ReplyAdvancedBracketIsStable
+   DEF ReplyAdvancedBracketObligation
+
 THEOREM ReplyCursorOrAdvancedPersists ==
   \A owner \in ReplyOwners, semantic \in ReplySemantics,
      source \in ReplySources,
      messageCursor \in 0..ReplyMessageCount,
      chunkCursor \in 0..ReplyChunkCount:
     ReplyRouteSpec =>
-      [][(\/ ReplySourceAtCursor(
+      []((\/ ReplySourceAtCursor(
                  owner, semantic, source,
                  messageCursor, chunkCursor)
               \/ ReplySourceAdvancedFrom(
@@ -8876,52 +9154,108 @@ THEOREM ReplyCursorOrAdvancedPersists ==
                  messageCursor, chunkCursor))
            => (\/ ReplySourceAtCursor(
                     owner, semantic, source,
-                    messageCursor, chunkCursor)
+                    messageCursor, chunkCursor)'
                  \/ ReplySourceAdvancedFrom(
                     owner, semantic, source,
-                    messageCursor, chunkCursor))']_ReplyRouteVars
+                    messageCursor, chunkCursor)'))
 PROOF
   <1>1. ASSUME NEW owner \in ReplyOwners,
                 NEW semantic \in ReplySemantics,
                 NEW source \in ReplySources,
                 NEW messageCursor \in 0..ReplyMessageCount,
-                NEW chunkCursor \in 0..ReplyChunkCount,
-                ReplyRouteSpec
-         PROVE [][(\/ ReplySourceAtCursor(
+                NEW chunkCursor \in 0..ReplyChunkCount
+         PROVE ReplyRouteSpec =>
+                 []((\/ ReplySourceAtCursor(
+                            owner, semantic, source,
+                            messageCursor, chunkCursor)
+                         \/ ReplySourceAdvancedFrom(
+                            owner, semantic, source,
+                            messageCursor, chunkCursor))
+                      => (\/ ReplySourceAtCursor(
+                               owner, semantic, source,
+                               messageCursor, chunkCursor)'
+                            \/ ReplySourceAdvancedFrom(
+                               owner, semantic, source,
+                               messageCursor, chunkCursor)'))
+    <2>1. /\ ReplyRouteConfiguration
+           /\ ReplyRouteFullSafetyInvariant
+           /\ ReplyRouteFullSafetyInvariant'
+           /\ [ReplyTenureAwareReplayStep]_ReplyRouteVars
+           /\ [ReplySourceIsolationStep]_ReplyRouteVars
+           /\ [ReplyRouteNext]_ReplyRouteVars
+          => ((\/ ReplySourceAtCursor(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor)
+               \/ ReplySourceAdvancedFrom(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor))
+              => (\/ ReplySourceAtCursor(
+                       owner, semantic, source,
+                       messageCursor, chunkCursor)'
+                  \/ ReplySourceAdvancedFrom(
+                       owner, semantic, source,
+                       messageCursor, chunkCursor)'))
+      BY <1>1, ReplyCursorOrAdvancedStepPersists,
+         IsaM("blast")
+    <2>2. ASSUME ReplyRouteSpec
+           PROVE []((\/ ReplySourceAtCursor(
+                            owner, semantic, source,
+                            messageCursor, chunkCursor)
+                         \/ ReplySourceAdvancedFrom(
+                            owner, semantic, source,
+                            messageCursor, chunkCursor))
+                      => (\/ ReplySourceAtCursor(
+                               owner, semantic, source,
+                               messageCursor, chunkCursor)'
+                            \/ ReplySourceAdvancedFrom(
+                               owner, semantic, source,
+                               messageCursor, chunkCursor)'))
+      <3>1. /\ []ReplyRouteConfiguration
+             /\ []ReplyRouteFullSafetyInvariant
+        BY <2>2,
+           ReplyRouteSpecAlwaysLifecycleInductiveInvariant, PTL
+           DEF ReplyRouteLifecycleInductiveInvariant
+      <3>2. /\ ReplyTenureAwareReplay
+             /\ ReplySourceIsolation
+        BY <2>2, ReplyRouteSpecAlwaysReplayAndIsolation
+      <3>3. [][ReplyRouteNext]_ReplyRouteVars
+        BY <2>2, PTL
+           DEF ReplyRouteSpec
+      <3>4. [](/\ ReplyRouteConfiguration
+                 /\ ReplyRouteFullSafetyInvariant
+                 /\ ReplyRouteFullSafetyInvariant'
+                 /\ [ReplyTenureAwareReplayStep]_ReplyRouteVars
+                 /\ [ReplySourceIsolationStep]_ReplyRouteVars
+                 /\ [ReplyRouteNext]_ReplyRouteVars
+                => ((\/ ReplySourceAtCursor(
                           owner, semantic, source,
                           messageCursor, chunkCursor)
-                       \/ ReplySourceAdvancedFrom(
+                     \/ ReplySourceAdvancedFrom(
                           owner, semantic, source,
                           messageCursor, chunkCursor))
                     => (\/ ReplySourceAtCursor(
                              owner, semantic, source,
-                             messageCursor, chunkCursor)
-                          \/ ReplySourceAdvancedFrom(
+                             messageCursor, chunkCursor)'
+                        \/ ReplySourceAdvancedFrom(
                              owner, semantic, source,
-                             messageCursor, chunkCursor))']_ReplyRouteVars
-    <2>1. /\ []ReplyRouteConfiguration
-           /\ []ReplyRouteSafetyInvariant
-      BY <1>1, ReplyRouteSpecAlwaysInductiveInvariant, PTL
-         DEF ReplyRouteInductiveInvariant
-    <2>2. /\ ReplyTenureAwareReplay
-             /\ ReplySourceIsolation
-      BY <1>1, ReplyRouteSpecAlwaysReplayAndIsolation
-    <2>3. [][ReplyCursorBracketObligationsHold]_ReplyRouteVars
-      BY ReplyCursorBracketObligationsHold, PTL
-    <2>4. [][ReplyAdvancedBracketObligationsHold]_ReplyRouteVars
-      BY ReplyAdvancedBracketObligationsHold, PTL
-    <2>5. [][ReplyCursorBracketObligation(
-                owner, semantic, source,
-                messageCursor, chunkCursor)]_ReplyRouteVars
-      BY <2>3, IsaM("blast")
-    <2>6. [][ReplyAdvancedBracketObligation(
-                owner, semantic, source,
-                messageCursor, chunkCursor)]_ReplyRouteVars
-      BY <2>4, IsaM("blast")
-    <2> QED BY <2>1, <2>2, <2>5, <2>6, PTL
-         DEF ReplyTenureAwareReplay, ReplySourceIsolation,
-             ReplyCursorBracketObligation,
-             ReplyAdvancedBracketObligation
+                             messageCursor, chunkCursor)')))
+        BY <2>1, PTL
+      <3>5. []((\/ ReplySourceAtCursor(
+                      owner, semantic, source,
+                      messageCursor, chunkCursor)
+                 \/ ReplySourceAdvancedFrom(
+                      owner, semantic, source,
+                      messageCursor, chunkCursor))
+                => (\/ ReplySourceAtCursor(
+                         owner, semantic, source,
+                         messageCursor, chunkCursor)'
+                    \/ ReplySourceAdvancedFrom(
+                         owner, semantic, source,
+                         messageCursor, chunkCursor)'))
+        BY <3>1, <3>2, <3>3, <3>4, PTL
+           DEF ReplyTenureAwareReplay, ReplySourceIsolation
+      <3> QED BY <3>5, PTL
+    <2> QED BY <2>2
   <1> QED BY <1>1
 
 THEOREM ReplyCursorReachesStableSuffixOrAdvances ==
@@ -8933,14 +9267,14 @@ THEOREM ReplyCursorReachesStableSuffixOrAdvances ==
     /\ ReplySourceStableResponsive(owner, semantic, source)
     => (ReplySourceAtCursor(
           owner, semantic, source, messageCursor, chunkCursor)
-          ~> (\/ ReplySourceAdvancedFrom(
-                   owner, semantic, source,
-                   messageCursor, chunkCursor)
-               \/ /\ ReplySourceAtCursor(
-                        owner, semantic, source,
-                        messageCursor, chunkCursor)
-                  /\ ReplySourceRouteStable(
-                       owner, semantic, source)))
+          ~> (ReplySourceAdvancedFrom(
+                owner, semantic, source,
+                messageCursor, chunkCursor)
+              \/ (ReplySourceAtCursor(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor)
+                  /\ []ReplySourceRouteStable(
+                       owner, semantic, source))))
 PROOF
   <1>1. ASSUME NEW owner \in ReplyOwners,
                 NEW semantic \in ReplySemantics,
@@ -8952,15 +9286,15 @@ PROOF
          PROVE ReplySourceAtCursor(
                    owner, semantic, source,
                    messageCursor, chunkCursor)
-                 ~> (\/ ReplySourceAdvancedFrom(
-                          owner, semantic, source,
-                          messageCursor, chunkCursor)
-                      \/ /\ ReplySourceAtCursor(
-                               owner, semantic, source,
-                               messageCursor, chunkCursor)
-                         /\ ReplySourceRouteStable(
-                              owner, semantic, source))
-    <2>1. [][(\/ ReplySourceAtCursor(
+                 ~> (ReplySourceAdvancedFrom(
+                       owner, semantic, source,
+                       messageCursor, chunkCursor)
+                     \/ (ReplySourceAtCursor(
+                           owner, semantic, source,
+                           messageCursor, chunkCursor)
+                         /\ []ReplySourceRouteStable(
+                              owner, semantic, source)))
+    <2>1. []((\/ ReplySourceAtCursor(
                       owner, semantic, source,
                       messageCursor, chunkCursor)
                    \/ ReplySourceAdvancedFrom(
@@ -8968,13 +9302,66 @@ PROOF
                       messageCursor, chunkCursor))
                 => (\/ ReplySourceAtCursor(
                          owner, semantic, source,
-                         messageCursor, chunkCursor)
+                         messageCursor, chunkCursor)'
                       \/ ReplySourceAdvancedFrom(
                          owner, semantic, source,
-                         messageCursor, chunkCursor))']_ReplyRouteVars
+                         messageCursor, chunkCursor)'))
       BY <1>1, ReplyCursorOrAdvancedPersists
-    <2> QED BY <1>1, <2>1, PTL
-         DEF ReplySourceStableResponsive
+    <2>2. [](ReplySourceAtCursor(
+               owner, semantic, source,
+               messageCursor, chunkCursor)
+               => [](\/ ReplySourceAtCursor(
+                          owner, semantic, source,
+                          messageCursor, chunkCursor)
+                      \/ ReplySourceAdvancedFrom(
+                          owner, semantic, source,
+                          messageCursor, chunkCursor)))
+      BY <2>1, PTL
+    <2>3. []<>[]ReplySourceRouteStable(
+             owner, semantic, source)
+      BY <1>1, PTL DEF ReplySourceStableResponsive
+    <2>4. [](ReplySourceAtCursor(
+               owner, semantic, source,
+               messageCursor, chunkCursor)
+               => <>(/\ (\/ ReplySourceAtCursor(
+                                owner, semantic, source,
+                                messageCursor, chunkCursor)
+                            \/ ReplySourceAdvancedFrom(
+                                owner, semantic, source,
+                                messageCursor, chunkCursor))
+                      /\ []ReplySourceRouteStable(
+                           owner, semantic, source)))
+      BY <2>2, <2>3, PTL
+    <2>5. ReplySourceAtCursor(
+             owner, semantic, source,
+             messageCursor, chunkCursor)
+             ~> (/\ (\/ ReplySourceAtCursor(
+                            owner, semantic, source,
+                            messageCursor, chunkCursor)
+                        \/ ReplySourceAdvancedFrom(
+                            owner, semantic, source,
+                            messageCursor, chunkCursor))
+                   /\ []ReplySourceRouteStable(
+                        owner, semantic, source))
+      BY <2>4, PTL
+    <2>6. /\ (\/ ReplySourceAtCursor(
+                       owner, semantic, source,
+                       messageCursor, chunkCursor)
+                   \/ ReplySourceAdvancedFrom(
+                       owner, semantic, source,
+                       messageCursor, chunkCursor))
+             /\ []ReplySourceRouteStable(
+                  owner, semantic, source)
+            => \/ ReplySourceAdvancedFrom(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor)
+               \/ /\ ReplySourceAtCursor(
+                        owner, semantic, source,
+                        messageCursor, chunkCursor)
+                  /\ []ReplySourceRouteStable(
+                       owner, semantic, source)
+      BY IsaM("blast")
+    <2> QED BY <2>5, <2>6, PTL
   <1> QED BY <1>1
 
 (***************************************************************************
@@ -9585,6 +9972,84 @@ BY SMTT(30)
        ReplyTicketValidForAttempt, ReplyAttemptCurrent,
        ReplyAttemptOwned, ReplyAttemptFor, NoReplyTicketTenure
 
+THEOREM ReplySubsetStepRetainsStablePendingCursor ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources,
+     messageCursor \in 0..ReplyMessageCount,
+     chunkCursor \in 0..ReplyChunkCount:
+    /\ ReplyRouteInductiveInvariant
+    /\ ReplyRouteInductiveInvariant'
+    /\ ReplySourceTicketPending(
+         owner, semantic, source, messageCursor, chunkCursor)
+    /\ ReplySourceRouteStable(owner, semantic, source)'
+    /\ rrAttempts' \subseteq rrAttempts
+    => ReplySourceCursorRetained(owner, semantic, source)
+PROOF
+  <1>1. ASSUME NEW owner \in ReplyOwners,
+                NEW semantic \in ReplySemantics,
+                NEW source \in ReplySources,
+                NEW messageCursor \in 0..ReplyMessageCount,
+                NEW chunkCursor \in 0..ReplyChunkCount,
+                ReplyRouteInductiveInvariant,
+                ReplyRouteInductiveInvariant',
+                ReplySourceTicketPending(
+                  owner, semantic, source,
+                  messageCursor, chunkCursor),
+                ReplySourceRouteStable(owner, semantic, source)',
+                rrAttempts' \subseteq rrAttempts
+         PROVE ReplySourceCursorRetained(owner, semantic, source)
+    <2>1. ReplyAttemptOwned(owner, semantic, source)
+      BY <1>1
+         DEF ReplySourceTicketPending,
+             ReplySourceRouteStable
+    <2>2. ReplyAttemptsForSource(
+             owner, semantic, source) # {}
+      BY <2>1 DEF ReplyAttemptOwned
+    <2>3. ReplyAttemptFor(owner, semantic, source)
+             \in ReplyAttemptsForSource(
+                   owner, semantic, source)
+      BY <2>2 DEF ReplyAttemptFor
+    <2>4. LET oldAttempt ==
+                   ReplyAttemptFor(owner, semantic, source)
+           IN /\ oldAttempt \in rrAttempts
+              /\ oldAttempt.owner = owner
+              /\ oldAttempt.semantic = semantic
+              /\ oldAttempt.source = source
+      BY <2>3
+         DEF ReplyAttemptsForSource, ReplyAttemptsFor
+    <2>5. ReplyAttemptOwned(owner, semantic, source)'
+      BY <1>1 DEF ReplySourceRouteStable
+    <2>6. ReplyAttemptsForSource(
+             owner, semantic, source)' # {}
+      BY <2>5 DEF ReplyAttemptOwned
+    <2>7. ReplyAttemptFor(owner, semantic, source)'
+             \in ReplyAttemptsForSource(
+                   owner, semantic, source)'
+      BY <2>6 DEF ReplyAttemptFor
+    <2>8. LET newAttempt ==
+                   ReplyAttemptFor(owner, semantic, source)'
+           IN /\ newAttempt \in rrAttempts'
+              /\ newAttempt.owner = owner
+              /\ newAttempt.semantic = semantic
+              /\ newAttempt.source = source
+      BY <2>7
+         DEF ReplyAttemptsForSource, ReplyAttemptsFor
+    <2>9. ReplyAttemptFor(owner, semantic, source)' \in rrAttempts
+      BY <1>1, <2>8
+    <2>10. SameReplyAttemptIdentity(
+             ReplyAttemptFor(owner, semantic, source),
+             ReplyAttemptFor(owner, semantic, source)')
+      BY <2>4, <2>8 DEF SameReplyAttemptIdentity
+    <2>11. ReplyAttemptFor(owner, semantic, source) =
+             ReplyAttemptFor(owner, semantic, source)'
+      BY <1>1, <2>4, <2>8, <2>9, <2>10,
+         ReplySameOwnedAttemptIdentityUnique
+         DEF ReplyRouteInductiveInvariant
+    <2> QED BY <2>8, <2>11
+         DEF ReplySourceCursorRetained,
+             SameReplyAttemptIdentity
+  <1> QED BY <1>1
+
 THEOREM ReplyRouteNextRetainsPendingCursor ==
   \A owner \in ReplyOwners, semantic \in ReplySemantics,
      source \in ReplySources,
@@ -9593,6 +10058,7 @@ THEOREM ReplyRouteNextRetainsPendingCursor ==
     /\ ReplyRouteInductiveInvariant
     /\ ReplySourceTicketPending(
          owner, semantic, source, messageCursor, chunkCursor)
+    /\ ReplySourceRouteStable(owner, semantic, source)'
     /\ ReplyRouteNext
     => ReplySourceCursorRetained(owner, semantic, source)
 PROOF
@@ -9605,6 +10071,7 @@ PROOF
                 ReplySourceTicketPending(
                   owner, semantic, source,
                   messageCursor, chunkCursor),
+                ReplySourceRouteStable(owner, semantic, source)',
                 ReplyRouteNext
          PROVE ReplySourceCursorRetained(owner, semantic, source)
     <2>1. LET retained ==
@@ -9613,6 +10080,8 @@ PROOF
               /\ retained \in ReplyAttemptSet
               /\ ReplyAttemptHasNoTicket(retained)
       BY <1>1, ReplyTicketPendingProvidesAcquirePreconditions
+    <2>9. ReplyRouteInductiveInvariant'
+      BY <1>1, ReplyRouteNextPreservesInductiveInvariant
     <2>2. CASE \E actionOwner \in ReplyOwners,
                    actionSemantic \in ReplySemantics,
                    actionSource \in ReplySources:
@@ -9853,8 +10322,57 @@ PROOF
       <3> QED BY <3>5
            DEF ReplySourceCursorRetained,
                SameReplyAttemptIdentity
+    <2>10. CASE \E witness \in ReplyCloseWitnessSet:
+                    CloseSemanticRequest(witness)
+      <3>1. PICK witness \in ReplyCloseWitnessSet:
+                   CloseSemanticRequest(witness)
+        BY <2>10
+      <3>2. rrAttempts' \subseteq rrAttempts
+        BY <3>1, FS_Subset
+           DEF CloseSemanticRequest, ReplyAttemptsAfterClose
+      <3> QED BY <1>1, <2>9, <3>2,
+           ReplySubsetStepRetainsStablePendingCursor
+    <2>11. CASE \E witness \in ReplyCloseWitnessSet:
+                    PiggybackCloseSemanticRequest(witness)
+      <3>1. PICK witness \in ReplyCloseWitnessSet:
+                   PiggybackCloseSemanticRequest(witness)
+        BY <2>11
+      <3>2. CloseSemanticRequest(witness)
+        BY <3>1 DEF PiggybackCloseSemanticRequest
+      <3>3. rrAttempts' \subseteq rrAttempts
+        BY <3>2, FS_Subset
+           DEF CloseSemanticRequest, ReplyAttemptsAfterClose
+      <3> QED BY <1>1, <2>9, <3>3,
+           ReplySubsetStepRetainsStablePendingCursor
+    <2>12. CASE \E witness \in ReplyCloseWitnessSet:
+                    RetryCloseSemanticRequest(witness)
+      <3>1. PICK witness \in ReplyCloseWitnessSet:
+                   RetryCloseSemanticRequest(witness)
+        BY <2>12
+      <3>2. rrAttempts' = rrAttempts
+        BY <3>1
+           DEF RetryCloseSemanticRequest, ReplyRouteVars
+      <3> QED BY <2>1, <3>2
+           DEF ReplySourceCursorRetained,
+               SameReplyAttemptIdentity
+    <2>13. CASE \E acknowledgement
+                    \in ReplyCloseAcknowledgementSet:
+                    AcknowledgeCloseSemanticRequest(acknowledgement)
+      <3>1. PICK acknowledgement
+                   \in ReplyCloseAcknowledgementSet:
+                   AcknowledgeCloseSemanticRequest(acknowledgement)
+        BY <2>13
+      <3>2. rrAttempts' = rrAttempts
+        BY <3>1 DEF AcknowledgeCloseSemanticRequest
+      <3> QED BY <2>1, <3>2
+           DEF ReplySourceCursorRetained,
+               SameReplyAttemptIdentity
+    <2>14. CASE \E actionOwner \in ReplyOwners,
+                    actionSource \in ReplySources:
+                    RecoverReplyRouteState(actionOwner, actionSource)
+      BY <2>5, <2>14 DEF RecoverReplyRouteState
     <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7,
-         <2>8
+         <2>8, <2>10, <2>11, <2>12, <2>13, <2>14
          DEF ReplyRouteNext
   <1> QED BY <1>1
 
@@ -9897,7 +10415,7 @@ PROOF
       BY <1>1, <2>1 DEF ReplyRouteInductiveInvariant
     <2>3. ReplySourceCursorRetained(owner, semantic, source)
       <3>1. CASE ReplyRouteNext
-        <4> QED BY <1>1, <3>1,
+        <4> QED BY <1>1, <2>1, <3>1,
              ReplyRouteNextRetainsPendingCursor
       <3>2. CASE UNCHANGED ReplyRouteVars
         <4>1. rrAttempts' = rrAttempts
@@ -10121,15 +10639,53 @@ PROOF
                         messageCursor, chunkCursor)
       <3>1. []ReplyRouteConfiguration
         BY <2>9, PTL DEF ReplyRouteInductiveInvariant
-      <3>2. ReplySourceTicketPending(
+      <3>2. /\ ReplySourceTicketPending(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor)
+               /\ ~ReplySourceReadyAtCursor(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor)
+              => ENABLED
+                   <<AcquireReplyTicket(
+                       owner, semantic, source)>>_ReplyRouteVars
+        BY <2>6, PTL
+           DEF ReplyTicketPendingEnablementObligation
+      <3>3. /\ ReplySourceTicketPending(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor)
+               /\ ~ReplySourceReadyAtCursor(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor)
+               /\ <<AcquireReplyTicket(
+                       owner, semantic, source)>>_ReplyRouteVars
+              => ReplySourceReadyAtCursor(
+                   owner, semantic, source,
+                   messageCursor, chunkCursor)'
+        BY <2>8, <3>1, PTL
+           DEF ReplyTicketAcquireReadinessObligation
+      <3>4. ASSUME ReplySourceTicketPending(
+                        owner, semantic, source,
+                        messageCursor, chunkCursor),
+                      [ReplyRouteNext]_ReplyRouteVars
+             PROVE \/ ReplySourceTicketPending(
+                        owner, semantic, source,
+                        messageCursor, chunkCursor)'
+                   \/ ReplySourceReadyAtCursor(
+                        owner, semantic, source,
+                        messageCursor, chunkCursor)'
+        <4>1. ReplyRouteInductiveInvariant
+          BY <2>9, PTL
+        <4>2. ReplySourceRouteStable(
+                 owner, semantic, source)'
+          BY <2>9, PTL
+        <4> QED BY <3>4, <4>1, <4>2,
+             ReplyTicketPendingPersistsOrBecomesReady
+      <3>5. ReplySourceTicketPending(
                owner, semantic, source, messageCursor, chunkCursor)
                ~> ReplySourceReadyAtCursor(
                     owner, semantic, source, messageCursor, chunkCursor)
-        BY <2>4, <2>6, <2>8, <2>9, <3>1, PTL
-           DEF ReplyTicketPendingPersistenceObligation,
-               ReplyTicketPendingEnablementObligation,
-               ReplyTicketAcquireReadinessObligation
-      <3> QED BY <2>2, <2>9, <3>2, PTL
+        BY <2>9, <3>2, <3>3, <3>4, PTL
+      <3> QED BY <2>2, <2>9, <3>5, PTL
            DEF ReplyRouteInductiveInvariant,
                ReplyStableCursorClassificationObligation
     <2> QED BY <2>9
@@ -10210,6 +10766,21 @@ THEOREM ReplyReadyCursorHasServiceRank ==
                messageCursor, chunkCursor, distance)
 BY ReplySourceRoundRobinRankTyped, Isa
    DEF ReplySourceServiceRank, ReplySourceReadyAtCursor
+
+THEOREM ReplyReadyCursorHasServiceRankAt ==
+  ASSUME NEW owner \in ReplyOwners,
+         NEW semantic \in ReplySemantics,
+         NEW source \in ReplySources,
+         NEW messageCursor \in 0..ReplyMessageCount,
+         NEW chunkCursor \in 0..ReplyChunkCount
+  PROVE ReplyRouteInductiveInvariant =>
+          (ReplySourceReadyAtCursor(
+             owner, semantic, source, messageCursor, chunkCursor)
+             => \E distance \in ReplyDistanceCarrier:
+                  ReplySourceServiceRank(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor, distance))
+BY ReplyReadyCursorHasServiceRank
 
 THEOREM ReplyReadySourceIndexPending ==
   \A owner \in ReplyOwners, semantic \in ReplySemantics,
@@ -10979,6 +11550,16 @@ ReplyRouteNonServiceNext ==
   \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
        source \in ReplySources:
        AcquireReplyTicket(owner, semantic, source)
+  \/ \E witness \in ReplyCloseWitnessSet:
+       CloseSemanticRequest(witness)
+  \/ \E witness \in ReplyCloseWitnessSet:
+       PiggybackCloseSemanticRequest(witness)
+  \/ \E witness \in ReplyCloseWitnessSet:
+       RetryCloseSemanticRequest(witness)
+  \/ \E acknowledgement \in ReplyCloseAcknowledgementSet:
+       AcknowledgeCloseSemanticRequest(acknowledgement)
+  \/ \E owner \in ReplyOwners, source \in ReplySources:
+       RecoverReplyRouteState(owner, source)
 
 THEOREM ReplyNonServiceRetainsServicePointer ==
   ReplyRouteNonServiceNext =>
@@ -10988,6 +11569,10 @@ BY SMTT(20)
        ObserveNewReplySource, ObserveLaterReplyDelivery,
        RetryExactReplySource, RetireReplySource,
        ReconnectReplySource, AcquireReplyTicket,
+       CloseSemanticRequest, PiggybackCloseSemanticRequest,
+       RetryCloseSemanticRequest,
+       AcknowledgeCloseSemanticRequest,
+       RecoverReplyRouteState,
        ReplyRouteVars
 
 THEOREM ReplyRouteStutterRetainsReadyTicketAndPointer ==
@@ -11157,6 +11742,120 @@ PROOF
     <2> QED BY <2>7, <2>8, <2>9
   <1> QED BY <1>1
 
+THEOREM ReplySubsetStepRetainsStableReadyTicketAndPointer ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources,
+     messageCursor \in 0..ReplyMessageCount,
+     chunkCursor \in 0..ReplyChunkCount:
+    /\ ReplyRouteInductiveInvariant
+    /\ ReplyRouteInductiveInvariant'
+    /\ ReplySourceReadyAtCursor(
+         owner, semantic, source, messageCursor, chunkCursor)
+    /\ ReplySourceRouteStable(owner, semantic, source)'
+    /\ rrAttempts' \subseteq rrAttempts
+    /\ rrConnectionTenure'[owner][source] =
+         rrConnectionTenure[owner][source]
+    /\ rrSourceActive'[owner][source] =
+         rrSourceActive[owner][source]
+    /\ rrNextServiceIndex'[owner][semantic] =
+         rrNextServiceIndex[owner][semantic]
+    => /\ ReplyTicketValidForAttempt(
+              ReplyAttemptFor(owner, semantic, source))'
+       /\ rrNextServiceIndex'[owner][semantic] =
+            rrNextServiceIndex[owner][semantic]
+PROOF
+  <1>1. ASSUME NEW owner \in ReplyOwners,
+                NEW semantic \in ReplySemantics,
+                NEW source \in ReplySources,
+                NEW messageCursor \in 0..ReplyMessageCount,
+                NEW chunkCursor \in 0..ReplyChunkCount,
+                ReplyRouteInductiveInvariant,
+                ReplyRouteInductiveInvariant',
+                ReplySourceReadyAtCursor(
+                  owner, semantic, source,
+                  messageCursor, chunkCursor),
+                ReplySourceRouteStable(owner, semantic, source)',
+                rrAttempts' \subseteq rrAttempts,
+                rrConnectionTenure'[owner][source] =
+                  rrConnectionTenure[owner][source],
+                rrSourceActive'[owner][source] =
+                  rrSourceActive[owner][source],
+                rrNextServiceIndex'[owner][semantic] =
+                  rrNextServiceIndex[owner][semantic]
+         PROVE /\ ReplyTicketValidForAttempt(
+                      ReplyAttemptFor(owner, semantic, source))'
+               /\ rrNextServiceIndex'[owner][semantic] =
+                    rrNextServiceIndex[owner][semantic]
+    <2>1. ReplyAttemptOwned(owner, semantic, source)
+      BY <1>1
+         DEF ReplySourceReadyAtCursor,
+             ReplySourceServiceEligible
+    <2>2. ReplyAttemptsForSource(
+             owner, semantic, source) # {}
+      BY <2>1 DEF ReplyAttemptOwned
+    <2>3. ReplyAttemptFor(owner, semantic, source)
+             \in ReplyAttemptsForSource(
+                   owner, semantic, source)
+      BY <2>2 DEF ReplyAttemptFor
+    <2>4. LET oldAttempt ==
+                   ReplyAttemptFor(owner, semantic, source)
+           IN /\ oldAttempt \in rrAttempts
+              /\ oldAttempt.owner = owner
+              /\ oldAttempt.semantic = semantic
+              /\ oldAttempt.source = source
+              /\ ReplyTicketValidForAttempt(oldAttempt)
+      BY <1>1, <2>3
+         DEF ReplySourceReadyAtCursor,
+             ReplySourceServiceEligible,
+             ReplyAttemptsForSource, ReplyAttemptsFor
+    <2>5. PICK oldAttempt \in rrAttempts:
+             /\ oldAttempt =
+                  ReplyAttemptFor(owner, semantic, source)
+             /\ oldAttempt.owner = owner
+             /\ oldAttempt.semantic = semantic
+             /\ oldAttempt.source = source
+             /\ ReplyTicketValidForAttempt(oldAttempt)
+      BY <2>4
+    <2>6. ReplyAttemptOwned(owner, semantic, source)'
+      BY <1>1 DEF ReplySourceRouteStable
+    <2>7. ReplyAttemptsForSource(
+             owner, semantic, source)' # {}
+      BY <2>6 DEF ReplyAttemptOwned
+    <2>8. ReplyAttemptFor(owner, semantic, source)'
+             \in ReplyAttemptsForSource(
+                   owner, semantic, source)'
+      BY <2>7 DEF ReplyAttemptFor
+    <2>9. LET newAttempt ==
+                   ReplyAttemptFor(owner, semantic, source)'
+           IN /\ newAttempt \in rrAttempts'
+              /\ newAttempt.owner = owner
+              /\ newAttempt.semantic = semantic
+              /\ newAttempt.source = source
+      BY <2>8
+         DEF ReplyAttemptsForSource, ReplyAttemptsFor
+    <2>10. ReplyAttemptFor(owner, semantic, source)' \in rrAttempts
+      BY <1>1, <2>9
+    <2>11. SameReplyAttemptIdentity(
+             oldAttempt,
+             ReplyAttemptFor(owner, semantic, source)')
+      BY <2>5, <2>9 DEF SameReplyAttemptIdentity
+    <2>12. oldAttempt =
+             ReplyAttemptFor(owner, semantic, source)'
+      BY <1>1, <2>5, <2>9, <2>10, <2>11,
+         ReplySameOwnedAttemptIdentityUnique
+         DEF ReplyRouteInductiveInvariant
+    <2>13. rrConnectionTenure'[oldAttempt.owner][oldAttempt.source] =
+              rrConnectionTenure[oldAttempt.owner][oldAttempt.source]
+      BY <1>1, <2>5
+    <2>14. rrSourceActive'[oldAttempt.owner][oldAttempt.source] =
+              rrSourceActive[oldAttempt.owner][oldAttempt.source]
+      BY <1>1, <2>5
+    <2>15. ReplyTicketValidForAttempt(oldAttempt)'
+      BY <2>5, <2>13, <2>14,
+         ReplyPointwiseRouteStatePreservesValidTicket
+    <2> QED BY <1>1, <2>12, <2>15
+  <1> QED BY <1>1
+
 THEOREM ReplyNonServiceRetainsReadyTicketAndPointer ==
   \A owner \in ReplyOwners, semantic \in ReplySemantics,
      source \in ReplySources,
@@ -11216,6 +11915,11 @@ PROOF
     <2>3. rrNextServiceIndex'[owner][semantic] =
              rrNextServiceIndex[owner][semantic]
       BY <1>1, ReplyNonServiceRetainsServicePointer
+    <2>10. ReplyRouteInductiveInvariant'
+      <3>1. ReplyRouteNext
+        BY <1>1 DEF ReplyRouteNext, ReplyRouteNonServiceNext
+      <3> QED BY <1>1, <3>1,
+           ReplyRouteNextPreservesInductiveInvariant
     <2>4. CASE \E actionOwner \in ReplyOwners,
                    actionSemantic \in ReplySemantics,
                    actionSource \in ReplySources:
@@ -11570,7 +12274,73 @@ PROOF
            ReplyPostOwnedAttemptIsCandidate
            DEF ReplyRouteInductiveInvariant
       <3> QED BY <2>3, <3>9, <3>10
-    <2> QED BY <1>1, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9
+    <2>11. CASE \E witness \in ReplyCloseWitnessSet:
+                    CloseSemanticRequest(witness)
+      <3>1. PICK witness \in ReplyCloseWitnessSet:
+                   CloseSemanticRequest(witness)
+        BY <2>11
+      <3>2. /\ rrAttempts' \subseteq rrAttempts
+              /\ rrConnectionTenure' = rrConnectionTenure
+              /\ rrSourceActive' = rrSourceActive
+        BY <3>1, FS_Subset
+           DEF CloseSemanticRequest, ReplyAttemptsAfterClose
+      <3> QED BY <1>1, <2>3, <2>10, <3>2,
+           ReplySubsetStepRetainsStableReadyTicketAndPointer
+    <2>12. CASE \E witness \in ReplyCloseWitnessSet:
+                    PiggybackCloseSemanticRequest(witness)
+      <3>1. PICK witness \in ReplyCloseWitnessSet:
+                   PiggybackCloseSemanticRequest(witness)
+        BY <2>12
+      <3>2. CloseSemanticRequest(witness)
+        BY <3>1 DEF PiggybackCloseSemanticRequest
+      <3>3. /\ rrAttempts' \subseteq rrAttempts
+              /\ rrConnectionTenure' = rrConnectionTenure
+              /\ rrSourceActive' = rrSourceActive
+        BY <3>2, FS_Subset
+           DEF CloseSemanticRequest, ReplyAttemptsAfterClose
+      <3> QED BY <1>1, <2>3, <2>10, <3>3,
+           ReplySubsetStepRetainsStableReadyTicketAndPointer
+    <2>13. CASE \E witness \in ReplyCloseWitnessSet:
+                    RetryCloseSemanticRequest(witness)
+      <3>1. PICK witness \in ReplyCloseWitnessSet:
+                   RetryCloseSemanticRequest(witness)
+        BY <2>13
+      <3>2. /\ rrAttempts' = rrAttempts
+              /\ rrConnectionTenure' = rrConnectionTenure
+              /\ rrSourceActive' = rrSourceActive
+        BY <3>1
+           DEF RetryCloseSemanticRequest, ReplyRouteVars
+      <3>3. ReplyAttemptFor(owner, semantic, source)' =
+               ReplyAttemptFor(owner, semantic, source)
+        BY <3>2, ReplyAttemptLookupStutters
+      <3>4. ReplyTicketValidForAttempt(oldAttempt)'
+        BY <2>2, <3>2,
+           ReplyPointwiseRouteStatePreservesValidTicket
+      <3> QED BY <2>2, <2>3, <3>3, <3>4
+    <2>14. CASE \E acknowledgement
+                    \in ReplyCloseAcknowledgementSet:
+                    AcknowledgeCloseSemanticRequest(acknowledgement)
+      <3>1. PICK acknowledgement
+                   \in ReplyCloseAcknowledgementSet:
+                   AcknowledgeCloseSemanticRequest(acknowledgement)
+        BY <2>14
+      <3>2. /\ rrAttempts' = rrAttempts
+              /\ rrConnectionTenure' = rrConnectionTenure
+              /\ rrSourceActive' = rrSourceActive
+        BY <3>1 DEF AcknowledgeCloseSemanticRequest
+      <3>3. ReplyAttemptFor(owner, semantic, source)' =
+               ReplyAttemptFor(owner, semantic, source)
+        BY <3>2, ReplyAttemptLookupStutters
+      <3>4. ReplyTicketValidForAttempt(oldAttempt)'
+        BY <2>2, <3>2,
+           ReplyPointwiseRouteStatePreservesValidTicket
+      <3> QED BY <2>2, <2>3, <3>3, <3>4
+    <2>15. CASE \E actionOwner \in ReplyOwners,
+                    actionSource \in ReplySources:
+                    RecoverReplyRouteState(actionOwner, actionSource)
+      BY <2>7, <2>15 DEF RecoverReplyRouteState
+    <2> QED BY <1>1, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9,
+         <2>11, <2>12, <2>13, <2>14, <2>15
          DEF ReplyRouteNonServiceNext
   <1> QED BY <1>1
 
@@ -11581,6 +12351,7 @@ THEOREM ReplyServiceRankPersistsOrExits ==
      chunkCursor \in 0..ReplyChunkCount,
      distance \in ReplyDistanceCarrier:
     /\ ReplyRouteInductiveInvariant
+    /\ ReplyRouteLifecycleInductiveInvariant
     /\ ReplySourceRouteStable(owner, semantic, source)'
     /\ ReplySourceServiceRank(
          owner, semantic, source,
@@ -11602,6 +12373,7 @@ PROOF
                 NEW chunkCursor \in 0..ReplyChunkCount,
                 NEW distance \in ReplyDistanceCarrier,
                 ReplyRouteInductiveInvariant,
+                ReplyRouteLifecycleInductiveInvariant,
                 ReplySourceRouteStable(owner, semantic, source)',
                 ReplySourceServiceRank(
                   owner, semantic, source,
@@ -11732,6 +12504,7 @@ PROOF
 ReplyServiceRankPersistenceObligation(
     owner, semantic, source, messageCursor, chunkCursor, distance) ==
   /\ ReplyRouteInductiveInvariant
+  /\ ReplyRouteLifecycleInductiveInvariant
   /\ ReplySourceRouteStable(owner, semantic, source)'
   /\ ReplySourceServiceRank(
        owner, semantic, source,
@@ -11758,6 +12531,19 @@ THEOREM ReplyServiceRankPersistenceObligationsHold ==
 BY ReplyServiceRankPersistsOrExits
    DEF ReplyServiceRankPersistenceObligation
 
+THEOREM ReplyServiceRankPersistenceObligationHoldsAt ==
+  ASSUME NEW owner \in ReplyOwners,
+         NEW semantic \in ReplySemantics,
+         NEW source \in ReplySources,
+         NEW messageCursor \in 0..ReplyMessageCount,
+         NEW chunkCursor \in 0..ReplyChunkCount,
+         NEW distance \in ReplyDistanceCarrier
+  PROVE ReplyServiceRankPersistenceObligation(
+          owner, semantic, source,
+          messageCursor, chunkCursor, distance)
+BY ReplyServiceRankPersistsOrExits
+   DEF ReplyServiceRankPersistenceObligation
+
 ReplyServiceRankEnablementObligation(
     owner, semantic, source, messageCursor, chunkCursor, distance) ==
   (/\ ReplyRouteConfiguration
@@ -11776,6 +12562,20 @@ THEOREM ReplyServiceRankEnablementObligationsHold ==
     ReplyServiceRankEnablementObligation(
       owner, semantic, source,
       messageCursor, chunkCursor, distance)
+BY ReplyReadyCursorEnablesService
+   DEF ReplyServiceRankEnablementObligation,
+       ReplySourceServiceRank
+
+THEOREM ReplyServiceRankEnablementObligationHoldsAt ==
+  ASSUME NEW owner \in ReplyOwners,
+         NEW semantic \in ReplySemantics,
+         NEW source \in ReplySources,
+         NEW messageCursor \in 0..ReplyMessageCount,
+         NEW chunkCursor \in 0..ReplyChunkCount,
+         NEW distance \in ReplyDistanceCarrier
+  PROVE ReplyServiceRankEnablementObligation(
+          owner, semantic, source,
+          messageCursor, chunkCursor, distance)
 BY ReplyReadyCursorEnablesService
    DEF ReplyServiceRankEnablementObligation,
        ReplySourceServiceRank
@@ -11828,10 +12628,23 @@ PROOF
   <1> QED BY <1>1
        DEF ReplyServiceRankOutcomeObligation
 
+THEOREM ReplyServiceRankOutcomeObligationHoldsAt ==
+  ASSUME NEW owner \in ReplyOwners,
+         NEW semantic \in ReplySemantics,
+         NEW source \in ReplySources,
+         NEW messageCursor \in 0..ReplyMessageCount,
+         NEW chunkCursor \in 0..ReplyChunkCount,
+         NEW distance \in ReplyDistanceCarrier
+  PROVE ReplyServiceRankOutcomeObligation(
+          owner, semantic, source,
+          messageCursor, chunkCursor, distance)
+BY ReplyServiceRankOutcomeObligationsHold
+
 ReplyServiceRankLiveSuffixObligation(
     owner, semantic, source,
     messageCursor, chunkCursor, distance) ==
   (/\ []ReplyRouteInductiveInvariant
+   /\ []ReplyRouteLifecycleInductiveInvariant
    /\ [][ReplyRouteNext]_ReplyRouteVars
    /\ WF_ReplyRouteVars(ServiceReplyRoute(owner, semantic))
    /\ []ReplySourceRouteStable(owner, semantic, source))
@@ -11866,23 +12679,39 @@ PROOF
                  messageCursor, chunkCursor, distance)
     <2>1. [][ReplyServiceRankPersistenceObligationsHold]_ReplyRouteVars
       BY ReplyServiceRankPersistenceObligationsHold, PTL
+    <2>8. ReplyServiceRankPersistenceObligation(
+               owner, semantic, source,
+               messageCursor, chunkCursor, distance)
+      BY <1>1, ReplyServiceRankPersistenceObligationsHold,
+         IsaM("blast")
     <2>2. [][ReplyServiceRankPersistenceObligation(
                 owner, semantic, source,
                 messageCursor, chunkCursor, distance)]_ReplyRouteVars
-      BY <2>1, IsaM("blast")
+      BY <2>8, PTL
     <2>3. []ReplyServiceRankEnablementObligationsHold
       BY ReplyServiceRankEnablementObligationsHold, PTL
+    <2>9. ReplyServiceRankEnablementObligation(
+               owner, semantic, source,
+               messageCursor, chunkCursor, distance)
+      BY <1>1, ReplyServiceRankEnablementObligationsHold,
+         IsaM("blast")
     <2>4. []ReplyServiceRankEnablementObligation(
                owner, semantic, source,
                messageCursor, chunkCursor, distance)
-      BY <2>3, IsaM("blast")
+      BY <2>9, PTL
     <2>5. [][ReplyServiceRankOutcomeObligationsHold]_ReplyRouteVars
       BY ReplyServiceRankOutcomeObligationsHold, PTL
+    <2>10. ReplyServiceRankOutcomeObligation(
+                owner, semantic, source,
+                messageCursor, chunkCursor, distance)
+      BY <1>1, ReplyServiceRankOutcomeObligationsHold,
+         IsaM("blast")
     <2>6. [][ReplyServiceRankOutcomeObligation(
                 owner, semantic, source,
                 messageCursor, chunkCursor, distance)]_ReplyRouteVars
-      BY <2>5, IsaM("blast")
+      BY <2>10, PTL
     <2>7. ASSUME []ReplyRouteInductiveInvariant,
+                  []ReplyRouteLifecycleInductiveInvariant,
                   [][ReplyRouteNext]_ReplyRouteVars,
                   WF_ReplyRouteVars(
                     ServiceReplyRoute(owner, semantic)),
@@ -11901,16 +12730,16 @@ PROOF
       <3>2. [][ReplySourceServiceRank(
                      owner, semantic, source,
                      messageCursor, chunkCursor, distance)
-                   /\ [ReplyRouteNext]_ReplyRouteVars
+                  /\ [ReplyRouteNext]_ReplyRouteVars
                   => \/ ReplySourceServiceRank(
-                          owner, semantic, source,
-                          messageCursor, chunkCursor, distance)'
-                     \/ ReplySourceLowerServiceRank(
                           owner, semantic, source,
                           messageCursor, chunkCursor, distance)'
                      \/ ReplySourceAdvancedFrom(
                           owner, semantic, source,
-                          messageCursor, chunkCursor)']_ReplyRouteVars
+                          messageCursor, chunkCursor)'
+                     \/ ReplySourceLowerServiceRank(
+                          owner, semantic, source,
+                          messageCursor, chunkCursor, distance)']_ReplyRouteVars
         BY <2>2, <2>7, PTL
            DEF ReplyServiceRankPersistenceObligation
       <3>3. [](ReplySourceServiceRank(
@@ -11935,7 +12764,70 @@ PROOF
                             messageCursor, chunkCursor, distance)']_ReplyRouteVars
         BY <2>6, <2>7, PTL
            DEF ReplyServiceRankOutcomeObligation
-      <3> QED BY <2>7, <3>2, <3>3, <3>4, PTL
+      <3>5. /\ ReplySourceServiceRank(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor, distance)
+               /\ ~(\/ ReplySourceAdvancedFrom(
+                         owner, semantic, source,
+                         messageCursor, chunkCursor)
+                    \/ ReplySourceLowerServiceRank(
+                         owner, semantic, source,
+                         messageCursor, chunkCursor, distance))
+              => ENABLED
+                   <<ServiceReplyRoute(
+                       owner, semantic)>>_ReplyRouteVars
+        BY <3>3, PTL
+      <3>6. /\ ReplySourceServiceRank(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor, distance)
+               /\ ~(\/ ReplySourceAdvancedFrom(
+                         owner, semantic, source,
+                         messageCursor, chunkCursor)
+                    \/ ReplySourceLowerServiceRank(
+                         owner, semantic, source,
+                         messageCursor, chunkCursor, distance))
+               /\ <<ServiceReplyRoute(
+                       owner, semantic)>>_ReplyRouteVars
+              => \/ ReplySourceAdvancedFrom(
+                      owner, semantic, source,
+                      messageCursor, chunkCursor)'
+                 \/ ReplySourceLowerServiceRank(
+                      owner, semantic, source,
+                      messageCursor, chunkCursor, distance)'
+        BY <3>4, PTL
+      <3>7. ASSUME ReplySourceServiceRank(
+                        owner, semantic, source,
+                        messageCursor, chunkCursor, distance),
+                      [ReplyRouteNext]_ReplyRouteVars
+             PROVE \/ ReplySourceServiceRank(
+                        owner, semantic, source,
+                        messageCursor, chunkCursor, distance)'
+                   \/ ReplySourceAdvancedFrom(
+                        owner, semantic, source,
+                        messageCursor, chunkCursor)'
+                   \/ ReplySourceLowerServiceRank(
+                        owner, semantic, source,
+                        messageCursor, chunkCursor, distance)'
+        <4>1. ReplyRouteInductiveInvariant
+          BY <2>7, PTL
+        <4>2. ReplyRouteLifecycleInductiveInvariant
+          BY <2>7, PTL
+        <4>3. ReplySourceRouteStable(
+                 owner, semantic, source)'
+          BY <2>7, PTL
+        <4>4. \/ ReplySourceServiceRank(
+                     owner, semantic, source,
+                     messageCursor, chunkCursor, distance)'
+                \/ ReplySourceLowerServiceRank(
+                     owner, semantic, source,
+                     messageCursor, chunkCursor, distance)'
+                \/ ReplySourceAdvancedFrom(
+                     owner, semantic, source,
+                     messageCursor, chunkCursor)'
+          BY <3>7, <4>1, <4>2, <4>3,
+             ReplyServiceRankPersistsOrExits
+        <4> QED BY <4>4, IsaM("blast")
+      <3> QED BY <2>7, <3>5, <3>6, <3>7, PTL
     <2> QED BY <2>7
          DEF ReplyServiceRankLiveSuffixObligation
   <1> QED BY <1>1
@@ -11977,107 +12869,19 @@ PROOF
                            messageCursor, chunkCursor, distance))
     <2>1. []ReplyRouteInductiveInvariant
       BY <1>1, ReplyRouteSpecAlwaysInductiveInvariant
-    <2>2. [][ReplyRouteNext]_ReplyRouteVars
+    <2>2. []ReplyRouteLifecycleInductiveInvariant
+      BY <1>1, ReplyRouteSpecAlwaysLifecycleInductiveInvariant
+    <2>3. [][ReplyRouteNext]_ReplyRouteVars
       BY <1>1, PTL DEF ReplyRouteSpec
-    <2>3. WF_ReplyRouteVars(ServiceReplyRoute(owner, semantic))
+    <2>4. WF_ReplyRouteVars(ServiceReplyRoute(owner, semantic))
       BY <1>1 DEF ReplyRouteSpec, ReplyRouteFairness
-    <2>4. /\ ReplyRouteInductiveInvariant
-             /\ ReplySourceRouteStable(owner, semantic, source)'
-             /\ ReplySourceServiceRank(
-                  owner, semantic, source,
-                  messageCursor, chunkCursor, distance)
-             /\ [ReplyRouteNext]_ReplyRouteVars
-            => \/ ReplySourceServiceRank(
-                    owner, semantic, source,
-                    messageCursor, chunkCursor, distance)'
-               \/ ReplySourceLowerServiceRank(
-                    owner, semantic, source,
-                    messageCursor, chunkCursor, distance)'
-               \/ ReplySourceAdvancedFrom(
-                    owner, semantic, source,
-                    messageCursor, chunkCursor)'
-      BY ReplyServiceRankPersistsOrExits
-    <2>5. ReplySourceServiceRank(
-             owner, semantic, source,
-             messageCursor, chunkCursor, distance)
-             => ENABLED
-                  <<ServiceReplyRoute(owner, semantic)>>_ReplyRouteVars
-      <3>1. ReplyRouteConfiguration
-        BY <2>1, PTL DEF ReplyRouteInductiveInvariant
-      <3> QED BY <3>1, ReplyReadyCursorEnablesService
-           DEF ReplySourceServiceRank
-    <2>6. <<ServiceReplyRoute(owner, semantic)>>_ReplyRouteVars
-             => ServiceReplyRoute(owner, semantic)
-      BY PTL
-    <2>7. /\ ReplyRouteInductiveInvariant
-             /\ ReplySourceServiceRank(
-                  owner, semantic, source,
-                  messageCursor, chunkCursor, distance)
-             /\ <<ServiceReplyRoute(
-                       owner, semantic)>>_ReplyRouteVars
-            => \/ ReplySourceAdvancedFrom(
-                    owner, semantic, source,
-                    messageCursor, chunkCursor)'
-               \/ ReplySourceLowerServiceRank(
-                    owner, semantic, source,
-                    messageCursor, chunkCursor, distance)'
-      BY <1>1, <2>6, ReplyServiceLowersRankOrAdvancesTarget
-    <2>8. [][ReplyServiceRankPersistenceObligationsHold]_ReplyRouteVars
-      BY ReplyServiceRankPersistenceObligationsHold, PTL
-    <2>9. [][ReplyServiceRankPersistenceObligation(
-                owner, semantic, source,
-                messageCursor, chunkCursor, distance)]_ReplyRouteVars
-      BY <2>8, IsaM("blast")
-    <2>10. [][ReplySourceServiceRank(
-                    owner, semantic, source,
-                    messageCursor, chunkCursor, distance)
-                  /\ [ReplyRouteNext]_ReplyRouteVars
-                 => \/ ReplySourceServiceRank(
-                         owner, semantic, source,
-                         messageCursor, chunkCursor, distance)'
-                    \/ ReplySourceLowerServiceRank(
-                         owner, semantic, source,
-                         messageCursor, chunkCursor, distance)'
-                    \/ ReplySourceAdvancedFrom(
-                         owner, semantic, source,
-                         messageCursor, chunkCursor)']_ReplyRouteVars
-      BY <1>1, <2>1, <2>2, <2>9, PTL
-         DEF ReplyServiceRankPersistenceObligation
-    <2>11. []ReplyServiceRankEnablementObligationsHold
-      BY ReplyServiceRankEnablementObligationsHold, PTL
-    <2>12. []ReplyServiceRankEnablementObligation(
+    <2>5. ReplyServiceRankLiveSuffixObligation(
                 owner, semantic, source,
                 messageCursor, chunkCursor, distance)
-      BY <2>11, IsaM("blast")
-    <2>13. [](ReplySourceServiceRank(
-                   owner, semantic, source,
-                   messageCursor, chunkCursor, distance)
-                => ENABLED
-                     <<ServiceReplyRoute(
-                         owner, semantic)>>_ReplyRouteVars)
-      BY <2>1, <2>12, PTL
-         DEF ReplyRouteInductiveInvariant,
-             ReplyServiceRankEnablementObligation
-    <2>14. [][ReplyServiceRankOutcomeObligationsHold]_ReplyRouteVars
-      BY ReplyServiceRankOutcomeObligationsHold, PTL
-    <2>15. [][ReplyServiceRankOutcomeObligation(
-                 owner, semantic, source,
-                 messageCursor, chunkCursor, distance)]_ReplyRouteVars
-      BY <2>14, IsaM("blast")
-    <2>16. [][/\ ReplySourceServiceRank(
-                        owner, semantic, source,
-                        messageCursor, chunkCursor, distance)
-                   /\ <<ServiceReplyRoute(
-                          owner, semantic)>>_ReplyRouteVars
-                  => \/ ReplySourceAdvancedFrom(
-                          owner, semantic, source,
-                          messageCursor, chunkCursor)'
-                     \/ ReplySourceLowerServiceRank(
-                          owner, semantic, source,
-                          messageCursor, chunkCursor, distance)']_ReplyRouteVars
-      BY <2>1, <2>15, PTL
-         DEF ReplyServiceRankOutcomeObligation
-    <2> QED BY <2>2, <2>3, <2>10, <2>13, <2>16, PTL
+      BY <1>1, ReplyServiceRankLiveSuffixObligationsHold,
+         IsaM("blast")
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, PTL
+         DEF ReplyServiceRankLiveSuffixObligation
   <1> QED BY <1>1
 
 ReplyServiceRankExistentialEquivalenceObligation(
@@ -12120,6 +12924,18 @@ THEOREM ReplyServiceRankCarrierExistentialEquivalenceObligationsHold ==
 BY IsaM("blast")
    DEF ReplyServiceRankExistentialEquivalenceObligation
 
+THEOREM ReplyServiceRankCarrierExistentialEquivalenceHoldsAt ==
+  ASSUME NEW owner \in ReplyOwners,
+         NEW semantic \in ReplySemantics,
+         NEW source \in ReplySources,
+         NEW messageCursor \in 0..ReplyMessageCount,
+         NEW chunkCursor \in 0..ReplyChunkCount
+  PROVE ReplyServiceRankExistentialEquivalenceObligation(
+          owner, semantic, source, messageCursor, chunkCursor,
+          ReplyDistanceCarrier)
+BY IsaM("blast")
+   DEF ReplyServiceRankExistentialEquivalenceObligation
+
 THEOREM ReplyServiceRankLowerExistentialEquivalenceObligationsHold ==
   \A owner \in ReplyOwners, semantic \in ReplySemantics,
      source \in ReplySources,
@@ -12130,6 +12946,20 @@ THEOREM ReplyServiceRankLowerExistentialEquivalenceObligationsHold ==
       owner, semantic, source, messageCursor, chunkCursor,
       SetLessThan(
         current, ReplyDistanceOrdering, ReplyDistanceCarrier))
+BY IsaM("blast")
+   DEF ReplyServiceRankExistentialEquivalenceObligation
+
+THEOREM ReplyServiceRankLowerExistentialEquivalenceHoldsAt ==
+  ASSUME NEW owner \in ReplyOwners,
+         NEW semantic \in ReplySemantics,
+         NEW source \in ReplySources,
+         NEW messageCursor \in 0..ReplyMessageCount,
+         NEW chunkCursor \in 0..ReplyChunkCount,
+         NEW current \in ReplyDistanceCarrier
+  PROVE ReplyServiceRankExistentialEquivalenceObligation(
+          owner, semantic, source, messageCursor, chunkCursor,
+          SetLessThan(
+            current, ReplyDistanceOrdering, ReplyDistanceCarrier))
 BY IsaM("blast")
    DEF ReplyServiceRankExistentialEquivalenceObligation
 
@@ -12160,6 +12990,20 @@ THEOREM ReplyServiceRankLowerNamedExistentialEquivalenceObligationsHold ==
       owner, semantic, source, messageCursor, chunkCursor,
       SetLessThan(
         current, ReplyDistanceOrdering, ReplyDistanceCarrier))
+BY IsaM("blast")
+   DEF ReplyServiceRankLowerNamedExistentialEquivalenceObligation
+
+THEOREM ReplyServiceRankLowerNamedExistentialEquivalenceHoldsAt ==
+  ASSUME NEW owner \in ReplyOwners,
+         NEW semantic \in ReplySemantics,
+         NEW source \in ReplySources,
+         NEW messageCursor \in 0..ReplyMessageCount,
+         NEW chunkCursor \in 0..ReplyChunkCount,
+         NEW current \in ReplyDistanceCarrier
+  PROVE ReplyServiceRankLowerNamedExistentialEquivalenceObligation(
+          owner, semantic, source, messageCursor, chunkCursor,
+          SetLessThan(
+            current, ReplyDistanceOrdering, ReplyDistanceCarrier))
 BY IsaM("blast")
    DEF ReplyServiceRankLowerNamedExistentialEquivalenceObligation
 
@@ -12216,166 +13060,138 @@ PROOF
     <2>1. []ReplyServiceRankCarrierExistentialEquivalenceObligationsHold
       BY ReplyServiceRankCarrierExistentialEquivalenceObligationsHold,
          PTL
-    <2>2. [](\A allSemantic \in ReplySemantics,
-                    allSource \in ReplySources,
-                    allMessageCursor \in 0..ReplyMessageCount,
-                    allChunkCursor \in 0..ReplyChunkCount:
-                  ReplyServiceRankExistentialEquivalenceObligation(
-                    owner, allSemantic, allSource,
-                    allMessageCursor, allChunkCursor,
-                    ReplyDistanceCarrier))
-      BY <2>1, IsaM("blast")
-    <2>3. [](\A allSource \in ReplySources,
-                    allMessageCursor \in 0..ReplyMessageCount,
-                    allChunkCursor \in 0..ReplyChunkCount:
-                  ReplyServiceRankExistentialEquivalenceObligation(
-                    owner, semantic, allSource,
-                    allMessageCursor, allChunkCursor,
-                    ReplyDistanceCarrier))
-      BY <2>2, IsaM("blast")
-    <2>4. [](\A allMessageCursor \in 0..ReplyMessageCount,
-                    allChunkCursor \in 0..ReplyChunkCount:
-                  ReplyServiceRankExistentialEquivalenceObligation(
-                    owner, semantic, source,
-                    allMessageCursor, allChunkCursor,
-                    ReplyDistanceCarrier))
-      BY <2>3, IsaM("blast")
-    <2>5. [](\A allChunkCursor \in 0..ReplyChunkCount:
-                  ReplyServiceRankExistentialEquivalenceObligation(
-                    owner, semantic, source,
-                    messageCursor, allChunkCursor,
-                    ReplyDistanceCarrier))
-      BY <2>4, IsaM("blast")
-    <2>6. []ReplyServiceRankExistentialEquivalenceObligation(
+    <2>2. []ReplyServiceRankExistentialEquivalenceObligation(
                owner, semantic, source,
                messageCursor, chunkCursor, ReplyDistanceCarrier)
-      BY <2>5, IsaM("blast")
-    <2> QED BY <2>6, PTL
+      BY ReplyServiceRankCarrierExistentialEquivalenceHoldsAt, PTL
+    <2> QED BY <2>2, PTL
          DEF ReplyServiceRankExistentialEquivalenceObligation
   <1> QED BY <1>1, <1>2, PTL
 
 THEOREM ReplyServiceRankLowerSetExistentialLift ==
-  ASSUME NEW owner \in ReplyOwners,
-         NEW semantic \in ReplySemantics,
-         NEW source \in ReplySources,
-         NEW messageCursor \in 0..ReplyMessageCount,
-         NEW chunkCursor \in 0..ReplyChunkCount,
-         NEW current \in ReplyDistanceCarrier,
-         \A lower \in SetLessThan(
-              current, ReplyDistanceOrdering, ReplyDistanceCarrier):
-           ReplySourceServiceRank(
-             owner, semantic, source,
-             messageCursor, chunkCursor, lower)
-             ~> ReplySourceAdvancedFrom(
-                  owner, semantic, source,
-                  messageCursor, chunkCursor)
-  PROVE (\E lower \in SetLessThan(
-                         current, ReplyDistanceOrdering,
-                         ReplyDistanceCarrier):
-           ReplySourceServiceRank(
-             owner, semantic, source,
-             messageCursor, chunkCursor, lower))
-          ~> ReplySourceAdvancedFrom(
-               owner, semantic, source,
-               messageCursor, chunkCursor)
-PROOF
-  <1>1. (\A lower \in SetLessThan(
-                         current, ReplyDistanceOrdering,
-                         ReplyDistanceCarrier):
-            [](ReplySourceServiceRank(
-                 owner, semantic, source,
-                 messageCursor, chunkCursor, lower)
-                 => <>ReplySourceAdvancedFrom(
-                      owner, semantic, source,
-                      messageCursor, chunkCursor)))
-          <=> [](\A lower \in SetLessThan(
-                                  current, ReplyDistanceOrdering,
-                                  ReplyDistanceCarrier):
-                   ReplySourceServiceRank(
-                     owner, semantic, source,
-                     messageCursor, chunkCursor, lower)
-                     => <>ReplySourceAdvancedFrom(
-                          owner, semantic, source,
-                          messageCursor, chunkCursor))
-    OBVIOUS
-  <1>2. [](\A lower \in SetLessThan(
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources,
+     messageCursor \in 0..ReplyMessageCount,
+     chunkCursor \in 0..ReplyChunkCount,
+     current \in ReplyDistanceCarrier:
+    (\A lower \in SetLessThan(
+                   current, ReplyDistanceOrdering,
+                   ReplyDistanceCarrier):
+       ReplySourceServiceRank(
+         owner, semantic, source,
+         messageCursor, chunkCursor, lower)
+         ~> ReplySourceAdvancedFrom(
+              owner, semantic, source,
+              messageCursor, chunkCursor))
+    => ((\E lower \in SetLessThan(
                             current, ReplyDistanceOrdering,
                             ReplyDistanceCarrier):
-             ReplySourceServiceRank(
-               owner, semantic, source,
-               messageCursor, chunkCursor, lower)
-               => <>ReplySourceAdvancedFrom(
+              ReplySourceServiceRank(
+                owner, semantic, source,
+                messageCursor, chunkCursor, lower))
+            ~> ReplySourceAdvancedFrom(
+                 owner, semantic, source,
+                 messageCursor, chunkCursor))
+PROOF
+  <1>1. ASSUME NEW owner \in ReplyOwners,
+                NEW semantic \in ReplySemantics,
+                NEW source \in ReplySources,
+                NEW messageCursor \in 0..ReplyMessageCount,
+                NEW chunkCursor \in 0..ReplyChunkCount,
+                NEW current \in ReplyDistanceCarrier
+         PROVE
+           (\A lower \in SetLessThan(
+                          current, ReplyDistanceOrdering,
+                          ReplyDistanceCarrier):
+              ReplySourceServiceRank(
+                owner, semantic, source,
+                messageCursor, chunkCursor, lower)
+                ~> ReplySourceAdvancedFrom(
+                     owner, semantic, source,
+                     messageCursor, chunkCursor))
+           => ((\E lower \in SetLessThan(
+                               current, ReplyDistanceOrdering,
+                               ReplyDistanceCarrier):
+                 ReplySourceServiceRank(
+                   owner, semantic, source,
+                   messageCursor, chunkCursor, lower))
+               ~> ReplySourceAdvancedFrom(
                     owner, semantic, source,
                     messageCursor, chunkCursor))
-          <=> []((\E lower \in SetLessThan(
-                                  current, ReplyDistanceOrdering,
-                                  ReplyDistanceCarrier):
-                    ReplySourceServiceRank(
-                      owner, semantic, source,
-                      messageCursor, chunkCursor, lower))
-                   => <>ReplySourceAdvancedFrom(
-                        owner, semantic, source,
-                        messageCursor, chunkCursor))
-    <2>1. []ReplyServiceRankLowerNamedExistentialEquivalenceObligationsHold
-      BY ReplyServiceRankLowerNamedExistentialEquivalenceObligationsHold,
-         PTL
-    <2>2. [](\A allSemantic \in ReplySemantics,
-                    allSource \in ReplySources,
-                    allMessageCursor \in 0..ReplyMessageCount,
-                    allChunkCursor \in 0..ReplyChunkCount,
-                    allCurrent \in ReplyDistanceCarrier:
-                  ReplyServiceRankLowerNamedExistentialEquivalenceObligation(
-                    owner, allSemantic, allSource,
-                    allMessageCursor, allChunkCursor,
-                    SetLessThan(
-                      allCurrent, ReplyDistanceOrdering,
-                      ReplyDistanceCarrier)))
-      BY <2>1, IsaM("blast")
-    <2>3. [](\A allSource \in ReplySources,
-                    allMessageCursor \in 0..ReplyMessageCount,
-                    allChunkCursor \in 0..ReplyChunkCount,
-                    allCurrent \in ReplyDistanceCarrier:
-                  ReplyServiceRankLowerNamedExistentialEquivalenceObligation(
-                    owner, semantic, allSource,
-                    allMessageCursor, allChunkCursor,
-                    SetLessThan(
-                      allCurrent, ReplyDistanceOrdering,
-                      ReplyDistanceCarrier)))
-      BY <2>2, IsaM("blast")
-    <2>4. [](\A allMessageCursor \in 0..ReplyMessageCount,
-                    allChunkCursor \in 0..ReplyChunkCount,
-                    allCurrent \in ReplyDistanceCarrier:
-                  ReplyServiceRankLowerNamedExistentialEquivalenceObligation(
-                    owner, semantic, source,
-                    allMessageCursor, allChunkCursor,
-                    SetLessThan(
-                      allCurrent, ReplyDistanceOrdering,
-                      ReplyDistanceCarrier)))
-      BY <2>3, IsaM("blast")
-    <2>5. [](\A allChunkCursor \in 0..ReplyChunkCount,
-                    allCurrent \in ReplyDistanceCarrier:
-                  ReplyServiceRankLowerNamedExistentialEquivalenceObligation(
-                    owner, semantic, source,
-                    messageCursor, allChunkCursor,
-                    SetLessThan(
-                      allCurrent, ReplyDistanceOrdering,
-                      ReplyDistanceCarrier)))
-      BY <2>4, IsaM("blast")
-    <2>6. [](\A allCurrent \in ReplyDistanceCarrier:
-                  ReplyServiceRankLowerNamedExistentialEquivalenceObligation(
-                    owner, semantic, source, messageCursor, chunkCursor,
-                    SetLessThan(
-                      allCurrent, ReplyDistanceOrdering,
-                      ReplyDistanceCarrier)))
-      BY <2>5, IsaM("blast")
-    <2>7. []ReplyServiceRankLowerNamedExistentialEquivalenceObligation(
+    <2>1. ReplyServiceRankLowerNamedExistentialEquivalenceObligation(
+             owner, semantic, source, messageCursor, chunkCursor,
+             SetLessThan(
+               current, ReplyDistanceOrdering, ReplyDistanceCarrier))
+      BY <1>1,
+         ReplyServiceRankLowerNamedExistentialEquivalenceObligationsHold,
+         IsaM("blast")
+    <2>2. []ReplyServiceRankLowerNamedExistentialEquivalenceObligation(
                owner, semantic, source, messageCursor, chunkCursor,
                SetLessThan(
                  current, ReplyDistanceOrdering, ReplyDistanceCarrier))
-      BY <2>6, IsaM("blast")
-    <2> QED BY <2>7, PTL
-         DEF ReplyServiceRankLowerNamedExistentialEquivalenceObligation
-  <1> QED BY <1>1, <1>2, PTL
+      BY <2>1, PTL
+    <2>3. ASSUME
+             \A lower \in SetLessThan(
+                            current, ReplyDistanceOrdering,
+                            ReplyDistanceCarrier):
+               ReplySourceServiceRank(
+                 owner, semantic, source,
+                 messageCursor, chunkCursor, lower)
+                 ~> ReplySourceAdvancedFrom(
+                      owner, semantic, source,
+                      messageCursor, chunkCursor)
+           PROVE
+             (\E lower \in SetLessThan(
+                              current, ReplyDistanceOrdering,
+                              ReplyDistanceCarrier):
+                ReplySourceServiceRank(
+                  owner, semantic, source,
+                  messageCursor, chunkCursor, lower))
+             ~> ReplySourceAdvancedFrom(
+                  owner, semantic, source,
+                  messageCursor, chunkCursor)
+      <3>1. (\A lower \in SetLessThan(
+                            current, ReplyDistanceOrdering,
+                            ReplyDistanceCarrier):
+                 [](ReplySourceServiceRank(
+                      owner, semantic, source,
+                      messageCursor, chunkCursor, lower)
+                      => <>ReplySourceAdvancedFrom(
+                           owner, semantic, source,
+                           messageCursor, chunkCursor)))
+               <=> [](\A lower \in SetLessThan(
+                                       current, ReplyDistanceOrdering,
+                                       ReplyDistanceCarrier):
+                        ReplySourceServiceRank(
+                          owner, semantic, source,
+                          messageCursor, chunkCursor, lower)
+                          => <>ReplySourceAdvancedFrom(
+                               owner, semantic, source,
+                               messageCursor, chunkCursor))
+        OBVIOUS
+      <3>2. [](\A lower \in SetLessThan(
+                                current, ReplyDistanceOrdering,
+                                ReplyDistanceCarrier):
+                 ReplySourceServiceRank(
+                   owner, semantic, source,
+                   messageCursor, chunkCursor, lower)
+                   => <>ReplySourceAdvancedFrom(
+                        owner, semantic, source,
+                        messageCursor, chunkCursor))
+               <=> []((\E lower \in SetLessThan(
+                                       current, ReplyDistanceOrdering,
+                                       ReplyDistanceCarrier):
+                         ReplySourceServiceRank(
+                           owner, semantic, source,
+                           messageCursor, chunkCursor, lower))
+                        => <>ReplySourceAdvancedFrom(
+                             owner, semantic, source,
+                             messageCursor, chunkCursor))
+        BY <2>2, PTL
+           DEF ReplyServiceRankLowerNamedExistentialEquivalenceObligation
+      <3> QED BY <2>3, <3>1, <3>2, PTL
+    <2> QED BY <2>3
+  <1> QED BY <1>1
 
 ReplyServiceRankProgress(
     owner, semantic, source, messageCursor, chunkCursor, distance) ==
@@ -12515,68 +13331,18 @@ PROOF
                             owner, semantic, source,
                             messageCursor, chunkCursor))
       BY DEF ReplyServiceRankProgress
+    <2>20. ReplyServiceRankExistentialEquivalenceObligation(
+                owner, semantic, source, messageCursor, chunkCursor,
+                SetLessThan(
+                  current, ReplyDistanceOrdering, ReplyDistanceCarrier))
+      BY <1>1,
+         ReplyServiceRankLowerExistentialEquivalenceObligationsHold,
+         IsaM("blast")
     <2>2. []ReplyServiceRankExistentialEquivalenceObligation(
                owner, semantic, source, messageCursor, chunkCursor,
                SetLessThan(
                  current, ReplyDistanceOrdering, ReplyDistanceCarrier))
-      <3>1. []ReplyServiceRankLowerExistentialEquivalenceObligationsHold
-        BY ReplyServiceRankLowerExistentialEquivalenceObligationsHold,
-           PTL
-      <3>2. [](\A allSemantic \in ReplySemantics,
-                      allSource \in ReplySources,
-                      allMessageCursor \in 0..ReplyMessageCount,
-                      allChunkCursor \in 0..ReplyChunkCount,
-                      allCurrent \in ReplyDistanceCarrier:
-                    ReplyServiceRankExistentialEquivalenceObligation(
-                      owner, allSemantic, allSource,
-                      allMessageCursor, allChunkCursor,
-                      SetLessThan(
-                        allCurrent, ReplyDistanceOrdering,
-                        ReplyDistanceCarrier)))
-        BY <3>1, IsaM("blast")
-      <3>3. [](\A allSource \in ReplySources,
-                      allMessageCursor \in 0..ReplyMessageCount,
-                      allChunkCursor \in 0..ReplyChunkCount,
-                      allCurrent \in ReplyDistanceCarrier:
-                    ReplyServiceRankExistentialEquivalenceObligation(
-                      owner, semantic, allSource,
-                      allMessageCursor, allChunkCursor,
-                      SetLessThan(
-                        allCurrent, ReplyDistanceOrdering,
-                        ReplyDistanceCarrier)))
-        BY <3>2, IsaM("blast")
-      <3>4. [](\A allMessageCursor \in 0..ReplyMessageCount,
-                      allChunkCursor \in 0..ReplyChunkCount,
-                      allCurrent \in ReplyDistanceCarrier:
-                    ReplyServiceRankExistentialEquivalenceObligation(
-                      owner, semantic, source,
-                      allMessageCursor, allChunkCursor,
-                      SetLessThan(
-                        allCurrent, ReplyDistanceOrdering,
-                        ReplyDistanceCarrier)))
-        BY <3>3, IsaM("blast")
-      <3>5. [](\A allChunkCursor \in 0..ReplyChunkCount,
-                      allCurrent \in ReplyDistanceCarrier:
-                    ReplyServiceRankExistentialEquivalenceObligation(
-                      owner, semantic, source,
-                      messageCursor, allChunkCursor,
-                      SetLessThan(
-                        allCurrent, ReplyDistanceOrdering,
-                        ReplyDistanceCarrier)))
-        BY <3>4, IsaM("blast")
-      <3>6. [](\A allCurrent \in ReplyDistanceCarrier:
-                    ReplyServiceRankExistentialEquivalenceObligation(
-                      owner, semantic, source, messageCursor, chunkCursor,
-                      SetLessThan(
-                        allCurrent, ReplyDistanceOrdering,
-                        ReplyDistanceCarrier)))
-        BY <3>5, IsaM("blast")
-      <3>7. []ReplyServiceRankExistentialEquivalenceObligation(
-                 owner, semantic, source, messageCursor, chunkCursor,
-                 SetLessThan(
-                   current, ReplyDistanceOrdering, ReplyDistanceCarrier))
-        BY <3>6, IsaM("blast")
-      <3> QED BY <3>7
+      BY <2>20, PTL
     <2>3. ASSUME
              /\ ReplySourceServiceRank(
                   owner, semantic, source,
@@ -12785,78 +13551,30 @@ PROOF
                     messageCursor, chunkCursor)
       BY <2>2, ReplyServiceRankWellFoundedLeadsTo
          DEF ServiceRankAt, TargetAdvanced
-    <2>4. []ReplyReadyCursorHasServiceRank
-      BY ReplyReadyCursorHasServiceRank, PTL
-    <2>5. [](\A allOwner \in ReplyOwners,
-                    allSemantic \in ReplySemantics,
-                    allSource \in ReplySources,
-                    allMessageCursor \in 0..ReplyMessageCount,
-                    allChunkCursor \in 0..ReplyChunkCount:
-                  ReplySourceReadyAtCursor(
-                    allOwner, allSemantic, allSource,
-                    allMessageCursor, allChunkCursor)
-                  => \E distance \in ReplyDistanceCarrier:
-                       ReplySourceServiceRank(
-                         allOwner, allSemantic, allSource,
-                         allMessageCursor, allChunkCursor, distance))
-      BY <2>1, <2>4, PTL
-    <2>6. [](\A allSemantic \in ReplySemantics,
-                    allSource \in ReplySources,
-                    allMessageCursor \in 0..ReplyMessageCount,
-                    allChunkCursor \in 0..ReplyChunkCount:
-                  ReplySourceReadyAtCursor(
-                    owner, allSemantic, allSource,
-                    allMessageCursor, allChunkCursor)
-                  => \E distance \in ReplyDistanceCarrier:
-                       ReplySourceServiceRank(
-                         owner, allSemantic, allSource,
-                         allMessageCursor, allChunkCursor, distance))
-      BY <2>5, IsaM("blast")
-    <2>7. [](\A allSource \in ReplySources,
-                    allMessageCursor \in 0..ReplyMessageCount,
-                    allChunkCursor \in 0..ReplyChunkCount:
-                  ReplySourceReadyAtCursor(
-                    owner, semantic, allSource,
-                    allMessageCursor, allChunkCursor)
-                  => \E distance \in ReplyDistanceCarrier:
-                       ReplySourceServiceRank(
-                         owner, semantic, allSource,
-                         allMessageCursor, allChunkCursor, distance))
-      BY <2>6, IsaM("blast")
-    <2>8. [](\A allMessageCursor \in 0..ReplyMessageCount,
-                    allChunkCursor \in 0..ReplyChunkCount:
-                  ReplySourceReadyAtCursor(
-                    owner, semantic, source,
-                    allMessageCursor, allChunkCursor)
+    <2>4. [](ReplyRouteInductiveInvariant =>
+               (ReplySourceReadyAtCursor(
+                  owner, semantic, source,
+                  messageCursor, chunkCursor)
                   => \E distance \in ReplyDistanceCarrier:
                        ReplySourceServiceRank(
                          owner, semantic, source,
-                         allMessageCursor, allChunkCursor, distance))
-      BY <2>7, IsaM("blast")
-    <2>9. [](\A allChunkCursor \in 0..ReplyChunkCount:
-                  ReplySourceReadyAtCursor(
-                    owner, semantic, source,
-                    messageCursor, allChunkCursor)
-                  => \E distance \in ReplyDistanceCarrier:
-                       ReplySourceServiceRank(
-                         owner, semantic, source,
-                         messageCursor, allChunkCursor, distance))
-      BY <2>8, IsaM("blast")
-    <2>10. [](ReplySourceReadyAtCursor(
+                         messageCursor, chunkCursor, distance)))
+      BY <1>1, ReplyReadyCursorHasServiceRankAt, PTL
+    <2>5. [](ReplySourceReadyAtCursor(
                 owner, semantic, source, messageCursor, chunkCursor)
                => \E distance \in ReplyDistanceCarrier:
                     ReplySourceServiceRank(
                       owner, semantic, source,
                       messageCursor, chunkCursor, distance))
-      BY <2>9, IsaM("blast")
-    <2>11. ReplySourceReadyAtCursor(
+      BY <2>1, <2>4, PTL
+    <2>6. ReplySourceReadyAtCursor(
               owner, semantic, source, messageCursor, chunkCursor)
               ~> (\E distance \in ReplyDistanceCarrier:
                     ReplySourceServiceRank(
                       owner, semantic, source,
                       messageCursor, chunkCursor, distance))
-      BY <2>10, PTL
-    <2>12. (\E distance \in ReplyDistanceCarrier:
+      BY <2>5, PTL
+    <2>7. (\E distance \in ReplyDistanceCarrier:
              ReplySourceServiceRank(
                owner, semantic, source,
                messageCursor, chunkCursor, distance))
@@ -12864,12 +13582,13 @@ PROOF
                  owner, semantic, source,
                  messageCursor, chunkCursor)
       BY <2>3, ReplyServiceRankExistentialLift
-    <2> QED BY <2>11, <2>12, PTL
+    <2> QED BY <2>6, <2>7, PTL
   <1> QED BY <1>1
 
 ReplyReadyCursorLiveSuffixObligation(
     owner, semantic, source, messageCursor, chunkCursor) ==
   (/\ []ReplyRouteInductiveInvariant
+   /\ []ReplyRouteLifecycleInductiveInvariant
    /\ [][ReplyRouteNext]_ReplyRouteVars
    /\ WF_ReplyRouteVars(ServiceReplyRoute(owner, semantic))
    /\ []ReplySourceRouteStable(owner, semantic, source))
@@ -12901,6 +13620,7 @@ PROOF
       BY ReplyServiceRankLiveSuffixObligationsHold,
          IsaM("blast")
     <2>2. ASSUME []ReplyRouteInductiveInvariant,
+                  []ReplyRouteLifecycleInductiveInvariant,
                   [][ReplyRouteNext]_ReplyRouteVars,
                   WF_ReplyRouteVars(
                     ServiceReplyRoute(owner, semantic)),
@@ -12953,80 +13673,32 @@ PROOF
                       owner, semantic, source,
                       messageCursor, chunkCursor)
         BY <3>1, ReplyServiceRankWellFoundedLeadsTo
-      <3>3. []ReplyReadyCursorHasServiceRank
-        BY ReplyReadyCursorHasServiceRank, PTL
-      <3>4. [](\A allOwner \in ReplyOwners,
-                      allSemantic \in ReplySemantics,
-                      allSource \in ReplySources,
-                      allMessageCursor \in 0..ReplyMessageCount,
-                      allChunkCursor \in 0..ReplyChunkCount:
-                    ReplySourceReadyAtCursor(
-                      allOwner, allSemantic, allSource,
-                      allMessageCursor, allChunkCursor)
-                    => \E distance \in ReplyDistanceCarrier:
-                         ReplySourceServiceRank(
-                           allOwner, allSemantic, allSource,
-                           allMessageCursor, allChunkCursor, distance))
-        BY <2>2, <3>3, PTL
-      <3>5. [](\A allSemantic \in ReplySemantics,
-                      allSource \in ReplySources,
-                      allMessageCursor \in 0..ReplyMessageCount,
-                      allChunkCursor \in 0..ReplyChunkCount:
-                    ReplySourceReadyAtCursor(
-                      owner, allSemantic, allSource,
-                      allMessageCursor, allChunkCursor)
-                    => \E distance \in ReplyDistanceCarrier:
-                         ReplySourceServiceRank(
-                           owner, allSemantic, allSource,
-                           allMessageCursor, allChunkCursor, distance))
-        BY <3>4, IsaM("blast")
-      <3>6. [](\A allSource \in ReplySources,
-                      allMessageCursor \in 0..ReplyMessageCount,
-                      allChunkCursor \in 0..ReplyChunkCount:
-                    ReplySourceReadyAtCursor(
-                      owner, semantic, allSource,
-                      allMessageCursor, allChunkCursor)
-                    => \E distance \in ReplyDistanceCarrier:
-                         ReplySourceServiceRank(
-                           owner, semantic, allSource,
-                           allMessageCursor, allChunkCursor, distance))
-        BY <3>5, IsaM("blast")
-      <3>7. [](\A allMessageCursor \in 0..ReplyMessageCount,
-                      allChunkCursor \in 0..ReplyChunkCount:
-                    ReplySourceReadyAtCursor(
-                      owner, semantic, source,
-                      allMessageCursor, allChunkCursor)
+      <3>3. [](ReplyRouteInductiveInvariant =>
+                 (ReplySourceReadyAtCursor(
+                    owner, semantic, source,
+                    messageCursor, chunkCursor)
                     => \E distance \in ReplyDistanceCarrier:
                          ReplySourceServiceRank(
                            owner, semantic, source,
-                           allMessageCursor, allChunkCursor, distance))
-        BY <3>6, IsaM("blast")
-      <3>8. [](\A allChunkCursor \in 0..ReplyChunkCount:
-                    ReplySourceReadyAtCursor(
-                      owner, semantic, source,
-                      messageCursor, allChunkCursor)
-                    => \E distance \in ReplyDistanceCarrier:
-                         ReplySourceServiceRank(
-                           owner, semantic, source,
-                           messageCursor, allChunkCursor, distance))
-        BY <3>7, IsaM("blast")
-      <3>9. [](ReplySourceReadyAtCursor(
+                           messageCursor, chunkCursor, distance)))
+        BY <1>1, ReplyReadyCursorHasServiceRankAt, PTL
+      <3>4. [](ReplySourceReadyAtCursor(
                   owner, semantic, source,
                   messageCursor, chunkCursor)
                  => \E distance \in ReplyDistanceCarrier:
                       ReplySourceServiceRank(
                         owner, semantic, source,
                         messageCursor, chunkCursor, distance))
-        BY <3>8, IsaM("blast")
-      <3>10. ReplySourceReadyAtCursor(
+        BY <2>2, <3>3, PTL
+      <3>5. ReplySourceReadyAtCursor(
                 owner, semantic, source,
                 messageCursor, chunkCursor)
                 ~> (\E distance \in ReplyDistanceCarrier:
                       ReplySourceServiceRank(
                         owner, semantic, source,
                         messageCursor, chunkCursor, distance))
-        BY <3>9, PTL
-      <3>11. (\E distance \in ReplyDistanceCarrier:
+        BY <3>4, PTL
+      <3>6. (\E distance \in ReplyDistanceCarrier:
                 ReplySourceServiceRank(
                   owner, semantic, source,
                   messageCursor, chunkCursor, distance))
@@ -13034,7 +13706,7 @@ PROOF
                     owner, semantic, source,
                     messageCursor, chunkCursor)
         BY <3>2, ReplyServiceRankExistentialLift
-      <3> QED BY <3>10, <3>11, PTL
+      <3> QED BY <3>5, <3>6, PTL
     <2> QED BY <2>2
          DEF ReplyReadyCursorLiveSuffixObligation
   <1> QED BY <1>1
@@ -13110,6 +13782,11 @@ PROOF
                     owner, semantic, source,
                     messageCursor, chunkCursor)
             BY <5>11, IsaM("blast")
+          <5>20. []ReplyRouteLifecycleInductiveInvariant
+            BY <1>1,
+               ReplyRouteSpecAlwaysLifecycleInductiveInvariant
+          <5>21. []([]ReplyRouteLifecycleInductiveInvariant)
+            BY <5>20, PTL
           <5>13. []([]ReplySourceRouteStable(
                        owner, semantic, source)
                     => ((/\ ReplySourceAtCursor(
@@ -13130,9 +13807,9 @@ PROOF
                           ~> ReplySourceAdvancedFrom(
                                owner, semantic, source,
                                messageCursor, chunkCursor)))
-            BY <5>2, <5>4, <5>8, <5>12, PTL
+            BY <5>2, <5>4, <5>8, <5>12, <5>21, PTL
                DEF ReplyReadyCursorLiveSuffixObligation
-          <5>15. [][(\/ ReplySourceAtCursor(
+          <5>15. []((\/ ReplySourceAtCursor(
                              owner, semantic, source,
                              messageCursor, chunkCursor)
                           \/ ReplySourceAdvancedFrom(
@@ -13140,24 +13817,24 @@ PROOF
                              messageCursor, chunkCursor))
                        => (\/ ReplySourceAtCursor(
                                 owner, semantic, source,
-                                messageCursor, chunkCursor)
+                                messageCursor, chunkCursor)'
                              \/ ReplySourceAdvancedFrom(
                                 owner, semantic, source,
-                                messageCursor, chunkCursor))']_ReplyRouteVars
+                                messageCursor, chunkCursor)'))
             BY <1>1, <4>1, ReplyCursorOrAdvancedPersists
           <5>16. ReplySourceAtCursor(
                     owner, semantic, source,
                     messageCursor, chunkCursor)
-                    ~> (\/ ReplySourceAdvancedFrom(
-                             owner, semantic, source,
-                             messageCursor, chunkCursor)
-                         \/ /\ ReplySourceAtCursor(
-                                  owner, semantic, source,
-                                  messageCursor, chunkCursor)
+                    ~> (ReplySourceAdvancedFrom(
+                          owner, semantic, source,
+                          messageCursor, chunkCursor)
+                        \/ (ReplySourceAtCursor(
+                              owner, semantic, source,
+                              messageCursor, chunkCursor)
                             /\ []ReplySourceRouteStable(
-                                 owner, semantic, source))
-            BY <3>1, <5>15, PTL
-               DEF ReplySourceStableResponsive
+                                 owner, semantic, source)))
+            BY <1>1, <3>1, <4>1,
+               ReplyCursorReachesStableSuffixOrAdvances
           <5>17. (/\ ReplySourceAtCursor(
                          owner, semantic, source,
                          messageCursor, chunkCursor)

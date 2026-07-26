@@ -45492,7 +45492,6 @@ mod advert_tests {
         let remote_origin = format!("http://{}", listener.local_addr().expect("listener addr"));
         let manifest_requests = Arc::new(AtomicUsize::new(0));
         let fetch_requests = Arc::new(AtomicUsize::new(0));
-        let remote_provider_id_hex = hex::encode([0x11; 32]);
         let mut remote_files = Vec::with_capacity(plan.files.len());
         let mut remote_offset = 0_u64;
         for file in &plan.files {

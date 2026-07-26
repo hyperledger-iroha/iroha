@@ -25623,8 +25623,8 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 53 pre-network legs and their exact
-477-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+original HEAD/tree/`Cargo.lock`, all 82 pre-network legs and their exact
+589-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -25672,7 +25672,11 @@ transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
 
 The 59-entry ledger contains 35 `tlaps_proved`, 17 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
-remains false. Outstanding release work:
+remains false. In particular,
+`AdequateLeaderExactClosureResidualObligation` and
+`ExactDecisionOffSchedulerResidualConvergenceObligation` remain explicit
+proofless residuals; neither may be promoted through assumption, circular
+reuse, or a vacuous wrapper. Outstanding release work:
 
 The async deadlock decomposition now scopes local runner-service debt to the
 exact active responsive and historical-recovery owners. Keep that deadline as
@@ -25690,11 +25694,14 @@ runtime premise on the final signed source.
   7,826-obligation induction and 565-obligation downstream Core receipt is
   historical evidence for the superseded transition relation and cannot
   promote the current source;
-- execute the fresh source-sealed 585-test, 39-module, 82-leg pre-network
+- execute the fresh source-sealed 589-test, 39-module, 82-leg pre-network
   corridor. Its proposal-origin and per-source route-attempt additions cover
   strict same-round TC
   upgrade/replay, exact locked-Commit recovery ownership, multi-carrier ingress,
-  persistence failure, and certified sidecar Close/CloseAck critical ingress.
+  persistence failure, certified sidecar Close/CloseAck critical ingress,
+  unsent-request restoration, request-first fairness-cursor service, and
+  validator-roster-bounded semantic history independent of active connection
+  capacity.
   Its final six regressions cover canonical view-zero
   genesis bytes first proposed in a later round, the contention-tolerant restart
   deadline, the successor's frozen predecessor CommitQC binding, Kura-first lane
@@ -25926,7 +25933,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  585-test target above supersedes that checkpoint. The 39-module pre-network
+  589-test target above supersedes that checkpoint. The 39-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

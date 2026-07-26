@@ -807,7 +807,7 @@ _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushProjectionBytes", "6561689ace006734d5b7da3ed40d527460e78aedd7dd356aeda4219dcb1e8033", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushTargetGateResidual", "29c6ccec7cb1b4f5f82b629f42763c65bfc8e33d9b5daeeb12ba70645a7ae5d5", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushTargetOutboundResidual", "c7059660e4aba5989c599d08bb30907eb313e025c455f749b42ffa9e4df51959", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushChunkArcIdentity", "7ef89fbd3151b2a0e7b9ebf22aa1b3182419262150785f981685feb64da092bc", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushChunkArcIdentity", "bba07374c9524055d3ce702e9f0aeb74880a4ceddbe199285bcbb81100081a6a", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSharedTransferSnapshot", "4d8641651448847cc75c596ed7b65b5de0d845fbb60fb97885013aa3f2235955", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSiblingGateSnapshot", "24575aef084082886f7c19179dbd0a0cdfbcd484a721b25ae40792f2d8c7302c", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSiblingOutboundSnapshot", "64183ad2a502d96cbc5de2ad0e808b5193dfe628fcf59d66bc0a7f9ca15aa8aa", "struct"),
@@ -825,9 +825,9 @@ _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "usize", "663dae82a41537b3c9157c0d1ce34d9b8430a51f84e3ffe12d5dad957228939d", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "hash", "8d52e6bc0b3e36a2275563271d3f1767a3e54341203a8ff0cd1e792e67be62c5", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "typed_hash", "9e4cd4400baa11201ece5bf143c9d2618b529db97413aabe39a0b2cd77705a1e", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "source", "274e14bee7550314203629c3804ae6646a709c56f298f03819db6c9078f7e831", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "source", "9d8de926c5a07c7e7d6ba62f11c9e44c5f8a6c875f0f01133559859b51dd5ebc", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "cursor", "002f5526f0b10ffdc6d02129e091459a0ce28de800a186c7fcf1bb74dfe18c59", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "pending_chunk", "921f9d45fbf35d3661e2f451197a1fc9c10239bd5322fa9d3eb3d92fffe19ad7", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "pending_chunk", "907a0138200d65a67078ba97983c2a7e2b9c13795afccc3b360fe3547d4ca587", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "key", "73a8e5fa851fd941b9004bbc3c1eaab53c1ad9538d51132d4ced6f8e6004e2bb", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "finish", "d92b5b03bcfab47c5813a3398fe7a773aa566eec9284b49e0cf91ec7b30d2d0d", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "fe82f420ac5c5bf2fd5cb0e60b6635688c006ccdbef572feb130776e409ec5a3", brace_context=(("impl", "ReliableFlushRouteIdentity"),)),
@@ -836,8 +836,8 @@ _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "61bf76985ab6b884520d58afdc22409595debe1d33bb85064fb5ed7ddff7c3fe", brace_context=(("impl", "ReliableFlushTargetGateResidual"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "e8fba25aa719fe80850ff4633d7db9b0ff53a52872149a86e1102d12041a5679", brace_context=(("impl", "ReliableFlushTargetOutboundResidual"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "e29da87c7d60f617ac76a0fad11b7d82dce2c137118815ea0da7307c96fd96ff", brace_context=(("impl", "ReliableFlushTargetOutboundResidual"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "611210b92e56e78092fbd3f53f48b465fe0d7964aaf811e7393750850fe5038b", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "append_to", "06a755c20c8b242f71cb7ef41b89259acf4fb110cf13ef46486a0e512db24fd6", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "ab931898cbc6647b3031498006cc6f6bba04b29cc7acbea4a80553b214604804", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "append_to", "0b20503cf92be8020c661de09aeef2b3ac1262f6fdb7af13c406dee1885d9e2d", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "a0da4d0e59f8b4c0f9ed9af08ed6b80c9e9603b8b3eab608e11e1139be4142dc", brace_context=(("impl", "ReliableFlushSharedTransferSnapshot"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "be53565d8672ac62cdd092462388d168bcaded210cfe53e28a9c1f20722c113a", brace_context=(("impl", "ReliableFlushSharedTransferSnapshot"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "c43764d7234abe2fc8afdb3c40088e4d9f3224b00ebd5837ea6b1c2db417298a", brace_context=(("impl", "ReliableFlushSiblingStateSnapshot"),)),
@@ -845,7 +845,7 @@ _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "2682491a6b73b17ce91aaf6dd374f2158a0196b6a9e0b3ca6487a269466dd0a1", brace_context=(("impl", "PartialEq", "for", "ReliableFlushRouteIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "ed9b902a7091c9acac4a3bbf455a0860c5b9e4aef30841ce6688c62a4cc1cb01", brace_context=(("impl", "PartialEq", "for", "ReliableFlushTargetGateResidual"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "b249fcbef09dc41c47eae28e6b1fe275305e502edc078ae817241b0581c8d70a", brace_context=(("impl", "PartialEq", "for", "ReliableFlushTargetOutboundResidual"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "b04199869a8f033b1d26f7cfe3e25fdadd8505b26891cb4b6a77d0954d2367e1", brace_context=(("impl", "PartialEq", "for", "ReliableFlushChunkArcIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "4560af28092b529e7d399e83bf370bdd0ac33efd7140c70dc54461c9bd082cc1", brace_context=(("impl", "PartialEq", "for", "ReliableFlushChunkArcIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_typed_identity", "e0f75753b395d116820035bcfe43ba3759fe8973d38d414b5cdbadd3a1a5db8f"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_hash_identity", "3a6cc6e2dcb6137ff1722f167fbd5b4828596bce1bf8422e8177d75c24d0f6f3"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_peer_identity", "3a1c9e36eaf39d860738c32f7612b187ef8dc45db64f7cf57622fbc3ca10a944"),
@@ -880,18 +880,18 @@ _RELIABLE_FLUSH_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_trace_body", "611933062ae23d502966c25c176f8dff489ed83215d7639773ba63049695d686", "macro"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReliableFlushTraceProjection", "4449822043b8473e00e3fe01e2b7bf6f524e294234c81d2863b2942cf587c88b", "struct", (("verus", "!"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkFlushProjection", "c880196080ebd569d99a7a4b465bd5a37a6645d08a4e7bd625ba5c89c3c11b81", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkFlushProjection", "12c0d7db72a87a59588640d0e482e64a60b41e432668040169291a0e09ba7217", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkAdmission", "f8f5605e0249bfbe54216287e4d82c2a1cb2a27621731e2073a6f0c16f3e53fa", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ServerPendingChunkIdentity", "2d327559023413021a8fed849fa15f675aae04a60c6a4781b5d0d80991745894", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ServerPendingChunkIdentity", "bf466defc9a4a4fd7ae6812b5af10f1b2369a92ee71caf2eb8b63f8044cbf361", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_admitted_reply", "6aab4029fd336b2651d767106862270fd1ac3accb751fbfffe2e5335e21523ca", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "projection", "7c2b58e389e8a3f8d3875bef22e7407f914c44d16baa8db933c14d1b53c754ef", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_ack_identity", "b41736d098c44a77011b4e5e02b84fc849f7c41f4a523ec4d5e7c7138f9308c7", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "projection_matches_identity", "e664bed9c23ca13891cc54d9609ed286e5d1d8d9e75ae9be82eefbca63c9efd6", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_materialized_chunk", "b64569347c573c20061e28b505d85aa2e63f8eaabc7d8351b94d0d79d05ca6e9", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_materialized_chunk", "5409de569e6d24d487c2da720277f46b71dd3eda1ae7b808549a37bb46ab1196", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "is_bound_to_attempt", "bc91d3dca2a1cd0d409ae3a00956265c44db98e16fece0312721a30dc7c41d0e", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "is_bound_to_source", "9b3eb15cf936a718438f1aaed1f91a1ff839fad37327b5050180c25859d224f7", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_message", "3db24d2537fad540298729ca22b11d418a9c0622829a810fd37cd9a47b77e1ce", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_admission", "a32740d06ecfbe70a3c6e85702650467541db8285ad768e061f435e29baa460d", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_message", "3df9cc44b6f184195c2a2aeedfc3b875077fdcda06850bacf0b552c62df93b29", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_admission", "832b2006e63195d9962938caa6c08eff7609efe6c2eeebdc9ee6eb0df02ed263", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "acknowledge_outbound_chunk", "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887", brace_context=(("impl", "MergeSidecarTransport"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_typed_identity", "e0f75753b395d116820035bcfe43ba3759fe8973d38d414b5cdbadd3a1a5db8f"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_hash_identity", "3a6cc6e2dcb6137ff1722f167fbd5b4828596bce1bf8422e8177d75c24d0f6f3"),
@@ -941,8 +941,8 @@ _TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "send", "897eae8bd11a0e121267b60b141acdc36d9c326c41b4516c0f4ffddba539ce83", brace_context=(("impl", "SumeragiRelayIngress"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "send_rehydrated", "d10242d792a48f0778102fd02d6eb3b1843dfb2c099101cddc181b817eadf668", brace_context=(("impl", "SumeragiRelayIngress"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_rehydrated_ownership_matches", "e256e3116ecb06539aa891d0057e502b9b6bdf46150211a9891168eeb38a256e"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "rehydrate_held_sumeragi_relay_work", "808ed52cde28b2848f59bbbdca3b6f7354db0d4e860413e2eb62396edffb38d6"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "74cda23a6a9fb054bc55f6d1588ca70be12291f470ba34aac2db75e49b842234", brace_context=(("impl", "NetworkRelayShared"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "rehydrate_held_sumeragi_relay_work", "c70d1d27ef4f639937fdbb8e4c5deb035142532b31c7bcfdb539ab752e36bb16"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "fa9919eae532cfec51c26996d518bc8794f2bb7e28543521b4709aa36c2f3936", brace_context=(("impl", "NetworkRelayShared"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "push", "d30cc609e125945f143c35d42f513479d7255ed739859859a6a2149aa74abf82", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "pop_if_with_trace", "4041485881b4ba7d2898082b21a228ff77652d520a91bb20cb9475ece8a48b41", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "finish_sumeragi_block_ingress_attempt", "acfcb75628dc5cc0a843059252287d0caaddae96a7575435ced11cd3b84a86fb"),
@@ -1141,7 +1141,7 @@ _EFFECTIVE_LOCK_TRACE_SHARED_MACRO_SHA256 = {
         "fa803e8d9ee4d9919e5b32d5572c7abf048a2a32f3a10651326395d64376d722"
     ),
     "enter_view_projection_gate_body": (
-        "334a4ef1ba46450f20318526019c6a653b7b2b64c5b93e0a3b23bdecf1b5a526"
+        "02098fc6a19056d6e8e463cb27478ad28c7e963fb481bcfcc9d955e3308288fa"
     ),
     "canonical_identity_equal_body": (
         "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"
@@ -1177,7 +1177,7 @@ _ENTER_VIEW_IDENTITY_PRODUCTION_ITEM_SHA256 = {
         "30862b71547dbc4b13e2de042810f398e13cc9b3cac1cec48f0db19c2a14aea0"
     ),
     "enter_view_projection": (
-        "2cb4fcd131278e26a55444846a8efca7a860ac7e7c79ea6e5e47e786f3252a6c"
+        "28e6c56712ef0a6a24df5828dcf1fdc43fe0a5be843b7f8812d8051cb5951dfc"
     ),
 }
 _ENTER_VIEW_IDENTITY_SUBSTITUTION_TEST = (
@@ -1190,7 +1190,7 @@ _ENTER_VIEW_IDENTITY_SUBSTITUTION_TEST_SHA256 = (
 # This inventory is deliberately code-owned rather than evidence-owned.  An
 # evidence writer may record these mappings but may not choose or substitute
 # them. The 4 + 7 + 6 claim cardinalities are the complete external-constant
-# seam currently declared by the two release proof modules.
+# seam currently declared by the three ledger-facing release proof modules.
 CROSS_TOOL_REFINEMENT_CONTRACTS = (
     CrossToolObligationContract(
         obligation_id="effective-lock-body-acquisition-production-refinement",
@@ -1238,7 +1238,16 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     projection.enter_view.effect_protected_lock.present
                         == projection.enter_view.durable_lock_after.present,
                     projection.enter_view.following_fetch_lock.present
-                        == projection.enter_view.durable_lock_after.present
+                        == projection.enter_view.durable_lock_after.present,
+                    production_enter_view_retains_high_prepare_qc_identity(
+                        projection.enter_view
+                    ),
+                    projection.enter_view.prepare_control_slot_present_after
+                        == projection.enter_view.durable_highest_after.present,
+                    certificate_identity_equal_body!(
+                        projection.enter_view.retained_prepare_qc_after,
+                        projection.enter_view.durable_highest_after
+                    )
                 """,
                 verified_kernel=(
                     "production_enter_view_uses_post_install_effective_lock_kernel"
@@ -1252,7 +1261,8 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_body=(
                     "effective_lock_trace_claim_body!(trace, 1u8) "
-                    "&& enter_view_locked_prepare_qc_identity_body!(enter_view)"
+                    "&& enter_view_locked_prepare_qc_identity_body!(enter_view) "
+                    "&& enter_view_high_prepare_qc_control_identity_body!(enter_view)"
                 ),
                 theorem_kernel_projection=(
                     "production_enter_view_effective_lock_trace(projection), "
@@ -1564,7 +1574,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="reconcile_protected_lock",
                         item_token_sha256=(
-                            "b996cc6d47c73e3d22095b9ab534d2b1679c81c847536ef1faeac20c839e116e"
+                            "a97368bb3587961e9c93f294ef8089a53cebe8e8ebbf7c54782e567820f6cf19"
                         ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
@@ -1626,7 +1636,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="plan_certified_view_body_cleanup",
                         item_token_sha256=(
-                            "b053bbdb7f1f88f72046618e6e3dd9fa02d33ac9910bc14d1d17caad3aad25ca"
+                            "ef98ad6c9b7bc9b0ec4f04bfa86479cdc1d10f0bfb29802afd5b2878d5ef5374"
                         ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
@@ -1893,20 +1903,26 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     ) <= 1u64,
                     projection.durable_sequence_after
                         >= projection.durable_sequence_before,
-                    projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+                    projection.boundary_claimed.kind
+                        == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
                         ==> projection.durable_sequence_before < u64::MAX,
-                    projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+                    projection.boundary_claimed.kind
+                        == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
                         ==> projection.pending_after.persistence_id
                             == projection.durable_sequence_before + 1,
-                    projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+                    projection.boundary_claimed.kind
+                        == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
                         ==> projection.durable_sequence_after
                             == projection.durable_sequence_before,
-                    projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+                    projection.boundary_claimed.kind
+                        == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
                         ==> projection.durable_sequence_before < u64::MAX,
-                    projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+                    projection.boundary_claimed.kind
+                        == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
                         ==> projection.durable_sequence_after
                             == projection.durable_sequence_before + 1,
-                    projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+                    projection.boundary_claimed.kind
+                        == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
                         ==> projection.pending_before.persistence_id
                             == projection.durable_sequence_after
                 """,
@@ -1925,13 +1941,13 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verified_kernel_const=False,
                 verified_kernel_shared_macro_sha256=(
                     ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
-                    ("production_durable_intent_trace_body", "72fa64768a64c55d5c08f337a616e2744a3c5a9ff2ee29a8a135872482dce65c"),
+                    ("production_durable_intent_trace_body", "6c6e9eee17b1784b92d40295b63404ca0fee62d56790919cc06cd7c46f0ce24f"),
                     ("pending_projection_is_absent_body", "1ee3ae9d3fa183f21f330af54f681f77c7c54300b6c436f34ff47fca238871ac"),
-                    ("pending_projection_equal_body", "76c11e957c8c596fed3caa5b3685c25b1fdd351b82ebdbb9b12c10cd30577f8"),
+                    ("pending_projection_equal_body", "76c11e957c8c596fed3caa5b3685c25b1fdd3511b82ebdbb9b12c10cd30577f8"),
                     ("pending_projection_matches_boundary_body", "5cc9a32b9cbe39fa8eb953596b684503b349ea2bb7e7b8a4771465f040478772"),
-                    ("pending_round_can_begin_body", "0f582e32bc81d4f4028457d97b8ade155c86cdf0a06bebbcea4f74c36bf12c3d"),
-                    ("pending_round_can_acknowledge_body", "f4e22d93521a33074dbc5e8ce89c47a4bf5756aba20c91a4e3a2a1e58b727cf2"),
-                    ("wal_record_proposal_round_is_exact_body", "e2cdf15b45ca6f5ce5d47aa28c219e9bc5b36419429b74b9bed42a6044746046"),
+                    ("pending_round_can_begin_body", "382f5b2b4d7ab9fa32b8c9784e6ac71055c0935904f30e16cf86f31f6a147125"),
+                    ("pending_round_can_acknowledge_body", "021be2defb51215c450d02671ada160c70d92697f2e702bfc8e7e1c91b016b39"),
+                    ("wal_record_proposal_round_is_exact_body", "2d0dcc4843df453a63f1a085b2ae7d515cf655ec6080f5f57bd0d5631948ef22"),
                     ("wal_record_round_matches_owner_body", "9ae760541518b7040a1b85a9399732ea494daaeeac74c686cf07809683c825dc"),
                     ("persist_slot_matches_boundary_body", "b5f99d1ada38d831dd5dc57759d11f02af735c4b5b7a8631f4256f67282a668d"),
                     ("tag_projection_equal_body", "d91ebfd02eabc6ce1b5ba4d26d463aab760936cd64fce0dbadd5f0ce7981fc84"),
@@ -2083,7 +2099,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="verify_pending_kura_apply_parts",
                         item_token_sha256=(
-                            "3c4a539122a8e2ecab8b283731cf4a0336762efda9f5fd56566dea21b32308fc"
+                            "ea3813c240db1a1756e948beaed9279710762fd3505e73325731b82711d727bc"
                         ),
                         projection="recovery_trace",
                         required_expression="""
@@ -2765,7 +2781,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                     self.restore_pending_flush(
                                         fanout_index,
                                         target_index,
-                                        pending_flush,
+                                        pending_flush
                                     )?;
                                     return Err(error);
                                 }
@@ -2776,7 +2792,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                 self.restore_pending_flush(
                                     fanout_index,
                                     target_index,
-                                    pending_flush,
+                                    pending_flush
                                 )?;
                                 return Err(MergeSidecarError::FlushIdentityMismatch(
                                     "sidecar flush transition failed its exact ownership kernel",
@@ -2841,7 +2857,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                     }
                                 """,
                                 item_token_sha256=(
-                                    "66f50b2b77dbabb37a75c9ca3fc76ad9a53bf648638c735518f67f1fd30f87e9"
+                                    "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887"
                                 ),
                             ),
                         ),
@@ -2914,7 +2930,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                     }
                                 """,
                                 item_token_sha256=(
-                                    "66f50b2b77dbabb37a75c9ca3fc76ad9a53bf648638c735518f67f1fd30f87e9"
+                                    "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887"
                                 ),
                             ),
                         ),
@@ -3569,7 +3585,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runner.rs",
                         item="run_inner",
                         item_token_sha256=(
-                            "8ec035abcdc7adc93d628e9f47231b5419a1c2f1d2f61b0dfc34e532b73f3389"
+                            "e48af8d484dc2fb93697b167e8edd2a96b626bfb39e84a69fc37c47c2e4169c7"
                         ),
                         projection="terminal_application,",
                         required_expression="""
@@ -3958,7 +3974,7 @@ _REPLY_ROUTE_FORMAL_SOURCE_SHA256 = {
         "b950a0c6c3ed22ecc53387de87e3c9b7e498b315ee3762e677aa3bbaec45729b"
     ),
     "SumeragiV2ReplyRouteOwnershipProofs.tla": (
-        "b7a99a9ba8148441733bd53a06394e326aa3182ee1dede013cb7bf1b60f69881"
+        "6b6f531fc48dee534265e45f86c21ada099ae4b37d2dbd0fcab23b253d9eb862"
     ),
     "SumeragiV2ReplyRoutePipeline.tla": (
         "7b2d991c537ae637df4b545f5e07c968a847892dadb771b5e1b5931585aaf012"
@@ -4794,10 +4810,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 585
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 589
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "b6dc528ea6e07d75a243a5b4ead89c83561aa9d0a74b9ac941cdf1a744078acd"
+    "4c8fadb0593206e7fcf616a2a1ba05db802aef1ea7fa0241ab275189aa271a70"
 )
 _GENESIS_HEADER_BINDING_TEST_SHA256 = (
     "8d847d27cdea09a87f5ee4ec940f60f9fa73fb85ca9a965d2a3fcac19eb3b41e"
@@ -4828,7 +4844,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::authoritative_runtime_gate_tests",
         29,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 41),
+    ("production-merge-sidecar", "merge_sidecar::tests", 45),
     ("production-v2-core", "sumeragi::v2_core::tests", 37),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     ("production-v2-core-reducer", "sumeragi::v2_core::reducer::tests", 2),
@@ -5212,12 +5228,16 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "merge_sidecar::tests::inactive_source_parking_retains_budget_and_reconnect_reuses_shared_bytes",
     "merge_sidecar::tests::parked_source_retains_capacity_and_cursor_while_alternate_source_progresses",
     "merge_sidecar::tests::exact_delivery_retry_stays_terminal_beyond_retired_ttl_horizon",
+    "merge_sidecar::tests::unsent_request_restores_holder_and_backoff_state",
+    "merge_sidecar::tests::idle_request_retry_starts_strictly_after_the_fairness_cursor",
     "merge_sidecar::tests::request_stream_close_floor_advances_only_over_a_contiguous_terminal_prefix",
     "merge_sidecar::tests::authenticated_close_floor_retires_covered_output_and_rejects_replay_or_regression",
     "merge_sidecar::tests::rejected_request_does_not_consume_server_stream_state",
     "merge_sidecar::tests::height_rollover_retries_only_each_sources_current_in_flight_chunk",
     "merge_sidecar::tests::durable_requester_restart_advances_sequence_and_carries_close_floor",
     "merge_sidecar::tests::durable_requester_crash_before_send_closes_unobserved_sequence",
+    "merge_sidecar::tests::durable_semantic_peer_history_is_roster_bounded_not_connection_bounded",
+    "merge_sidecar::tests::durable_lifecycle_rejects_canonical_payload_with_stale_digest",
     "merge_sidecar::tests::durable_responder_restart_preserves_same_hub_gate_budget",
     "merge_sidecar::tests::durable_responder_restart_allows_new_source_while_recovered_source_is_offline",
     "merge_sidecar::tests::durable_responder_restart_preserves_terminal_source_cursor_and_rebinds_capability",
@@ -5323,7 +5343,7 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
     ),
     "step": "4f67388fcb627e5c5f5926d403e53e0906466d87e8498cd264254c8534761176",
     "step_pending_tip_recovery": (
-        "2489b7f110f3baa4ec2157895aa967b27359103572187bcb2670581e17580917"
+        "3b8447ebe8e67eb95548d9eb4193fd789e7b171665ff62aaeec271cd1fef8279"
     ),
 }
 
@@ -5379,7 +5399,8 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
 _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
     "CertifiedMergeSidecarChunkAdmission::from_admitted_reply": "6aab4029fd336b2651d767106862270fd1ac3accb751fbfffe2e5335e21523ca",
     "apply_reliable_flush_application": "93912d6c690daa60be7fda65daa0a997a0e55839d3661560ada00aaca8dd8a52",
-    "MergeSidecarTransport::with_limits": "20b2a5a3cb34f03102083d5e2826410fa41fd6c6f4b8c78e52759dd0e6744e4c",
+    "MergeSidecarTransport::with_limits": "1daab14ca43158166ca7c626859b20d9507dd3d4b0a36d4dc8e6cd2b31b0b12d",
+    "MergeSidecarTransport::begin_request_or_close": "8fae96ccb47e45e090ba0ddad6359153951f47583e23be35c6eccfa6ce61e3ca",
     "MergeSidecarTransport::release_unsent_request": "fe1c4c45bc3e04b6808bab3f031e8d790d391ab98e4a7a0206efb442dbb9a83d",
     "MergeSidecarTransport::release_authorized_server_request_attempts": "713f97a0a252983fffcd258d631f1052cd3801f634d8554d1febcdc65cf689d9",
     "MergeSidecarTransport::park_authorized_server_request_attempts": "a7f6ad8f3a595fe655f0535b11d2564a2a783d60df1cc6bebeadb704606e96f6",
@@ -5398,10 +5419,10 @@ _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
     "MergeSidecarTransport::can_add_outbound_attempt": "7ec9222597fcb0ada3b06a589d775066cd94335c8d6bb2cfcb2f685fb922c43d",
     "MergeSidecarTransport::admit_server_request": "3f00248661a4307ef6866f7427b0b8dfd744b2c9b780ff78296d3aba4de501b5",
     "MergeSidecarTransport::cancel_unmaterialized_server_request": "8cd27f5a91bf9eff9187074d64afb267917af410122972436f76ede451af2da7",
-    "MergeSidecarTransport::enqueue_response": "06db7c01c56bcb8912edba949d6355e9a58871e8f7d0f4b3b836d556e9c3e98d",
+    "MergeSidecarTransport::enqueue_response": "a979f4115abcb46c4582334e5b08c24ff556828fe9364a0e4e88b8473224df83",
     "MergeSidecarTransport::drain_outbound_chunks_durable": "ad49951ee72490f77843f5af216c5c8cc431a265c4f0078cab8f62d5a6694c52",
     "MergeSidecarTransport::acknowledge_outbound_chunk": "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887",
-    "MergeSidecarTransport::tick_bounded": "e71c167138c9e4cc238cabd44177ee221d5a482840200bb8b54c760717ad47ff",
+    "MergeSidecarTransport::tick_bounded": "9791fb641b015423a5561f39897473ad2b22be66324fd7eea6e8fdc9b25ff048",
 }
 
 # Complete seals for the crash-safe semantic request lifecycle. Process-local
@@ -5415,25 +5436,27 @@ _PRODUCTION_MERGE_SIDECAR_LIFECYCLE_ITEM_SHA256 = {
     "RequestStreamState::acknowledge_close": "d09a3a3a80625ea0ba3f2db5abc96357f29c0b34bb6f2f06c9ea7f42b3d2c792",
     "ServerRequestSource::budget_source": "ff85c7db75fcbff14abacdbd2d23351e5c244b8046989f7ed6d8feb2bfe59663",
     "ServerRequestSource::shares_budget_with": "d2fccc4fab299dac39f9a6bac5639887a4dd6e115eae29ec90579da93c75051e",
+    "MergeSidecarLifecycleSnapshotV1::new": "e21bb0885182d8e5be8006b9b0c86c55416860dc64ea69e3d31ff0733a9675a0",
+    "MergeSidecarLifecycleSnapshotV1::integrity_is_valid": "413dd7181f9898e41bb9b9f2bb826ceaa793c44f9a4a12943d36fe58ae32cf0c",
     "MergeSidecarLifecycleJournal::open": "5e14c7591f429b55a8fe59e75a64523791547f044d5ab187cf1d3e81dab9cd71",
     "MergeSidecarLifecycleJournal::remove_stale_temp": "173d1488eb43c7f2f491f61736e9cf1595eba798a3b6fa8ad730ce1a0ca046c7",
-    "MergeSidecarLifecycleJournal::load": "b8405da996d80a98141bb626a7132e086c69a58b8f5f55254ea9e2672394cf1b",
-    "MergeSidecarLifecycleJournal::persist": "90490ef9cfcd7361648df2b674023bc46d91d0a4bcfb7c467a8d7a6ff89e52bc",
-    "MergeSidecarTransport::lifecycle_geometry": "ad4844574d7d4426af5e487c3cbc0a6d60cc0c9b0187c67773da4f2667e8a27b",
-    "MergeSidecarTransport::lifecycle_max_snapshot_bytes": "06da18ef9eb6cce9d14f2e1a19488f9d4a7950e61e2d86060a8dcd06e5aa0888",
-    "MergeSidecarTransport::lifecycle_snapshot": "503b8589aefe2963d22a0f1fe3258be475be3076627c2d5b1087d82cdc91156e",
-    "MergeSidecarTransport::restore_lifecycle_snapshot": "232bb68948f5a1a4b0d19ff85782a4bcbec763988ae9ebeccabf3caa4850e4af",
+    "MergeSidecarLifecycleJournal::load": "e1bbadf5248422a734e9ec3369decb5650da1f63a5cf219e00a3578b0d1884bc",
+    "MergeSidecarLifecycleJournal::persist": "9d6de2e9846d05bb2668435291ecd247a4b3e9810ae76f97469b13bba5ceb12c",
+    "MergeSidecarTransport::lifecycle_geometry": "70fef8b283a94b5fd5776faa2ace4e04a6273ecaaa1813e3a9fe6f94a8c66cc3",
+    "MergeSidecarTransport::lifecycle_max_snapshot_bytes": "80af92d3eca998f2e91b2b01f030c5f99a0a421ab83532d5b998bf23f995ff34",
+    "MergeSidecarTransport::lifecycle_snapshot": "d09d1ae7ebae28a5684d67d09ab58f3521a5023679c0c832680e3b949e0adca2",
+    "MergeSidecarTransport::restore_lifecycle_snapshot": "687b87ba2917bb2a2e2f19d096e5e6d79cbb2cef03dd6bdf6c711855534930a8",
     "MergeSidecarTransport::open_durable": "f89704ba4ec24568477f0a27dbaead034d93cad7d6c6045e6dcb15fbc2997ccb",
     "MergeSidecarTransport::persist_lifecycle_state": "a052c4c94221392d81def550fb207ceafb5ccc032b53f900ced4ea35ea2cf936",
     "MergeSidecarTransport::rehydrate_with_exact_geometry": "bcaf62cead811469e28d1155461d6d8cc3d297878968c4562e0aa7578b890221",
-    "MergeSidecarTransport::allocate_request_sequence": "b17ef2905195d8fb14f481214098b8b4ce76b64a8239cb3a6ce4e02c9c3a343e",
+    "MergeSidecarTransport::allocate_request_sequence": "a41c58ba4be0abfe52b73f43f98691d7dee7b5ab02294019aa61919b15480b54",
     "MergeSidecarTransport::close_request_sequence": "839b47a16abe23b50cbf345b4cb168831eb202f8d46841742a86be369ef01755",
     "MergeSidecarTransport::begin_close": "023c75991bc11e8528e4692fb11101e1e565f18f496be829eb20a4935f13a9f0",
     "MergeSidecarTransport::begin_request": "3db840b5e6868055159e811510a994c8a721c645f382892d2cb4c803651b1c08",
     "MergeSidecarTransport::acknowledge_close": "f838fffb1be6bbebee2ea010cc9cae0baa580c8be55aed53b3f48ea3fae19988",
-    "MergeSidecarTransport::preflight_server_request_stream": "6c8015fef6178ba0500b4dcac8b050a0eb6b6b80aa0604f73db5d81e8a568929",
+    "MergeSidecarTransport::preflight_server_request_stream": "5e5fbb25850e8513088b2cf52b293e194355f00d2f941447352cbe3d8695f887",
     "MergeSidecarTransport::advance_server_close_floor": "2de4301fbec67a1372fa0195797b4a3d63d27faf80b319423b50b3ff0e27e0a9",
-    "MergeSidecarTransport::admit_server_close": "e965765cee88e86ff7c61ba237c8297123309ab13409c70577097886119654ec",
+    "MergeSidecarTransport::admit_server_close": "20271f60864d8c2f8e3e7cf135480fcf03f8c28884432b1a709ffe1c04548f45",
     "MergeSidecarTransport::server_gate_attempt_count_after_close": "928c60127f080278e5d418bc01624b8a14716d8143d08338f362556e3305ea2c",
     "MergeSidecarTransport::source_gate_count_after_close": "c8cf9807842ff0adf0ada5ca52765a22301490a9da4bb76dbe642b62eb8f216f",
     "MergeSidecarTransport::drain_outbound_chunks_inner": "c78a0bfefa93fee0f333ceea76d47e29aa63cf8e03f00c0bd52fc0f4f1ba1028",
@@ -5444,11 +5467,12 @@ _PRODUCTION_MERGE_SIDECAR_LIFECYCLE_ITEM_SHA256 = {
 
 _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkLimits::new": "5224fe67da91d648fef4cb803ffcd48e972fbd3b32dc85917773666adf39235e",
-    "V2LaneWorkAdapter::new_with_output_guard": "711699f1b4bcda1a0b137d86abde0fb573a789ad3d1230feba67f02ca24b328f",
     "V2LaneWorkAdapter::new_with_output_guard_and_transport": "8c237674e099cdee8fe9bc7b6a2558a0380fc8e1381a498fb992f593a3963eeb",
     "V2LaneWorkAdapter::accept_relay_message": "8c307167fe5ea486fc509817d12c352fa8a831751e0e7fc1342b6d43b6ef00bf",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar": "4619524497bfb871606a88c0987363fe5ce70fe9d0f7249d0c9d915731f44b19",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar_request": "7f610f27c4d1e26e4db4b9ec7fcc8bcf6e4741a4805d03613ff2d15f7e8d3d2f",
+    "V2LaneWorkAdapter::persist_anchored_sessions": "40f2ca1c93171337adae168019d2f28ca65acf838da2e9011f6e751ad775876f",
+    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "b716b4d92ddd3c4e80e6999bd7aee543701e2727bef70841c2bf89f38ff5a3f1",
     "V2LaneWorkAdapter::next_effect": "6bb449d70a60394b3ad3fa55fcbb7aa01b0815a51b97087909fc22ee0fe80a3b",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
@@ -5945,7 +5969,7 @@ _PRODUCTION_P2P_RECEIVER_FRAME_ITEM_SHA256 = {
         "cb0e506080c0985c5f81c5c567250e143d072f2f23e06b4072cb3d2b739a8212"
     ),
     "parse_next_encrypted_frame": (
-        "5e97b871b18bf572b308816c2ca9c1041296eb82820e7a361c3e34e8dc1ee019"
+        "95da490e1c30cfe119fe51a31fffb2b08287efab0e0e3134d7d5face610f3212"
     ),
 }
 _PRODUCTION_P2P_SOURCE_OWNERSHIP_ITEM_SHA256 = {
@@ -5987,7 +6011,7 @@ _PRODUCTION_P2P_START_FRAME_ITEM_SHA256 = {
         "5305bae9d0febfc2a1348f8f3b9737fb5155a62084a80f731d75bc372ea3bbcd"
     ),
     "start_with_crypto": (
-        "7030ac7bb0bcb8cd6ba75235ea94b03278ed00d1baabd8e463fcf3db1ea112b2"
+        "90be87dcd2e0261a837303e9f3b78a3f3d64cd36c25d556c6e22d99ce0aff595"
     ),
 }
 _PRODUCTION_P2P_RELIABLE_PEER_ITEM_SHA256 = {
@@ -6081,7 +6105,7 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "555b18d0375cc9268d427b6fb04e05b1d5a48099d8bb48921ea85ea1c19e77b8"
     ),
     "authenticated_via": (
-        "d22cd3f69572010f93d6ff0e1d4d216ec8e084a4b7a7ff49969c669cd15eef4c"
+        "3e66e6dd0a33ffb60c71db2a4f306abe6c733d54558b94559664503576695de2"
     ),
     "same_tenure": (
         "6119490d174355c24153db559dc66834d10bee4f81c3dbcbaab9fb460cbb24a5"
@@ -6180,7 +6204,7 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "b938440d9f487ac064ca8ac46269d88551da51349ce14b4e470c87d672e82888"
     ),
     "submit_progress_message_to_source": (
-        "6987ce3c6eaf5db107896e749d2964d65b6e18c3c61e8b70cf0bea9b4f95babe"
+        "7fdcb421a2d88bae3aa36e668308de45c1599d69035a73a540823836fca52227"
     ),
     "new_targeted_post": (
         "888dd40f150e73106406cd89204dcbe27400a7a3c79324792030bc7669f08ea5"
@@ -6339,7 +6363,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "5904b0cb28ad048ab778e75e1f99bc19336b6712d817d33ac7a07e050f25c7e3"
     ),
     "fair_v2_ingress_required_quorum_certificate_bytes": (
-        "5bb74cbb0b57aca8bfd89205594b38c91d4b212f5d256b13636499c3424216ea"
+        "0335a87586cee9c0d8bf68ba87581f873ccbfdce5c316b1e033ccf0019801629"
     ),
     "fair_v2_ingress_required_proposal_bytes": (
         "f87150d121741f99778f8108a82cc95a0811afe51edae3cf06ee8e955337985b"
@@ -6397,7 +6421,7 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "4a438064a15934103937a5cf29a93e0f2bb8bdd07b3838ea01118dcf63859ba1"
     ),
     "try_push_at": (
-        "3d9ee875b919df50d2d6937a2f2c526843b83ffee934860f4248907f6e923fef"
+        "08f9e38eb05f91f9daab74242d05409afd7738ea3dd16cd3ee22f625f7316b02"
     ),
     "try_recv_if_at": (
         "37b785d44e6fecf30b3d63ce5f90dcde39fe6584d91c6678b97401b6fb22a4db"
@@ -6434,10 +6458,17 @@ def _rust_statement_token_sha256(statement: RustStatement) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+@lru_cache(maxsize=512)
 def _rust_delimiter_context(
     structural_source: str, end: int
 ) -> tuple[tuple[str, int, tuple[str, ...]], ...]:
-    """Return every unmatched delimiter ancestor enclosing ``end``."""
+    """Return every unmatched delimiter ancestor enclosing ``end``.
+
+    Item extraction asks for the same context separately when binding brace,
+    delimiter, and ancestor-attribute ownership. Cache that immutable parse so
+    mutation-matrix validation does not rescan a large production file for
+    each view of the same item.
+    """
 
     stack: list[tuple[str, int, tuple[str, ...]]] = []
     matching = {')': '(', ']': '[', '}': '{'}
@@ -8390,6 +8421,83 @@ def _expanded_tla_alias(source: str, expression: str) -> str:
     return current
 
 
+def _cross_tool_tla_module_closure(
+    formal_dir: Path, module: str
+) -> tuple[tuple[str, Path, str], ...]:
+    """Return the local module and every repository-owned inherited provider."""
+
+    ordered: list[tuple[str, Path, str]] = []
+    visited: set[str] = set()
+    active: set[str] = set()
+
+    def visit(current: str, *, required: bool) -> None:
+        if current in visited:
+            return
+        if current in active:
+            raise ValueError(
+                f"cyclic TLA+ EXTENDS chain in cross-tool seam through {current}"
+            )
+        path = formal_dir / f"{current}.tla"
+        if not path.exists():
+            if required:
+                raise ValueError(
+                    f"cross-tool TLA source is not a regular file: {path}"
+                )
+            return
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(
+                f"cross-tool TLA source is not a regular file: {path}"
+            )
+        source = path.read_text(encoding="utf-8")
+        header = MODULE_HEADER_RE.search(source)
+        if header is None or header.group(1) != current:
+            raise ValueError(
+                f"cross-tool TLA provider {path} must declare module {current}"
+            )
+        active.add(current)
+        ordered.append((current, path, source))
+        for inherited in _module_extends(source):
+            visit(inherited, required=False)
+        active.remove(current)
+        visited.add(current)
+
+    visit(module, required=True)
+    return tuple(ordered)
+
+
+def _cross_tool_tla_declaration(
+    closure: Sequence[tuple[str, Path, str]],
+    symbol: str,
+    *,
+    kind: str,
+) -> tuple[str, Path, str, tuple[str, int]] | None:
+    """Resolve one unique top-level declaration through an ``EXTENDS`` closure."""
+
+    if kind == "operator":
+        extractor = _top_level_operator_body
+    elif kind == "theorem":
+        extractor = _top_level_theorem_body
+    else:
+        raise ValueError(f"unsupported cross-tool TLA declaration kind {kind!r}")
+    matches = [
+        (module, path, source, declaration)
+        for module, path, source in closure
+        if (
+            declaration := extractor(
+                source, symbol, preserve_string_contents=True
+            )
+        )
+        is not None
+    ]
+    if len(matches) > 1:
+        providers = [module for module, _, _, _ in matches]
+        raise ValueError(
+            f"cross-tool TLA {kind} {symbol} has multiple inherited providers "
+            f"{providers!r}"
+        )
+    return matches[0] if matches else None
+
+
 def _cross_tool_tla_payload(
     contract: CrossToolObligationContract,
     *,
@@ -8414,19 +8522,18 @@ def _cross_tool_tla_payload(
     if tlaps_evidence.get("backend_verification") is not True:
         raise ValueError("cross-tool TLAPS evidence is not backend verified")
 
-    module_path = formal_dir / f"{contract.module}.tla"
-    if not module_path.is_file() or module_path.is_symlink():
-        raise ValueError(
-            f"cross-tool TLA source is not a regular file: {module_path}"
-        )
-    module_source = module_path.read_text(encoding="utf-8")
+    closure = _cross_tool_tla_module_closure(formal_dir, contract.module)
+    module_source = "\n".join(source for _, _, source in closure)
     premise = contract.tla_statement.split(" => ", maxsplit=1)[0]
-    premise_operator = _top_level_operator_body(module_source, premise)
-    if premise_operator is None:
+    premise_declaration = _cross_tool_tla_declaration(
+        closure, premise, kind="operator"
+    )
+    if premise_declaration is None:
         raise ValueError(
             f"cross-tool obligation {contract.obligation_id} is missing "
             f"production premise {contract.module}!{premise}"
         )
+    premise_module, _, _, premise_operator = premise_declaration
     premise_body, _ = premise_operator
     observed_premise = " ".join(premise_body.split())
     expected_premise = " ".join(
@@ -8453,15 +8560,11 @@ def _cross_tool_tla_payload(
                 f"cross-tool obligation {contract.obligation_id} has unsupported "
                 f"ledger declaration kind {ledger_kind!r}"
             )
-        ledger_operator = _top_level_operator_body(
-            module_source,
-            contract.ledger_symbol,
-            preserve_string_contents=True,
+        ledger_operator = _cross_tool_tla_declaration(
+            closure, contract.ledger_symbol, kind="operator"
         )
-        ledger_theorem = _top_level_theorem_body(
-            module_source,
-            contract.ledger_symbol,
-            preserve_string_contents=True,
+        ledger_theorem = _cross_tool_tla_declaration(
+            closure, contract.ledger_symbol, kind="theorem"
         )
         if ledger_kind == "operator":
             ledger_declaration = ledger_operator
@@ -8475,7 +8578,8 @@ def _cross_tool_tla_payload(
                 f"must be declared exactly once as a top-level {ledger_kind}, not "
                 "as a theorem/operator substitution"
             )
-        ledger_body, _ = ledger_declaration
+        ledger_module, _, _, ledger_body_with_line = ledger_declaration
+        ledger_body, _ = ledger_body_with_line
         observed_ledger_statement = _tla_statement_without_proof(ledger_body)
         expected_ledger_statement = " ".join(ledger_contract_statement.split())
         if observed_ledger_statement != expected_ledger_statement:
@@ -8484,14 +8588,15 @@ def _cross_tool_tla_payload(
                 f"{contract.module}!{contract.ledger_symbol} must state exactly "
                 f"{expected_ledger_statement!r}; found {observed_ledger_statement!r}"
             )
-    theorem = _top_level_theorem_body(
-        module_source, contract.tla_theorem, preserve_string_contents=True
+    theorem_declaration = _cross_tool_tla_declaration(
+        closure, contract.tla_theorem, kind="theorem"
     )
-    if theorem is None:
+    if theorem_declaration is None:
         raise ValueError(
             f"cross-tool obligation {contract.obligation_id} is missing named "
             f"TLA theorem {contract.module}!{contract.tla_theorem}"
         )
+    theorem_module, theorem_path, _, theorem = theorem_declaration
     theorem_body, _ = theorem
     theorem_parts = re.split(
         r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", theorem_body, maxsplit=1
@@ -8533,14 +8638,15 @@ def _cross_tool_tla_payload(
     matching = [
         entry
         for entry in modules
-        if isinstance(entry, dict) and entry.get("module") == contract.module
+        if isinstance(entry, dict) and entry.get("module") == theorem_module
     ]
     if len(matching) != 1:
         raise ValueError(
-            f"cross-tool TLAPS evidence must contain exactly one {contract.module} log"
+            f"cross-tool TLAPS evidence must contain exactly one "
+            f"{theorem_module} provider log"
         )
     entry = matching[0]
-    expected_log = f"target/formal/sumeragi_v2/tlaps/{contract.module}.log"
+    expected_log = f"target/formal/sumeragi_v2/tlaps/{theorem_module}.log"
     if entry.get("log") != expected_log:
         raise ValueError(
             f"cross-tool TLAPS evidence must use strict log {expected_log}"
@@ -8548,7 +8654,7 @@ def _cross_tool_tla_payload(
     manifest_sha256 = expected_manifest["sha256"]
     if entry.get("source_manifest_sha256") != manifest_sha256:
         raise ValueError(
-            f"cross-tool TLAPS log for {contract.module} is stale"
+            f"cross-tool TLAPS log for {theorem_module} is stale"
         )
     log_path = root_dir / expected_log
     if not log_path.is_file() or log_path.is_symlink():
@@ -8556,20 +8662,25 @@ def _cross_tool_tla_payload(
     log_sha256 = _sha256_file(log_path)
     if entry.get("log_sha256") != log_sha256:
         raise ValueError(
-            f"cross-tool TLAPS log digest mismatch for {contract.module}"
+            f"cross-tool TLAPS log digest mismatch for {theorem_module}"
         )
     proved = _tlapm_obligation_count(
         log_path.read_text(encoding="utf-8"),
-        module=contract.module,
+        module=theorem_module,
         source_manifest_sha256=manifest_sha256,
     )
     if proved is None or proved <= 0 or entry.get("obligations_proved") != proved:
         raise ValueError(
-            f"cross-tool TLAPS log for {contract.module} lacks a fresh strict "
+            f"cross-tool TLAPS log for {theorem_module} lacks a fresh strict "
             "successful result"
         )
     return {
         "module": contract.module,
+        "providers": {
+            "premise": premise_module,
+            "ledger": ledger_module if ledger_kind is not None else None,
+            "theorem": theorem_module,
+        },
         "theorem": contract.tla_theorem,
         "statement": contract.tla_statement,
         "ledger_definition": (
@@ -8590,7 +8701,7 @@ def _cross_tool_tla_payload(
         "normalized_consequent_sha256": hashlib.sha256(
             expanded_consequent.encode("utf-8")
         ).hexdigest(),
-        "source_sha256": _sha256_file(module_path),
+        "source_sha256": _sha256_file(theorem_path),
         "log": expected_log,
         "log_sha256": log_sha256,
         "obligations_proved": proved,
@@ -23036,7 +23147,7 @@ let merge_signing_guard = MergeSigningGuard::open_with_committed_frontier(
         lane_path,
         lane_source,
         """
-merge_sidecars: match retained_merge_sidecars {
+let merge_sidecars = match retained_merge_sidecars {
     Some(transport) => transport.rehydrate_with_exact_geometry(
         limits.reply_source_capacity.get(),
         limits.merge_sidecar_limits,
@@ -23047,9 +23158,21 @@ merge_sidecars: match retained_merge_sidecars {
         limits.merge_sidecar_limits,
     ),
 }
+.map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
 """,
         "adapter rehydrates retained sidecar ownership only under the exact fingerprinted "
         "geometry and opens the crash-safe lifecycle journal for a fresh live transport",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        lane_path,
+        lane_source,
+        """
+merge_signing_guard,
+merge_sidecars,
+authenticated_merge_qcs: BTreeSet::new(),
+""",
+        "adapter hands the exact rehydrated sidecar transport into the live production field",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -29455,6 +29578,38 @@ def _exact_output_production_source_fidelity_errors(
     ingress_source = loaded_sources[ingress_path]
     effects_source = loaded_sources[effects_path]
 
+    semantic_peer_capacity_tokens = rust_code_tokens(
+        """
+const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize =
+    MAX_VALIDATORS_PER_HEIGHT;
+"""
+    )
+    semantic_peer_capacity_declarations = [
+        statement
+        for statement in rust_top_level_statements(merge_source)
+        if statement.tokens == semantic_peer_capacity_tokens
+    ]
+    if len(semantic_peer_capacity_declarations) != 1:
+        errors.append(
+            f"{merge_path}: certified merge semantic request history must "
+            "have exactly one top-level protocol-roster bound; found "
+            f"{len(semantic_peer_capacity_declarations)}"
+        )
+    elif semantic_peer_capacity_declarations[0].ancestor_inner_attributes:
+        errors.append(
+            f"{merge_path}:{semantic_peer_capacity_declarations[0].line}: "
+            "certified merge semantic request history must not be hidden by "
+            "a cfg/cfg_attr attribute"
+        )
+    _require_rust_source_token_sequence(
+        merge_path,
+        merge_source,
+        "semantic_peer_capacity: u64,",
+        "the durable sidecar geometry must advertise its validator-scoped semantic-peer bound",
+        errors,
+        count=1,
+    )
+
     for variant, payload in (
         ("SumeragiBlock", "BlockMessageWire"),
         ("MergeCommitteeSignature", "MergeCommitteeSignature"),
@@ -30231,6 +30386,7 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
     )
     for item_name in (
         "with_limits",
+        "begin_request_or_close",
         "release_unsent_request",
         "release_authorized_server_request_attempts",
         "park_authorized_server_request_attempts",
@@ -30276,6 +30432,10 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
             ("budget_source", "shares_budget_with"),
         ),
         (
+            "MergeSidecarLifecycleSnapshotV1",
+            ("new", "integrity_is_valid"),
+        ),
+        (
             "MergeSidecarLifecycleJournal",
             ("open", "remove_stale_temp", "load", "persist"),
         ),
@@ -30316,6 +30476,86 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
                 errors,
                 f"crash-safe sidecar lifecycle {qualified_name} production item",
             )
+
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarTransport::lifecycle_geometry"),
+        """
+semantic_peer_capacity: as_u64(MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)?,
+""",
+        "lifecycle geometry must fingerprint the validator-scoped semantic-peer bound independently of concurrent reply sources",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::lifecycle_max_snapshot_bytes"
+        ),
+        """
+let stream_bytes = MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+    .checked_mul(3)
+    .and_then(|count| count.checked_mul(LIFECYCLE_JOURNAL_STREAM_BYTES))
+    .ok_or(MergeSidecarError::Capacity(
+        "lifecycle journal stream byte geometry",
+    ))?;
+""",
+        "lifecycle byte geometry must reserve requester streams plus responder close-floor and high-water maps for every semantic validator",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::restore_lifecycle_snapshot"
+        ),
+        """
+if snapshot.request_streams.len() > MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+    || snapshot.server_closed_through.len() > MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+    || snapshot.server_highest_sequence.len() > MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+    || snapshot.server_request_gates.len() > self.server_request_gate_capacity
+{
+""",
+        "lifecycle restoration must separate validator-scoped semantic histories from concurrent authenticated-source gate geometry",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::allocate_request_sequence"
+        ),
+        """
+if !self.request_streams.contains_key(responder)
+    && self.request_streams.len() >= MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+{
+""",
+        "requester-side holder rotation must be roster-bounded rather than connection-bounded",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::preflight_server_request_stream"
+        ),
+        """
+if !self.server_closed_through.contains_key(sender)
+    && self.server_closed_through.len() >= MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+{
+""",
+        "responder-side semantic requester history must be roster-bounded rather than active-gate-bounded",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarTransport::admit_server_close"),
+        """
+if self.server_closed_through.len() >= MAX_CERTIFIED_MERGE_SEMANTIC_PEERS {
+    return Err(MergeSidecarError::Capacity(
+        "server semantic requester geometry",
+    ));
+}
+""",
+        "a first-observation Close must share the same validator-scoped semantic requester bound",
+        errors,
+    )
 
     worker_ack_items: dict[str, RustItem | None] = {}
     for impl_name, item_names in (
@@ -30388,11 +30628,12 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
         )
     }
     for item_name in (
-        "new_with_output_guard",
         "new_with_output_guard_and_transport",
         "accept_relay_message",
         "accept_certified_merge_sidecar",
         "accept_certified_merge_sidecar_request",
+        "persist_anchored_sessions",
+        "hydrate_canonical_lane_artifacts",
         "next_effect",
         "effect_count",
         "requeue_effect",
@@ -30417,8 +30658,7 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
                 errors,
                 f"lane sidecar ACK bridge {item_name} production item",
                 expected_attributes=("#[allow(clippy::too_many_arguments)]",)
-                if item_name
-                in ("new_with_output_guard", "new_with_output_guard_and_transport")
+                if item_name == "new_with_output_guard_and_transport"
                 else (),
             )
         )
@@ -30593,7 +30833,7 @@ enum ServerResponseCursor {
         """
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct MergeSidecarLifecycleSnapshotV1 {
+struct MergeSidecarLifecyclePayloadV1 {
     version: u8,
     geometry: MergeSidecarLifecycleGeometryV1,
     request_streams: Vec<RequestStreamLifecycleV1>,
@@ -30601,8 +30841,24 @@ struct MergeSidecarLifecycleSnapshotV1 {
     server_highest_sequence: Vec<PeerSequenceLifecycleV1>,
     server_request_gates: Vec<ServerRequestGateLifecycleV1>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct MergeSidecarLifecycleSnapshotV1 {
+    payload: MergeSidecarLifecyclePayloadV1,
+    payload_hash: HashOf<MergeSidecarLifecyclePayloadV1>,
+}
 """,
-        "the durable sidecar snapshot must use canonical Norito and contain only stable bounded semantic lifecycle state",
+        "the durable sidecar snapshot must wrap stable bounded semantic lifecycle state in a typed integrity digest",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarLifecycleSnapshotV1::integrity_is_valid"
+        ),
+        "self.payload_hash == HashOf::new(&self.payload)",
+        "the durable sidecar snapshot integrity check must bind the complete canonical payload",
         errors,
     )
     _require_rust_token_sequence(
@@ -30657,8 +30913,27 @@ if canonical != bytes {
         "lifecycle journal is not canonical Norito".to_owned(),
     ));
 }
+if !snapshot.integrity_is_valid() {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "lifecycle journal payload digest mismatch".to_owned(),
+    ));
+}
 """,
-        "lifecycle recovery must accept only a byte-for-byte canonical Norito snapshot",
+        "lifecycle recovery must accept only byte-for-byte canonical Norito with a valid typed payload digest",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarLifecycleJournal::persist"),
+        """
+if !snapshot.integrity_is_valid() {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "lifecycle journal payload digest mismatch".to_owned(),
+    ));
+}
+let bytes = norito::to_bytes(snapshot)
+""",
+        "lifecycle publication must reject an in-memory snapshot whose typed payload digest is stale",
         errors,
     )
     _require_rust_token_sequence(
@@ -30687,6 +30962,22 @@ fs::rename(&temp, self.state_path())
 Self::sync_directory(&self.directory)
 """,
         "lifecycle publication must atomically rename and fsync the containing directory",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::restore_lifecycle_snapshot"
+        ),
+        """
+if !snapshot.integrity_is_valid() {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "lifecycle journal payload digest mismatch".to_owned(),
+    ));
+}
+let snapshot = snapshot.payload;
+""",
+        "lifecycle restoration must independently reject a stale typed payload digest before interpreting any semantic floor",
         errors,
     )
     _require_rust_token_sequence(
@@ -30913,7 +31204,8 @@ pub(crate) fn with_limits(
         outbound: BTreeMap::new(),
         outbound_order: VecDeque::new(),
         tick_response_next: true,
-        tick_close_next: true,
+        tick_close_next: false,
+        timeout_retry_close_deferred: false,
         server_request_gates: BTreeMap::new(),
         request_streams: BTreeMap::new(),
         server_closed_through: BTreeMap::new(),
@@ -30925,6 +31217,38 @@ pub(crate) fn with_limits(
 """,
         "sidecar source geometry must reject zero and install every checked corridor bound",
         errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_ack_items.get("MergeSidecarTransport::with_limits"),
+        "tick_close_next: false",
+        "sidecar request/close fairness must service an initial progress-bearing request before alternating closes",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_ack_items.get("MergeSidecarTransport::tick_bounded"),
+        """
+if closed_any {
+    if self.timeout_retry_close_deferred {
+        self.tick_close_next = true;
+    } else {
+        self.tick_close_next = false;
+        self.timeout_retry_close_deferred = true;
+    }
+    self.persist_lifecycle_state()?;
+}
+""",
+        "a newly timed-out sidecar fetch may preempt administrative closure only once before retained Close debt wins the bounded service slot",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_ack_items.get("MergeSidecarTransport::begin_request_or_close"),
+        "self.timeout_retry_close_deferred = false;",
+        "servicing a sidecar Close must discharge retained timeout-preemption debt",
+        errors,
+        count=2,
     )
     _require_rust_token_sequence(
         merge_path,
@@ -31502,7 +31826,7 @@ if update == NetworkReplyRouteSourceUpdate::Exact {
         merge_path,
         merge_ack_items.get("MergeSidecarTransport::enqueue_response"),
         "Self::park_authorized_server_request_attempts(gate, now);",
-        "only completed-race or successfully materialized response work may consume its terminating retry authorization",
+        "completed-race and admitted materialized response work must pass through terminal parking before partitioned sources are restored",
         errors,
         count=2,
     )
@@ -31524,6 +31848,14 @@ if update == NetworkReplyRouteSourceUpdate::Exact {
         merge_ack_items.get("MergeSidecarTransport::enqueue_response"),
         """
 Self::park_authorized_server_request_attempts(gate, now);
+for source in capacity_rejected_attempts {
+    let attempt = gate
+        .attempts
+        .get_mut(&source)
+        .expect("capacity-rejected source remains in its semantic gate");
+    attempt.materialization_retryable =
+        matches!(attempt.cursor, ServerResponseCursor::Pending(_));
+}
 let mut attempts = BTreeMap::new();
 for (source, reply_route, resume_chunk) in admitted_attempts {
     self.outbound_order.push_back((key.clone(), source.clone()));
@@ -31548,7 +31880,7 @@ let replaced = self.outbound.insert(
 );
 debug_assert!(replaced.is_none());
 """,
-        "partial materialization must retain dormant sources while installing only admitted sources at their preserved cursors",
+        "partial materialization must keep capacity-partitioned pending sources retryable after shared bytes retire while installing only admitted sources at their preserved cursors",
         errors,
     )
     _require_rust_token_sequence(
@@ -33016,6 +33348,27 @@ for post in sidecar_posts {
 }
 """,
         "sidecar retransmission must preserve bounded transport fairness through fail-stop handoff",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::persist_anchored_sessions"),
+        """
+self.hydrate_canonical_lane_artifacts()?;
+self.collect_committed_lane_sessions();
+""",
+        "late canonical lane hydration must precede committed-session collection",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::hydrate_canonical_lane_artifacts"),
+        """
+let _ = self
+    .lane_sessions
+    .insert_recovered_proposal_replacing_uncommitted_conflict(proposal);
+""",
+        "late canonical lane hydration must retain the exact proposal as bounded recovery work",
         errors,
     )
     _require_rust_token_sequence(
@@ -41767,8 +42120,8 @@ def _production_liveness_release_inventory_errors(
             f"{release_path}: production liveness source count must be sealed as "
             f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
         )
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 322:
-        errors.append("internal release-regression seal must contain exactly 322 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 326:
+        errors.append("internal release-regression seal must contain exactly 326 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -42396,21 +42749,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "inventory to 585 tests across 39 modules. Together with "
+            "inventory to 589 tests across 39 modules. Together with "
             "the source-sealed\ncommand and tooling legs, the pre-network "
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "585-test, 39-module inventory. The complete source-sealed "
+            "589-test, 39-module inventory. The complete source-sealed "
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
-            "inventory to 585 exact tests across 39 modules and "
+            "inventory to 589 exact tests across 39 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
@@ -42637,7 +42990,7 @@ REPLAY_TRACE_SOURCE_SHA256 = {
         "15061cb4e7cfeacc9f121c2ca95c1bcd7a6eb27cc49d16629934769ba8d4532d"
     ),
     "scripts/formal/run_sumeragi_v2_harness.sh": (
-        "517df2246e35c73158267ddcbe3485ec1e10e9ff010a18d59acd0837e4275be8"
+        "d3637e08cd97783506adb397a97885ac27daa4633abccdd38fbe7a47b78eeac1"
     ),
 }
 
@@ -43499,7 +43852,7 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "c50d463074ad62174e7309a747988e14eb6e80391b8aeb727e2d45c8744f86c3"
+        "533255b708b6c9f084a369b02264a448674e357c2d34f2dde396ca222568354f"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
         "39db66a694be27a6243b773f073af8b7e01a1348482041e6e40dc7763a80f3e2"
@@ -43514,10 +43867,10 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "d9b9799d17ac1f84b9e166ad04640606c55337c474cc5a29a7bd8ceb45a6613c"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "97d3bdd1408a4acb406bb7a1ce6a560db978badd225165d81cefbdbd37cc1cbb"
+        "833b33f94b232078fcc03518e552c51aed987bea51ac6fc34cdb2aac7e6598a3"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "a1a9a39721f3de6c7ef65d3d6bafdd3b5b78786df68b2c31ca38479d9ff76ad5"
+        "06d94aa8755853ae13a2ed539882d569607fc12c68c655f905c4802583ebeddf"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "c64307cb8a40f5f5c4e36455e0cccf930da2b6fde3980274aa05d7af84bce576"
@@ -45653,6 +46006,7 @@ def validate_ledger(
     errors.extend(
         _successor_stale_token_mutation_source_fidelity_errors(formal_dir)
     )
+    errors.extend(_replay_trace_source_fidelity_errors(ROOT_DIR))
     errors.extend(_nightly_chaos_cold_cache_errors(ROOT_DIR))
     errors.extend(_production_liveness_release_inventory_errors(ROOT_DIR))
     for cfg_name in REQUIRED_TLC_CONFIGS:

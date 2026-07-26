@@ -1175,6 +1175,8 @@ required_production_liveness_tests=(
   merge_sidecar::tests::third_session_from_one_hub_is_rejected_while_another_hub_progresses
   merge_sidecar::tests::source_byte_overflow_is_rejected_while_another_hub_progresses
   merge_sidecar::tests::completed_short_session_replacement_cannot_starve_an_older_long_session
+  merge_sidecar::tests::unsent_request_restores_holder_and_backoff_state
+  merge_sidecar::tests::idle_request_retry_starts_strictly_after_the_fairness_cursor
   merge_sidecar::tests::route_retirement_between_admission_and_enqueue_releases_all_response_reservations
   merge_sidecar::tests::saturated_materializer_does_not_erase_same_request_alternate_session
   merge_sidecar::tests::saturated_materializer_does_not_erase_same_request_alternate_bytes
@@ -1186,6 +1188,8 @@ required_production_liveness_tests=(
   merge_sidecar::tests::height_rollover_retries_only_each_sources_current_in_flight_chunk
   merge_sidecar::tests::durable_requester_restart_advances_sequence_and_carries_close_floor
   merge_sidecar::tests::durable_requester_crash_before_send_closes_unobserved_sequence
+  merge_sidecar::tests::durable_semantic_peer_history_is_roster_bounded_not_connection_bounded
+  merge_sidecar::tests::durable_lifecycle_rejects_canonical_payload_with_stale_digest
   merge_sidecar::tests::durable_responder_restart_preserves_same_hub_gate_budget
   merge_sidecar::tests::durable_responder_restart_allows_new_source_while_recovered_source_is_offline
   merge_sidecar::tests::durable_responder_restart_preserves_terminal_source_cursor_and_rebinds_capability
@@ -1617,7 +1621,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=585
+readonly expected_production_liveness_test_count=589
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1717,7 +1721,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 585-test liveness inventory above. The later
+# not belong to the canonical 589-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.

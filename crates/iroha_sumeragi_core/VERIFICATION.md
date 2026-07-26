@@ -12,7 +12,7 @@ Verus or vstd version, verifies the official macOS arm64 or Linux x86_64 binary
 checksums (other platforms must supply the two pinned checksum variables), and
 rejects the wrong bundled Rust toolchain or proof escape hatches in the
 production reducer and formal proof modules. It also rejects any external
-`#[path]` from the production module, then runs exactly nine deterministic
+`#[path]` from the production module, then runs exactly eleven deterministic
 adversarial network simulations before invoking Verus.
 The script enables the crate's `verus` feature explicitly; normal production
 builds do not compile or link `vstd`. Verifier output is streamed to the caller
@@ -22,10 +22,11 @@ and retained at `target/formal/sumeragi_v2/verus.log` for CI to archive; shell
 The dependency-free reducer sources are authoritative under
 `crates/iroha_core/src/sumeragi/v2_core/`; this excluded crate is a formal
 harness over those same package-local files. The script copies both into a
-disposable workspace, generates that workspace's lockfile, and runs the nine
+disposable workspace, generates that workspace's lockfile, and runs the eleven
 loss/duplication/reordering, symmetric/asymmetric partition, proposal/locked-body
-crash, corrupt-body, withheld-evidence, divergent-view, and accelerated
-chain-prefix simulations with `--locked
+crash, corrupt-body, withheld-evidence, historical-certificate
+consumer-tag/redelivery, divergent-view, and accelerated chain-prefix
+simulations with `--locked
 --offline` and one test thread.
 The repository `Cargo.lock` is never read for resolution or modified.
 
@@ -57,7 +58,7 @@ bash scripts/formal/run_sumeragi_v2_harness.sh --unit
 bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay
   8 model-trace replay tests passed
 bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
-  9 deterministic network simulations passed
+  11 deterministic network simulations passed
 bash scripts/formal/run_sumeragi_v2_harness.sh --chaos-100k
   50,000 permissioned + 50,000 NPoS heights passed
   400,000 validator finalizations; 0 failures; 91.29 seconds
@@ -66,7 +67,7 @@ bash scripts/formal/run_sumeragi_v2_harness.sh --clippy
 ```
 
 The current Rust runs exercise the source-shared reducer/WAL/refinement logic,
-model replay, all nine named fast-network scenarios, and the deterministic
+model replay, all eleven named fast-network scenarios, and the deterministic
 chaos schedule. They are not a Verus discharge. A fresh pinned run is required
 before the changed primitive-to-derived-fact or production commit-gate
 obligations can be marked verified. Unverified `std` collection code,

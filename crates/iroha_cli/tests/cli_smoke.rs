@@ -900,7 +900,7 @@ fn sorafs_reserve_lifecycle_projects_credit_draw() {
 }
 
 #[test]
-fn sorafs_reserve_help_lists_movement_commands() {
+fn sorafs_reserve_help_lists_local_projection_commands() {
     let output = command()
         .args(["app", "sorafs", "reserve", "--help"])
         .output()
@@ -911,20 +911,7 @@ fn sorafs_reserve_help_lists_movement_commands() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for expected in [
-        "top-up",
-        "withdraw",
-        "movements",
-        "status",
-        "custody",
-        "credit-lines",
-        "credit-status",
-        "appeal-submit",
-        "appeals",
-        "appeal-decide",
-        "policy-update",
-        "policy",
-    ] {
+    for expected in ["quote", "ledger", "lifecycle"] {
         assert!(
             stdout.contains(expected),
             "reserve help did not include `{expected}`:\n{stdout}"

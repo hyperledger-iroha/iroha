@@ -790,10 +790,15 @@ consume progress ownership, while all three rank leaves consume their exact
 proved fair-action prerequisites. The aggregate
 `protected-service-rank` obligation waits for every leaf, while production
 admission, runtime, ingress, and actor-to-flush ownership remain outside these
-abstract results. The 54-entry ledger contains 33 `tlaps_proved`, 14
+abstract results. The 59-entry ledger contains 35 `tlaps_proved`, 17
 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries, so
 `machine_checked_completion` remains false.
+The aggregate temporal closure deliberately leaves
+`AdequateLeaderExactClosureResidualObligation` and
+`ExactDecisionOffSchedulerResidualConvergenceObligation` proofless. The
+theorems which consume them are dependency wiring, not evidence that either
+residual has been discharged.
 
 TLC runs exhaustive constant checks and bounded asynchronous counterexample
 searches. It cannot upgrade a proof status. The scheduler corridor runs nine
@@ -988,15 +993,25 @@ height-context identity to the signed origin.
 
 The final successor/recovery closure adds six exact regressions without adding
 a module. Crash-safe response handoff and same-delivery retry after transient
-capacity pressure add two more sidecar regressions. The per-source
+capacity pressure add two more sidecar regressions. The lifecycle snapshot also
+binds its complete canonical Norito payload with a typed hash; recovery rejects
+canonical bytes carrying a stale digest before interpreting any semantic
+floor. The per-source
 route-attempt, exact PrepareQC recovery, locked-body reproposal, runner/worker,
 sidecar, and daemon closure, plus the certified sidecar control-bucket
-regression, yields the current
-585-test, 39-module inventory. The complete source-sealed pre-network corridor
+regression, yielded the 585-test checkpoint. The unsent-request restoration and
+fairness-cursor retry regressions yielded the 588-test checkpoint. The durable
+semantic-peer-history regression yields the current
+589-test, 39-module inventory. The complete source-sealed pre-network corridor
 contains 82 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
+Requester streams and responder close/high-water histories use the full
+128-validator protocol-roster bound, not the smaller concurrent P2P
+reply-source or active-gate capacities. This keeps sequential certified
+recovery rotation live through one active slot, rejects a 129th semantic
+identity, and restores the same separation after a crash.
 The canonical module/test TSV inventory SHA-256 is
-`b6dc528ea6e07d75a243a5b4ead89c83561aa9d0a74b9ac941cdf1a744078acd`.
+`4c8fadb0593206e7fcf616a2a1ba05db802aef1ea7fa0241ab275189aa271a70`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

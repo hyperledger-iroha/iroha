@@ -160,6 +160,8 @@ case "$1" in
     required_tests=(
       lossy_offline_leader_simulations_commit_for_4_7_and_10_validators
       two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits
+      historical_prepare_qc_uses_current_consumer_tag_after_timeout_install
+      responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc
       asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies
       leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum
       leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum
@@ -179,7 +181,7 @@ case "$1" in
     done < <(sed -n 's/: test$//p' <<<"$network_test_list")
     if ((${#listed_tests[@]} != ${#required_tests[@]} + 1)); then
       printf '%s\n' "${listed_tests[@]}" >&2
-      echo "expected exactly nine fast and one ignored Sumeragi v2 simulations" >&2
+      echo "expected exactly eleven fast and one ignored Sumeragi v2 simulations" >&2
       exit 1
     fi
     for test_name in "${listed_tests[@]}"; do

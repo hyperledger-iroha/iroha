@@ -50674,7 +50674,6 @@ mod app_api_integration_tests {
         };
         let remote_origin = format!("http://{}", listener.local_addr().expect("listener addr"));
         let fixture = make_projection_provider_fixture(&remote_origin);
-        let provider_id_hex = hex::encode(fixture.provider_id());
         let manifest_requests = Arc::new(AtomicUsize::new(0));
         let fetch_requests = Arc::new(AtomicUsize::new(0));
         let mut manifest_responses = std::collections::HashMap::new();

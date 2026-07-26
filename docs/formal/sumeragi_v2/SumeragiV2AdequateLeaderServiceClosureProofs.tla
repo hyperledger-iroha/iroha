@@ -706,8 +706,59 @@ ExactLeaderSchedulerOriginReadinessInvariant ==
 ExactLeaderSchedulerOriginReadinessProperty(specification) ==
   specification => []ExactLeaderSchedulerOriginReadinessInvariant
 
-\* TODO: prove this property for AsyncLiveSpecAt by constructor-complete
-\* initialization and AsyncNext preservation of the readiness invariant.
+THEOREM AsyncInitSchedulesOnlyInitialCausalCandidates ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A candidate:
+           CandidateScheduled(candidate)
+             => \E node \in ValidatorIds:
+                  candidate = InitialCausalCandidate(node)
+BY Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, AsyncRuntimeInit,
+       AsyncIoInit, AsyncDeferredInit,
+       CandidateScheduled, CandidateScheduledIn,
+       QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates,
+       InitialCausalCandidate, SequenceSet
+
+THEOREM AsyncInitialLeaderCandidateIsReadyOrHasProposalEvidence ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => \A node \in ValidatorIds,
+            rank \in (1..5) \X Nat:
+           /\ ExactLeaderCandidateRank(
+                InitialCausalCandidate(node), rank)
+           /\ NodeIdle(node)
+           => \/ CommandDispatchable(InitialCausalCandidate(node))
+              \/ ExactLeaderEvidenceAt(
+                   InitialCausalCandidate(node), rank)
+BY InitialCausalCandidateIsTyped, IsaT(180)
+   DEF AsyncInitAt, AsyncBaseInitAt, InitAt,
+       AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
+       InitialCausalCandidate, NoItemCandidate,
+       AsyncCandidate, AsyncCandidateWithIdentity,
+       AsyncProposalSubject,
+       ExactLeaderCandidateRank, ExactLeaderEvidenceAt,
+       ProposalEvidenceAt, PrepareEvidenceAt,
+       CommitEvidenceAt, ViewChangeEvidenceAt,
+       ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned,
+       CommandDispatchable, CommandExecutionReady,
+       ExecuteRegularCommandReady, RegularCoreCommandReady,
+       AssembleLocalBodyReady, CommandMatches,
+       LocalAssemblyBusyDispatchAllowed,
+       LocalBodyNotSupersededByDecision, BodyHeldBy
+
+THEOREM AsyncInitEstablishesExactLeaderSchedulerOriginReadiness ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => ExactLeaderSchedulerOriginReadinessInvariant
+BY AsyncInitSchedulesOnlyInitialCausalCandidates,
+   AsyncInitialLeaderCandidateIsReadyOrHasProposalEvidence, Isa
+   DEF ExactLeaderSchedulerOriginReadinessInvariant,
+       ExactLeaderCandidateRank,
+       ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned
 
 THEOREM SameConsumerLeaderDiscardIsIdleAndDisabled ==
   \A candidate:

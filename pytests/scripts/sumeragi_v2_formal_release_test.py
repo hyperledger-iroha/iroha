@@ -953,14 +953,13 @@ def test_certified_response_source_lineage_mutation_is_release_gated_and_pinned(
         formal_dir / "SumeragiV2CertifiedResponseSourceLineageMutation.tla"
     ).read_text(encoding="utf-8")
     assert (
-        "CertifiedResponse.envelope.request.envelope.recipient\n"
-        "       \\in CommitQc.signers \\ {Node}"
+        "CertifiedResponse.envelope.citedResponder \\in CommitQc.signers"
         in model
     )
     assert "CertifiedResponse.source \\in CommitQc.signers" in model
     assert (
         'IF Mode = "EmbeddedCitedSignerSurrogate"\n'
-        "  THEN EmbeddedCitedSignerSurrogateOwnsResponse\n"
+        "  THEN ExplicitCitedResponderOwnsResponse\n"
         "  ELSE OuterTransportSourceOwnsResponse"
         in model
     )

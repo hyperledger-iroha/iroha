@@ -1000,10 +1000,13 @@ G-SCALE tooling preflight produced the historical 515-test checkpoint. The
 crash-safe response handoff and same-delivery capacity-retry regressions add
 two sidecar cases. The per-source route-attempt, exact PrepareQC recovery,
 locked-body reproposal, runner/worker, sidecar, and daemon closure, plus the
-certified sidecar control-bucket regression, brings the current source-bound
-inventory to 585 exact tests across 39 modules and 82 pre-network legs.
+certified sidecar control-bucket regression, produced the 585-test checkpoint.
+The unsent-request restoration and fairness-cursor retry regressions produced
+the 588-test checkpoint. The durable semantic-peer-history regression brings
+the current source-bound
+inventory to 589 exact tests across 39 modules and 82 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`b6dc528ea6e07d75a243a5b4ead89c83561aa9d0a74b9ac941cdf1a744078acd`.
+`4c8fadb0593206e7fcf616a2a1ba05db802aef1ea7fa0241ab275189aa271a70`.
 Nine of those legs execute the separate 256-test G-UNIT focus inventory; its
 canonical source-derived TSV SHA-256 is
 `f45d6752f3dc449415446abc7340a3531ed48db5e9e744bccc6c1bba0d7a8957`.
@@ -1054,8 +1057,10 @@ Completed attempts remain terminal until an authenticated cumulative Close
 retires their contiguous semantic prefix.
 The requester sequence/floor state and responder gate, source-budget, cursor,
 and pending-chunk identities are atomically journaled under the authenticated
-Kura root. Restart rebinds only a freshly authenticated process-local route;
-it never reconstructs a capability from disk. A lifecycle-journal failure
+Kura root. The journal wraps that canonical Norito payload in its exact typed
+hash and rejects a stale digest before interpreting any recovered floor or
+cursor. Restart rebinds only a freshly authenticated process-local route; it
+never reconstructs a capability from disk. A lifecycle-journal failure
 latches the process-wide output guard before an allocated request, queued
 chunk, timeout rotation, Close, or CloseAck can publish later consensus output.
 The retained runner seam explicitly inventories
@@ -1088,7 +1093,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 585-test inventory is a mechanically checked
+The current 589-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1142,12 +1147,16 @@ consumer while a missing body waits for durable recovery and retries.
 
 The strict proof-run counts in the following paragraphs are retained
 historical submodule evidence, not current aggregate source-manifest-bound
-release evidence. The canonical 54-entry proof ledger currently reports 33
-`tlaps_proved`, 14 `specified_unproved`, 6 `trusted_contract`, and 1
+release evidence. The canonical 59-entry proof ledger currently reports 35
+`tlaps_proved`, 17 `specified_unproved`, 6 `trusted_contract`, and 1
 `out_of_scope` entry, with `machine_checked_completion: false`. The legacy-named
 locked-body-reproposal entry now denotes locked-origin direct-commit progress;
 it and the production cross-tool refinements remain explicitly
-unproved; no bounded model or source-fidelity check promotes them. An honest
+unproved; no bounded model or source-fidelity check promotes them. The
+aggregate temporal module likewise retains
+`AdequateLeaderExactClosureResidualObligation` and
+`ExactDecisionOffSchedulerResidualConvergenceObligation` as explicit proofless
+residuals; downstream wrappers cannot promote them. An honest
 validator outside `Responsive` may retain activation queued before GST;
 neither the formal fairness premise nor the conditional release target promises
 its local-worker progress. The action-by-action safety
@@ -1230,7 +1239,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 585 exact production
+Before those longer scenarios, the PR gate inventories 589 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 256-test
 focus inventory. The
@@ -1347,8 +1356,11 @@ the historical 515-test inventory across 38 modules and 65 pre-network legs.
 The per-source route-attempt and locked-body completion adds 57 exact names,
 one owning module, and seven corridor legs. Nine G-UNIT execution legs plus the
 source-attested Native AMX fixture-check leg complete the 584-test checkpoint;
-the certified sidecar Close/CloseAck critical-bucket regression brings the
-current inventory to 585 tests across 39 modules and 82 legs. The rollover slice covers
+the certified sidecar Close/CloseAck critical-bucket regression produces the
+585-test checkpoint. The unsent-request restoration and fairness-cursor retry
+regressions produce the 588-test checkpoint; the durable semantic-peer-history
+regression brings the current inventory to 589 tests across 39 modules and 82
+legs. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -1366,6 +1378,11 @@ identity, clears the retired tenure-bound ticket, and retries the source's
 retained current item or chunk through fresh tenure admission while leaving
 sibling-source progress
 untouched. A newly observed alternate source starts independently at zero.
+The durable requester-stream and responder close/high-water maps are bounded
+by the complete 128-validator protocol roster rather than the smaller
+concurrent reply-source and active-gate geometry. Sequential semantic peers can
+therefore rotate through a single active slot; the 129th unique identity fails
+closed, and crash recovery restores exactly that separation.
 These newest tests pin local typed retirement, ownership, and fail-closed
 behavior; they do not claim end-to-end relay/application acknowledgement or
 unbounded broadcast admission. The integration filter remains a five-test
@@ -1612,7 +1629,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 82 pre-network corridor legs and
-their exact 585-test production inventory, the separate 256-test G-UNIT
+their exact 589-test production inventory, the separate 256-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos

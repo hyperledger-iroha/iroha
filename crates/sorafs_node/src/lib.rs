@@ -333,11 +333,10 @@ use sorafs_manifest::reputation::signed::{
 use sorafs_manifest::{
     AdmissionRecord, AppealFinanceReconciliationSummaryV1, ManifestV1,
     ReconciliationValidationError, ReputationScoringEvidenceV1, ReputationSnapshotEventV1,
-    ReputationSnapshotTrustPolicyV1, ReputationSnapshotV1,
-    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SignedReputationSnapshotV1,
-    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
-    SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
-    SorafsReconciliationReportV1,
+    ReputationSnapshotTrustPolicyV1, ReputationSnapshotV1, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+    SignedReputationSnapshotV1, SoraFsAppealFinanceReportV1,
+    SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
+    SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
     deal::{DealSettlementStatusV1, DealSettlementV1, XorQuantity},
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
@@ -3670,11 +3669,6 @@ fn quantity_to_metric_micro_saturating(amount: &Quantity) -> u128 {
         .ok()
         .and_then(|scaled| scaled.try_mantissa_u128())
         .unwrap_or(u128::MAX)
-}
-
-#[cfg(test)]
-fn xor_quantity_to_metric_micro_saturating(amount: &XorQuantity) -> u128 {
-    quantity_to_metric_micro_saturating(amount.as_quantity())
 }
 
 fn quantity_divergence_bps_saturating(feed: &Quantity, reference: &Quantity) -> u64 {
@@ -14225,7 +14219,7 @@ mod tests {
             1
         );
         assert_eq!(
-            xor_quantity_to_metric_micro_saturating(&xor("0.0000001")),
+            quantity_to_metric_micro_saturating(xor("0.0000001").as_quantity()),
             0
         );
         assert_eq!(
