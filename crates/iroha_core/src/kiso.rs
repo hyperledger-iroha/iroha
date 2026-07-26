@@ -698,6 +698,7 @@ mod tests {
                 require_sm_handshake_match: true,
                 require_sm_openssl_preview_match: true,
                 idle_timeout: std::time::Duration::from_secs(5),
+                reply_writer_flush_timeout: defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
                 connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
                 dial_timeout: defaults::network::DIAL_TIMEOUT,
                 deferred_send_ttl: Duration::from_millis(

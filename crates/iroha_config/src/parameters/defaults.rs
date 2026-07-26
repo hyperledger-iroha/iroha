@@ -288,8 +288,6 @@ pub mod queue {
     pub const EXPIRED_CULL_INTERVAL: Duration = Duration::from_secs(1);
     /// Maximum number of entries scanned per expired-transaction sweep.
     pub const EXPIRED_CULL_BATCH: NonZeroUsize = nonzero!(256_usize);
-    /// Whether to persist pending transaction routing plans for local restart replay.
-    pub const PLAN_JOURNAL_ENABLED: bool = true;
     /// Maximum journal size before compaction is considered.
     pub const PLAN_JOURNAL_MAX_BYTES: u64 = 64 * 1024 * 1024;
 }
@@ -874,6 +872,8 @@ pub mod network {
     /// Keep this comfortably above the typical integration-test runtime so peers do not churn
     /// before they exchange their first gossip/status messages.
     pub const IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+    /// Base deadline for an exact reply to remain owned by one peer writer without a flush.
+    pub const REPLY_WRITER_FLUSH_TIMEOUT: Duration = Duration::from_secs(30);
     /// Delay outbound peer dials after startup.
     pub const CONNECT_STARTUP_DELAY: Duration = Duration::from_millis(0);
     /// Timeout applied to an individual outbound dial attempt (TCP/TLS/QUIC/WS).

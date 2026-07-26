@@ -965,6 +965,34 @@ ValidateBody, and Apply owners.  No item in this inventory assumes
 `ApplicationLivenessProperty`, or `ExactDecisionStageServiceProperty`.
 ***************************************************************************)
 
+(***************************************************************************
+Exact proof-debt declarations.
+
+These four theorem wrappers make every remaining temporal kernel visible to
+the release ledger.  They intentionally have no proof: the proved composition
+below consumes them but must not be mistaken for their discharge.
+
+TODO: discharge each wrapper from the exact ordinary-consensus, historical
+packet/service, target-runner, and body/application fairness actions without
+assuming indexed height liveness or current-voter application liveness.
+***************************************************************************)
+
+THEOREM IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation ==
+  IndexedChainSpec
+    => IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
+
+THEOREM IndexedHistoricalCertificateRankProgressResidualObligation ==
+  IndexedChainSpec
+    => IndexedHistoricalCertificateRankProgressResidualProperty
+
+THEOREM IndexedHistoricalDecisionStageOwnershipResidualObligation ==
+  IndexedChainSpec
+    => IndexedHistoricalDecisionStageOwnershipResidualProperty
+
+THEOREM IndexedHistoricalDecisionRankProgressResidualObligation ==
+  IndexedChainSpec
+    => IndexedHistoricalDecisionRankProgressResidualProperty
+
 IndexedHistoricalRecoveryTemporalResidualKernels ==
   /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
   /\ IndexedHistoricalCertificateRankProgressResidualProperty

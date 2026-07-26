@@ -105,7 +105,7 @@ witness with:
 
 ```text
 scripts/formal/check_sumeragi_v2_replay_trace.sh
-TLC replay witness matches 95 checked-in production actions
+TLC replay witness matches 100 checked-in production actions and the production reducer
 
 CARGO_TARGET_DIR=/tmp/codex-sumeragi-model-trace-target \
   cargo test --locked -p iroha_sumeragi_core --test model_trace_replay

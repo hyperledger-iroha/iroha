@@ -2006,7 +2006,7 @@ mod tests {
 
         let mut first = fixture.vote(signer, wire_v2::GlobalPhase::Commit, subject);
         first.round = fixture.round(2);
-        first.proposal_round = fixture.round(0);
+        first.proposal_round = first.round;
         first.signature = fixture.sign(signer, &first.signature_preimage());
 
         let mut different_origin = first.clone();
@@ -2016,8 +2016,11 @@ mod tests {
             first: first.clone(),
             second: different_origin,
         });
-        validate_v2_equivocation(&origin_conflict)
-            .expect("different authenticated proposal origins conflict");
+        assert_eq!(
+            validate_v2_equivocation(&origin_conflict),
+            Err(EvidenceValidationError::V2ArtifactInvalid),
+            "a vote whose proposal origin differs from its certified round is not canonical evidence"
+        );
 
         let mut different_execution = first.clone();
         different_execution.execution_commitment.post_state_root =

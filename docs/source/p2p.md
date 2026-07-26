@@ -333,6 +333,7 @@ transaction_gossip_size = 500
 transaction_gossip_period_ms = 1000
 transaction_gossip_resend_ticks = 3
 idle_timeout_ms = 60000
+reply_writer_flush_timeout_ms = 30000
 connect_startup_delay_ms = 0
 # Trust decay/penalties for gossip senders (decays toward 0)
 trust_decay_half_life_ms = 300000  # halve negative scores every 5 minutes
@@ -341,7 +342,18 @@ trust_penalty_unknown_peer = 3     # penalty applied when gossip references peer
 trust_min_score = -20              # drop trust gossip at or below this score
 ```
 
-- Gossip/idle intervals are clamped to >=100ms to prevent zero-duration spin loops.
+- Gossip, idle, and exact reply-writer timeout intervals are clamped to >=100ms
+  to prevent zero-duration spin loops.
+- `reply_writer_flush_timeout_ms` is the base timeout for one actor-owned exact
+  reply. Its immutable deadline starts on first actor dispatch, before writer
+  admission. An observed timeout doubles only that semantic item's next
+  attempt, with checked saturation; an ordinary writer close or reconnect
+  preserves the attempt, and a complete writer flush resets it. The
+  actor-minted flush receipt binds the admitted attempt, and consumers reject
+  a receipt whose attempt differs from the retained target. Exponential
+  scaling provides qualitative eventual expiry for each finite attempt, not a
+  fixed operational wall-clock SLA; a recovered writer may still flush before
+  the current deadline.
 - Peer-address gossip is change-driven with exponential backoff up to `peer_gossip_max_period_ms`
   (and is throttled when the relay drops inbound frames); block-sync sampling similarly backs off
   up to `block_gossip_max_period_ms` when no progress is observed.
@@ -525,6 +537,19 @@ Behavior matrix (bounded queues enabled):
 | disconnect_on_post_overflow=false| Keep connection; drop overflowed    | `p2p_post_overflow_total{topic=..}↑`   |
 
 Because queues are always bounded, overflow counters rise whenever a channel drops messages. Use `disconnect_on_post_overflow` to choose whether to drop the connection or just the overflowing messages.
+
+Actor-owned exact replies are stricter than this best-effort policy. A full
+writer queue does not drop the exact occurrence or perform the knob-selected
+overflow action: the network actor retains its bounded owner until the writer
+flushes or the occurrence reaches `reply_writer_flush_timeout_ms` after its
+adaptive scaling. At timeout the actor marks only the bound reply tenure
+unwritable, retires only the same connection if it is still current, and
+reports `TimedOut`; it never reports a successful flush. A successful full
+flush already published by the exact writer is polled first and therefore wins
+simultaneous deadline, route-retirement, and connection-replacement
+observation. An empty or closed writer completion cannot retain a stale route
+or terminate its replacement. Ordinary topology-routed traffic does not
+acquire this reply deadline.
 
 ### Frame Size Caps
 

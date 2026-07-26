@@ -29389,7 +29389,7 @@ mod tests {
         let error = validate(&stale_participant_incarnation)
             .expect_err("retired participant incarnation must fail");
         assert!(
-            error.contains("internally inconsistent"),
+            error.contains("unexpected participant lane 2 dataspace 8"),
             "unexpected participant-incarnation rejection: {error}"
         );
 

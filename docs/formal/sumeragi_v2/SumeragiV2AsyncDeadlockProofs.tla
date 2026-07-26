@@ -1272,6 +1272,824 @@ PROOF
     <2> QED BY <1>1, <2>4
   <1> QED BY <1>1
 
+(***************************************************************************
+Normalize each live Local admission branch before constructing its exact
+historical-recovery successor.  The production action and normalized action
+are equivalent in both directions under the selected-source guard.  Each
+normalized successor then computes the restart-authority projection from the
+actual post-state, so no delivery branch can reconstruct or reset an older
+authority, rank, subject, or work owner.
+***************************************************************************)
+
+DirectLocalProducerAdmissionStep(node) ==
+  /\ asyncRunnerPhase[node] = "Local"
+  /\ UNCHANGED AsyncDeferredVars
+  /\ LocalAdmissionCanAdvance(node)
+  /\ SelectedLocalSource(node) = "Producer"
+  /\ AdmitProducerCompletion(node)
+  /\ LeaveCausalQueues
+  /\ UpdateLocalAdmissionMetadata(node, "Producer")
+  /\ asyncRunnerPhase' = asyncRunnerPhase
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+
+DirectHistoricalRecoveryLocalProducerWitness(node) ==
+  /\ gst
+  /\ DirectLocalProducerAdmissionStep(node)
+  /\ HistoricalRecoveryTarget(node)
+  /\ node \in up
+  /\ ~NodeHasApplication(node)
+  /\ ~ResponsiveReplayQuarantined(node)
+  /\ NodeServiceFrame(node)
+  /\ UNCHANGED up
+  /\ UNCHANGED AsyncRecoveryControlVars
+  /\ AsyncCoreOuterFrame
+  /\ asyncHistoricalLockRestartAuthorities' =
+       HistoricalLockRestartAuthoritiesAt(
+         context', nodeView', generation', prepareQCs', installedTCs',
+         lockRank', lockSubject', commitIntents', decisions',
+         asyncCommandQueues',
+         asyncDeferredCompletionQueues',
+         asyncDeferredProgressQueues',
+         asyncDeferredNormalQueues',
+         asyncCausalQueues', asyncOutstandingWork')
+
+THEOREM DirectLocalProducerAdmissionIffProduction ==
+  \A node:
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Producer"
+    => (DirectLocalProducerAdmissionStep(node)
+          <=> LocalAdmissionStep(node))
+BY Isa
+   DEF DirectLocalProducerAdmissionStep, LocalAdmissionStep
+
+THEOREM DirectHistoricalRecoveryLocalProducerEnabled ==
+  \A node:
+    /\ gst
+    /\ HistoricalRecoveryTarget(node)
+    /\ node \in up
+    /\ ~NodeHasApplication(node)
+    /\ ~ResponsiveReplayQuarantined(node)
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Producer"
+    /\ ENABLED DirectLocalProducerAdmissionStep(node)
+    => ENABLED DirectHistoricalRecoveryLocalProducerWitness(node)
+BY AutoUSE, ExpandENABLED, IsaT(300)
+   DEF DirectHistoricalRecoveryLocalProducerWitness,
+       DirectLocalProducerAdmissionStep,
+       NodeServiceFrame, AsyncCoreOuterFrame,
+       AdmitProducerCompletion, UpdateLocalAdmissionMetadata,
+       EnqueueCandidate, LeaveCausalQueues,
+       AsyncIoVars, AsyncDeferredVars,
+       AsyncRecoveryControlVars, vars
+
+THEOREM DirectHistoricalRecoveryLocalProducerProvidesConcreteAdmission ==
+  \A node:
+    DirectHistoricalRecoveryLocalProducerWitness(node)
+      => DirectLocalProducerAdmissionStep(node)
+BY Isa
+   DEF DirectHistoricalRecoveryLocalProducerWitness
+
+THEOREM DirectHistoricalRecoveryLocalProducerProvidesAdmissionGuard ==
+  \A node:
+    DirectHistoricalRecoveryLocalProducerWitness(node)
+      => /\ LocalAdmissionCanAdvance(node)
+         /\ SelectedLocalSource(node) = "Producer"
+BY Isa
+   DEF DirectHistoricalRecoveryLocalProducerWitness,
+       DirectLocalProducerAdmissionStep
+
+THEOREM DirectHistoricalRecoveryLocalProducerUsesProductionAdmission ==
+  \A node:
+    DirectHistoricalRecoveryLocalProducerWitness(node)
+      => LocalAdmissionStep(node)
+BY DirectHistoricalRecoveryLocalProducerProvidesConcreteAdmission,
+   DirectHistoricalRecoveryLocalProducerProvidesAdmissionGuard,
+   DirectLocalProducerAdmissionIffProduction, Isa
+
+THEOREM DirectHistoricalRecoveryLocalProducerProvidesEnvelope ==
+  \A node:
+    DirectHistoricalRecoveryLocalProducerWitness(node)
+      => PostStateHistoricalRecoveryRunnerEnvelope(node)
+BY Isa
+   DEF DirectHistoricalRecoveryLocalProducerWitness,
+       PostStateHistoricalRecoveryRunnerEnvelope,
+       PostStateHistoricalLockRestartNonCrashOuterFrame,
+       PostStateHistoricalLockRestartAuthorityFrame,
+       NodeServiceFrame
+
+THEOREM DirectHistoricalRecoveryLocalProducerRefinesPostState ==
+  \A node:
+    DirectHistoricalRecoveryLocalProducerWitness(node)
+      => PostStateHistoricalRecoveryLocalRunnerWitness(node)
+BY DirectHistoricalRecoveryLocalProducerUsesProductionAdmission,
+   DirectHistoricalRecoveryLocalProducerProvidesEnvelope, Isa
+   DEF DirectHistoricalRecoveryLocalProducerWitness,
+       PostStateHistoricalRecoveryLocalRunnerWitness
+
+THEOREM DirectHistoricalRecoveryLocalProducerRefinesExact ==
+  \A node:
+    DirectHistoricalRecoveryLocalProducerWitness(node)
+      => PostGstRunHistoricalRecoveryNode(node)
+BY DirectHistoricalRecoveryLocalProducerRefinesPostState,
+   PostStateHistoricalRecoveryRunnerWitnessRefinesExact, Isa
+   DEF PostStateHistoricalRecoveryRunnerWitness
+
+THEOREM DirectHistoricalRecoveryLocalProducerCaller ==
+  \A node:
+    /\ gst
+    /\ HistoricalRecoveryTarget(node)
+    /\ node \in up
+    /\ ~NodeHasApplication(node)
+    /\ ~ResponsiveReplayQuarantined(node)
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Producer"
+    /\ ENABLED LocalAdmissionStep(node)
+    => ENABLED PostGstRunHistoricalRecoveryNode(node)
+PROOF
+  <1>1. ASSUME NEW node,
+                gst,
+                HistoricalRecoveryTarget(node),
+                node \in up,
+                ~NodeHasApplication(node),
+                ~ResponsiveReplayQuarantined(node),
+                LocalAdmissionCanAdvance(node),
+                SelectedLocalSource(node) = "Producer",
+                ENABLED LocalAdmissionStep(node)
+         PROVE ENABLED PostGstRunHistoricalRecoveryNode(node)
+    <2>1. DirectLocalProducerAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF DirectLocalProducerAdmissionStep
+    <2>2. LocalAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF LocalAdmissionStep
+    <2>3. LocalAdmissionStep(node)
+             => DirectLocalProducerAdmissionStep(node)
+      BY <1>1, DirectLocalProducerAdmissionIffProduction
+    <2>4. ENABLED LocalAdmissionStep(node)
+             => ENABLED DirectLocalProducerAdmissionStep(node)
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2>5. ENABLED DirectLocalProducerAdmissionStep(node)
+      BY <1>1, <2>4
+    <2>6. ENABLED
+             DirectHistoricalRecoveryLocalProducerWitness(node)
+      BY <1>1, <2>5,
+         DirectHistoricalRecoveryLocalProducerEnabled
+    <2>7. DirectHistoricalRecoveryLocalProducerWitness(node)
+             \in BOOLEAN
+      BY Isa DEF DirectHistoricalRecoveryLocalProducerWitness
+    <2>8. PostGstRunHistoricalRecoveryNode(node) \in BOOLEAN
+      BY Isa DEF PostGstRunHistoricalRecoveryNode
+    <2>9. DirectHistoricalRecoveryLocalProducerWitness(node)
+             => PostGstRunHistoricalRecoveryNode(node)
+      BY DirectHistoricalRecoveryLocalProducerRefinesExact
+    <2>10. ENABLED
+             DirectHistoricalRecoveryLocalProducerWitness(node)
+             => ENABLED PostGstRunHistoricalRecoveryNode(node)
+      BY <2>7, <2>8, <2>9, ENABLEDaxioms
+    <2> QED BY <2>6, <2>10
+  <1> QED BY <1>1
+
+DirectLocalCausalDuplicateAdmissionStep(node) ==
+  LET candidate == HeadCausalCandidate(node)
+  IN /\ asyncRunnerPhase[node] = "Local"
+     /\ UNCHANGED AsyncDeferredVars
+     /\ LocalAdmissionCanAdvance(node)
+     /\ SelectedLocalSource(node) = "Causal"
+     /\ CausalHeadCanAdvance(node)
+     /\ CandidateInFlight(candidate)
+     /\ asyncCausalQueues' =
+          [asyncCausalQueues EXCEPT ![node] = Tail(@)]
+     /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass>>
+     /\ UNCHANGED <<asyncIoQueues, asyncOutstandingWork,
+                     asyncIoReadyCompletions,
+                     asyncLocalReadyCompletions,
+                     asyncNextCompletionSource,
+                     asyncIoControlAvailable>>
+     /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
+                    asyncOutstandingTags, asyncNodeDeadlines,
+                    asyncRetransmitDeadlines, asyncSentItems,
+                    asyncRetainedControl, asyncActiveRequests,
+                    asyncCertifiedResponseClaim, asyncTransport,
+                    asyncIngressLanes, asyncIngressReady,
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets>>
+     /\ UpdateLocalAdmissionMetadata(node, "Causal")
+     /\ asyncRunnerPhase' = asyncRunnerPhase
+     /\ asyncRunnerBudget' =
+          [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+
+DirectHistoricalRecoveryLocalCausalDuplicateWitness(node) ==
+  /\ gst
+  /\ DirectLocalCausalDuplicateAdmissionStep(node)
+  /\ HistoricalRecoveryTarget(node)
+  /\ node \in up
+  /\ ~NodeHasApplication(node)
+  /\ ~ResponsiveReplayQuarantined(node)
+  /\ NodeServiceFrame(node)
+  /\ UNCHANGED up
+  /\ UNCHANGED AsyncRecoveryControlVars
+  /\ AsyncCoreOuterFrame
+  /\ asyncHistoricalLockRestartAuthorities' =
+       HistoricalLockRestartAuthoritiesAt(
+         context', nodeView', generation', prepareQCs', installedTCs',
+         lockRank', lockSubject', commitIntents', decisions',
+         asyncCommandQueues',
+         asyncDeferredCompletionQueues',
+         asyncDeferredProgressQueues',
+         asyncDeferredNormalQueues',
+         asyncCausalQueues', asyncOutstandingWork')
+
+THEOREM DirectLocalCausalDuplicateIffProduction ==
+  \A node:
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Causal"
+    /\ CandidateInFlight(HeadCausalCandidate(node))
+    => (DirectLocalCausalDuplicateAdmissionStep(node)
+          <=> LocalAdmissionStep(node))
+BY Isa
+   DEF DirectLocalCausalDuplicateAdmissionStep,
+       LocalAdmissionStep, AdmitCausalHead
+
+THEOREM DirectHistoricalRecoveryLocalCausalDuplicateEnabled ==
+  \A node:
+    /\ gst
+    /\ HistoricalRecoveryTarget(node)
+    /\ node \in up
+    /\ ~NodeHasApplication(node)
+    /\ ~ResponsiveReplayQuarantined(node)
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Causal"
+    /\ CandidateInFlight(HeadCausalCandidate(node))
+    /\ ENABLED DirectLocalCausalDuplicateAdmissionStep(node)
+    => ENABLED
+         DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+BY AutoUSE, ExpandENABLED, IsaT(300)
+   DEF DirectHistoricalRecoveryLocalCausalDuplicateWitness,
+       DirectLocalCausalDuplicateAdmissionStep,
+       NodeServiceFrame, AsyncCoreOuterFrame,
+       UpdateLocalAdmissionMetadata,
+       AsyncIoVars, AsyncDeferredVars,
+       AsyncRecoveryControlVars, vars
+
+THEOREM DirectHistoricalRecoveryLocalCausalDuplicateProvidesConcreteAdmission ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+      => DirectLocalCausalDuplicateAdmissionStep(node)
+BY Isa
+   DEF DirectHistoricalRecoveryLocalCausalDuplicateWitness
+
+THEOREM DirectHistoricalRecoveryLocalCausalDuplicateProvidesAdmissionGuard ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+      => /\ LocalAdmissionCanAdvance(node)
+         /\ SelectedLocalSource(node) = "Causal"
+         /\ CandidateInFlight(HeadCausalCandidate(node))
+BY Isa
+   DEF DirectHistoricalRecoveryLocalCausalDuplicateWitness,
+       DirectLocalCausalDuplicateAdmissionStep
+
+THEOREM DirectHistoricalRecoveryLocalCausalDuplicateUsesProductionAdmission ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+      => LocalAdmissionStep(node)
+BY DirectHistoricalRecoveryLocalCausalDuplicateProvidesConcreteAdmission,
+   DirectHistoricalRecoveryLocalCausalDuplicateProvidesAdmissionGuard,
+   DirectLocalCausalDuplicateIffProduction, Isa
+
+THEOREM DirectHistoricalRecoveryLocalCausalDuplicateProvidesEnvelope ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+      => PostStateHistoricalRecoveryRunnerEnvelope(node)
+BY Isa
+   DEF DirectHistoricalRecoveryLocalCausalDuplicateWitness,
+       PostStateHistoricalRecoveryRunnerEnvelope,
+       PostStateHistoricalLockRestartNonCrashOuterFrame,
+       PostStateHistoricalLockRestartAuthorityFrame,
+       NodeServiceFrame
+
+THEOREM DirectHistoricalRecoveryLocalCausalDuplicateRefinesPostState ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+      => PostStateHistoricalRecoveryLocalRunnerWitness(node)
+BY DirectHistoricalRecoveryLocalCausalDuplicateUsesProductionAdmission,
+   DirectHistoricalRecoveryLocalCausalDuplicateProvidesEnvelope, Isa
+   DEF DirectHistoricalRecoveryLocalCausalDuplicateWitness,
+       PostStateHistoricalRecoveryLocalRunnerWitness
+
+THEOREM DirectHistoricalRecoveryLocalCausalDuplicateRefinesExact ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+      => PostGstRunHistoricalRecoveryNode(node)
+BY DirectHistoricalRecoveryLocalCausalDuplicateRefinesPostState,
+   PostStateHistoricalRecoveryRunnerWitnessRefinesExact, Isa
+   DEF PostStateHistoricalRecoveryRunnerWitness
+
+THEOREM DirectHistoricalRecoveryLocalCausalDuplicateCaller ==
+  \A node:
+    /\ gst
+    /\ HistoricalRecoveryTarget(node)
+    /\ node \in up
+    /\ ~NodeHasApplication(node)
+    /\ ~ResponsiveReplayQuarantined(node)
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Causal"
+    /\ CandidateInFlight(HeadCausalCandidate(node))
+    /\ ENABLED LocalAdmissionStep(node)
+    => ENABLED PostGstRunHistoricalRecoveryNode(node)
+PROOF
+  <1>1. ASSUME NEW node,
+                gst,
+                HistoricalRecoveryTarget(node),
+                node \in up,
+                ~NodeHasApplication(node),
+                ~ResponsiveReplayQuarantined(node),
+                LocalAdmissionCanAdvance(node),
+                SelectedLocalSource(node) = "Causal",
+                CandidateInFlight(HeadCausalCandidate(node)),
+                ENABLED LocalAdmissionStep(node)
+         PROVE ENABLED PostGstRunHistoricalRecoveryNode(node)
+    <2>1. DirectLocalCausalDuplicateAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF DirectLocalCausalDuplicateAdmissionStep
+    <2>2. LocalAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF LocalAdmissionStep
+    <2>3. LocalAdmissionStep(node)
+             => DirectLocalCausalDuplicateAdmissionStep(node)
+      BY <1>1, DirectLocalCausalDuplicateIffProduction
+    <2>4. ENABLED LocalAdmissionStep(node)
+             => ENABLED DirectLocalCausalDuplicateAdmissionStep(node)
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2>5. ENABLED DirectLocalCausalDuplicateAdmissionStep(node)
+      BY <1>1, <2>4
+    <2>6. ENABLED
+             DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+      BY <1>1, <2>5,
+         DirectHistoricalRecoveryLocalCausalDuplicateEnabled
+    <2>7. DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+             \in BOOLEAN
+      BY Isa DEF DirectHistoricalRecoveryLocalCausalDuplicateWitness
+    <2>8. PostGstRunHistoricalRecoveryNode(node) \in BOOLEAN
+      BY Isa DEF PostGstRunHistoricalRecoveryNode
+    <2>9. DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+             => PostGstRunHistoricalRecoveryNode(node)
+      BY DirectHistoricalRecoveryLocalCausalDuplicateRefinesExact
+    <2>10. ENABLED
+             DirectHistoricalRecoveryLocalCausalDuplicateWitness(node)
+             => ENABLED PostGstRunHistoricalRecoveryNode(node)
+      BY <2>7, <2>8, <2>9, ENABLEDaxioms
+    <2> QED BY <2>6, <2>10
+  <1> QED BY <1>1
+
+DirectLocalCausalCompletionAdmissionStep(node) ==
+  LET candidate == HeadCausalCandidate(node)
+  IN /\ asyncRunnerPhase[node] = "Local"
+     /\ UNCHANGED AsyncDeferredVars
+     /\ LocalAdmissionCanAdvance(node)
+     /\ SelectedLocalSource(node) = "Causal"
+     /\ CausalHeadCanAdvance(node)
+     /\ ~CandidateInFlight(candidate)
+     /\ candidate.class = "Completion"
+     /\ asyncCausalQueues' =
+          [asyncCausalQueues EXCEPT ![node] = Tail(@)]
+     /\ asyncIoQueues' =
+          [asyncIoQueues EXCEPT
+             ![node] = Append(@, AsyncIoConsensusJob(candidate))]
+     /\ asyncOutstandingWork' =
+          [asyncOutstandingWork EXCEPT ![node] = @ \cup {candidate}]
+     /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
+                     asyncIoReadyCompletions,
+                     asyncLocalReadyCompletions,
+                     asyncNextCompletionSource,
+                     asyncIoControlAvailable>>
+     /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
+                    asyncOutstandingTags, asyncNodeDeadlines,
+                    asyncRetransmitDeadlines, asyncSentItems,
+                    asyncRetainedControl, asyncActiveRequests,
+                    asyncCertifiedResponseClaim, asyncTransport,
+                    asyncIngressLanes, asyncIngressReady,
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets>>
+     /\ UpdateLocalAdmissionMetadata(node, "Causal")
+     /\ asyncRunnerPhase' = asyncRunnerPhase
+     /\ asyncRunnerBudget' =
+          [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+
+DirectHistoricalRecoveryLocalCausalCompletionWitness(node) ==
+  /\ gst
+  /\ DirectLocalCausalCompletionAdmissionStep(node)
+  /\ HistoricalRecoveryTarget(node)
+  /\ node \in up
+  /\ ~NodeHasApplication(node)
+  /\ ~ResponsiveReplayQuarantined(node)
+  /\ NodeServiceFrame(node)
+  /\ UNCHANGED up
+  /\ UNCHANGED AsyncRecoveryControlVars
+  /\ AsyncCoreOuterFrame
+  /\ asyncHistoricalLockRestartAuthorities' =
+       HistoricalLockRestartAuthoritiesAt(
+         context', nodeView', generation', prepareQCs', installedTCs',
+         lockRank', lockSubject', commitIntents', decisions',
+         asyncCommandQueues',
+         asyncDeferredCompletionQueues',
+         asyncDeferredProgressQueues',
+         asyncDeferredNormalQueues',
+         asyncCausalQueues', asyncOutstandingWork')
+
+THEOREM DirectLocalCausalCompletionIffProduction ==
+  \A node:
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Causal"
+    /\ ~CandidateInFlight(HeadCausalCandidate(node))
+    /\ HeadCausalCandidate(node).class = "Completion"
+    => (DirectLocalCausalCompletionAdmissionStep(node)
+          <=> LocalAdmissionStep(node))
+BY Isa
+   DEF DirectLocalCausalCompletionAdmissionStep,
+       LocalAdmissionStep, AdmitCausalHead
+
+THEOREM DirectHistoricalRecoveryLocalCausalCompletionEnabled ==
+  \A node:
+    /\ gst
+    /\ HistoricalRecoveryTarget(node)
+    /\ node \in up
+    /\ ~NodeHasApplication(node)
+    /\ ~ResponsiveReplayQuarantined(node)
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Causal"
+    /\ ~CandidateInFlight(HeadCausalCandidate(node))
+    /\ HeadCausalCandidate(node).class = "Completion"
+    /\ ENABLED DirectLocalCausalCompletionAdmissionStep(node)
+    => ENABLED
+         DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+BY AutoUSE, ExpandENABLED, IsaT(300)
+   DEF DirectHistoricalRecoveryLocalCausalCompletionWitness,
+       DirectLocalCausalCompletionAdmissionStep,
+       NodeServiceFrame, AsyncCoreOuterFrame,
+       UpdateLocalAdmissionMetadata,
+       AsyncIoVars, AsyncDeferredVars,
+       AsyncRecoveryControlVars, vars
+
+THEOREM DirectHistoricalRecoveryLocalCausalCompletionProvidesConcreteAdmission ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+      => DirectLocalCausalCompletionAdmissionStep(node)
+BY Isa
+   DEF DirectHistoricalRecoveryLocalCausalCompletionWitness
+
+THEOREM DirectHistoricalRecoveryLocalCausalCompletionProvidesAdmissionGuard ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+      => /\ LocalAdmissionCanAdvance(node)
+         /\ SelectedLocalSource(node) = "Causal"
+         /\ ~CandidateInFlight(HeadCausalCandidate(node))
+         /\ HeadCausalCandidate(node).class = "Completion"
+BY Isa
+   DEF DirectHistoricalRecoveryLocalCausalCompletionWitness,
+       DirectLocalCausalCompletionAdmissionStep
+
+THEOREM DirectHistoricalRecoveryLocalCausalCompletionUsesProductionAdmission ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+      => LocalAdmissionStep(node)
+BY DirectHistoricalRecoveryLocalCausalCompletionProvidesConcreteAdmission,
+   DirectHistoricalRecoveryLocalCausalCompletionProvidesAdmissionGuard,
+   DirectLocalCausalCompletionIffProduction, Isa
+
+THEOREM DirectHistoricalRecoveryLocalCausalCompletionProvidesEnvelope ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+      => PostStateHistoricalRecoveryRunnerEnvelope(node)
+BY Isa
+   DEF DirectHistoricalRecoveryLocalCausalCompletionWitness,
+       PostStateHistoricalRecoveryRunnerEnvelope,
+       PostStateHistoricalLockRestartNonCrashOuterFrame,
+       PostStateHistoricalLockRestartAuthorityFrame,
+       NodeServiceFrame
+
+THEOREM DirectHistoricalRecoveryLocalCausalCompletionRefinesPostState ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+      => PostStateHistoricalRecoveryLocalRunnerWitness(node)
+BY DirectHistoricalRecoveryLocalCausalCompletionUsesProductionAdmission,
+   DirectHistoricalRecoveryLocalCausalCompletionProvidesEnvelope, Isa
+   DEF DirectHistoricalRecoveryLocalCausalCompletionWitness,
+       PostStateHistoricalRecoveryLocalRunnerWitness
+
+THEOREM DirectHistoricalRecoveryLocalCausalCompletionRefinesExact ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+      => PostGstRunHistoricalRecoveryNode(node)
+BY DirectHistoricalRecoveryLocalCausalCompletionRefinesPostState,
+   PostStateHistoricalRecoveryRunnerWitnessRefinesExact, Isa
+   DEF PostStateHistoricalRecoveryRunnerWitness
+
+THEOREM DirectHistoricalRecoveryLocalCausalCompletionCaller ==
+  \A node:
+    /\ gst
+    /\ HistoricalRecoveryTarget(node)
+    /\ node \in up
+    /\ ~NodeHasApplication(node)
+    /\ ~ResponsiveReplayQuarantined(node)
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Causal"
+    /\ ~CandidateInFlight(HeadCausalCandidate(node))
+    /\ HeadCausalCandidate(node).class = "Completion"
+    /\ ENABLED LocalAdmissionStep(node)
+    => ENABLED PostGstRunHistoricalRecoveryNode(node)
+PROOF
+  <1>1. ASSUME NEW node,
+                gst,
+                HistoricalRecoveryTarget(node),
+                node \in up,
+                ~NodeHasApplication(node),
+                ~ResponsiveReplayQuarantined(node),
+                LocalAdmissionCanAdvance(node),
+                SelectedLocalSource(node) = "Causal",
+                ~CandidateInFlight(HeadCausalCandidate(node)),
+                HeadCausalCandidate(node).class = "Completion",
+                ENABLED LocalAdmissionStep(node)
+         PROVE ENABLED PostGstRunHistoricalRecoveryNode(node)
+    <2>1. DirectLocalCausalCompletionAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF DirectLocalCausalCompletionAdmissionStep
+    <2>2. LocalAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF LocalAdmissionStep
+    <2>3. LocalAdmissionStep(node)
+             => DirectLocalCausalCompletionAdmissionStep(node)
+      BY <1>1, DirectLocalCausalCompletionIffProduction
+    <2>4. ENABLED LocalAdmissionStep(node)
+             => ENABLED DirectLocalCausalCompletionAdmissionStep(node)
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2>5. ENABLED DirectLocalCausalCompletionAdmissionStep(node)
+      BY <1>1, <2>4
+    <2>6. ENABLED
+             DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+      BY <1>1, <2>5,
+         DirectHistoricalRecoveryLocalCausalCompletionEnabled
+    <2>7. DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+             \in BOOLEAN
+      BY Isa DEF DirectHistoricalRecoveryLocalCausalCompletionWitness
+    <2>8. PostGstRunHistoricalRecoveryNode(node) \in BOOLEAN
+      BY Isa DEF PostGstRunHistoricalRecoveryNode
+    <2>9. DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+             => PostGstRunHistoricalRecoveryNode(node)
+      BY DirectHistoricalRecoveryLocalCausalCompletionRefinesExact
+    <2>10. ENABLED
+             DirectHistoricalRecoveryLocalCausalCompletionWitness(node)
+             => ENABLED PostGstRunHistoricalRecoveryNode(node)
+      BY <2>7, <2>8, <2>9, ENABLEDaxioms
+    <2> QED BY <2>6, <2>10
+  <1> QED BY <1>1
+
+DirectLocalCausalCommandAdmissionStep(node) ==
+  LET candidate == HeadCausalCandidate(node)
+  IN /\ asyncRunnerPhase[node] = "Local"
+     /\ UNCHANGED AsyncDeferredVars
+     /\ LocalAdmissionCanAdvance(node)
+     /\ SelectedLocalSource(node) = "Causal"
+     /\ CausalHeadCanAdvance(node)
+     /\ ~CandidateInFlight(candidate)
+     /\ candidate.class # "Completion"
+     /\ asyncCausalQueues' =
+          [asyncCausalQueues EXCEPT ![node] = Tail(@)]
+     /\ EnqueueCandidate(candidate)
+     /\ UNCHANGED AsyncIoVars
+     /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
+                    asyncOutstandingTags, asyncNodeDeadlines,
+                    asyncRetransmitDeadlines, asyncSentItems,
+                    asyncRetainedControl, asyncActiveRequests,
+                    asyncCertifiedResponseClaim, asyncTransport,
+                    asyncIngressLanes, asyncIngressReady,
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets>>
+     /\ UpdateLocalAdmissionMetadata(node, "Causal")
+     /\ asyncRunnerPhase' = asyncRunnerPhase
+     /\ asyncRunnerBudget' =
+          [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+
+DirectHistoricalRecoveryLocalCausalCommandWitness(node) ==
+  /\ gst
+  /\ DirectLocalCausalCommandAdmissionStep(node)
+  /\ HistoricalRecoveryTarget(node)
+  /\ node \in up
+  /\ ~NodeHasApplication(node)
+  /\ ~ResponsiveReplayQuarantined(node)
+  /\ NodeServiceFrame(node)
+  /\ UNCHANGED up
+  /\ UNCHANGED AsyncRecoveryControlVars
+  /\ AsyncCoreOuterFrame
+  /\ asyncHistoricalLockRestartAuthorities' =
+       HistoricalLockRestartAuthoritiesAt(
+         context', nodeView', generation', prepareQCs', installedTCs',
+         lockRank', lockSubject', commitIntents', decisions',
+         asyncCommandQueues',
+         asyncDeferredCompletionQueues',
+         asyncDeferredProgressQueues',
+         asyncDeferredNormalQueues',
+         asyncCausalQueues', asyncOutstandingWork')
+
+THEOREM DirectLocalCausalCommandIffProduction ==
+  \A node:
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Causal"
+    /\ ~CandidateInFlight(HeadCausalCandidate(node))
+    /\ HeadCausalCandidate(node).class # "Completion"
+    => (DirectLocalCausalCommandAdmissionStep(node)
+          <=> LocalAdmissionStep(node))
+BY Isa
+   DEF DirectLocalCausalCommandAdmissionStep,
+       LocalAdmissionStep, AdmitCausalHead
+
+THEOREM DirectHistoricalRecoveryLocalCausalCommandEnabled ==
+  \A node:
+    /\ gst
+    /\ HistoricalRecoveryTarget(node)
+    /\ node \in up
+    /\ ~NodeHasApplication(node)
+    /\ ~ResponsiveReplayQuarantined(node)
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Causal"
+    /\ ~CandidateInFlight(HeadCausalCandidate(node))
+    /\ HeadCausalCandidate(node).class # "Completion"
+    /\ ENABLED DirectLocalCausalCommandAdmissionStep(node)
+    => ENABLED DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+BY AutoUSE, ExpandENABLED, IsaT(300)
+   DEF DirectHistoricalRecoveryLocalCausalCommandWitness,
+       DirectLocalCausalCommandAdmissionStep,
+       NodeServiceFrame, AsyncCoreOuterFrame,
+       UpdateLocalAdmissionMetadata, EnqueueCandidate,
+       AsyncIoVars, AsyncDeferredVars,
+       AsyncRecoveryControlVars, vars
+
+THEOREM DirectHistoricalRecoveryLocalCausalCommandProvidesConcreteAdmission ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+      => DirectLocalCausalCommandAdmissionStep(node)
+BY Isa
+   DEF DirectHistoricalRecoveryLocalCausalCommandWitness
+
+THEOREM DirectHistoricalRecoveryLocalCausalCommandProvidesAdmissionGuard ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+      => /\ LocalAdmissionCanAdvance(node)
+         /\ SelectedLocalSource(node) = "Causal"
+         /\ ~CandidateInFlight(HeadCausalCandidate(node))
+         /\ HeadCausalCandidate(node).class # "Completion"
+BY Isa
+   DEF DirectHistoricalRecoveryLocalCausalCommandWitness,
+       DirectLocalCausalCommandAdmissionStep
+
+THEOREM DirectHistoricalRecoveryLocalCausalCommandUsesProductionAdmission ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+      => LocalAdmissionStep(node)
+BY DirectHistoricalRecoveryLocalCausalCommandProvidesConcreteAdmission,
+   DirectHistoricalRecoveryLocalCausalCommandProvidesAdmissionGuard,
+   DirectLocalCausalCommandIffProduction, Isa
+
+THEOREM DirectHistoricalRecoveryLocalCausalCommandProvidesEnvelope ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+      => PostStateHistoricalRecoveryRunnerEnvelope(node)
+BY Isa
+   DEF DirectHistoricalRecoveryLocalCausalCommandWitness,
+       PostStateHistoricalRecoveryRunnerEnvelope,
+       PostStateHistoricalLockRestartNonCrashOuterFrame,
+       PostStateHistoricalLockRestartAuthorityFrame,
+       NodeServiceFrame
+
+THEOREM DirectHistoricalRecoveryLocalCausalCommandRefinesPostState ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+      => PostStateHistoricalRecoveryLocalRunnerWitness(node)
+BY DirectHistoricalRecoveryLocalCausalCommandUsesProductionAdmission,
+   DirectHistoricalRecoveryLocalCausalCommandProvidesEnvelope, Isa
+   DEF DirectHistoricalRecoveryLocalCausalCommandWitness,
+       PostStateHistoricalRecoveryLocalRunnerWitness
+
+THEOREM DirectHistoricalRecoveryLocalCausalCommandRefinesExact ==
+  \A node:
+    DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+      => PostGstRunHistoricalRecoveryNode(node)
+BY DirectHistoricalRecoveryLocalCausalCommandRefinesPostState,
+   PostStateHistoricalRecoveryRunnerWitnessRefinesExact, Isa
+   DEF PostStateHistoricalRecoveryRunnerWitness
+
+THEOREM DirectHistoricalRecoveryLocalCausalCommandCaller ==
+  \A node:
+    /\ gst
+    /\ HistoricalRecoveryTarget(node)
+    /\ node \in up
+    /\ ~NodeHasApplication(node)
+    /\ ~ResponsiveReplayQuarantined(node)
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Causal"
+    /\ ~CandidateInFlight(HeadCausalCandidate(node))
+    /\ HeadCausalCandidate(node).class # "Completion"
+    /\ ENABLED LocalAdmissionStep(node)
+    => ENABLED PostGstRunHistoricalRecoveryNode(node)
+PROOF
+  <1>1. ASSUME NEW node,
+                gst,
+                HistoricalRecoveryTarget(node),
+                node \in up,
+                ~NodeHasApplication(node),
+                ~ResponsiveReplayQuarantined(node),
+                LocalAdmissionCanAdvance(node),
+                SelectedLocalSource(node) = "Causal",
+                ~CandidateInFlight(HeadCausalCandidate(node)),
+                HeadCausalCandidate(node).class # "Completion",
+                ENABLED LocalAdmissionStep(node)
+         PROVE ENABLED PostGstRunHistoricalRecoveryNode(node)
+    <2>1. DirectLocalCausalCommandAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF DirectLocalCausalCommandAdmissionStep
+    <2>2. LocalAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF LocalAdmissionStep
+    <2>3. LocalAdmissionStep(node)
+             => DirectLocalCausalCommandAdmissionStep(node)
+      BY <1>1, DirectLocalCausalCommandIffProduction
+    <2>4. ENABLED LocalAdmissionStep(node)
+             => ENABLED DirectLocalCausalCommandAdmissionStep(node)
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2>5. ENABLED DirectLocalCausalCommandAdmissionStep(node)
+      BY <1>1, <2>4
+    <2>6. ENABLED DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+      BY <1>1, <2>5,
+         DirectHistoricalRecoveryLocalCausalCommandEnabled
+    <2>7. DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+             \in BOOLEAN
+      BY Isa DEF DirectHistoricalRecoveryLocalCausalCommandWitness
+    <2>8. PostGstRunHistoricalRecoveryNode(node) \in BOOLEAN
+      BY Isa DEF PostGstRunHistoricalRecoveryNode
+    <2>9. DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+             => PostGstRunHistoricalRecoveryNode(node)
+      BY DirectHistoricalRecoveryLocalCausalCommandRefinesExact
+    <2>10. ENABLED
+             DirectHistoricalRecoveryLocalCausalCommandWitness(node)
+             => ENABLED PostGstRunHistoricalRecoveryNode(node)
+      BY <2>7, <2>8, <2>9, ENABLEDaxioms
+    <2> QED BY <2>6, <2>10
+  <1> QED BY <1>1
+
+THEOREM SelectedLocalSourceIsKnown ==
+  \A node:
+    SelectedLocalSource(node) \in {"Producer", "Causal"}
+BY Isa
+   DEF SelectedLocalSource, PreferredLocalSource, OtherLocalSource
+
+THEOREM DirectHistoricalRecoveryLocalRunnerCaller ==
+  \A node \in ValidatorIds:
+    /\ HistoricalRecoveryRunnerCurrentGuard(node)
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ ENABLED LocalAdmissionStep(node)
+    => ENABLED PostGstRunHistoricalRecoveryNode(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                HistoricalRecoveryRunnerCurrentGuard(node),
+                asyncRunnerPhase[node] = "Local",
+                ENABLED LocalAdmissionStep(node)
+         PROVE ENABLED PostGstRunHistoricalRecoveryNode(node)
+    <2>1. /\ gst
+           /\ HistoricalRecoveryTarget(node)
+           /\ node \in up
+           /\ ~NodeHasApplication(node)
+           /\ ~ResponsiveReplayQuarantined(node)
+      BY <1>1
+         DEF HistoricalRecoveryRunnerCurrentGuard,
+             HistoricalRecoveryTarget
+    <2>2. CASE ~LocalAdmissionCanAdvance(node)
+      <3>1. ENABLED
+               RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
+        BY <1>1, <2>2, HistoricalRecoveryLocalPhaseAdvanceEnabled
+      <3>2. RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
+               \in BOOLEAN
+        BY Isa
+           DEF RetainedHistoricalRecoveryLocalPhaseAdvanceWitness
+      <3>3. PostGstRunHistoricalRecoveryNode(node) \in BOOLEAN
+        BY Isa DEF PostGstRunHistoricalRecoveryNode
+      <3>4. RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
+               => PostGstRunHistoricalRecoveryNode(node)
+        BY RetainedHistoricalRecoveryLocalPhaseAdvanceRefinesExact
+      <3>5. ENABLED
+               RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
+               => ENABLED PostGstRunHistoricalRecoveryNode(node)
+        BY <3>2, <3>3, <3>4, ENABLEDaxioms
+      <3> QED BY <3>1, <3>5
+    <2>3. CASE LocalAdmissionCanAdvance(node)
+      <3>1. CASE SelectedLocalSource(node) = "Producer"
+        <4> QED BY <1>1, <2>1, <2>3, <3>1,
+             DirectHistoricalRecoveryLocalProducerCaller
+      <3>2. CASE SelectedLocalSource(node) = "Causal"
+        <4>1. CASE CandidateInFlight(HeadCausalCandidate(node))
+          <5> QED BY <1>1, <2>1, <2>3, <3>2, <4>1,
+               DirectHistoricalRecoveryLocalCausalDuplicateCaller
+        <4>2. CASE ~CandidateInFlight(HeadCausalCandidate(node))
+          <5>1. CASE HeadCausalCandidate(node).class = "Completion"
+            <6> QED BY <1>1, <2>1, <2>3, <3>2, <4>2, <5>1,
+                 DirectHistoricalRecoveryLocalCausalCompletionCaller
+          <5>2. CASE HeadCausalCandidate(node).class # "Completion"
+            <6> QED BY <1>1, <2>1, <2>3, <3>2, <4>2, <5>2,
+                 DirectHistoricalRecoveryLocalCausalCommandCaller
+          <5> QED BY <5>1, <5>2
+        <4> QED BY <4>1, <4>2
+      <3> QED BY SelectedLocalSourceIsKnown, <3>1, <3>2
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
 THEOREM HistoricalRecoveryRunnerEnabledAfterGst ==
   \A node \in asyncHistoricalRecoveryTargets:
     /\ AsyncStrongTypeInvariant
@@ -1304,22 +2122,11 @@ PROOF
     <2>2. CASE asyncRunnerPhase[node] = "Local"
       <3>1. ENABLED LocalAdmissionStep(node)
         BY <2>1b, <2>2, LocalAdmissionStepIsEnabled
-      <3>2. ENABLED
-                PostStateHistoricalRecoveryLocalRunnerWitness(node)
-        BY <1>1, <2>1c, <2>1d, <3>1,
-           AutoUSE, ExpandENABLED, Isa
-           DEF PostStateHistoricalRecoveryLocalRunnerWitness,
-               PostStateHistoricalRecoveryRunnerEnvelope,
-               PostStateHistoricalLockRestartNonCrashOuterFrame,
-               PostStateHistoricalLockRestartAuthorityFrame,
-               HistoricalRecoveryTarget,
-               NodeServiceFrame, AsyncCoreOuterFrame,
-               AsyncRecoveryControlVars
-      <3>3. ENABLED PostStateHistoricalRecoveryRunnerWitness(node)
-        BY <3>2, AutoUSE, ExpandENABLED, Isa
-           DEF PostStateHistoricalRecoveryRunnerWitness
-      <3> QED BY <3>3,
-           EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact
+      <3>2. HistoricalRecoveryRunnerCurrentGuard(node)
+        BY <1>1, <2>1c, <2>1d
+           DEF HistoricalRecoveryRunnerCurrentGuard
+      <3> QED BY <2>1b, <2>2, <3>1, <3>2,
+           DirectHistoricalRecoveryLocalRunnerCaller
     <2>3. CASE asyncRunnerPhase[node] = "Ingress"
       <3>1. ENABLED IngressDrainStep(node)
         BY <2>1b, <2>3, IngressDrainStepIsEnabled

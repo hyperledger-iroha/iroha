@@ -340,21 +340,21 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 589
-_G_UNIT_TEST_COUNT = 256
+_PRODUCTION_TEST_COUNT = 704
+_G_UNIT_TEST_COUNT = 277
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        99,
+        101,
         "lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        101,
+        119,
         "lib",
     ),
     (
@@ -375,7 +375,7 @@ _G_UNIT_GROUPS = (
         "required_multilane_config_fixtures_focus_tests",
         "g-unit-iroha-config-fixtures",
         "iroha_config",
-        1,
+        2,
         "test:fixtures",
     ),
     (
@@ -426,17 +426,20 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        29,
+        32,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 45),
+    ("production-merge-sidecar", "merge_sidecar::tests", 102),
     ("production-v2-core", "sumeragi::v2_core::tests", 37),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
-    ("production-v2-core-reducer", "sumeragi::v2_core::reducer::tests", 2),
-    ("production-v2-core-wal", "sumeragi::v2_core::wal::tests", 1),
+    (
+        "production-v2-core-wal",
+        "sumeragi::v2_core::wal::byte_lifecycle_tests",
+        1,
+    ),
     (
         "production-v2-core-source-link",
         "sumeragi::v2_core::reducer::source_link_tests",
-        6,
+        8,
     ),
     (
         "production-v2-equivocation-evidence",
@@ -448,12 +451,12 @@ _PRODUCTION_MODULES = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 62),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 34),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 51),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 39),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 27),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 60),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 30),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 77),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -497,17 +500,17 @@ _PRODUCTION_MODULES = (
     (
         "production-p2p-network-reliable-actor",
         "network::tests",
-        70,
+        84,
     ),
     (
         "production-p2p-source-memory-geometry",
         "network::inbound_source_memory_bound_tests",
-        1,
+        2,
     ),
     (
         "production-p2p-waiter-rank-geometry",
         "network::handle_update_tests",
-        1,
+        4,
     ),
     (
         "production-irohad-consensus-message-control",

@@ -16136,7 +16136,7 @@ mod tests {
         assert_geometry_io_error(
             &error,
             ErrorKind::WouldBlock,
-            "lane retirement scan found an in-flight sidecar",
+            "lane retirement scan found an in-flight autonomous sidecar",
         );
         assert!(!data_path.exists());
         assert!(!index_path.exists());

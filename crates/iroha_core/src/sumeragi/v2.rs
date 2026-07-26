@@ -7497,13 +7497,9 @@ mod tests {
             height: parent_context.height,
             view: 3,
         };
-        let proposal_round = wire::ConsensusRound {
-            view: 1,
-            ..parent_round
-        };
         let parent_qc = wire::QuorumCertificate {
             round: parent_round,
-            proposal_round,
+            proposal_round: parent_round,
             phase: wire::GlobalPhase::Commit,
             subject: subject(0x6d),
             execution_commitment: execution_commitment(0x6d),
@@ -7527,7 +7523,7 @@ mod tests {
         assert_eq!(core_parent.context_id(), context_id(parent_context.id()));
         assert_ne!(core_parent.context_id(), context_id(successor_id));
         assert_eq!(core_parent.round().height(), parent_context.height);
-        assert_eq!(core_parent.proposal_round().view(), proposal_round.view);
+        assert_eq!(core_parent.proposal_round().view(), parent_round.view);
 
         let parent_reference = successor
             .parent_commit_qc
@@ -15247,10 +15243,10 @@ mod tests {
         let conflicting_proposal_message = wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal),
         );
-        // First-release proposal admission deliberately forbids carrying a
-        // high PrepareQC through a timeout justification. Exercise the
-        // read-only embedded-certificate compatibility walk directly, then
-        // confirm ordinary ingress preserves structural-error precedence.
+        // Exercise the read-only embedded-certificate compatibility walk
+        // directly, then confirm ordinary ingress rejects the same
+        // structurally valid proposal for its conflicting deterministic
+        // execution result.
         let authenticated_conflicting_proposal =
             AuthenticatedConsensusMessage::for_test(conflicting_proposal_message.clone());
         assert!(matches!(
@@ -15261,9 +15257,7 @@ mod tests {
         ));
         assert!(matches!(
             adapter.authenticate(conflicting_proposal_message),
-            Err(AdapterError::WireValidation(
-                wire::ValidationError::InvalidProposalJustification
-            ))
+            Err(AdapterError::ConflictingExecutionCommitment)
         ));
 
         let unbound_subject = subject(0x85);

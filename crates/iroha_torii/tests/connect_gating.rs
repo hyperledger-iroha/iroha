@@ -139,6 +139,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout: core::time::Duration::from_secs(5),
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay:
                 iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,

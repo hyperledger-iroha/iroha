@@ -421,6 +421,7 @@ fn minimal_config_snapshot() {
                 require_sm_handshake_match: true,
                 require_sm_openssl_preview_match: true,
                 idle_timeout: 300s,
+                reply_writer_flush_timeout: 30s,
                 connect_startup_delay: 0ns,
                 dial_timeout: 5s,
                 deferred_send_ttl: 1.5s,
@@ -1640,7 +1641,6 @@ fn minimal_config_snapshot() {
                 transaction_time_to_live: 86400s,
                 expired_cull_interval: 1s,
                 expired_cull_batch: 256,
-                plan_journal_enabled: true,
                 plan_journal_max_bytes: 67108864,
             },
             nexus: Nexus {
@@ -3169,6 +3169,14 @@ fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
             || message.contains("recovery"),
         "diagnostic should identify a retired v1 table: {message}",
     );
+}
+
+#[test]
+fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage() {
+    let report = load_config_from_fixtures("bad.retired_plan_journal_toggle.toml")
+        .expect_err("the first release must not expose a journal-disabled runtime path");
+    let message = strip_ansi_codes(&format!("{report:?}"));
+    assert_contains!(message, "unknown parameter: `queue.plan_journal_enabled`");
 }
 
 #[test]

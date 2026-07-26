@@ -85,6 +85,8 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout: Duration::from_millis(1000),
+        reply_writer_flush_timeout:
+            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: Duration::from_millis(

@@ -2356,11 +2356,12 @@ impl ConsensusIngressLimiter {
             iroha_core::NetworkMessage::SumeragiControlFlow(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::LaneDrainVote(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
-                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
+                | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_) => {
                     IngressPolicy::limited()
                 }
-                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_)
-                | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_) => {
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_)
+                | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => {
                     IngressPolicy::critical()
                 }
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
@@ -2944,6 +2945,19 @@ fn obsolete_sumeragi_relay_terminal_meta(
         .map(|(kind, height, view)| (kind, height, view, SumeragiRelayTerminalOutcome::Delivered))
 }
 
+fn certified_merge_sidecar_ingress_reply_route(
+    message: &iroha_core::merge_sidecar::CertifiedMergeSidecarMessage,
+    reply_route: iroha_p2p::network::NetworkReplyRoute,
+) -> Option<iroha_p2p::network::NetworkReplyRoute> {
+    match message {
+        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => None,
+        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
+        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_)
+        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_)
+        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => Some(reply_route),
+    }
+}
+
 impl NetworkRelayShared {
     fn prepare_sumeragi_relay_work(
         &self,
@@ -3211,14 +3225,18 @@ impl NetworkRelayShared {
                     Arc::unwrap_or_clone(signature),
                 )),
             ),
-            CertifiedMergeSidecar(message) => (
-                SumeragiRelayClass::Lane,
-                PreparedSumeragiRelayItem::Lane(LaneRelayMessage::CertifiedMergeSidecar {
-                    sender: peer_id.clone(),
-                    reply_route: Some(reply_route),
-                    message: Arc::unwrap_or_clone(message),
-                }),
-            ),
+            CertifiedMergeSidecar(message) => {
+                let reply_route =
+                    certified_merge_sidecar_ingress_reply_route(message.as_ref(), reply_route);
+                (
+                    SumeragiRelayClass::Lane,
+                    PreparedSumeragiRelayItem::Lane(LaneRelayMessage::CertifiedMergeSidecar {
+                        sender: peer_id.clone(),
+                        reply_route,
+                        message: Arc::unwrap_or_clone(message),
+                    }),
+                )
+            }
             NativeAmx(message) => (
                 SumeragiRelayClass::Lane,
                 PreparedSumeragiRelayItem::Lane(LaneRelayMessage::NativeAmx {
@@ -4438,6 +4456,9 @@ impl NetworkRelayShared {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_) => {
                     ("CertifiedMergeSidecarCloseAck", None, None)
                 }
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => {
+                    ("CertifiedMergeSidecarGenerationHint", None, None)
+                }
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
                     ("CertifiedMergeSidecarChunk", None, None)
                 }
@@ -5086,7 +5107,7 @@ impl NetworkRelayShared {
 
 #[cfg(test)]
 mod network_relay_tests {
-    use std::time::Duration;
+    use std::{num::NonZeroU64, time::Duration};
 
     use iroha_config::{
         client_api::{SoranetHandshakePowSummary, SoranetHandshakePuzzleSummary},
@@ -6002,19 +6023,30 @@ mod network_relay_tests {
         )))
     }
 
-    fn certified_merge_sidecar_control_messages()
-    -> (iroha_core::NetworkMessage, iroha_core::NetworkMessage) {
+    fn certified_merge_sidecar_control_messages() -> (
+        iroha_core::NetworkMessage,
+        iroha_core::NetworkMessage,
+        iroha_core::NetworkMessage,
+    ) {
         use iroha_core::merge_sidecar::{
             CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarCloseAckV1,
-            CertifiedMergeSidecarCloseV1, CertifiedMergeSidecarMessage,
+            CertifiedMergeSidecarCloseV1, CertifiedMergeSidecarGenerationHintV1,
+            CertifiedMergeSidecarMessage, CertifiedMergeSidecarServiceGenerationV1,
+            CertifiedMergeSidecarStreamEpochV1,
         };
 
         let requester = PeerId::new(KeyPair::random().public_key().clone());
         let responder = PeerId::new(KeyPair::random().public_key().clone());
+        let stream_epoch = CertifiedMergeSidecarStreamEpochV1(
+            NonZeroU64::new(1).expect("sidecar control stream epoch is non-zero"),
+        );
+        let service_generation = CertifiedMergeSidecarServiceGenerationV1::INITIAL;
         let close_id = Hash::prehashed([0x6C; 32]);
         let close = iroha_core::NetworkMessage::CertifiedMergeSidecar(std::sync::Arc::new(
             CertifiedMergeSidecarMessage::Close(CertifiedMergeSidecarCloseV1 {
                 version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                service_generation,
+                stream_epoch,
                 closed_through: 7,
                 close_id,
                 requester: requester.clone(),
@@ -6024,13 +6056,28 @@ mod network_relay_tests {
         let ack = iroha_core::NetworkMessage::CertifiedMergeSidecar(std::sync::Arc::new(
             CertifiedMergeSidecarMessage::CloseAck(CertifiedMergeSidecarCloseAckV1 {
                 version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                service_generation,
+                stream_epoch,
                 closed_through: 7,
                 close_id,
+                requester: requester.clone(),
+                responder: responder.clone(),
+            }),
+        ));
+        let hint = iroha_core::NetworkMessage::CertifiedMergeSidecar(std::sync::Arc::new(
+            CertifiedMergeSidecarMessage::GenerationHint(CertifiedMergeSidecarGenerationHintV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                observed_generation: service_generation,
+                current_generation: CertifiedMergeSidecarServiceGenerationV1(
+                    NonZeroU64::new(2).expect("sidecar control successor generation is non-zero"),
+                ),
+                observed_message_hash: Hash::new(b"sidecar control observed message"),
+                hint_id: Hash::new(b"sidecar control generation Hint"),
                 requester,
                 responder,
             }),
         ));
-        (close, ack)
+        (close, ack, hint)
     }
 
     fn limited_msg() -> iroha_core::NetworkMessage {
@@ -6445,14 +6492,104 @@ mod network_relay_tests {
     }
 
     #[test]
-    fn certified_merge_sidecar_control_uses_critical_bucket() {
-        let (close, close_ack) = certified_merge_sidecar_control_messages();
+    fn certified_merge_sidecar_close_is_limited_but_responder_controls_are_critical() {
+        let (close, close_ack, generation_hint) = certified_merge_sidecar_control_messages();
 
-        for message in [&close, &close_ack] {
+        let close_policy = ConsensusIngressLimiter::ingress_policy(&close);
+        assert_eq!(close_policy.rate_class, Some(IngressRateClass::Limited));
+        assert!(close_policy.apply_penalty);
+
+        for message in [&close_ack, &generation_hint] {
             let policy = ConsensusIngressLimiter::ingress_policy(message);
             assert_eq!(policy.rate_class, Some(IngressRateClass::Critical));
             assert!(!policy.apply_penalty);
         }
+    }
+
+    #[test]
+    fn certified_merge_sidecar_generation_hint_alone_drops_ingress_reply_route() {
+        use iroha_core::merge_sidecar::{
+            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
+            CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
+            CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
+            CertifiedMergeSidecarStreamEpochV1,
+        };
+        use iroha_p2p::network::NetworkReplyRouteTestFixture;
+
+        let (close, close_ack, generation_hint) = certified_merge_sidecar_control_messages();
+        let into_sidecar = |message| {
+            let iroha_core::NetworkMessage::CertifiedMergeSidecar(message) = message else {
+                panic!("fixture must contain a certified merge-sidecar message");
+            };
+            std::sync::Arc::unwrap_or_clone(message)
+        };
+        let close = into_sidecar(close);
+        let close_ack = into_sidecar(close_ack);
+        let generation_hint = into_sidecar(generation_hint);
+
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let responder = PeerId::new(KeyPair::random().public_key().clone());
+        let stream_epoch = CertifiedMergeSidecarStreamEpochV1(
+            NonZeroU64::new(1).expect("sidecar stream epoch is non-zero"),
+        );
+        let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"sidecar route entry"));
+        let reference_digest = Hash::new(b"sidecar route reference");
+        let mut request = CertifiedMergeSidecarRequestV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
+            stream_epoch,
+            semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1(
+                NonZeroU64::new(1).expect("sidecar semantic sequence is non-zero"),
+            ),
+            closed_through: 0,
+            request_id: Hash::prehashed([0; Hash::LENGTH]),
+            entry_hash,
+            encoded_len: 1,
+            epoch_id: 1,
+            reference_digest,
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        request.request_id = request.canonical_request_id();
+        let chunk = CertifiedMergeSidecarChunkV1 {
+            version: request.version,
+            service_generation: request.service_generation,
+            stream_epoch: request.stream_epoch,
+            semantic_sequence: request.semantic_sequence,
+            request_id: request.request_id,
+            entry_hash: request.entry_hash,
+            encoded_len: request.encoded_len,
+            epoch_id: request.epoch_id,
+            reference_digest: request.reference_digest,
+            requester,
+            responder,
+            chunk_index: 0,
+            chunk_count: 1,
+            bytes: vec![0xA5],
+        };
+
+        let authenticated_via = PeerId::new(KeyPair::random().public_key().clone());
+        let semantic_sender = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(authenticated_via);
+        for message in [
+            CertifiedMergeSidecarMessage::Request(request),
+            close,
+            close_ack,
+            CertifiedMergeSidecarMessage::Chunk(chunk),
+        ] {
+            let route = routes.mint(semantic_sender.clone());
+            let retained =
+                super::certified_merge_sidecar_ingress_reply_route(&message, route.clone())
+                    .expect("non-Hint sidecar traffic keeps its authenticated reply route");
+            assert!(retained.same_delivery(&route));
+        }
+
+        let hint_route = routes.mint(semantic_sender);
+        assert!(
+            super::certified_merge_sidecar_ingress_reply_route(&generation_hint, hint_route)
+                .is_none(),
+            "GenerationHint is Consensus control traffic without reply authority"
+        );
     }
 
     #[test]
@@ -8160,8 +8297,8 @@ impl Iroha {
         }
         // Independent lane producers transfer FIFO ownership before they
         // publish any payload bytes. Install and replay that durable ownership
-        // journal before the ordinary queue-plan journal can reinsert pending
-        // transactions, regardless of whether plan journaling is enabled.
+        // journal before the mandatory ordinary queue-plan journal can reinsert
+        // pending transactions.
         let lane_reservation_journal_path = config
             .kura
             .store_dir
@@ -8188,12 +8325,6 @@ impl Iroha {
             "lane queue reservation journal installed"
         );
 
-        if !config.queue.plan_journal_enabled {
-            return Err(Report::new(StartError::InitKura).attach(
-                "queue.plan_journal_enabled=false is unsupported: production transaction \
-                 acknowledgement requires durable pending-plan recovery",
-            ));
-        }
         let journal_path = config
             .kura
             .store_dir

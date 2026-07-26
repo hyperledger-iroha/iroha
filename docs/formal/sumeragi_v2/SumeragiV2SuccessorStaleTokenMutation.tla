@@ -11,10 +11,13 @@ buggy Begin omits both guards.  Its single transition exposes Running, makes
 the stale token credential-ready, and reaches the pipeline CASE fallback at
 distance zero, violating the projected protocol invariant at depth one.
 
-The repaired Begin is disabled in that state. An Applied startup failure is
-also disabled until the visible status is Running; failure may not atomically
-rewrite a Queued owner into recovered state. The two configurations below
-separate the red buggy witness from the green fixed/lifecycle corridor.
+The repaired Begin is disabled in that state. The fixed model takes one
+explicit rejection-observation step which preserves every protocol field, so
+the green case is non-vacuous without pretending that the malformed request
+entered the startup pipeline. An Applied startup failure is also disabled
+until the visible status is Running; failure may not atomically rewrite a
+Queued owner into recovered state. The two configurations below separate the
+red buggy witness from the green fixed/lifecycle corridor.
 ***************************************************************************)
 
 VARIABLES
@@ -111,7 +114,8 @@ MutationTypeInvariant ==
   /\ activationFailurePresent \in BOOLEAN
   /\ activationFailureHistoryPresent \in BOOLEAN
   /\ lastTransition
-       \in {"Initial", "BuggyBegin", "FixedBegin", "AppliedFailure"}
+       \in {"Initial", "BuggyBegin", "FixedBegin", "FixedReject",
+            "AppliedFailure"}
   /\ previousRank \in 0..10
 
 (***************************************************************************
@@ -172,6 +176,24 @@ FixedBeginSuccessorActivation ==
                   activationFailurePresent,
                   activationFailureHistoryPresent>>
 
+(***************************************************************************
+The fixed fail-closed observation is deliberately not a startup transition:
+it records that the malformed stale-token input was rejected while preserving
+the exact pending protocol state. The Initial guard makes this a one-shot
+non-vacuity witness rather than an artificial stuttering cycle.
+***************************************************************************)
+FixedRejectStaleSuccessorActivation ==
+  /\ StaleAppliedTokenState
+  /\ lastTransition = "Initial"
+  /\ lastTransition' = "FixedReject"
+  /\ previousRank' = SuccessorActivationRank
+  /\ UNCHANGED <<activationStatus,
+                  predecessorOwnership,
+                  activationPrerequisites,
+                  activationTokens,
+                  activationFailurePresent,
+                  activationFailureHistoryPresent>>
+
 MutationLatchAppliedSuccessorStartupFailure ==
   /\ activationStatus = "Running"
   /\ predecessorOwnership = "Published"
@@ -194,9 +216,18 @@ StaleAppliedFailureIsDisabled ==
   StaleAppliedTokenState
     => ~ENABLED MutationLatchAppliedSuccessorStartupFailure
 
+InitialStaleRejectionIsEnabled ==
+  (/\ StaleAppliedTokenState
+   /\ lastTransition = "Initial")
+    => ENABLED FixedRejectStaleSuccessorActivation
+
 BuggyBeginViolationWitness ==
   lastTransition = "BuggyBegin"
     => ~SuccessorActivationProtocolInvariantProjection
+
+FixedRejectPreservesStaleState ==
+  lastTransition = "FixedReject"
+    => StaleAppliedTokenState
 
 AppliedFailurePreservesRunningWitness ==
   lastTransition = "AppliedFailure"
@@ -209,6 +240,7 @@ BugMutationSpec ==
 
 FixedMutationNext ==
   \/ FixedBeginSuccessorActivation
+  \/ FixedRejectStaleSuccessorActivation
   \/ MutationLatchAppliedSuccessorStartupFailure
 
 FixedMutationSpec ==

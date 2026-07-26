@@ -119418,7 +119418,6 @@ seiyaku IdentitylessRawCallback {
         let entrypoint = queue_plan_entrypoint_for_state_test(state, tag);
         let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
             &state.chain_id,
-            Hash::new([tag]),
             &entrypoint,
             &routing_plan,
             admission_context,

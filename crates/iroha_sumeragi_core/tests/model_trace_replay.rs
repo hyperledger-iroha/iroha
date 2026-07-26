@@ -893,7 +893,15 @@ impl ProductionReplay {
                     self.network.len()
                 )
             });
-        let envelope = self.network.swap_remove(position);
+        // Quorum certificates are durable authenticated progress artifacts.
+        // The production network may redeliver the same exact certificate, so
+        // keep its envelope available and require every replay to pass through
+        // the reducer again. Other model messages remain one-shot deliveries.
+        let envelope = if action == ModelAction::DeliverQc {
+            self.network[position].clone()
+        } else {
+            self.network.swap_remove(position)
+        };
         if position != 0 {
             self.reordered_deliveries += 1;
         }
@@ -1304,7 +1312,7 @@ fn assert_every_witness_wal_prefix_recovers(replay: &ProductionReplay, subject: 
 #[test]
 fn tlc_liveness_witness_replays_against_the_production_reducer() {
     let steps = parse_trace(TRACE).expect("checked-in source-aligned trace is valid");
-    assert_eq!(steps.len(), 91);
+    assert_eq!(steps.len(), 100);
     let mut source_locks = [None; 4];
     for step in &steps {
         match step.action {
@@ -1528,8 +1536,8 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
 
     let wrong_leader = replace_exactly_once(
         TRACE,
-        "32\tBeginLocalProposal\t0",
-        "32\tBeginLocalProposal\t1",
+        "29\tBeginLocalProposal\t0",
+        "29\tBeginLocalProposal\t1",
     );
     assert!(
         parse_trace(&wrong_leader)
@@ -1537,13 +1545,13 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
             .contains("proposal violates leader")
     );
 
-    // Replace the third distinct Prepare signer delivered to node zero with a
-    // duplicate signer. The syntactic trace remains well formed but the model
-    // validator refuses to manufacture a QC from two distinct validators.
+    // Replace node zero's second remote Prepare signer with a duplicate of its
+    // first remote signer. Together with the local signature the syntactic
+    // trace remains well formed, but only two distinct validators remain.
     let under_quorum = replace_exactly_once(
         TRACE,
-        "68\tDeliverVote\t0\t1\t1\tPrepare\tA",
-        "68\tDeliverVote\t0\t2\t1\tPrepare\tA",
+        "64\tDeliverVote\t0\t2\t1\tPrepare\tA",
+        "64\tDeliverVote\t0\t1\t1\tPrepare\tA",
     );
     assert!(
         parse_trace(&under_quorum)
@@ -1557,18 +1565,13 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
     // the later CommitQC.
     let unlocked_commit = replace_exactly_once(
         TRACE,
-        "77\tDeliverQC\t3\t-\t1\tPrepare\tA",
-        "77\tDeliverVote\t2\t0\t1\tCommit\tA",
+        "86\tDeliverQC\t3\t-\t1\tPrepare\tA",
+        "86\tDeliverVote\t2\t0\t1\tCommit\tA",
     );
     let unlocked_commit = replace_exactly_once(
         &unlocked_commit,
-        "80\tDeliverQC\t0\t-\t1\tPrepare\tA",
-        "80\tDeliverQC\t3\t-\t1\tPrepare\tA",
-    );
-    let unlocked_commit = replace_exactly_once(
-        &unlocked_commit,
-        "84\tDeliverVote\t2\t0\t1\tCommit\tA",
-        "84\tDeliverQC\t0\t-\t1\tPrepare\tA",
+        "91\tDeliverVote\t2\t0\t1\tCommit\tA",
+        "91\tDeliverQC\t3\t-\t1\tPrepare\tA",
     );
     assert!(
         parse_trace(&unlocked_commit)

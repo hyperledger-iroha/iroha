@@ -3599,6 +3599,16 @@ pub mod handles {
                 .map(RetainedPost::into_inner)
         }
 
+        /// Simulate a successful consensus-lane peer-writer flush and return
+        /// the flushed payload.
+        pub(crate) fn try_recv_consensus_and_acknowledge_flush(
+            &mut self,
+        ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
+            self.hi_consensus
+                .try_recv()
+                .map(RetainedPost::into_inner_and_acknowledge_flush)
+        }
+
         /// Receive the next high-priority control-lane message, if any.
         pub(crate) fn try_recv_high_control(
             &mut self,

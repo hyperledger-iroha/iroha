@@ -2676,16 +2676,8 @@ mod tests {
         let admission_context = queue
             .plan_admission_context_with_state(state, &routing_plan)
             .expect("capture reservation fixture admission context");
-        let request_identity = Hash::new(
-            format!(
-                "sumeragi-v2-apply-reservation:{}",
-                accepted.hash_as_entrypoint()
-            )
-            .as_bytes(),
-        );
         let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
             state.chain_id_ref(),
-            request_identity,
             accepted.entrypoint(),
             &routing_plan,
             admission_context,
@@ -2827,13 +2819,6 @@ mod tests {
                 .expect("capture autonomous crash admission context");
             let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
                 fixture.state.chain_id_ref(),
-                Hash::new(
-                    format!(
-                        "sumeragi-v2-autonomous-crash-reservation:{}",
-                        accepted.hash_as_entrypoint()
-                    )
-                    .as_bytes(),
-                ),
                 accepted.entrypoint(),
                 &routing_plan,
                 admission_context,

@@ -3732,9 +3732,7 @@ mod tests {
         block::BlockHeader,
         domain::{Domain, DomainId},
         isi::{
-            escrow::{
-                CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
-            },
+            escrow::{CancelAssetLock, DrawdownAssetLock, ExpireAssetLock},
             sorafs::{
                 AdvanceSorafsReserveLifecycle, DecideSorafsReserveAppeal,
                 RegisterSorafsReserveAccount, SetSorafsReservePolicy, SubmitSorafsReserveAppeal,

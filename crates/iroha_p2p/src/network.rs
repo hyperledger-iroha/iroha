@@ -4104,6 +4104,10 @@ struct ProgressTicketShape {
     topic: message::Topic,
     stream_wire_bytes: usize,
     broadcast: bool,
+    /// Exact reply timeout generation retained across admission retries.
+    ///
+    /// Topology-authorized posts and broadcasts carry no adaptive timeout.
+    reply_writer_timeout_attempt: Option<u8>,
     /// Binds the ticket to the exact canonical request which created it.
     request_digest: Hash,
     /// Exact actor-published tenure which authorizes this target delivery.
@@ -4323,6 +4327,13 @@ impl NetworkActorAdmittedTicketIdentity {
         });
         projection.extend_from_slice(&(self.shape.stream_wire_bytes as u128).to_le_bytes());
         projection.push(u8::from(self.shape.broadcast));
+        match self.shape.reply_writer_timeout_attempt {
+            None => projection.push(0),
+            Some(attempt) => {
+                projection.push(1);
+                projection.push(attempt);
+            }
+        }
         projection.extend_from_slice(self.shape.request_digest.as_ref());
         match self.shape.authority {
             None => projection.push(0),
@@ -4463,8 +4474,16 @@ pub enum NetworkReplyFlushAckStatus {
     Pending,
     /// The exact admitted reply was fully written and flushed by its peer writer.
     Flushed,
+    /// The exact admitted reply exceeded its actor-owned writer deadline.
+    TimedOut,
     /// Actor ownership ended without observing a successful writer flush.
     Closed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NetworkReplyFlushCompletion {
+    Flushed,
+    TimedOut,
 }
 
 /// Immutable process-local identity of one admitted reliable-reply flush.
@@ -4500,22 +4519,37 @@ impl core::fmt::Debug for NetworkReplyFlushIdentity {
             .field("ticket_rank", &self.ticket.rank)
             .field("topic", &self.ticket.shape.topic)
             .field("stream_wire_bytes", &self.ticket.shape.stream_wire_bytes)
+            .field(
+                "reply_writer_timeout_attempt",
+                &self.ticket.shape.reply_writer_timeout_attempt,
+            )
             .finish_non_exhaustive()
     }
 }
 
 impl NetworkReplyFlushIdentity {
+    /// Build the completion identity for a ticket already validated by reply
+    /// admission.
+    ///
+    /// Production calls this only after the actor budget has admitted the
+    /// exact reply shape. The checks remain fail-closed defense in depth for
+    /// malformed internal tickets.
     fn from_admitted_ticket(ticket: NetworkActorAdmittedTicketIdentity) -> Option<Self> {
         let ProgressDeliveryAuthority::Reply(route) = &ticket.authority else {
             return None;
         };
+        let expected_authority = Some(ProgressAuthorityIdentity::Reply(
+            route.tenure.connection_ordinal,
+        ));
+        if ticket.shape.reply_writer_timeout_attempt.is_none()
+            || ticket.shape.authority != expected_authority
+            || ticket.source.target.as_ref() != Some(&route.tenure.delivery_peer)
+            || ticket.shape.broadcast
+        {
+            return None;
+        }
         let route = route.clone();
-        debug_assert_eq!(
-            ticket.shape.authority,
-            Some(ProgressAuthorityIdentity::Reply(
-                route.tenure.connection_ordinal
-            ))
-        );
+        debug_assert_eq!(ticket.shape.authority, expected_authority);
         debug_assert_eq!(
             ticket.source.target.as_ref(),
             Some(&route.tenure.delivery_peer)
@@ -4589,6 +4623,15 @@ impl NetworkReplyFlushIdentity {
     #[must_use]
     pub fn ticket_stream_wire_bytes(&self) -> usize {
         self.ticket.shape.stream_wire_bytes
+    }
+
+    /// Bounded adaptive writer-timeout generation admitted with this reply.
+    #[must_use]
+    pub fn reply_writer_timeout_attempt(&self) -> u8 {
+        self.ticket
+            .shape
+            .reply_writer_timeout_attempt
+            .expect("reply flush identity construction requires a timeout attempt")
     }
 
     /// Digest of the canonical priority, semantic target, and encoded payload.
@@ -4734,14 +4777,14 @@ pub enum NetworkReplyAdmissionOutcome {
 #[must_use = "dropping the flush acknowledgement discards the delivery witness"]
 pub struct NetworkReplyFlushAck {
     identity: NetworkReplyFlushIdentity,
-    receiver: Option<tokio::sync::oneshot::Receiver<()>>,
+    receiver: Option<tokio::sync::oneshot::Receiver<NetworkReplyFlushCompletion>>,
     terminal: Option<NetworkReplyFlushAckStatus>,
 }
 
 impl NetworkReplyFlushAck {
     fn new(
         identity: NetworkReplyFlushIdentity,
-        receiver: tokio::sync::oneshot::Receiver<()>,
+        receiver: tokio::sync::oneshot::Receiver<NetworkReplyFlushCompletion>,
     ) -> Self {
         Self {
             identity,
@@ -4758,9 +4801,8 @@ impl NetworkReplyFlushAck {
 
     /// Poll without blocking for the local writer-flush outcome.
     ///
-    /// Once this returns [`NetworkReplyFlushAckStatus::Flushed`] or
-    /// [`NetworkReplyFlushAckStatus::Closed`], every later poll returns the
-    /// same terminal result.
+    /// Once this returns a terminal result, every later poll returns that same
+    /// result.
     pub fn poll(&mut self) -> NetworkReplyFlushAckStatus {
         if let Some(terminal) = self.terminal {
             return terminal;
@@ -4770,10 +4812,15 @@ impl NetworkReplyFlushAck {
             .as_mut()
             .expect("nonterminal reply flush acknowledgement owns its receiver");
         match receiver.try_recv() {
-            Ok(()) => {
+            Ok(NetworkReplyFlushCompletion::Flushed) => {
                 self.receiver = None;
                 self.terminal = Some(NetworkReplyFlushAckStatus::Flushed);
                 NetworkReplyFlushAckStatus::Flushed
+            }
+            Ok(NetworkReplyFlushCompletion::TimedOut) => {
+                self.receiver = None;
+                self.terminal = Some(NetworkReplyFlushAckStatus::TimedOut);
+                NetworkReplyFlushAckStatus::TimedOut
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
                 NetworkReplyFlushAckStatus::Pending
@@ -4790,7 +4837,7 @@ impl NetworkReplyFlushAck {
 /// Test-only controller for one opaque reply writer-flush completion.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub struct NetworkReplyFlushAckTestFixture {
-    sender: Option<tokio::sync::oneshot::Sender<()>>,
+    sender: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -4827,6 +4874,7 @@ impl NetworkReplyFlushAckTestFixture {
                 topic: message::Topic::Consensus,
                 stream_wire_bytes: 1,
                 broadcast: false,
+                reply_writer_timeout_attempt: Some(0),
                 request_digest: Hash::new(b"test-only-reply-flush-identity"),
                 authority: Some(ProgressAuthorityIdentity::Reply(0)),
             },
@@ -4853,6 +4901,19 @@ impl NetworkReplyFlushAckTestFixture {
     /// admission authority.
     #[must_use]
     pub fn for_reply<T>(post: &Post<T>, route: &NetworkReplyRoute) -> (Self, NetworkReplyFlushAck)
+    where
+        T: Pload + message::ClassifyTopic,
+    {
+        Self::for_reply_at_attempt(post, route, 0)
+    }
+
+    /// Create a pending completion bound to one adaptive timeout generation.
+    #[must_use]
+    pub fn for_reply_at_attempt<T>(
+        post: &Post<T>,
+        route: &NetworkReplyRoute,
+        reply_writer_timeout_attempt: u8,
+    ) -> (Self, NetworkReplyFlushAck)
     where
         T: Pload + message::ClassifyTopic,
     {
@@ -4889,6 +4950,7 @@ impl NetworkReplyFlushAckTestFixture {
                 topic,
                 stream_wire_bytes,
                 broadcast: false,
+                reply_writer_timeout_attempt: Some(reply_writer_timeout_attempt),
                 request_digest: progress_ticket_request_digest(&canonical),
                 authority: Some(ProgressAuthorityIdentity::Reply(
                     route.tenure.connection_ordinal,
@@ -4915,7 +4977,14 @@ impl NetworkReplyFlushAckTestFixture {
     pub fn flush(&mut self) -> bool {
         self.sender
             .take()
-            .is_some_and(|sender| sender.send(()).is_ok())
+            .is_some_and(|sender| sender.send(NetworkReplyFlushCompletion::Flushed).is_ok())
+    }
+
+    /// Publish the exact actor-owned writer-timeout result once.
+    pub fn timeout(&mut self) -> bool {
+        self.sender
+            .take()
+            .is_some_and(|sender| sender.send(NetworkReplyFlushCompletion::TimedOut).is_ok())
     }
 
     /// Close the completion without publishing success once.
@@ -5626,6 +5695,57 @@ impl From<NetworkActorProgressLease> for NetworkActorLease {
     }
 }
 
+/// One peer-writer occurrence retained by the network actor until flush.
+struct PendingWriterFlush {
+    receiver: tokio::sync::oneshot::Receiver<()>,
+}
+
+/// Linearize an exact reply's pending writer flush before a destructive exit.
+///
+/// Closing the receiver and polling it immediately gives the peer writer and
+/// network actor one deterministic boundary: a flush published before the
+/// close remains observable, while a writer which loses the close race cannot
+/// publish success afterwards. Topology traffic has no exact target and never
+/// enters this fence.
+fn exact_reply_flush_wins_terminal_fence(
+    pending_flush_acks: &mut HashMap<PeerId, PendingWriterFlush>,
+    exact_target: Option<&PeerId>,
+) -> bool {
+    let Some(exact_target) = exact_target else {
+        return false;
+    };
+    let Some(mut pending) = pending_flush_acks.remove(exact_target) else {
+        return false;
+    };
+    pending.receiver.close();
+    matches!(pending.receiver.try_recv(), Ok(()))
+}
+
+/// Immutable lifetime of one exact actor-owned reply occurrence.
+#[derive(Clone, Copy, Debug)]
+struct ExactReplyWriterDeadline {
+    admitted_at: tokio::time::Instant,
+    timeout: Duration,
+}
+
+impl ExactReplyWriterDeadline {
+    fn expired_at(self, now: tokio::time::Instant) -> bool {
+        now.checked_duration_since(self.admitted_at)
+            .is_some_and(|elapsed| elapsed >= self.timeout)
+    }
+}
+
+fn scaled_reply_writer_flush_timeout(base: Duration, attempt: u8) -> Duration {
+    let mut timeout = base;
+    for _ in 0..attempt {
+        let Some(doubled) = timeout.checked_mul(2) else {
+            return Duration::MAX;
+        };
+        timeout = doubled;
+    }
+    timeout
+}
+
 struct AdmittedNetworkMessage<T> {
     message: Option<NetworkMessage<T>>,
     byte_lease: NetworkActorLease,
@@ -5642,11 +5762,18 @@ struct AdmittedNetworkMessage<T> {
     /// Receivers stay inside the same opaque actor item as the original
     /// message and actor lease.  A closed receiver moves its target back to
     /// the retry cursor; a pending receiver cannot be mistaken for delivery.
-    pending_flush_acks: HashMap<PeerId, tokio::sync::oneshot::Receiver<()>>,
+    /// An exact reply also retains its immutable writer deadline and
+    /// connection so timeout retirement cannot affect a replacement.
+    pending_flush_acks: HashMap<PeerId, PendingWriterFlush>,
+    /// Adaptive timeout generation for an exact reply; topology traffic has none.
+    reply_writer_timeout_attempt: Option<u8>,
+    /// Fixed on first actor dispatch, before any peer-writer admission attempt.
+    reply_writer_deadline: Option<ExactReplyWriterDeadline>,
     /// Process-local completion owned by the caller which admitted this exact
     /// reply occurrence. Only a fully observed peer-writer flush consumes it
-    /// successfully; every cancellation and drop path closes its receiver.
-    reply_flush_ack: Option<tokio::sync::oneshot::Sender<()>>,
+    /// successfully. A ready writer flush wins each terminal close-and-poll
+    /// fence; cancellation or drop otherwise closes the caller's receiver.
+    reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
 }
 
 impl<T> AdmittedNetworkMessage<T> {
@@ -5659,6 +5786,8 @@ impl<T> AdmittedNetworkMessage<T> {
             progress_authority: None,
             remaining_broadcast_targets: None,
             pending_flush_acks: HashMap::new(),
+            reply_writer_timeout_attempt: None,
+            reply_writer_deadline: None,
             reply_flush_ack: None,
         }
     }
@@ -5679,6 +5808,8 @@ impl<T> AdmittedNetworkMessage<T> {
             remaining_broadcast_targets: Some(VecDeque::from([membership.peer_id.clone()])),
             progress_authority: Some(authority),
             pending_flush_acks: HashMap::new(),
+            reply_writer_timeout_attempt: None,
+            reply_writer_deadline: None,
             reply_flush_ack: None,
         }
     }
@@ -5687,12 +5818,17 @@ impl<T> AdmittedNetworkMessage<T> {
         message: NetworkMessage<T>,
         byte_lease: NetworkActorProgressLease,
         authority: ProgressDeliveryAuthority,
-        reply_flush_ack: Option<tokio::sync::oneshot::Sender<()>>,
+        reply_writer_timeout_attempt: Option<u8>,
+        reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
     ) -> Self {
         debug_assert!(matches!(message, NetworkMessage::Post(_)));
         debug_assert_eq!(
             byte_lease.source.target.as_ref(),
             Some(authority.source_target())
+        );
+        debug_assert_eq!(
+            reply_writer_timeout_attempt.is_some(),
+            matches!(&authority, ProgressDeliveryAuthority::Reply(_))
         );
         Self {
             message: Some(message),
@@ -5700,6 +5836,8 @@ impl<T> AdmittedNetworkMessage<T> {
             progress_authority: Some(authority),
             remaining_broadcast_targets: None,
             pending_flush_acks: HashMap::new(),
+            reply_writer_timeout_attempt,
+            reply_writer_deadline: None,
             reply_flush_ack,
         }
     }
@@ -5708,6 +5846,32 @@ impl<T> AdmittedNetworkMessage<T> {
         self.progress_authority
             .as_ref()
             .is_some_and(|authority| !authority.is_active())
+    }
+
+    /// Publish a ready exact-reply flush before this actor item is dropped.
+    ///
+    /// This is the terminal-drop counterpart of dispatch's destructive-exit
+    /// fence. It is intentionally a no-op for topology-authorized traffic.
+    fn publish_ready_exact_reply_before_terminal_drop(&mut self) -> bool {
+        let Self {
+            progress_authority,
+            pending_flush_acks,
+            reply_flush_ack,
+            ..
+        } = self;
+        let exact_target = progress_authority.as_ref().and_then(|authority| {
+            let ProgressDeliveryAuthority::Reply(route) = authority else {
+                return None;
+            };
+            Some(route.semantic_target())
+        });
+        if !exact_reply_flush_wins_terminal_fence(pending_flush_acks, exact_target) {
+            return false;
+        }
+        if let Some(reply_flush_ack) = reply_flush_ack.take() {
+            let _ = reply_flush_ack.send(NetworkReplyFlushCompletion::Flushed);
+        }
+        true
     }
 
     fn progress_source(&self) -> Option<&ActorProgressSource> {
@@ -5734,9 +5898,11 @@ impl<T> AdmittedNetworkMessage<T> {
         NetworkMessage<T>,
         NetworkActorLease,
         Option<VecDeque<PeerId>>,
-        HashMap<PeerId, tokio::sync::oneshot::Receiver<()>>,
+        HashMap<PeerId, PendingWriterFlush>,
         Option<ProgressDeliveryAuthority>,
-        Option<tokio::sync::oneshot::Sender<()>>,
+        Option<u8>,
+        Option<ExactReplyWriterDeadline>,
+        Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
     ) {
         let Self {
             mut message,
@@ -5744,6 +5910,8 @@ impl<T> AdmittedNetworkMessage<T> {
             remaining_broadcast_targets,
             pending_flush_acks,
             progress_authority,
+            reply_writer_timeout_attempt,
+            reply_writer_deadline,
             reply_flush_ack,
         } = self;
         (
@@ -5754,6 +5922,8 @@ impl<T> AdmittedNetworkMessage<T> {
             remaining_broadcast_targets,
             pending_flush_acks,
             progress_authority,
+            reply_writer_timeout_attempt,
+            reply_writer_deadline,
             reply_flush_ack,
         )
     }
@@ -5767,9 +5937,11 @@ impl<T> AdmittedNetworkMessage<T> {
         message: NetworkMessage<T>,
         byte_lease: NetworkActorLease,
         remaining_broadcast_targets: Option<VecDeque<PeerId>>,
-        pending_flush_acks: HashMap<PeerId, tokio::sync::oneshot::Receiver<()>>,
+        pending_flush_acks: HashMap<PeerId, PendingWriterFlush>,
         progress_authority: Option<ProgressDeliveryAuthority>,
-        reply_flush_ack: Option<tokio::sync::oneshot::Sender<()>>,
+        reply_writer_timeout_attempt: Option<u8>,
+        reply_writer_deadline: Option<ExactReplyWriterDeadline>,
+        reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
     ) -> Self {
         Self {
             message: Some(message),
@@ -5777,6 +5949,8 @@ impl<T> AdmittedNetworkMessage<T> {
             progress_authority,
             remaining_broadcast_targets,
             pending_flush_acks,
+            reply_writer_timeout_attempt,
+            reply_writer_deadline,
             reply_flush_ack,
         }
     }
@@ -5799,6 +5973,29 @@ struct ReliableActorPending<T> {
     ready_members: HashSet<ActorProgressSource>,
     len: usize,
     max_items: usize,
+}
+
+impl<T> ReliableActorPending<T> {
+    /// Release every retained item through the exact-reply terminal fence.
+    fn release_all_with_terminal_fence(&mut self) -> usize {
+        let released = self.len;
+        for entries in self.by_source.values_mut() {
+            for entry in entries {
+                entry.publish_ready_exact_reply_before_terminal_drop();
+            }
+        }
+        self.by_source.clear();
+        self.ready_sources.clear();
+        self.ready_members.clear();
+        self.len = 0;
+        released
+    }
+}
+
+impl<T> Drop for ReliableActorPending<T> {
+    fn drop(&mut self) {
+        let _ = self.release_all_with_terminal_fence();
+    }
 }
 
 impl<T: message::ClassifyTopic> ReliableActorPending<T> {
@@ -5882,9 +6079,14 @@ impl<T: message::ClassifyTopic> ReliableActorPending<T> {
     fn release_cancelled_targets(&mut self) -> usize {
         let mut released = 0usize;
         self.by_source.retain(|_source, entries| {
-            let before = entries.len();
-            entries.retain(|entry| !entry.cancelled_progress_authority());
-            released = released.saturating_add(before.saturating_sub(entries.len()));
+            entries.retain_mut(|entry| {
+                if !entry.cancelled_progress_authority() {
+                    return true;
+                }
+                entry.publish_ready_exact_reply_before_terminal_drop();
+                released = released.saturating_add(1);
+                false
+            });
             !entries.is_empty()
         });
         self.len = self
@@ -8057,6 +8259,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             relay_ttl,
             soranet_handshake,
             idle_timeout,
+            reply_writer_flush_timeout,
             connect_startup_delay,
             dial_timeout,
             deferred_send_ttl,
@@ -8730,6 +8933,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout,
+            reply_writer_flush_timeout,
             dial_timeout,
             connect_startup_delay_until,
             chain_id,
@@ -9106,7 +9310,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         source: ActorProgressSource,
         authority: ProgressDeliveryAuthority,
         ticket: Option<NetworkActorAdmissionTicket>,
-        reply_flush_ack: Option<tokio::sync::oneshot::Sender<()>>,
+        reply_writer_timeout_attempt: Option<u8>,
+        reply_flush_ack: Option<tokio::sync::oneshot::Sender<NetworkReplyFlushCompletion>>,
     ) -> Result<
         Option<NetworkActorAdmittedTicketIdentity>,
         NetworkActorAdmissionError<NetworkMessage<T>>,
@@ -9139,6 +9344,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             topic,
             stream_wire_bytes: wire_bytes,
             broadcast,
+            reply_writer_timeout_attempt,
             request_digest: progress_ticket_request_digest(&message),
             authority: Some(authority.identity()),
         };
@@ -9191,9 +9397,16 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         };
         let admitted = if broadcast {
             debug_assert!(reply_flush_ack.is_none());
+            debug_assert!(reply_writer_timeout_attempt.is_none());
             AdmittedNetworkMessage::new_targeted_broadcast(message, lease, authority)
         } else {
-            AdmittedNetworkMessage::new_targeted_post(message, lease, authority, reply_flush_ack)
+            AdmittedNetworkMessage::new_targeted_post(
+                message,
+                lease,
+                authority,
+                reply_writer_timeout_attempt,
+                reply_flush_ack,
+            )
         };
         match sender.try_send(admitted) {
             Ok(()) => {
@@ -9354,6 +9567,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             ProgressDeliveryAuthority::Topology(membership),
             ticket,
             None,
+            None,
         )
         .map(|_| ())
         .map_err(|error| error.map_message(restore_requested_priority))
@@ -9400,8 +9614,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     /// the identity remains unchanged as completion advances.
     /// Actor admission alone leaves the handle pending. It becomes
     /// [`NetworkReplyFlushAckStatus::Flushed`] only after the network actor
-    /// observes the peer writer's complete write and flush; writer shutdown,
-    /// route retirement, or retained-item drop instead closes it. `None` means
+    /// observes the peer writer's complete write and flush. An actor-owned
+    /// deadline publishes [`NetworkReplyFlushAckStatus::TimedOut`] after
+    /// retiring that exact writer tenure; unrelated writer shutdown, route
+    /// retirement, or retained-item drop otherwise closes it, but a ready
+    /// writer flush wins their terminal fence. `None` means
     /// no actor ownership transferred: the tenure either retired after the
     /// public delivery-authority precheck or entered its delivery-active but
     /// reply-unwritable drain phase. Callers must retain the exact current item
@@ -9419,7 +9636,28 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         reply_route: &NetworkReplyRoute,
         ticket: Option<NetworkActorAdmissionTicket>,
     ) -> Result<Option<NetworkReplyFlushAck>, NetworkActorAdmissionError<Post<T>>> {
-        self.post_reply_recoverable_with_flush_ack_inner(msg, reply_route, ticket, || {})
+        self.post_reply_recoverable_with_flush_ack_at_attempt(msg, reply_route, ticket, 0)
+    }
+
+    /// Admit a reliable reply using the caller's bounded adaptive timeout generation.
+    ///
+    /// The timeout generation is part of actor-ticket identity and therefore
+    /// cannot be changed while retrying a backpressured admission ticket.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn post_reply_recoverable_with_flush_ack_at_attempt(
+        &self,
+        msg: Post<T>,
+        reply_route: &NetworkReplyRoute,
+        ticket: Option<NetworkActorAdmissionTicket>,
+        reply_writer_timeout_attempt: u8,
+    ) -> Result<Option<NetworkReplyFlushAck>, NetworkActorAdmissionError<Post<T>>> {
+        self.post_reply_recoverable_with_flush_ack_inner(
+            msg,
+            reply_route,
+            ticket,
+            reply_writer_timeout_attempt,
+            || {},
+        )
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -9428,6 +9666,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         mut msg: Post<T>,
         reply_route: &NetworkReplyRoute,
         mut ticket: Option<NetworkActorAdmissionTicket>,
+        reply_writer_timeout_attempt: u8,
         after_route_preflight: impl FnOnce(),
     ) -> Result<Option<NetworkReplyFlushAck>, NetworkActorAdmissionError<Post<T>>> {
         let (reply_flush_sender, reply_flush_receiver) = tokio::sync::oneshot::channel();
@@ -9525,12 +9764,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             source,
             ProgressDeliveryAuthority::Reply(reply_route.clone()),
             ticket,
+            Some(reply_writer_timeout_attempt),
             Some(reply_flush_sender),
         )
         .map(|admitted_ticket| {
             admitted_ticket.map(|ticket| {
                 let identity = NetworkReplyFlushIdentity::from_admitted_ticket(ticket)
-                    .expect("reply admission must retain exact reply authority");
+                    .expect("validated reply admission must retain its exact reply shape");
                 NetworkReplyFlushAck::new(identity, reply_flush_receiver)
             })
         })
@@ -9691,6 +9931,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 source,
                 ProgressDeliveryAuthority::Topology(Arc::clone(&target.membership)),
                 target.actor_ticket.take(),
+                None,
                 None,
             ) {
                 Ok(_new_owner) => {}
@@ -10258,6 +10499,7 @@ mod handle_update_tests {
             topic: message::Topic::BlockSync,
             stream_wire_bytes: 10,
             broadcast: false,
+            reply_writer_timeout_attempt: None,
             request_digest: Hash::new(b"progress-budget-waiter"),
             authority: None,
         };
@@ -10306,6 +10548,7 @@ mod handle_update_tests {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
             broadcast: false,
+            reply_writer_timeout_attempt: None,
             request_digest: Hash::new([tag]),
             authority: None,
         };
@@ -10393,6 +10636,7 @@ mod handle_update_tests {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
             broadcast: false,
+            reply_writer_timeout_attempt: None,
             request_digest: Hash::new([tag]),
             authority: None,
         };
@@ -10493,6 +10737,7 @@ mod handle_update_tests {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
             broadcast: true,
+            reply_writer_timeout_attempt: None,
             request_digest,
             authority: Some(ProgressAuthorityIdentity::Topology(generation)),
         };
@@ -10565,6 +10810,7 @@ mod handle_update_tests {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
             broadcast: true,
+            reply_writer_timeout_attempt: None,
             request_digest: Hash::new([tag]),
             authority: Some(ProgressAuthorityIdentity::Topology(generation)),
         };
@@ -10572,6 +10818,7 @@ mod handle_update_tests {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
             broadcast: false,
+            reply_writer_timeout_attempt: None,
             request_digest: Hash::new(b"membership-cancellation-direct-owner"),
             authority: None,
         };
@@ -10725,6 +10972,7 @@ mod handle_update_tests {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
             broadcast: false,
+            reply_writer_timeout_attempt: None,
             request_digest: Hash::new(b"lane-progress-budget"),
             authority: None,
         };
@@ -10770,6 +11018,7 @@ mod handle_update_tests {
                 topic: message::Topic::ConsensusSafety,
                 stream_wire_bytes: 1,
                 broadcast: false,
+                reply_writer_timeout_attempt: None,
                 request_digest: Hash::new(b"safety-progress-budget"),
                 authority: None,
             },
@@ -10796,6 +11045,7 @@ mod handle_update_tests {
             topic: message::Topic::BlockSync,
             stream_wire_bytes: 1,
             broadcast: false,
+            reply_writer_timeout_attempt: None,
             request_digest: Hash::new(b"progress-ticket-wrap"),
             authority: None,
         };
@@ -12728,6 +12978,8 @@ mod accept_stream_tests {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout: std::time::Duration::from_millis(200),
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             deferred_send_ttl: std::time::Duration::from_millis(
@@ -13730,6 +13982,8 @@ mod accept_stream_tests {
             allow_nets: Vec::new(),
             deny_nets: Vec::new(),
             idle_timeout: Duration::from_millis(50),
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             tcp_nodelay: true,
             tcp_keepalive: None,
@@ -14089,6 +14343,8 @@ mod accept_stream_tests {
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             tcp_nodelay: true,
             tcp_keepalive: None,
@@ -14323,6 +14579,8 @@ mod accept_stream_tests {
                 current_topology: HashSet::new(),
                 current_peers_addresses: Vec::new(),
                 idle_timeout: Duration::from_millis(50),
+                reply_writer_flush_timeout:
+                    iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
                 dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
                 tcp_nodelay: true,
                 tcp_keepalive: None,
@@ -14576,6 +14834,8 @@ mod accept_stream_tests {
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             tcp_nodelay: true,
             tcp_keepalive: None,
@@ -15632,6 +15892,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     dns_pending_refresh: HashSet<PeerId>,
     /// Duration after which terminate connection with idle peer
     idle_timeout: Duration,
+    /// Base deadline for an exact reply occurrence inside one peer writer.
+    reply_writer_flush_timeout: Duration,
     /// Timeout applied to an individual outbound dial attempt.
     dial_timeout: Duration,
     /// Whether to enable `TCP_NODELAY` on TCP connections (best-effort).
@@ -15848,20 +16110,122 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         &mut self,
         admitted: AdmittedNetworkMessage<T>,
     ) -> Result<(), AdmittedNetworkMessage<T>> {
+        self.dispatch_reliable_actor_message_inner(admitted, || {})
+    }
+
+    /// Dispatch one admitted reliable item.
+    ///
+    /// The generic hook is monomorphized to an empty closure in production.
+    /// Tests use it to publish a writer flush deterministically after the
+    /// optimistic poll and before any terminal close-and-poll fence.
+    fn dispatch_reliable_actor_message_inner<AfterInitialFlushPoll>(
+        &mut self,
+        admitted: AdmittedNetworkMessage<T>,
+        after_initial_flush_poll: AfterInitialFlushPoll,
+    ) -> Result<(), AdmittedNetworkMessage<T>>
+    where
+        AfterInitialFlushPoll: FnOnce(),
+    {
         let (
             message,
             actor_lease,
             mut remaining_broadcast_targets,
             mut pending_flush_acks,
             progress_authority,
+            reply_writer_timeout_attempt,
+            mut reply_writer_deadline,
             reply_flush_ack,
         ) = admitted.into_dispatch_parts();
+        if let Some(attempt) = reply_writer_timeout_attempt {
+            debug_assert!(matches!(
+                progress_authority.as_ref(),
+                Some(ProgressDeliveryAuthority::Reply(_))
+            ));
+            reply_writer_deadline.get_or_insert_with(|| ExactReplyWriterDeadline {
+                admitted_at: tokio::time::Instant::now(),
+                timeout: scaled_reply_writer_flush_timeout(
+                    self.reply_writer_flush_timeout,
+                    attempt,
+                ),
+            });
+        }
+        let (topic, route) = match &message {
+            NetworkMessage::Post(post) => (post.data.topic(), post.data.subscriber_route()),
+            NetworkMessage::Broadcast(broadcast) => {
+                (broadcast.data.topic(), broadcast.data.subscriber_route())
+            }
+        };
+        let reliable_progress = is_reliable_progress_route(topic, route);
+
+        // Poll already-admitted peer-writer occurrences before observing route
+        // retirement or connection replacement. The receiver is their
+        // linearization point: a successful full flush published by that exact
+        // writer occurrence remains successful even if actor-side teardown
+        // wins the race immediately afterwards. A never-admitted occurrence
+        // has no receiver in this map and therefore cannot take this path.
+        //
+        // Poll in stable peer-id order so a HashMap's randomized iteration
+        // cannot affect the reducer-visible retry order or test traces.
+        let mut ack_targets: Vec<_> = pending_flush_acks.keys().cloned().collect();
+        ack_targets.sort();
+        let mut completed_targets = HashSet::new();
+        let mut retry_targets = Vec::new();
+        let reply_route = progress_authority.as_ref().and_then(|authority| {
+            let ProgressDeliveryAuthority::Reply(route) = authority else {
+                return None;
+            };
+            Some(route.clone())
+        });
+        for target in ack_targets {
+            let pending = pending_flush_acks
+                .get_mut(&target)
+                .expect("ack target snapshot must still be present");
+            // The receiver is the linearization point: a flush already
+            // published by the peer writer wins even at the deadline.
+            let outcome = pending.receiver.try_recv();
+            match outcome {
+                Ok(()) => {
+                    pending_flush_acks.remove(&target);
+                    completed_targets.insert(target);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    pending_flush_acks.remove(&target);
+                    retry_targets.push(target);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+            }
+        }
+        after_initial_flush_poll();
+        let exact_reply_flushed = reply_route
+            .as_ref()
+            .is_some_and(|route| completed_targets.contains(route.semantic_target()));
+        if exact_reply_flushed {
+            debug_assert!(reliable_progress);
+            debug_assert!(matches!(&message, NetworkMessage::Post(_)));
+            if let Some(reply_flush_ack) = reply_flush_ack {
+                let _ = reply_flush_ack.send(NetworkReplyFlushCompletion::Flushed);
+            }
+            drop(actor_lease);
+            return Ok(());
+        }
+
         if progress_authority
             .as_ref()
             .is_some_and(|authority| !authority.is_active())
         {
+            if exact_reply_flush_wins_terminal_fence(
+                &mut pending_flush_acks,
+                reply_route.as_ref().map(NetworkReplyRoute::semantic_target),
+            ) {
+                if let Some(reply_flush_ack) = reply_flush_ack {
+                    let _ = reply_flush_ack.send(NetworkReplyFlushCompletion::Flushed);
+                }
+                drop(actor_lease);
+                return Ok(());
+            }
             // An accepted topology removal is the exact cancellation witness
-            // for this reliable target tenure.
+            // for this reliable target tenure. An empty or closed writer
+            // receiver cannot keep the cancelled tenure alive.
             drop(actor_lease);
             return Ok(());
         }
@@ -15875,6 +16239,16 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 .get(&route.tenure.connection_id)
                 .is_some_and(|current| Arc::ptr_eq(current, &route.tenure));
             if !current_writer || !current_tenure {
+                if exact_reply_flush_wins_terminal_fence(
+                    &mut pending_flush_acks,
+                    reply_route.as_ref().map(NetworkReplyRoute::semantic_target),
+                ) {
+                    if let Some(reply_flush_ack) = reply_flush_ack {
+                        let _ = reply_flush_ack.send(NetworkReplyFlushCompletion::Flushed);
+                    }
+                    drop(actor_lease);
+                    return Ok(());
+                }
                 // The actor may process replacement between handle admission
                 // and this dispatch. Close this exact writer occurrence, but
                 // keep delivery authority alive until the receiver-completion
@@ -15888,13 +16262,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 return Ok(());
             }
         }
-        let (topic, route) = match &message {
-            NetworkMessage::Post(post) => (post.data.topic(), post.data.subscriber_route()),
-            NetworkMessage::Broadcast(broadcast) => {
-                (broadcast.data.topic(), broadcast.data.subscriber_route())
-            }
-        };
-        if !is_reliable_progress_route(topic, route) {
+        if !reliable_progress {
             match message {
                 NetworkMessage::Post(post) => self.post(post),
                 NetworkMessage::Broadcast(broadcast) => self.broadcast(broadcast),
@@ -15903,28 +16271,39 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             return Ok(());
         }
 
-        // Poll in stable peer-id order so a HashMap's randomized iteration
-        // cannot affect the reducer-visible retry order or test traces.
-        let mut ack_targets: Vec<_> = pending_flush_acks.keys().cloned().collect();
-        ack_targets.sort();
-        let mut completed_targets = HashSet::new();
-        let mut retry_targets = Vec::new();
-        for target in ack_targets {
-            let outcome = pending_flush_acks
-                .get_mut(&target)
-                .expect("ack target snapshot must still be present")
-                .try_recv();
-            match outcome {
-                Ok(()) => {
-                    pending_flush_acks.remove(&target);
-                    completed_targets.insert(target);
+        let timed_out_reply_writer = reply_route.is_some()
+            && reply_writer_deadline
+                .is_some_and(|deadline| deadline.expired_at(tokio::time::Instant::now()));
+        if timed_out_reply_writer {
+            let route = reply_route.expect("only an exact reply writer carries a deadline");
+            let semantic_target = route.semantic_target();
+            let connection_id = route.tenure.connection_id;
+            if exact_reply_flush_wins_terminal_fence(&mut pending_flush_acks, Some(semantic_target))
+            {
+                if let Some(reply_flush_ack) = reply_flush_ack {
+                    let _ = reply_flush_ack.send(NetworkReplyFlushCompletion::Flushed);
                 }
-                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    pending_flush_acks.remove(&target);
-                    retry_targets.push(target);
-                }
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                drop(actor_lease);
+                return Ok(());
             }
+            let terminated_current_writer =
+                self.expire_reply_writer_occurrence(&route, connection_id);
+            iroha_logger::warn!(
+                semantic_target = %semantic_target,
+                delivery_peer = %route.tenure.delivery_peer,
+                connection_id,
+                terminated_current_writer,
+                timeout = ?reply_writer_deadline.map(|deadline| deadline.timeout),
+                attempt = ?reply_writer_timeout_attempt,
+                "Exact reply peer writer exceeded its flush deadline"
+            );
+            // Draining and exact-connection retirement publish before the
+            // timeout result, so the caller can safely retry on a replacement.
+            if let Some(reply_flush_ack) = reply_flush_ack {
+                let _ = reply_flush_ack.send(NetworkReplyFlushCompletion::TimedOut);
+            }
+            drop(actor_lease);
+            return Ok(());
         }
 
         let transferred = match &message {
@@ -15954,7 +16333,16 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         post.priority,
                         post.data.clone(),
                     );
-                    match self.post_reliable_actor_frame_to_writer(&delivery_peer, frame, topic) {
+                    let exact_reply = matches!(
+                        progress_authority.as_ref(),
+                        Some(ProgressDeliveryAuthority::Reply(_))
+                    );
+                    match self.post_reliable_actor_frame_to_writer(
+                        &delivery_peer,
+                        frame,
+                        topic,
+                        exact_reply,
+                    ) {
                         ReliableWriterAttempt::Awaiting(receiver) => {
                             let replaced =
                                 pending_flush_acks.insert(post.peer_id.clone(), receiver);
@@ -15993,7 +16381,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                             broadcast.priority,
                             broadcast.data.clone(),
                         );
-                        match self.post_reliable_actor_frame_to_writer(&target, frame, topic) {
+                        match self.post_reliable_actor_frame_to_writer(&target, frame, topic, false)
+                        {
                             ReliableWriterAttempt::Awaiting(receiver) => {
                                 let replaced = pending_flush_acks.insert(target, receiver);
                                 debug_assert!(replaced.is_none());
@@ -16012,7 +16401,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             // The actor lease retires only after every target's peer writer
             // confirms a complete write and flush.
             if let Some(reply_flush_ack) = reply_flush_ack {
-                let _ = reply_flush_ack.send(());
+                let _ = reply_flush_ack.send(NetworkReplyFlushCompletion::Flushed);
             }
             drop(actor_lease);
             Ok(())
@@ -16023,6 +16412,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 remaining_broadcast_targets,
                 pending_flush_acks,
                 progress_authority,
+                reply_writer_timeout_attempt,
+                reply_writer_deadline,
                 reply_flush_ack,
             ))
         }
@@ -16050,9 +16441,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     fn accept_reliable_actor_message(
         &mut self,
         pending: &mut ReliableActorPending<T>,
-        message: AdmittedNetworkMessage<T>,
+        mut message: AdmittedNetworkMessage<T>,
     ) {
         if message.cancelled_progress_authority() {
+            message.publish_ready_exact_reply_before_terminal_drop();
             return;
         }
         pending.push_back(message);
@@ -16440,9 +16832,19 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             }
             tokio::task::yield_now().await;
         }
+        let released_on_shutdown = safety_dispatch_pending
+            .release_all_with_terminal_fence()
+            .saturating_add(progress_dispatch_pending.release_all_with_terminal_fence());
+        if released_on_shutdown > 0 {
+            iroha_logger::debug!(
+                released_on_shutdown,
+                "Released reliable actor ownership through terminal fences at shutdown"
+            );
+        }
         // Publish route and waiter cancellation before stopping peer writers.
         // `Drop` repeats this same idempotent operation if shutdown is aborted
-        // or unwinds before reaching this point.
+        // or unwinds before reaching this point. Pending-queue `Drop` likewise
+        // fences exact writer receivers if the actor future is aborted.
         let _ = self.cancel_all_reply_route_tenures();
         // Explicitly cancel authenticated peer tasks at actor shutdown.  Dropping
         // their handles alone intentionally permits admitted frames to drain and
@@ -17395,11 +17797,15 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     /// receiver observes a successful full write and flush.  Missing, closed,
     /// or replaced sessions therefore yield `Retry` and trigger the ordinary
     /// reconnect machinery without manufacturing a second durable owner.
+    /// Exact replies retain their actor occurrence when the queue is full even
+    /// if best-effort overflow policy requests disconnection; their immutable
+    /// actor deadline owns that retirement decision.
     fn post_reliable_actor_frame_to_writer(
         &mut self,
         peer_id: &PeerId,
         frame: RelayMessage<T>,
         topic: message::Topic,
+        exact_reply: bool,
     ) -> ReliableWriterAttempt {
         if !message::ClassifyTopic::is_outbound_allowed(&frame) {
             iroha_logger::error!(
@@ -17452,7 +17858,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         "reliable consensus frame is awaiting peer-writer flush"
                     );
                 }
-                ReliableWriterAttempt::Awaiting(receiver)
+                ReliableWriterAttempt::Awaiting(PendingWriterFlush { receiver })
             }
             Err(error) => {
                 let closed = matches!(&error, RecoverPostError::Closed(_));
@@ -17463,7 +17869,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 }
                 drop(error.into_message());
 
-                if closed || self.disconnect_on_post_overflow {
+                if closed || (self.disconnect_on_post_overflow && !exact_reply) {
                     let peer = Peer::new(p2p_addr, peer_id.clone());
                     iroha_logger::warn!(
                         peer = %peer,
@@ -17999,6 +18405,42 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 .cancel_reply_route(tenure);
         }
         self.terminating_connections.insert(conn_id);
+    }
+
+    /// Drain one exact reply tenure whose peer writer exceeded its fixed deadline.
+    ///
+    /// Returns `true` only when this call removed and cancelled the same
+    /// connection which originally accepted writer ownership. A delayed
+    /// timeout can therefore never terminate a replacement connection.
+    fn expire_reply_writer_occurrence(
+        &mut self,
+        route: &NetworkReplyRoute,
+        connection_id: ConnectionId,
+    ) -> bool {
+        route.tenure.mark_draining();
+        let _ = self
+            .network_actor_progress_budget
+            .cancel_reply_route(&route.tenure);
+        if route.tenure.connection_id != connection_id {
+            iroha_logger::error!(
+                expected_connection_id = route.tenure.connection_id,
+                connection_id,
+                "Exact reply writer deadline carried a foreign connection"
+            );
+            return false;
+        }
+
+        let delivery_peer = route.tenure.delivery_peer.clone();
+        if !self
+            .peers
+            .get(&delivery_peer)
+            .is_some_and(|current| current.conn_id == connection_id)
+        {
+            return false;
+        }
+        self.disconnect_peer(&delivery_peer);
+        let _ = self.trigger_reconnect_for_peer(&delivery_peer);
+        true
     }
 
     fn finish_reply_route_tenure(&mut self, conn_id: ConnectionId) -> usize {
@@ -20962,6 +21404,85 @@ mod tests {
     }
 
     #[test]
+    fn reply_timeout_attempt_is_retained_by_actor_admission_ticket() {
+        let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let tenure = test_reply_tenure(&handle.reply_route_owner, delivery_peer, 45, 25);
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 25);
+        let post = |marker| Post {
+            data: DeferredProgressMsg::Lane(marker),
+            peer_id: semantic_target.clone(),
+            priority: Priority::High,
+        };
+
+        let _first_completion = handle
+            .post_reply_recoverable_with_flush_ack_at_attempt(post(90), &route, None, 0)
+            .expect("first reply occupies the source lane")
+            .expect("first reply owns one completion");
+        let first_actor_item = progress_rx.try_recv().expect("first reply actor item");
+        let (second, second_ticket) = match handle.post_reply_recoverable_with_flush_ack_at_attempt(
+            post(91),
+            &route,
+            None,
+            2,
+        ) {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message,
+                ticket: Some(ticket),
+                rank: 1,
+            }) => (message, ticket),
+            other => panic!("second reply must retain its adaptive-attempt ticket: {other:?}"),
+        };
+        drop(first_actor_item);
+
+        let second_completion = handle
+            .post_reply_recoverable_with_flush_ack_at_attempt(
+                second,
+                &route,
+                Some(second_ticket),
+                2,
+            )
+            .expect("the unchanged adaptive attempt keeps its actor ticket")
+            .expect("the retried reply owns one completion");
+        assert_eq!(
+            second_completion.identity().reply_writer_timeout_attempt(),
+            2,
+            "actor admission must retain the requested timeout generation in its completion identity"
+        );
+        let second_actor_item = progress_rx.try_recv().expect("second reply actor item");
+
+        let (third, third_ticket) = match handle.post_reply_recoverable_with_flush_ack_at_attempt(
+            post(92),
+            &route,
+            None,
+            4,
+        ) {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message,
+                ticket: Some(ticket),
+                rank: 1,
+            }) => (message, ticket),
+            other => panic!("third reply must retain its adaptive-attempt ticket: {other:?}"),
+        };
+        assert!(matches!(
+            handle.post_reply_recoverable_with_flush_ack_at_attempt(
+                third,
+                &route,
+                Some(third_ticket),
+                5,
+            ),
+            Err(NetworkActorAdmissionError::Rejected {
+                reason: NetworkActorAdmissionRejection::InvalidTicket,
+                ..
+            })
+        ));
+        drop(second_actor_item);
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[test]
     fn reply_flush_identity_binds_ticket_tenure_source_payload_and_delivery_occurrence() {
         let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<DeferredProgressMsg>();
@@ -21276,6 +21797,7 @@ mod tests {
                 },
                 &route,
                 None,
+                0,
                 || tenure.cancel(),
             )
             .expect("a raced retirement preserves the existing no-op admission behavior");
@@ -21350,7 +21872,7 @@ mod tests {
     }
 
     #[test]
-    fn reply_flush_test_fixture_controls_success_and_close_without_false_receipts() {
+    fn reply_flush_test_fixture_distinguishes_success_timeout_and_close() {
         let (mut flushed_control, mut flushed) = NetworkReplyFlushAckTestFixture::new();
         let flushed_identity = flushed.identity().clone();
         assert_eq!(flushed.poll(), NetworkReplyFlushAckStatus::Pending);
@@ -21371,6 +21893,15 @@ mod tests {
         assert_eq!(closed.poll(), NetworkReplyFlushAckStatus::Closed);
         assert_eq!(closed.poll(), NetworkReplyFlushAckStatus::Closed);
         assert!(closed_identity.same_delivery_occurrence(closed.identity()));
+
+        let (mut timeout_control, mut timed_out) = NetworkReplyFlushAckTestFixture::new();
+        let timeout_identity = timed_out.identity().clone();
+        assert_eq!(timed_out.poll(), NetworkReplyFlushAckStatus::Pending);
+        assert!(timeout_control.timeout());
+        assert!(!timeout_control.timeout());
+        assert_eq!(timed_out.poll(), NetworkReplyFlushAckStatus::TimedOut);
+        assert_eq!(timed_out.poll(), NetworkReplyFlushAckStatus::TimedOut);
+        assert!(timeout_identity.same_delivery_occurrence(timed_out.identity()));
     }
 
     #[test]
@@ -21392,6 +21923,7 @@ mod tests {
         assert!(first.identity().is_bound_to_delivery(&route));
         assert!(first.identity().is_authenticated_via(&authenticated_source));
         assert!(first.identity().ticket_rank() >= 1);
+        assert_eq!(first.identity().reply_writer_timeout_attempt(), 0);
         assert_eq!(
             first.identity().ticket_stream_wire_bytes(),
             ncore::encoded_payload_len(&post.data)
@@ -21404,6 +21936,56 @@ mod tests {
         );
         assert!(first_control.flush());
         assert!(second_control.close());
+    }
+
+    #[test]
+    fn reply_flush_identity_requires_and_exposes_timeout_attempt() {
+        let authenticated_source = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(authenticated_source);
+        let route = routes.mint(semantic_target.clone());
+        let post = Post {
+            data: DeferredProgressMsg::Lane(92),
+            peer_id: semantic_target,
+            priority: Priority::High,
+        };
+        let (_control, completion) =
+            NetworkReplyFlushAckTestFixture::for_reply_at_attempt(&post, &route, 7);
+        assert_eq!(completion.identity().reply_writer_timeout_attempt(), 7);
+
+        let mut missing_attempt_ticket = completion.identity().ticket.clone();
+        missing_attempt_ticket.shape.reply_writer_timeout_attempt = None;
+        assert!(
+            NetworkReplyFlushIdentity::from_admitted_ticket(missing_attempt_ticket).is_none(),
+            "reply flush identity construction must reject a missing timeout generation"
+        );
+
+        let mut broadcast_ticket = completion.identity().ticket.clone();
+        broadcast_ticket.shape.broadcast = true;
+        assert!(
+            NetworkReplyFlushIdentity::from_admitted_ticket(broadcast_ticket).is_none(),
+            "reply flush identity construction must reject a broadcast-shaped ticket"
+        );
+
+        let mut wrong_authority_ticket = completion.identity().ticket.clone();
+        wrong_authority_ticket.shape.authority = Some(ProgressAuthorityIdentity::Reply(
+            completion
+                .identity()
+                .connection_tenure_ordinal()
+                .wrapping_add(1),
+        ));
+        assert!(
+            NetworkReplyFlushIdentity::from_admitted_ticket(wrong_authority_ticket).is_none(),
+            "reply flush identity construction must reject the wrong shape authority"
+        );
+
+        let mut wrong_source_ticket = completion.identity().ticket.clone();
+        wrong_source_ticket.source.target =
+            Some(PeerId::from(KeyPair::random().public_key().clone()));
+        assert!(
+            NetworkReplyFlushIdentity::from_admitted_ticket(wrong_source_ticket).is_none(),
+            "reply flush identity construction must reject the wrong authenticated source"
+        );
     }
 
     #[test]
@@ -21867,6 +22449,8 @@ mod tests {
                 iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             dns_pending_refresh: HashSet::new(),
             idle_timeout: Duration::from_millis(50),
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             tcp_nodelay: true,
             tcp_keepalive: None,
@@ -22458,6 +23042,7 @@ mod tests {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
             broadcast: false,
+            reply_writer_timeout_attempt: Some(0),
             request_digest: Hash::new(b"old-reply-retained"),
             authority: Some(old_reply_authority.identity()),
         };
@@ -22768,6 +23353,7 @@ mod tests {
                 topic: message::Topic::Consensus,
                 stream_wire_bytes: 1,
                 broadcast: false,
+                reply_writer_timeout_attempt: Some(0),
                 request_digest: Hash::new_from_chunks(&[label, b"retained"]),
                 authority: Some(authority.identity()),
             };
@@ -25556,11 +26142,12 @@ mod tests {
         assert_eq!(actor_budget.retained().total, 0);
     }
 
-    #[test]
-    fn reply_flush_ack_completes_only_after_peer_writer_flush() {
+    #[tokio::test(start_paused = true)]
+    async fn reply_flush_ack_completes_only_after_peer_writer_flush() {
         let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
             return;
         };
+        network.reply_writer_flush_timeout = Duration::from_millis(10);
         let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
             handle_with_network_receivers::<DeferredProgressMsg>();
         handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
@@ -25607,6 +26194,7 @@ mod tests {
             .dispatch_reliable_actor_message(admitted)
             .expect_err("peer-writer admission alone cannot complete the reply");
         assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+        tokio::time::advance(network.reply_writer_flush_timeout).await;
         assert_eq!(
             peer_receivers
                 .try_recv_any_and_acknowledge_flush()
@@ -25622,10 +26210,1139 @@ mod tests {
 
         assert!(
             network.dispatch_reliable_actor_message(retained).is_ok(),
-            "observed peer-writer flush retires actor ownership"
+            "a ready flush acknowledgement must win at the exact deadline"
         );
         assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
         assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert!(route.is_reply_writable());
+        assert!(!peer_receivers.termination_requested());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ready_exact_reply_flush_wins_route_retirement() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let connection_id = 145;
+        let (peer_handle, mut peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45725),
+            connection_id,
+            peer_handle,
+            true,
+        );
+        let tenure =
+            test_reply_tenure(&network.reply_route_owner, delivery_peer, connection_id, 37);
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target.clone(), Arc::clone(&tenure), 52);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(82),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("peer-writer admission awaits completion");
+        assert_eq!(
+            peer_receivers
+                .try_recv_any_and_acknowledge_flush()
+                .expect("old writer publishes the exact full-flush witness")
+                .payload,
+            DeferredProgressMsg::Lane(82)
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+
+        tenure.cancel();
+        assert!(!route.is_active());
+        assert!(
+            network.dispatch_reliable_actor_message(retained).is_ok(),
+            "an already-published exact flush must win route retirement"
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ready_exact_reply_flush_wins_connection_replacement() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        network.reply_writer_flush_timeout = Duration::from_millis(10);
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let old_connection_id = 146;
+        let replacement_connection_id = 147;
+        let (old_handle, mut old_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45726),
+            old_connection_id,
+            old_handle,
+            true,
+        );
+        let tenure = test_reply_tenure(
+            &network.reply_route_owner,
+            delivery_peer.clone(),
+            old_connection_id,
+            38,
+        );
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(old_connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 53);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(83),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("old peer writer owns the exact occurrence");
+        assert_eq!(
+            old_receivers
+                .try_recv_any_and_acknowledge_flush()
+                .expect("old writer publishes the exact full-flush witness")
+                .payload,
+            DeferredProgressMsg::Lane(83)
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+
+        let (replacement_handle, replacement_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45727),
+            replacement_connection_id,
+            replacement_handle,
+            true,
+        );
+        tokio::time::advance(network.reply_writer_flush_timeout).await;
+        assert!(
+            network.dispatch_reliable_actor_message(retained).is_ok(),
+            "an already-published exact flush must win replacement and deadline observation"
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert_eq!(
+            network
+                .peers
+                .get(&delivery_peer)
+                .expect("replacement remains current")
+                .conn_id,
+            replacement_connection_id
+        );
+
+        assert!(
+            !network.expire_reply_writer_occurrence(&route, old_connection_id),
+            "an obsolete timeout cannot terminate the replacement after flush"
+        );
+        assert!(!replacement_receivers.termination_requested());
+        assert!(
+            !network
+                .terminating_connections
+                .contains(&replacement_connection_id)
+        );
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn terminal_fence_observes_deadline_flush_published_after_initial_poll() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        network.reply_writer_flush_timeout = Duration::from_millis(10);
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let connection_id = 152;
+        let (peer_handle, mut peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45730),
+            connection_id,
+            peer_handle,
+            true,
+        );
+        let tenure =
+            test_reply_tenure(&network.reply_route_owner, delivery_peer, connection_id, 40);
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 55);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(85),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("peer-writer admission awaits completion");
+
+        tokio::time::advance(network.reply_writer_flush_timeout).await;
+        assert!(
+            network
+                .dispatch_reliable_actor_message_inner(retained, || {
+                    assert_eq!(
+                        peer_receivers
+                            .try_recv_any_and_acknowledge_flush()
+                            .expect("writer publishes after the optimistic poll")
+                            .payload,
+                        DeferredProgressMsg::Lane(85)
+                    );
+                })
+                .is_ok(),
+            "the terminal fence must observe a deadline-gap flush"
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert!(route.is_reply_writable());
+        assert!(!peer_receivers.termination_requested());
+        assert!(!network.terminating_connections.contains(&connection_id));
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn terminal_fence_observes_replacement_flush_published_after_initial_poll() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let old_connection_id = 153;
+        let replacement_connection_id = 154;
+        let (old_handle, mut old_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45731),
+            old_connection_id,
+            old_handle,
+            true,
+        );
+        let tenure = test_reply_tenure(
+            &network.reply_route_owner,
+            delivery_peer.clone(),
+            old_connection_id,
+            41,
+        );
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(old_connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 56);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(86),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("old peer writer owns the exact occurrence");
+
+        let (replacement_handle, replacement_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45732),
+            replacement_connection_id,
+            replacement_handle,
+            true,
+        );
+        assert!(
+            network
+                .dispatch_reliable_actor_message_inner(retained, || {
+                    assert_eq!(
+                        old_receivers
+                            .try_recv_consensus_and_acknowledge_flush()
+                            .expect("old writer publishes after the optimistic poll")
+                            .payload,
+                        DeferredProgressMsg::Lane(86)
+                    );
+                })
+                .is_ok(),
+            "the terminal fence must observe a replacement-gap flush"
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert!(route.is_reply_writable());
+        assert_eq!(
+            network
+                .peers
+                .get(&delivery_peer)
+                .expect("replacement remains current")
+                .conn_id,
+            replacement_connection_id
+        );
+        assert!(!old_receivers.termination_requested());
+        assert!(!replacement_receivers.termination_requested());
+        assert!(
+            !network
+                .terminating_connections
+                .contains(&replacement_connection_id)
+        );
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn terminal_fence_observes_inactive_route_flush_published_after_initial_poll() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let connection_id = 155;
+        let (peer_handle, mut peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45733),
+            connection_id,
+            peer_handle,
+            true,
+        );
+        let tenure =
+            test_reply_tenure(&network.reply_route_owner, delivery_peer, connection_id, 42);
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target.clone(), Arc::clone(&tenure), 57);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(87),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("peer-writer admission awaits completion");
+
+        tenure.cancel();
+        assert!(!route.is_active());
+        assert!(
+            network
+                .dispatch_reliable_actor_message_inner(retained, || {
+                    assert_eq!(
+                        peer_receivers
+                            .try_recv_any_and_acknowledge_flush()
+                            .expect("writer publishes after the optimistic poll")
+                            .payload,
+                        DeferredProgressMsg::Lane(87)
+                    );
+                })
+                .is_ok(),
+            "the terminal fence must observe an inactive-route-gap flush"
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert!(!peer_receivers.termination_requested());
+        assert!(!network.terminating_connections.contains(&connection_id));
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[test]
+    fn terminal_fence_observes_send_before_close_and_rejects_send_after_close() {
+        let exact_target = PeerId::from(KeyPair::random().public_key().clone());
+        let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+        let mut ready = HashMap::from([(
+            exact_target.clone(),
+            PendingWriterFlush {
+                receiver: ready_receiver,
+            },
+        )]);
+        assert!(ready_sender.send(()).is_ok());
+        assert!(exact_reply_flush_wins_terminal_fence(
+            &mut ready,
+            Some(&exact_target)
+        ));
+        assert!(ready.is_empty());
+
+        let (late_sender, late_receiver) = tokio::sync::oneshot::channel();
+        let mut late = HashMap::from([(
+            exact_target.clone(),
+            PendingWriterFlush {
+                receiver: late_receiver,
+            },
+        )]);
+        assert!(!exact_reply_flush_wins_terminal_fence(
+            &mut late,
+            Some(&exact_target)
+        ));
+        assert!(late.is_empty());
+        assert!(
+            late_sender.send(()).is_err(),
+            "a writer which loses the terminal close cannot publish success"
+        );
+
+        let (topology_sender, topology_receiver) = tokio::sync::oneshot::channel();
+        let mut topology = HashMap::from([(
+            exact_target.clone(),
+            PendingWriterFlush {
+                receiver: topology_receiver,
+            },
+        )]);
+        assert!(!exact_reply_flush_wins_terminal_fence(&mut topology, None));
+        assert_eq!(topology.len(), 1);
+        assert!(
+            topology_sender.send(()).is_ok(),
+            "topology traffic must not enter the exact-reply terminal fence"
+        );
+        assert!(matches!(
+            topology
+                .get_mut(&exact_target)
+                .expect("topology receiver remains owned")
+                .receiver
+                .try_recv(),
+            Ok(())
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_pending_exact_reply_observes_ready_flush_before_release() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let connection_id = 156;
+        let (peer_handle, mut peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45734),
+            connection_id,
+            peer_handle,
+            true,
+        );
+        let tenure =
+            test_reply_tenure(&network.reply_route_owner, delivery_peer, connection_id, 43);
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target.clone(), Arc::clone(&tenure), 58);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(88),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("peer-writer admission awaits completion");
+        let mut pending = ReliableActorPending::new(4);
+        pending.push_back(retained);
+
+        tenure.cancel();
+        assert!(!route.is_active());
+        assert_eq!(
+            peer_receivers
+                .try_recv_any_and_acknowledge_flush()
+                .expect("writer publishes while the cancelled item is queued")
+                .payload,
+            DeferredProgressMsg::Lane(88)
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+        assert_eq!(pending.release_cancelled_targets(), 1);
+        assert_eq!(pending.len(), 0);
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert!(!peer_receivers.termination_requested());
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pending_queue_drop_observes_ready_exact_flush_before_shutdown_close() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let connection_id = 157;
+        let (peer_handle, mut peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45735),
+            connection_id,
+            peer_handle,
+            true,
+        );
+        let tenure =
+            test_reply_tenure(&network.reply_route_owner, delivery_peer, connection_id, 44);
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 59);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(89),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("peer-writer admission awaits completion");
+        let mut pending = ReliableActorPending::new(4);
+        pending.push_back(retained);
+
+        assert_eq!(
+            peer_receivers
+                .try_recv_any_and_acknowledge_flush()
+                .expect("writer publishes while the shutdown-owned item is queued")
+                .payload,
+            DeferredProgressMsg::Lane(89)
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+        drop(pending);
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert!(route.is_reply_writable());
+        assert!(!peer_receivers.termination_requested());
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn nonready_exact_reply_ack_cannot_keep_stale_route_alive() {
+        for close_old_writer in [false, true] {
+            let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+                return;
+            };
+            let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+                handle_with_network_receivers::<DeferredProgressMsg>();
+            handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+            let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+            let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+            let old_connection_id = if close_old_writer { 149 } else { 148 };
+            let replacement_connection_id = if close_old_writer { 151 } else { 150 };
+            let (old_handle, old_receivers) =
+                crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+            insert_ref_peer(
+                &mut network,
+                delivery_peer.clone(),
+                socket_addr!(127.0.0.1:45728),
+                old_connection_id,
+                old_handle,
+                true,
+            );
+            let tenure = test_reply_tenure(
+                &network.reply_route_owner,
+                delivery_peer.clone(),
+                old_connection_id,
+                39,
+            );
+            assert!(
+                network
+                    .reply_route_tenures
+                    .insert(old_connection_id, Arc::clone(&tenure))
+                    .is_none()
+            );
+            let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 54);
+            let mut completion = handle
+                .post_reply_recoverable_with_flush_ack(
+                    Post {
+                        data: DeferredProgressMsg::Lane(84),
+                        peer_id: semantic_target,
+                        priority: Priority::High,
+                    },
+                    &route,
+                    None,
+                )
+                .expect("reply enters actor ownership")
+                .expect("new reply admission returns one completion");
+            let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+            let retained = network
+                .dispatch_reliable_actor_message(admitted)
+                .expect_err("old peer writer owns the unflushed occurrence");
+            assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+            let old_receivers = if close_old_writer {
+                drop(old_receivers);
+                None
+            } else {
+                Some(old_receivers)
+            };
+
+            let (replacement_handle, replacement_receivers) =
+                crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+            insert_ref_peer(
+                &mut network,
+                delivery_peer.clone(),
+                socket_addr!(127.0.0.1:45729),
+                replacement_connection_id,
+                replacement_handle,
+                true,
+            );
+            assert!(
+                network.dispatch_reliable_actor_message(retained).is_ok(),
+                "an empty or closed acknowledgement cannot retain a stale exact route"
+            );
+            assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Closed);
+            assert!(!route.is_reply_writable());
+            assert_eq!(
+                network
+                    .peers
+                    .get(&delivery_peer)
+                    .expect("replacement remains current")
+                    .conn_id,
+                replacement_connection_id
+            );
+            assert!(!replacement_receivers.termination_requested());
+            assert!(
+                !network
+                    .terminating_connections
+                    .contains(&replacement_connection_id)
+            );
+            assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+            drop(old_receivers);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_exact_deadline_beats_closed_peer_writer_receiver() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        network.reply_writer_flush_timeout = Duration::from_millis(10);
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let connection_id = 143;
+        let (peer_handle, peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45723),
+            connection_id,
+            peer_handle,
+            true,
+        );
+        let tenure =
+            test_reply_tenure(&network.reply_route_owner, delivery_peer, connection_id, 35);
+        network
+            .reply_route_tenures
+            .insert(connection_id, Arc::clone(&tenure));
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 50);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(80),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("peer-writer admission awaits completion");
+
+        tokio::time::advance(network.reply_writer_flush_timeout).await;
+        drop(peer_receivers);
+        assert!(
+            network.dispatch_reliable_actor_message(retained).is_ok(),
+            "an expired occurrence must not evade timeout via a closed writer receiver"
+        );
+        assert_eq!(
+            completion.poll(),
+            NetworkReplyFlushAckStatus::TimedOut,
+            "only a published successful flush may win at the deadline"
+        );
+        assert!(!route.is_reply_writable());
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn adaptive_reply_attempt_flushes_between_base_and_doubled_deadline() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        let base = Duration::from_millis(10);
+        network.reply_writer_flush_timeout = base;
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let connection_id = 144;
+        let (peer_handle, mut peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45724),
+            connection_id,
+            peer_handle,
+            true,
+        );
+        let tenure =
+            test_reply_tenure(&network.reply_route_owner, delivery_peer, connection_id, 36);
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 51);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack_at_attempt(
+                Post {
+                    data: DeferredProgressMsg::Lane(81),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+                1,
+            )
+            .expect("adaptive retry enters actor ownership")
+            .expect("adaptive retry returns one completion");
+        let admitted = progress_rx
+            .try_recv()
+            .expect("admitted adaptive reply actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("writer admission awaits its flush");
+
+        tokio::time::advance(Duration::from_millis(15)).await;
+        let retained = network
+            .dispatch_reliable_actor_message(retained)
+            .expect_err("attempt one owns twice the base timeout");
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+        assert!(route.is_reply_writable());
+        assert_eq!(
+            peer_receivers
+                .try_recv_any_and_acknowledge_flush()
+                .expect("writer flushes between base and doubled deadline")
+                .payload,
+            DeferredProgressMsg::Lane(81)
+        );
+        assert!(network.dispatch_reliable_actor_message(retained).is_ok());
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Flushed);
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[test]
+    fn adaptive_reply_timeout_scaling_handles_extreme_duration_without_panicking() {
+        assert_eq!(
+            scaled_reply_writer_flush_timeout(Duration::from_millis(1), 32),
+            Duration::from_millis(1_u64 << 32),
+            "u8 attempts must not saturate merely because a u32 multiplier cannot encode them"
+        );
+        assert_eq!(
+            scaled_reply_writer_flush_timeout(Duration::MAX, 1),
+            Duration::MAX
+        );
+        assert_eq!(
+            scaled_reply_writer_flush_timeout(Duration::from_millis(u64::MAX), u8::MAX),
+            Duration::MAX
+        );
+        let now = tokio::time::Instant::now();
+        let deadline = ExactReplyWriterDeadline {
+            admitted_at: now,
+            timeout: scaled_reply_writer_flush_timeout(Duration::MAX, u8::MAX),
+        };
+        assert!(!deadline.expired_at(now));
+    }
+
+    // TODO: Add a four-peer authenticated socket test whose Byzantine peer
+    // keeps the inbound idle timer alive with valid frames while never reading
+    // its outbound stream; assert this actor deadline still drains only that
+    // connection and preserves sibling progress.
+    #[tokio::test(start_paused = true)]
+    async fn full_exact_writer_queue_times_out_closes_route_and_releases_actor_budget() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        network.reply_writer_flush_timeout = Duration::from_millis(10);
+        network.disconnect_on_post_overflow = false;
+        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+        handle.reply_route_owner = Arc::clone(&network.reply_route_owner);
+
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_addr = socket_addr!(127.0.0.1:45719);
+        let connection_id = 139;
+        let (peer_handle, peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        peer_handle
+            .post(RelayMessage::new(
+                network.self_id.clone(),
+                RelayTarget::Direct(semantic_target.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::High,
+                DeferredProgressMsg::Lane(1),
+            ))
+            .expect("prefill the cap-one peer-writer queue");
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            peer_addr,
+            connection_id,
+            peer_handle,
+            true,
+        );
+        let tenure =
+            test_reply_tenure(&network.reply_route_owner, delivery_peer, connection_id, 33);
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 48);
+        let mut completion = handle
+            .post_reply_recoverable_with_flush_ack(
+                Post {
+                    data: DeferredProgressMsg::Lane(78),
+                    peer_id: semantic_target,
+                    priority: Priority::High,
+                },
+                &route,
+                None,
+            )
+            .expect("reply enters actor ownership")
+            .expect("new reply admission returns one completion");
+        assert!(
+            handle.network_actor_progress_budget.retained() > 0,
+            "actor admission must retain the exact reply bytes"
+        );
+        let admitted = progress_rx.try_recv().expect("admitted reply actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("a full peer-writer queue retains actor ownership");
+
+        tokio::time::advance(Duration::from_millis(9)).await;
+        let retained = network
+            .dispatch_reliable_actor_message(retained)
+            .expect_err("retry polling must not reset or prematurely expire the deadline");
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::Pending);
+        assert!(route.is_reply_writable());
+        assert!(!peer_receivers.termination_requested());
+
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert!(
+            network.dispatch_reliable_actor_message(retained).is_ok(),
+            "expired occurrence must release the actor owner"
+        );
+        assert_eq!(completion.poll(), NetworkReplyFlushAckStatus::TimedOut);
+        assert_eq!(
+            completion.poll(),
+            NetworkReplyFlushAckStatus::TimedOut,
+            "timeout completion must remain terminal and never become flushed"
+        );
+        assert!(
+            route.is_active(),
+            "delivery authority drains separately from writer authority"
+        );
+        assert!(!route.is_reply_writable());
+        assert!(peer_receivers.termination_requested());
+        assert!(network.terminating_connections.contains(&connection_id));
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn topology_writer_full_retry_does_not_acquire_exact_reply_deadline() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        network.reply_writer_flush_timeout = Duration::from_millis(10);
+        network.disconnect_on_post_overflow = false;
+        let (handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
+            handle_with_network_receivers::<DeferredProgressMsg>();
+
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let _ = handle
+            .reliable_direct_topology
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reconcile(&HashSet::from([peer_id.clone()]), &handle.self_id);
+        let peer_addr = socket_addr!(127.0.0.1:45722);
+        let connection_id = 142;
+        let (peer_handle, mut peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        peer_handle
+            .post(RelayMessage::new(
+                network.self_id.clone(),
+                RelayTarget::Direct(peer_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::High,
+                DeferredProgressMsg::Lane(1),
+            ))
+            .expect("prefill the topology peer-writer queue");
+        insert_ref_peer(
+            &mut network,
+            peer_id.clone(),
+            peer_addr,
+            connection_id,
+            peer_handle,
+            true,
+        );
+
+        handle
+            .post_recoverable(
+                Post {
+                    data: DeferredProgressMsg::Lane(79),
+                    peer_id,
+                    priority: Priority::High,
+                },
+                None,
+            )
+            .expect("topology-authorized progress enters actor ownership");
+        let admitted = progress_rx
+            .try_recv()
+            .expect("topology-authorized actor item");
+        let retained = network
+            .dispatch_reliable_actor_message(admitted)
+            .expect_err("full topology writer retains actor ownership");
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let retained = network
+            .dispatch_reliable_actor_message(retained)
+            .expect_err("topology retry remains independent of reply timeout");
+        assert!(!peer_receivers.termination_requested());
+        assert!(handle.network_actor_progress_budget.retained() > 0);
+
+        assert_eq!(
+            peer_receivers
+                .try_recv_any_and_acknowledge_flush()
+                .expect("drain the prefilled topology writer slot")
+                .payload,
+            DeferredProgressMsg::Lane(1)
+        );
+        let retained = network
+            .dispatch_reliable_actor_message(retained)
+            .expect_err("writer admission still awaits its flush");
+        assert_eq!(
+            peer_receivers
+                .try_recv_any_and_acknowledge_flush()
+                .expect("flush the topology actor occurrence")
+                .payload,
+            DeferredProgressMsg::Lane(79)
+        );
+        assert!(network.dispatch_reliable_actor_message(retained).is_ok());
+        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stale_reply_writer_deadline_does_not_terminate_replacement() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let old_connection_id = 140;
+        let replacement_connection_id = 141;
+        let tenure = test_reply_tenure(
+            &network.reply_route_owner,
+            delivery_peer.clone(),
+            old_connection_id,
+            34,
+        );
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(old_connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target, tenure, 49);
+        let (replacement_handle, replacement_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45720),
+            replacement_connection_id,
+            replacement_handle,
+            true,
+        );
+
+        assert!(
+            !network.expire_reply_writer_occurrence(&route, old_connection_id),
+            "a stale timeout must not remove a replacement connection"
+        );
+        assert!(!route.is_reply_writable());
+        assert_eq!(
+            network
+                .peers
+                .get(&delivery_peer)
+                .expect("replacement remains current")
+                .conn_id,
+            replacement_connection_id
+        );
+        assert!(!replacement_receivers.termination_requested());
+        assert!(
+            !network
+                .terminating_connections
+                .contains(&replacement_connection_id)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reply_writer_deadline_retirement_is_idempotent() {
+        let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
+            return;
+        };
+        let delivery_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let semantic_target = PeerId::from(KeyPair::random().public_key().clone());
+        let connection_id = 142;
+        let tenure = test_reply_tenure(
+            &network.reply_route_owner,
+            delivery_peer.clone(),
+            connection_id,
+            35,
+        );
+        assert!(
+            network
+                .reply_route_tenures
+                .insert(connection_id, Arc::clone(&tenure))
+                .is_none()
+        );
+        let route = NetworkReplyRoute::new(semantic_target, tenure, 50);
+        let (peer_handle, peer_receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DeferredProgressMsg>>(1);
+        insert_ref_peer(
+            &mut network,
+            delivery_peer.clone(),
+            socket_addr!(127.0.0.1:45721),
+            connection_id,
+            peer_handle,
+            true,
+        );
+
+        assert!(network.expire_reply_writer_occurrence(&route, connection_id));
+        let terminating_after_first = network.terminating_connections.len();
+        let pending_connects_after_first = network.pending_connects.len();
+        assert!(
+            !network.expire_reply_writer_occurrence(&route, connection_id),
+            "the same timeout cannot cancel its connection twice"
+        );
+        assert_eq!(
+            network.terminating_connections.len(),
+            terminating_after_first
+        );
+        assert_eq!(network.pending_connects.len(), pending_connects_after_first);
+        assert!(peer_receivers.termination_requested());
+        assert!(!route.is_reply_writable());
+        assert!(!network.peers.contains_key(&delivery_peer));
     }
 
     #[test]
@@ -25834,6 +27551,7 @@ mod tests {
             topic: message::Topic::Consensus,
             stream_wire_bytes: 1,
             broadcast: false,
+            reply_writer_timeout_attempt: None,
             request_digest: Hash::new(b"blocked-live-source"),
             authority: None,
         };
@@ -26086,6 +27804,7 @@ mod tests {
                 topic: message::Topic::Consensus,
                 stream_wire_bytes: direct_bytes,
                 broadcast: false,
+                reply_writer_timeout_attempt: None,
                 request_digest: progress_ticket_request_digest(&direct),
                 authority: None,
             },
@@ -26255,6 +27974,7 @@ mod tests {
                 topic: message::Topic::Consensus,
                 stream_wire_bytes: direct_bytes,
                 broadcast: false,
+                reply_writer_timeout_attempt: None,
                 request_digest: progress_ticket_request_digest(&direct),
                 authority: None,
             },
@@ -26409,9 +28129,12 @@ mod tests {
         };
         let membership = Arc::clone(membership);
         let (ack_sender, ack_receiver) = tokio::sync::oneshot::channel();
-        child
-            .pending_flush_acks
-            .insert(target.clone(), ack_receiver);
+        child.pending_flush_acks.insert(
+            target.clone(),
+            PendingWriterFlush {
+                receiver: ack_receiver,
+            },
+        );
 
         let ordinary_budget = NetworkActorByteBudget::new(1, 0).expect("direct fixture owner");
         let direct = AdmittedNetworkMessage::new(
@@ -26571,6 +28294,7 @@ mod tests {
                 topic: message::Topic::Consensus,
                 stream_wire_bytes: direct_bytes,
                 broadcast: false,
+                reply_writer_timeout_attempt: None,
                 request_digest: progress_ticket_request_digest(&direct),
                 authority: None,
             },
@@ -29707,7 +31431,7 @@ enum DeferredFlushOutcome {
 }
 
 enum ReliableWriterAttempt {
-    Awaiting(tokio::sync::oneshot::Receiver<()>),
+    Awaiting(PendingWriterFlush),
     Retry,
 }
 

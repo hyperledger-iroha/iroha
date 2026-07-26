@@ -22674,14 +22674,7 @@ fn queue_plan_synced_proxy_request_id_for_entrypoint(
     app: &AppState,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
-    Hash::new(
-        norito::to_bytes(&(
-            "torii:proxy:queue-plan-synced:v5",
-            app.chain_id.as_ref().clone(),
-            entrypoint_hash,
-        ))
-        .expect("deterministic QueuePlanSynced request identity must encode"),
-    )
+    iroha_core::torii_proxy::queue_plan_synced_request_id(app.chain_id.as_ref(), entrypoint_hash)
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -31478,7 +31471,6 @@ async fn execute_torii_transaction_via_proxy(
         let enqueue_timestamp_ms = app.queue.queue_plan_admission_timestamp_ms();
         match QueuePlanAdmissionBindingV2::new(
             app.chain_id.as_ref(),
-            request_id,
             &transaction,
             &routing_plan,
             context,
@@ -64517,7 +64509,6 @@ pub(crate) mod tests_runtime_handlers {
         let admission_binding = Some(
             QueuePlanAdmissionBindingV2::new(
                 &chain_id,
-                request_id,
                 &transaction,
                 &RoutingPlan::single(RoutingDecision::new(LaneId::new(9), DataSpaceId::new(12))),
                 context,
@@ -64592,7 +64583,6 @@ pub(crate) mod tests_runtime_handlers {
         let admission_binding = Some(
             QueuePlanAdmissionBindingV2::new(
                 app.chain_id.as_ref(),
-                request_id,
                 &transaction,
                 &routing_plan,
                 context,
@@ -65368,7 +65358,6 @@ pub(crate) mod tests_runtime_handlers {
         *admission_binding = Some(
             QueuePlanAdmissionBindingV2::new(
                 app.chain_id.as_ref(),
-                request.request_id,
                 transaction,
                 &routing_plan,
                 admission_context,
