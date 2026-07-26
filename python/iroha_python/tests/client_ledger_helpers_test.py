@@ -14,6 +14,7 @@ from iroha_python import (
     AccountAsset,
     AccountAssetsPage,
     AssetHolderRecord,
+    CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
     DataEventFilter,
     Ed25519KeyPair,
     ExplorerRwaRecord,
@@ -2592,6 +2593,47 @@ def test_cancel_asset_lock_instruction_rejects_non_positive_or_noncanonical_rema
             "lock-sdk-invalid-cancel-remaining",
             expected_remaining_amount,
         )
+
+
+def test_cancel_asset_lock_bounds_exact_utf8_lock_id_preimage() -> None:
+    exact_bound = "🔒" * 1_024
+    assert len(exact_bound.encode("utf-8")) == 4_096
+    assert CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 == 4_096
+    Instruction.cancel_asset_lock(exact_bound, "1")
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account_address(0x75),
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
+    draft.cancel_asset_lock(exact_bound, "1")
+
+    over_bound = exact_bound + "a"
+    assert len(over_bound.encode("utf-8")) == 4_097
+    with pytest.raises(ValueError, match="at most 4096 UTF-8 bytes"):
+        Instruction.cancel_asset_lock(over_bound, "1")
+    with pytest.raises(ValueError, match="at most 4096 UTF-8 bytes"):
+        draft.cancel_asset_lock(over_bound, "1")
+
+
+@pytest.mark.parametrize(
+    "lock_id",
+    ["", " ", " lock", "lock ", "\ufefflock", "lock\ufeff"],
+)
+def test_cancel_asset_lock_rejects_unclean_lock_id_preimage(lock_id: str) -> None:
+    with pytest.raises(ValueError, match="lock-ID preimage"):
+        Instruction.cancel_asset_lock(lock_id, "1")
+
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account_address(0x75),
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
+    with pytest.raises(ValueError):
+        draft.cancel_asset_lock(lock_id, "1")
 
 
 @pytest.mark.parametrize(

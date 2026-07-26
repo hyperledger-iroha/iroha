@@ -290,6 +290,7 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
     "ToriiBrowserClient",
     "buildTransaction",
     "buildCancelAssetLockInstruction",
+    "CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1",
     "noritoEncodeInstruction",
     "privacyCapabilitiesV1",
   ]) {
@@ -337,6 +338,10 @@ test("package dist quantity builders reject numbers and noncanonical strings", (
 });
 
 test("package dist exposes strict CancelAssetLock V1 construction", () => {
+  assert.equal(
+    packageExports.CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
+    4_096,
+  );
   assert.deepEqual(
     packageExports.buildCancelAssetLockInstruction({
       lockId: "merchant-lock-001",
@@ -357,6 +362,21 @@ test("package dist exposes strict CancelAssetLock V1 construction", () => {
         expectedRemainingAmount: 1500,
       }),
     /JavaScript numbers/u,
+  );
+  const exactBound = "🔒".repeat(1_024);
+  assert.doesNotThrow(() =>
+    packageExports.buildCancelAssetLockInstruction({
+      lockId: exactBound,
+      expectedRemainingAmount: "1",
+    }),
+  );
+  assert.throws(
+    () =>
+      packageExports.buildCancelAssetLockInstruction({
+        lockId: `${exactBound}a`,
+        expectedRemainingAmount: "1",
+      }),
+    /at most 4096 UTF-8 bytes/u,
   );
 });
 

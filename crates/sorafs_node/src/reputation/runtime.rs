@@ -4035,6 +4035,16 @@ impl ReputationPublicationCheckpointV1 {
         }
         Ok(())
     }
+
+    fn evict_oldest_committed(&mut self) -> bool {
+        if self.committed_snapshots.len() <= 1 {
+            return false;
+        }
+        self.committed_snapshots.drain(..1);
+        self.committed_governance_readbacks.drain(..1);
+        self.committed_read.events.drain(..1);
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -4631,17 +4641,13 @@ impl ReputationPublicationReconcilerV1 {
         state: &mut PublicationRuntimeState,
         candidate: ReputationPublicationCheckpointV1,
     ) -> Result<(), ReputationRuntimeError> {
-        validate_publication_checkpoint(
-            &candidate,
+        let (candidate, encoded) = encode_bounded_publication_checkpoint(
+            candidate,
             &self.policy,
             self.policy_digest,
             &self.trust_policy,
+            self.policy.checkpoint_max_bytes,
         )?;
-        let encoded =
-            norito::to_bytes(&candidate).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
-        if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > self.policy.checkpoint_max_bytes {
-            return Err(ReputationRuntimeError::CheckpointTooLarge);
-        }
         match self.store.commit_bytes(&encoded, state.fingerprint) {
             Ok(fingerprint) => {
                 state.checkpoint = candidate;
@@ -4661,6 +4667,26 @@ impl ReputationPublicationReconcilerV1 {
             return Err(ReputationRuntimeError::CheckpointDurabilityUncertain);
         }
         Ok(())
+    }
+}
+
+fn encode_bounded_publication_checkpoint(
+    mut candidate: ReputationPublicationCheckpointV1,
+    policy: &ReputationPublicationPolicyV1,
+    policy_digest: [u8; 32],
+    trust_policy: &ReputationSnapshotTrustPolicyV1,
+    checkpoint_max_bytes: u64,
+) -> Result<(ReputationPublicationCheckpointV1, Vec<u8>), ReputationRuntimeError> {
+    loop {
+        validate_publication_checkpoint(&candidate, policy, policy_digest, trust_policy)?;
+        let encoded =
+            norito::to_bytes(&candidate).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
+        if u64::try_from(encoded.len()).unwrap_or(u64::MAX) <= checkpoint_max_bytes {
+            return Ok((candidate, encoded));
+        }
+        if !candidate.evict_oldest_committed() {
+            return Err(ReputationRuntimeError::CheckpointTooLarge);
+        }
     }
 }
 
@@ -7197,6 +7223,38 @@ mod tests {
         );
         validate_publication_checkpoint(&checkpoint, &policy, policy_digest, &trust)
             .expect("validate bounded history");
+
+        let mut expected_byte_bounded = checkpoint.clone();
+        assert!(expected_byte_bounded.evict_oldest_committed());
+        let expected_byte_bounded_bytes =
+            norito::to_bytes(&expected_byte_bounded).expect("encode one retained snapshot");
+        let byte_ceiling =
+            u64::try_from(expected_byte_bounded_bytes.len()).expect("fixture length fits u64");
+        let (byte_bounded, byte_bounded_bytes) = encode_bounded_publication_checkpoint(
+            checkpoint.clone(),
+            &policy,
+            policy_digest,
+            &trust,
+            byte_ceiling,
+        )
+        .expect("evict the oldest snapshot to meet the byte ceiling");
+        assert_eq!(byte_bounded, expected_byte_bounded);
+        assert_eq!(byte_bounded_bytes, expected_byte_bounded_bytes);
+        assert_eq!(
+            decode_publication_checkpoint(&byte_bounded_bytes, &policy, policy_digest, &trust,)
+                .expect("restore byte-bounded history"),
+            expected_byte_bounded
+        );
+        assert!(matches!(
+            encode_bounded_publication_checkpoint(
+                checkpoint.clone(),
+                &policy,
+                policy_digest,
+                &trust,
+                byte_ceiling - 1,
+            ),
+            Err(ReputationRuntimeError::CheckpointTooLarge)
+        ));
 
         let canonical = norito::to_bytes(&checkpoint).expect("encode bounded history");
         assert_eq!(

@@ -38,6 +38,8 @@
     <None Include="../../../fixtures/sorafs_manifest/moderation/governance_node_v1.to" Link="Fixtures/sorafs_manifest/moderation/governance_node_v1.to" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/moderation/governance_node_validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/moderation/governance_node_validation_outcome_v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/replication_order/order_v1.to" Link="Fixtures/sorafs_manifest/replication_order/order_v1.to" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/appeal_finance/**/*.json" Link="Fixtures/sorafs_manifest/appeal_finance/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/appeal_finance/**/*.to" Link="Fixtures/sorafs_manifest/appeal_finance/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/por/proof_v1.to" Link="Fixtures/sorafs_manifest/por/proof_v1.to" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_0_v1.to" Link="Fixtures/sorafs_manifest/governance/dag_block_0_v1.to" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/governance/dag_block_validation_outcome_v1.json" CopyToOutputDirectory="PreserveNewest" />

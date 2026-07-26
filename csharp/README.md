@@ -725,7 +725,16 @@ catch (ToriiApiException exception)
 - `ToriiClient.GetExplorerHealthAsync(...)`
 - `ToriiClient.GetExplorerMetricsAsync(...)`
 
-The managed transaction encoder is deterministic and now covers the current asset quantity, metadata, and native SoraFS replication-order slice. The Torii client can also parse generic SSE frames, project the common pipeline, proof, and explorer block/transaction/instruction streams into typed models, read the core explorer JSON endpoints including latest/health/metrics snapshots with typed DTOs, and build/sign the current singular set plus the first fast_dsl iterable-query subset, but broader iterable families, richer instruction families beyond that slice, broader typed event families, and the broader parity surfaces are still open work.
+The managed transaction encoder is deterministic and now covers the current
+asset quantity, metadata, native SoraFS replication-order slice, and strict
+asset-lock cancellation. The Torii client can also parse generic SSE frames,
+project the common pipeline, proof, and explorer
+block/transaction/instruction streams into typed models, read the core
+explorer JSON endpoints including latest/health/metrics snapshots with typed
+DTOs, and build/sign the current singular set plus the first fast_dsl
+iterable-query subset, but broader iterable families, richer instruction
+families beyond that slice, broader typed event families, and the broader
+parity surfaces are still open work.
 
 ## SoraFS replication-order instructions
 
@@ -752,6 +761,27 @@ standard base64, caps the decoded archive at 1 MiB, and validates canonical
 `ReplicationOrderV1` framing, ID binding, target/provider ordering, and
 deadlines. Completion has no legacy two-field overload: `providerId` is
 mandatory and becomes the native `provider_id` field.
+
+## Asset-lock cancellation
+
+The managed transaction encoder exposes the strict compare-and-cancel V1
+instruction through both `TransactionInstruction` and `TransactionBuilder`:
+
+```csharp
+var cancel = TransactionInstruction.CancelAssetLock(
+    "merchant-lock-001",
+    expectedRemainingAmount: "1500");
+```
+
+The builder derives the native `EscrowId` with Blake2b-256 and emits exactly
+`escrow_id` plus `expected_remaining_amount`. The amount is mandatory, positive,
+and canonically spelled. Lock-id preimages are capped at 4096 UTF-8 bytes and
+must not have leading or trailing Unicode whitespace (including U+FEFF).
+`CancelAssetLockInstruction.DecodeNorito(...)`, `DecodeInstructionJson(...)`,
+and `DecodePayloadJson(...)` provide bounded strict decoding for instruction
+envelopes and the shared V1 fixtures; they reject the retired one-field shape,
+noncanonical quantities, zero preconditions, alternate layout flags, and
+trailing bytes.
 
 ## Build
 

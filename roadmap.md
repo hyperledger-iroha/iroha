@@ -150,13 +150,18 @@ authenticated-source and governed completion-signer providers. The worker now
 rechecks the current committed provider owner before signer resolution and
 immediately before and after signing; a newer finalized assignment snapshot
 also invalidates retained `Signing`, `Signed`, `Ambiguous`, and `Submitted`
-material when that owner changes or is removed. Remaining gaps are the
-production authenticated multi-provider transport and HSM/KMS signer-resolver
-adapters, a provider-indexed committed query or governed archive that stays
-bounded across long-lived history, and a persisted governed signer-policy
-revision/digest binding so same-owner key rotation or revocation is recoverable
-across prepared state and restart. Focused/workspace validation and reviewed
-four-peer restart/duplicate-submission evidence remain open under
+material when that owner changes or is removed. The exact governed
+signer-policy identity, monotonic revision, and digest are now persisted with
+prepared material; a newer finalized policy rotation or revocation invalidates
+that material before observation or resubmission, including after restart.
+The durable policy floor rejects revision rollback, same-revision digest
+equivocation, identity substitution, and reuse after revocation unless a strict
+canonical successor is observed.
+Remaining gaps are the production authenticated multi-provider transport and
+HSM/KMS signer-resolver adapters plus a provider-indexed committed query or
+governed archive that stays bounded across long-lived history.
+Focused/workspace validation and reviewed four-peer restart/
+duplicate-submission evidence remain open under
 `V1-BLOCK-PROVIDER-INGEST-RUNTIME-01`.
 
 PoTR finalization no longer authorizes a provider from Torii's immutable

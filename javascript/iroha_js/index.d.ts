@@ -14647,8 +14647,13 @@ export interface CancelAssetLockInstruction {
   };
 }
 
+/** Maximum UTF-8 bytes accepted for a CancelAssetLock lock-id preimage. */
+export declare const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1: 4096;
+
 /**
  * Build a native compare-and-cancel asset-lock instruction. `lockId` is
+ * exact nonempty text without surrounding whitespace/BOM and at most
+ * {@link CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1} UTF-8 bytes. It is
  * deterministically hashed to the ledger `EscrowId`; the precondition must be
  * a positive canonical quantity.
  */
