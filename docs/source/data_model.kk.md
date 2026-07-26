@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   - Сынақтар мен қондырғылар алдымен әмбебап `AccountId` септігін тигізуі керек, содан кейін есептік жазбаның өзіне домен жорамалдарын кодтаудың орнына бүркеншік атын, бүркеншік ат рұқсаттарын және кез келген доменге тиесілі күйді бөлек қосу керек.
   - Жалпыға ортақ сингулярлық тіркелгіні іздеу енді бүркеншік аттарға бағытталған (`FindAliasesByAccountId`); тіркелгі идентификаторының өзі доменсіз қалады.### Актив анықтамалары және активтер
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` нұсқасы және бақылау сомасы бар префикссіз Base58 мекенжайы ретінде мәтіндік түрде көрсетіледі.
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`.
   - `name` адамға арналған дисплей мәтіні қажет және құрамында `#`/`@` болмауы керек.
   - `alias` міндетті емес және мыналардың бірі болуы керек:
     - `<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - Құрылысшылар: `AssetDefinition::new(id, spec)` немесе ыңғайлылық `numeric(id)`; `name` қажет және `.with_name(...)` арқылы орнатылуы керек.
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }`, сақтауға ыңғайлы `AssetEntry`/`AssetValue`.- `AssetBalanceScope`: шектеусіз баланстар үшін `Global` және деректер кеңістігі шектелген баланстар үшін `Dataspace(DataSpaceId)`.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` жиынтық API интерфейстері үшін ашық.
+- `Asset { id, value: Quantity }`, сақтауға ыңғайлы `AssetEntry`/`AssetValue`.- `AssetBalanceScope`: шектеусіз баланстар үшін `Global` және деректер кеңістігі шектелген баланстар үшін `Dataspace(DataSpaceId)`.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` жиынтық API интерфейстері үшін ашық.
 
 ### NFTs
 - `NftId { domain: DomainId, name: Name }`.
@@ -182,7 +182,7 @@ translator: machine-google-reviewed
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

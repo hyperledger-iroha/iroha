@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::Hash;
 use iroha_data_model::{DomainId, prelude::Name};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use ivm::{
     AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken, PointerType,
     ProgramMetadata, encode_argument_record_from_json,
@@ -64,8 +64,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Seed the canonical accounts and asset definition with zero balances, then
     // grant permission for the user to mint through the host.
     let mut wsv = MockWorldStateView::with_balances(&[
-        ((user.clone(), debt_asset.clone()), Numeric::from(0_u64)),
-        ((vault.clone(), debt_asset.clone()), Numeric::from(0_u64)),
+        ((user.clone(), debt_asset.clone()), Quantity::zero()),
+        ((vault.clone(), debt_asset.clone()), Quantity::zero()),
     ]);
     wsv.grant_permission(&user, PermissionToken::MintAsset(debt_asset.clone()));
     wsv.grant_permission(&user, PermissionToken::ReadAccountAssets(user.clone()));

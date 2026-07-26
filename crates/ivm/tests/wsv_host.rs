@@ -4,10 +4,7 @@ use std::str::FromStr;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::nexus::DataSpaceId;
 use iroha_primitives::json::Json;
-use iroha_primitives::{
-    numeric::{Numeric, Quantity},
-    numeric_abi::QuantityValueV1,
-};
+use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     IVM, PointerType, VMError,
     mock_wsv::{
@@ -39,9 +36,8 @@ fn unwrap_some_word(vm: &IVM) -> u64 {
     words[0]
 }
 
-fn make_quantity_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
-    let quantity = Quantity::try_from_numeric(amount.into()).expect("canonical quantity");
-    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
+fn make_quantity_tlv(amount: impl Into<Quantity>) -> Vec<u8> {
+    ivm::numeric_tlv::encode_quantity(&amount.into()).expect("encode quantity pointer envelope")
 }
 
 fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
@@ -71,7 +67,7 @@ fn test_balance_syscall_permission() {
 
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
-        Numeric::from(50_u64),
+        Quantity::from(50_u64),
     )]);
     // Bob has no permission initially
     let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
@@ -101,7 +97,7 @@ fn test_balance_syscall_permission() {
     // Grant permission and retry using a fresh WSV instance
     let mut wsv2 = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
-        Numeric::from(50_u64),
+        Quantity::from(50_u64),
     )]);
     wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
     let host = WsvHost::new_with_subject(wsv2, bob, HashMap::new());
@@ -118,7 +114,7 @@ fn test_balance_syscall_permission() {
     let value = QuantityValueV1::decode_frame(tlv.payload)
         .expect("decode balance")
         .into_quantity();
-    assert_eq!(value.as_numeric(), &Numeric::from(50_u64));
+    assert_eq!(value, Quantity::from(50_u64));
 }
 
 #[test]
@@ -138,8 +134,8 @@ fn test_transfer_syscall_permission() {
     );
 
     let wsv = MockWorldStateView::with_balances(&[
-        ((alice.clone(), asset.clone()), Numeric::from(50_u64)),
-        ((bob.clone(), asset.clone()), Numeric::from(0_u64)),
+        ((alice.clone(), asset.clone()), Quantity::from(50_u64)),
+        ((bob.clone(), asset.clone()), Quantity::zero()),
     ]);
     let mut acc_map = HashMap::new();
     acc_map.insert(1, alice.clone());
@@ -167,8 +163,8 @@ fn test_transfer_syscall_permission() {
     assert!(matches!(result, Err(VMError::PermissionDenied)));
 
     let mut wsv2 = MockWorldStateView::with_balances(&[
-        ((alice.clone(), asset.clone()), Numeric::from(50_u64)),
-        ((bob.clone(), asset.clone()), Numeric::from(0_u64)),
+        ((alice.clone(), asset.clone()), Quantity::from(50_u64)),
+        ((bob.clone(), asset.clone()), Quantity::zero()),
     ]);
     wsv2.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
     let host = WsvHost::new_with_subject_map(wsv2, bob.clone(), acc_map, asset_map);
@@ -194,7 +190,7 @@ fn test_mint_syscall_permission() {
     );
 
     let wsv =
-        MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Numeric::from(0_u64))]);
+        MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Quantity::zero())]);
     let mut acc_map = HashMap::new();
     acc_map.insert(1, bob.clone());
     let mut asset_map = HashMap::new();
@@ -214,7 +210,7 @@ fn test_mint_syscall_permission() {
     assert!(matches!(result, Err(VMError::PermissionDenied)));
 
     let mut wsv2 =
-        MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Numeric::from(0_u64))]);
+        MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Quantity::zero())]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
     let host = WsvHost::new_with_subject_map(wsv2, bob.clone(), acc_map, asset_map);
     vm.set_host(host);

@@ -3120,7 +3120,7 @@ fn contracts_paths() -> Map {
         "/v1/assets/transfer".to_owned(),
         Value::Object(json_post_operation(
             "Assets",
-            "Prepare or submit one numeric asset transfer.",
+            "Prepare or submit one asset quantity transfer.",
             "Prepare a strictly bound, versioned detached-signature scaffold with a typed fee_payment intent when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied. Retired fee_sponsor, gas_asset_id, and metadata gas_limit overrides are rejected. Replaying the exact signed transaction is idempotent: Torii returns its current queued or applied status, including after its TTL expires when it is already committed.",
             "#/components/schemas/AssetTransferRequest",
             "#/components/schemas/AssetTransferResponse",
@@ -25333,7 +25333,7 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 192,
-                    "description": "Exact canonical strictly positive Iroha Numeric text."
+                    "description": "Exact canonical strictly positive Iroha Quantity text."
                 },
                 "destination": {
                     "type": "string",

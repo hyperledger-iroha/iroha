@@ -481,7 +481,7 @@ pub(crate) fn execute_instruction_detached(
         match tb {
             TransferBox::Asset(t) => {
                 let src = t.source.clone();
-                let qty = t.object.clone().into_numeric();
+                let qty = t.object.clone();
                 delta.transfer_asset(src, t.destination.clone(), qty);
             }
             TransferBox::Domain(t) => {
@@ -3305,40 +3305,20 @@ pub(crate) fn compute_nexus_fee_amount(
     let instr_u64 = u64::try_from(instruction_count).map_err(|_| {
         ValidationFail::InternalError("instruction count too large for fee accounting".to_owned())
     })?;
-    let mut fee = cfg.base_fee.as_numeric().clone();
-    fee = Executor::checked_numeric_add(
-        fee,
-        Executor::checked_numeric_mul_u64(
-            cfg.per_byte_fee.as_numeric(),
-            tx_bytes_u64,
-            "fee amount",
-        )?,
-        "fee amount",
-    )?;
-    fee = Executor::checked_numeric_add(
-        fee,
-        Executor::checked_numeric_mul_u64(
-            cfg.per_instruction_fee.as_numeric(),
-            instr_u64,
-            "fee amount",
-        )?,
-        "fee amount",
-    )?;
-    let fee = Executor::checked_numeric_add(
-        fee,
-        Executor::checked_numeric_mul_u64(
-            cfg.per_gas_unit_fee.as_numeric(),
-            gas_used,
-            "fee amount",
-        )?,
-        "fee amount",
-    )?
-    .trim_trailing_zeros();
-    Quantity::from_canonical_numeric(fee).map_err(|error| {
-        ValidationFail::InternalError(format!(
-            "computed nexus fee left the quantity domain: {error}"
-        ))
-    })
+    let mut fee = cfg.base_fee.clone();
+    for (unit, count) in [
+        (&cfg.per_byte_fee, tx_bytes_u64),
+        (&cfg.per_instruction_fee, instr_u64),
+        (&cfg.per_gas_unit_fee, gas_used),
+    ] {
+        let delta = unit.try_mul_decimal(&Numeric::from(count)).map_err(|_| {
+            ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".to_owned())
+        })?;
+        fee = fee.checked_add(&delta).map_err(|_| {
+            ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".to_owned())
+        })?;
+    }
+    Ok(fee)
 }
 
 fn fee_bound_for_admission_payload(
@@ -3650,14 +3630,10 @@ fn evaluate_nexus_fee_admission_payload(
             }
             let mut authority_balances = BTreeMap::new();
             for (payer_asset, required) in required_by_asset {
-                let available =
-                    world
-                        .assets()
-                        .get(&payer_asset)
-                        .map_or_else(Quantity::zero, |balance| {
-                            Quantity::try_from_numeric(balance.as_ref().as_numeric().clone())
-                                .unwrap_or_else(|_| Quantity::zero())
-                        });
+                let available = world
+                    .assets()
+                    .get(&payer_asset)
+                    .map_or_else(Quantity::zero, |balance| balance.as_ref().clone());
                 if available < required {
                     return Err(NexusFeeAdmissionError::rejected(
                         FeeRejectionCode::AuthorityPayerInsufficient,
@@ -4735,7 +4711,7 @@ impl Executor {
         #[cfg(feature = "telemetry")]
         {
             let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
-            state_transaction.stage_block_fee_amount(Numeric::from(delta));
+            state_transaction.stage_block_fee_amount(Quantity::from(delta));
         }
 
         Self::record_pipeline_gas_settlement_receipt(
@@ -4748,28 +4724,6 @@ impl Executor {
             liquidity_profile,
             volatility_bucket,
         )
-    }
-
-    fn checked_numeric_add(
-        lhs: Numeric,
-        rhs: Numeric,
-        context: &'static str,
-    ) -> Result<Numeric, ValidationFail> {
-        lhs.checked_add(rhs).ok_or_else(|| {
-            ValidationFail::NotPermitted(format!("{context} exceeds supported numeric bounds"))
-        })
-    }
-
-    fn checked_numeric_mul_u64(
-        value: &Numeric,
-        multiplier: u64,
-        context: &'static str,
-    ) -> Result<Numeric, ValidationFail> {
-        value
-            .try_decimal_mul(&Numeric::from(multiplier))
-            .map_err(|_| {
-                ValidationFail::NotPermitted(format!("{context} exceeds supported numeric bounds"))
-            })
     }
 
     #[allow(clippy::too_many_lines)]
@@ -7987,7 +7941,7 @@ struct FixtureMintAssetForAllAccounts {
 #[derive(Debug, Clone)]
 enum FixtureRuntimeValue {
     Bool(bool),
-    Numeric(Numeric),
+    Quantity(Quantity),
     Instruction(InstructionBox),
 }
 
@@ -8246,14 +8200,14 @@ fn evaluate_fixture_bool_expression_value(
     }
 }
 
-fn evaluate_fixture_numeric_expression_value(
+fn evaluate_fixture_quantity_expression_value(
     state_transaction: &StateTransaction<'_, '_>,
     value: &json::Value,
-) -> Result<Numeric, ValidationFail> {
-    let expression = fixture_unwrap_evaluates_to_expression(value, "numeric expression")?;
+) -> Result<Quantity, ValidationFail> {
+    let expression = fixture_unwrap_evaluates_to_expression(value, "quantity expression")?;
     match evaluate_fixture_expression_value(state_transaction, expression)? {
-        FixtureRuntimeValue::Numeric(value) => Ok(value),
-        _ => Err(fixture_conversion_error("numeric value")),
+        FixtureRuntimeValue::Quantity(value) => Ok(value),
+        _ => Err(fixture_conversion_error("quantity value")),
     }
 }
 
@@ -8295,13 +8249,14 @@ fn evaluate_fixture_expression_value(
                     })?;
                     Ok(FixtureRuntimeValue::Bool(parsed))
                 }
-                "Numeric" => {
-                    let parsed: Numeric = json::from_value(raw_payload.clone()).map_err(|err| {
-                        ValidationFail::InternalError(format!(
-                            "failed to decode fixture numeric literal: {err}"
-                        ))
-                    })?;
-                    Ok(FixtureRuntimeValue::Numeric(parsed))
+                "Quantity" => {
+                    let parsed: Quantity =
+                        json::from_value(raw_payload.clone()).map_err(|err| {
+                            ValidationFail::InternalError(format!(
+                                "failed to decode fixture quantity literal: {err}"
+                            ))
+                        })?;
+                    Ok(FixtureRuntimeValue::Quantity(parsed))
                 }
                 "InstructionBox" => {
                     let parsed: InstructionBox =
@@ -8320,13 +8275,13 @@ fn evaluate_fixture_expression_value(
         "Greater" => {
             let left = fixture_object_field(payload, "left", "greater expression")?;
             let right = fixture_object_field(payload, "right", "greater expression")?;
-            let left = evaluate_fixture_numeric_expression_value(state_transaction, left)?;
-            let right = evaluate_fixture_numeric_expression_value(state_transaction, right)?;
+            let left = evaluate_fixture_quantity_expression_value(state_transaction, left)?;
+            let right = evaluate_fixture_quantity_expression_value(state_transaction, right)?;
             Ok(FixtureRuntimeValue::Bool(left > right))
         }
         "Query" => {
-            let value = evaluate_fixture_numeric_query_value(state_transaction, payload)?;
-            Ok(FixtureRuntimeValue::Numeric(value))
+            let value = evaluate_fixture_quantity_query_value(state_transaction, payload)?;
+            Ok(FixtureRuntimeValue::Quantity(value))
         }
         _ => Err(ValidationFail::InternalError(format!(
             "unsupported fixture expression variant `{variant}`"
@@ -8334,11 +8289,11 @@ fn evaluate_fixture_expression_value(
     }
 }
 
-fn evaluate_fixture_numeric_query_value(
+fn evaluate_fixture_quantity_query_value(
     state_transaction: &StateTransaction<'_, '_>,
     value: &json::Value,
-) -> Result<Numeric, ValidationFail> {
-    let (variant, payload) = fixture_single_field(value, "numeric query")?;
+) -> Result<Quantity, ValidationFail> {
+    let (variant, payload) = fixture_single_field(value, "quantity query")?;
     match variant {
         "FindAssetQuantityById" => {
             let asset_id: AssetId = json::from_value(payload.clone()).map_err(|err| {
@@ -8350,8 +8305,8 @@ fn evaluate_fixture_numeric_query_value(
                 .world
                 .assets
                 .get(&asset_id)
-                .map(|value| value.as_ref().as_numeric().clone())
-                .unwrap_or_else(Numeric::zero))
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero))
         }
         "FindTotalAssetQuantityByAssetDefinitionId" => {
             let asset_definition_id: AssetDefinitionId = json::from_value(payload.clone())
@@ -8363,11 +8318,10 @@ fn evaluate_fixture_numeric_query_value(
             state_transaction
                 .world
                 .asset_total_amount(&asset_definition_id)
-                .map(Quantity::into_numeric)
                 .map_err(ValidationFail::from)
         }
         _ => Err(ValidationFail::InternalError(format!(
-            "unsupported fixture numeric query variant `{variant}`"
+            "unsupported fixture quantity query variant `{variant}`"
         ))),
     }
 }

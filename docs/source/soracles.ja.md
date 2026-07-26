@@ -126,7 +126,7 @@ binding 上限、日次予算、deny-list を設定する。プロモーショ�
 ツール向け:
 - CLI は `iroha social claim-twitter-follow-reward|send-to-twitter|cancel-twitter-escrow`
   を提供し、Norito JSON の `KeyedHash` payload（binding hash）と、送金時は
-  `Numeric` 金額を受け取り、対応する命令を構築/送信する。
+  `Quantity` 金額を受け取り、対応する命令を構築/送信する。
 - JS SDK は `buildClaimTwitterFollowRewardInstruction`, `buildSendToTwitterInstruction`,
   `buildCancelTwitterEscrowInstruction` で同等のヘルパーを提供し、同じ keyed-hash
   形状と数量を受け取って Norito-ready の命令オブジェクトを返す。

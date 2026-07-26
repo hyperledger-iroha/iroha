@@ -36,7 +36,8 @@
       "locks": {
         "34mSYmhpgCPNxWQs5cVbkLKGozajDgsRT6UneZ6ZUUsDauwCPqJMJz5zmsCPzxpLNUvnWzMkx": {
           "owner": "34mSYmhpgCPNxWQs5cVbkLKGozajDgsRT6UneZ6ZUUsDauwCPqJMJz5zmsCPzxpLNUvnWzMkx",
-          "amount": 10,
+          "amount": "10",
+          "slashed": "0",
           "expiry_height": 55,
           "direction": 1,
           "duration_blocks": 5

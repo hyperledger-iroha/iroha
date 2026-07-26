@@ -410,7 +410,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         DomainId::try_new("wonderland", "universal")?,
         "xor".parse()?,
     );
-    let quantity = numeric!(200);
+    let quantity = Quantity::from(200_u32);
 
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
@@ -434,8 +434,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let client = peer_a.client();
     let client_for_submit = client.clone();
     let asset_definition_clone = asset_definition_id.clone();
-    let mint_quantity =
-        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative");
+    let mint_quantity = quantity.clone();
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         client_for_submit
             .submit_all_blocking::<InstructionBox>(
@@ -492,7 +491,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         if assets.iter().any(|asset| {
             *asset.id().account() == ALICE_ID.clone()
                 && *asset.id().definition() == asset_definition_id
-                && asset.value().as_numeric() == &quantity
+                && asset.value() == &quantity
         }) {
             break true;
         }
@@ -592,7 +591,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
             *asset.id().account() == ALICE_ID.clone()
                 && *asset.id().definition() == asset_definition_id
         }) {
-            break Some(asset.value().clone().into_numeric());
+            break Some(asset.value().clone());
         }
         if Instant::now() >= deadline {
             break None;
@@ -641,7 +640,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
         iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
     );
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-    let quantity = numeric!(321);
+    let quantity = Quantity::from(321_u32);
 
     let client = network.client();
     let setup_domain = domain_setup_instruction(&domain_id, &client.account)?;
@@ -654,8 +653,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let submit_client = client.clone();
     let submit_definition = asset_definition_id.clone();
     let submit_asset = asset_id.clone();
-    let submit_quantity =
-        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative");
+    let submit_quantity = quantity.clone();
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         submit_client
             .submit_all_blocking::<InstructionBox>(
@@ -743,7 +741,7 @@ async fn wait_for_route_sensitive_state_digest(
     domain_id: DomainId,
     asset_definition_id: AssetDefinitionId,
     asset_id: AssetId,
-    quantity: Numeric,
+    quantity: Quantity,
     timeout_after: Duration,
 ) -> Result<blake3::Hash> {
     let deadline = Instant::now() + timeout_after;
@@ -778,7 +776,7 @@ async fn route_sensitive_state_digest(
     domain_id: DomainId,
     asset_definition_id: AssetDefinitionId,
     asset_id: AssetId,
-    quantity: Numeric,
+    quantity: Quantity,
 ) -> Result<blake3::Hash> {
     spawn_blocking(move || {
         let account = client.query_single(FindAccountById::new(account_id.clone()))?;
@@ -787,7 +785,7 @@ async fn route_sensitive_state_digest(
         let definition =
             client.query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))?;
         let asset = client.query_single(FindAssetById::new(asset_id.clone()))?;
-        if asset.value().as_numeric() != &quantity {
+        if asset.value() != &quantity {
             return Err(eyre!(
                 "asset `{}` has value `{}`, expected `{}`",
                 asset.id(),

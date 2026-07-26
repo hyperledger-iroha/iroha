@@ -114,7 +114,7 @@ Iroha тиҫтерҙәре тәртипле топологияны һаҡлай,
 `iroha_data_model` йәшник бөтә леджер объекттарын билдәләй, күрһәтмәләр, эҙләүҙәр, һәм ваҡиғалар. Һығымталар:
 
 - **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
-  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Asset quantities support fixed-point
   operations; NFTs carry arbitrary structured metadata.
 
 - **Ролдәр һәм рөхсәттәр** ҡулланыу Norito-иҫәпләнгән токендар, тип карта туранан-тура башҡарыусы тикшерергә.

@@ -7056,17 +7056,6 @@ mod tests {
         }
     }
 
-    fn orderbook_settlement_channel(trade: &TradeEventV1) -> SettlementChannelV1 {
-        crate::open_settlement_channel_for_trade_v1(
-            trade,
-            [0x82; 32],
-            b"buyer@sora".to_vec(),
-            [0x91; 32],
-            1_800_000_005,
-        )
-        .expect("orderbook fixture channel should open")
-    }
-
     fn hedging_digest(label: &str) -> [u8; 32] {
         let hash = blake3::hash(label.as_bytes());
         let mut out = [0_u8; 32];

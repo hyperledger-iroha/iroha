@@ -4236,7 +4236,7 @@ kotoage fn main() authorize("CompilerFixture") {{
 
         let literal_section = parsed.literal_section.expect("literal section");
         let quantity_literal_indices = (0..literal_section.count)
-            .filter_map(|index| {
+            .filter(|&index| {
                 let descriptor_start = literal_section.entries_start + index * 8;
                 let raw = u64::from_le_bytes(
                     bytes[descriptor_start..descriptor_start + 8]
@@ -4246,7 +4246,7 @@ kotoage fn main() authorize("CompilerFixture") {{
                 let (kind, relative_offset) = crate::metadata::decode_literal_descriptor(raw)
                     .expect("literal descriptor metadata");
                 if kind != crate::metadata::LiteralKindV1::PointerTlv {
-                    return None;
+                    return false;
                 }
                 let literal_start = literal_section.start
                     + usize::try_from(relative_offset).expect("literal offset fits usize");
@@ -4255,7 +4255,7 @@ kotoage fn main() authorize("CompilerFixture") {{
                         .try_into()
                         .expect("pointer type id"),
                 );
-                (pointer_type == PointerType::Quantity as u16).then_some(index)
+                pointer_type == PointerType::Quantity as u16
             })
             .collect::<Vec<_>>();
         assert_eq!(quantity_literal_indices.len(), 2, "amounts 1 and 2");

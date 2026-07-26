@@ -15,7 +15,7 @@ use iroha_test_samples::ALICE_ID;
 fn wait_for_asset_value(
     client: &Client,
     asset_id: &AssetId,
-    expected_value: &Numeric,
+    expected_value: &Quantity,
     context: &str,
 ) -> Result<Asset> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -28,7 +28,7 @@ fn wait_for_asset_value(
         match client.query_single(FindAssetById::new(asset_id.clone())) {
             Ok(asset) => {
                 last_observed = format!("value={:?}", asset.value());
-                if asset.value().as_numeric() == expected_value {
+                if asset.value() == expected_value {
                     return Ok(asset);
                 }
             }
@@ -83,7 +83,12 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
         );
 
         test_client.submit_transaction_blocking(&tx)?;
-        wait_for_asset_value(&test_client, &asset_id, &numeric!(200), "first mint")?;
+        wait_for_asset_value(
+            &test_client,
+            &asset_id,
+            &Quantity::from(200_u32),
+            "first mint",
+        )?;
 
         assert!(
             test_client
@@ -117,7 +122,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
             [create_asset.into(), register_asset.clone().into()],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-        wait_for_asset_value(&test_client, &asset_id, &numeric!(1), "seeded mint")?;
+        wait_for_asset_value(&test_client, &asset_id, &Quantity::one(), "seeded mint")?;
 
         assert!(
             test_client

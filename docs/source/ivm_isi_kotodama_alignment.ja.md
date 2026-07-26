@@ -4,7 +4,9 @@
 lang: ja
 direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 status: complete
+translation_last_reviewed: 2026-07-26
 translator: manual
 ---
 
@@ -84,7 +86,7 @@ translator: manual
 - 影で動く比較テスト（「シャドウモード」）を導入し、VM がエンキューした ISI とネイティブ経路を突き合わせて差分を検出する。
 
 ### B. ABI と syscall 仕様の定義
-- 資産量は `Numeric` なので NoritoBytes ポインタで渡し、その他の複合型も同様にポインタで渡す。
+- 資産量には汎用 `NoritoBytes` ポインタではなく、専用の `QuantityValueV1` pointer-ABI TLV（`PointerType::Quantity = 0x0010`）を使用する。その他の複合値には、それぞれに割り当てられたポインタ型を使用する。
 - すべての `SYSCALL_*` 番号に対応する `InstructionBox` を一覧化するリファレンスを作成する。
 - リターン規約（成功で x10=1、失敗で x10=0、必要に応じて `VMError::HostRejected { code }`）を公式に定義する。
 - ABI を Kotodama のコード生成と IVM テストに組み込み、整数→ID のデモマップを廃止する。
@@ -122,8 +124,8 @@ translator: manual
 - `SYSCALL_REGISTER_DOMAIN(id: ptr DomainId)` → ISI `Register<Domain>`
 - `SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId)` → ISI `Register<Account>`
 - `SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8)` → ISI `Register<AssetDefinition>`
-- `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Mint<Numeric, Asset>`
-- `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Burn<Numeric, Asset>`
+- `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Mint<Quantity, Asset>`
+- `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Burn<Quantity, Asset>`
 - `SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Transfer<Asset>`
 - `SYSCALL_TRANSFER_V1_BATCH_BEGIN()` / `SYSCALL_TRANSFER_V1_BATCH_END()` → ISI `TransferAssetBatch`（バッチスコープの開始/終了を宣言し、各エントリは `transfer_asset` で順次適用される）
 - `SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes<TransferAssetBatch>)` → 既に Norito でエンコードされたバッチを 1 回の呼び出しで適用

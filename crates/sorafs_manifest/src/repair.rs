@@ -132,7 +132,7 @@ pub enum RepairPdpFailureKindV1 {
     /// The provider did not submit a proof before the governed deadline.
     #[norito(rename = "deadline_expired")]
     DeadlineExpired,
-    /// An authenticated provider submission failed PDP binding or witness verification.
+    /// A PDP submission was malformed, unauthorized, misbound, or failed verification.
     #[norito(rename = "invalid_proof")]
     InvalidProof,
     /// Governance revoked or otherwise removed the provider admission while pending.

@@ -5,9 +5,10 @@ import json
 import pytest
 
 from iroha_python.address import AccountAddress
-from iroha_python.client import ToriiClient
+from iroha_python.client import GovernanceLockRecord, ToriiClient
 
 from .helpers import RecordingSession, StubResponse
+
 
 def _canonical_owner_literal(domain: str = "wonderland") -> str:
     address = AccountAddress.from_account(domain=domain, public_key=bytes([0x11] * 32))
@@ -15,11 +16,87 @@ def _canonical_owner_literal(domain: str = "wonderland") -> str:
 
 
 CANONICAL_AUTHORITY = _canonical_owner_literal()
+CANONICAL_LARGE_FRACTION = "18446744073709551616.25"
 
 
 def _noncanonical_owner_literal(domain: str = "wonderland") -> str:
     address = AccountAddress.from_account(domain=domain, public_key=bytes([0x22] * 32))
     return address.canonical_hex()
+
+
+def _governance_lock_payload(amount: object) -> dict[str, object]:
+    return {
+        "owner": CANONICAL_AUTHORITY,
+        "amount": amount,
+        "slashed": "0.25",
+        "expiry_height": 10,
+        "direction": 1,
+        "duration_blocks": 5,
+    }
+
+
+def test_governance_lock_record_preserves_fraction_above_u64() -> None:
+    record = GovernanceLockRecord.from_payload(
+        _governance_lock_payload(CANONICAL_LARGE_FRACTION)
+    )
+    assert record.amount == CANONICAL_LARGE_FRACTION
+    assert record.slashed == "0.25"
+
+
+@pytest.mark.parametrize(
+    "amount",
+    [1, 1.5, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", "9" * 155],
+)
+def test_governance_lock_record_rejects_noncanonical_quantity(amount: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        GovernanceLockRecord.from_payload(_governance_lock_payload(amount))
+
+
+@pytest.mark.parametrize(
+    "slashed",
+    [1, 1.5, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", "9" * 155],
+)
+def test_governance_lock_record_rejects_noncanonical_slashed_quantity(
+    slashed: object,
+) -> None:
+    payload = _governance_lock_payload("1")
+    payload["slashed"] = slashed
+    with pytest.raises((TypeError, ValueError)):
+        GovernanceLockRecord.from_payload(payload)
+
+
+def test_governance_submit_plain_ballot_requires_canonical_quantity() -> None:
+    session = RecordingSession(StubResponse(payload={"ok": True}))
+    client = ToriiClient("http://node.test", session=session)
+    payload = {
+        "authority": CANONICAL_AUTHORITY,
+        "chain_id": "chain",
+        "referendum_id": "ref-1",
+        "owner": CANONICAL_AUTHORITY,
+        "amount": CANONICAL_LARGE_FRACTION,
+        "duration_blocks": 5,
+        "direction": "Aye",
+    }
+
+    client.governance_submit_plain_ballot(payload)
+    encoded = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert encoded["amount"] == CANONICAL_LARGE_FRACTION
+
+    overflowing = "9" * 155
+    for invalid in [
+        1,
+        1.5,
+        "+1",
+        "01",
+        "1.0",
+        "1.2300",
+        " 1",
+        "1 ",
+        "-1",
+        overflowing,
+    ]:
+        with pytest.raises((TypeError, ValueError)):
+            client.governance_submit_plain_ballot({**payload, "amount": invalid})
 
 
 def test_governance_submit_zk_ballot_rejects_unsupported_public_inputs() -> None:
@@ -54,7 +131,7 @@ def test_governance_submit_zk_ballot_normalizes_public_inputs() -> None:
             "proof_b64": "AAAA",
             "public": {
                 "owner": _canonical_owner_literal(),
-                "amount": "100",
+                "amount": CANONICAL_LARGE_FRACTION,
                 "duration_blocks": 5,
                 "root_hint": f"0x{'Cc' * 32}",
                 "nullifier": bytes.fromhex("DD" * 32),
@@ -64,8 +141,63 @@ def test_governance_submit_zk_ballot_normalizes_public_inputs() -> None:
 
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     public = payload["public"]
+    assert public["amount"] == CANONICAL_LARGE_FRACTION
     assert public["root_hint"] == "cc" * 32
     assert public["nullifier"] == "dd" * 32
+
+
+@pytest.mark.parametrize(
+    "amount",
+    [1, 1.5, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", "9" * 155],
+)
+def test_governance_zk_lock_hints_reject_noncanonical_quantity(
+    amount: object,
+) -> None:
+    session = RecordingSession(StubResponse(payload={"ok": True}))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises((TypeError, ValueError)):
+        client.governance_submit_zk_ballot(
+            {
+                "authority": CANONICAL_AUTHORITY,
+                "chain_id": "chain",
+                "election_id": "election-1",
+                "proof_b64": "AAAA",
+                "public": {
+                    "owner": CANONICAL_AUTHORITY,
+                    "amount": amount,
+                    "duration_blocks": 5,
+                },
+            }
+        )
+    with pytest.raises((TypeError, ValueError)):
+        client.governance_submit_zk_ballot_v1(
+            {
+                "authority": CANONICAL_AUTHORITY,
+                "chain_id": "chain",
+                "election_id": "election-1",
+                "backend": "halo2/ipa",
+                "envelope_b64": "AAAA",
+                "owner": CANONICAL_AUTHORITY,
+                "amount": amount,
+                "duration_blocks": 5,
+            }
+        )
+    with pytest.raises((TypeError, ValueError)):
+        client.governance_submit_zk_ballot_proof_v1(
+            {
+                "authority": CANONICAL_AUTHORITY,
+                "chain_id": "chain",
+                "election_id": "election-1",
+                "ballot": {
+                    "backend": "halo2/ipa",
+                    "envelope_bytes": "AAE=",
+                    "owner": CANONICAL_AUTHORITY,
+                    "amount": amount,
+                    "duration_blocks": 5,
+                },
+            }
+        )
 
 
 def test_governance_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
@@ -168,6 +300,9 @@ def test_governance_submit_zk_ballot_proof_v1_normalizes_hex_hints() -> None:
                 "envelope_bytes": "AAE=",
                 "root_hint": f"blake2b32:{'Aa' * 32}",
                 "nullifier": bytes.fromhex("BB" * 32),
+                "owner": CANONICAL_AUTHORITY,
+                "amount": CANONICAL_LARGE_FRACTION,
+                "duration_blocks": 5,
             },
         }
     )
@@ -176,6 +311,7 @@ def test_governance_submit_zk_ballot_proof_v1_normalizes_hex_hints() -> None:
     ballot = payload["ballot"]
     assert ballot["root_hint"] == "aa" * 32
     assert ballot["nullifier"] == "bb" * 32
+    assert ballot["amount"] == CANONICAL_LARGE_FRACTION
 
 
 def test_governance_submit_zk_ballot_v1_normalizes_hex_hints() -> None:

@@ -252,7 +252,7 @@ public sealed record class ToriiAccountFaucetResponse
     public string Amount
     {
         get => amount;
-        init => amount = ToriiOnboardingDirectMetadata.RequireCanonicalNonNegativeNumericText(
+        init => amount = ToriiOnboardingDirectMetadata.RequireCanonicalQuantityText(
             value,
             nameof(Amount));
     }
@@ -1615,7 +1615,7 @@ public sealed record class ToriiAssetBalance
     public string Quantity
     {
         get => quantity;
-        init => quantity = ToriiAccountQueryDirectMetadata.RequireCanonicalNonNegativeNumericText(
+        init => quantity = ToriiAccountQueryDirectMetadata.RequireCanonicalQuantityText(
             value,
             nameof(Quantity));
     }
@@ -1977,9 +1977,9 @@ internal static class ToriiAccountQueryDirectMetadata
         return ToriiExplorerDirectMetadata.RequireOptionalExactNonEmptyText(value, paramName);
     }
 
-    internal static string RequireCanonicalNonNegativeNumericText(string? value, string paramName)
+    internal static string RequireCanonicalQuantityText(string? value, string paramName)
     {
-        return ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, paramName);
+        return ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, paramName);
     }
 
     internal static string RequireExactSizedHex(string? value, string paramName, int expectedBytes)
@@ -2058,9 +2058,9 @@ internal static class ToriiOnboardingDirectMetadata
         return ToriiExplorerDirectMetadata.RequireExactTokenText(value, paramName);
     }
 
-    internal static string RequireCanonicalNonNegativeNumericText(string? value, string paramName)
+    internal static string RequireCanonicalQuantityText(string? value, string paramName)
     {
-        return ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, paramName);
+        return ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, paramName);
     }
 
     internal static string RequireOptionalTransactionHashHex(string? value, string paramName)
@@ -2467,7 +2467,7 @@ public sealed record class ToriiExplorerAssetDefinition
     public string TotalQuantity
     {
         get => totalQuantity;
-        init => totalQuantity = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(
+        init => totalQuantity = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(
             value,
             nameof(TotalQuantity));
     }
@@ -2476,7 +2476,7 @@ public sealed record class ToriiExplorerAssetDefinition
     public string? LockedQuantity
     {
         get => lockedQuantity;
-        init => lockedQuantity = ToriiExplorerDirectMetadata.RequireOptionalCanonicalNonNegativeNumericText(
+        init => lockedQuantity = ToriiExplorerDirectMetadata.RequireOptionalCanonicalQuantityText(
             value,
             nameof(LockedQuantity));
     }
@@ -2485,7 +2485,7 @@ public sealed record class ToriiExplorerAssetDefinition
     public string? CirculatingQuantity
     {
         get => circulatingQuantity;
-        init => circulatingQuantity = ToriiExplorerDirectMetadata.RequireOptionalCanonicalNonNegativeNumericText(
+        init => circulatingQuantity = ToriiExplorerDirectMetadata.RequireOptionalCanonicalQuantityText(
             value,
             nameof(CirculatingQuantity));
     }
@@ -2539,7 +2539,7 @@ public sealed record class ToriiExplorerEconometricsVelocityWindow
     public string Amount
     {
         get => amount;
-        init => amount = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Amount));
+        init => amount = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Amount));
     }
 }
 
@@ -2574,21 +2574,21 @@ public sealed record class ToriiExplorerEconometricsIssuanceWindow
     public string Minted
     {
         get => minted;
-        init => minted = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Minted));
+        init => minted = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Minted));
     }
 
     [JsonPropertyName("burned")]
     public string Burned
     {
         get => burned;
-        init => burned = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Burned));
+        init => burned = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Burned));
     }
 
     [JsonPropertyName("net")]
     public string Net
     {
         get => net;
-        init => net = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Net));
+        init => net = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Net));
     }
 }
 
@@ -2606,21 +2606,21 @@ public sealed record class ToriiExplorerEconometricsIssuanceSeriesPoint
     public string Minted
     {
         get => minted;
-        init => minted = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Minted));
+        init => minted = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Minted));
     }
 
     [JsonPropertyName("burned")]
     public string Burned
     {
         get => burned;
-        init => burned = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Burned));
+        init => burned = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Burned));
     }
 
     [JsonPropertyName("net")]
     public string Net
     {
         get => net;
-        init => net = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Net));
+        init => net = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Net));
     }
 }
 
@@ -2772,7 +2772,7 @@ public sealed record class ToriiExplorerEconometricsDistributionSnapshot
     public string? Median
     {
         get => median;
-        init => median = ToriiExplorerDirectMetadata.RequireOptionalCanonicalNonNegativeNumericText(
+        init => median = ToriiExplorerDirectMetadata.RequireOptionalCanonicalQuantityText(
             value,
             nameof(Median));
     }
@@ -2781,14 +2781,14 @@ public sealed record class ToriiExplorerEconometricsDistributionSnapshot
     public string? P90
     {
         get => p90;
-        init => p90 = ToriiExplorerDirectMetadata.RequireOptionalCanonicalNonNegativeNumericText(value, nameof(P90));
+        init => p90 = ToriiExplorerDirectMetadata.RequireOptionalCanonicalQuantityText(value, nameof(P90));
     }
 
     [JsonPropertyName("p99")]
     public string? P99
     {
         get => p99;
-        init => p99 = ToriiExplorerDirectMetadata.RequireOptionalCanonicalNonNegativeNumericText(value, nameof(P99));
+        init => p99 = ToriiExplorerDirectMetadata.RequireOptionalCanonicalQuantityText(value, nameof(P99));
     }
 
     [JsonPropertyName("lorenz")]
@@ -2816,7 +2816,7 @@ public sealed record class ToriiExplorerEconometricsTopHolder
     public string Balance
     {
         get => balance;
-        init => balance = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Balance));
+        init => balance = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Balance));
     }
 }
 
@@ -2845,7 +2845,7 @@ public sealed record class ToriiExplorerAssetDefinitionSnapshot
     public string TotalSupply
     {
         get => totalSupply;
-        init => totalSupply = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(
+        init => totalSupply = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(
             value,
             nameof(TotalSupply));
     }
@@ -2898,7 +2898,7 @@ public sealed record class ToriiExplorerAsset
     public string Value
     {
         get => value;
-        init => this.value = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Value));
+        init => this.value = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Value));
     }
 }
 
@@ -2980,7 +2980,7 @@ public sealed record class ToriiExplorerRwaParent
     public string Quantity
     {
         get => quantity;
-        init => quantity = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Quantity));
+        init => quantity = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Quantity));
     }
 }
 
@@ -3014,14 +3014,14 @@ public sealed record class ToriiExplorerRwa
     public string Quantity
     {
         get => quantity;
-        init => quantity = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, nameof(Quantity));
+        init => quantity = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, nameof(Quantity));
     }
 
     [JsonPropertyName("held_quantity")]
     public string HeldQuantity
     {
         get => heldQuantity;
-        init => heldQuantity = ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(
+        init => heldQuantity = ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(
             value,
             nameof(HeldQuantity));
     }
@@ -3565,7 +3565,7 @@ internal static class ToriiExplorerDirectMetadata
         return value is null ? null : RequireExactTokenText(value, paramName);
     }
 
-    internal static string RequireCanonicalNonNegativeNumericText(string? value, string paramName)
+    internal static string RequireCanonicalQuantityText(string? value, string paramName)
     {
         var exact = RequireExactNonEmptyText(value, paramName);
         try
@@ -3575,15 +3575,15 @@ internal static class ToriiExplorerDirectMetadata
         catch (Hyperledger.Iroha.Numeric.NumericV1.NumericException exception)
         {
             throw new ArgumentException(
-                "Value must be a canonical non-negative numeric string in the V1 quantity domain.",
+                "Value must be a canonical Kotodama V1 Quantity string.",
                 paramName,
                 exception);
         }
     }
 
-    internal static string? RequireOptionalCanonicalNonNegativeNumericText(string? value, string paramName)
+    internal static string? RequireOptionalCanonicalQuantityText(string? value, string paramName)
     {
-        return value is null ? null : RequireCanonicalNonNegativeNumericText(value, paramName);
+        return value is null ? null : RequireCanonicalQuantityText(value, paramName);
     }
 
     internal static double RequireFiniteNonNegativeDouble(double value, string paramName)
@@ -4363,7 +4363,7 @@ public sealed record class ToriiUaidPortfolioAsset
     public string Quantity
     {
         get => quantity;
-        init => quantity = ToriiUaidDirectMetadata.RequireCanonicalNonNegativeNumericText(
+        init => quantity = ToriiUaidDirectMetadata.RequireCanonicalQuantityText(
             value,
             nameof(Quantity));
     }
@@ -4704,9 +4704,9 @@ internal static class ToriiUaidDirectMetadata
         return ToriiExplorerDirectMetadata.RequireOptionalExactNonEmptyText(value, paramName);
     }
 
-    internal static string RequireCanonicalNonNegativeNumericText(string? value, string paramName)
+    internal static string RequireCanonicalQuantityText(string? value, string paramName)
     {
-        return ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, paramName);
+        return ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, paramName);
     }
 
     internal static string RequireExactSizedHex(string? value, string paramName)
@@ -4854,7 +4854,7 @@ internal static class ToriiUaidDirectMetadata
         RequireExactNonEmptyText(
             value.AssetDefinitionId,
             $"{paramName}.{nameof(ToriiUaidPortfolioAsset.AssetDefinitionId)}");
-        RequireCanonicalNonNegativeNumericText(
+        RequireCanonicalQuantityText(
             value.Quantity,
             $"{paramName}.{nameof(ToriiUaidPortfolioAsset.Quantity)}");
         return value;

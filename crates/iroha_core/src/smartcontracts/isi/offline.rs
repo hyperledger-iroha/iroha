@@ -51,7 +51,7 @@ use iroha_data_model::{
     transaction::SignedTransaction,
     zk::{BackendTag, OpenVerifyEnvelope},
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use p256::PublicKey as P256PublicKey;
 use sha2::{Digest as _, Sha256};
 use x509_parser::{
@@ -1156,16 +1156,11 @@ fn kagemusha_escrow_asset_id(source_asset: &AssetId, escrow_account: AccountId) 
     )
 }
 
-fn withdraw_numeric_asset_exact(
+fn withdraw_asset_quantity_exact(
     state_transaction: &mut StateTransaction<'_, '_>,
     id: &AssetId,
-    amount: &Numeric,
+    amount: &Quantity,
 ) -> Result<(), Error> {
-    if amount.mantissa().is_negative() {
-        return Err(MathError::NegativeValue.into());
-    }
-    let amount =
-        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
     let asset = state_transaction
         .world
         .assets
@@ -1173,7 +1168,7 @@ fn withdraw_numeric_asset_exact(
         .ok_or_else(|| FindError::Asset(id.clone().into()))?;
     let quantity: &mut Quantity = &mut *asset;
     let candidate = quantity
-        .checked_sub(&amount)
+        .checked_sub(amount)
         .map_err(|_| MathError::NotEnoughQuantity)?;
     *quantity = candidate;
     if (**asset).is_zero() {
@@ -1187,23 +1182,18 @@ fn withdraw_numeric_asset_exact(
     Ok(())
 }
 
-fn deposit_numeric_asset_exact(
+fn deposit_asset_quantity_exact(
     state_transaction: &mut StateTransaction<'_, '_>,
     id: &AssetId,
-    amount: &Numeric,
+    amount: &Quantity,
 ) -> Result<(), Error> {
-    if amount.mantissa().is_negative() {
-        return Err(MathError::NegativeValue.into());
-    }
-    let amount =
-        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
     let is_nonzero = {
         let dst = state_transaction
             .world
             .asset_or_insert_exact(id, Quantity::zero())?;
         let quantity: &mut Quantity = &mut *dst;
         *quantity = quantity
-            .checked_add(&amount)
+            .checked_add(amount)
             .map_err(|_| MathError::Overflow)?;
         !quantity.is_zero()
     };
@@ -1216,7 +1206,7 @@ fn deposit_numeric_asset_exact(
 fn reserve_kagemusha_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
     asset: &AssetId,
-    amount: &Numeric,
+    amount: &Quantity,
 ) -> Result<(), Error> {
     let escrow_account = resolve_offline_escrow_account(state_transaction, asset.definition())?;
     let escrow_account = escrow_account.ok_or_else(|| {
@@ -1239,9 +1229,9 @@ fn reserve_kagemusha_escrow(
     )?;
     let source_asset = canonical_kagemusha_asset_id(state_transaction, asset)?;
     let escrow_asset = kagemusha_escrow_asset_id(&source_asset, escrow_account);
-    withdraw_numeric_asset_exact(state_transaction, &source_asset, amount)?;
-    if let Err(err) = deposit_numeric_asset_exact(state_transaction, &escrow_asset, amount) {
-        deposit_numeric_asset_exact(state_transaction, &source_asset, amount)
+    withdraw_asset_quantity_exact(state_transaction, &source_asset, amount)?;
+    if let Err(err) = deposit_asset_quantity_exact(state_transaction, &escrow_asset, amount) {
+        deposit_asset_quantity_exact(state_transaction, &source_asset, amount)
             .expect("offline escrow reservation refund must succeed after failed deposit");
         return Err(err);
     }
@@ -1265,6 +1255,8 @@ fn credit_legacy_note_from_offline_escrow(
     );
     let spec = state_transaction.numeric_spec_for(&definition_id)?;
     assert_numeric_spec_with(amount, spec)?;
+    let amount =
+        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
     state_transaction.world.account(recipient)?;
 
     let escrow_account = resolve_offline_escrow_account(state_transaction, &definition_id)?
@@ -1284,9 +1276,9 @@ fn credit_legacy_note_from_offline_escrow(
     )?;
 
     let escrow_asset = kagemusha_escrow_asset_id(&recipient_asset, escrow_account);
-    withdraw_numeric_asset_exact(state_transaction, &escrow_asset, amount)?;
-    if let Err(error) = deposit_numeric_asset_exact(state_transaction, &recipient_asset, amount) {
-        deposit_numeric_asset_exact(state_transaction, &escrow_asset, amount)
+    withdraw_asset_quantity_exact(state_transaction, &escrow_asset, &amount)?;
+    if let Err(error) = deposit_asset_quantity_exact(state_transaction, &recipient_asset, &amount) {
+        deposit_asset_quantity_exact(state_transaction, &escrow_asset, &amount)
             .expect("legacy note escrow refund must succeed after failed recipient deposit");
         return Err(error);
     }
@@ -5028,16 +5020,16 @@ pub mod isi {
     struct KagemushaV2EscrowCreditPlan {
         escrow_asset: AssetId,
         recipient_asset: AssetId,
-        amount: Numeric,
+        amount: Quantity,
     }
 
     impl KagemushaV2EscrowCreditPlan {
         fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
-            withdraw_numeric_asset_exact(state_transaction, &self.escrow_asset, &self.amount)?;
+            withdraw_asset_quantity_exact(state_transaction, &self.escrow_asset, &self.amount)?;
             if let Err(err) =
-                deposit_numeric_asset_exact(state_transaction, &self.recipient_asset, &self.amount)
+                deposit_asset_quantity_exact(state_transaction, &self.recipient_asset, &self.amount)
             {
-                deposit_numeric_asset_exact(state_transaction, &self.escrow_asset, &self.amount)
+                deposit_asset_quantity_exact(state_transaction, &self.escrow_asset, &self.amount)
                     .expect("prevalidated Kagemusha V2 escrow refund must succeed");
                 return Err(err);
             }
@@ -5048,7 +5040,7 @@ pub mod isi {
     fn plan_kagemusha_v2_escrow_credit(
         source_asset: &AssetId,
         recipient: &AccountId,
-        amount: &Numeric,
+        amount: &Quantity,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<KagemushaV2EscrowCreditPlan, Error> {
         let definition_id = source_asset.definition().clone();
@@ -5096,20 +5088,19 @@ pub mod isi {
             .world
             .assets
             .get(&escrow_asset)
-            .map(|asset| asset.as_ref().as_numeric().clone())
+            .map(|asset| asset.as_ref().clone())
             .ok_or_else(|| FindError::Asset(escrow_asset.clone().into()))?;
         escrow_balance
-            .checked_sub(amount.clone())
-            .filter(|remaining| !remaining.mantissa().is_negative())
-            .ok_or(MathError::NotEnoughQuantity)?;
+            .checked_sub(amount)
+            .map_err(|_| MathError::NotEnoughQuantity)?;
         state_transaction
             .world
             .assets
             .get(&recipient_asset)
-            .map(|asset| asset.as_ref().as_numeric().clone())
-            .unwrap_or_else(Numeric::zero)
-            .checked_add(amount.clone())
-            .ok_or(MathError::Overflow)?;
+            .map(|asset| asset.as_ref().clone())
+            .unwrap_or_else(Quantity::zero)
+            .checked_add(amount)
+            .map_err(|_| MathError::Overflow)?;
 
         Ok(KagemushaV2EscrowCreditPlan {
             escrow_asset,
@@ -7032,6 +7023,8 @@ pub mod isi {
             )?;
             let spec = state_transaction.numeric_spec_for(issue.asset.definition())?;
             assert_numeric_spec_with(&issue.amount, spec)?;
+            let amount = Quantity::from_canonical_numeric(issue.amount.clone())
+                .map_err(|_| MathError::NegativeValue)?;
 
             let issue_marker = legacy_note_issue_marker(&issue.note_commitment);
             let certificate_marker = legacy_note_certificate_marker(&certificate_payload_hash);
@@ -7071,7 +7064,7 @@ pub mod isi {
 
             // Issuance only moves online funds into governed escrow. It does
             // not advertise or enable a peer mode.
-            reserve_kagemusha_escrow(state_transaction, &issue.asset, &issue.amount)?;
+            reserve_kagemusha_escrow(state_transaction, &issue.asset, &amount)?;
             for marker in [issue_marker, certificate_marker, claim_marker] {
                 state_transaction
                     .world
@@ -7838,7 +7831,7 @@ pub mod isi {
         definition_id: &'a AssetDefinitionId,
         source_asset: &'a AssetId,
         recipient: &'a AccountId,
-        amount: Numeric,
+        amount: Quantity,
         current_nullifier: [u8; 32],
         consumed_claims: &'a [KagemushaRecursiveSpendBranchClaimV2],
         redemption_binding: Option<[u8; 32]>,
@@ -7992,7 +7985,7 @@ pub mod isi {
                 definition_id: &statement.asset,
                 source_asset,
                 recipient: &request.recipient,
-                amount: amount.into_numeric(),
+                amount,
                 current_nullifier,
                 consumed_claims: &request.redemption.parent_branch_claims,
                 redemption_binding,
@@ -8422,7 +8415,7 @@ pub mod isi {
             if amount.scale() != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",
-                    "Kagemusha V4 top-up Numeric encoding changed the authoritative scale",
+                    "Kagemusha V4 top-up quantity encoding changed the authoritative scale",
                 )
                 .into());
             }
@@ -8551,7 +8544,7 @@ pub mod isi {
                 .into());
             }
 
-            reserve_kagemusha_escrow(state_transaction, &request.asset, amount.as_numeric())?;
+            reserve_kagemusha_escrow(state_transaction, &request.asset, &amount)?;
             let finalized_root =
                 crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
                     &mut zk_state,
@@ -8648,7 +8641,7 @@ pub mod isi {
             if amount.scale() != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",
-                    "Kagemusha V4 redemption Numeric encoding changed the authoritative scale",
+                    "Kagemusha V4 redemption quantity encoding changed the authoritative scale",
                 )
                 .into());
             }

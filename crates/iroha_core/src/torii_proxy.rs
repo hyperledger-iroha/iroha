@@ -299,11 +299,12 @@ impl QueuePlanAdmissionBindingV2 {
     ///
     /// The compatibility queue hash is derived from the canonical entrypoint rather than trusted
     /// from the reservation key. The exact coordinator and its admitting incarnation are then
-    /// recovered from this binding's immutable routing context.
+    /// recovered from this binding's immutable routing context, including the proposal height that
+    /// validated that incarnation.
     ///
     /// # Errors
     /// Returns an error for a malformed reservation key or any entrypoint, queue hash, plan,
-    /// coordinator, incarnation, or canonical binding-hash mismatch.
+    /// proposal height, coordinator, incarnation, or canonical binding-hash mismatch.
     pub(crate) fn validate_for_lane_reservation_commit(
         &self,
         key: &crate::queue::LaneQueueReservationKeyV2,
@@ -315,10 +316,11 @@ impl QueuePlanAdmissionBindingV2 {
         if self.entrypoint_hash != key.entrypoint_hash
             || compatibility_queue_hash != key.signed_transaction_hash
             || self.routing_plan_digest != key.routing_plan_digest
+            || self.admission_context.proposal_height != key.proposal_height
             || self.canonical_hash() != key.queue_plan_admission_binding_hash
         {
             return Err(
-                "QueuePlan binding does not match the lane reservation transaction, plan, or binding identity"
+                "QueuePlan binding does not match the lane reservation transaction, plan, proposal height, or binding identity"
                     .to_owned(),
             );
         }
@@ -1635,6 +1637,48 @@ mod tests {
             QueuePlanAdmissionBindingV2::new(&chain_id, &transaction, &routing_plan, context, 73)
                 .expect("construct canonical admission binding");
         (chain_id, transaction, routing_plan, binding, validator)
+    }
+
+    #[test]
+    fn lane_reservation_commit_binds_proposal_height() {
+        let (_, _, _, binding, _) = single_route_admission_fixture();
+        let coordinator = binding
+            .admission_context
+            .route_incarnations
+            .first()
+            .expect("single-route fixture has a coordinator");
+        let key = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(
+                binding.entrypoint_hash.clone(),
+            )),
+            entrypoint_hash: binding.entrypoint_hash.clone(),
+            queue_plan_admission_binding_hash: binding.canonical_hash(),
+            routing_plan_digest: binding.routing_plan_digest,
+            coordinator_leg: coordinator.leg,
+            lane_id: coordinator.leg.route.lane_id,
+            dataspace_id: coordinator.leg.route.dataspace_id,
+            lane_incarnation: coordinator.lane_incarnation,
+            proposal_height: binding.admission_context.proposal_height,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            reservation_owner_hash: Hash::new(b"lane-reservation-owner"),
+            proposal_identity_hash: Hash::new(b"lane-reservation-proposal"),
+        };
+
+        binding
+            .validate_for_lane_reservation_commit(&key)
+            .expect("matching proposal height must validate");
+
+        let mut tampered = key;
+        tampered.proposal_height += 1;
+        let error = binding
+            .validate_for_lane_reservation_commit(&tampered)
+            .expect_err("tampered proposal height must be rejected");
+        assert!(
+            error.contains("proposal height"),
+            "unexpected rejection: {error}"
+        );
     }
 
     #[test]

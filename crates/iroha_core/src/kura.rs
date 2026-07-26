@@ -28704,7 +28704,8 @@ impl Kura {
                     "certified lane block frontier recovery",
                 ) {
                     return Err(Error::IO(
-                        std::io::Error::other(
+                        std::io::Error::new(
+                            ErrorKind::WouldBlock,
                             "failed to make frontier-backed certified lane block pair durable",
                         ),
                         data_path,
@@ -30459,32 +30460,50 @@ impl Kura {
                         "autonomous lane proposal-height attempt is not canonical Norito",
                     ));
                 }
-                let Some(hint) = payload.origin_proposal.payload_block_hint else {
-                    return Err(Self::invalid_lane_artifact_error(
-                        artifact_path,
-                        "autonomous lane proposal-height attempt already contains conflicting bytes",
-                    ));
-                };
-                let promoted_payload = existing_artifact
+                let existing_descriptor = &existing_artifact
                     .executable_payload
-                    .attach_global_hint_exact(hint, expected_chain_id_hash, expected_epoch)
-                    .map_err(|error| {
-                        Self::invalid_lane_artifact_error(
-                            artifact_path.clone(),
-                            format!(
-                                "autonomous lane attempt cannot be promoted to the carrier hint: {error}"
-                            ),
-                        )
-                    })?;
-                let mut promoted_artifact = existing_artifact;
-                promoted_artifact.executable_payload = promoted_payload;
-                if promoted_artifact != *artifact {
-                    return Err(Self::invalid_lane_artifact_error(
-                        artifact_path,
-                        "autonomous lane attempt carrier-hint promotion changed other durable bytes",
-                    ));
+                    .origin_proposal
+                    .descriptor;
+                let replaces_retired_incarnation = existing_descriptor.lane_id
+                    == descriptor.lane_id
+                    && existing_descriptor.dataspace_id == descriptor.dataspace_id
+                    && existing_descriptor.lane_block_height == descriptor.lane_block_height
+                    && existing_descriptor.proposal_height == descriptor.proposal_height
+                    && existing_descriptor.lane_incarnation != descriptor.lane_incarnation;
+                if replaces_retired_incarnation {
+                    // `require_active_lane_artifact` above proves that the incoming
+                    // incarnation is authoritative. The path coordinates also match
+                    // exactly, so bytes from the now-inactive incarnation cannot pin
+                    // the reusable lane-height slot after lane recreation.
+                    self.write_atomic_synced_replace(&artifact_path, &artifact_bytes)?;
+                } else {
+                    let Some(hint) = payload.origin_proposal.payload_block_hint else {
+                        return Err(Self::invalid_lane_artifact_error(
+                            artifact_path,
+                            "autonomous lane proposal-height attempt already contains conflicting bytes",
+                        ));
+                    };
+                    let promoted_payload = existing_artifact
+                        .executable_payload
+                        .attach_global_hint_exact(hint, expected_chain_id_hash, expected_epoch)
+                        .map_err(|error| {
+                            Self::invalid_lane_artifact_error(
+                                artifact_path.clone(),
+                                format!(
+                                    "autonomous lane attempt cannot be promoted to the carrier hint: {error}"
+                                ),
+                            )
+                        })?;
+                    let mut promoted_artifact = existing_artifact;
+                    promoted_artifact.executable_payload = promoted_payload;
+                    if promoted_artifact != *artifact {
+                        return Err(Self::invalid_lane_artifact_error(
+                            artifact_path,
+                            "autonomous lane attempt carrier-hint promotion changed other durable bytes",
+                        ));
+                    }
+                    self.write_atomic_synced_replace(&artifact_path, &artifact_bytes)?;
                 }
-                self.write_atomic_synced_replace(&artifact_path, &artifact_bytes)?;
             }
         }
         let artifact_after = Self::file_len_or_zero(&artifact_path)?;
@@ -32382,6 +32401,23 @@ impl Kura {
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
     ) -> Option<AutonomousLaneBlockArtifact> {
+        self.read_autonomous_lane_block_artifact_with_recovery_policy(
+            lane_id,
+            lane_block_height,
+            expected_chain_id_hash,
+            expected_epoch,
+            true,
+        )
+    }
+
+    fn read_autonomous_lane_block_artifact_with_recovery_policy(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        recover: bool,
+    ) -> Option<AutonomousLaneBlockArtifact> {
         if self.prune_recovery_is_required() {
             return None;
         }
@@ -32391,6 +32427,7 @@ impl Kura {
             lane_block_height,
             expected_chain_id_hash,
             expected_epoch,
+            recover,
         )
     }
 
@@ -32401,6 +32438,7 @@ impl Kura {
         lane_block_height: u64,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
+        recover: bool,
     ) -> Option<AutonomousLaneBlockArtifact> {
         let entry = self.lane_storage_entry(lane_id).ok()?;
         let _guard = self.sidecar_lock.lock();
@@ -32413,7 +32451,7 @@ impl Kura {
             lane_block_height,
             expected_chain_id_hash,
             expected_epoch,
-            true,
+            recover,
         )
     }
 
@@ -33369,9 +33407,13 @@ impl Kura {
             autonomous_epoch,
             autonomous_payload_hash,
         ) {
-            (Some(chain_id_hash), Some(epoch), Some(_)) => {
-                self.recover_autonomous_lane_block_payload(proposal, chain_id_hash, epoch)
-            }
+            (Some(chain_id_hash), Some(epoch), Some(_)) => self
+                .recover_autonomous_lane_block_payload_with_sidecar_repair(
+                    proposal,
+                    chain_id_hash,
+                    epoch,
+                    repair_missing_sidecar,
+                ),
             (None, None, None) => self
                 .recover_lane_block_payload_with_sidecar_repair(proposal, repair_missing_sidecar),
             _ => Err(LaneBlockPayloadAvailability::DescriptorMismatch),
@@ -33583,15 +33625,27 @@ impl Kura {
         lane_id: LaneId,
         lane_block_height: u64,
     ) -> Option<LaneBlockExecutionInputArtifact> {
+        self.read_lane_block_execution_input_with_repair_policy(lane_id, lane_block_height, true)
+    }
+
+    fn read_lane_block_execution_input_with_repair_policy(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        repair_missing_sidecars: bool,
+    ) -> Option<LaneBlockExecutionInputArtifact> {
         if self.prune_recovery_is_required() {
             return None;
         }
         let artifact = self.read_active_lane_block_execution_input_structural(
             lane_id,
             lane_block_height,
-            true,
+            repair_missing_sidecars,
         )?;
-        if !self.lane_block_execution_input_matches_canonical_payload(&artifact, true) {
+        if !self.lane_block_execution_input_matches_canonical_payload(
+            &artifact,
+            repair_missing_sidecars,
+        ) {
             iroha_logger::warn!(
                 lane = %lane_id.as_u32(),
                 lane_block_height,
@@ -33756,9 +33810,11 @@ impl Kura {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
         })?;
         let descriptor = &input.proposal.descriptor;
-        let Some(canonical_input) =
-            self.read_lane_block_execution_input(descriptor.lane_id, descriptor.lane_block_height)
-        else {
+        let Some(canonical_input) = self.read_lane_block_execution_input_with_repair_policy(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            false,
+        ) else {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "canonical lane execution input unavailable for preflight",
@@ -33924,15 +33980,31 @@ impl Kura {
         lane_id: LaneId,
         lane_block_height: u64,
     ) -> Option<LaneBlockExecutionPreflightArtifact> {
+        self.read_lane_block_execution_preflight_with_repair_policy(
+            lane_id,
+            lane_block_height,
+            true,
+        )
+    }
+
+    fn read_lane_block_execution_preflight_with_repair_policy(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        repair_missing_sidecars: bool,
+    ) -> Option<LaneBlockExecutionPreflightArtifact> {
         if self.prune_recovery_is_required() {
             return None;
         }
         let artifact = self.read_active_lane_block_execution_preflight_structural(
             lane_id,
             lane_block_height,
-            true,
+            repair_missing_sidecars,
         )?;
-        if !self.lane_block_execution_preflight_matches_canonical_input(&artifact) {
+        if !self.lane_block_execution_preflight_matches_canonical_input(
+            &artifact,
+            repair_missing_sidecars,
+        ) {
             iroha_logger::warn!(
                 lane = %lane_id.as_u32(),
                 lane_block_height,
@@ -34090,10 +34162,14 @@ impl Kura {
     fn lane_block_execution_preflight_matches_canonical_input(
         &self,
         artifact: &LaneBlockExecutionPreflightArtifact,
+        repair_missing_sidecars: bool,
     ) -> bool {
         let descriptor = &artifact.proposal.descriptor;
-        match self.read_lane_block_execution_input(descriptor.lane_id, descriptor.lane_block_height)
-        {
+        match self.read_lane_block_execution_input_with_repair_policy(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            repair_missing_sidecars,
+        ) {
             Some(input) => {
                 input.proposal == artifact.proposal
                     && input.artifact == artifact.artifact
@@ -34339,26 +34415,6 @@ impl Kura {
             ));
         }
         Ok(())
-    }
-
-    /// Persist QC-authenticated Native AMX participant manifests and receipts.
-    ///
-    /// Each route's standalone manifest is published before its standalone
-    /// receipt and the derived latest pointer. This operation never executes a
-    /// transaction and is idempotent at every artifact boundary.
-    pub(crate) fn persist_native_amx_participant_application_evidence(
-        &self,
-        block: &SignedBlock,
-    ) -> Result<usize> {
-        let _publication_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let artifacts = self
-            .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, false,
-            )?;
-        self.persist_native_amx_participant_application_evidence_under_publication_guard(
-            block, artifacts,
-        )
     }
 
     /// Repair Native AMX evidence after WSV commit and its Kura metadata join.
@@ -35608,9 +35664,11 @@ impl Kura {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
         })?;
         let descriptor = &input.proposal.descriptor;
-        let Some(canonical_input) =
-            self.read_lane_block_execution_input(descriptor.lane_id, descriptor.lane_block_height)
-        else {
+        let Some(canonical_input) = self.read_lane_block_execution_input_with_repair_policy(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            false,
+        ) else {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "canonical lane execution input unavailable for direct receipt",
@@ -35623,7 +35681,11 @@ impl Kura {
             ));
         }
         let Some(canonical_preflight) = self
-            .read_lane_block_execution_preflight(descriptor.lane_id, descriptor.lane_block_height)
+            .read_lane_block_execution_preflight_with_repair_policy(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                false,
+            )
         else {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
@@ -35895,7 +35957,7 @@ impl Kura {
         Self::validate_lane_block_application_receipt_artifact(artifact).map_err(|message| {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
         })?;
-        if !self.lane_block_application_receipt_matches_available_evidence(artifact) {
+        if !self.lane_block_application_receipt_matches_available_evidence(artifact, false) {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "lane application receipt no longer matches canonical execution evidence",
@@ -35922,7 +35984,7 @@ impl Kura {
             );
         let observed_existing_matches_evidence =
             observed_existing.as_ref().is_some_and(|existing| {
-                self.lane_block_application_receipt_matches_available_evidence(existing)
+                self.lane_block_application_receipt_matches_available_evidence(existing, false)
             });
 
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -36102,7 +36164,7 @@ impl Kura {
             lane_block_height,
             true,
         )?;
-        if !self.lane_block_application_receipt_matches_available_evidence(&artifact) {
+        if !self.lane_block_application_receipt_matches_available_evidence(&artifact, true) {
             iroha_logger::warn!(
                 lane = %lane_id.as_u32(),
                 lane_block_height,
@@ -36259,7 +36321,7 @@ impl Kura {
             .iter()
             .cloned()
             .filter(|receipt| {
-                self.lane_block_application_receipt_matches_available_evidence(receipt)
+                self.lane_block_application_receipt_matches_available_evidence(receipt, true)
             })
             .collect::<Vec<_>>();
         if receipts.len() != direct_candidates.len()
@@ -36450,9 +36512,10 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
         repair_missing_sidecar: bool,
     ) -> bool {
-        let Some(preflight) = self.read_lane_block_execution_preflight(
+        let Some(preflight) = self.read_lane_block_execution_preflight_with_repair_policy(
             proposal.descriptor.lane_id,
             proposal.descriptor.lane_block_height,
+            repair_missing_sidecar,
         ) else {
             return false;
         };
@@ -36472,14 +36535,17 @@ impl Kura {
     fn lane_block_application_receipt_matches_available_evidence(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
+        repair_missing_sidecars: bool,
     ) -> bool {
         match artifact.format {
             LaneBlockApplicationReceiptArtifactFormat::Current => {
                 self.lane_block_application_receipt_matches_canonical_results(artifact)
             }
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
-                self.lane_block_application_receipt_matches_direct_preflight(artifact)
-            }
+            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
+                .lane_block_application_receipt_matches_direct_preflight(
+                    artifact,
+                    repair_missing_sidecars,
+                ),
             LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
                 self.lane_block_application_receipt_matches_merge_log(artifact)
             }
@@ -36869,11 +36935,14 @@ impl Kura {
     fn lane_block_application_receipt_matches_direct_preflight(
         &self,
         artifact: &LaneBlockApplicationReceiptArtifact,
+        repair_missing_sidecars: bool,
     ) -> bool {
         let descriptor = &artifact.proposal.descriptor;
-        let Some(preflight) = self
-            .read_lane_block_execution_preflight(descriptor.lane_id, descriptor.lane_block_height)
-        else {
+        let Some(preflight) = self.read_lane_block_execution_preflight_with_repair_policy(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            repair_missing_sidecars,
+        ) else {
             return false;
         };
         preflight.proposal == artifact.proposal
@@ -37153,12 +37222,28 @@ impl Kura {
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
     ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
+        self.recover_autonomous_lane_block_payload_with_sidecar_repair(
+            proposal,
+            expected_chain_id_hash,
+            expected_epoch,
+            true,
+        )
+    }
+
+    fn recover_autonomous_lane_block_payload_with_sidecar_repair(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        expected_chain_id_hash: Hash,
+        expected_epoch: u64,
+        repair_missing_sidecar: bool,
+    ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
         let artifact = self
-            .read_autonomous_lane_block_artifact(
+            .read_autonomous_lane_block_artifact_with_recovery_policy(
                 proposal.descriptor.lane_id,
                 proposal.descriptor.lane_block_height,
                 expected_chain_id_hash,
                 expected_epoch,
+                repair_missing_sidecar,
             )
             .ok_or(LaneBlockPayloadAvailability::MissingLaneArtifact)?;
         let _cursor = Self::validate_autonomous_lane_block_artifact(
@@ -52797,12 +52882,14 @@ mod tests {
             std::fs::create_dir_all(parent).expect("create parent dir");
         }
         std::fs::File::create(&conflict_dir).expect("seed conflicting file");
+        let canonical_conflict_dir =
+            std::fs::canonicalize(&conflict_dir).expect("canonicalize conflicting file");
 
         let err = kura
             .reconcile_lane_segments_for_testing(&[conflicting_entry], &[], &[])
             .expect_err("expected lane provisioning to surface error");
         match err {
-            Error::MkDir(_, path) => assert_eq!(path, conflict_dir),
+            Error::MkDir(_, path) => assert_eq!(path, canonical_conflict_dir),
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -64722,7 +64809,7 @@ mod tests {
         );
         let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
             lane_entry,
-            temp_dir.path(),
+            &reopened.store_root,
             1,
             payload.origin_proposal.descriptor.proposal_height,
         );
@@ -65554,6 +65641,72 @@ mod tests {
             ),
             Err("invalid autonomous lane payload availability certificate"),
             "the durable artifact must reject a next-view READY QC before merge validation",
+        );
+    }
+
+    #[test]
+    fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist autonomous payload");
+        let recovered = kura
+            .recover_autonomous_lane_block_payload(&payload.origin_proposal, chain_id_hash, epoch)
+            .expect("recover execution input before crash");
+
+        let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+            lane_entry,
+            &kura.store_root,
+            1,
+            payload.origin_proposal.descriptor.proposal_height,
+        );
+        let temp_path = Kura::autonomous_lane_block_view_state_temp_path(&view_path);
+        let canonical_bytes = fs::read(&view_path).expect("read canonical view state");
+        fs::write(&temp_path, &canonical_bytes).expect("stage valid crash temp");
+        let truncated_bytes = canonical_bytes[..canonical_bytes.len() / 2].to_vec();
+        fs::write(&view_path, &truncated_bytes).expect("truncate main view state");
+        let main_before = fs::read(&view_path).expect("snapshot truncated main");
+        let temp_before = fs::read(&temp_path).expect("snapshot valid crash temp");
+
+        assert!(
+            kura.persist_lane_block_execution_input(&recovered).is_err(),
+            "execution-input validation must fail closed on the malformed main view sidecar",
+        );
+        assert_eq!(
+            fs::read(&view_path).expect("main view state after validation"),
+            main_before,
+            "non-repair validation must not promote the autonomous crash temp",
+        );
+        assert_eq!(
+            fs::read(&temp_path).expect("crash temp after validation"),
+            temp_before,
+            "non-repair validation must not delete the autonomous crash temp",
+        );
+
+        assert_eq!(
+            kura.recover_autonomous_lane_block_payload(
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+            )
+            .expect("ordinary recovery promotes the valid crash temp"),
+            recovered,
+        );
+        assert_eq!(
+            fs::read(&view_path).expect("repaired main view state"),
+            canonical_bytes,
+        );
+        assert!(
+            !temp_path.exists(),
+            "ordinary recovery must remove the promoted crash temp",
         );
     }
 
@@ -67401,7 +67554,11 @@ mod tests {
                     .persist_lane_block_execution_input(&recovered)
                     .map_err(|error| format!("persist execution input: {error:?}"))?;
                 let input = worker_kura
-                    .read_lane_block_execution_input(lane_id, lane_block_height)
+                    .read_lane_block_execution_input_with_repair_policy(
+                        lane_id,
+                        lane_block_height,
+                        false,
+                    )
                     .ok_or_else(|| "read execution input after persistence".to_owned())?;
                 let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
                     b"missing lane artifact direct application state",
@@ -67412,7 +67569,11 @@ mod tests {
                     .persist_lane_block_execution_preflight(&input, 7, state_hash, vec![result])
                     .map_err(|error| format!("persist execution preflight: {error:?}"))?;
                 let preflight = worker_kura
-                    .read_lane_block_execution_preflight(lane_id, lane_block_height)
+                    .read_lane_block_execution_preflight_with_repair_policy(
+                        lane_id,
+                        lane_block_height,
+                        false,
+                    )
                     .ok_or_else(|| "read execution preflight after persistence".to_owned())?;
                 worker_kura
                     .persist_direct_lane_block_application_receipt(&input, &preflight)
@@ -67428,14 +67589,35 @@ mod tests {
         worker.join().expect("lane sidecar validation worker");
 
         assert!(
-            kura.read_lane_block_application_receipt(lane_id, lane_block_height)
-                .is_some(),
-            "execution input, preflight, and direct receipt must remain usable",
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .is_none(),
+            "validation under prune_lock must not repair the missing lane artifact sidecar",
+        );
+        let receipt = kura
+            .read_active_lane_block_application_receipt_structural(
+                lane_id,
+                lane_block_height,
+                false,
+            )
+            .expect("read direct receipt without sidecar repair");
+        assert!(
+            kura.lane_block_application_receipt_matches_available_evidence(&receipt, false),
+            "execution input, preflight, and direct receipt must remain usable without repair",
         );
         assert!(
             kura.read_lane_block_artifact(lane_id, lane_block_height)
                 .is_none(),
-            "validation under prune_lock must not repair the missing lane artifact sidecar",
+            "nonrepair evidence validation must leave the missing lane artifact absent",
+        );
+        assert_eq!(
+            kura.read_lane_block_application_receipt(lane_id, lane_block_height),
+            Some(receipt),
+            "the public repair-enabled receipt reader must retain valid evidence",
+        );
+        assert!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .is_some(),
+            "the public repair-enabled reader must recover the missing lane artifact",
         );
     }
 
@@ -77706,7 +77888,7 @@ mod tests {
                         receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution
                     })
                     .all(|receipt| kura
-                        .lane_block_application_receipt_matches_available_evidence(receipt)),
+                        .lane_block_application_receipt_matches_available_evidence(receipt, true)),
                 "every structurally captured direct receipt must retain its preflight evidence"
             );
             assert_eq!(

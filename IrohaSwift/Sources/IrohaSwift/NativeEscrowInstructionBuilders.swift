@@ -134,7 +134,7 @@ private enum NativeEscrowInstructionPayloadBuilder {
     }
 }
 
-/// Swift helpers for building native numeric asset escrow instruction payloads as Norito JSON.
+/// Swift helpers for building native Quantity asset escrow instruction payloads as Norito JSON.
 public enum NativeEscrowInstructionBuilders {
     /// Build an `OpenAssetEscrow` instruction payload.
     public static func openAssetEscrow(escrowId: String,

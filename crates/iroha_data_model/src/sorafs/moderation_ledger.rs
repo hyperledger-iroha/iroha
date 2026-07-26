@@ -1777,6 +1777,10 @@ pub fn sorafs_repair_idempotency_digest_v1(ticket_id: &str, key: &str) -> [u8; 3
 /// reconcile an idempotency receipt against finalized state. Keeping the
 /// preimage construction in the data model prevents replicas from
 /// reimplementing a consensus-private hash contract.
+///
+/// # Errors
+///
+/// Returns an error when Norito cannot encode `action`.
 pub fn sorafs_repair_action_digest_v1<T: norito::core::NoritoSerialize>(
     authority: &AccountId,
     action: &T,

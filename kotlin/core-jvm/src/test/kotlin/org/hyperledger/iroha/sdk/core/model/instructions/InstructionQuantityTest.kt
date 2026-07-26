@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import java.math.BigInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -41,6 +42,56 @@ class InstructionQuantityTest {
         )
 
         values.forEach { assertEquals("1.25", it) }
+    }
+
+    @Test
+    fun `plain ballot amount is a canonical lossless quantity`() {
+        val ballot = CastPlainBallotInstruction(
+            referendumId = "referendum",
+            ownerAccountId = "owner",
+            amount = "18446744073709551616.25",
+            durationBlocks = 10,
+            direction = 1,
+        )
+        assertEquals("18446744073709551616.25", ballot.amount)
+        assertEquals("18446744073709551616.25", ballot.arguments["amount"])
+        assertFailsWith<IllegalArgumentException>("BigInteger constructor accepted an out-of-range Quantity") {
+            CastPlainBallotInstruction(
+                "referendum",
+                "owner",
+                BigInteger.ONE.shiftLeft(511),
+                10,
+                1,
+            )
+        }
+        assertEquals(
+            "1.25",
+            CastPlainBallotInstruction(
+                "referendum",
+                "owner",
+                KotodamaQuantity.parseCanonical("1.25"),
+                10,
+                1,
+            ).amount,
+        )
+
+        INVALID_QUANTITIES.forEach { amount ->
+            assertFailsWith<IllegalArgumentException>("constructor accepted '$amount'") {
+                CastPlainBallotInstruction("referendum", "owner", amount, 10, 1)
+            }
+            assertFailsWith<IllegalArgumentException>("readback accepted '$amount'") {
+                CastPlainBallotInstruction.fromArguments(
+                    mapOf(
+                        "action" to "CastPlainBallot",
+                        "referendum_id" to "referendum",
+                        "owner" to "owner",
+                        "amount" to amount,
+                        "duration_blocks" to "10",
+                        "direction" to "1",
+                    ),
+                )
+            }
+        }
     }
 
     private fun constructionAttempts(quantity: String): List<() -> Any> = listOf(

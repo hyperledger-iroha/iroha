@@ -35,7 +35,7 @@ import java.nio.charset.StandardCharsets
  * The TransferBox::Asset variant contains:
  *
  * - source: AssetId (the asset to transfer from)
- * - object: Numeric (amount to transfer)
+ * - object: Quantity (amount to transfer)
  * - destination: AccountId (recipient account)
  */
 object TransferWirePayloadEncoder {
@@ -141,20 +141,20 @@ object TransferWirePayloadEncoder {
     }
 
     private fun encodeTransferBox(assetIdStr: String, amount: String, destinationAccountIdStr: String): ByteArray {
-        val numeric = parseNumericAmount(amount)
+        val quantity = parseQuantityAmount(amount)
         val assetId = AssetId.parse(assetIdStr)
         val destinationAccountId = AccountId.parse(destinationAccountIdStr)
         val payloadAdapter = TransferAssetPayloadAdapter()
-        val payload = TransferAssetPayload(assetId, numeric, destinationAccountId)
+        val payload = TransferAssetPayload(assetId, quantity, destinationAccountId)
         return NoritoCodec.encode(payload, SCHEMA_PATH, payloadAdapter)
     }
 
-    private fun parseNumericAmount(amount: String): NumericValue {
+    private fun parseQuantityAmount(amount: String): QuantityValue {
         val quantity = KotodamaQuantity.parseCanonical(amount)
-        return NumericValue(quantity.mantissa, quantity.scale)
+        return QuantityValue(quantity.mantissa, quantity.scale)
     }
 
-    private class NumericValue(val mantissa: BigInteger, val scale: Int) {
+    private class QuantityValue(val mantissa: BigInteger, val scale: Int) {
         init {
             val canonical = KotodamaQuantity.of(mantissa, scale)
             require(canonical.mantissa == mantissa && canonical.scale == scale) {
@@ -165,7 +165,7 @@ object TransferWirePayloadEncoder {
         fun render(): String = KotodamaQuantity.of(mantissa, scale).toString()
     }
 
-    private class TransferAssetPayload(val source: AssetId, val amount: NumericValue, val destination: AccountId)
+    private class TransferAssetPayload(val source: AssetId, val amount: QuantityValue, val destination: AccountId)
 
     private class AssetDefinitionId(definitionBytes: ByteArray) {
         private val _definitionBytes: ByteArray = definitionBytes.clone()
@@ -333,7 +333,7 @@ object TransferWirePayloadEncoder {
 
         private fun encodeTransferStruct(encoder: NoritoEncoder, value: TransferAssetPayload) {
             encodeFieldWithLength(encoder, assetIdAdapter, value.source)
-            encodeFieldWithLength(encoder, NumericAdapter(), value.amount)
+            encodeFieldWithLength(encoder, QuantityAdapter(), value.amount)
             encodeFieldWithLength(encoder, accountIdAdapter, value.destination)
         }
 
@@ -366,7 +366,7 @@ object TransferWirePayloadEncoder {
 
         private fun decodeTransferStruct(decoder: NoritoDecoder): TransferAssetPayload {
             val source = decodeSizedTypedField(decoder, assetIdAdapter, "source")
-            val amount = decodeSizedTypedField(decoder, NumericAdapter(), "amount")
+            val amount = decodeSizedTypedField(decoder, QuantityAdapter(), "amount")
             val destination = decodeSizedTypedField(decoder, accountIdAdapter, "destination")
             return TransferAssetPayload(source, amount, destination)
         }
@@ -547,20 +547,20 @@ object TransferWirePayloadEncoder {
         }
     }
 
-    private class NumericAdapter : TypeAdapter<NumericValue> {
-        override fun encode(encoder: NoritoEncoder, value: NumericValue) {
+    private class QuantityAdapter : TypeAdapter<QuantityValue> {
+        override fun encode(encoder: NoritoEncoder, value: QuantityValue) {
             encodeFieldBigInt(encoder, value.mantissa)
             encodeFieldU32(encoder, value.scale)
         }
 
-        override fun decode(decoder: NoritoDecoder): NumericValue =
-            decodeNumeric(decoder)
+        override fun decode(decoder: NoritoDecoder): QuantityValue =
+            decodeQuantity(decoder)
 
-        private fun decodeNumeric(decoder: NoritoDecoder): NumericValue {
+        private fun decodeQuantity(decoder: NoritoDecoder): QuantityValue {
             val mantissa = decodeFieldBigInt(decoder)
             val scale = Math.toIntExact(decodeFieldU32(decoder))
-            require(scale in 0..28) { "Numeric scale exceeds Iroha limit of 28: $scale" }
-            return NumericValue(mantissa, scale)
+            require(scale in 0..28) { "Quantity scale exceeds Iroha limit of 28: $scale" }
+            return QuantityValue(mantissa, scale)
         }
 
         private fun encodeFieldBigInt(encoder: NoritoEncoder, value: BigInteger) {
@@ -583,27 +583,27 @@ object TransferWirePayloadEncoder {
         }
 
         private fun decodeFieldBigInt(decoder: NoritoDecoder): BigInteger {
-            val payload = decodeSizedRawField(decoder, "numeric mantissa")
+            val payload = decodeSizedRawField(decoder, "quantity mantissa")
             val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
-            val byteLength = checkedLength(child.readUInt(32), "numeric mantissa byte length")
+            val byteLength = checkedLength(child.readUInt(32), "quantity mantissa byte length")
             val twosComplement = child.readBytes(byteLength)
-            require(child.remaining() == 0) { "Trailing bytes after numeric mantissa payload" }
+            require(child.remaining() == 0) { "Trailing bytes after quantity mantissa payload" }
             val value = decodeBigInt(twosComplement)
             require(toTwosComplementLittleEndian(value).contentEquals(twosComplement)) {
-                "Numeric mantissa is not canonical"
+                "Quantity mantissa is not canonical"
             }
             require(value.bitLength() < 512) {
-                "Numeric mantissa exceeds Iroha limit of 512 bits: ${value.bitLength()}"
+                "Quantity mantissa exceeds Iroha limit of 512 bits: ${value.bitLength()}"
             }
             return value
         }
 
         private fun decodeFieldU32(decoder: NoritoDecoder): Long {
-            val payload = decodeSizedRawField(decoder, "numeric scale")
-            require(payload.size == 4) { "numeric scale payload must be 4 bytes" }
+            val payload = decodeSizedRawField(decoder, "quantity scale")
+            require(payload.size == 4) { "quantity scale payload must be 4 bytes" }
             val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
             val value = UINT32_ADAPTER.decode(child)
-            require(child.remaining() == 0) { "Trailing bytes after numeric scale payload" }
+            require(child.remaining() == 0) { "Trailing bytes after quantity scale payload" }
             return value
         }
 

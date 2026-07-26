@@ -34,7 +34,7 @@ use iroha::{
             ManifestEntry, ManifestVersion, UniversalAccountId,
         },
         peer::PeerId,
-        prelude::{FindAssetById, Numeric, Quantity},
+        prelude::{FindAssetById, Quantity},
         transaction::{SignedTransaction, TransactionSubmissionReceipt},
     },
     query::QueryError,
@@ -554,12 +554,12 @@ fn wait_for_height(client: &Client, target_height: u64, context: &str) -> Result
     ))
 }
 
-fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
+fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
-        Ok(asset) => Ok(asset.value().as_numeric().clone()),
+        Ok(asset) => Ok(asset.value().clone()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-        ))) => Ok(Numeric::zero()),
+        ))) => Ok(Quantity::zero()),
         Err(err) => Err(eyre!(err)),
     }
 }
@@ -1300,11 +1300,11 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     })?;
 
     ensure!(
-        asset_balance(&alice_via_ds2, &alice_ds1_asset)? == Numeric::from(100_u32),
+        asset_balance(&alice_via_ds2, &alice_ds1_asset)? == Quantity::from(100_u32),
         "alice signed query through ds2 ingress did not route to ds1"
     );
     ensure!(
-        asset_balance(&bob_via_ds1, &bob_ds2_asset)? == Numeric::from(200_u32),
+        asset_balance(&bob_via_ds1, &bob_ds2_asset)? == Quantity::from(200_u32),
         "bob signed query through ds1 ingress did not route to ds2"
     );
 

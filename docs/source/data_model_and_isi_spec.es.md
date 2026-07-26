@@ -107,7 +107,7 @@ Tipos: `Register<T: Registered>` e `Unregister<T: Identifiable>`, con tipos de s
 Tipos: `Mint<O, D: Identifiable>` e `Burn<O, D: Identifiable>`, en cajas como `MintBox`/`BurnBox`.
 
 - Activo (Numérico) mint/burn: ajusta saldos y definiciones `total_quantity`.
-  - Condiciones previas: el valor `Numeric` debe satisfacer `AssetDefinition.spec()`; perfecto permitido por `mintable`:
+  - Condiciones previas: el valor `Quantity` debe satisfacer `AssetDefinition.spec()`; perfecto permitido por `mintable`:
     - `Infinitely`: siempre permitido.
     - `Once`: permitido exactamente una vez; la primera casa de moneda convierte `mintable` a `Not` y emite `AssetDefinitionEvent::MintabilityChanged`, además de un `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` detallado para auditabilidad.
     - `Limited(n)`: permite operaciones adicionales de mint `n`. Cada menta exitosa disminuye el contador; cuando llega a cero, la definición cambia a `Not` y emite los mismos eventos `MintabilityChanged` que los anteriores.

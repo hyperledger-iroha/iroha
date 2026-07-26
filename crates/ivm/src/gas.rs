@@ -32,7 +32,41 @@ pub const G_ESCROW: u64 = 16;
 pub const G_SORACLOUD: u64 = 16;
 
 /// Version of the consensus-visible host-syscall gas formulas.
-pub const HOST_GAS_FORMULA_VERSION: u16 = 5;
+pub const HOST_GAS_FORMULA_VERSION: u16 = 6;
+/// Version of the ledger-query base/item/offset/byte formula.
+///
+/// This value is included in the gas-schedule descriptor. Any change to the
+/// formula, its charge-point ordering, or its sorted-query semantics MUST
+/// increment it and regenerate the gas-schedule golden hash.
+pub const LEDGER_QUERY_GAS_FORMULA_VERSION_V1: u64 = 1;
+/// Fixed gas for a singular ledger query.
+pub const LEDGER_QUERY_GAS_BASE_SINGULAR: u64 = 1_000;
+/// Fixed gas for an iterable ledger query.
+pub const LEDGER_QUERY_GAS_BASE_ITERABLE: u64 = 2_500;
+/// Gas charged for each processed or directly skipped ledger-query item.
+pub const LEDGER_QUERY_GAS_PER_ITEM: u64 = 250;
+/// Multiplier applied to the item rate when a query requests sorting.
+pub const LEDGER_QUERY_GAS_SORT_MULTIPLIER: u64 = 4;
+/// Gas charged for each canonically measured query or projection byte.
+pub const LEDGER_QUERY_GAS_PER_BYTE: u64 = 2;
+
+/// Compute the V1 ledger-query charge from canonical schedule parameters.
+///
+/// `base` and `per_item` are selected before execution from the request kind
+/// and whether sorting is requested. Unsorted offsets are charged directly;
+/// sorted queries instead charge every scanned item at the multiplied rate.
+#[must_use]
+pub const fn ledger_query_gas_v1(
+    base: u64,
+    per_item: u64,
+    offset_items: u64,
+    processed_items: u64,
+    processed_bytes: u64,
+) -> u64 {
+    base.saturating_add(per_item.saturating_mul(processed_items))
+        .saturating_add(per_item.saturating_mul(offset_items))
+        .saturating_add(LEDGER_QUERY_GAS_PER_BYTE.saturating_mul(processed_bytes))
+}
 /// Fixed durable-state syscall charge before path, value, scan, or response bytes.
 pub const STATE_QUERY_GAS_BASE: u64 = 16;
 /// Charge for visiting one durable-state key in an ordered scan.
@@ -569,6 +603,18 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
         ("soracloud_base", G_SORACLOUD),
         ("host_formula_version", u64::from(HOST_GAS_FORMULA_VERSION)),
         (
+            "ledger_query_formula_version",
+            LEDGER_QUERY_GAS_FORMULA_VERSION_V1,
+        ),
+        ("ledger_query_base_singular", LEDGER_QUERY_GAS_BASE_SINGULAR),
+        ("ledger_query_base_iterable", LEDGER_QUERY_GAS_BASE_ITERABLE),
+        ("ledger_query_per_item", LEDGER_QUERY_GAS_PER_ITEM),
+        (
+            "ledger_query_sort_multiplier",
+            LEDGER_QUERY_GAS_SORT_MULTIPLIER,
+        ),
+        ("ledger_query_per_byte", LEDGER_QUERY_GAS_PER_BYTE),
+        (
             "numeric_formula_version",
             crate::numeric_gas::NUMERIC_GAS_FORMULA_VERSION_V1,
         ),
@@ -781,6 +827,7 @@ fn formula_tag(formula: crate::host::HostSyscallGasFormula) -> u8 {
         Formula::ReserveAvailable => 11,
         Formula::ConservativeEnvelope => 12,
         Formula::ZkVerifyV1 => 14,
+        Formula::LedgerQueryV1 => 15,
     }
 }
 
@@ -797,6 +844,7 @@ fn parameters_tag(parameters: crate::host::HostSyscallGasParameters) -> u8 {
         Parameters::DurableState => 6,
         Parameters::Conservative => 7,
         Parameters::ZkVerifyV1 => 9,
+        Parameters::LedgerQueryV1 => 10,
     }
 }
 
@@ -930,6 +978,92 @@ mod tests {
             });
         }
         assert_descriptor_mutation_changes_hash(|changed| changed.parameters.swap(0, 1));
+    }
+
+    #[test]
+    fn schedule_hash_binds_the_complete_live_ledger_query_formula() {
+        let expected = [
+            (
+                "ledger_query_formula_version",
+                LEDGER_QUERY_GAS_FORMULA_VERSION_V1,
+            ),
+            ("ledger_query_base_singular", LEDGER_QUERY_GAS_BASE_SINGULAR),
+            ("ledger_query_base_iterable", LEDGER_QUERY_GAS_BASE_ITERABLE),
+            ("ledger_query_per_item", LEDGER_QUERY_GAS_PER_ITEM),
+            (
+                "ledger_query_sort_multiplier",
+                LEDGER_QUERY_GAS_SORT_MULTIPLIER,
+            ),
+            ("ledger_query_per_byte", LEDGER_QUERY_GAS_PER_BYTE),
+        ];
+        let canonical = canonical_gas_schedule_descriptor();
+        for (name, value) in expected {
+            let matches = canonical
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, parameter)| parameter.name == name)
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1, "descriptor coverage for {name}");
+            let (index, parameter) = matches[0];
+            assert_eq!(parameter.value, value, "descriptor value for {name}");
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.parameters[index].value = changed.parameters[index].value.wrapping_add(1);
+            });
+        }
+        assert_eq!(
+            ledger_query_gas_v1(
+                LEDGER_QUERY_GAS_BASE_ITERABLE,
+                LEDGER_QUERY_GAS_PER_ITEM,
+                3,
+                2,
+                100,
+            ),
+            3_950,
+        );
+    }
+
+    #[test]
+    fn schedule_hash_binds_every_ledger_query_syscall_to_its_formula_family() {
+        let canonical = canonical_gas_schedule_descriptor();
+        for number in [
+            crate::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
+            crate::syscalls::SYSCALL_QUERY_EXECUTE_NORITO,
+            crate::syscalls::SYSCALL_CORE_QUERY_GET,
+            crate::syscalls::SYSCALL_CORE_QUERY_PAGE,
+            crate::syscalls::SYSCALL_QUERY_GET_PARAMETER,
+            crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST,
+            crate::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
+            crate::syscalls::SYSCALL_GET_ACCOUNT_BALANCE,
+            crate::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS,
+        ] {
+            let matches = canonical
+                .syscalls
+                .iter()
+                .enumerate()
+                .filter(|(_, syscall)| syscall.number == number)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matches.len(),
+                1,
+                "metering descriptor coverage for ledger-query syscall {number:#x}"
+            );
+            let (index, syscall) = matches[0];
+            assert_eq!(syscall.quote_strategy, 2);
+            assert_eq!(syscall.formula, 15);
+            assert_eq!(syscall.parameters, 10);
+            assert_eq!(syscall.minimum_gas, LEDGER_QUERY_GAS_BASE_SINGULAR);
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.syscalls[index].formula ^= 0x80;
+            });
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.syscalls[index].parameters ^= 0x80;
+            });
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.syscalls[index].minimum_gas =
+                    changed.syscalls[index].minimum_gas.wrapping_add(1);
+            });
+        }
     }
 
     #[test]

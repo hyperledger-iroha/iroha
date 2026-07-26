@@ -126,7 +126,7 @@ translation_last_reviewed: 2026-01-21
 לצורכי tooling:
 - ה‑CLI מציע תתי‑פקודות `iroha social claim-twitter-follow-reward|send-to-twitter|cancel-twitter-escrow`
   שמקבלות payload Norito JSON מסוג `KeyedHash` (binding hash) ולשליחות גם סכום
-  `Numeric`, ואז בונות ושולחות את ההוראות המתאימות.
+  `Quantity`, ואז בונות ושולחות את ההוראות המתאימות.
 - ה‑JS SDK משקף עזרי אלו דרך
   `buildClaimTwitterFollowRewardInstruction`, `buildSendToTwitterInstruction`, ו‑
   `buildCancelTwitterEscrowInstruction`, שמקבלים את אותו מבנה keyed‑hash וכמויות

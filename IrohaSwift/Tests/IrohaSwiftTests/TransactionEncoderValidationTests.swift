@@ -353,6 +353,37 @@ final class TransactionEncoderValidationTests: XCTestCase {
         }
     }
 
+    func testCastPlainBallotRejectsNoncanonicalQuantityBeforeNativeDispatch() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
+        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let owner = try canonicalOwnerLiteral()
+        let overflowing = String(repeating: "9", count: 155)
+
+        for amount in ["+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", overflowing] {
+            let request = CastPlainBallotRequest(
+                chainId: "chain",
+                authority: authority,
+                referendumId: "referendum-1",
+                owner: owner,
+                amount: amount,
+                durationBlocks: 1,
+                direction: .aye,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                ttlMs: nil
+            )
+
+            XCTAssertThrowsError(
+                try SwiftTransactionEncoder.encodeCastPlainBallot(
+                    request: request,
+                    signingKey: signingKey,
+                    creationTimeMs: 1
+                )
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error, "\(amount): \(error)")
+            }
+        }
+    }
+
     func testCastZkBallotRejectsInvalidRootHintHex() throws {
         let owner = try canonicalOwnerLiteral(
             networkPrefix: SccpV1.tairaI105DiscriminantV1
@@ -386,13 +417,55 @@ final class TransactionEncoderValidationTests: XCTestCase {
         }
     }
 
+    func testCastZkBallotRejectsNoncanonicalQuantityBeforeNativeDispatch() throws {
+        let owner = try canonicalOwnerLiteral()
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
+        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let overflowing = String(repeating: "9", count: 155)
+        let invalidAmounts: [Any] = [
+            1, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", overflowing,
+        ]
+
+        for amount in invalidAmounts {
+            let publicInputs = try NoritoJSON.fromJSONObject([
+                "owner": owner,
+                "amount": amount,
+                "duration_blocks": 1,
+            ])
+            let request = CastZkBallotRequest(
+                chainId: "chain",
+                authority: authority,
+                electionId: "election-1",
+                proofB64: "AAAA",
+                publicInputs: publicInputs,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                ttlMs: nil
+            )
+
+            XCTAssertThrowsError(
+                try SwiftTransactionEncoder.encodeCastZkBallot(
+                    request: request,
+                    signingKey: signingKey,
+                    creationTimeMs: 1
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? TransactionInputError,
+                    .invalidZkBallotPublicInputs(
+                        "amount must be a canonical non-negative Kotodama V1 Quantity string"
+                    )
+                )
+            }
+        }
+    }
+
     func testCastZkBallotRejectsDeprecatedAliases() throws {
         let owner = try canonicalOwnerLiteral()
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)
         let publicInputs = try NoritoJSON.fromJSONObject([
             "owner": owner,
-            "amount": "1",
+            "amount": "18446744073709551616.25",
             "duration_blocks": 1,
             "root_hint_hex": "0x" + String(repeating: "Cc", count: 32),
         ])
@@ -425,7 +498,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         )
         let publicInputs = try NoritoJSON.fromJSONObject([
             "owner": owner,
-            "amount": "1",
+            "amount": "18446744073709551616.25",
             "duration_blocks": 1,
             "root_hint": "0x" + String(repeating: "Cc", count: 32),
             "nullifier": "blake2b32:" + String(repeating: "DD", count: 32),

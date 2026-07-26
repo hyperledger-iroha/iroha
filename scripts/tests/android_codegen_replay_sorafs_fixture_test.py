@@ -385,6 +385,7 @@ def test_manifest_builder_receives_only_ephemeral_signing_key_path(
 
     assert len(calls) == 1
     command, check, cwd = calls[0]
+    assert command[:4] == ["cargo", "run", "--locked", "--quiet"]
     assert f"--council-signing-key-file={key_path}" in command
     assert MODULE.ANDROID_CODEGEN_TEST_COUNCIL_SIGNING_SEED.hex() not in " ".join(
         command

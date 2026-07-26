@@ -56,26 +56,26 @@ fn find_asset_total_quantity() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
 
-        // Test for numeric assets value types
+        // Test asset quantity values.
         test_total_quantity(
             &test_client,
             &accounts,
             quantity_definition,
             NumericSpec::default(),
-            &numeric!(1),
-            &numeric!(10),
-            &numeric!(5),
-            &numeric!(30),
+            &Quantity::one(),
+            &Quantity::from(10_u32),
+            &Quantity::from(5_u32),
+            &Quantity::from(30_u32),
         )?;
         test_total_quantity(
             &test_client,
             &accounts,
             fixed_definition,
             NumericSpec::default(),
-            &numeric!(1.0),
-            &numeric!(10.0),
-            &numeric!(5.0),
-            &numeric!(30.0),
+            &Quantity::one(),
+            &Quantity::from(10_u32),
+            &Quantity::from(5_u32),
+            &Quantity::from(30_u32),
         )?;
         Ok(())
     })();
@@ -92,10 +92,10 @@ fn test_total_quantity(
     accounts: &[AccountId; 5],
     definition_id: AssetDefinitionId,
     asset_spec: NumericSpec,
-    initial_value: &Numeric,
-    to_mint: &Numeric,
-    to_burn: &Numeric,
-    expected_total_asset_quantity: &Numeric,
+    initial_value: &Quantity,
+    to_mint: &Quantity,
+    to_burn: &Quantity,
+    expected_total_asset_quantity: &Quantity,
 ) -> Result<()> {
     let context = stringify!(find_asset_total_quantity);
     // Registering new asset definition
@@ -114,13 +114,11 @@ fn test_total_quantity(
     let expected_minted_total = sum_value(to_mint, account_count)?;
     let expected_burned_total = sum_value(to_burn, account_count)?;
     let expected_after_mint = expected_initial_total
-        .clone()
-        .checked_add(expected_minted_total.clone())
-        .ok_or_else(|| eyre!("numeric overflow while summing minted totals"))?;
+        .checked_add(&expected_minted_total)
+        .map_err(|_| eyre!("quantity overflow while summing minted totals"))?;
     let expected_after_burn = expected_after_mint
-        .clone()
-        .checked_sub(expected_burned_total.clone())
-        .ok_or_else(|| eyre!("numeric underflow while subtracting burned totals"))?;
+        .checked_sub(&expected_burned_total)
+        .map_err(|_| eyre!("quantity underflow while subtracting burned totals"))?;
     assert_eq!(
         expected_total_asset_quantity, &expected_after_burn,
         "expected_total_asset_quantity should match computed totals"
@@ -132,7 +130,7 @@ fn test_total_quantity(
         .map(|account_id| AssetId::new(definition_id.clone(), account_id))
         .collect::<Vec<_>>();
 
-    let get_quantity = || -> Result<Numeric, SingleQueryError<QueryError>> {
+    let get_quantity = || -> Result<Quantity, SingleQueryError<QueryError>> {
         const MAX_ATTEMPTS: usize = 5;
         let mut last_err = None;
 
@@ -146,7 +144,7 @@ fn test_total_quantity(
                         .into_iter()
                         .find(|asset_definition| asset_definition.id() == &definition_id)
                     {
-                        return Ok(def.total_quantity().clone().into_numeric());
+                        return Ok(def.total_quantity().clone());
                     }
                     last_err = Some(SingleQueryError::ExpectedOneGotNone);
                 }
@@ -168,19 +166,16 @@ fn test_total_quantity(
     };
 
     // Assert that initial total quantity before any burns and mints is zero
-    let initial_total_asset_quantity = wait_for_quantity(&get_quantity, &Numeric::zero(), context)?;
+    let initial_total_asset_quantity =
+        wait_for_quantity(&get_quantity, &Quantity::zero(), context)?;
     assert!(initial_total_asset_quantity.is_zero());
 
     let mut mint_and_burn_assets: Vec<InstructionBox> = Vec::new();
-    let initial_quantity = Quantity::try_from_numeric(initial_value.clone())?;
-    let quantity_to_mint = Quantity::try_from_numeric(to_mint.clone())?;
-    let quantity_to_burn = Quantity::try_from_numeric(to_burn.clone())?;
     for asset_id in asset_ids.iter().cloned() {
         mint_and_burn_assets
-            .push(Mint::asset_quantity(initial_quantity.clone(), asset_id.clone()).into());
-        mint_and_burn_assets
-            .push(Mint::asset_quantity(quantity_to_mint.clone(), asset_id.clone()).into());
-        mint_and_burn_assets.push(Burn::asset_quantity(quantity_to_burn.clone(), asset_id).into());
+            .push(Mint::asset_quantity(initial_value.clone(), asset_id.clone()).into());
+        mint_and_burn_assets.push(Mint::asset_quantity(to_mint.clone(), asset_id.clone()).into());
+        mint_and_burn_assets.push(Burn::asset_quantity(to_burn.clone(), asset_id).into());
     }
     test_client.submit_all_blocking(
         mint_and_burn_assets,
@@ -190,12 +185,12 @@ fn test_total_quantity(
 
     // Assert that total asset quantity is equal to: `n_accounts * (initial_value + to_mint - to_burn)`
     let total_asset_quantity = observed_after_burn;
-    let log_balances = |stage: &str, definition_total: &Numeric| -> Result<Numeric> {
+    let log_balances = |stage: &str, definition_total: &Quantity| -> Result<Quantity> {
         let assets = test_client
             .query(FindAssets::new())
             .execute_all()
             .map_err(|e| eyre!("failed to fetch assets: {e}"))?;
-        let mut manual_total = Numeric::zero();
+        let mut manual_total = Quantity::zero();
         let mut missing_accounts = Vec::new();
 
         println!(
@@ -208,14 +203,14 @@ fn test_total_quantity(
                 .map_or_else(
                     || {
                         missing_accounts.push(account_id.clone());
-                        Numeric::zero()
+                        Quantity::zero()
                     },
-                    |asset| asset.value().clone().into_numeric(),
+                    |asset| asset.value().clone(),
                 );
             println!("    account {account_id}: balance {balance}");
             manual_total = manual_total
-                .checked_add(balance)
-                .ok_or_else(|| eyre!("numeric overflow while summing balances"))?;
+                .checked_add(&balance)
+                .map_err(|_| eyre!("quantity overflow while summing balances"))?;
         }
 
         if !missing_accounts.is_empty() {
@@ -248,7 +243,7 @@ fn test_total_quantity(
     )?;
 
     let mut removed = false;
-    let mut last_value: Option<Numeric> = None;
+    let mut last_value: Option<Quantity> = None;
     for _ in 0..UNREGISTER_ATTEMPTS {
         match get_quantity() {
             Err(SingleQueryError::ExpectedOneGotNone) => {
@@ -289,9 +284,9 @@ fn test_total_quantity(
     Ok(())
 }
 
-fn wait_for_quantity<F>(get_quantity: &F, expected: &Numeric, context: &str) -> Result<Numeric>
+fn wait_for_quantity<F>(get_quantity: &F, expected: &Quantity, context: &str) -> Result<Quantity>
 where
-    F: Fn() -> Result<Numeric, SingleQueryError<QueryError>>,
+    F: Fn() -> Result<Quantity, SingleQueryError<QueryError>>,
 {
     const MAX_ATTEMPTS: usize = 30; // 7.5 seconds at 250ms
     const DELAY: Duration = Duration::from_millis(250);
@@ -318,12 +313,12 @@ where
     }))
 }
 
-fn sum_value(value: &Numeric, count: usize) -> Result<Numeric> {
-    let mut total = Numeric::zero();
+fn sum_value(value: &Quantity, count: usize) -> Result<Quantity> {
+    let mut total = Quantity::zero();
     for _ in 0..count {
         total = total
-            .checked_add(value.clone())
-            .ok_or_else(|| eyre!("numeric overflow while summing quantities"))?;
+            .checked_add(value)
+            .map_err(|_| eyre!("quantity overflow while summing quantities"))?;
     }
     Ok(total)
 }

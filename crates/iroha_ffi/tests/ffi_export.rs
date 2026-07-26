@@ -377,6 +377,26 @@ pub fn take_and_return_array_of_opaques(a: [OpaqueStruct; 2]) -> [OpaqueStruct; 
 #[ffi_export]
 pub fn freestanding_with_nested_vec(_vec: Vec<Vec<Vec<u8>>>) {}
 
+/// Panics so the generated export boundary can prove it contains unwinding.
+#[ffi_export]
+pub fn freestanding_panics() {
+    panic!("expected FFI boundary test panic");
+}
+
+struct PanickingDropPanicPayload;
+
+impl Drop for PanickingDropPanicPayload {
+    fn drop(&mut self) {
+        panic!("expected panic payload destructor panic");
+    }
+}
+
+/// Panics with an adversarial payload whose destructor also panics.
+#[ffi_export]
+pub fn freestanding_panics_with_panicking_payload_drop() {
+    std::panic::panic_any(PanickingDropPanicPayload);
+}
+
 /// Take `&mut String`
 #[ffi_export]
 #[cfg(feature = "non_robust_ref_mut")]
@@ -750,6 +770,20 @@ fn ffi_return_conversion_helpers() {
         <String as FromFfiReturn>::from_ffi_return(FfiReturn::UnknownHandle),
         "UnknownHandle"
     );
+}
+
+#[test]
+fn exported_panic_is_contained() {
+    assert_eq!(FfiReturn::UnrecoverableError, unsafe {
+        __freestanding_panics()
+    });
+}
+
+#[test]
+fn exported_panicking_payload_drop_is_contained() {
+    assert_eq!(FfiReturn::UnrecoverableError, unsafe {
+        __freestanding_panics_with_panicking_payload_drop()
+    });
 }
 
 #[test]

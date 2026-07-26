@@ -46,6 +46,55 @@ The hash is exposed by:
 Use this digest to verify that all peers share the same schedule when wiring
 config or telemetry checks.
 
+## Ledger-query host gas
+
+ABI-v1 ledger reads that execute through the query engine use the
+`LedgerQueryV1` formula family. This includes generic query execution, typed
+core-query gets and pages, parameter and contract lookups, balance reads, and
+account-alias resolution. The exact post-execution charge is computed with
+saturating `u64` arithmetic:
+
+```text
+gas = base
+    + item_rate * processed_items
+    + item_rate * offset_items
+    + 2 * processed_bytes
+```
+
+The schedule descriptor commits the formula version and every cost constant:
+
+| Descriptor parameter | Value | Meaning |
+|---|---:|---|
+| `ledger_query_formula_version` | 1 | Version of the complete request-kind, offset, sorting, item, and byte formula |
+| `ledger_query_base_singular` | 1,000 | Base for a singular query |
+| `ledger_query_base_iterable` | 2,500 | Base for an iterable query |
+| `ledger_query_per_item` | 250 | Item rate for an unsorted query |
+| `ledger_query_sort_multiplier` | 4 | Multiplier for a query that requests metadata sorting; its effective item rate is 1,000 |
+| `ledger_query_per_byte` | 2 | Rate for each canonically measured byte |
+
+Request semantics prevent pagination work from being charged twice:
+
+- An unsorted `QueryRequest::Start` uses the 250-unit item rate and sets
+  `offset_items` to the requested pagination offset. Bytes from skipped values
+  are still included in `processed_bytes`.
+- A metadata-sorted start query uses the 1,000-unit effective item rate and
+  sets `offset_items` to zero. Its `processed_items` already counts the
+  candidates scanned to form the sorted result, including work attributable to
+  the offset.
+- Singular queries use the 1,000-unit base with no offset. Iterable queries,
+  including typed core-query pages, use the 2,500-unit base.
+- For query-engine execution, `processed_bytes` includes canonical source
+  traversal and the final framed query response. Direct singular lookup paths
+  charge their canonical result payload instead. A typed core-query result
+  additionally charges its projected page payload and the pointer-ABI leaf
+  TLVs prepared for materialization, exactly once each.
+
+The query syscalls reserve the caller's available bounded gas before
+host-dependent work, derive one shared item-and-byte execution budget from
+these constants, and reject work that cannot fit that budget before returning
+guest-visible output. Changing any value or semantic rule above requires a
+formula-version increment and produces a different gas-schedule hash.
+
 ## Vector scaling and HTM retries
 
 - Vector ops (`VADD*`, `VAND`, `VXOR`, `VOR`, `VROT32`) scale with the logical

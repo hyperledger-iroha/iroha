@@ -1,23 +1,25 @@
 package org.hyperledger.iroha.sdk.subscriptions
 
 import org.hyperledger.iroha.sdk.client.JsonEncoder
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
+import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 
 /** Request payload for subscription usage recording. */
 class SubscriptionUsageRequest(
     authority: String,
     unitKey: String,
-    delta: String,
+    delta: KotodamaQuantity,
     usageTriggerId: String? = null,
 ) {
     val authority: String = requireNonBlank(authority, "authority")
     val unitKey: String = requireNonBlank(unitKey, "unit_key")
-    val delta: String = requireNumericLiteral(delta, "delta")
+    val delta: KotodamaQuantity = delta
     val usageTriggerId: String? = normalizeOptional(usageTriggerId)
 
     fun toJsonMap(): Map<String, Any> = buildMap {
         put("authority", authority)
         put("unit_key", unitKey)
-        put("delta", delta)
+        put("delta", NumericV1Codec.encodeQuantityJson(delta))
         this@SubscriptionUsageRequest.usageTriggerId?.let { put("usage_trigger_id", it) }
     }
 
@@ -28,31 +30,6 @@ class SubscriptionUsageRequest(
 private fun requireNonBlank(value: String, field: String): String {
     val trimmed = value.trim()
     check(trimmed.isNotEmpty()) { "$field is required" }
-    return trimmed
-}
-
-private fun requireNumericLiteral(value: String, field: String): String {
-    val trimmed = requireNonBlank(value, field)
-    var index = 0
-    val first = trimmed[0]
-    if (first == '+' || first == '-') {
-        require(first != '-') { "$field must be non-negative" }
-        index = 1
-    }
-    require(index < trimmed.length) { "$field must be numeric" }
-    var seenDot = false
-    var seenDigit = false
-    for (i in index until trimmed.length) {
-        val ch = trimmed[i]
-        if (ch == '.') {
-            require(!seenDot) { "$field must be numeric" }
-            seenDot = true
-            continue
-        }
-        require(ch in '0'..'9') { "$field must be numeric" }
-        seenDigit = true
-    }
-    require(seenDigit) { "$field must be numeric" }
     return trimmed
 }
 

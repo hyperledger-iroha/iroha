@@ -3995,11 +3995,10 @@ pub mod asset {
         );
     }
 
-    fn execute_mint_asset<V, Q>(executor: &mut V, isi: &Mint<Q, Asset>)
+    fn execute_mint_asset<V>(executor: &mut V, isi: &Mint<Quantity, Asset>)
     where
         V: Execute + Visit + ?Sized,
-        Q: Into<Numeric>,
-        Mint<Q, Asset>: BuiltInInstruction + NoritoSerialize,
+        Mint<Quantity, Asset>: BuiltInInstruction + NoritoSerialize,
     {
         let asset_id = isi.destination();
         if executor.context().curr_block.is_genesis() {
@@ -4043,11 +4042,10 @@ pub mod asset {
         execute_mint_asset(executor, isi);
     }
 
-    fn execute_burn_asset<V, Q>(executor: &mut V, isi: &Burn<Q, Asset>)
+    fn execute_burn_asset<V>(executor: &mut V, isi: &Burn<Quantity, Asset>)
     where
         V: Execute + Visit + ?Sized,
-        Q: Into<Numeric>,
-        Burn<Q, Asset>: BuiltInInstruction + NoritoSerialize,
+        Burn<Quantity, Asset>: BuiltInInstruction + NoritoSerialize,
     {
         let asset_id = isi.destination();
         if executor.context().curr_block.is_genesis() {

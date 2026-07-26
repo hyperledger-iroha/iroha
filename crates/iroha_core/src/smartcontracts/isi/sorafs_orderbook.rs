@@ -3753,11 +3753,7 @@ mod tests {
             },
         },
     };
-    use iroha_primitives::{
-        bigint::BigInt,
-        json::Json,
-        numeric::{Numeric, Quantity},
-    };
+    use iroha_primitives::{bigint::BigInt, json::Json, numeric::Quantity};
     use sorafs_manifest::{
         XorQuantity,
         orderbook::{
@@ -4088,8 +4084,9 @@ mod tests {
     }
 
     fn micro_quantity(micro: u128) -> Quantity {
-        Quantity::try_from_numeric(Numeric::new(micro, 6))
+        XorQuantity::try_from_micro(micro)
             .expect("micro-XOR fixture is a valid quantity")
+            .into_quantity()
     }
 
     fn state_with_settlement_accounts(
@@ -7304,12 +7301,17 @@ mod tests {
             .clone();
         let mut maximum_bytes = vec![0xFF; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
         *maximum_bytes.last_mut().expect("non-empty mantissa") = 0x7F;
-        let maximum = Quantity::try_from_numeric(Numeric::new(
-            BigInt::from_twos_bytes(&maximum_bytes)
-                .expect("maximum signed 512-bit positive mantissa"),
-            6,
-        ))
-        .expect("positive maximum is a valid quantity");
+        let maximum_mantissa = BigInt::from_twos_bytes(&maximum_bytes)
+            .expect("maximum signed 512-bit positive mantissa");
+        let mut maximum_source = maximum_mantissa.to_string();
+        let decimal_index = maximum_source
+            .len()
+            .checked_sub(6)
+            .expect("maximum mantissa has at least six decimal digits");
+        maximum_source.insert(decimal_index, '.');
+        let maximum: Quantity = maximum_source
+            .parse()
+            .expect("positive maximum is a valid quantity");
         assert!(
             maximum
                 .checked_add(&candidate.provider_credit.clone().into_quantity())

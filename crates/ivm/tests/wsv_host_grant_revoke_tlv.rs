@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use iroha_crypto::{Hash, PublicKey};
-use iroha_primitives::{numeric::Numeric, numeric_abi::QuantityValueV1};
+use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
@@ -59,7 +59,7 @@ fn grant_revoke_permission_with_tlv() {
 
     let mut wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
-        Numeric::from(50_u64),
+        Quantity::from(50_u64),
     )]);
     wsv.grant_permission(&bob, PermissionToken::ManagePermissions);
     let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
@@ -102,7 +102,7 @@ fn grant_revoke_permission_with_tlv() {
     let value = QuantityValueV1::decode_frame(tlv.payload)
         .expect("decode canonical balance")
         .into_quantity();
-    assert_eq!(value.as_numeric(), &Numeric::from(50_u64));
+    assert_eq!(value, Quantity::from(50_u64));
 
     // Step 3: revoke the same permission via Json TLV
     let subj = make_account_tlv(&bob);

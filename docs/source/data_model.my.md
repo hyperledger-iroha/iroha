@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   - စမ်းသပ်မှုများနှင့် တပ်ဆင်မှုများသည် universal `AccountId` ကို ဦးစွာ စေ့စပ်ထားပြီး၊ ထို့နောက် အမည်တူငှားရမ်းမှုများ၊ အမည်တူခွင့်ပြုချက်များနှင့် မည်သည့်ဒိုမိန်းပိုင်ဆိုင်သည့်ပြည်နယ်ကိုမဆို အကောင့်အထောက်အထားကိုယ်တိုင်ကုဒ်သွင်းမည့်အစား ဒိုမိန်း၏ယူဆချက်များအား သီးခြားစီထည့်သွင်းသင့်သည်။
   - ယခု အများသူငှာ အကောင့်ရှာဖွေမှုသည် နာမည်တူများ (`FindAliasesByAccountId`) ကို အာရုံစိုက်ထားသည်။ အကောင့်အထောက်အထားကိုယ်တိုင်က domainless ဖြစ်နေပါတယ်။### ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက်များနှင့် ပိုင်ဆိုင်မှုများ
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` ကို ဗားရှင်းရေးဆွဲခြင်းနှင့် checksum ဖြင့် ရှေ့မဆက်သော Base58 လိပ်စာအဖြစ် စာသားအတိုင်း ဖော်ထုတ်ထားသည်။
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`။
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`။
   - `name` သည် လူမျက်နှာပြထားသော စာသားလိုအပ်ပြီး `#`/`@` မပါဝင်ရပါ။
   - `alias` သည် စိတ်ကြိုက်ရွေးချယ်နိုင်ပြီး အနက်မှတစ်ခုဖြစ်ရမည်-
     - `<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`။
   - တည်ဆောက်သူများ- `AssetDefinition::new(id, spec)` သို့မဟုတ် အဆင်ပြေစေရန် `numeric(id)`; `name` လိုအပ်ပြီး `.with_name(...)` မှတစ်ဆင့် သတ်မှတ်ရပါမည်။
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`။
-- သိုလှောင်မှု အဆင်ပြေသော `AssetEntry`/`AssetValue` ပါသော `Asset { id, value: Numeric }`။- `AssetBalanceScope`- ကန့်သတ်မထားသော လက်ကျန်များအတွက် `Global` နှင့် dataspace-ကန့်သတ်ထားသော လက်ကျန်များအတွက် `Dataspace(DataSpaceId)`။
-- အနှစ်ချုပ် APIs အတွက် `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` ကို ဖော်ထုတ်ထားသည်။
+- သိုလှောင်မှု အဆင်ပြေသော `AssetEntry`/`AssetValue` ပါသော `Asset { id, value: Quantity }`။- `AssetBalanceScope`- ကန့်သတ်မထားသော လက်ကျန်များအတွက် `Global` နှင့် dataspace-ကန့်သတ်ထားသော လက်ကျန်များအတွက် `Dataspace(DataSpaceId)`။
+- အနှစ်ချုပ် APIs အတွက် `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` ကို ဖော်ထုတ်ထားသည်။
 
 ### NFTs
 - `NftId { domain: DomainId, name: Name }`။
@@ -182,7 +182,7 @@ translator: machine-google-reviewed
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

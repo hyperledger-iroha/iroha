@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   - בדיקות ותוספות צריכים לראות תחילה את ה-`AccountId` האוניברסלי, ולאחר מכן להוסיף חכירות כינוי, הרשאות כינוי וכל מדינה בבעלות דומיין בנפרד במקום לקודד הנחות דומיין לזהות החשבון עצמו.
   - חיפוש חשבון יחיד ציבורי מתמקד כעת בכינויים (`FindAliasesByAccountId`); זהות החשבון עצמה נשארת ללא דומיין.### הגדרות ונכסים של נכסים
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` חשופה טקסטואלית ככתובת Base58 ללא קידומת עם ניהול גרסאות ובדיקת סכום.
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`.
   - `name` נדרש טקסט תצוגה הפונה לאדם ואסור להכיל `#`/`@`.
   - `alias` הוא אופציונלי וחייב להיות אחד מ:
     - `<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - בונים: `AssetDefinition::new(id, spec)` או נוחות `numeric(id)`; `name` נדרש ויש להגדיר אותו באמצעות `.with_name(...)`.
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }` עם `AssetEntry`/`AssetValue` ידידותי לאחסון.- `AssetBalanceScope`: `Global` עבור יתרות בלתי מוגבלות ו-`Dataspace(DataSpaceId)` עבור יתרות מוגבלות במרחב נתונים.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` חשוף עבור ממשקי API לסיכום.
+- `Asset { id, value: Quantity }` עם `AssetEntry`/`AssetValue` ידידותי לאחסון.- `AssetBalanceScope`: `Global` עבור יתרות בלתי מוגבלות ו-`Dataspace(DataSpaceId)` עבור יתרות מוגבלות במרחב נתונים.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` חשוף עבור ממשקי API לסיכום.
 
 ### NFTs
 - `NftId { domain: DomainId, name: Name }`.
@@ -182,7 +182,7 @@ translator: machine-google-reviewed
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

@@ -783,7 +783,7 @@ async fn ws_fallback_connects_and_handshakes() {
     .await
     .expect("start outbound WebSocket test network");
 
-    let peer2_address = websocket_address
+    let peer2_address: iroha_primitives::addr::SocketAddr = websocket_address
         .to_string()
         .parse()
         .expect("WebSocket listener address should be a valid peer address");

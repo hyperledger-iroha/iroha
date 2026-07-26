@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   - བརྟག་དཔྱད་དང་སྒྲིག་ཆས་ཚུ་གིས་ དང་པ་ར་ ཡོངས་ཁྱབ་`AccountId` འདི་བཙུགས་དགོཔ་དང་ དེ་ལས་ རྩིས་ཐོ་ངོ་རྟགས་ནང་ལུ་ མངའ་ཁོངས་བསམ་ཚུལ་ཚུ་ ཨིན་ཀོ་ཌིང་འབད་ནིའི་ཚབ་ལུ་ མིང་གཞན་གླ་ཁར་ལེན་ནི་དང་ མིང་གཞན་ཆོག་ཐམ་ དེ་ལས་ མངའ་ཁོངས་བདག་དབང་ཡོད་པའི་གནས་སྟངས་གང་རུང་ཅིག་ སོ་སོ་སྦེ་ཁ་སྐོང་བརྐྱབ་དགོ།
   - མི་མང་རྐྱང་པའི་རྩིས་ཐོ་འཚོལ་ཞིབ་འདི་ད་ལྟོ་མིང་གཞན་ཚུ་ལུ་གཙོ་བོར་བསྟེནམ་ཨིན། (`FindAliasesByAccountId`); རྩིས་ཐོའི་ངོ་རྟགས་འདི་རང་ མངའ་ཁོངས་མེད་པར་སྡོདཔ་ཨིན།### རྒྱུ་དངོས་ངེས་ཚིག་དང་རྒྱུ་ནོར།
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` ཐོན་རིམ་དང་ བརྟག་ཞིབ་བསྡོམས་དང་གཅིག་ཁར་ སྔོན་སྒྲིག་མེད་པའི་ Base58 ཁ་བྱང་སྦེ་ ཚིག་ཡིག་ཐོག་ལས་ གསལ་སྟོན་འབད་ཡོདཔ་ཨིན།
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`.
   - `name` འདི་ མི་ལུ་གདོང་ཕྱོགས་བཀྲམ་སྟོན་ཚིག་ཡིག་དགོཔ་དང་ `#`/`@` འོང་མི་དགོ།
   - `alias` འདི་གདམ་ཁ་ཅན་ཨིནམ་དང་ འདི་ནང་ལས་གཅིག་འོང་དགོ།
     - ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༡༣༥X
@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - བཟོ་བསྐྲུན་པ་ཚུ་: `AssetDefinition::new(id, spec)` ཡང་ན་ སྟབས་བདེ་ `numeric(id)`; `name` འདི་དགོས་མཁོ་ཡོདཔ་དང་ `.with_name(...)` བརྒྱུད་དེ་གཞི་སྒྲིག་འབད་དགོ།
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- གསོག་འཇོག་འབད་བཏུབ་པའི་ `Asset { id, value: Numeric }` དང་ཅིག་ཁར་ `AssetEntry`/`AssetValue`.- `AssetBalanceScope`: བཀག་ཆ་མེད་པའི་ལྷག་ལུས་ཚུ་གི་དོན་ལུ་ `Global` དང་ གནད་སྡུད་ས་སྒོ་-བཀག་ཆ་ཡོད་པའི་ལྷག་ལུས་ཚུ་གི་དོན་ལུ་ `Dataspace(DataSpaceId)` ཨིན།
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` བཅུད་དོན་ཨེ་པི་ཨའི་ཨེསི་ཚུ་གི་དོན་ལུ་ ཕྱིར་བཏོན་འབད་ཡོདཔ།
+- གསོག་འཇོག་འབད་བཏུབ་པའི་ `Asset { id, value: Quantity }` དང་ཅིག་ཁར་ `AssetEntry`/`AssetValue`.- `AssetBalanceScope`: བཀག་ཆ་མེད་པའི་ལྷག་ལུས་ཚུ་གི་དོན་ལུ་ `Global` དང་ གནད་སྡུད་ས་སྒོ་-བཀག་ཆ་ཡོད་པའི་ལྷག་ལུས་ཚུ་གི་དོན་ལུ་ `Dataspace(DataSpaceId)` ཨིན།
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` བཅུད་དོན་ཨེ་པི་ཨའི་ཨེསི་ཚུ་གི་དོན་ལུ་ ཕྱིར་བཏོན་འབད་ཡོདཔ།
 
 ### ཨེན་ཨེཕ་ཊི་ཚུ།
 - `NftId { domain: DomainId, name: Name }`.
@@ -182,7 +182,7 @@ translator: machine-google-reviewed
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

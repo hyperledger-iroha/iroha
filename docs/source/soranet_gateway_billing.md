@@ -81,5 +81,5 @@ Guardrail behaviour:
   nearest micro-XOR.
 - Discount tiers pick the highest applicable threshold per line.
 - Amounts are stored and exported in micro-XOR; ledger projections convert the
-  final total to `Numeric` with six decimal places before emitting the transfer
+  final total to `Quantity` with six decimal places before emitting the transfer
   batch.

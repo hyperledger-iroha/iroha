@@ -12,7 +12,7 @@ use std::{
 use criterion::Criterion;
 use dashmap::{DashMap, DashSet};
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use ivm::{
     DurableStateSnapshot, MockWorldStateView, WsvHost,
     host::IVMHost,
@@ -30,14 +30,14 @@ const TRANSFER_ROUTES: [[(usize, usize); 3]; 4] = [
 #[derive(Clone)]
 struct AssetDefinition {
     mintable: Mintable,
-    total_supply: Numeric,
+    total_supply: Quantity,
 }
 
 impl AssetDefinition {
     fn new(mintable: Mintable) -> Self {
         Self {
             mintable,
-            total_supply: Numeric::zero(),
+            total_supply: Quantity::zero(),
         }
     }
 }
@@ -47,7 +47,7 @@ struct ConcurrentWSV {
     domains: DashSet<DomainId>,
     accounts: DashSet<AccountId>,
     asset_definitions: DashMap<AssetDefinitionId, AssetDefinition>,
-    balances: DashMap<(AccountId, AssetDefinitionId), Numeric>,
+    balances: DashMap<(AccountId, AssetDefinitionId), Quantity>,
 }
 
 // DashMap and DashSet use interior mutability through `RwLock`, which prevents
@@ -73,11 +73,8 @@ impl ConcurrentWSV {
             .is_none()
     }
 
-    fn mint(&self, account_id: AccountId, asset_id: AssetDefinitionId, amount: Numeric) -> bool {
+    fn mint(&self, account_id: AccountId, asset_id: AssetDefinitionId, amount: Quantity) -> bool {
         if !self.accounts.contains(&account_id) {
-            return false;
-        }
-        if amount.mantissa().is_negative() {
             return false;
         }
         let mut def = match self.asset_definitions.get_mut(&asset_id) {
@@ -87,19 +84,19 @@ impl ConcurrentWSV {
         if def.mintable.consume_one().is_err() {
             return false;
         }
-        let total = match def.total_supply.clone().checked_add(amount.clone()) {
-            Some(val) => val,
-            None => return false,
+        let total = match def.total_supply.checked_add(&amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
         def.total_supply = total;
         drop(def);
         let mut bal = self
             .balances
             .entry((account_id, asset_id))
-            .or_insert_with(Numeric::zero);
-        let next = match bal.clone().checked_add(amount) {
-            Some(val) => val,
-            None => return false,
+            .or_insert_with(Quantity::zero);
+        let next = match bal.checked_add(&amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
         *bal = next;
         true
@@ -110,34 +107,28 @@ impl ConcurrentWSV {
         from: AccountId,
         to: AccountId,
         asset_id: AssetDefinitionId,
-        amount: Numeric,
+        amount: Quantity,
     ) -> bool {
         if !self.accounts.contains(&from) || !self.accounts.contains(&to) {
-            return false;
-        }
-        if amount.mantissa().is_negative() {
             return false;
         }
         let mut from_bal = self
             .balances
             .entry((from.clone(), asset_id.clone()))
-            .or_insert_with(Numeric::zero);
-        let remaining = match from_bal.clone().checked_sub(amount.clone()) {
-            Some(val) => val,
-            None => return false,
+            .or_insert_with(Quantity::zero);
+        let remaining = match from_bal.checked_sub(&amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
-        if remaining.mantissa().is_negative() {
-            return false;
-        }
         *from_bal = remaining;
         drop(from_bal);
         let mut to_bal = self
             .balances
             .entry((to, asset_id))
-            .or_insert_with(Numeric::zero);
-        let next = match to_bal.clone().checked_add(amount) {
-            Some(val) => val,
-            None => return false,
+            .or_insert_with(Quantity::zero);
+        let next = match to_bal.checked_add(&amount) {
+            Ok(value) => value,
+            Err(_) => return false,
         };
         *to_bal = next;
         true
@@ -195,7 +186,7 @@ fn bench_massive_wsv(c: &mut Criterion) {
                     assert!(wsv_ref.mint(
                         accounts_ref[0].clone(),
                         asset_id.clone(),
-                        Numeric::from(1_u64),
+                        Quantity::from(1_u64),
                     ));
                     let route = &TRANSFER_ROUTES[(idx % TRANSFER_ROUTES.len() as u64) as usize];
                     for &(from_idx, to_idx) in route {
@@ -203,7 +194,7 @@ fn bench_massive_wsv(c: &mut Criterion) {
                             accounts_ref[from_idx].clone(),
                             accounts_ref[to_idx].clone(),
                             asset_id.clone(),
-                            Numeric::from(1_u64),
+                            Quantity::from(1_u64),
                         ));
                     }
                     TxResult {

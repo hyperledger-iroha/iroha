@@ -8,7 +8,7 @@ use std::{
 };
 
 use iroha_crypto::PublicKey;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use ivm::{
     IVM, KotodamaCompiler, VMError,
     host::IVMHost,
@@ -246,7 +246,7 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
         move |host| {
             let balance = host.wsv.balance(recipient.clone(), asset_id_clone.clone());
             assert!(
-                balance >= Numeric::from(250_u64),
+                balance >= Quantity::from(250_u64),
                 "register-and-mint should mint at least 250 units (observed {balance})"
             );
         },
@@ -276,7 +276,7 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
             &caller,
             caller.clone(),
             asset_id.clone(),
-            Numeric::from(20_u64)
+            Quantity::from(20_u64)
         ),
         "seed caller balance"
     );
@@ -292,15 +292,15 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
             let caller_balance = host.wsv.balance(caller.clone(), asset_id_clone.clone());
             let recipient_balance = host.wsv.balance(recipient.clone(), asset_id_clone.clone());
             assert!(
-                recipient_balance >= Numeric::from(10_u64),
+                recipient_balance >= Quantity::from(10_u64),
                 "recipient balance should increase (observed {recipient_balance})"
             );
             let total = caller_balance
-                .checked_add(recipient_balance)
+                .checked_add(&recipient_balance)
                 .expect("sum caller + recipient");
             assert_eq!(
                 total,
-                Numeric::from(20_u64),
+                Quantity::from(20_u64),
                 "transfer preserves total balance"
             );
         },
@@ -333,7 +333,7 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
             &caller,
             alice.clone(),
             asset_id.clone(),
-            Numeric::from(15_u64)
+            Quantity::from(15_u64)
         ),
         "seed alice balance"
     );
@@ -348,15 +348,15 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
             let alice_balance = host.wsv.balance(alice.clone(), asset_id_clone.clone());
             let bob_balance = host.wsv.balance(bob.clone(), asset_id_clone.clone());
             assert!(
-                bob_balance >= Numeric::from(10_u64),
+                bob_balance >= Quantity::from(10_u64),
                 "contract transfer should credit bob (observed {bob_balance})"
             );
             let total = alice_balance
-                .checked_add(bob_balance)
+                .checked_add(&bob_balance)
                 .expect("sum alice + bob");
             assert_eq!(
                 total,
-                Numeric::from(15_u64),
+                Quantity::from(15_u64),
                 "transfer preserves total supply"
             );
         },

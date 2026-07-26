@@ -7563,6 +7563,7 @@ fn normalize_zk_ballot_public_inputs(value: &mut json::Value, context: &str) -> 
         ));
     }
     ensure_zk_public_input_owner_canonical(map, context)?;
+    ensure_zk_public_input_amount_canonical(map, context)?;
     Ok(())
 }
 
@@ -7610,6 +7611,22 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
         ));
     }
     Ok(())
+}
+
+fn ensure_zk_public_input_amount_canonical(map: &json::Map, context: &str) -> napi::Result<()> {
+    let Some(value) = map.get("amount") else {
+        return Ok(());
+    };
+    if matches!(value, json::Value::Null) {
+        return Ok(());
+    }
+    let amount = value.as_str().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context}.amount must be a canonical Quantity string"),
+        )
+    })?;
+    parse_canonical_quantity_text(amount, &format!("{context}.amount")).map(|_| ())
 }
 
 fn canonicalize_hex32_public_input(
@@ -7715,25 +7732,30 @@ fn parse_u8_value(value: json::Value, context: &str) -> napi::Result<u8> {
     })
 }
 
-fn parse_u128_value(value: json::Value, context: &str) -> napi::Result<u128> {
-    match value {
-        json::Value::Number(number) => number.as_u64().map(u128::from).ok_or_else(|| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("{context} must be an unsigned integer"),
-            )
-        }),
-        json::Value::String(s) => s.parse::<u128>().map_err(|err| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("{context} must be an unsigned integer string: {err}"),
-            )
-        }),
-        other => Err(napi::Error::new(
+fn parse_canonical_quantity_text(source: &str, context: &str) -> napi::Result<Quantity> {
+    let quantity = Quantity::from_str(source).map_err(|err| {
+        napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context} must be an unsigned integer (found {other:?})"),
-        )),
+            format!("{context} must be canonical non-negative Quantity text: {err}"),
+        )
+    })?;
+    if quantity.to_string() != source {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must use canonical Quantity text"),
+        ));
     }
+    Ok(quantity)
+}
+
+fn parse_canonical_quantity_value(value: json::Value, context: &str) -> napi::Result<Quantity> {
+    let json::Value::String(source) = value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be a canonical Quantity string"),
+        ));
+    };
+    parse_canonical_quantity_text(&source, context)
 }
 
 fn parse_optional_voting_mode(
@@ -9539,7 +9561,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 )?;
                 let owner_value = required_value(&mut fields, "owner", "CastPlainBallot")?;
                 let owner = parse_account_id_value(owner_value, "CastPlainBallot.owner")?;
-                let amount = parse_u128_value(
+                let amount = parse_canonical_quantity_value(
                     required_value(&mut fields, "amount", "CastPlainBallot")?,
                     "CastPlainBallot.amount",
                 )?;
@@ -9554,7 +9576,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let ballot = CastPlainBallot {
                     referendum_id,
                     owner,
-                    amount: amount.into(),
+                    amount,
                     duration_blocks,
                     direction,
                 };
@@ -9564,14 +9586,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterCitizen") {
                 let owner_value = required_value(&mut fields, "owner", "RegisterCitizen")?;
                 let owner = parse_account_id_value(owner_value, "RegisterCitizen.owner")?;
-                let amount = parse_u128_value(
+                let amount = parse_canonical_quantity_value(
                     required_value(&mut fields, "amount", "RegisterCitizen")?,
                     "RegisterCitizen.amount",
                 )?;
-                let instruction = RegisterCitizen {
-                    owner,
-                    amount: amount.into(),
-                };
+                let instruction = RegisterCitizen { owner, amount };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
 
@@ -14665,20 +14684,14 @@ fn build_private_kaigi_fee_change_payload(
 }
 
 fn normalize_private_kaigi_fee_amount(fee_amount: &str) -> napi::Result<String> {
-    let fee_amount = fee_amount.trim().to_owned();
     if fee_amount.is_empty() {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
             "fee_amount must be non-empty",
         ));
     }
-    let _parsed_fee_amount = Numeric::from_str(&fee_amount).map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid fee_amount numeric literal: {err}"),
-        )
-    })?;
-    Ok(fee_amount)
+    parse_canonical_quantity_text(fee_amount, "fee_amount")?;
+    Ok(fee_amount.to_owned())
 }
 
 fn normalize_private_kaigi_nonce(nonce: Option<u32>) -> napi::Result<Option<NonZeroU32>> {
@@ -16159,6 +16172,24 @@ mod tests {
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert!(error.reason.contains(field));
             assert!(error.reason.contains("safe integer"));
+        }
+    }
+
+    #[test]
+    fn private_kaigi_fee_amount_requires_canonical_quantity_text() {
+        let wide = "340282366920938463463374607431768211456.25";
+        for amount in ["0", "1.25", wide] {
+            assert_eq!(
+                normalize_private_kaigi_fee_amount(amount)
+                    .expect("canonical private Kaigi fee Quantity"),
+                amount
+            );
+        }
+
+        for amount in ["", "-1", "01", "1.0", "+1", " 1", "1 ", "1e3"] {
+            let error = normalize_private_kaigi_fee_amount(amount)
+                .expect_err("invalid private Kaigi fee Quantity must be rejected");
+            assert_eq!(error.status, napi::Status::InvalidArg);
         }
     }
 
@@ -21222,6 +21253,31 @@ seiyaku Privacy {
         AccountId::new(keypair.public_key().clone())
     }
 
+    fn cast_plain_ballot_json(owner: &AccountId, amount: json::Value) -> json::Value {
+        let mut fields = json::Map::new();
+        fields.insert(
+            "referendum_id".to_owned(),
+            json::Value::String("ref-plain".to_owned()),
+        );
+        fields.insert(
+            "owner".to_owned(),
+            json::to_value(owner).expect("serialize ballot owner"),
+        );
+        fields.insert("amount".to_owned(), amount);
+        fields.insert(
+            "duration_blocks".to_owned(),
+            json::to_value(&42_u64).expect("serialize ballot duration"),
+        );
+        fields.insert(
+            "direction".to_owned(),
+            json::to_value(&1_u8).expect("serialize ballot direction"),
+        );
+        json::Value::Object(json::Map::from_iter([(
+            "CastPlainBallot".to_owned(),
+            json::Value::Object(fields),
+        )]))
+    }
+
     fn account_json_literal(account: &AccountId) -> String {
         json::to_value(account)
             .expect("serialize account id")
@@ -23709,6 +23765,69 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn governance_cast_zk_ballot_public_inputs_accepts_fractional_and_wide_quantity_hints() {
+        let owner = canonical_owner_literal("wonderland");
+        let wide = "340282366920938463463374607431768211456.25";
+        for amount in ["1.25", wide] {
+            let mut value = norito_json!({
+                "owner": owner,
+                "amount": amount,
+                "duration_blocks": 64,
+            });
+            normalize_zk_ballot_public_inputs(&mut value, "CastZkBallot.public_inputs_json")
+                .expect("canonical Quantity lock hint must normalize");
+            assert_eq!(
+                value.get("amount").and_then(json::Value::as_str),
+                Some(amount)
+            );
+        }
+    }
+
+    #[test]
+    fn governance_cast_zk_ballot_public_inputs_rejects_invalid_quantity_hints() {
+        let owner = canonical_owner_literal("wonderland");
+        let oversized = format!("1{}", "0".repeat(200));
+        let invalid = [
+            ("negative", json::Value::String("-1".to_owned())),
+            ("leading zero", json::Value::String("01".to_owned())),
+            (
+                "trailing fractional zero",
+                json::Value::String("1.0".to_owned()),
+            ),
+            ("explicit plus", json::Value::String("+1".to_owned())),
+            ("leading whitespace", json::Value::String(" 1".to_owned())),
+            ("trailing whitespace", json::Value::String("1 ".to_owned())),
+            ("exponent", json::Value::String("1e3".to_owned())),
+            ("overflow", json::Value::String(oversized)),
+            (
+                "number",
+                json::from_str::<json::Value>("1").expect("JSON number"),
+            ),
+            ("boolean", json::Value::Bool(true)),
+            ("array", json::Value::Array(Vec::new())),
+            ("object", json::Value::Object(json::Map::new())),
+        ];
+        for (case, amount) in invalid {
+            let mut map = json::Map::new();
+            map.insert("owner".to_owned(), json::Value::String(owner.clone()));
+            map.insert("amount".to_owned(), amount);
+            map.insert(
+                "duration_blocks".to_owned(),
+                json::from_str::<json::Value>("64").expect("JSON number"),
+            );
+            let mut value = json::Value::Object(map);
+            let error =
+                normalize_zk_ballot_public_inputs(&mut value, "CastZkBallot.public_inputs_json")
+                    .expect_err("invalid Quantity lock hint must be rejected");
+            assert!(
+                error.reason.contains(".amount"),
+                "unexpected {case} rejection: {}",
+                error.reason
+            );
+        }
+    }
+
+    #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_partial_hints() {
         let mut inner = json::Map::new();
         let owner = canonical_owner_literal("wonderland");
@@ -23836,11 +23955,71 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn governance_cast_plain_ballot_accepts_fractional_and_wide_quantities() {
+        let owner = sample_account("wonderland");
+        let wide = "340282366920938463463374607431768211456.25";
+        for amount in ["1.25", wide] {
+            let instruction = value_to_instruction(cast_plain_ballot_json(
+                &owner,
+                json::Value::String(amount.to_owned()),
+            ))
+            .expect("canonical plain-ballot Quantity must deserialize");
+            let ballot = instruction
+                .as_any()
+                .downcast_ref::<CastPlainBallot>()
+                .expect("CastPlainBallot");
+            assert_eq!(ballot.amount.to_string(), amount);
+
+            let encoded =
+                instruction_to_json_value(&instruction).expect("serialize CastPlainBallot");
+            assert_eq!(
+                encoded
+                    .get("CastPlainBallot")
+                    .and_then(|value| value.get("amount"))
+                    .and_then(json::Value::as_str),
+                Some(amount)
+            );
+        }
+    }
+
+    #[test]
+    fn governance_cast_plain_ballot_rejects_invalid_quantity_shapes_and_text() {
+        let owner = sample_account("wonderland");
+        let invalid = [
+            ("negative", json::Value::String("-1".to_owned())),
+            ("leading zero", json::Value::String("01".to_owned())),
+            (
+                "trailing fractional zero",
+                json::Value::String("1.0".to_owned()),
+            ),
+            ("explicit plus", json::Value::String("+1".to_owned())),
+            ("whitespace", json::Value::String(" 1".to_owned())),
+            (
+                "number",
+                json::from_str::<json::Value>("1").expect("JSON number"),
+            ),
+            ("null", json::Value::Null),
+            ("boolean", json::Value::Bool(true)),
+            ("array", json::Value::Array(Vec::new())),
+            ("object", json::Value::Object(json::Map::new())),
+        ];
+        for (case, amount) in invalid {
+            let error = value_to_instruction(cast_plain_ballot_json(&owner, amount))
+                .expect_err("invalid plain-ballot Quantity must be rejected");
+            assert!(
+                error.reason.contains("CastPlainBallot.amount"),
+                "unexpected {case} rejection: {}",
+                error.reason
+            );
+        }
+    }
+
+    #[test]
     fn governance_register_citizen_instruction_json_roundtrip() {
         let owner = sample_account("wonderland");
         let instruction: InstructionBox = Box::new(RegisterCitizen {
             owner: owner.clone(),
-            amount: 10_000_u64.into(),
+            amount: "10000.25".parse().expect("canonical Quantity"),
         })
         .into_instruction_box();
 
@@ -23865,6 +24044,65 @@ seiyaku Privacy {
             .and_then(|value| value.as_str())
             .expect("owner string present");
         assert_eq!(owner_json, account_json_literal(&owner));
+    }
+
+    #[test]
+    fn governance_register_citizen_accepts_fractional_and_wide_quantities() {
+        let owner = sample_account("wonderland");
+        let wide = "340282366920938463463374607431768211456.25";
+        for amount in ["1.25", wide] {
+            let instruction = value_to_instruction(norito_json!({
+                "RegisterCitizen": {
+                    "owner": account_json_literal(&owner),
+                    "amount": amount,
+                }
+            }))
+            .expect("canonical citizen-bond Quantity must deserialize");
+            let register = instruction
+                .as_any()
+                .downcast_ref::<RegisterCitizen>()
+                .expect("RegisterCitizen");
+            assert_eq!(register.amount.to_string(), amount);
+        }
+    }
+
+    #[test]
+    fn governance_register_citizen_rejects_invalid_quantity_shapes_and_text() {
+        let owner = sample_account("wonderland");
+        let invalid = [
+            ("negative", json::Value::String("-1".to_owned())),
+            ("leading zero", json::Value::String("01".to_owned())),
+            (
+                "trailing fractional zero",
+                json::Value::String("1.0".to_owned()),
+            ),
+            ("explicit plus", json::Value::String("+1".to_owned())),
+            ("leading whitespace", json::Value::String(" 1".to_owned())),
+            ("trailing whitespace", json::Value::String("1 ".to_owned())),
+            ("exponent", json::Value::String("1e3".to_owned())),
+            (
+                "number",
+                json::from_str::<json::Value>("1").expect("JSON number"),
+            ),
+            ("null", json::Value::Null),
+            ("boolean", json::Value::Bool(true)),
+            ("array", json::Value::Array(Vec::new())),
+            ("object", json::Value::Object(json::Map::new())),
+        ];
+        for (case, amount) in invalid {
+            let error = value_to_instruction(norito_json!({
+                "RegisterCitizen": {
+                    "owner": account_json_literal(&owner),
+                    "amount": amount,
+                }
+            }))
+            .expect_err("invalid citizen-bond Quantity must be rejected");
+            assert!(
+                error.reason.contains("RegisterCitizen.amount"),
+                "unexpected {case} rejection: {}",
+                error.reason
+            );
+        }
     }
 
     #[test]

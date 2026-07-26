@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T19:17:13.238594+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ translator: machine-google-reviewed
 
 ### B. განსაზღვრეთ დეტერმინისტული VM/host ABI აკრეფილი მნიშვნელობებისთვის
 - გამოიყენეთ Norito VM მხარეს სტრუქტურირებული არგუმენტებისთვის:
-  - გადაიტანეთ მაჩვენებლები (x10..x13 და ა.შ.) VM მეხსიერების რეგიონებში, რომლებიც შეიცავს Norito-ში დაშიფრულ მნიშვნელობებს ტიპებისთვის, როგორიცაა `AccountId`, `AssetDefinitionId`, `Numeric`, `Numeric`, I001.
+  - გადაიტანეთ მაჩვენებლები (x10..x13 და ა.შ.) VM მეხსიერების რეგიონებში, რომლებიც შეიცავს Norito-ში დაშიფრულ მნიშვნელობებს ტიპებისთვის, როგორიცაა `AccountId`, `AssetDefinitionId`, `Quantity`, `Quantity`, I001.
   - ჰოსტი კითხულობს ბაიტებს `IVM` მეხსიერების დამხმარეების მეშვეობით და დეკოდირდება Norito-ით (`iroha_data_model` უკვე იღებს `Encode/Decode`).
 - დაამატეთ მინიმალური დამხმარეები Kotodama კოდეგენში, რათა მოხდეს პირდაპირი ID-ების სერია კოდის/მუდმივი აუზების სახით ან მომზადდეს ზარის ჩარჩოები მეხსიერებაში.
-- თანხები არის `Numeric` და გადაეცემა როგორც NoritoBytes მაჩვენებლები; სხვა რთული ტიპები ასევე გადის მაჩვენებლით.
+- აქტივის რაოდენობები იყენებს სპეციალურ `QuantityValueV1` pointer-ABI TLV-ს (`PointerType::Quantity = 0x0010`) და არა ზოგად `NoritoBytes` მაჩვენებელს; სხვა რთული მნიშვნელობები იყენებს მათთვის მინიჭებულ მაჩვენებლის ტიპებს.
 - დაწერეთ ეს `crates/ivm/docs/calling_convention.md`-ში და დაამატეთ მაგალითები.### C. გაუსწორეთ syscall დასახელება და დაფარვა ISI/Data Model-თან
 - სიცხადისთვის გადაარქვით NFT-თან დაკავშირებულ სიკალებს: კანონიკური სახელები ახლა მიჰყვება `SYSCALL_NFT_*` შაბლონს (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA` და ა.შ.).
 - გამოაქვეყნეთ რუკების ცხრილი (დოკუმენტი + კოდის კომენტარები) თითოეული syscall-დან ძირითადი ISI სემანტიკამდე, მათ შორის:

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T19:17:13.238594+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ translator: machine-google-reviewed
 
 ### Б. Билдәләнгән ҡиммәттәр өсөн детерминистик ВМ/хужа АБИ билдәләгеҙ
 - структуралы аргументтар өсөн VM яғында Norito ҡулланыу:
-  - Үткәргес күрһәткестәре (х10..x13, һ.б.) VM хәтер төбәктәренә Norito‐X‐кодланған ҡиммәттәр өсөн типтары өсөн `AccountId`, `AssetDefinitionId`, `Numeric`, Kotodama.
+  - Үткәргес күрһәткестәре (х10..x13, һ.б.) VM хәтер төбәктәренә Norito‐X‐кодланған ҡиммәттәр өсөн типтары өсөн `AccountId`, `AssetDefinitionId`, `Quantity`, Kotodama.
   - Алып барыусы байттарҙы `IVM` хәтер ярҙамсылары аша уҡый һәм Norito менән декодлай (`iroha_data_model` инде `Encode/Decode` инде сыға.
 - Kotodama codegen-да минималь ярҙамсыларҙы туранан-тура идентификаторҙарҙы код/даими бассейндарға сериялаштырыу йәки хәтерҙә шылтыратыу кадрҙарын әҙерләү өсөн өҫтәү.
-- суммалары `Numeric` һәм ҡабул ителә, сөнки NoritoBytes күрһәткестәре; башҡа ҡатмарлы типтар ҙа күрһәткес буйынса үтә.
+- Актив күләмдәре дөйөм `NoritoBytes` күрһәткесен түгел, махсус `QuantityValueV1` pointer-ABI TLV-ын (`PointerType::Quantity = 0x0010`) ҡуллана; башҡа ҡатмарлы ҡиммәттәр үҙҙәренә тәғәйенләнгән күрһәткес төрҙәрен ҡуллана.
 - Был турала `crates/ivm/docs/calling_convention.md`-та документ һәм миҫалдар өҫтәгеҙ.### C. syscall исем ҡушыу һәм ҡаплау менән тура килтереп ISI/Мәғлүмәттәр моделе
 - NFT-ға бәйле syscalls асыҡлыҡ өсөн үҙгәртергә: хәҙер канон исемдәре `SYSCALL_NFT_*` ҡалыбы буйынса үтә (`SYSCALL_NFT_MINT_ASSET`, `SYSCALL_NFT_SET_METADATA` һ.б.).
 - Һәр syscall-нан үҙәк ИСИ семантикаһына картаға төшөрөү таблицаһын (док + код комментарийҙары) баҫтырып сығарыу, шул иҫәптән:

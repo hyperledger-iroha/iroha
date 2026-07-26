@@ -10,6 +10,8 @@ use std::{
 
 const BEGIN: &str = "<!-- BEGIN GENERATED SYSCALLS -->";
 const END: &str = "<!-- END GENERATED SYSCALLS -->";
+const ABI_SYSCALL_GOLDEN_BEGIN: &str = "    // BEGIN GENERATED ABI V1 SYSCALL LIST";
+const ABI_SYSCALL_GOLDEN_END: &str = "    // END GENERATED ABI V1 SYSCALL LIST";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -505,6 +507,72 @@ fn render_docs(text: &str, table: &str) -> Result<String, String> {
     }
 }
 
+fn replace_generated_section(
+    text: &str,
+    begin_marker: &str,
+    end_marker: &str,
+    expected_section: &str,
+) -> Result<String, String> {
+    let begin_matches = text.match_indices(begin_marker).collect::<Vec<_>>();
+    if begin_matches.len() != 1 {
+        return Err(format!(
+            "expected exactly one generated-section begin marker `{begin_marker}`, found {}",
+            begin_matches.len()
+        ));
+    }
+    let end_matches = text.match_indices(end_marker).collect::<Vec<_>>();
+    if end_matches.len() != 1 {
+        return Err(format!(
+            "expected exactly one generated-section end marker `{end_marker}`, found {}",
+            end_matches.len()
+        ));
+    }
+    let begin = begin_matches[0].0;
+    let end_start = end_matches[0].0;
+    if end_start <= begin {
+        return Err(format!(
+            "generated-section end marker `{end_marker}` precedes begin marker `{begin_marker}`"
+        ));
+    }
+    let end = end_start + end_marker.len();
+    let mut rendered = String::with_capacity(text.len() - (end - begin) + expected_section.len());
+    rendered.push_str(&text[..begin]);
+    rendered.push_str(expected_section);
+    rendered.push_str(&text[end..]);
+    Ok(rendered)
+}
+
+fn render_abi_syscall_golden_section(numbers: &[u32]) -> Result<String, String> {
+    let mut sorted = numbers.to_vec();
+    sorted.sort_unstable();
+    if sorted.windows(2).any(|window| window[0] == window[1]) {
+        return Err("ABI syscall list contains duplicate numbers".to_owned());
+    }
+
+    let mut rendered = String::new();
+    rendered.push_str(ABI_SYSCALL_GOLDEN_BEGIN);
+    rendered.push_str("\n    let golden: &[u32] = &[\n");
+    for number in sorted {
+        let name = ivm::syscalls::syscall_name(number)
+            .ok_or_else(|| format!("ABI syscall 0x{number:06X} has no canonical symbolic name"))?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            return Err(format!(
+                "ABI syscall 0x{number:06X} has invalid symbolic name `{name}`"
+            ));
+        }
+        rendered.push_str("        S::SYSCALL_");
+        rendered.push_str(name);
+        rendered.push_str(",\n");
+    }
+    rendered.push_str("    ];\n");
+    rendered.push_str(ABI_SYSCALL_GOLDEN_END);
+    Ok(rendered)
+}
+
 fn sync_generated_file(
     path: &Path,
     expected: &str,
@@ -735,15 +803,43 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let abi_syscall_golden_path =
+        PathBuf::from(manifest_dir).join("tests/abi_syscall_list_golden.rs");
+    let abi_syscall_golden_text =
+        fs::read_to_string(&abi_syscall_golden_path).expect("read ABI syscall-list golden test");
+    let abi_syscall_golden_section =
+        match render_abi_syscall_golden_section(ivm::syscalls::abi_syscall_list()) {
+            Ok(rendered) => rendered,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        };
+    let rendered_abi_syscall_golden = match replace_generated_section(
+        &abi_syscall_golden_text,
+        ABI_SYSCALL_GOLDEN_BEGIN,
+        ABI_SYSCALL_GOLDEN_END,
+        &abi_syscall_golden_section,
+    ) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            eprintln!("{}: {error}", abi_syscall_golden_path.display());
+            std::process::exit(1);
+        }
+    };
 
     let abi_src_dir = PathBuf::from(manifest_dir).join("../ivm_abi/src");
     let code_path = abi_src_dir.join("syscalls_doc_gen.rs");
     let gas_code_path = abi_src_dir.join("gas_spec.rs");
-    let regenerate_command = "cargo run -p ivm --bin gen_syscalls_doc -- --write";
+    let regenerate_command = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --write";
     let outputs = [
         (&code_path, generated_docs_code.as_str()),
         (&gas_code_path, generated_gas_code.as_str()),
         (&path, rendered_docs.as_str()),
+        (
+            &abi_syscall_golden_path,
+            rendered_abi_syscall_golden.as_str(),
+        ),
     ];
     let mut failures = Vec::new();
     for (output_path, expected) in outputs {
@@ -769,7 +865,9 @@ mod tests {
     };
 
     use super::{
-        BEGIN, END, Mode, parse_mode, render_docs, rewrite_gas_tokens, sync_generated_file,
+        ABI_SYSCALL_GOLDEN_BEGIN, ABI_SYSCALL_GOLDEN_END, BEGIN, END, Mode, parse_mode,
+        render_abi_syscall_golden_section, render_docs, replace_generated_section,
+        rewrite_gas_tokens, sync_generated_file,
     };
 
     static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
@@ -825,6 +923,47 @@ mod tests {
             render_docs(
                 &format!("{BEGIN}\none\n{END}\n{BEGIN}\ntwo\n{END}\n"),
                 table,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn abi_syscall_golden_rendering_is_owned_and_idempotent() {
+        let section = render_abi_syscall_golden_section(&[
+            ivm::syscalls::SYSCALL_ABORT,
+            ivm::syscalls::SYSCALL_EXIT,
+        ])
+        .expect("render ABI syscall golden section");
+        assert!(section.contains("S::SYSCALL_EXIT"));
+        assert!(section.contains("S::SYSCALL_ABORT"));
+
+        let stale = format!(
+            "prefix\n{ABI_SYSCALL_GOLDEN_BEGIN}\n        stale\n{ABI_SYSCALL_GOLDEN_END}\nsuffix\n"
+        );
+        let rendered = replace_generated_section(
+            &stale,
+            ABI_SYSCALL_GOLDEN_BEGIN,
+            ABI_SYSCALL_GOLDEN_END,
+            &section,
+        )
+        .expect("replace ABI syscall golden section");
+        assert_eq!(
+            replace_generated_section(
+                &rendered,
+                ABI_SYSCALL_GOLDEN_BEGIN,
+                ABI_SYSCALL_GOLDEN_END,
+                &section,
+            )
+            .expect("replace ABI syscall golden section again"),
+            rendered
+        );
+        assert!(
+            replace_generated_section(
+                &format!("{stale}{ABI_SYSCALL_GOLDEN_BEGIN}\n"),
+                ABI_SYSCALL_GOLDEN_BEGIN,
+                ABI_SYSCALL_GOLDEN_END,
+                &section,
             )
             .is_err()
         );

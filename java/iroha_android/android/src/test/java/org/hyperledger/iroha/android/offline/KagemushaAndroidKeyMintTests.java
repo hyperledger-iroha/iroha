@@ -17,6 +17,7 @@ import java.security.interfaces.ECPublicKey;
 import java.security.spec.ECGenParameterSpec;
 import java.util.Arrays;
 import java.util.List;
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.junit.Test;
 
@@ -27,8 +28,10 @@ public final class KagemushaAndroidKeyMintTests {
   public void highLevelRegistrationDerivesAndUsesTheExactPreKeyChallenge() throws Exception {
     final FakeBackend backend = new FakeBackend();
     final KagemushaAndroidKeyMint keyMint = new KagemushaAndroidKeyMint(backend);
-    final byte[] accountPublicKey = new byte[32];
-    Arrays.fill(accountPublicKey, (byte) 0x22);
+    final byte[] accountSeed = new byte[32];
+    Arrays.fill(accountSeed, (byte) 0x22);
+    final byte[] accountPublicKey =
+        new Ed25519PrivateKeyParameters(accountSeed, 0).generatePublicKey().getEncoded();
     final String accountId =
         AccountAddress.fromAccount(accountPublicKey, "ed25519").toI105(0x02f1);
     final byte[] signingCertificateSha256 = canonicalHash(0x11);

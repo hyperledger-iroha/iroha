@@ -1,4 +1,4 @@
-"""Native-extension-free normalization for exact Numeric V1 quantities."""
+"""Native-extension-free normalization for exact Kotodama V1 quantities."""
 
 from __future__ import annotations
 

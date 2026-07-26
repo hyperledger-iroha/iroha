@@ -121,10 +121,10 @@ impl Execute for ClaimTwitterFollowReward {
 
         state_transaction
             .world
-            .withdraw_numeric_asset(&reward_asset_id, cfg.follow_reward_amount.as_numeric())?;
+            .withdraw_numeric_asset(&reward_asset_id, &cfg.follow_reward_amount)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&recipient_asset, cfg.follow_reward_amount.as_numeric())?;
+            .deposit_numeric_asset(&recipient_asset, &cfg.follow_reward_amount)?;
 
         let mut payout_ctx = ViralPayoutContext {
             stx: state_transaction,
@@ -206,10 +206,10 @@ impl Execute for SendToTwitter {
 
                 state_transaction
                     .world
-                    .withdraw_numeric_asset(&sender_asset, amount.as_numeric())?;
+                    .withdraw_numeric_asset(&sender_asset, &amount)?;
                 state_transaction
                     .world
-                    .deposit_numeric_asset(&recipient_asset, amount.as_numeric())?;
+                    .deposit_numeric_asset(&recipient_asset, &amount)?;
 
                 let mut budget = refresh_budget(state_transaction, day);
                 let mut campaign_budget = refresh_campaign_budget(state_transaction);
@@ -256,10 +256,10 @@ impl Execute for SendToTwitter {
 
         state_transaction
             .world
-            .withdraw_numeric_asset(&sender_asset, amount.as_numeric())?;
+            .withdraw_numeric_asset(&sender_asset, &amount)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&escrow_asset, amount.as_numeric())?;
+            .deposit_numeric_asset(&escrow_asset, &amount)?;
 
         let record = ViralEscrowRecord {
             binding_hash: binding_hash.clone(),
@@ -311,10 +311,10 @@ impl Execute for CancelTwitterEscrow {
 
         state_transaction
             .world
-            .withdraw_numeric_asset(&escrow_asset, record.amount.as_numeric())?;
+            .withdraw_numeric_asset(&escrow_asset, &record.amount)?;
         state_transaction
             .world
-            .deposit_numeric_asset(&sender_asset, record.amount.as_numeric())?;
+            .deposit_numeric_asset(&sender_asset, &record.amount)?;
 
         state_transaction
             .world
@@ -530,12 +530,8 @@ fn maybe_pay_bonus(
     *ctx.budget = consume_budget(ctx.stx, ctx.cfg, ctx.budget.clone(), bonus.clone())?;
     *ctx.campaign = consume_campaign_budget(ctx.stx, ctx.cfg, ctx.campaign.clone(), bonus.clone())?;
 
-    ctx.stx
-        .world
-        .withdraw_numeric_asset(&pool_asset, bonus.as_numeric())?;
-    ctx.stx
-        .world
-        .deposit_numeric_asset(&sender_asset, bonus.as_numeric())?;
+    ctx.stx.world.withdraw_numeric_asset(&pool_asset, &bonus)?;
+    ctx.stx.world.deposit_numeric_asset(&sender_asset, &bonus)?;
 
     ctx.stx
         .world
@@ -596,10 +592,10 @@ fn release_escrow_if_present(
     let recipient_asset = AssetId::new(ctx.cfg.reward_asset_definition_id.clone(), account.clone());
     ctx.stx
         .world
-        .withdraw_numeric_asset(&escrow_asset, escrow.amount.as_numeric())?;
+        .withdraw_numeric_asset(&escrow_asset, &escrow.amount)?;
     ctx.stx
         .world
-        .deposit_numeric_asset(&recipient_asset, escrow.amount.as_numeric())?;
+        .deposit_numeric_asset(&recipient_asset, &escrow.amount)?;
 
     let bonus_paid = maybe_pay_bonus(ctx, &escrow.sender, uaid)?;
 

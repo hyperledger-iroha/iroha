@@ -79,8 +79,13 @@ class KagemushaScaledAmount private constructor(
         private fun isAsciiDigit(value: Char): Boolean = value in '0'..'9'
     }
 
-    /** Canonical Iroha Numeric spelling at the authoritative asset scale. */
-    val scaledNumericDecimal: String
+    /**
+     * Exact fixed-scale decimal at the authoritative asset scale.
+     *
+     * This projection is proof-side evidence; use [displayDecimal] for the
+     * canonical public Quantity spelling.
+     */
+    val fixedScaleDecimal: String
         get() {
             if (scale == 0) return atomicUnits
             val padded = atomicUnits.padStart(scale + 1, '0')
@@ -88,11 +93,11 @@ class KagemushaScaledAmount private constructor(
             return padded.substring(0, split) + "." + padded.substring(split)
         }
 
-    /** Minimal user-facing decimal spelling without insignificant zeroes. */
+    /** Canonical public Quantity spelling without insignificant zeroes. */
     val displayDecimal: String
         get() {
             if (scale == 0) return atomicUnits
-            return scaledNumericDecimal.trimEnd('0').trimEnd('.')
+            return fixedScaleDecimal.trimEnd('0').trimEnd('.')
         }
 
     fun adding(other: KagemushaScaledAmount): KagemushaScaledAmount = sum(listOf(this, other))

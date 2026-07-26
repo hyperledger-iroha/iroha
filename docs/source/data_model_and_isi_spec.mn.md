@@ -107,7 +107,7 @@ ID-ууд нь `Display`/`FromStr` хоёр талын аялалтай тогт
 Төрөл: `Mint<O, D: Identifiable>` ба `Burn<O, D: Identifiable>`, хайрцагласан `MintBox`/`BurnBox`.
 
 - Хөрөнгө (Тоон) гаа/шатаах: үлдэгдэл болон тодорхойлолтын `total_quantity`-ийг тохируулна.
-  - Урьдчилсан нөхцөл: `Numeric` утга нь `AssetDefinition.spec()` шаардлагыг хангасан байх ёстой; `mintable` зөвшөөрөгдсөн гаа:
+  - Урьдчилсан нөхцөл: `Quantity` утга нь `AssetDefinition.spec()` шаардлагыг хангасан байх ёстой; `mintable` зөвшөөрөгдсөн гаа:
     - `Infinitely`: үргэлж зөвшөөрнө.
     - `Once`: яг нэг удаа зөвшөөрсөн; Эхний гаа нь `mintable`-ыг `Not` руу эргүүлж, `AssetDefinitionEvent::MintabilityChanged`, дээр нь аудит хийх боломжтой нарийвчилсан `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` ялгаруулдаг.
     - `Limited(n)`: `n` нэмэлт гаа үйл ажиллагааг зөвшөөрдөг. Амжилттай гаа бүр тоолуурыг бууруулдаг; тэг хүрэх үед тодорхойлолт нь `Not` болж хувирч, дээрхтэй ижил `MintabilityChanged` үйл явдлуудыг ялгаруулдаг.

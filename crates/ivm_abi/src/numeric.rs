@@ -112,7 +112,7 @@ pub enum PointerAbiFaultV1 {
     InvalidAddress = 1,
     /// The pointer type identifier is unknown.
     UnknownType = 2,
-    /// The pointer type is known but retired or disallowed by ABI V1.
+    /// The pointer type is known but disallowed by ABI V1.
     TypeNotAllowed = 3,
     /// The pointer has a known but unexpected type.
     WrongType = 4,

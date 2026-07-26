@@ -698,7 +698,7 @@ mod tests {
         let bytes = bare(&Numeric::new(-1, 0));
         assert!(QuantityV1::decode_from_slice(&bytes).is_err());
 
-        let quantity = QuantityV1::try_new(Numeric::new(125, 2)).expect("canonical quantity");
+        let quantity = QuantityV1::from("1.25".parse::<Quantity>().expect("canonical quantity"));
         let encoded = norito::to_bytes(&quantity).expect("encode quantity");
         let decoded: QuantityV1 = norito::decode_from_bytes(&encoded).expect("decode quantity");
         assert_eq!(decoded, quantity);
@@ -847,7 +847,9 @@ mod tests {
             name: "Rose".to_owned(),
             description: Some("A deterministic flower".to_owned()),
             owned_by: account_id(4),
-            total_quantity: QuantityV1::try_new(Numeric::new(125, 2)).expect("quantity"),
+            total_quantity: QuantityV1::from(
+                "1.25".parse::<Quantity>().expect("canonical quantity"),
+            ),
             metadata: Json::default(),
         };
         let expected = FieldOrderOracle {
@@ -892,7 +894,7 @@ mod tests {
     fn every_projection_roundtrips_through_a_bounded_page() {
         let owner = account_id(8);
         let definition = asset_definition_id();
-        let quantity = QuantityV1::try_new(Numeric::new(10, 0)).expect("quantity");
+        let quantity = QuantityV1::from(Quantity::from(10_u32));
 
         let account_page = QueryPageV1::try_new(vec![account_view(8)], None).expect("page");
         let asset_page = QueryPageV1::try_new(

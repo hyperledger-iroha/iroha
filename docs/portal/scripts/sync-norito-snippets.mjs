@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import {createHash} from 'node:crypto';
 import {mkdir, readdir, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
@@ -8,6 +9,23 @@ import {SNIPPET_MARKER, SNIPPETS} from './norito-snippets-config.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+const cliArguments = invokedPath === __filename ? process.argv.slice(2) : [];
+
+export function parseCliMode(arguments_) {
+  if (arguments_.length === 0) return 'write';
+  if (arguments_.length === 1 && arguments_[0] === '--check') return 'check';
+  throw new Error('usage: node scripts/sync-norito-snippets.mjs [--check]');
+}
+
+let cliMode = 'write';
+try {
+  cliMode = parseCliMode(cliArguments);
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
+}
+const checkOnly = cliMode === 'check';
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const portalRoot = path.resolve(__dirname, '..');
@@ -15,7 +33,7 @@ const outputDocsDir = path.resolve(portalRoot, 'docs', 'norito', 'examples');
 const staticDir = path.resolve(portalRoot, 'static', 'norito-snippets');
 const manifestPath = path.resolve(portalRoot, '.docusaurus', 'norito-snippets-manifest.json');
 const marker = SNIPPET_MARKER;
-const MANIFEST_VERSION = 2;
+const MANIFEST_VERSION = 3;
 const TEMPLATE_REVISION = 5;
 const RETIRED_SNIPPET_SLUGS = new Set(['init-entrypoint']);
 
@@ -66,8 +84,10 @@ function formatSdkGuideSection(guides) {
 }
 
 async function main() {
-  await mkdir(outputDocsDir, {recursive: true});
-  await mkdir(staticDir, {recursive: true});
+  if (!checkOnly) {
+    await mkdir(outputDocsDir, {recursive: true});
+    await mkdir(staticDir, {recursive: true});
+  }
   await removeRetiredSnippetDocs(path.resolve(portalRoot, 'docs'));
   await removeRetiredSnippetDocs(path.resolve(portalRoot, 'i18n'));
   await removeRetiredSnippetArtifacts(staticDir);
@@ -77,16 +97,18 @@ async function main() {
     path.resolve(portalRoot, 'docs', 'norito', 'quickstart.md')
   );
   const manifestEntries = createManifestEntries(descriptors);
-  const previousManifest = await readManifest(manifestPath);
+  // The manifest is an ignored write-mode cache. Check mode derives every
+  // tracked output directly so a clean checkout never depends on cache state.
+  const previousManifest = checkOnly ? null : await readManifest(manifestPath);
   const outputsReady = await outputsExist(SNIPPETS);
 
-  const needsGeneration =
+  const needsGeneration = checkOnly ||
     manifestNeedsUpdate(previousManifest, manifestEntries) || !outputsReady;
 
   if (!needsGeneration) {
     let translatedUpdates = 0;
-    for (const {snippet, absoluteSource} of descriptors) {
-      const code = await readFile(absoluteSource, 'utf8');
+    for (const {snippet, sourceBytes} of descriptors) {
+      const code = sourceBytes.toString('utf8');
       translatedUpdates += await synchronizeTranslatedSnippetCode(snippet.slug, code);
     }
     translatedUpdates += await synchronizeTranslatedQuickstart(quickstartCode);
@@ -105,8 +127,8 @@ async function main() {
   let updatedDocs = 0;
   let updatedStatic = 0;
 
-  for (const {snippet, absoluteSource} of descriptors) {
-    const code = await readFile(absoluteSource, 'utf8');
+  for (const {snippet, sourceBytes} of descriptors) {
+    const code = sourceBytes.toString('utf8');
     const docPath = path.join(outputDocsDir, `${snippet.slug}.md`);
     const staticPath = path.join(staticDir, `${snippet.slug}.ko`);
 
@@ -132,10 +154,14 @@ async function main() {
 
   await removeStaleFiles(staleDocs);
   await removeStaleFiles(staleStatic);
-  await writeManifest(manifestPath, manifestEntries);
+  if (!checkOnly) {
+    await writeManifest(manifestPath, manifestEntries);
+  }
 
   console.log(
-    `[sync-norito-snippets] processed ${generated.length} snippets (${updatedDocs} docs updated, ${updatedStatic} snippets updated)`
+    checkOnly
+      ? `[sync-norito-snippets] checked ${generated.length} snippets`
+      : `[sync-norito-snippets] processed ${generated.length} snippets (${updatedDocs} docs updated, ${updatedStatic} snippets updated)`
   );
 }
 
@@ -168,6 +194,11 @@ async function removeRetiredSnippetDocs(root) {
         (slug) => entry.name === `${slug}.md` || entry.name.startsWith(`${slug}.`)
       )
     ) {
+      if (checkOnly) {
+        throw new Error(
+          `retired generated snippet remains: ${path.relative(repoRoot, entryPath)}`
+        );
+      }
       await rm(entryPath);
     }
   }
@@ -188,7 +219,13 @@ async function removeRetiredSnippetArtifacts(root) {
         (slug) => entry.name === `${slug}.ko` || entry.name === `${slug}.to`
       )
     ) {
-      await rm(path.join(root, entry.name));
+      const entryPath = path.join(root, entry.name);
+      if (checkOnly) {
+        throw new Error(
+          `retired generated snippet remains: ${path.relative(repoRoot, entryPath)}`
+        );
+      }
+      await rm(entryPath);
     }
   }
 }
@@ -296,7 +333,6 @@ async function synchronizeSnippetCodeUnder(
   return updated;
 }
 
-const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
 if (invokedPath === __filename) {
   main().catch((error) => {
     console.error('[sync-norito-snippets] failed:', error);
@@ -331,11 +367,17 @@ async function collectGeneratedStatic(dir) {
 }
 
 async function writeIfChanged(filePath, contents) {
-  await mkdir(path.dirname(filePath), {recursive: true});
   const current = await readFileSafe(filePath);
   if (current === contents) {
     return false;
   }
+  if (checkOnly) {
+    throw new Error(
+      `stale generated snippet output: ${path.relative(repoRoot, filePath)}; ` +
+      'run `npm run sync-norito-snippets`'
+    );
+  }
+  await mkdir(path.dirname(filePath), {recursive: true});
   await writeFile(filePath, contents, 'utf8');
   return true;
 }
@@ -357,6 +399,12 @@ async function readFileSafe(filePath) {
 
 async function removeStaleFiles(paths) {
   for (const filePath of paths) {
+    if (checkOnly) {
+      throw new Error(
+        `stale generated snippet output: ${path.relative(repoRoot, filePath)}; ` +
+        'run `npm run sync-norito-snippets`'
+      );
+    }
     await rm(filePath);
   }
 }
@@ -365,14 +413,18 @@ async function buildSnippetDescriptors(snippets) {
   const descriptors = [];
   for (const snippet of snippets) {
     const absoluteSource = path.join(repoRoot, snippet.source);
-    const stats = await stat(absoluteSource);
-    descriptors.push({snippet, absoluteSource, stats});
+    const sourceBytes = await readFile(absoluteSource);
+    descriptors.push({
+      snippet,
+      sourceBytes,
+      sourceSha256: createHash('sha256').update(sourceBytes).digest('hex')
+    });
   }
   return descriptors;
 }
 
 function createManifestEntries(descriptors) {
-  return descriptors.map(({snippet, stats}) => ({
+  return descriptors.map(({snippet, sourceBytes, sourceSha256}) => ({
     slug: snippet.slug,
     source: snippet.source,
     title: snippet.title,
@@ -381,8 +433,8 @@ function createManifestEntries(descriptors) {
       ledgerWalkthrough: snippet.ledgerWalkthrough ?? [],
       sdkGuides: snippet.sdkGuides ?? []
     }),
-    size: stats.size,
-    mtimeMs: stats.mtimeMs,
+    size: sourceBytes.length,
+    sourceSha256,
     templateRevision: TEMPLATE_REVISION
   }));
 }
@@ -421,7 +473,7 @@ function manifestEntriesEqual(previousEntry, nextEntry) {
     previousEntry.description === nextEntry.description &&
     previousEntry.renderConfigDigest === nextEntry.renderConfigDigest &&
     previousEntry.size === nextEntry.size &&
-    previousEntry.mtimeMs === nextEntry.mtimeMs &&
+    previousEntry.sourceSha256 === nextEntry.sourceSha256 &&
     previousEntry.templateRevision === nextEntry.templateRevision
   );
 }
@@ -467,17 +519,15 @@ async function readManifest(filePath) {
 }
 
 async function writeManifest(filePath, entries) {
-  const payload = JSON.stringify(
+  const payload = `${JSON.stringify(
     {
       version: MANIFEST_VERSION,
-      generatedAt: new Date().toISOString(),
       entries
     },
     null,
     2
-  );
-  await mkdir(path.dirname(filePath), {recursive: true});
-  await writeFile(filePath, payload, 'utf8');
+  )}\n`;
+  await writeIfChanged(filePath, payload);
 }
 
 export {

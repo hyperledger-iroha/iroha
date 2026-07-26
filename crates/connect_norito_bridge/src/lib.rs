@@ -1015,6 +1015,7 @@ fn normalize_zk_ballot_public_inputs(value: &mut JsonValue) -> BridgeResult<()> 
         return Err(BridgeError::Governance);
     }
     ensure_zk_public_input_owner_canonical(map)?;
+    ensure_zk_public_input_amount_canonical(map)?;
     Ok(())
 }
 
@@ -1038,6 +1039,19 @@ fn ensure_zk_public_input_owner_canonical(map: &JsonMap) -> BridgeResult<()> {
         return Err(BridgeError::Governance);
     }
     Ok(())
+}
+
+fn ensure_zk_public_input_amount_canonical(map: &JsonMap) -> BridgeResult<()> {
+    let Some(value) = map.get("amount") else {
+        return Ok(());
+    };
+    if matches!(value, JsonValue::Null) {
+        return Ok(());
+    }
+    let amount = value.as_str().ok_or(BridgeError::Governance)?;
+    parse_public_quantity(amount.to_owned())
+        .map(|_| ())
+        .map_err(|_| BridgeError::Governance)
 }
 
 fn canonicalize_hex32_public_input(map: &mut JsonMap, key: &str) -> BridgeResult<()> {
@@ -5022,7 +5036,7 @@ where
         asset_definition,
         asset_scope,
         destination: parse_destination(destination_str)?,
-        quantity: parse_quantity(quantity_str)?,
+        quantity: parse_public_quantity(quantity_str)?,
         ttl: parse_ttl(ttl_ms, ttl_present != 0)?,
         private_key: parse_key(key_slice)?,
     })
@@ -26861,7 +26875,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
             parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
         let asset_definition =
             unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
-        let quantity = parse_quantity(unsafe { read_string_bridge(quantity_ptr, quantity_len) }?)?;
+        let quantity =
+            parse_public_quantity(unsafe { read_string_bridge(quantity_ptr, quantity_len) }?)?;
         let destination =
             parse_destination(unsafe { read_string_bridge(destination_ptr, destination_len) }?)?;
         let (asset_definition, asset_scope) =
@@ -28279,7 +28294,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
         let authority = parse_account_id(authority_str)?;
         let owner = parse_account_id(owner_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let amount = u128::from_str(&amount_str).map_err(|_| BridgeError::Governance)?;
+        let amount = parse_public_quantity(amount_str)?;
 
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key(key_slice)?;
@@ -28287,7 +28302,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
         let ballot = CastPlainBallot {
             referendum_id,
             owner,
-            amount: amount.into(),
+            amount,
             duration_blocks,
             direction,
         };
@@ -28361,7 +28376,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
         let authority = parse_account_id(authority_str)?;
         let owner = parse_account_id(owner_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let amount = u128::from_str(&amount_str).map_err(|_| BridgeError::Governance)?;
+        let amount = parse_public_quantity(amount_str)?;
 
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
@@ -28369,7 +28384,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
         let ballot = CastPlainBallot {
             referendum_id,
             owner,
-            amount: amount.into(),
+            amount,
             duration_blocks,
             direction,
         };
@@ -29572,6 +29587,124 @@ mod accel_tests {
         (result, out_signed_ptr, out_signed_len, out_hash)
     }
 
+    fn call_plain_ballot_encoder(
+        amount: &str,
+        algorithm: Option<Algorithm>,
+    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("governance", 30);
+        let owner = sample_destination("governance", 31);
+        let referendum_id = cstring("ref-plain");
+        let amount = cstring(amount);
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0_u8; 32];
+        let result = unsafe {
+            if let Some(algorithm) = algorithm {
+                connect_norito_encode_governance_cast_plain_ballot_signed_transaction_alg(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    referendum_id.as_ptr(),
+                    referendum_id.as_bytes().len() as c_ulong,
+                    owner.as_ptr(),
+                    owner.as_bytes().len() as c_ulong,
+                    amount.as_ptr(),
+                    amount.as_bytes().len() as c_ulong,
+                    42,
+                    1,
+                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    algorithm as u8,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            } else {
+                connect_norito_encode_governance_cast_plain_ballot_signed_transaction(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    referendum_id.as_ptr(),
+                    referendum_id.as_bytes().len() as c_ulong,
+                    owner.as_ptr(),
+                    owner.as_bytes().len() as c_ulong,
+                    amount.as_ptr(),
+                    amount.as_bytes().len() as c_ulong,
+                    42,
+                    1,
+                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            }
+        };
+        (result, out_signed_ptr, out_signed_len, out_hash)
+    }
+
+    #[test]
+    fn governance_plain_ballot_encoders_preserve_canonical_quantity_amounts() {
+        let _guard = chain_guard();
+        let wide = "340282366920938463463374607431768211456.25";
+        for algorithm in [None, Some(Algorithm::Ed25519)] {
+            for amount in ["1.25", wide] {
+                let (result, out_signed_ptr, out_signed_len, out_hash) =
+                    call_plain_ballot_encoder(amount, algorithm);
+                assert_eq!(result, 0, "canonical Quantity {amount:?} must encode");
+                assert!(!out_signed_ptr.is_null());
+                assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
+                let signed = decode_signed(out_signed_ptr, out_signed_len);
+                let ballot = match signed.instructions() {
+                    Executable::Instructions(instructions) => instructions
+                        .first()
+                        .and_then(|instruction| {
+                            instruction.as_any().downcast_ref::<CastPlainBallot>()
+                        })
+                        .expect("plain ballot instruction"),
+                    other => panic!("unexpected executable: {other:?}"),
+                };
+                assert_eq!(ballot.amount.to_string(), amount);
+                unsafe {
+                    free(out_signed_ptr.cast());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn governance_plain_ballot_encoders_reject_noncanonical_quantities() {
+        let _guard = chain_guard();
+        for algorithm in [None, Some(Algorithm::Ed25519)] {
+            for amount in ["", "-1", "01", "1.0", "+1", " 1", "1 ", "1e3"] {
+                let (result, out_signed_ptr, out_signed_len, out_hash) =
+                    call_plain_ballot_encoder(amount, algorithm);
+                assert_eq!(
+                    result, ERR_QUANTITY_PARSE,
+                    "invalid public Quantity {amount:?} must be rejected"
+                );
+                assert!(out_signed_ptr.is_null());
+                assert_eq!(out_signed_len, 0);
+                assert_eq!(out_hash, [0_u8; 32]);
+            }
+        }
+    }
+
     fn call_confidential_payload_encoder(
         ephemeral: &[u8; 32],
         ciphertext: &[u8],
@@ -30293,45 +30426,48 @@ mod accel_tests {
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 1);
         let asset_definition = asset_definition_cstring("bank", "usd");
-        let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                0,
-                0,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        assert!(!out_signed_ptr.is_null());
-        assert!(out_signed_len > 0);
-        assert_ne!(out_hash, [0u8; 32], "hash should be populated");
+        let wide = "340282366920938463463374607431768211456.25";
+        for amount in ["10", "1.25", wide] {
+            let quantity = cstring(amount);
+            let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+            let mut out_signed_len: c_ulong = 0;
+            let mut out_hash = [0u8; 32];
+            let result = unsafe {
+                connect_norito_encode_transfer_signed_transaction(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    asset_definition.as_ptr(),
+                    asset_definition.as_bytes().len() as c_ulong,
+                    quantity.as_ptr(),
+                    quantity.as_bytes().len() as c_ulong,
+                    destination.as_ptr(),
+                    destination.as_bytes().len() as c_ulong,
+                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            };
+            assert_eq!(result, 0, "canonical Quantity {amount:?} must encode");
+            assert!(!out_signed_ptr.is_null());
+            assert!(out_signed_len > 0);
+            assert_ne!(out_hash, [0u8; 32], "hash should be populated");
 
-        unsafe {
-            free(out_signed_ptr as *mut _);
+            unsafe {
+                free(out_signed_ptr.cast());
+            }
         }
     }
 
@@ -31377,42 +31513,52 @@ mod accel_tests {
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
-        let quantity = cstring("NaN");
         let destination = sample_destination("bank", 1);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                0,
-                0,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                quantity.as_ptr(),
-                quantity.as_bytes().len() as c_ulong,
-                destination.as_ptr(),
-                destination.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, ERR_QUANTITY_PARSE);
-        assert!(out_signed_ptr.is_null());
-        assert_eq!(out_signed_len, 0);
-        assert_eq!(out_hash, [0u8; 32], "hash should remain unchanged");
+        let oversized = format!("1{}", "0".repeat(200));
+        for amount in ["NaN", "-1", "01", "1.0", "+1", " 1", "1 ", "1e3"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(core::iter::once(oversized))
+        {
+            let quantity = cstring(&amount);
+            let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+            let mut out_signed_len: c_ulong = 0;
+            let mut out_hash = [0u8; 32];
+            let result = unsafe {
+                connect_norito_encode_transfer_signed_transaction(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    asset_definition.as_ptr(),
+                    asset_definition.as_bytes().len() as c_ulong,
+                    quantity.as_ptr(),
+                    quantity.as_bytes().len() as c_ulong,
+                    destination.as_ptr(),
+                    destination.as_bytes().len() as c_ulong,
+                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            };
+            assert_eq!(
+                result, ERR_QUANTITY_PARSE,
+                "invalid public Quantity {amount:?} must be rejected"
+            );
+            assert!(out_signed_ptr.is_null());
+            assert_eq!(out_signed_len, 0);
+            assert_eq!(out_hash, [0u8; 32], "hash should remain unchanged");
+        }
     }
 
     #[test]
@@ -52967,6 +53113,63 @@ mod tests {
         map.insert("duration_blocks".to_owned(), JsonValue::from(64u64));
         let mut value = JsonValue::Object(map);
         assert!(normalize_zk_ballot_public_inputs(&mut value).is_err());
+    }
+
+    #[test]
+    fn zk_ballot_public_inputs_accepts_fractional_and_wide_quantity_hints() {
+        let keypair = KeyPair::try_from_seed(vec![0xCD; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
+        let owner = AccountId::new(keypair.public_key().clone()).to_string();
+        let wide = "340282366920938463463374607431768211456.25";
+        for amount in ["1.25", wide] {
+            let mut map = JsonMap::new();
+            map.insert("owner".to_owned(), JsonValue::from(owner.clone()));
+            map.insert("amount".to_owned(), JsonValue::from(amount));
+            map.insert("duration_blocks".to_owned(), JsonValue::from(64_u64));
+            let mut value = JsonValue::Object(map);
+            normalize_zk_ballot_public_inputs(&mut value)
+                .expect("canonical Quantity lock hint must normalize");
+            assert_eq!(
+                value
+                    .as_object()
+                    .and_then(|map| map.get("amount"))
+                    .and_then(JsonValue::as_str),
+                Some(amount)
+            );
+        }
+    }
+
+    #[test]
+    fn zk_ballot_public_inputs_rejects_invalid_quantity_hints() {
+        let keypair = KeyPair::try_from_seed(vec![0xCE; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
+        let owner = AccountId::new(keypair.public_key().clone()).to_string();
+        let oversized = format!("1{}", "0".repeat(200));
+        let invalid = [
+            ("negative", JsonValue::from("-1")),
+            ("leading zero", JsonValue::from("01")),
+            ("trailing fractional zero", JsonValue::from("1.0")),
+            ("explicit plus", JsonValue::from("+1")),
+            ("leading whitespace", JsonValue::from(" 1")),
+            ("trailing whitespace", JsonValue::from("1 ")),
+            ("exponent", JsonValue::from("1e3")),
+            ("overflow", JsonValue::from(oversized)),
+            ("number", JsonValue::from(1_u64)),
+            ("boolean", JsonValue::from(true)),
+            ("array", JsonValue::Array(Vec::new())),
+            ("object", JsonValue::Object(JsonMap::new())),
+        ];
+        for (case, amount) in invalid {
+            let mut map = JsonMap::new();
+            map.insert("owner".to_owned(), JsonValue::from(owner.clone()));
+            map.insert("amount".to_owned(), amount);
+            map.insert("duration_blocks".to_owned(), JsonValue::from(64_u64));
+            let mut value = JsonValue::Object(map);
+            assert!(
+                normalize_zk_ballot_public_inputs(&mut value).is_err(),
+                "{case} Quantity hint must be rejected"
+            );
+        }
     }
 
     #[test]

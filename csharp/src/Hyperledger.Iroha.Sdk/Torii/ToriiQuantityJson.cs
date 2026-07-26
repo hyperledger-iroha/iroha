@@ -20,7 +20,7 @@ internal static class ToriiQuantityJson
         catch (NumericV1.NumericException exception)
         {
             throw new JsonException(
-                $"{field} must be a canonical non-negative numeric string in the V1 quantity domain.",
+                $"{field} must be a canonical Kotodama V1 Quantity string.",
                 exception);
         }
     }

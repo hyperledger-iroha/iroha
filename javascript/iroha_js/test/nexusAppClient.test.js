@@ -1646,15 +1646,22 @@ test("NexusAppClient rejects Torii hash mismatches and maps submit/status failur
   );
 });
 
-test("NexusAppClient conflict-checks all Torii hash aliases before waiting", async () => {
+test("NexusAppClient separates Torii canonical and signed-wire receipt hashes", async () => {
   const canonicalHash = fixtureSignedTransactionHashHex;
+  const signedWireHash = "d".repeat(64);
   const finalizer = {
     signedTransaction: fixtureSignedTransaction,
     hashHex: canonicalHash,
   };
   for (const submission of [
     { hashHex: canonicalHash, tx_hash: "d".repeat(64) },
-    { hashHex: canonicalHash, payload: { signed_transaction_hash: "d".repeat(64) } },
+    { hashHex: canonicalHash, payload: { entrypoint_hash: "d".repeat(64) } },
+    {
+      payload: {
+        tx_hash: canonicalHash,
+        entrypoint_hash: "d".repeat(64),
+      },
+    },
     { hashHex: "A".repeat(64) },
     { txHash: [256] },
   ]) {
@@ -1681,10 +1688,13 @@ test("NexusAppClient conflict-checks all Torii hash aliases before waiting", asy
   const equivalent = finalizationHarness(finalizer, {
     hashHex: canonicalHash,
     hash: Buffer.from(canonicalHash, "hex"),
+    transaction_hash: canonicalHash,
+    entrypoint_hash: canonicalHash,
     tx_hash: Buffer.from(canonicalHash, "hex"),
     payload: {
-      signedTransactionHashHex: canonicalHash,
-      signed_transaction_hash: Buffer.from(canonicalHash, "hex"),
+      tx_hash: canonicalHash,
+      entrypoint_hash: canonicalHash,
+      signed_transaction_hash: signedWireHash,
     },
   });
   const receipt = await equivalent.client.finalizeAndSubmit(
@@ -1692,6 +1702,12 @@ test("NexusAppClient conflict-checks all Torii hash aliases before waiting", asy
     fixtureWalletSignature,
   );
   assert.equal(receipt.signedTransactionHashHex, canonicalHash);
+  assert.equal(
+    receipt.submission.payload.signed_transaction_hash,
+    signedWireHash,
+    "the raw Torii receipt must retain its distinct inner signed-wire identity",
+  );
+  assert.equal(receipt.status.hash, canonicalHash);
   assert.deepEqual(equivalent.calls, { finalized: 1, submitted: 1, waited: 1 });
 });
 

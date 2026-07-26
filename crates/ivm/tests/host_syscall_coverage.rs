@@ -6,9 +6,9 @@ use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     CoreHost, IVM, IVMHost, VMError, gas,
     host::{
-        DefaultHost, HostSyscallGasClass, HostSyscallGasFormula, HostSyscallQuoteStrategy,
-        abi_v1_host_syscall_metering_registry, host_syscall_metering_spec,
-        registered_host_syscall_gas_formula,
+        DefaultHost, HostSyscallGasClass, HostSyscallGasFormula, HostSyscallGasParameters,
+        HostSyscallQuoteStrategy, abi_v1_host_syscall_metering_registry,
+        host_syscall_metering_spec, registered_host_syscall_gas_formula,
     },
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     pointer_abi::PointerType,
@@ -265,6 +265,35 @@ fn abi_v1_allowed_syscalls_have_one_exhaustive_host_metering_registry() {
             SyscallMetering::Reserved
         };
         assert_eq!(spec.metering, expected, "metering mode for {number:#x}");
+    }
+}
+
+#[test]
+fn ledger_query_syscalls_use_the_descriptor_bound_v1_formula() {
+    for number in [
+        syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
+        syscalls::SYSCALL_QUERY_EXECUTE_NORITO,
+        syscalls::SYSCALL_CORE_QUERY_GET,
+        syscalls::SYSCALL_CORE_QUERY_PAGE,
+        syscalls::SYSCALL_QUERY_GET_PARAMETER,
+        syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST,
+        syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE,
+        syscalls::SYSCALL_GET_ACCOUNT_BALANCE,
+        syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS,
+    ] {
+        let spec = host_syscall_metering_spec(ivm::SyscallPolicy::AbiV1, number)
+            .expect("ledger-query syscall has metering metadata");
+        assert_eq!(spec.formula, HostSyscallGasFormula::LedgerQueryV1);
+        assert_eq!(spec.parameters, HostSyscallGasParameters::LedgerQueryV1);
+        assert_eq!(
+            spec.quote_strategy,
+            HostSyscallQuoteStrategy::ReserveAvailable
+        );
+        assert_eq!(
+            spec.minimum_gas,
+            gas::LEDGER_QUERY_GAS_BASE_SINGULAR,
+            "minimum gas for ledger-query syscall {number:#x}"
+        );
     }
 }
 

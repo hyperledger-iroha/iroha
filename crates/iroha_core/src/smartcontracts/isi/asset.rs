@@ -55,20 +55,17 @@ pub mod isi {
         pub(crate) fn withdraw_numeric_asset(
             &mut self,
             id: &AssetId,
-            amount: &Numeric,
+            amount: &Quantity,
         ) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
             let spec = self.asset_definition(resolved_id.definition())?.spec();
-            assert_numeric_spec_with(amount, spec)?;
+            assert_numeric_spec_with(amount.as_numeric(), spec)?;
             if sccp_registry_references_custody_asset(self.sccp_registry.get(), &resolved_id) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "SCCP custody can only be debited by verified native inbound settlement".into(),
                 )
                 .into());
             }
-            ensure_non_negative(amount)?;
-            let amount_quantity = Quantity::from_canonical_numeric(amount.clone())
-                .map_err(|_| MathError::NegativeValue)?;
             let asset = self
                 .assets
                 .get_mut(&resolved_id)
@@ -76,7 +73,7 @@ pub mod isi {
             let quantity: &mut Quantity = &mut *asset;
             assert_numeric_spec_with(quantity.as_numeric(), spec)?;
             let candidate = quantity
-                .checked_sub(&amount_quantity)
+                .checked_sub(amount)
                 .map_err(|_| MathError::NotEnoughQuantity)?;
             assert_numeric_spec_with(candidate.as_numeric(), spec)?;
             *quantity = candidate;
@@ -90,7 +87,7 @@ pub mod isi {
             &self,
             source_id: &AssetId,
             destination_id: &AssetId,
-            amount: &Numeric,
+            amount: &Quantity,
         ) -> Result<TransferDeltaTranscript, Error> {
             if source_id.definition() != destination_id.definition() {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -103,55 +100,41 @@ pub mod isi {
                 ));
             }
             let source_spec = self.asset_definition(source_id.definition())?.spec();
-            ensure_non_negative(amount)?;
-            assert_numeric_spec_with(amount, source_spec)?;
+            assert_numeric_spec_with(amount.as_numeric(), source_spec)?;
             let source_current = self
                 .assets
                 .get(source_id)
                 .ok_or_else(|| FindError::Asset(source_id.clone().into()))?
                 .as_ref()
-                .as_numeric()
                 .clone();
-            assert_numeric_spec_with(&source_current, source_spec)?;
+            assert_numeric_spec_with(source_current.as_numeric(), source_spec)?;
             let from_balance_after = source_current
-                .clone()
-                .checked_sub(amount.clone())
-                .ok_or(MathError::NotEnoughQuantity)?;
-            if from_balance_after.mantissa().is_negative() {
-                return Err(MathError::NotEnoughQuantity.into());
-            }
+                .checked_sub(amount)
+                .map_err(|_| MathError::NotEnoughQuantity)?;
             self.account(destination_id.account())?;
             let to_balance_before = if source_id == destination_id {
                 from_balance_after.clone()
             } else {
                 self.assets
                     .get(destination_id)
-                    .map(|value| value.as_ref().as_numeric().clone())
-                    .unwrap_or_else(Numeric::zero)
+                    .map(|value| value.as_ref().clone())
+                    .unwrap_or_else(Quantity::zero)
             };
-            ensure_non_negative(&to_balance_before)?;
-            assert_numeric_spec_with(&to_balance_before, source_spec)?;
+            assert_numeric_spec_with(to_balance_before.as_numeric(), source_spec)?;
             let to_balance_after = to_balance_before
-                .clone()
-                .checked_add(amount.clone())
-                .ok_or(MathError::Overflow)?;
-            ensure_non_negative(&to_balance_after)?;
-            assert_numeric_spec_with(&to_balance_after, source_spec)?;
+                .checked_add(amount)
+                .map_err(|_| MathError::Overflow)?;
+            assert_numeric_spec_with(to_balance_after.as_numeric(), source_spec)?;
 
             Ok(TransferDeltaTranscript {
                 from_account: source_id.account().clone(),
                 to_account: destination_id.account().clone(),
                 asset_definition: source_id.definition().clone(),
-                amount: Quantity::from_canonical_numeric(amount.clone())
-                    .map_err(|_| MathError::NegativeValue)?,
-                from_balance_before: Quantity::from_canonical_numeric(source_current)
-                    .map_err(|_| MathError::NegativeValue)?,
-                from_balance_after: Quantity::from_canonical_numeric(from_balance_after)
-                    .map_err(|_| MathError::NegativeValue)?,
-                to_balance_before: Quantity::from_canonical_numeric(to_balance_before)
-                    .map_err(|_| MathError::NegativeValue)?,
-                to_balance_after: Quantity::from_canonical_numeric(to_balance_after)
-                    .map_err(|_| MathError::NegativeValue)?,
+                amount: amount.clone(),
+                from_balance_before: source_current,
+                from_balance_after,
+                to_balance_before,
+                to_balance_after,
                 from_smt_witness: TransferSmtWitness::default(),
                 to_smt_witness: TransferSmtWitness::default(),
             })
@@ -212,21 +195,16 @@ pub mod isi {
         pub(crate) fn deposit_numeric_asset(
             &mut self,
             id: &AssetId,
-            amount: &Numeric,
+            amount: &Quantity,
         ) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
             let spec = self.asset_definition(resolved_id.definition())?.spec();
-            ensure_non_negative(amount)?;
-            assert_numeric_spec_with(amount, spec)?;
-            let amount_quantity = Quantity::from_canonical_numeric(amount.clone())
-                .map_err(|_| MathError::NegativeValue)?;
+            assert_numeric_spec_with(amount.as_numeric(), spec)?;
             let is_nonzero = {
                 let dst = self.asset_or_insert(&resolved_id, Quantity::zero())?;
                 let q: &mut Quantity = &mut *dst;
                 assert_numeric_spec_with(q.as_numeric(), spec)?;
-                *q = q
-                    .checked_add(&amount_quantity)
-                    .map_err(|_| MathError::Overflow)?;
+                *q = q.checked_add(amount).map_err(|_| MathError::Overflow)?;
                 assert_numeric_spec_with(q.as_numeric(), spec)?;
                 !q.is_zero()
             };
@@ -250,14 +228,6 @@ pub mod isi {
             })
         })?;
         Ok(asset_spec)
-    }
-
-    /// Reject negative numeric values to keep asset balances non-negative.
-    pub(super) fn ensure_non_negative(value: &Numeric) -> Result<(), Error> {
-        if value.mantissa().is_negative() {
-            return Err(MathError::NegativeValue.into());
-        }
-        Ok(())
     }
 
     fn ensure_transparent_allowed(
@@ -575,7 +545,7 @@ pub mod isi {
     pub(crate) fn prepare_outbound_asset_transfer_control_update(
         state_transaction: &StateTransaction<'_, '_>,
         source_id: &AssetId,
-        amount: &Numeric,
+        amount: &Quantity,
     ) -> Result<Option<AssetTransferControlRecord>, Error> {
         let Some(mut record) = active_control_record(
             state_transaction,
@@ -608,8 +578,6 @@ pub mod isi {
         }
 
         let now_ms = state_transaction.block_unix_timestamp_ms();
-        let amount_quantity = Quantity::from_canonical_numeric(amount.clone())
-            .map_err(|_| MathError::NegativeValue)?;
         let mut current_usages =
             BTreeMap::<AssetTransferControlWindow, AssetTransferUsageBucket>::new();
         for usage in record.usages.iter().cloned() {
@@ -631,7 +599,7 @@ pub mod isi {
                 .map(|usage| usage.spent_amount)
                 .unwrap_or_else(Quantity::zero);
             let spent_after = spent_before
-                .checked_add(&amount_quantity)
+                .checked_add(amount)
                 .map_err(|_| MathError::Overflow)?;
             if spent_after > cap_amount {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -767,7 +735,7 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         definition_id: &AssetDefinitionId,
         subject: &AccountId,
-        amount: Option<&Numeric>,
+        amount: Option<&Quantity>,
         dataspace: Option<DataSpaceId>,
         binding: &AssetSubjectBindingV1,
     ) -> Result<(), Error> {
@@ -835,24 +803,13 @@ pub mod isi {
             ));
         }
 
-        let requested_quantity = amount
-            .map(|amount| {
-                Quantity::from_canonical_numeric(amount.clone()).map_err(|_| {
-                    InstructionExecutionError::InvariantViolation(
-                        "dataspace capability amount must be a non-negative quantity"
-                            .to_owned()
-                            .into(),
-                    )
-                })
-            })
-            .transpose()?;
         let request = CapabilityRequest::new(
             current_dataspace,
             None,
             None,
             Some(definition_id),
             None,
-            requested_quantity,
+            amount.cloned(),
             state_transaction.block_height(),
         );
         match manifest_record.manifest.evaluate(&request) {
@@ -872,7 +829,7 @@ pub mod isi {
         definition_id: &AssetDefinitionId,
         policy: &AssetIssuerUsagePolicyV1,
         subject: &AccountId,
-        amount: Option<&Numeric>,
+        amount: Option<&Quantity>,
         dataspace: Option<DataSpaceId>,
     ) -> Result<(), Error> {
         let binding = policy.binding_for(subject);
@@ -905,7 +862,7 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         definition_id: &AssetDefinitionId,
         participants: impl IntoIterator<Item = (&'a AccountId, Option<DataSpaceId>)>,
-        amount: Option<&Numeric>,
+        amount: Option<&Quantity>,
     ) -> Result<(), Error> {
         let definition = state_transaction
             .world
@@ -1236,7 +1193,7 @@ pub mod isi {
         destination_id: AssetId,
         event_source_id: AssetId,
         event_destination_id: AssetId,
-        amount: Numeric,
+        amount: Quantity,
         control_update: Option<AssetTransferControlRecord>,
         numeric_spec: NumericSpec,
         normalized_scale: u32,
@@ -1247,7 +1204,7 @@ pub mod isi {
     struct AppliedNumericTransfer {
         source_id: AssetId,
         destination_id: AssetId,
-        amount: Numeric,
+        amount: Quantity,
         delta: TransferDeltaTranscript,
     }
 
@@ -1257,7 +1214,7 @@ pub mod isi {
             authority: &AccountId,
             event_source_id: AssetId,
             event_destination_id: AssetId,
-            amount: Numeric,
+            amount: Quantity,
         ) -> Result<Self, Error> {
             // Reject no-op transfers before account admission, control usage, transcripts,
             // balances, or events can be staged.
@@ -1294,11 +1251,14 @@ pub mod isi {
                 .numeric_spec_for(source_id.definition())
                 .map_err(Error::from)?;
             debug_assert!(
-                numeric_spec.check(&amount).is_ok(),
+                numeric_spec.check(amount.as_numeric()).is_ok(),
                 "prepared numeric transfer amount must satisfy cached spec",
             );
-            let normalized_scale = numeric_spec.scale().unwrap_or_else(|| amount.scale());
-            let normalized_amount = normalized_numeric_to_u64(&amount, normalized_scale);
+            let normalized_scale = numeric_spec
+                .scale()
+                .unwrap_or_else(|| amount.as_numeric().scale());
+            let normalized_amount =
+                normalized_numeric_to_u64(amount.as_numeric(), normalized_scale);
             let prechecked_delta = state_transaction
                 .world
                 .precheck_numeric_asset_transfer_delta_exact(
@@ -1326,12 +1286,12 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<AppliedNumericTransfer, Error> {
             debug_assert!(
-                self.numeric_spec.check(&self.amount).is_ok(),
+                self.numeric_spec.check(self.amount.as_numeric()).is_ok(),
                 "prepared numeric transfer amount must still satisfy cached spec",
             );
             debug_assert_eq!(
                 self.normalized_amount,
-                normalized_numeric_to_u64(&self.amount, self.normalized_scale),
+                normalized_numeric_to_u64(self.amount.as_numeric(), self.normalized_scale),
                 "prepared numeric transfer normalization must be stable",
             );
             state_transaction
@@ -1361,12 +1321,12 @@ pub mod isi {
                 "batch transfer fast path does not persist transfer-control usage updates",
             );
             debug_assert!(
-                self.numeric_spec.check(&self.amount).is_ok(),
+                self.numeric_spec.check(self.amount.as_numeric()).is_ok(),
                 "prepared numeric transfer amount must still satisfy cached spec",
             );
             debug_assert_eq!(
                 self.normalized_amount,
-                normalized_numeric_to_u64(&self.amount, self.normalized_scale),
+                normalized_numeric_to_u64(self.amount.as_numeric(), self.normalized_scale),
                 "prepared numeric transfer normalization must be stable",
             );
             state_transaction
@@ -1396,10 +1356,10 @@ pub mod isi {
         submitting_authority: &AccountId,
         source_id: AssetId,
         source_destination_id: AssetId,
-        source_amount: Numeric,
+        source_amount: Quantity,
         destination_source_id: AssetId,
         destination_id: AssetId,
-        destination_amount: Numeric,
+        destination_amount: Quantity,
     ) -> Result<PreparedNativeFxTransferPair, Error> {
         if source_id.scope() != source_destination_id.scope()
             || destination_source_id.scope() != destination_id.scope()
@@ -1451,10 +1411,10 @@ pub mod isi {
         submitting_authority: &AccountId,
         source_id: AssetId,
         source_destination_id: AssetId,
-        source_amount: Numeric,
+        source_amount: Quantity,
         destination_source_id: AssetId,
         destination_id: AssetId,
-        destination_amount: Numeric,
+        destination_amount: Quantity,
     ) -> Result<(), Error> {
         prepare_native_fx_numeric_asset_pair(
             state_transaction,
@@ -1481,10 +1441,10 @@ pub mod isi {
         submitting_authority: &AccountId,
         source_id: AssetId,
         source_destination_id: AssetId,
-        source_amount: Numeric,
+        source_amount: Quantity,
         destination_source_id: AssetId,
         destination_id: AssetId,
-        destination_amount: Numeric,
+        destination_amount: Quantity,
     ) -> Result<(), Error> {
         let prepared = prepare_native_fx_numeric_asset_pair(
             state_transaction,
@@ -1503,10 +1463,8 @@ pub mod isi {
         let destination = prepared.destination.apply(state_transaction)?;
         state_transaction.record_transfer_transcript(submitting_authority, source.delta)?;
         state_transaction.record_transfer_transcript(submitting_authority, destination.delta)?;
-        let source_amount = Quantity::from_canonical_numeric(source.amount)
-            .map_err(|_| MathError::NegativeValue)?;
-        let destination_amount = Quantity::from_canonical_numeric(destination.amount)
-            .map_err(|_| MathError::NegativeValue)?;
+        let source_amount = source.amount;
+        let destination_amount = destination.amount;
 
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
@@ -1534,7 +1492,7 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
         destination_id: &AssetId,
-        amount: &Numeric,
+        amount: &Quantity,
         source_policy: NumericAssetTransferSourcePolicy,
     ) -> Result<(AssetId, AssetId), Error> {
         ensure_global_asset_write_on_authoritative_route(
@@ -1583,8 +1541,7 @@ pub mod isi {
         let spec = state_transaction
             .numeric_spec_for(source_id.definition())
             .map_err(Error::from)?;
-        assert_numeric_spec_with(amount, spec)?;
-        ensure_non_negative(amount)?;
+        assert_numeric_spec_with(amount.as_numeric(), spec)?;
         ensure_transparent_allowed(
             state_transaction,
             source_id.definition(),
@@ -1658,7 +1615,7 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
         destination_id: &AssetId,
-        amount: &Numeric,
+        amount: &Quantity,
     ) -> Result<TransferDeltaTranscript, Error> {
         let delta = state_transaction
             .world
@@ -1678,7 +1635,7 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
         destination_id: &AssetId,
-        amount: &Numeric,
+        amount: &Quantity,
         source_policy: NumericAssetTransferSourcePolicy,
     ) -> Result<(AssetId, AssetId, TransferDeltaTranscript), Error> {
         let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
@@ -1721,7 +1678,7 @@ pub mod isi {
             state_transaction,
             &source_id,
             &destination_id,
-            amount.as_numeric(),
+            &amount,
             NumericAssetTransferSourcePolicy::FeeSponsorCustody,
         )?;
         state_transaction.record_transfer_transcript(submitting_authority, delta)?;
@@ -1763,11 +1720,10 @@ pub mod isi {
             )
             .into());
         }
-        let numeric = amount.as_numeric().clone();
         let spec = state_transaction
             .numeric_spec_for(source_id.definition())
             .map_err(Error::from)?;
-        assert_numeric_spec_with(&numeric, spec)?;
+        assert_numeric_spec_with(amount.as_numeric(), spec)?;
         ensure_transparent_allowed(
             state_transaction,
             source_id.definition(),
@@ -1780,14 +1736,14 @@ pub mod isi {
                 source_id.account(),
                 asset_id_dataspace_hint(state_transaction, &source_id),
             )],
-            Some(&numeric),
+            Some(&amount),
         )?;
         ensure_not_offline_escrow_source(state_transaction, &source_id)?;
         ensure_not_native_escrow_source(state_transaction, &source_id)?;
         ensure_not_sccp_custody_source(state_transaction, &source_id)?;
         state_transaction
             .world
-            .withdraw_numeric_asset(&source_id, &numeric)?;
+            .withdraw_numeric_asset(&source_id, &amount)?;
         state_transaction
             .world
             .decrease_asset_total_amount(source_id.definition(), &amount)?;
@@ -1816,20 +1772,17 @@ pub mod isi {
                 .world
                 .resolve_asset_id_for_current_scope(&asset_id)?;
 
-            // Instruction payloads carry the nominal non-negative domain. Convert to the
-            // storage arithmetic representation only at the execution boundary.
             let quantity = self.object().clone();
-            let amount = quantity.as_numeric().clone();
             let _created = ensure_receiving_account(
                 authority,
                 asset_id.account(),
-                Some((asset_id.definition(), &amount)),
+                Some((asset_id.definition(), &quantity)),
                 state_transaction,
             )?;
             let spec = state_transaction
                 .numeric_spec_for(asset_id.definition())
                 .map_err(Error::from)?;
-            assert_numeric_spec_with(&amount, spec)?;
+            assert_numeric_spec_with(quantity.as_numeric(), spec)?;
             ensure_transparent_allowed(
                 state_transaction,
                 asset_id.definition(),
@@ -1842,16 +1795,16 @@ pub mod isi {
                     resolved_asset_id.account(),
                     asset_id_dataspace_hint(state_transaction, &resolved_asset_id),
                 )],
-                Some(&amount),
+                Some(&quantity),
             )?;
 
             let flipped = assert_can_mint_cached(state_transaction, asset_id.definition())?;
             // Deposit into destination asset balance, creating if needed
             #[cfg(feature = "telemetry")]
-            let amount_f64 = amount.clone().to_f64_lossy();
+            let amount_f64 = quantity.as_numeric().clone().to_f64_lossy();
             state_transaction
                 .world
-                .deposit_numeric_asset(&asset_id, &amount)?;
+                .deposit_numeric_asset(&asset_id, &quantity)?;
 
             #[allow(clippy::float_arithmetic)]
             {
@@ -1902,11 +1855,10 @@ pub mod isi {
                 .resolve_asset_id_for_current_scope(&asset_id)?;
 
             let quantity = self.object().clone();
-            let amount = quantity.as_numeric().clone();
             let spec = state_transaction
                 .numeric_spec_for(asset_id.definition())
                 .map_err(Error::from)?;
-            assert_numeric_spec_with(&amount, spec)?;
+            assert_numeric_spec_with(quantity.as_numeric(), spec)?;
             ensure_usage_policy_for_accounts(
                 state_transaction,
                 asset_id.definition(),
@@ -1914,7 +1866,7 @@ pub mod isi {
                     resolved_asset_id.account(),
                     asset_id_dataspace_hint(state_transaction, &resolved_asset_id),
                 )],
-                Some(&amount),
+                Some(&quantity),
             )?;
             ensure_not_native_escrow_source(state_transaction, &resolved_asset_id)?;
             ensure_not_sccp_custody_source(state_transaction, &resolved_asset_id)?;
@@ -1922,14 +1874,14 @@ pub mod isi {
             // Withdraw from source asset balance and remove if it reaches zero
             state_transaction
                 .world
-                .withdraw_numeric_asset(&asset_id, &amount)?;
+                .withdraw_numeric_asset(&asset_id, &quantity)?;
 
             #[allow(clippy::float_arithmetic)]
             {
                 #[cfg(feature = "telemetry")]
                 state_transaction
                     .telemetry
-                    .observe_tx_amount(amount.clone().to_f64_lossy());
+                    .observe_tx_amount(quantity.as_numeric().clone().to_f64_lossy());
                 state_transaction
                     .world
                     .decrease_asset_total_amount(asset_id.definition(), &quantity)?;
@@ -1957,7 +1909,7 @@ pub mod isi {
                 authority,
                 self.source().clone(),
                 self.destination().clone(),
-                self.object().clone().into_numeric(),
+                self.object().clone(),
             )
         }
     }
@@ -1968,7 +1920,7 @@ pub mod isi {
         authority: &AccountId,
         source_id: AssetId,
         destination: AccountId,
-        amount: Numeric,
+        amount: Quantity,
     ) -> Result<(), Error> {
         let destination_id = AssetId::new(source_id.definition().clone(), destination);
         let plan = PreparedNumericTransferPlan::prepare_user(
@@ -1985,10 +1937,9 @@ pub mod isi {
         #[cfg(feature = "telemetry")]
         state_transaction
             .telemetry
-            .observe_tx_amount(applied.amount.clone().to_f64_lossy());
+            .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
 
-        let amount = Quantity::from_canonical_numeric(applied.amount)
-            .map_err(|_| MathError::NegativeValue)?;
+        let amount = applied.amount;
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
                 asset: applied.source_id,
@@ -2014,7 +1965,7 @@ pub mod isi {
         authority: &AccountId,
         source_id: AssetId,
         destination: AccountId,
-        amount: Numeric,
+        amount: Quantity,
     ) -> Result<(), Error> {
         if source_id.account() != authority {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -2036,10 +1987,9 @@ pub mod isi {
         #[cfg(feature = "telemetry")]
         state_transaction
             .telemetry
-            .observe_tx_amount(applied.amount.clone().to_f64_lossy());
+            .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
 
-        let amount = Quantity::from_canonical_numeric(applied.amount)
-            .map_err(|_| MathError::NegativeValue)?;
+        let amount = applied.amount;
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
                 asset: applied.source_id,
@@ -2084,16 +2034,12 @@ pub mod isi {
             state_transaction,
             &source_id,
             &destination_id,
-            amount.as_numeric(),
+            &amount,
             NumericAssetTransferSourcePolicy::SccpInboundSettlement,
         )?;
         let delta = state_transaction
             .world
-            .precheck_numeric_asset_transfer_delta_exact(
-                &source_id,
-                &destination_id,
-                amount.as_numeric(),
-            )?;
+            .precheck_numeric_asset_transfer_delta_exact(&source_id, &destination_id, &amount)?;
         Ok(PreparedSccpInboundNumericAssetRelease {
             source_id,
             destination_id,
@@ -2143,7 +2089,7 @@ pub mod isi {
         authority: &AccountId,
         source_id: AssetId,
         destination: AccountId,
-        amount: Numeric,
+        amount: Quantity,
     ) -> Result<bool, Error> {
         if state_transaction.world.account(&destination).is_err() {
             return Ok(false);
@@ -2167,10 +2113,9 @@ pub mod isi {
         #[cfg(feature = "telemetry")]
         state_transaction
             .telemetry
-            .observe_tx_amount(applied.amount.clone().to_f64_lossy());
+            .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
 
-        let amount = Quantity::from_canonical_numeric(applied.amount)
-            .map_err(|_| MathError::NegativeValue)?;
+        let amount = applied.amount;
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
                 asset: applied.source_id,
@@ -2329,7 +2274,7 @@ pub mod isi {
                     AssetId::new(entry.asset_definition().clone(), entry.from().clone());
                 let destination_id =
                     AssetId::new(entry.asset_definition().clone(), entry.to().clone());
-                let amount = entry.amount().as_numeric().clone();
+                let amount = entry.amount().clone();
                 let plan = PreparedNumericTransferPlan::prepare_user(
                     state_transaction,
                     authority,
@@ -2343,9 +2288,8 @@ pub mod isi {
                 #[cfg(feature = "telemetry")]
                 state_transaction
                     .telemetry
-                    .observe_tx_amount(applied.amount.to_f64_lossy());
-                let amount = Quantity::from_canonical_numeric(applied.amount)
-                    .map_err(|_| MathError::NegativeValue)?;
+                    .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
+                let amount = applied.amount;
                 state_transaction.world.emit_events([
                     AssetEvent::Removed(AssetChanged {
                         asset: applied.source_id,
@@ -3556,7 +3500,6 @@ pub mod query {
                 asset::isi::{
                     NumericAssetTransferSourcePolicy, ensure_numeric_asset_transfer_policies,
                 },
-                isi::asset::isi::ensure_non_negative,
             },
             state::{State, StateTransaction, World},
         };
@@ -5144,16 +5087,6 @@ pub mod query {
         }
 
         #[test]
-        fn ensure_non_negative_blocks_negative_amounts() {
-            let err = ensure_non_negative(&Numeric::new(-1, 0))
-                .expect_err("negative numeric balances must be rejected");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::Math(MathError::NegativeValue)
-            ));
-        }
-
-        #[test]
         fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
             let (state, asset_definition_id, source_asset_id) =
                 build_asset_transfer_control_test_state(10);
@@ -5219,8 +5152,8 @@ pub mod query {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
-            let fractional_quantity = Quantity::try_from_numeric(Numeric::new(1_u32, 1))
-                .expect("non-negative fractional quantity");
+            let fractional_quantity: Quantity =
+                "0.1".parse().expect("non-negative fractional quantity");
 
             let err = stx
                 .world
@@ -6179,7 +6112,7 @@ pub mod query {
                 &mut stx,
                 &source_asset_id,
                 &destination_asset_id,
-                &Numeric::new(1, 0),
+                &Quantity::one(),
                 NumericAssetTransferSourcePolicy::User,
             )
             .expect_err("explicit destination scope outside non-universal route must reject");

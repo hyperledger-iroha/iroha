@@ -416,6 +416,7 @@ import java.net.URI;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.hyperledger.iroha.android.client.SubscriptionToriiClient;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionCreateRequest;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionCreateResponse;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionPlanCreateRequest;
@@ -458,7 +459,7 @@ client.recordSubscriptionUsage(
             .authority("<provider_account_i105>")
             .privateKey("<hex>")
             .unitKey("compute_ms")
-            .delta("3600000")
+            .delta(NumericV1.QuantityValue.parseCanonical("3600000"))
             .build())
     .join();
 ```

@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 import java.math.BigInteger
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
 private const val CAST_BALLOT_ACTION = "CastPlainBallot"
 
@@ -64,6 +65,20 @@ class CastPlainBallotInstruction private constructor(
         direction = direction,
     )
 
+    constructor(
+        referendumId: String,
+        ownerAccountId: String,
+        amount: KotodamaQuantity,
+        durationBlocks: Long,
+        direction: Int,
+    ) : this(
+        referendumId = referendumId,
+        ownerAccountId = ownerAccountId,
+        amount = amount.toString(),
+        durationBlocks = durationBlocks,
+        direction = direction,
+    )
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is CastPlainBallotInstruction) return false
@@ -89,7 +104,7 @@ class CastPlainBallotInstruction private constructor(
             return CastPlainBallotInstruction(
                 referendumId = require(arguments, "referendum_id"),
                 ownerAccountId = require(arguments, "owner"),
-                amount = require(arguments, "amount"),
+                amount = validateAmount(require(arguments, "amount")),
                 durationBlocks = parseLong(require(arguments, "duration_blocks"), "duration_blocks"),
                 direction = parseDirection(require(arguments, "direction")),
                 _arguments = LinkedHashMap(arguments),
@@ -123,14 +138,14 @@ class CastPlainBallotInstruction private constructor(
         }
 
         private fun validateAmount(amount: String): String {
-            require(amount.isNotBlank()) { "amount must not be blank" }
             try {
-                val parsed = BigInteger(amount)
-                require(parsed.signum() >= 0) { "amount must be non-negative" }
-            } catch (ex: NumberFormatException) {
-                throw IllegalArgumentException("amount must be a non-negative integer", ex)
+                return KotodamaQuantity.parseCanonical(amount).toString()
+            } catch (ex: IllegalArgumentException) {
+                throw IllegalArgumentException(
+                    "amount must be a canonical non-negative Quantity",
+                    ex,
+                )
             }
-            return amount
         }
     }
 }

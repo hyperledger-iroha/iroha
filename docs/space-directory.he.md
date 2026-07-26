@@ -191,7 +191,7 @@ placeholders כמו ה-fixtures המכוּרָתים, ושני הפלטים כו
 - **Deny מנצח.** הציבו deny מפורשים אחרי allow תואם כדי שאופרטורים יוכלו להבין
   את קדימות הכללים.
 - **סכומים דטרמיניסטיים.** שמרו על `max_amount` כמחרוזת דצימלית כדי להימנע
-  מעמימות של float כאשר `Numeric` מפרש את הערך.
+  מעמימות של float כאשר `Quantity` מפרש את הערך.
 - **תוקף מגובה Scheduler.** ה-runtime הליבתי מפוגג manifests אוטומטית לאחר
   שהגובה מגיע ל-`expiry_epoch`, מפיק `SpaceDirectoryEvent::ManifestExpired`,
   מעלה את `nexus_space_directory_revision_total`, וקושר מחדש UAIDs לפני ש-

@@ -107,7 +107,7 @@ translator: machine-google-reviewed
 Түрлері: `Mint<O, D: Identifiable>` және `Burn<O, D: Identifiable>`, қорапта `MintBox`/`BurnBox`.
 
 - Актив (сандық) жалбыз/жазу: баланстар мен анықтаманың `total_quantity` мәнін реттейді.
-  - Алғышарттар: `Numeric` мәні `AssetDefinition.spec()` сәйкес келуі керек; `mintable` рұқсат берген ақша:
+  - Алғышарттар: `Quantity` мәні `AssetDefinition.spec()` сәйкес келуі керек; `mintable` рұқсат берген ақша:
     - `Infinitely`: әрқашан рұқсат етіледі.
     - `Once`: бір рет рұқсат етіледі; бірінші жалбыз `mintable`-ті `Not`-ке аударады және `AssetDefinitionEvent::MintabilityChanged` шығарады, сонымен қатар тексерілу мүмкіндігі үшін егжей-тегжейлі `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }`.
     - `Limited(n)`: `n` қосымша ақша операцияларына мүмкіндік береді. Әрбір сәтті жалбыз есептегішті азайтады; ол нөлге жеткенде анықтама `Not` түріне ауысады және жоғарыдағыдай `MintabilityChanged` оқиғаларын шығарады.

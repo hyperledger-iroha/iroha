@@ -1,0 +1,5 @@
+error: `#[ffi_type(unsafe {robust})]` is only valid on `#[repr(transparent)]` types
+ --> tests/ui_fail/robust_without_repr.rs:4:12
+  |
+4 | #[ffi_type(unsafe {robust})]
+  |            ^^^^^^

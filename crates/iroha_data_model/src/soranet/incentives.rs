@@ -67,8 +67,12 @@ pub enum RelayBandwidthProofSignatureError {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct RelayBondPolicyV1 {
     /// Minimum bond (denominated in XOR) required for relays that expose an exit hop.
@@ -96,8 +100,12 @@ impl RelayBondPolicyV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct RelayBondLedgerEntryV1 {
     /// Relay fingerprint as advertised in the directory.
@@ -134,8 +142,12 @@ impl RelayBondLedgerEntryV1 {
 #[cfg_attr(feature = "json", norito(tag = "status", content = "details"))]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct BandwidthConfidenceV1 {
     /// Number of path samples collected for the measurement window.
@@ -158,8 +170,12 @@ impl BandwidthConfidenceV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct RelayBandwidthProofV1 {
     /// Relay fingerprint for which the bandwidth was measured.
@@ -259,8 +275,12 @@ impl RelayBandwidthProofV1 {
 /// Relay compliance status used when calculating rewards or penalties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 #[allow(clippy::exhaustive_enums)]
 pub enum RelayComplianceStatusV1 {
@@ -318,8 +338,12 @@ impl JsonDeserialize for RelayComplianceStatusV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct RelayEpochMetricsV1 {
     /// Relay fingerprint as advertised in the directory consensus.
@@ -372,8 +396,12 @@ impl RelayEpochMetricsV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct RelayRewardInstructionV1 {
     /// Relay fingerprint for which the payout is being issued.
@@ -419,8 +447,12 @@ impl RelayRewardInstructionV1 {
 /// Status of a relay reward dispute raised against a payout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub enum RelayRewardDisputeStatusV1 {
     /// Dispute has been recorded and awaits treasury review.
@@ -469,8 +501,12 @@ impl JsonDeserialize for RelayRewardDisputeStatusV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct RelayRewardDisputeV1 {
     /// Relay fingerprint associated with the disputed payout.

@@ -1060,7 +1060,7 @@ pub enum PdpRejectionReasonV1 {
     SubmissionLate,
     /// A signed proof claimed an issued-at time beyond governed clock skew.
     FutureTimestamp,
-    /// An authenticated proof failed binding, coverage, or Merkle verification.
+    /// A submitted proof was malformed, unauthorized, misbound, or failed verification.
     InvalidProof,
     /// The provider admission disappeared while the challenge was pending.
     AdmissionRevoked,
@@ -1118,7 +1118,11 @@ pub struct PdpGovernanceArchiveV1 {
     pub admission_envelope_digest: [u8; 32],
     /// Exact canonical challenge bytes.
     pub canonical_challenge: Vec<u8>,
-    /// Exact canonical authenticated proof bytes, absent for no-submission failures.
+    /// Exact canonical authenticated proof bytes when the submitted proof remains
+    /// admissible as evidence.
+    ///
+    /// This is absent for no-submission failures and for invalid submissions
+    /// that cannot be retained as a canonical proof bound to this archive.
     #[norito(default)]
     pub canonical_proof: Option<Vec<u8>>,
 }
@@ -1162,11 +1166,15 @@ impl PdpGovernanceArchiveV1 {
             PdpTerminalDecisionV1::Rejected(reason) => {
                 let proof_required = matches!(
                     reason,
-                    PdpRejectionReasonV1::SubmissionLate
-                        | PdpRejectionReasonV1::FutureTimestamp
-                        | PdpRejectionReasonV1::InvalidProof
+                    PdpRejectionReasonV1::SubmissionLate | PdpRejectionReasonV1::FutureTimestamp
                 );
-                if proof_required != self.canonical_proof.is_some() || self.sampled_bytes != 0 {
+                let proof_allowed =
+                    proof_required || matches!(reason, PdpRejectionReasonV1::InvalidProof);
+                let has_proof = self.canonical_proof.is_some();
+                if (proof_required && !has_proof)
+                    || (!proof_allowed && has_proof)
+                    || self.sampled_bytes != 0
+                {
                     return Err(PdpGovernanceArchiveValidationError::DecisionMismatch);
                 }
                 if matches!(
@@ -2444,6 +2452,13 @@ mod tests {
         rejected
             .validate()
             .expect("authenticated invalid proof remains archivable");
+
+        let mut malformed_submission = rejected;
+        malformed_submission.proof_digest = None;
+        malformed_submission.canonical_proof = None;
+        malformed_submission
+            .validate()
+            .expect("invalid submission without canonical proof remains archivable");
 
         let mut expired = accepted_archive(&fixture);
         expired.decision = PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired);

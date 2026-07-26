@@ -1674,7 +1674,7 @@ impl MergeLedgerStore {
 struct NexusFeeSettlementPlan {
     receipts: Vec<NexusFeeReceipt>,
     receipt_authority_heights: BTreeMap<[u8; 32], u64>,
-    aggregate_burns: BTreeMap<AssetId, Numeric>,
+    aggregate_burns: BTreeMap<AssetId, Quantity>,
     settled_lease_usage: BTreeMap<Hash, Quantity>,
     settlement_markers: Vec<Name>,
     receipt_markers: Vec<([u8; 32], Name)>,
@@ -11140,7 +11140,7 @@ pub struct StateTransaction<'block, 'state> {
     pending_nexus_fee_event: Option<crate::sumeragi::status::NexusFeeEvent>,
     /// Block fee amount staged until the transaction is committed.
     #[cfg(feature = "telemetry")]
-    pending_block_fee_amount: Numeric,
+    pending_block_fee_amount: Quantity,
     /// Confidential operations executed so far within this transaction.
     pub zk_confidential_ops_in_tx: u32,
     /// Confidential proof verifications executed so far within this transaction.
@@ -11359,16 +11359,14 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
 
     /// Stage block fee amount so telemetry only reflects committed transactions.
     #[cfg(feature = "telemetry")]
-    pub(crate) fn stage_block_fee_amount(&mut self, delta_amount: Numeric) {
-        if delta_amount <= Numeric::zero() {
+    pub(crate) fn stage_block_fee_amount(&mut self, delta_amount: Quantity) {
+        if delta_amount.is_zero() {
             return;
         }
         self.pending_block_fee_amount = self
             .pending_block_fee_amount
-            .clone()
-            .checked_add(delta_amount)
+            .checked_add(&delta_amount)
             .expect("block fee amount exceeds supported numeric bounds")
-            .trim_trailing_zeros();
     }
 }
 
@@ -15679,20 +15677,20 @@ enum DetachedPermissionOp {
 pub struct DetachedStateTransactionDelta {
     // SoA: asset balance deltas
     asset_add_ids: Vec<iroha_data_model::asset::AssetId>,
-    asset_add_qtys: Vec<iroha_primitives::numeric::Numeric>,
+    asset_add_qtys: Vec<Quantity>,
     asset_sub_ids: Vec<iroha_data_model::asset::AssetId>,
-    asset_sub_qtys: Vec<iroha_primitives::numeric::Numeric>,
-    // SoA: transparent numeric asset transfers.
+    asset_sub_qtys: Vec<Quantity>,
+    // SoA: transparent asset-quantity transfers.
     asset_transfer_source_ids: Vec<iroha_data_model::asset::AssetId>,
     asset_transfer_destination_accounts: Vec<iroha_data_model::account::AccountId>,
-    asset_transfer_amounts: Vec<iroha_primitives::numeric::Numeric>,
+    asset_transfer_amounts: Vec<Quantity>,
     /// Event replay script describing the per-operation ordering for asset changes.
     asset_event_script: Vec<AssetEventScriptEntry>,
     // SoA: total supply deltas per asset definition
     asset_def_add_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
-    asset_def_add_qtys: Vec<iroha_primitives::numeric::Numeric>,
+    asset_def_add_qtys: Vec<Quantity>,
     asset_def_sub_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
-    asset_def_sub_qtys: Vec<iroha_primitives::numeric::Numeric>,
+    asset_def_sub_qtys: Vec<Quantity>,
     flip_mintable_to_not:
         std::collections::BTreeMap<iroha_data_model::asset::AssetDefinitionId, u32>,
     // Intern pool shared by metadata operations
@@ -15794,25 +15792,20 @@ pub(crate) struct DetachedMergeContext {
     pub(crate) current_dataspace_id: Option<iroha_data_model::nexus::DataSpaceId>,
 }
 
-fn aggregate_numeric<K>(
+fn aggregate_quantities<K>(
     ids: &[K],
-    qtys: &[Numeric],
-) -> Result<Vec<(K, Numeric)>, iroha_data_model::ValidationFail>
+    qtys: &[Quantity],
+) -> Result<Vec<(K, Quantity)>, iroha_data_model::ValidationFail>
 where
     K: Ord + Clone,
 {
     debug_assert_eq!(ids.len(), qtys.len());
-    let mut order: Vec<(K, Numeric)> = Vec::with_capacity(ids.len());
+    let mut order: Vec<(K, Quantity)> = Vec::with_capacity(ids.len());
     let mut positions: BTreeMap<K, usize> = BTreeMap::new();
     for (id, qty) in ids.iter().zip(qtys.iter()) {
-        if qty.mantissa().is_negative() {
-            return Err(iroha_data_model::ValidationFail::InstructionFailed(
-                Error::Math(MathError::NegativeValue),
-            ));
-        }
         if let Some(existing_index) = positions.get(id) {
             let entry = &mut order[*existing_index].1;
-            *entry = entry.clone().checked_add(qty.clone()).ok_or_else(|| {
+            *entry = entry.checked_add(qty).map_err(|_| {
                 iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
                     MathError::Overflow,
                 ))
@@ -15877,7 +15870,7 @@ impl DetachedStateTransactionDelta {
     ) -> Option<(
         iroha_data_model::asset::AssetId,
         iroha_data_model::account::AccountId,
-        iroha_primitives::numeric::Numeric,
+        Quantity,
     )> {
         let transfer_only = self.asset_transfer_source_ids.len() == 1
             && self.asset_transfer_destination_accounts.len() == 1
@@ -15942,18 +15935,15 @@ impl DetachedStateTransactionDelta {
         let Some((source_id, destination, amount)) = self.single_transfer_delta() else {
             return false;
         };
-        let Ok(quantity) = Quantity::from_canonical_numeric(amount.clone()) else {
-            return false;
-        };
         let destination_id = AssetId::new(source_id.definition().clone(), destination.clone());
         let transfer_events = [
             data_pre::DataEvent::from(data_pre::AssetEvent::Removed(data_pre::AssetChanged {
                 asset: source_id.clone(),
-                amount: quantity.clone(),
+                amount: amount.clone(),
             })),
             data_pre::DataEvent::from(data_pre::AssetEvent::Added(data_pre::AssetChanged {
                 asset: destination_id.clone(),
-                amount: quantity,
+                amount: amount.clone(),
             })),
         ];
 
@@ -15981,12 +15971,8 @@ impl DetachedStateTransactionDelta {
         self.single_transfer_delta().is_some()
     }
 
-    /// Record an addition to an account's numeric asset balance.
-    pub fn add_asset_add(
-        &mut self,
-        id: iroha_data_model::asset::AssetId,
-        qty: iroha_primitives::numeric::Numeric,
-    ) {
+    /// Record an addition to an account's asset balance.
+    pub fn add_asset_add(&mut self, id: iroha_data_model::asset::AssetId, qty: Quantity) {
         let idx = self.asset_add_ids.len();
         self.asset_add_ids.push(id);
         self.asset_add_qtys.push(qty);
@@ -15995,12 +15981,8 @@ impl DetachedStateTransactionDelta {
                 .expect("detached asset event script exceeded u32::MAX"),
         ));
     }
-    /// Record a subtraction from an account's numeric asset balance.
-    pub fn add_asset_sub(
-        &mut self,
-        id: iroha_data_model::asset::AssetId,
-        qty: iroha_primitives::numeric::Numeric,
-    ) {
+    /// Record a subtraction from an account's asset balance.
+    pub fn add_asset_sub(&mut self, id: iroha_data_model::asset::AssetId, qty: Quantity) {
         let idx = self.asset_sub_ids.len();
         self.asset_sub_ids.push(id);
         self.asset_sub_qtys.push(qty);
@@ -16009,32 +15991,24 @@ impl DetachedStateTransactionDelta {
                 .expect("detached asset event script exceeded u32::MAX"),
         ));
     }
-    /// Record a source-signed transparent numeric asset transfer.
+    /// Record a source-signed transparent asset-quantity transfer.
     pub fn transfer_asset(
         &mut self,
         source_id: iroha_data_model::asset::AssetId,
         destination: iroha_data_model::account::AccountId,
-        amount: iroha_primitives::numeric::Numeric,
+        amount: Quantity,
     ) {
         self.asset_transfer_source_ids.push(source_id);
         self.asset_transfer_destination_accounts.push(destination);
         self.asset_transfer_amounts.push(amount);
     }
     /// Record an increase in total supply for an asset definition.
-    pub fn add_total_add(
-        &mut self,
-        id: iroha_data_model::asset::AssetDefinitionId,
-        qty: iroha_primitives::numeric::Numeric,
-    ) {
+    pub fn add_total_add(&mut self, id: iroha_data_model::asset::AssetDefinitionId, qty: Quantity) {
         self.asset_def_add_ids.push(id);
         self.asset_def_add_qtys.push(qty);
     }
     /// Record a decrease in total supply for an asset definition.
-    pub fn add_total_sub(
-        &mut self,
-        id: iroha_data_model::asset::AssetDefinitionId,
-        qty: iroha_primitives::numeric::Numeric,
-    ) {
+    pub fn add_total_sub(&mut self, id: iroha_data_model::asset::AssetDefinitionId, qty: Quantity) {
         self.asset_def_sub_ids.push(id);
         self.asset_def_sub_qtys.push(qty);
     }
@@ -16636,7 +16610,7 @@ impl DetachedStateTransactionDelta {
         self.merge_into_with_context(state_block, authority, DetachedMergeContext::default())
     }
 
-    /// Merge a single transparent numeric transfer into an existing transaction overlay.
+    /// Merge a single transparent asset-quantity transfer into an existing transaction overlay.
     ///
     /// Returns `None` when the delta is not exactly one transparent transfer.
     ///
@@ -16653,7 +16627,7 @@ impl DetachedStateTransactionDelta {
         )
     }
 
-    /// Merge a single transparent numeric transfer into an existing transaction without triggers.
+    /// Merge a single transparent asset-quantity transfer into an existing transaction without triggers.
     ///
     /// Returns `None` when the delta is not exactly one transparent transfer.
     ///
@@ -16778,12 +16752,12 @@ impl DetachedStateTransactionDelta {
             stx.world.current_dataspace_id = Some(dataspace_id);
         }
         let result: Result<(), iroha_data_model::ValidationFail> = (|| {
-            let asset_adds = aggregate_numeric(&self.asset_add_ids, &self.asset_add_qtys)?;
-            let asset_subs = aggregate_numeric(&self.asset_sub_ids, &self.asset_sub_qtys)?;
+            let asset_adds = aggregate_quantities(&self.asset_add_ids, &self.asset_add_qtys)?;
+            let asset_subs = aggregate_quantities(&self.asset_sub_ids, &self.asset_sub_qtys)?;
             let asset_def_adds =
-                aggregate_numeric(&self.asset_def_add_ids, &self.asset_def_add_qtys)?;
+                aggregate_quantities(&self.asset_def_add_ids, &self.asset_def_add_qtys)?;
             let asset_def_subs =
-                aggregate_numeric(&self.asset_def_sub_ids, &self.asset_def_sub_qtys)?;
+                aggregate_quantities(&self.asset_def_sub_ids, &self.asset_def_sub_qtys)?;
             let account_kv_sets = gather_last_wins_keyed(
                 &self.account_kv_set_accounts,
                 &self.account_kv_set_key_ids,
@@ -16811,14 +16785,14 @@ impl DetachedStateTransactionDelta {
             );
             let asset_def_kv_dels =
                 gather_set_keyed(&self.asset_def_kv_del_ids, &self.asset_def_kv_del_key_ids);
-            // Validate numeric specs for all changes prior to mutating state (aggregated)
+            // Validate numeric specs for all changes prior to mutating state (aggregated).
             for (id, qty) in &asset_adds {
                 let def = stx.world.asset_definition(id.definition())?;
                 let spec = def.spec();
                 ensure_asset_quantity_value(qty, spec)
                     .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 if let Some(value) = stx.world.assets.get(id) {
-                    ensure_asset_quantity_value(value.as_ref().as_numeric(), spec)
+                    ensure_asset_quantity_value(value.as_ref(), spec)
                         .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 }
             }
@@ -16828,7 +16802,7 @@ impl DetachedStateTransactionDelta {
                 ensure_asset_quantity_value(qty, spec)
                     .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 if let Some(value) = stx.world.assets.get(id) {
-                    ensure_asset_quantity_value(value.as_ref().as_numeric(), spec)
+                    ensure_asset_quantity_value(value.as_ref(), spec)
                         .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 }
             }
@@ -16884,11 +16858,6 @@ impl DetachedStateTransactionDelta {
 
             // Apply asset subtractions (aggregated per id)
             for (id, qty) in &asset_subs {
-                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
-                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
-                        MathError::NegativeValue,
-                    ))
-                })?;
                 // Mutate value and record pre/post within a limited scope to drop the mutable borrow
                 // before possibly removing the entry from the map.
                 let remove_it = {
@@ -16899,8 +16868,8 @@ impl DetachedStateTransactionDelta {
                     })?;
                     let qref: &mut Quantity = &mut *cur;
                     // Witness: record pre-value
-                    crate::sumeragi::witness::record_read_asset(id, Some(qref.as_numeric()));
-                    let updated = qref.checked_sub(&quantity).map_err(|_| {
+                    crate::sumeragi::witness::record_read_asset(id, Some(qref));
+                    let updated = qref.checked_sub(qty).map_err(|_| {
                         iroha_data_model::ValidationFail::NotPermitted(
                             "not enough quantity".to_owned(),
                         )
@@ -16908,7 +16877,7 @@ impl DetachedStateTransactionDelta {
                     *qref = updated;
                     let is_zero = qref.is_zero();
                     // Witness: record post-value (after mutation)
-                    crate::sumeragi::witness::record_write_asset(id, qref.as_numeric());
+                    crate::sumeragi::witness::record_write_asset(id, qref);
                     is_zero
                 };
                 if remove_it {
@@ -16917,17 +16886,12 @@ impl DetachedStateTransactionDelta {
             }
             // Apply asset additions (aggregated per id) and defer event emission until totals update.
             for (id, qty) in &asset_adds {
-                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
-                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
-                        MathError::NegativeValue,
-                    ))
-                })?;
                 let is_nonzero = {
                     let dst = stx.world.asset_or_insert(id, Quantity::zero())?;
                     let qref: &mut Quantity = &mut *dst;
                     // Witness: record pre-value
-                    crate::sumeragi::witness::record_read_asset(id, Some(qref.as_numeric()));
-                    let updated = qref.checked_add(&quantity).map_err(|_| {
+                    crate::sumeragi::witness::record_read_asset(id, Some(qref));
+                    let updated = qref.checked_add(qty).map_err(|_| {
                         iroha_data_model::ValidationFail::NotPermitted(
                             "numeric overflow".to_owned(),
                         )
@@ -16935,7 +16899,7 @@ impl DetachedStateTransactionDelta {
                     *qref = updated;
                     let is_nonzero = !qref.is_zero();
                     // Witness: record post-value
-                    crate::sumeragi::witness::record_write_asset(id, qref.as_numeric());
+                    crate::sumeragi::witness::record_write_asset(id, qref);
                     is_nonzero
                 };
                 if is_nonzero {
@@ -16944,48 +16908,38 @@ impl DetachedStateTransactionDelta {
             }
             // Update asset definition totals
             for (def, qty) in &asset_def_adds {
-                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
-                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
-                        MathError::NegativeValue,
-                    ))
-                })?;
                 // Witness: record pre total
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_read_asset_def_total(
                         def,
-                        Some(def_ro.total_quantity().as_numeric()),
+                        Some(def_ro.total_quantity()),
                     );
                 } else {
                     crate::sumeragi::witness::record_read_asset_def_total(def, None);
                 }
-                stx.world.increase_asset_total_amount(def, &quantity)?;
+                stx.world.increase_asset_total_amount(def, qty)?;
                 // Witness: record post total
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_write_asset_def_total(
                         def,
-                        def_ro.total_quantity().as_numeric(),
+                        def_ro.total_quantity(),
                     );
                 }
             }
             for (def, qty) in &asset_def_subs {
-                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
-                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
-                        MathError::NegativeValue,
-                    ))
-                })?;
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_read_asset_def_total(
                         def,
-                        Some(def_ro.total_quantity().as_numeric()),
+                        Some(def_ro.total_quantity()),
                     );
                 } else {
                     crate::sumeragi::witness::record_read_asset_def_total(def, None);
                 }
-                stx.world.decrease_asset_total_amount(def, &quantity)?;
+                stx.world.decrease_asset_total_amount(def, qty)?;
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_write_asset_def_total(
                         def,
-                        def_ro.total_quantity().as_numeric(),
+                        def_ro.total_quantity(),
                     );
                 }
             }
@@ -17007,11 +16961,7 @@ impl DetachedStateTransactionDelta {
                         stx.world
                             .emit_events(Some(AssetEvent::Removed(AssetChanged {
                                 asset: asset.clone(),
-                                amount: Quantity::from_canonical_numeric(qty).map_err(|_| {
-                                    iroha_data_model::ValidationFail::InstructionFailed(
-                                        Error::Math(MathError::NegativeValue),
-                                    )
-                                })?,
+                                amount: qty,
                             })));
                     }
                     AssetEventScriptEntry::Added(index) => {
@@ -17028,11 +16978,7 @@ impl DetachedStateTransactionDelta {
                             .expect("asset event references missing addition qty");
                         stx.world.emit_events(Some(AssetEvent::Added(AssetChanged {
                             asset: asset.clone(),
-                            amount: Quantity::from_canonical_numeric(qty).map_err(|_| {
-                                iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
-                                    MathError::NegativeValue,
-                                ))
-                            })?,
+                            amount: qty,
                         })));
                     }
                 }
@@ -17523,24 +17469,14 @@ impl DetachedStateTransactionDelta {
     }
 }
 
-fn ensure_asset_quantity_value(value: &Numeric, spec: NumericSpec) -> Result<(), Error> {
-    if value.mantissa().is_negative() {
-        return Err(MathError::NegativeValue.into());
-    }
-    spec.check(value).map_err(|_| {
+fn ensure_asset_quantity_value(value: &Quantity, spec: NumericSpec) -> Result<(), Error> {
+    spec.check(value.as_numeric()).map_err(|_| {
         TypeError::from(Mismatch {
             expected: spec,
             actual: NumericSpec::fractional(value.scale()),
         })
         .into()
     })
-}
-
-fn ensure_persisted_non_negative(value: &Numeric, context: &str) -> Result<(), String> {
-    if value.mantissa().is_negative() {
-        return Err(format!("{context} is negative: {value}"));
-    }
-    Ok(())
 }
 
 impl World {
@@ -17567,7 +17503,7 @@ impl World {
         let definitions = self.asset_definitions.view();
         for (definition_id, definition) in definitions.iter() {
             let total = definition.total_quantity();
-            if definition.spec().check(total.as_numeric()).is_err() {
+            if ensure_asset_quantity_value(total, definition.spec()).is_err() {
                 return Err(format!(
                     "asset definition {definition_id} total quantity {total} violates numeric spec {}",
                     definition.spec()
@@ -17590,7 +17526,7 @@ impl World {
                     asset_id.account()
                 ));
             }
-            if definition.spec().check(balance.as_numeric()).is_err() {
+            if ensure_asset_quantity_value(balance, definition.spec()).is_err() {
                 return Err(format!(
                     "asset {asset_id} balance {balance} violates numeric spec {}",
                     definition.spec()
@@ -17600,28 +17536,14 @@ impl World {
         Ok(())
     }
 
-    fn validate_non_negative_ledger_invariants(&self) -> Result<(), String> {
+    fn validate_quantity_ledger_invariants(&self) -> Result<(), String> {
         for (rwa_id, value) in self.rwas.view().iter() {
             let rwa = value.as_ref();
-            ensure_persisted_non_negative(
-                rwa.quantity.as_numeric(),
-                &format!("RWA {rwa_id} quantity"),
-            )?;
-            ensure_persisted_non_negative(
-                rwa.held_quantity.as_numeric(),
-                &format!("RWA {rwa_id} held quantity"),
-            )?;
             if rwa.held_quantity > rwa.quantity {
                 return Err(format!(
                     "RWA {rwa_id} held quantity {} exceeds total quantity {}",
                     rwa.held_quantity, rwa.quantity
                 ));
-            }
-            for parent in &rwa.parents {
-                ensure_persisted_non_negative(
-                    parent.quantity().as_numeric(),
-                    &format!("RWA {rwa_id} parent quantity"),
-                )?;
             }
             for (label, quantity) in [
                 ("quantity", &rwa.quantity),
@@ -17637,14 +17559,6 @@ impl World {
         }
 
         for (escrow_id, escrow) in self.asset_escrows.view().iter() {
-            ensure_persisted_non_negative(
-                escrow.amount.as_numeric(),
-                &format!("asset escrow {:?} amount", escrow_id.as_hash()),
-            )?;
-            ensure_persisted_non_negative(
-                escrow.remaining_amount.as_numeric(),
-                &format!("asset escrow {:?} remaining amount", escrow_id.as_hash()),
-            )?;
             if escrow.remaining_amount > escrow.amount {
                 return Err(format!(
                     "asset escrow {:?} remaining amount {} exceeds total amount {}",
@@ -17653,16 +17567,6 @@ impl World {
                     escrow.amount
                 ));
             }
-            if let Some(resolution) = &escrow.resolution {
-                ensure_persisted_non_negative(
-                    resolution.buyer_amount.as_numeric(),
-                    &format!("asset escrow {:?} buyer resolution", escrow_id.as_hash()),
-                )?;
-                ensure_persisted_non_negative(
-                    resolution.seller_amount.as_numeric(),
-                    &format!("asset escrow {:?} seller resolution", escrow_id.as_hash()),
-                )?;
-            }
         }
 
         for (agreement_id, agreement) in self.repo_agreements.view().iter() {
@@ -17670,10 +17574,6 @@ impl World {
                 ("cash", agreement.cash_leg().quantity()),
                 ("collateral", agreement.collateral_leg().quantity()),
             ] {
-                ensure_persisted_non_negative(
-                    quantity.as_numeric(),
-                    &format!("repo agreement {agreement_id} {label} quantity"),
-                )?;
                 if quantity.is_zero() {
                     return Err(format!(
                         "repo agreement {agreement_id} {label} quantity must be positive"
@@ -17683,14 +17583,6 @@ impl World {
         }
 
         for ((lane_id, validator_id), validator) in self.public_lane_validators.view().iter() {
-            ensure_persisted_non_negative(
-                validator.total_stake.as_numeric(),
-                &format!("lane {lane_id} validator {validator_id} total stake"),
-            )?;
-            ensure_persisted_non_negative(
-                validator.self_stake.as_numeric(),
-                &format!("lane {lane_id} validator {validator_id} self stake"),
-            )?;
             if validator.self_stake > validator.total_stake {
                 return Err(format!(
                     "lane {lane_id} validator {validator_id} self stake exceeds total stake"
@@ -17698,34 +17590,9 @@ impl World {
             }
         }
 
-        for ((lane_id, validator_id, staker_id), share) in
-            self.public_lane_stake_shares.view().iter()
-        {
-            ensure_persisted_non_negative(
-                share.bonded.as_numeric(),
-                &format!("lane {lane_id} validator {validator_id} staker {staker_id} bonded stake"),
-            )?;
-            for unbond in share.pending_unbonds.values() {
-                ensure_persisted_non_negative(
-                    unbond.amount.as_numeric(),
-                    &format!(
-                        "lane {lane_id} validator {validator_id} staker {staker_id} pending unbond"
-                    ),
-                )?;
-            }
-        }
-
         for ((lane_id, epoch), reward) in self.public_lane_rewards.view().iter() {
-            ensure_persisted_non_negative(
-                reward.total_reward.as_numeric(),
-                &format!("lane {lane_id} epoch {epoch} total reward"),
-            )?;
             let mut total = Quantity::zero();
             for share in &reward.shares {
-                ensure_persisted_non_negative(
-                    share.amount.as_numeric(),
-                    &format!("lane {lane_id} epoch {epoch} reward share"),
-                )?;
                 total = total.checked_add(&share.amount).map_err(|_| {
                     format!("lane {lane_id} epoch {epoch} reward share total overflowed")
                 })?;
@@ -17735,17 +17602,6 @@ impl World {
                     "lane {lane_id} epoch {epoch} reward shares total {total} does not match {}",
                     reward.total_reward
                 ));
-            }
-        }
-
-        for (settlement_id, ledger) in self.settlement_ledgers.view().iter() {
-            for entry in ledger.entries() {
-                for leg in &entry.legs {
-                    ensure_persisted_non_negative(
-                        leg.leg.quantity().as_numeric(),
-                        &format!("settlement {settlement_id} leg quantity"),
-                    )?;
-                }
             }
         }
 
@@ -18206,8 +18062,8 @@ impl World {
             .validate_numeric_asset_invariants()
             .expect("invalid numeric asset state in world constructor");
         world
-            .validate_non_negative_ledger_invariants()
-            .expect("invalid non-negative ledger state in world constructor");
+            .validate_quantity_ledger_invariants()
+            .expect("invalid quantity ledger state in world constructor");
         world
             .rebuild_domain_selector_index()
             .expect("duplicate domain selector in world constructor");
@@ -23612,7 +23468,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ///
     /// # Errors
     /// - There is no account with such name.
-    /// - The default or existing asset balance is negative or violates the definition's numeric spec.
+    /// - The default or existing asset balance violates the definition's numeric spec.
     #[allow(clippy::missing_panics_doc)]
     pub fn asset_or_insert(
         &mut self,
@@ -23631,7 +23487,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ///
     /// # Errors
     /// - There is no account with such name.
-    /// - The default or existing asset balance is negative or violates the definition's numeric spec.
+    /// - The default or existing asset balance violates the definition's numeric spec.
     #[allow(clippy::missing_panics_doc)]
     pub fn asset_or_insert_exact(
         &mut self,
@@ -23642,10 +23498,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let spec = self.asset_definition(resolved_id.definition())?.spec();
         self.account(resolved_id.account())?;
         let default_asset_value = default_asset_value.into();
-        ensure_asset_quantity_value(default_asset_value.as_numeric(), spec)?;
+        ensure_asset_quantity_value(&default_asset_value, spec)?;
 
         if let Some(value) = self.assets.get(&resolved_id) {
-            ensure_asset_quantity_value(value.as_ref().as_numeric(), spec)?;
+            ensure_asset_quantity_value(value.as_ref(), spec)?;
         }
 
         if self.assets.get(&resolved_id).is_none() {
@@ -23695,19 +23551,19 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         increment: &Quantity,
     ) -> Result<(), Error> {
         let spec = self.asset_definition(definition_id)?.spec();
-        ensure_asset_quantity_value(increment.as_numeric(), spec)?;
+        ensure_asset_quantity_value(increment, spec)?;
         // Update the aggregate based on the stored value rather than recomputing
         // from the current storage view (which would already include the change)
         // to avoid double-counting.
         // Compute and persist the new total first, then emit events.
         let new_total = {
             let def = self.asset_definition_mut(definition_id)?;
-            ensure_asset_quantity_value(def.total_quantity.as_numeric(), spec)?;
+            ensure_asset_quantity_value(&def.total_quantity, spec)?;
             let new_total = def
                 .total_quantity
                 .checked_add(increment)
                 .map_err(|_| MathError::Overflow)?;
-            ensure_asset_quantity_value(new_total.as_numeric(), spec)?;
+            ensure_asset_quantity_value(&new_total, spec)?;
             def.total_quantity = new_total.clone();
             new_total
         };
@@ -23748,13 +23604,13 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         decrement: &Quantity,
     ) -> Result<(), Error> {
         let spec = self.asset_definition(definition_id)?.spec();
-        ensure_asset_quantity_value(decrement.as_numeric(), spec)?;
+        ensure_asset_quantity_value(decrement, spec)?;
         // Update the aggregate directly to avoid double-counting when storage
         // has already been mutated by the caller.
         // Compute and persist the new total first, then emit events.
         let new_total = {
             let def = self.asset_definition_mut(definition_id)?;
-            ensure_asset_quantity_value(def.total_quantity.as_numeric(), spec)?;
+            ensure_asset_quantity_value(&def.total_quantity, spec)?;
             if &def.total_quantity < decrement {
                 return Err(MathError::NotEnoughQuantity.into());
             }
@@ -23762,7 +23618,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 .total_quantity
                 .checked_sub(decrement)
                 .map_err(|_| MathError::NotEnoughQuantity)?;
-            ensure_asset_quantity_value(new_total.as_numeric(), spec)?;
+            ensure_asset_quantity_value(&new_total, spec)?;
             def.total_quantity = new_total.clone();
             new_total
         };
@@ -26704,8 +26560,8 @@ impl State {
             .validate_numeric_asset_invariants()
             .expect("initial world contains invalid numeric asset state");
         world
-            .validate_non_negative_ledger_invariants()
-            .expect("initial world contains invalid non-negative ledger state");
+            .validate_quantity_ledger_invariants()
+            .expect("initial world contains invalid quantity ledger state");
         crate::smartcontracts::ivm::active_runtime_abi_hash(&world.view(), u64::MAX)
             .unwrap_or_else(|error| {
                 panic!(
@@ -28353,7 +28209,7 @@ impl State {
                                     def_id,
                                     sb.gov.bond_escrow_account.clone(),
                                 );
-                                let amount = rec.amount.as_numeric().clone();
+                                let amount = rec.amount.clone();
                                 if let Err(err) =
                                     wtx.withdraw_numeric_asset(&escrow_asset_id, &amount)
                                 {
@@ -37161,7 +37017,7 @@ impl State {
         receipt: &NexusFeeReceipt,
     ) -> Result<Quantity, MergeLedgerCommitError> {
         let schedule = &receipt.schedule;
-        let mut fee = schedule.base_fee.as_numeric().clone();
+        let mut fee = schedule.base_fee.clone();
         for (unit, count, label) in [
             (
                 &schedule.per_byte_fee,
@@ -37179,28 +37035,20 @@ impl State {
                 "per_gas_unit_fee",
             ),
         ] {
-            let delta = unit
-                .as_numeric()
-                .try_decimal_mul(&Numeric::from(count))
-                .map_err(|_| {
-                    MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                        "{label} multiplication overflow for receipt {}",
-                        hex::encode(receipt.source_id)
-                    ))
-                })?;
-            fee = fee.checked_add(delta).ok_or_else(|| {
+            let delta = unit.try_mul_decimal(&Numeric::from(count)).map_err(|_| {
+                MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                    "{label} multiplication overflow for receipt {}",
+                    hex::encode(receipt.source_id)
+                ))
+            })?;
+            fee = fee.checked_add(&delta).map_err(|_| {
                 MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
                     "fee addition overflow for receipt {}",
                     hex::encode(receipt.source_id)
                 ))
             })?;
         }
-        Quantity::from_canonical_numeric(fee.trim_trailing_zeros()).map_err(|error| {
-            MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                "computed fee left the quantity domain for receipt {}: {error}",
-                hex::encode(receipt.source_id)
-            ))
-        })
+        Ok(fee)
     }
 
     fn verified_fee_sponsor_allocation_for_receipt(
@@ -37468,7 +37316,7 @@ impl State {
         };
         let mut plan = self.collect_nexus_fee_receipts_for_merge(lane_snapshots, &asset_def)?;
 
-        let mut aggregate = BTreeMap::<AssetId, Numeric>::new();
+        let mut aggregate = BTreeMap::<AssetId, Quantity>::new();
         let mut settled_lease_usage = BTreeMap::<Hash, Quantity>::new();
         {
             let world = self.world.view();
@@ -37522,14 +37370,12 @@ impl State {
                     }
                 };
                 let asset_id = AssetId::new(asset_def.clone(), payer.clone());
-                let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
-                let next = current
-                    .checked_add(receipt.fee_amount.as_numeric().clone())
-                    .ok_or_else(|| {
-                        MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                            "aggregate fee overflow for payer {payer}",
-                        ))
-                    })?;
+                let current = aggregate.remove(&asset_id).unwrap_or_else(Quantity::zero);
+                let next = current.checked_add(&receipt.fee_amount).map_err(|_| {
+                    MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                        "aggregate fee overflow for payer {payer}",
+                    ))
+                })?;
                 aggregate.insert(asset_id, next);
             }
             for (asset_id, required) in &aggregate {
@@ -37537,16 +37383,10 @@ impl State {
                     .assets()
                     .get(asset_id)
                     .map_or_else(Quantity::zero, |value| value.as_ref().clone());
-                if available.as_numeric() < required {
-                    let required =
-                        Quantity::from_canonical_numeric(required.clone()).map_err(|err| {
-                            MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                                "aggregate fee is not a non-negative quantity: {err}"
-                            ))
-                        })?;
+                if &available < required {
                     return Err(MergeLedgerCommitError::InsufficientNexusFeeBalance {
                         payer: asset_id.account().clone(),
-                        required,
+                        required: required.clone(),
                         available,
                     });
                 }
@@ -37643,17 +37483,15 @@ impl State {
             );
             tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             for (asset_id, amount) in &aggregate_burns {
-                let quantity = Quantity::from_canonical_numeric(amount.clone())
-                    .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
                 tx.withdraw_numeric_asset(asset_id, amount)
                     .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-                tx.decrease_asset_total_amount(asset_id.definition(), &quantity)
+                tx.decrease_asset_total_amount(asset_id.definition(), amount)
                     .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
                 tx.emit_events(Some(
                     iroha_data_model::events::data::prelude::AssetEvent::Removed(
                         iroha_data_model::events::data::prelude::AssetChanged {
                             asset: asset_id.clone(),
-                            amount: quantity,
+                            amount: amount.clone(),
                         },
                     ),
                 ));
@@ -47637,7 +47475,7 @@ impl<'state> StateBlock<'state> {
             pending_nexus_fee_records: BTreeMap::new(),
             pending_nexus_fee_event: None,
             #[cfg(feature = "telemetry")]
-            pending_block_fee_amount: Numeric::zero(),
+            pending_block_fee_amount: Quantity::zero(),
             zk_confidential_ops_in_tx: 0,
             zk_verify_calls_in_tx: 0,
             zk_proof_bytes_in_tx: 0,
@@ -48173,7 +48011,7 @@ impl<'state> StateBlock<'state> {
         if self.nexus.fees.settlement_mode != NexusFeeSettlementMode::LaneRelayBurn {
             return Ok(());
         }
-        let mut aggregate = BTreeMap::<AssetId, Numeric>::new();
+        let mut aggregate = BTreeMap::<AssetId, Quantity>::new();
         let mut settlement_markers = Vec::new();
         let mut receipt_markers = Vec::new();
         let mut settled_lease_usage = BTreeMap::<Hash, Quantity>::new();
@@ -48271,14 +48109,12 @@ impl<'state> StateBlock<'state> {
                     }
                 };
                 let asset_id = AssetId::new(asset_definition.clone(), payer.clone());
-                let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
-                let next = current
-                    .checked_add(receipt.fee_amount.as_numeric().clone())
-                    .ok_or_else(|| {
-                        MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                            "aggregate fee overflow for payer {payer}",
-                        ))
-                    })?;
+                let current = aggregate.remove(&asset_id).unwrap_or_else(Quantity::zero);
+                let next = current.checked_add(&receipt.fee_amount).map_err(|_| {
+                    MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                        "aggregate fee overflow for payer {payer}",
+                    ))
+                })?;
                 aggregate.insert(asset_id, next);
                 receipt_markers.push(receipt_key);
             }
@@ -48292,16 +48128,10 @@ impl<'state> StateBlock<'state> {
                 .assets
                 .get(asset_id)
                 .map_or_else(Quantity::zero, |value| value.as_ref().clone());
-            if available.as_numeric() < required {
-                let required =
-                    Quantity::from_canonical_numeric(required.clone()).map_err(|err| {
-                        MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                            "aggregate fee is not a non-negative quantity: {err}"
-                        ))
-                    })?;
+            if &available < required {
                 return Err(MergeLedgerCommitError::InsufficientNexusFeeBalance {
                     payer: asset_id.account().clone(),
-                    required,
+                    required: required.clone(),
                     available,
                 });
             }
@@ -48311,19 +48141,17 @@ impl<'state> StateBlock<'state> {
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate {
-            let quantity = Quantity::from_canonical_numeric(amount.clone())
-                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
                 .withdraw_numeric_asset(asset_id, amount)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
-                .decrease_asset_total_amount(asset_id.definition(), &quantity)
+                .decrease_asset_total_amount(asset_id.definition(), amount)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world.emit_events(Some(
                 iroha_data_model::events::data::prelude::AssetEvent::Removed(
                     iroha_data_model::events::data::prelude::AssetChanged {
                         asset: asset_id.clone(),
-                        amount: quantity,
+                        amount: amount.clone(),
                     },
                 ),
             ));
@@ -48371,19 +48199,17 @@ impl<'state> StateBlock<'state> {
         let mut tx = self.transaction();
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate_burns {
-            let quantity = Quantity::from_canonical_numeric(amount.clone())
-                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
                 .withdraw_numeric_asset(asset_id, amount)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
-                .decrease_asset_total_amount(asset_id.definition(), &quantity)
+                .decrease_asset_total_amount(asset_id.definition(), amount)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world.emit_events(Some(
                 iroha_data_model::events::data::prelude::AssetEvent::Removed(
                     iroha_data_model::events::data::prelude::AssetChanged {
                         asset: asset_id.clone(),
-                        amount: quantity,
+                        amount: amount.clone(),
                     },
                 ),
             ));
@@ -54928,7 +54754,6 @@ mod tiered_snapshot_diff_tests {
 #[cfg(test)]
 mod transfer_transcript_tests {
     use iroha_data_model::block::BlockHeader;
-    use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
 
@@ -55276,14 +55101,14 @@ mod transfer_transcript_tests {
             (world, alice_asset_id, bob_asset_id)
         }
 
-        fn numeric_balance(state: &State, asset_id: &AssetId) -> Numeric {
+        fn balance(state: &State, asset_id: &AssetId) -> Quantity {
             state
                 .view()
                 .world()
                 .assets()
                 .get(asset_id)
-                .map(|value| value.as_ref().as_numeric().clone())
-                .unwrap_or_else(Numeric::zero)
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero)
         }
 
         let call_hash = iroha_crypto::Hash::prehashed([7_u8; iroha_crypto::Hash::LENGTH]);
@@ -55483,45 +55308,36 @@ mod transfer_transcript_tests {
         );
         drop(batch_guard_tx);
 
+        assert_eq!(balance(&state_det, &alice_asset_id), Quantity::from(7_u32));
+        assert_eq!(balance(&state_det, &bob_asset_id), Quantity::from(3_u32));
         assert_eq!(
-            numeric_balance(&state_det, &alice_asset_id),
-            Numeric::from(7_u32)
+            balance(&state_existing_tx, &alice_asset_id),
+            Quantity::from(7_u32)
         );
         assert_eq!(
-            numeric_balance(&state_det, &bob_asset_id),
-            Numeric::from(3_u32)
+            balance(&state_existing_tx, &bob_asset_id),
+            Quantity::from(3_u32)
         );
         assert_eq!(
-            numeric_balance(&state_existing_tx, &alice_asset_id),
-            Numeric::from(7_u32)
+            balance(&state_batch, &alice_asset_id),
+            Quantity::from(5_u32)
+        );
+        assert_eq!(balance(&state_batch, &bob_asset_id), Quantity::from(5_u32));
+        assert_eq!(
+            balance(&state_seq, &alice_asset_id),
+            balance(&state_det, &alice_asset_id)
         );
         assert_eq!(
-            numeric_balance(&state_existing_tx, &bob_asset_id),
-            Numeric::from(3_u32)
+            balance(&state_seq, &bob_asset_id),
+            balance(&state_det, &bob_asset_id)
         );
         assert_eq!(
-            numeric_balance(&state_batch, &alice_asset_id),
-            Numeric::from(5_u32)
+            balance(&state_seq, &alice_asset_id),
+            balance(&state_existing_tx, &alice_asset_id)
         );
         assert_eq!(
-            numeric_balance(&state_batch, &bob_asset_id),
-            Numeric::from(5_u32)
-        );
-        assert_eq!(
-            numeric_balance(&state_seq, &alice_asset_id),
-            numeric_balance(&state_det, &alice_asset_id)
-        );
-        assert_eq!(
-            numeric_balance(&state_seq, &bob_asset_id),
-            numeric_balance(&state_det, &bob_asset_id)
-        );
-        assert_eq!(
-            numeric_balance(&state_seq, &alice_asset_id),
-            numeric_balance(&state_existing_tx, &alice_asset_id)
-        );
-        assert_eq!(
-            numeric_balance(&state_seq, &bob_asset_id),
-            numeric_balance(&state_existing_tx, &bob_asset_id)
+            balance(&state_seq, &bob_asset_id),
+            balance(&state_existing_tx, &bob_asset_id)
         );
         let transcript = transcripts_det
             .get(&call_hash)
@@ -61148,7 +60964,7 @@ impl StateTransaction<'_, '_> {
         {
             let cumulative = gas_used_in_block_so_far.saturating_add(last_tx_gas_used);
             telemetry.set_block_gas_used(cumulative);
-            if pending_block_fee_amount > Numeric::zero() {
+            if !pending_block_fee_amount.is_zero() {
                 telemetry.add_block_fee_amount(&pending_block_fee_amount);
             }
         }
@@ -63366,7 +63182,7 @@ pub(crate) mod deserialize {
                 decode_space_directory_manifest_sets(space_directory_manifests)?;
 
             world
-                .validate_non_negative_ledger_invariants()
+                .validate_quantity_ledger_invariants()
                 .map_err(|message| json::Error::InvalidField {
                     field: "state.world.numeric_ledgers".to_owned(),
                     message,
@@ -64615,7 +64431,7 @@ pub(crate) mod deserialize {
                 message,
             })?;
         world
-            .validate_non_negative_ledger_invariants()
+            .validate_quantity_ledger_invariants()
             .map_err(|message| json::Error::InvalidField {
                 field: "world.numeric_ledgers".into(),
                 message,
@@ -66886,7 +66702,8 @@ seiyaku SequentialNfts {
             .build(&ALICE_ID);
         let asset = Asset::new(
             AssetId::new(definition_id, ALICE_ID.clone()),
-            Quantity::try_from_numeric(Numeric::new(1_u32, 1))
+            "0.1"
+                .parse::<Quantity>()
                 .expect("positive fractional quantity"),
         );
 
@@ -66898,9 +66715,9 @@ seiyaku SequentialNfts {
         let (state, _, asset_id) = snapshot_state_with_numeric_asset();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-        **block.world.assets.get_mut(&asset_id).expect("asset exists") =
-            Quantity::try_from_numeric(Numeric::new(1_u32, 1))
-                .expect("positive fractional quantity");
+        **block.world.assets.get_mut(&asset_id).expect("asset exists") = "0.1"
+            .parse::<Quantity>()
+            .expect("positive fractional quantity");
         block
             .commit()
             .expect("commit adversarial invalid-scale snapshot fixture");
@@ -66915,25 +66732,17 @@ seiyaku SequentialNfts {
     }
 
     #[test]
-    fn detached_merge_rejects_negative_delta_even_when_aggregation_would_cancel_it() {
+    fn detached_delta_rejects_negative_quantity_before_recording() {
         let (state, _, asset_id) = snapshot_state_with_numeric_asset();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
         let mut delta = DetachedStateTransactionDelta::default();
-        delta.add_asset_add(asset_id.clone(), Numeric::one());
-        delta.add_asset_add(asset_id.clone(), Numeric::new(-1_i32, 0));
-
-        let error = delta
-            .merge_into(&mut block, &ALICE_ID)
-            .expect_err("negative detached delta must not be hidden by aggregation");
+        delta.add_asset_add(asset_id.clone(), Quantity::one());
+        let error = Quantity::try_from_numeric(Numeric::new(-1_i32, 0))
+            .expect_err("negative detached delta must be rejected at its nominal boundary");
         assert!(matches!(
             error,
-            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                iroha_data_model::ValidationFail::InstructionFailed(
-                    InstructionExecutionError::Math(MathError::NegativeValue)
-                )
-            )
+            iroha_primitives::numeric::NumericOperationError::NegativeQuantity
         ));
+        assert_eq!(delta.asset_add_qtys, [Quantity::one()]);
         assert_eq!(
             state
                 .view()
@@ -72171,14 +71980,12 @@ seiyaku SequentialNfts {
     fn merge_reservation_key_boundary_requires_current_version() {
         let route = crate::queue::RoutingDecision::new(LaneId::new(7), DataSpaceId::new(9));
         let plan = crate::queue::RoutingPlan::single(route);
+        let entrypoint_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"merge-reservation-entrypoint"));
         let key = crate::queue::LaneQueueReservationKeyV2 {
             version: crate::queue::LaneQueueReservationKeyV2::VERSION,
-            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"merge-reservation-signed-transaction",
-            )),
-            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"merge-reservation-entrypoint",
-            )),
+            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(entrypoint_hash)),
+            entrypoint_hash,
             queue_plan_admission_binding_hash: Hash::new(
                 b"merge-reservation-queue-plan-admission-binding",
             ),
@@ -72214,6 +72021,22 @@ seiyaku SequentialNfts {
                 "merge admission must reject reservation key version {malformed_version}"
             );
         }
+
+        let mut mismatched_hashes = key;
+        mismatched_hashes.signed_transaction_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"mismatched-merge-signed-transaction"));
+        let framed = norito::to_bytes(&mismatched_hashes)
+            .expect("encode canonical hash-mismatched reservation key");
+        assert!(
+            matches!(
+                decode_canonical_merge_reservation_key(&framed),
+                Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
+                    if message.contains(
+                        "signed transaction hash does not match its entrypoint compatibility hash"
+                    )
+            ),
+            "merge admission must reject mismatched reservation identities"
+        );
     }
 
     #[test]
@@ -115208,10 +115031,7 @@ seiyaku SequentialNfts {
             isi::{Mint, RemoveKeyValue, SetKeyValue},
             prelude::*,
         };
-        use iroha_primitives::{
-            json::Json,
-            numeric::{Numeric, Quantity},
-        };
+        use iroha_primitives::{json::Json, numeric::Quantity};
         use iroha_test_samples::ALICE_ID;
 
         fn build_world() -> (World, DomainId, AssetDefinitionId, AssetId, AccountId) {
@@ -115296,7 +115116,7 @@ seiyaku SequentialNfts {
         let state_det = State::new(world_det, kura_det, query_det);
         let mut block_det = state_det.block(header);
         let mut delta = DetachedStateTransactionDelta::default();
-        let mint_amount = Numeric::new(5, 0);
+        let mint_amount = Quantity::from(5_u32);
         delta.add_asset_add(asset_id.clone(), mint_amount.clone());
         delta.add_total_add(asset_def_id.clone(), mint_amount.clone());
         delta.set_account_kv(authority.clone(), account_key.clone(), Json::new(1u32));
@@ -115407,10 +115227,7 @@ seiyaku SequentialNfts {
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
-        crate::sumeragi::witness::record_write_asset(
-            &asset_id,
-            &iroha_primitives::numeric::Numeric::from(42u32),
-        );
+        crate::sumeragi::witness::record_write_asset(&asset_id, &Quantity::from(42_u32));
 
         state_block.capture_exec_witness();
         let witness = state_block.take_exec_witness().expect("witness captured");
@@ -121617,11 +121434,11 @@ seiyaku IdentitylessRawCallback {
         (state, custody_id, asset_def_id, commit_keypairs)
     }
 
-    fn account_numeric_asset_balance(
+    fn account_asset_balance(
         state: &State,
         asset_def_id: &AssetDefinitionId,
         account_id: &AccountId,
-    ) -> Numeric {
+    ) -> Quantity {
         state
             .view()
             .world()
@@ -121629,9 +121446,7 @@ seiyaku IdentitylessRawCallback {
             .get(&AssetId::of(asset_def_id.clone(), account_id.clone()))
             .expect("account asset exists")
             .0
-            .as_numeric()
             .clone()
-            .into()
     }
 
     #[test]
@@ -121792,8 +121607,8 @@ seiyaku IdentitylessRawCallback {
             .commit_merge_entry(entry.clone())
             .expect("merge settlement burns fee");
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(7_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(7_u32)
         );
 
         let err = state
@@ -121805,8 +121620,8 @@ seiyaku IdentitylessRawCallback {
                 | MergeLedgerCommitError::DuplicateNexusFeeReceipt(_)
         ));
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(7_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(7_u32)
         );
 
         state.settled_nexus_fee_receipts.write().clear();
@@ -121826,8 +121641,8 @@ seiyaku IdentitylessRawCallback {
                 | MergeLedgerCommitError::DuplicateNexusFeeReceipt(_)
         ));
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(7_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(7_u32)
         );
     }
 
@@ -121856,8 +121671,8 @@ seiyaku IdentitylessRawCallback {
             MergeLedgerCommitError::SettlementCommitmentMismatch { .. }
         ));
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(10_u32),
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(10_u32),
             "rejected settlement must not burn the sponsor balance"
         );
         assert!(state.kura.merge_ledger_snapshot().is_empty());
@@ -121892,8 +121707,8 @@ seiyaku IdentitylessRawCallback {
             MergeLedgerCommitError::SettlementCommitmentMismatch { .. }
         ));
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(10_u32),
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(10_u32),
             "rejected settlement must not burn the sponsor balance"
         );
         assert!(state.kura.merge_ledger_snapshot().is_empty());
@@ -121920,8 +121735,8 @@ seiyaku IdentitylessRawCallback {
             MergeLedgerCommitError::InsufficientNexusFeeBalance { .. }
         ));
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(1_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(1_u32)
         );
     }
 
@@ -121965,8 +121780,8 @@ seiyaku IdentitylessRawCallback {
             .expect_err("durable append failure must abort before settlement");
 
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(10_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(10_u32)
         );
         assert!(state.kura.merge_ledger_snapshot().is_empty());
         assert!(state.settled_nexus_fee_receipts.read().is_empty());
@@ -122005,8 +121820,8 @@ seiyaku IdentitylessRawCallback {
             State::nexus_fee_receipt_marker_key(&source_id).expect("fee receipt marker key");
         assert_eq!(state.committed_height(), 1);
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(10_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(10_u32)
         );
         assert!(
             matches!(
@@ -122085,8 +121900,8 @@ seiyaku IdentitylessRawCallback {
         assert!(matches!(error, TransactionsBlockError::MissingInsertBlock));
         assert_eq!(state.committed_height(), 1);
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(10_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(10_u32)
         );
         assert!(state.settled_nexus_fee_receipts.read().is_empty());
         assert!(
@@ -122132,8 +121947,8 @@ seiyaku IdentitylessRawCallback {
             "orphan sidecar recovery returned an unexpected error: {recovery}"
         );
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(10_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(10_u32)
         );
         assert!(state.settled_nexus_fee_receipts.read().is_empty());
         assert_eq!(
@@ -122164,8 +121979,8 @@ seiyaku IdentitylessRawCallback {
             .expect("authenticate future exact merge carrier during recovery");
         assert!(state.merge_ledger().snapshot().is_empty());
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(10_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(10_u32)
         );
 
         let reference = iroha_data_model::block::CertifiedMergeLedgerReference::new(&entry);
@@ -122184,8 +121999,8 @@ seiyaku IdentitylessRawCallback {
             .replay_persisted_merge_settlements()
             .expect("already-applied exact carrier settlement is recognized");
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(7_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(7_u32)
         );
         assert!(state.settled_nexus_fee_receipts.read().contains(&source_id));
 
@@ -122193,8 +122008,8 @@ seiyaku IdentitylessRawCallback {
             .replay_persisted_merge_settlements()
             .expect("marker-backed replay is idempotent");
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(7_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(7_u32)
         );
     }
 
@@ -122228,22 +122043,22 @@ seiyaku IdentitylessRawCallback {
             .expect("authenticate durable exact merge carrier during recovery");
         assert!(state.merge_ledger().snapshot().is_empty());
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(10_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(10_u32)
         );
 
         state
             .replay_persisted_merge_settlements()
             .expect("future carrier must not settle before exact State replay");
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(10_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(10_u32)
         );
 
         commit_exact_merge_carrier_to_state(&state, &carrier, &entry);
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(7_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(7_u32)
         );
         assert!(state.settled_nexus_fee_receipts.read().contains(&source_id));
 
@@ -122251,8 +122066,8 @@ seiyaku IdentitylessRawCallback {
             .replay_persisted_merge_settlements()
             .expect("marker-backed replay is idempotent");
         assert_eq!(
-            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
-            Numeric::from(7_u32)
+            account_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Quantity::from(7_u32)
         );
     }
 
@@ -123543,16 +123358,94 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
-    fn aggregate_numeric_merges_duplicate_ids() {
+    fn aggregate_quantities_merges_duplicate_ids() {
         let ids = vec![1, 1, 2];
-        let qtys = vec![Numeric::new(5, 0), Numeric::new(3, 0), Numeric::new(2, 0)];
+        let qtys = vec![
+            Quantity::from(5_u32),
+            Quantity::from(3_u32),
+            Quantity::from(2_u32),
+        ];
 
-        let aggregated = aggregate_numeric(&ids, &qtys)
+        let aggregated = aggregate_quantities(&ids, &qtys)
             .expect("valid non-negative quantities should aggregate without overflow");
 
         assert_eq!(aggregated.len(), 2, "duplicate ids should coalesce");
-        assert_eq!(aggregated[0], (1, Numeric::new(8, 0)));
-        assert_eq!(aggregated[1], (2, Numeric::new(2, 0)));
+        assert_eq!(aggregated[0], (1, Quantity::from(8_u32)));
+        assert_eq!(aggregated[1], (2, Quantity::from(2_u32)));
+    }
+
+    #[test]
+    fn detached_merge_quantity_aggregation_overflow_is_atomic() {
+        let mut maximum_bytes = vec![0xff_u8; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
+        *maximum_bytes.last_mut().expect("non-empty mantissa") = 0x7f;
+        let maximum_mantissa = iroha_primitives::bigint::BigInt::from_twos_bytes(&maximum_bytes)
+            .expect("maximum signed 512-bit mantissa");
+        let maximum = Quantity::from_canonical_numeric(Numeric::new(maximum_mantissa, 0))
+            .expect("maximum signed mantissa is a valid quantity");
+
+        let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let initial_balance = state_block
+            .world
+            .assets
+            .get(&asset_id)
+            .expect("asset exists")
+            .as_ref()
+            .clone();
+        let initial_total = state_block
+            .world
+            .asset_definition(&definition_id)
+            .expect("asset definition exists")
+            .total_quantity()
+            .clone();
+        assert!(
+            state_block.world.external_event_buf.is_empty(),
+            "fixture starts without buffered events"
+        );
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.add_asset_add(asset_id.clone(), maximum.clone());
+        delta.add_asset_add(asset_id.clone(), Quantity::one());
+        delta.add_total_add(definition_id.clone(), maximum);
+        delta.add_total_add(definition_id.clone(), Quantity::one());
+
+        let error = delta
+            .merge_into(&mut state_block, &ALICE_ID)
+            .expect_err("duplicate quantity aggregation must reject overflow");
+        assert!(matches!(
+            error,
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::InstructionFailed(
+                    iroha_data_model::isi::error::InstructionExecutionError::Math(
+                        iroha_data_model::isi::error::MathError::Overflow
+                    )
+                )
+            )
+        ));
+        assert_eq!(
+            state_block
+                .world
+                .assets
+                .get(&asset_id)
+                .expect("asset remains")
+                .as_ref(),
+            &initial_balance,
+            "failed aggregation must not mutate the asset balance"
+        );
+        assert_eq!(
+            state_block
+                .world
+                .asset_definition(&definition_id)
+                .expect("asset definition remains")
+                .total_quantity(),
+            &initial_total,
+            "failed aggregation must not mutate the asset total"
+        );
+        assert!(
+            state_block.world.external_event_buf.is_empty(),
+            "failed aggregation must not emit events"
+        );
     }
 
     #[test]
@@ -127846,7 +127739,7 @@ seiyaku MissingBytecodeTrigger {
         let block = new_dummy_block_with_payload(|_| {});
         let mut state_block = state.block(block.as_ref().header());
         let mut delta = DetachedStateTransactionDelta::default();
-        delta.add_asset_sub(asset_id.clone(), Numeric::new(1, 0));
+        delta.add_asset_sub(asset_id.clone(), Quantity::from(1_u32));
         delta
             .merge_into(&mut state_block, &ALICE_ID)
             .expect("detached merge succeeds");

@@ -106,7 +106,16 @@ public final class AccountAddressTests {
     final byte[] key = decodeHex(asString(vector.get("key_hex"), "key_hex", name));
     final byte[] canonical =
         decodeHex(asString(vector.get("single_canonical_hex"), "single_canonical_hex", name));
-    final String i105 = asString(vector.get("single_i105"), "single_i105", name);
+    final boolean hasCanonicalI105 = vector.containsKey("single_i105");
+    final boolean hasMalformedI105 = vector.containsKey("malformed_i105");
+    assert hasCanonicalI105 ^ hasMalformedI105
+        : name + ": exactly one I105 fixture field is required";
+    assert !hasMalformedI105 || !valid : name + ": malformed I105 is negative-test-only";
+    final String i105 =
+        asString(
+            vector.get(hasCanonicalI105 ? "single_i105" : "malformed_i105"),
+            hasCanonicalI105 ? "single_i105" : "malformed_i105",
+            name);
 
     assert Ed25519PublicKeyAdmission.isValid(key) == valid : name + ": helper result mismatch";
 
@@ -173,11 +182,17 @@ public final class AccountAddressTests {
       assert decodedCompact == null : name + ": invalid compact key accepted";
       expectInvalidPublicKey(name, () -> AccountAddress.fromAccount(key, "ed25519"));
       expectInvalidPublicKey(name, () -> AccountAddress.fromCanonicalBytes(canonical));
-      expectInvalidPublicKey(
+      final AccountAddress.AccountAddressErrorCode expectedI105Error =
+          hasMalformedI105
+              ? AccountAddress.AccountAddressErrorCode.CHECKSUM_MISMATCH
+              : AccountAddress.AccountAddressErrorCode.INVALID_PUBLIC_KEY;
+      expectAddressError(
           name,
+          expectedI105Error,
           () -> AccountAddress.fromI105(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT));
-      expectInvalidPublicKey(
+      expectAddressError(
           name,
+          expectedI105Error,
           () ->
               AccountAddress.parseEncodedIgnoringCurveSupport(
                   i105, AccountAddress.DEFAULT_I105_DISCRIMINANT));
@@ -365,14 +380,22 @@ public final class AccountAddressTests {
 
   private static void expectInvalidPublicKey(final String name, final CheckedRunnable action)
       throws Exception {
+    expectAddressError(name, AccountAddress.AccountAddressErrorCode.INVALID_PUBLIC_KEY, action);
+  }
+
+  private static void expectAddressError(
+      final String name,
+      final AccountAddress.AccountAddressErrorCode expected,
+      final CheckedRunnable action)
+      throws Exception {
     try {
       action.run();
     } catch (final AccountAddress.AccountAddressException ex) {
-      assert ex.getCode() == AccountAddress.AccountAddressErrorCode.INVALID_PUBLIC_KEY
+      assert ex.getCode() == expected
           : name + ": unexpected error " + ex.getCode();
       return;
     }
-    throw new AssertionError(name + ": invalid Ed25519 public key was accepted");
+    throw new AssertionError(name + ": expected account-address error " + expected);
   }
 
   private static void expectInvalidPublicKeyEncoding(

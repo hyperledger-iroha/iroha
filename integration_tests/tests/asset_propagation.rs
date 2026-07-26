@@ -30,9 +30,9 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
             .with_name(__asset_definition_id.name().to_string())
     });
 
-    let quantity = numeric!(200);
+    let quantity = Quantity::from(200_u32);
     let mint_asset = Mint::asset_quantity(
-        Quantity::try_from_numeric(quantity.clone()).expect("mint quantity must be non-negative"),
+        quantity.clone(),
         AssetId::new(asset_definition_id.clone(), account_id.clone()),
     );
 
@@ -106,7 +106,7 @@ fn assert_asset_amount(
     peer: &NetworkPeer,
     account_id: &AccountId,
     asset_definition_id: &AssetDefinitionId,
-    expected: &Numeric,
+    expected: &Quantity,
 ) -> Result<()> {
     // Increase retry limit significantly for CI environments.
     // 240 attempts * 250ms = 60 seconds total wait time.
@@ -116,7 +116,7 @@ fn assert_asset_amount(
     for attempt in 0..=MAX_ATTEMPTS {
         match find_asset(peer, account_id, asset_definition_id) {
             Ok(Some(asset)) => {
-                if asset.value().as_numeric() == expected {
+                if asset.value() == expected {
                     return Ok(());
                 }
             }
@@ -140,7 +140,7 @@ fn assert_asset_amount(
     // One final check to produce a good error message
     match find_asset(peer, account_id, asset_definition_id) {
         Ok(Some(asset)) => {
-            if asset.value().as_numeric() == expected {
+            if asset.value() == expected {
                 Ok(())
             } else {
                 Err(eyre!(

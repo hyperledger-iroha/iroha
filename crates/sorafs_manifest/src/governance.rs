@@ -3749,7 +3749,8 @@ pub enum GovernanceDagChainValidationError {
     #[error("block at index {index} failed validation: {source}")]
     InvalidBlock {
         index: usize,
-        source: GovernanceDagBlockValidationError,
+        #[source]
+        source: Box<GovernanceDagBlockValidationError>,
     },
     #[error("duplicate governance DAG block CID at index {index}")]
     DuplicateBlockCid { index: usize },
@@ -3837,7 +3838,10 @@ pub fn validate_governance_dag_chain_v1(
     for (index, block) in blocks.iter().enumerate() {
         block
             .validate()
-            .map_err(|source| GovernanceDagChainValidationError::InvalidBlock { index, source })?;
+            .map_err(|source| GovernanceDagChainValidationError::InvalidBlock {
+                index,
+                source: Box::new(source),
+            })?;
         if !block_cids.insert(block.block_cid.clone()) {
             return Err(GovernanceDagChainValidationError::DuplicateBlockCid { index });
         }
@@ -4036,6 +4040,8 @@ pub enum GovernanceLogSignatureVerificationError {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
@@ -4765,6 +4771,36 @@ mod tests {
 
         validate_governance_dag_chain_v1(&blocks, Some(&expected_head))
             .expect("valid governance DAG chain");
+    }
+
+    #[test]
+    fn governance_dag_chain_preserves_invalid_block_error_source() {
+        let mut block = signed_governance_block(None, None, 0, 1_700_000_400);
+        block.block_cid[0] ^= 0x01;
+
+        let error = validate_governance_dag_chain_v1(&[block], None)
+            .expect_err("a block with a tampered CID must fail chain validation");
+        const SOURCE_MESSAGE: &str =
+            "governance DAG block CID does not match the canonical block payload";
+        assert_eq!(
+            error.to_string(),
+            format!("block at index 0 failed validation: {SOURCE_MESSAGE}")
+        );
+        assert_eq!(
+            error
+                .source()
+                .expect("invalid block error retains its source")
+                .to_string(),
+            SOURCE_MESSAGE
+        );
+        assert!(matches!(
+            &error,
+            GovernanceDagChainValidationError::InvalidBlock { index: 0, source }
+                if matches!(
+                    source.as_ref(),
+                    GovernanceDagBlockValidationError::InvalidBlockCid
+                )
+        ));
     }
 
     #[test]

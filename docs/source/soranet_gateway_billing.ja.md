@@ -91,4 +91,4 @@ cargo xtask soranet-gateway-billing \
   （数量 × ベース価格）に適用して micro-XOR 単位で四捨五入する。
 - 割引階層は各行で適用可能なしきい値のうち最も高いものを選ぶ。
 - 金額は micro-XOR で保存/出力され、台帳プロジェクションは最終合計を
-  6 桁小数の `Numeric` に変換して transfer batch を生成する。
+  6 桁小数の `Quantity` に変換して transfer batch を生成する。

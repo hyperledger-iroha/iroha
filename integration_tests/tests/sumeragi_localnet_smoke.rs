@@ -48,7 +48,7 @@ use iroha::{
         },
         parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
         peer::PeerId,
-        prelude::{FindAccountById, FindAssetById, Numeric, Quantity},
+        prelude::{FindAccountById, FindAssetById, Quantity},
         ram_lfe::{
             RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
             RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
@@ -7423,8 +7423,8 @@ fn realistic_npos_fee_funding_instruction_chunks_target_fee_asset() {
             &AssetId::new(fee_asset_definition_id.clone(), account.id.clone())
         );
         assert_eq!(
-            mint.object().as_numeric(),
-            &Numeric::from(ROUTE_VALIDATOR_FEE_SEED_AMOUNT)
+            mint.object(),
+            &Quantity::from(ROUTE_VALIDATOR_FEE_SEED_AMOUNT)
         );
     }
 }

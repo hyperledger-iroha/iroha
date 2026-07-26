@@ -8,7 +8,7 @@ public enum RwaInstructionBuilderError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case let .invalidQuantity(field):
-            return "\(field) must be a non-empty string representing a Numeric quantity"
+            return "\(field) must be a canonical non-negative Kotodama V1 Quantity string"
         case let .invalidJSONObject(field):
             return "\(field) must be a JSON object payload"
         }

@@ -182,6 +182,9 @@ export {
   computeAxtBinding,
 } from "./axt.js";
 export {
+  encodeAccountIdNoritoValue,
+  encodeAssetDefinitionIdNoritoValue,
+  encodeQuantityNoritoValue,
   noritoDecodeBlockProofs,
   noritoEncodeInstruction,
   noritoDecodeInstruction,

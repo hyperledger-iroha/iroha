@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { sha256 } from "@noble/hashes/sha2";
 import {
+  encodeQuantityNoritoValue,
   noritoDecodeBlockProofs,
   noritoEncodeInstruction,
   noritoDecodeInstruction,
@@ -35,6 +36,49 @@ const SEED_11_ED25519_PUBLIC_KEY_HEX =
   "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737";
 const MULTISIG_SIGNER_ID =
   "sorauﾛ1P738ｷﾈｹｵﾙﾍﾉﾂUｿﾚｹﾑbﾄ1xYﾆｷvWzﾒkﾒ5ﾛﾘuE1ﾌsﾛXB6V1Y";
+
+baseTest("encodeQuantityNoritoValue enforces the nominal Quantity boundary", () => {
+  assert.ok(
+    encodeQuantityNoritoValue("18446744073709551616.25") instanceof Uint8Array,
+  );
+  for (const value of [
+    1,
+    "+1",
+    "01",
+    "1.0",
+    "1.2300",
+    "1amt",
+    "1qty",
+    " 1",
+    "1 ",
+    "-1",
+    1n << 511n,
+    "9".repeat(155),
+  ]) {
+    assert.throws(
+      () => encodeQuantityNoritoValue(value),
+      /canonical|JavaScript numbers are rejected|mantissa|negative/u,
+      `Quantity ${String(value).slice(0, 32)} must be rejected`,
+    );
+  }
+});
+
+baseTest("root entrypoints expose every declared typed Norito value encoder", async () => {
+  const [root, browser, norito] = await Promise.all([
+    import("../src/index.js"),
+    import("../src/browser.js"),
+    import("../src/norito.js"),
+  ]);
+  for (const runtime of [root, browser]) {
+    assert.equal(typeof runtime.encodeAccountIdNoritoValue, "function");
+    assert.equal(typeof runtime.encodeAssetDefinitionIdNoritoValue, "function");
+    assert.equal(typeof runtime.encodeQuantityNoritoValue, "function");
+    assert.equal("encodeNumericNoritoValue" in runtime, false);
+  }
+  assert.equal(typeof norito.encodeQuantityNoritoValue, "function");
+  assert.equal("encodeNumericNoritoValue" in norito, false);
+  assert.equal("encodeNumericNoritoValue" in root.Norito, false);
+});
 
 function canonicalSignatureBase64Fixture() {
   return Buffer.alloc(64, 0x01).toString("base64");

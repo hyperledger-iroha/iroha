@@ -295,12 +295,12 @@ def _commitment() -> dict[str, Any]:
                 "block_height": 42,
                 "payer_account_id": "ed0120payer",
                 "fee_asset_id": "xor#universal",
-                "fee_amount": "12345678901234567890.012300",
+                "fee_amount": "12345678901234567890.0123",
                 "schedule": {
                     "tx_bytes_len": 1 << 63,
                     "instruction_count": 2,
                     "gas_used": 987654321,
-                    "base_fee": "1.2500",
+                    "base_fee": "1.25",
                     "per_byte_fee": "0.0001",
                     "per_instruction_fee": "2",
                     "per_gas_unit_fee": "0.125",
@@ -358,7 +358,7 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
 
     assert parsed.total_local_amount == str((1 << 127) + 123)
     assert parsed.lane_incarnation == payload["lane_incarnation"]
-    assert parsed.nexus_fee_receipts[0].fee_amount == "12345678901234567890.012300"
+    assert parsed.nexus_fee_receipts[0].fee_amount == "12345678901234567890.0123"
     assert parsed.nexus_fee_receipts[0].schedule.tx_bytes_len == 1 << 63
     receipt = parsed.native_amx_receipts[0]
     assert receipt.plan_digest == payload["native_amx_receipts"][0]["plan_digest"]
@@ -942,10 +942,15 @@ def test_native_amx_parser_rejects_participant_leg_overflow_before_decode() -> N
     [
         _delete(("nexus_fee_receipts", 0, "schedule")),
         _set(("nexus_fee_receipts", 0, "fee_amount"), 1.25),
+        _set(("nexus_fee_receipts", 0, "fee_amount"), 1),
+        _set(("nexus_fee_receipts", 0, "fee_amount"), "+1"),
         _set(("nexus_fee_receipts", 0, "fee_amount"), "01.25"),
+        _set(("nexus_fee_receipts", 0, "fee_amount"), "1.0"),
+        _set(("nexus_fee_receipts", 0, "fee_amount"), " 1"),
         _set(("nexus_fee_receipts", 0, "source_id"), "cd" * 32),
         _set(("nexus_fee_receipts", 0, "schedule", "gas_used"), "123"),
         _set(("nexus_fee_receipts", 0, "schedule", "base_fee"), "-1"),
+        _set(("nexus_fee_receipts", 0, "schedule", "base_fee"), "2.0"),
         _set(("nexus_fee_receipts", 0, "schedule", "legacy_rate"), "1"),
         _set(("nexus_fee_receipts", 0, "lane_id"), 8),
     ],

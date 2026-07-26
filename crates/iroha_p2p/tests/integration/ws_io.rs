@@ -27,10 +27,18 @@ enum ShutdownState {
     Closed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReadState {
+    Open,
+    FlushingCloseAcknowledgement,
+    Eof,
+}
+
 /// Stateful adapter that preserves stream semantics across bounded `Binary` messages.
 pub(super) struct WsByteStream<S> {
     inner: WebSocketStream<S>,
     read_buffer: Bytes,
+    read_state: ReadState,
     write_buffer: Vec<u8>,
     shutdown: ShutdownState,
 }
@@ -43,6 +51,7 @@ where
         Self {
             inner,
             read_buffer: Bytes::new(),
+            read_state: ReadState::Open,
             write_buffer: Vec::new(),
             shutdown: ShutdownState::Open,
         }
@@ -76,6 +85,17 @@ where
             .map_err(|err| std::io::Error::other(format!("ws flush error: {err}")))?;
         core::task::Poll::Ready(Ok(()))
     }
+
+    fn poll_flush_close_acknowledgement(
+        &mut self,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<std::io::Result<()>> {
+        futures::ready!(core::pin::Pin::new(&mut self.inner).poll_flush(cx)).map_err(|err| {
+            std::io::Error::other(format!("ws close acknowledgement error: {err}"))
+        })?;
+        self.read_state = ReadState::Eof;
+        core::task::Poll::Ready(Ok(()))
+    }
 }
 
 impl<S> AsyncRead for WsByteStream<S>
@@ -87,10 +107,20 @@ where
         cx: &mut core::task::Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> core::task::Poll<std::io::Result<()>> {
+        if buf.remaining() == 0 {
+            return core::task::Poll::Ready(Ok(()));
+        }
         if !self.read_buffer.is_empty() {
             let len = core::cmp::min(self.read_buffer.len(), buf.remaining());
             buf.put_slice(&self.read_buffer.split_to(len));
             return core::task::Poll::Ready(Ok(()));
+        }
+        match self.read_state {
+            ReadState::Eof => return core::task::Poll::Ready(Ok(())),
+            ReadState::FlushingCloseAcknowledgement => {
+                return self.poll_flush_close_acknowledgement(cx);
+            }
+            ReadState::Open => {}
         }
 
         match futures::ready!(core::pin::Pin::new(&mut self.inner).poll_next(cx)) {
@@ -112,7 +142,18 @@ where
                 cx.waker().wake_by_ref();
                 core::task::Poll::Pending
             }
-            Some(Ok(Message::Close(_))) | None => core::task::Poll::Ready(Ok(())),
+            Some(Ok(Message::Close(_))) => {
+                self.write_buffer.clear();
+                self.shutdown = ShutdownState::Closed;
+                self.read_state = ReadState::FlushingCloseAcknowledgement;
+                self.poll_flush_close_acknowledgement(cx)
+            }
+            None => {
+                self.write_buffer.clear();
+                self.shutdown = ShutdownState::Closed;
+                self.read_state = ReadState::Eof;
+                core::task::Poll::Ready(Ok(()))
+            }
             Some(Err(err)) => {
                 core::task::Poll::Ready(Err(std::io::Error::other(format!("ws read error: {err}"))))
             }
@@ -155,6 +196,9 @@ where
                 std::io::ErrorKind::BrokenPipe,
                 "websocket stream is closing",
             ))),
+            ShutdownState::Closed if self.read_state == ReadState::FlushingCloseAcknowledgement => {
+                self.poll_flush_close_acknowledgement(cx)
+            }
             ShutdownState::Closed => core::task::Poll::Ready(Ok(())),
         }
     }
@@ -163,6 +207,9 @@ where
         mut self: core::pin::Pin<&mut Self>,
         cx: &mut core::task::Context<'_>,
     ) -> core::task::Poll<std::io::Result<()>> {
+        if self.read_state == ReadState::FlushingCloseAcknowledgement {
+            return self.poll_flush_close_acknowledgement(cx);
+        }
         if self.shutdown == ShutdownState::Open {
             // Transition before draining so a cancelled shutdown cannot permit
             // additional writes on a stream already committed to closing.
@@ -207,7 +254,7 @@ mod tests {
     };
 
     use futures::{SinkExt as _, StreamExt as _, task::noop_waker_ref};
-    use tokio::io::{AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
+    use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf};
     use tokio_tungstenite::{WebSocketStream, client_async};
 
     use super::WsByteStream;
@@ -257,6 +304,52 @@ mod tests {
             .await
             .expect("read after empty binary message");
         assert_eq!(&received, b"payload");
+    }
+
+    #[tokio::test]
+    async fn zero_capacity_read_is_immediately_ready() {
+        let (mut server, _client) = websocket_pair(4_096).await;
+        let mut empty = [];
+        let mut read_buffer = ReadBuf::new(&mut empty);
+        let mut cx = Context::from_waker(noop_waker_ref());
+
+        assert!(matches!(
+            Pin::new(&mut server).poll_read(&mut cx, &mut read_buffer),
+            Poll::Ready(Ok(()))
+        ));
+        assert!(read_buffer.filled().is_empty());
+    }
+
+    #[tokio::test]
+    async fn peer_close_is_acknowledged_before_sticky_eof() {
+        let (mut server, mut client) = websocket_pair(4_096).await;
+        client
+            .send(tokio_tungstenite::tungstenite::Message::Close(None))
+            .await
+            .expect("send close frame");
+
+        let mut byte = [0_u8; 1];
+        let first_read =
+            tokio::time::timeout(std::time::Duration::from_secs(1), server.read(&mut byte))
+                .await
+                .expect("server should flush the close acknowledgement");
+        assert_eq!(first_read.expect("read peer close"), 0);
+
+        let acknowledgement =
+            tokio::time::timeout(std::time::Duration::from_secs(1), client.next())
+                .await
+                .expect("client should receive the close acknowledgement")
+                .expect("close acknowledgement message")
+                .expect("valid close acknowledgement");
+        assert!(acknowledgement.is_close());
+
+        let mut cx = Context::from_waker(noop_waker_ref());
+        let mut read_buffer = ReadBuf::new(&mut byte);
+        assert!(matches!(
+            Pin::new(&mut server).poll_read(&mut cx, &mut read_buffer),
+            Poll::Ready(Ok(()))
+        ));
+        assert!(read_buffer.filled().is_empty());
     }
 
     #[tokio::test]

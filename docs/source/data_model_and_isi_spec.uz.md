@@ -107,7 +107,7 @@ Turlari: `Register<T: Registered>` va `Unregister<T: Identifiable>`, `RegisterBo
 Turlari: `Mint<O, D: Identifiable>` va `Burn<O, D: Identifiable>`, `MintBox`/`BurnBox` sifatida qutiga solingan.
 
 - Asset (Raqamli) mint/burn: balanslar va taʼrifning `total_quantity` ni sozlaydi.
-  - Old shartlar: `Numeric` qiymati `AssetDefinition.spec()` ni qondirishi kerak; `mintable` tomonidan ruxsat etilgan zarb:
+  - Old shartlar: `Quantity` qiymati `AssetDefinition.spec()` ni qondirishi kerak; `mintable` tomonidan ruxsat etilgan zarb:
     - `Infinitely`: har doim ruxsat beriladi.
     - `Once`: aynan bir marta ruxsat berilgan; birinchi yalpiz `mintable` ni `Not` ga aylantiradi va `AssetDefinitionEvent::MintabilityChanged` chiqaradi, shuningdek audit uchun batafsil `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }`.
     - `Limited(n)`: `n` qo'shimcha zarb operatsiyalariga ruxsat beradi. Har bir muvaffaqiyatli yalpiz hisoblagichni kamaytiradi; u nolga yetganda, ta'rif `Not` ga o'tadi va yuqoridagi kabi bir xil `MintabilityChanged` hodisalarini chiqaradi.

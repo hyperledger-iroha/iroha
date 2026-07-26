@@ -19,7 +19,6 @@ pub use self::model::*;
 use crate::{Name, account::prelude::*, domain::prelude::*, error::ParseError, nexus::DataSpaceId};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
 pub(crate) struct AssetDefinitionProjection {
     domain: DomainId,
     name: Name,

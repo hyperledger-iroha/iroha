@@ -1051,10 +1051,10 @@ impl V2ApplyService {
             .executed_block_wire_hash()
             .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
 
-        // Repair or confirm the pre-WSV durable evidence boundary before any
-        // derived publication. Fresh application already crossed this boundary
-        // inside `validate_and_apply`; these calls are deliberately idempotent
-        // so restart can repair each individual artifact.
+        // Repair or confirm the durable finality boundary before any derived
+        // publication. Fresh application already crossed this boundary inside
+        // `validate_and_apply`; these calls are deliberately idempotent so
+        // restart can repair each individual artifact.
         let receipt = self
             .kura
             .store_v2_finality_artifact(&artifact)
@@ -1357,14 +1357,6 @@ impl V2ApplyService {
                 .map_err(|error| {
                     V2ApplyError::committed_recovery_required(
                         "pre-WSV v2 finality artifact",
-                        &error,
-                    )
-                })?;
-            self.kura
-                .persist_native_amx_participant_application_evidence(committed_block.as_ref())
-                .map_err(|error| {
-                    V2ApplyError::committed_recovery_required(
-                        "pre-WSV Native AMX participant evidence",
                         &error,
                     )
                 })?;

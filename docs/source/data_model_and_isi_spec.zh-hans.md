@@ -107,7 +107,7 @@ ID 具有稳定的字符串形式，可进行 `Display`/`FromStr` 往返。名�
 类型：`Mint<O, D: Identifiable>` 和 `Burn<O, D: Identifiable>`，盒装为 `MintBox`/`BurnBox`。
 
 - 资产（数字）铸造/销毁：调整余额和定义的 `total_quantity`。
-  - 前提条件：`Numeric`值必须满足`AssetDefinition.spec()`； `mintable` 允许的薄荷：
+  - 前提条件：`Quantity`值必须满足`AssetDefinition.spec()`； `mintable` 允许的薄荷：
     - `Infinitely`：始终允许。
     - `Once`：仅允许一次；第一个铸币厂将 `mintable` 翻转为 `Not` 并发出 `AssetDefinitionEvent::MintabilityChanged`，以及用于可审计的详细 `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }`。
     - `Limited(n)`：允许 `n` 额外的铸造操作。每个成功的铸币厂都会减少计数器；当它达到零时，定义翻转到 `Not` 并发出与上面相同的 `MintabilityChanged` 事件。

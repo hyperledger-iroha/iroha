@@ -1122,7 +1122,7 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
 
 #[cfg(test)]
 mod tests {
-    use iroha_primitives::{bigint::BigInt, numeric::Numeric};
+    use iroha_primitives::{bigint::BigInt, numeric::Quantity};
     use ivm_abi::state_value::{
         StateValueAtomV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
     };
@@ -1618,9 +1618,11 @@ mod tests {
             assert_eq!(quantity.type_id, PointerType::Quantity);
             let value = QuantityValueV1::decode_frame(quantity.payload)
                 .expect("decode quantity")
-                .into_quantity()
-                .into_numeric();
-            assert_eq!(value, Numeric::new(125, 2));
+                .into_quantity();
+            assert_eq!(
+                value,
+                "1.25".parse::<Quantity>().expect("canonical quantity")
+            );
         }
 
         let overflow = crate::list::allocate_words(
@@ -1705,9 +1707,11 @@ mod tests {
         let amount = vm.validate_tlv(amount[0]).expect("quantity TLV");
         let amount = QuantityValueV1::decode_frame(amount.payload)
             .expect("decode quantity")
-            .into_quantity()
-            .into_numeric();
-        assert_eq!(amount, Numeric::new(125, 2));
+            .into_quantity();
+        assert_eq!(
+            amount,
+            "1.25".parse::<Quantity>().expect("canonical quantity")
+        );
 
         let (some, second) =
             crate::sum::read_words(&vm, list[1][0], option_layout).expect("read second Option");

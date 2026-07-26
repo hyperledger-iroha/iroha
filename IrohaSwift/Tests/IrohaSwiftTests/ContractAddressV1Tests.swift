@@ -17,16 +17,14 @@ final class ContractAddressV1Tests: XCTestCase {
         }
     }
 
-    func testCompactCanonicalPrimitivesRejectNoncanonicalNumericSpellings() throws {
+    func testCompactCanonicalPrimitivesRejectNoncanonicalDecimalSpellings() throws {
         XCTAssertEqual(
-            try CanonicalNorito.encodeCompactNumeric("0.25"),
+            try CanonicalNorito.encodeCompactDecimal("0.25"),
             Data([5, 1, 0, 0, 0, 25, 4, 2, 0, 0, 0])
         )
         for value in ["+1", "01", "-0", "1.0", "0.250"] {
-            XCTAssertThrowsError(try CanonicalNorito.encodeCompactNumeric(value))
+            XCTAssertThrowsError(try CanonicalNorito.encodeCompactDecimal(value))
         }
-        XCTAssertThrowsError(
-            try CanonicalNorito.encodeCompactNumeric("-1", requireNonNegative: true)
-        )
+        XCTAssertThrowsError(try CanonicalNorito.encodeCompactQuantity("-1"))
     }
 }

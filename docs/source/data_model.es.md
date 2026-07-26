@@ -55,7 +55,7 @@ Este documento explica las estructuras, identificadores, rasgos y protocolos que
   - Las pruebas y accesorios deben generar primero el `AccountId` universal, luego agregar concesiones de alias, permisos de alias y cualquier estado de propiedad del dominio por separado en lugar de codificar suposiciones de dominio en la identidad de la cuenta misma.
   - La búsqueda de cuentas públicas singulares ahora se centra en alias (`FindAliasesByAccountId`); La identidad de la cuenta en sí misma permanece sin dominio.### Definiciones de activos y activos
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` expuesto textualmente como una dirección Base58 sin prefijo con control de versiones y suma de comprobación.
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`.
   - `name` es un texto de visualización de cara humana requerido y no debe contener `#`/`@`.
   - `alias` es opcional y debe ser uno de:
     -`<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ Este documento explica las estructuras, identificadores, rasgos y protocolos que
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - Constructores: `AssetDefinition::new(id, spec)` o conveniencia `numeric(id)`; Se requiere `name` y se debe configurar a través de `.with_name(...)`.
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }` con `AssetEntry`/`AssetValue` fácil de almacenar.- `AssetBalanceScope`: `Global` para saldos sin restricciones e `Dataspace(DataSpaceId)` para saldos con espacio de datos restringido.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` expuesto para API de resumen.
+- `Asset { id, value: Quantity }` con `AssetEntry`/`AssetValue` fácil de almacenar.- `AssetBalanceScope`: `Global` para saldos sin restricciones e `Dataspace(DataSpaceId)` para saldos con espacio de datos restringido.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` expuesto para API de resumen.
 
 ### NFT
 - `NftId { domain: DomainId, name: Name }`.
@@ -182,7 +182,7 @@ Cree un dominio y una cuenta, defina un activo y cree una transacción con instr
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

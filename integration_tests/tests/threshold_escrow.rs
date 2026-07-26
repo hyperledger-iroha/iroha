@@ -345,12 +345,12 @@ fn decode_contract_state_norito_bytes(path: &str, payload: &[u8]) -> Result<nori
             Ok(norito::json::Value::from(asset_definition.to_string()))
         }
         "target_amount_value" | "funded_amount_value" => {
-            let numeric = decode_norito_value_with_optional_inner_tlv::<Numeric>(
+            let quantity = decode_norito_value_with_optional_inner_tlv::<Quantity>(
                 payload,
-                ivm::pointer_abi::PointerType::NoritoBytes,
-                "Numeric",
+                ivm::pointer_abi::PointerType::Quantity,
+                "Quantity",
             )?;
-            Ok(norito::json::Value::from(numeric.to_string()))
+            Ok(norito::json::Value::from(quantity.to_string()))
         }
         "is_open" | "is_released" | "is_refunded" => {
             let flag = decode_norito_value_with_optional_inner_tlv::<i64>(
@@ -391,9 +391,9 @@ where
         .map_err(|err| eyre!("decode {label} fallback inner payload: {err}"))
 }
 
-fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Numeric>> {
+fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quantity>> {
     match client.query_single(FindAssetById::new(asset_id.clone())) {
-        Ok(asset) => Ok(Some(asset.value().clone().into_numeric())),
+        Ok(asset) => Ok(Some(asset.value().clone())),
         Err(QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
         ))) => Ok(None),
@@ -605,8 +605,14 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     let alice_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
     let recipient_asset = AssetId::new(asset_definition_id.clone(), CARPENTER_ID.clone());
     let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    assert_eq!(asset_value(&client, &alice_asset)?, Some(numeric!(16)));
-    assert_eq!(asset_value(&client, &escrow_asset)?, Some(numeric!(4)));
+    assert_eq!(
+        asset_value(&client, &alice_asset)?,
+        Some(Quantity::from(16_u32))
+    );
+    assert_eq!(
+        asset_value(&client, &escrow_asset)?,
+        Some(Quantity::from(4_u32))
+    );
     assert_eq!(asset_value(&client, &recipient_asset)?, None);
 
     let partial_state = contract_state_values(
@@ -685,7 +691,10 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         early_release_state["funded_amount_value"],
         norito::json::Value::from("4")
     );
-    assert_eq!(asset_value(&client, &escrow_asset)?, Some(numeric!(4)));
+    assert_eq!(
+        asset_value(&client, &escrow_asset)?,
+        Some(Quantity::from(4_u32))
+    );
     assert_eq!(asset_value(&client, &recipient_asset)?, None);
 
     call_contract_expect_status(
@@ -713,8 +722,14 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         norito::json::Value::from("10")
     );
     assert_eq!(funded_state["is_open"], norito::json::Value::from(true));
-    assert_eq!(asset_value(&client, &alice_asset)?, Some(numeric!(10)));
-    assert_eq!(asset_value(&client, &escrow_asset)?, Some(numeric!(10)));
+    assert_eq!(
+        asset_value(&client, &alice_asset)?,
+        Some(Quantity::from(10_u32))
+    );
+    assert_eq!(
+        asset_value(&client, &escrow_asset)?,
+        Some(Quantity::from(10_u32))
+    );
 
     call_contract_expect_status(
         &client,
@@ -754,8 +769,14 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         released_state["is_refunded"],
         norito::json::Value::from(false)
     );
-    assert_eq!(asset_value(&client, &alice_asset)?, Some(numeric!(10)));
-    assert_eq!(asset_value(&client, &recipient_asset)?, Some(numeric!(10)));
+    assert_eq!(
+        asset_value(&client, &alice_asset)?,
+        Some(Quantity::from(10_u32))
+    );
+    assert_eq!(
+        asset_value(&client, &recipient_asset)?,
+        Some(Quantity::from(10_u32))
+    );
     assert_eq!(asset_value(&client, &escrow_asset)?, None);
 
     call_contract_expect_status(
@@ -869,8 +890,14 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
 
     let alice_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
     let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    assert_eq!(asset_value(&client, &alice_asset)?, Some(numeric!(17)));
-    assert_eq!(asset_value(&client, &escrow_asset)?, Some(numeric!(3)));
+    assert_eq!(
+        asset_value(&client, &alice_asset)?,
+        Some(Quantity::from(17_u32))
+    );
+    assert_eq!(
+        asset_value(&client, &escrow_asset)?,
+        Some(Quantity::from(3_u32))
+    );
 
     call_contract_expect_status(
         &client,
@@ -910,7 +937,10 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         refunded_state["is_refunded"],
         norito::json::Value::from(true)
     );
-    assert_eq!(asset_value(&client, &alice_asset)?, Some(numeric!(20)));
+    assert_eq!(
+        asset_value(&client, &alice_asset)?,
+        Some(Quantity::from(20_u32))
+    );
     assert_eq!(asset_value(&client, &escrow_asset)?, None);
 
     call_contract_expect_status(

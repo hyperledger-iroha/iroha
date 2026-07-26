@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   - Թեստերը և հարմարանքները պետք է նախ տեղադրեն համընդհանուր `AccountId`-ը, այնուհետև առանձին-առանձին ավելացնեն այլ անունների վարձակալություն, այլանունների թույլտվություններ և տիրույթին պատկանող ցանկացած պետություն՝ բուն հաշվի ինքնության մեջ տիրույթի ենթադրությունները կոդավորելու փոխարեն:
   - Հանրային եզակի հաշվի որոնումն այժմ կենտրոնանում է այլանունների վրա (`FindAliasesByAccountId`); հաշվի ինքնությունը ինքնին մնում է առանց տիրույթի:### Ակտիվների սահմանումներ և ակտիվներ
 - `AssetDefinitionId { aid_bytes: [u8; 16] }`-ը ցուցադրվում է տեքստային ձևով որպես առանց նախածանցի Base58 հասցե՝ տարբերակման և ստուգման գումարով:
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`.
   - `name`-ը մարդուն ուղղված ցուցադրման տեքստ է պահանջվում և չպետք է պարունակի `#`/`@`:
   - `alias`-ը կամընտիր է և պետք է լինի հետևյալներից մեկը.
     - `<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`՝ `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - Շինարարներ՝ `AssetDefinition::new(id, spec)` կամ հարմարավետ `numeric(id)`; `name`-ը պահանջվում է և պետք է սահմանվի `.with_name(...)`-ի միջոցով:
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }` պահեստավորման համար հարմար `AssetEntry`/`AssetValue`:- `AssetBalanceScope`. `Global` անսահմանափակ մնացորդների համար և `Dataspace(DataSpaceId)` տվյալների տարածության սահմանափակ մնացորդների համար:
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` ցուցադրվում է ամփոփ API-ների համար:
+- `Asset { id, value: Quantity }` պահեստավորման համար հարմար `AssetEntry`/`AssetValue`:- `AssetBalanceScope`. `Global` անսահմանափակ մնացորդների համար և `Dataspace(DataSpaceId)` տվյալների տարածության սահմանափակ մնացորդների համար:
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` ցուցադրվում է ամփոփ API-ների համար:
 
 ### NFTs
 - `NftId { domain: DomainId, name: Name }`.
@@ -182,7 +182,7 @@ translator: machine-google-reviewed
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

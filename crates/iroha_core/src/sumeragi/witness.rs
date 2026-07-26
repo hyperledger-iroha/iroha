@@ -21,7 +21,7 @@ use iroha_data_model::{
     name::Name,
     nft::NftId,
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 
 use super::{
@@ -313,7 +313,7 @@ pub fn record_delete_nft_kv(id: &NftId, key: &Name, pre: &iroha_primitives::json
 }
 
 /// Record asset balance read (pre-value) for an asset.
-pub fn record_read_asset(id: &AssetId, val: Option<&iroha_primitives::numeric::Numeric>) {
+pub fn record_read_asset(id: &AssetId, val: Option<&Quantity>) {
     let k = key_asset_balance(id);
     let v = val
         .map(|n| Json::new(n.clone()).get().as_bytes().to_vec())
@@ -324,7 +324,7 @@ pub fn record_read_asset(id: &AssetId, val: Option<&iroha_primitives::numeric::N
 }
 
 /// Record asset balance write (post-value) for an asset.
-pub fn record_write_asset(id: &AssetId, val: &iroha_primitives::numeric::Numeric) {
+pub fn record_write_asset(id: &AssetId, val: &Quantity) {
     let k = key_asset_balance(id);
     let v = Json::new(val.clone()).get().as_bytes().to_vec();
     with_active_slot(|g| {
@@ -333,10 +333,7 @@ pub fn record_write_asset(id: &AssetId, val: &iroha_primitives::numeric::Numeric
 }
 
 /// Record asset definition total supply read (pre-value).
-pub fn record_read_asset_def_total(
-    id: &AssetDefinitionId,
-    val: Option<&iroha_primitives::numeric::Numeric>,
-) {
+pub fn record_read_asset_def_total(id: &AssetDefinitionId, val: Option<&Quantity>) {
     let k = key_asset_def_total(id);
     let v = val
         .map(|n| Json::new(n.clone()).get().as_bytes().to_vec())
@@ -347,10 +344,7 @@ pub fn record_read_asset_def_total(
 }
 
 /// Record asset definition total supply write (post-value).
-pub fn record_write_asset_def_total(
-    id: &AssetDefinitionId,
-    val: &iroha_primitives::numeric::Numeric,
-) {
+pub fn record_write_asset_def_total(id: &AssetDefinitionId, val: &Quantity) {
     let k = key_asset_def_total(id);
     let v = Json::new(val.clone()).get().as_bytes().to_vec();
     with_active_slot(|g| {
@@ -605,11 +599,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
     if let Some(rest) = access_key.strip_prefix("asset:")
         && let Ok(id) = iroha_data_model::asset::AssetId::parse_literal(rest)
     {
-        let pre = state_block
-            .world
-            .assets()
-            .get(&id)
-            .map(|v| v.as_ref().as_numeric());
+        let pre = state_block.world.assets().get(&id).map(|v| v.as_ref());
         record_read_asset(&id, pre);
         // no further processing needed for asset access
     }
@@ -617,7 +607,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         && let Ok(ad) = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(rest)
     {
         if let Ok(def) = state_block.world.asset_definition(&ad) {
-            record_read_asset_def_total(&ad, Some(def.total_quantity().as_numeric()));
+            record_read_asset_def_total(&ad, Some(def.total_quantity()));
         } else {
             record_read_asset_def_total(&ad, None);
         }
@@ -668,7 +658,7 @@ mod tests {
         permission::{Permission, Permissions},
         role::{Role, RoleId},
     };
-    use iroha_primitives::numeric::{Numeric, Quantity};
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
 
@@ -810,8 +800,8 @@ mod tests {
         Json::new(value).get().as_bytes().to_vec()
     }
 
-    fn numeric_json_bytes(value: u32) -> Vec<u8> {
-        Json::new(Numeric::from(value)).get().as_bytes().to_vec()
+    fn quantity_json_bytes(value: u32) -> Vec<u8> {
+        Json::new(Quantity::from(value)).get().as_bytes().to_vec()
     }
 
     fn assert_read_value(witness: &ExecWitness, key: Vec<u8>, expected: Vec<u8>) {
@@ -1040,7 +1030,7 @@ mod tests {
         assert_read_value(
             &witness,
             key_asset_balance(&fixture.asset),
-            numeric_json_bytes(11),
+            quantity_json_bytes(11),
         );
         assert_read_value(
             &witness,
@@ -1050,7 +1040,7 @@ mod tests {
         assert_read_value(
             &witness,
             key_asset_def_total(&fixture.asset_definition),
-            numeric_json_bytes(37),
+            quantity_json_bytes(37),
         );
         assert_read_value(
             &witness,
@@ -1212,13 +1202,13 @@ mod tests {
             "rose".parse().unwrap(),
         );
         let aid = iroha_data_model::asset::AssetId::new(ad.clone(), (*ALICE_ID).clone());
-        let pre = iroha_primitives::numeric::Numeric::from(10u32);
-        let post = iroha_primitives::numeric::Numeric::from(15u32);
+        let pre = Quantity::from(10u32);
+        let post = Quantity::from(15u32);
         record_read_asset(&aid, Some(&pre));
         record_write_asset(&aid, &post);
         // Simulate total supply
-        let tot_pre = iroha_primitives::numeric::Numeric::from(100u32);
-        let tot_post = iroha_primitives::numeric::Numeric::from(105u32);
+        let tot_pre = Quantity::from(100u32);
+        let tot_post = Quantity::from(105u32);
         record_read_asset_def_total(&ad, Some(&tot_pre));
         record_write_asset_def_total(&ad, &tot_post);
         let w1 = drain_exec_witness();
@@ -1306,11 +1296,8 @@ mod tests {
             "rose".parse().unwrap(),
         );
         let asset = AssetId::new(asset_definition, account.clone());
-        record_read_asset(
-            &asset,
-            Some(&iroha_primitives::numeric::Numeric::from(1u32)),
-        );
-        record_write_asset(&asset, &iroha_primitives::numeric::Numeric::from(2u32));
+        record_read_asset(&asset, Some(&Quantity::from(1u32)));
+        record_write_asset(&asset, &Quantity::from(2u32));
 
         start_block();
         assert!(snapshot_exec_witness().reads.is_empty());
@@ -1325,11 +1312,8 @@ mod tests {
         record_write_account_kv(&account, &key, &second);
         record_write_account_kv(&account, &key, &post);
         record_delete_account_kv(&account, &key, &delete_pre);
-        record_read_asset(
-            &asset,
-            Some(&iroha_primitives::numeric::Numeric::from(7u32)),
-        );
-        record_write_asset(&asset, &iroha_primitives::numeric::Numeric::from(9u32));
+        record_read_asset(&asset, Some(&Quantity::from(7u32)));
+        record_write_asset(&asset, &Quantity::from(9u32));
 
         let snapshot = snapshot_exec_witness();
         assert_eq!(snapshot.reads.len(), 2);
@@ -1697,8 +1681,6 @@ mod tests {
     #[test]
     fn inactive_recorder_ignores_out_of_block_records() {
         use iroha_data_model::{asset::id::AssetDefinitionId, fastpq::TransferTranscript};
-        use iroha_primitives::numeric::Numeric;
-
         let _guard = exec_witness_guard();
         let _ = drain_exec_witness();
         let asset_definition = AssetDefinitionId::new(
@@ -1706,7 +1688,7 @@ mod tests {
             "rose".parse().unwrap(),
         );
         let asset = AssetId::new(asset_definition, (*ALICE_ID).clone());
-        record_read_asset(&asset, Some(&Numeric::from(7u32)));
+        record_read_asset(&asset, Some(&Quantity::from(7u32)));
         record_fastpq_transcript(&TransferTranscript {
             batch_hash: Hash::prehashed([0x22; Hash::LENGTH]),
             deltas: Vec::new(),
@@ -1723,8 +1705,6 @@ mod tests {
 
     #[test]
     fn guard_drop_clears_unfinished_capture() {
-        use iroha_primitives::numeric::Numeric;
-
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
@@ -1732,7 +1712,7 @@ mod tests {
         let asset = AssetId::new(asset_definition, (*ALICE_ID).clone());
         let guard = exec_witness_guard();
         start_block();
-        record_read_asset(&asset, Some(&Numeric::from(11u32)));
+        record_read_asset(&asset, Some(&Quantity::from(11u32)));
         drop(guard);
 
         let _guard = exec_witness_guard();

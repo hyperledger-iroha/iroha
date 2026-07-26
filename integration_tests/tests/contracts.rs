@@ -198,6 +198,13 @@ fn typed_query_page_parts(
                 .ok_or_else(|| eyre!("typed {view_name} is missing its id: {item:?}"))
         })
         .collect::<Result<Vec<_>>>()?;
+    if ids.len() > ivm::core_query::QUERY_PAGE_CAPACITY_V1 {
+        return Err(eyre!(
+            "typed {view_name} page contains {} items; maximum is {}",
+            ids.len(),
+            ivm::core_query::QUERY_PAGE_CAPACITY_V1,
+        ));
+    }
     let next_offset = result
         .get("next_offset")
         .and_then(norito::json::Value::as_object)
@@ -222,6 +229,25 @@ fn typed_query_page_parts(
                 "typed {view_name} page contains a non-canonical next_offset Int: {result:?}"
             ));
         }
+        if parsed < 0 {
+            return Err(eyre!(
+                "typed {view_name} page contains a negative next_offset: {result:?}"
+            ));
+        }
+        if ids.is_empty() {
+            return Err(eyre!(
+                "typed {view_name} page contains next_offset without making progress: {result:?}"
+            ));
+        }
+        let next_offset_usize = usize::try_from(parsed).map_err(|_| {
+            eyre!("typed {view_name} page contains an out-of-range next_offset: {result:?}")
+        })?;
+        if next_offset_usize < ids.len() {
+            return Err(eyre!(
+                "typed {view_name} page contains next_offset before its returned item count: \
+                 {result:?}"
+            ));
+        }
         Some(parsed)
     } else if next_offset
         .get("none")
@@ -240,8 +266,10 @@ fn typed_query_page_parts(
 #[test]
 fn typed_query_page_parts_require_canonical_active_only_option_int() {
     for (source, expected) in [
-        (r#"{"items":[],"next_offset":{"some":"3"}}"#, Some(3)),
-        (r#"{"items":[],"next_offset":{"some":"-3"}}"#, Some(-3)),
+        (
+            r#"{"items":[{"id":"item"}],"next_offset":{"some":"3"}}"#,
+            Some(3),
+        ),
         (r#"{"items":[],"next_offset":{"none":true}}"#, None),
     ] {
         let page = norito::json::from_str(source).expect("parse canonical typed query page");
@@ -262,6 +290,9 @@ fn typed_query_page_parts_require_canonical_active_only_option_int() {
         r#"{"items":[],"next_offset":{"none":false}}"#,
         r#"{"items":[],"next_offset":{"some":"3","none":true}}"#,
         r#"{"items":[],"next_offset":{"unknown":true}}"#,
+        r#"{"items":[{"id":"item"}],"next_offset":{"some":"-3"}}"#,
+        r#"{"items":[],"next_offset":{"some":"3"}}"#,
+        r#"{"items":[{"id":"a"},{"id":"b"}],"next_offset":{"some":"1"}}"#,
     ] {
         let page = norito::json::from_str(source).expect("parse malformed typed query page");
         assert!(
@@ -269,6 +300,19 @@ fn typed_query_page_parts_require_canonical_active_only_option_int() {
             "accepted non-canonical active-only Option<Int>: {source}"
         );
     }
+
+    let oversized_items = (0..=ivm::core_query::QUERY_PAGE_CAPACITY_V1)
+        .map(|index| format!(r#"{{"id":"item{index}"}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let oversized = norito::json::from_str(&format!(
+        r#"{{"items":[{oversized_items}],"next_offset":{{"none":true}}}}"#
+    ))
+    .expect("parse oversized typed query page");
+    assert!(
+        typed_query_page_parts(&oversized, "TestView").is_err(),
+        "accepted a typed query page above the V1 capacity"
+    );
 }
 
 fn assert_typed_query_projection(

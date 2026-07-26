@@ -533,7 +533,7 @@ struct PrivateKaigiFeeBinding {
     action_hash_hex: String,
     chain_id: String,
     asset_definition_id: String,
-    fee_amount: Numeric,
+    fee_amount: Quantity,
 }
 
 fn json_object_string(
@@ -593,17 +593,27 @@ fn decode_private_kaigi_fee_binding(
             ),
         ));
     }
-    let fee_amount = Numeric::from_str(&json_object_string(
-        &map,
-        "fee_amount",
-        "private Kaigi fee spend aux payload",
-    )?)
-    .map_err(|err| {
+    let fee_amount_text = map
+        .get("fee_amount")
+        .and_then(norito::json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                "private Kaigi fee spend aux payload must include non-empty `fee_amount`".into(),
+            ))
+        })?;
+    let fee_amount = Quantity::from_str(fee_amount_text).map_err(|err| {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
             "private Kaigi fee amount is invalid: {err}"
         )))
-    })?
-    .trim_trailing_zeros();
+    })?;
+    if fee_amount_text != fee_amount.to_string() {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(format!(
+                "private Kaigi fee amount must use canonical form `{fee_amount}`"
+            )),
+        ));
+    }
 
     Ok(PrivateKaigiFeeBinding {
         action_hash_hex: json_object_string(
@@ -2046,32 +2056,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         Ok(())
     }
 
-    fn private_fee_numeric_add(
-        lhs: Numeric,
-        rhs: Numeric,
-        context: &'static str,
-    ) -> Result<Numeric, TransactionRejectionReason> {
-        lhs.checked_add(rhs).ok_or_else(|| {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                "{context} exceeds supported numeric bounds"
-            )))
-        })
-    }
-
-    fn private_fee_numeric_mul_u64(
-        value: &Numeric,
-        multiplier: u64,
-        context: &'static str,
-    ) -> Result<Numeric, TransactionRejectionReason> {
-        value
-            .try_decimal_mul(&Numeric::from(multiplier))
-            .map_err(|_| {
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                    "{context} exceeds supported numeric bounds"
-                )))
-            })
-    }
-
     fn private_kaigi_instruction_gas(
         tx: &PrivateKaigiTransaction,
     ) -> Result<u64, TransactionRejectionReason> {
@@ -2085,9 +2069,9 @@ impl<'tx> AcceptedTransaction<'tx> {
     fn compute_private_kaigi_fee_amount(
         tx: &PrivateKaigiTransaction,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<Numeric, TransactionRejectionReason> {
+    ) -> Result<Quantity, TransactionRejectionReason> {
         if !state_transaction.nexus.enabled {
-            return Ok(Numeric::zero());
+            return Ok(Quantity::zero());
         }
 
         let cfg = state_transaction.nexus.fees.clone();
@@ -2099,38 +2083,9 @@ impl<'tx> AcceptedTransaction<'tx> {
                     "failed to encode private Kaigi transaction for fee metering: {err}"
                 )))
             })?;
-        let tx_bytes_len = u64::try_from(tx_bytes_len).unwrap_or(u64::MAX);
         let gas_used = Self::private_kaigi_instruction_gas(tx)?;
-
-        let mut fee = cfg.base_fee.as_numeric().clone();
-        fee = Self::private_fee_numeric_add(
-            fee,
-            Self::private_fee_numeric_mul_u64(
-                cfg.per_byte_fee.as_numeric(),
-                tx_bytes_len,
-                "fee amount",
-            )?,
-            "fee amount",
-        )?;
-        fee = Self::private_fee_numeric_add(
-            fee,
-            Self::private_fee_numeric_mul_u64(
-                cfg.per_instruction_fee.as_numeric(),
-                1,
-                "fee amount",
-            )?,
-            "fee amount",
-        )?;
-        fee = Self::private_fee_numeric_add(
-            fee,
-            Self::private_fee_numeric_mul_u64(
-                cfg.per_gas_unit_fee.as_numeric(),
-                gas_used,
-                "fee amount",
-            )?,
-            "fee amount",
-        )?;
-        Ok(fee.trim_trailing_zeros())
+        crate::executor::compute_nexus_fee_amount(&cfg, tx_bytes_len, 1, gas_used)
+            .map_err(TransactionRejectionReason::Validation)
     }
 
     fn execute_private_kaigi_fee_spend(
@@ -8110,7 +8065,7 @@ pub mod tests {
         assert_eq!(binding.action_hash_hex, "abcd");
         assert_eq!(binding.chain_id, "private-kaigi-chain");
         assert_eq!(binding.asset_definition_id, "xor#wonderland");
-        assert_eq!(binding.fee_amount, Numeric::from(5_u32));
+        assert_eq!(binding.fee_amount, Quantity::from(5_u32));
 
         let canonical = super::canonical_private_kaigi_fee_transfer_proof(&proof_bytes)
             .expect("canonicalize fee proof");
@@ -8134,6 +8089,66 @@ pub mod tests {
                 "unexpected message: {msg}"
             ),
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn private_kaigi_fee_binding_rejects_negative_amount() {
+        let aux = br#"{"schema":"iroha.private_kaigi.fee.v1","action_hash_hex":"abcd","chain_id":"private-kaigi-chain","asset_definition_id":"xor#wonderland","fee_amount":"-1"}"#;
+        let envelope = OpenVerifyEnvelope {
+            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
+            vk_hash: [0x42; 32],
+            public_inputs:
+                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
+                    .to_vec(),
+            proof_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
+            aux: aux.to_vec(),
+        };
+        let proof_bytes = norito::to_bytes(&envelope).expect("encode negative fee envelope");
+
+        let err = super::decode_private_kaigi_fee_binding(&proof_bytes)
+            .expect_err("negative private Kaigi fee amount must fail at the nominal boundary");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => assert!(
+                msg.contains("private Kaigi fee amount is invalid"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn private_kaigi_fee_binding_rejects_noncanonical_amount_text() {
+        for amount in ["+1", "01", "1.0", "123.4500", " 1 "] {
+            let aux = format!(
+                r#"{{"schema":"iroha.private_kaigi.fee.v1","action_hash_hex":"abcd","chain_id":"private-kaigi-chain","asset_definition_id":"xor#wonderland","fee_amount":"{amount}"}}"#
+            );
+            let envelope = OpenVerifyEnvelope {
+                backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+                circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
+                    .to_owned(),
+                vk_hash: [0x42; 32],
+                public_inputs:
+                    crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
+                        .to_vec(),
+                proof_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
+                aux: aux.into_bytes(),
+            };
+            let proof_bytes =
+                norito::to_bytes(&envelope).expect("encode noncanonical fee envelope");
+
+            let err = super::decode_private_kaigi_fee_binding(&proof_bytes)
+                .expect_err("noncanonical private Kaigi fee text must fail closed");
+            match err {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+                    assert!(
+                        msg.contains("private Kaigi fee amount must use canonical form"),
+                        "unexpected message for `{amount}`: {msg}"
+                    );
+                }
+                other => panic!("unexpected error for `{amount}`: {other:?}"),
+            }
         }
     }
 

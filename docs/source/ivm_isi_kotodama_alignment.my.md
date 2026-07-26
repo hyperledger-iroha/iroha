@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/ivm_isi_kotodama_alignment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f40329b9968530dea38745b49f7fee4d55aeb461e515e6f97b5b5986cb27e3f
+source_hash: cc7c5c153368eeb7bd392980cc754a66e94a3764a9ce60cff718d968baef2504
 source_last_modified: "2026-01-21T19:17:13.238594+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -92,10 +92,10 @@ bytecode ပစ်မှတ်အပေါ် မှတ်ချက်- Kotodama
 
 ### B။ ရိုက်ထည့်ထားသော တန်ဖိုးများအတွက် အဆုံးအဖြတ်ပေးသော VM/host ABI ကို သတ်မှတ်ပါ။
 - ဖွဲ့စည်းတည်ဆောက်ထားသော အကြောင်းပြချက်များအတွက် VM ဘက်မှ Norito ကိုသုံးပါ-
-  - `AccountId`၊ `AssetDefinitionId`၊ `Numeric`၊ I1810000126X၊ Kotodama ကဲ့သို့သော အမျိုးအစားများအတွက် `Numeric`၊ Kotodama။
+  - `AccountId`၊ `AssetDefinitionId`၊ `Quantity`၊ I1810000126X၊ Kotodama ကဲ့သို့သော အမျိုးအစားများအတွက် `Quantity`၊ Kotodama။
   - Host သည် `IVM` memory helpers မှတစ်ဆင့် bytes ဖတ်ပြီး Norito (`iroha_data_model` သည် `Encode/Decode` ဖြင့် ကုဒ်များဖတ်သည်)။
 - Kotodama တွင် ပကတိ ID များကို code/constant pool များအဖြစ် ခွဲခြားရန် သို့မဟုတ် memory ရှိ ခေါ်ဆိုမှုဘောင်များကို ပြင်ဆင်ရန်အတွက် အနည်းငယ်မျှသော အထောက်အကူများကို ထည့်ပါ။
-- ပမာဏများမှာ `Numeric` ဖြစ်ပြီး NoritoBytes ညွှန်ပြချက်များအဖြစ် ကျော်သွားသည် ။ အခြားရှုပ်ထွေးသောအမျိုးအစားများသည်လည်း pointer ဖြင့်ဖြတ်သန်းပါသည်။
+- ပိုင်ဆိုင်မှုပမာဏများသည် ယေဘုယျ `NoritoBytes` pointer မဟုတ်ဘဲ သီးသန့် `QuantityValueV1` pointer-ABI TLV (`PointerType::Quantity = 0x0010`) ကို အသုံးပြုသည်။ အခြားရှုပ်ထွေးသောတန်ဖိုးများသည် ၎င်းတို့အတွက် သတ်မှတ်ထားသော pointer အမျိုးအစားများကို အသုံးပြုသည်။
 - ဤအရာကို `crates/ivm/docs/calling_convention.md` တွင်မှတ်တမ်းတင်ပြီး ဥပမာများထည့်ပါ။### C. syscall အမည်ပေးခြင်းနှင့် အကျုံးဝင်မှုကို ISI/Data Model ဖြင့် ချိန်ညှိပါ။
 - ရှင်းလင်းပြတ်သားမှုအတွက် NFT နှင့်ပတ်သက်သည့် syscalls များကို အမည်ပြောင်းပါ- ယခု Canonical အမည်များသည် `SYSCALL_NFT_*` ပုံစံ (`SYSCALL_NFT_MINT_ASSET`၊ `SYSCALL_NFT_SET_METADATA` စသည်ဖြင့်) ကို လိုက်နာပါသည်။
 - မြေပုံဆွဲဇယား (doc + ကုဒ်မှတ်ချက်များ) အပါအဝင် syscall တစ်ခုစီမှ core ISI semantics အထိ၊

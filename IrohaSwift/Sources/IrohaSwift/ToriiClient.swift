@@ -16088,9 +16088,9 @@ fileprivate func normalizeDetachedAssetTransferScope(_ value: String) throws -> 
 }
 
 fileprivate func normalizeDetachedAssetTransferAmount(_ value: String) throws -> String {
-    guard !value.isEmpty, value.utf8.count <= 192 else {
+    guard !value.isEmpty, value.utf8.count <= 155 else {
         throw ToriiClientError.invalidPayload(
-            "amount must be non-empty canonical Numeric text no longer than 192 bytes."
+            "amount must be non-empty canonical Kotodama V1 Quantity text no longer than 155 bytes."
         )
     }
     let quantity: KotodamaQuantity
@@ -16098,12 +16098,12 @@ fileprivate func normalizeDetachedAssetTransferAmount(_ value: String) throws ->
         quantity = try KotodamaQuantity(value)
     } catch {
         throw ToriiClientError.invalidPayload(
-            "amount must be an in-range canonical Iroha Numeric value."
+            "amount must be an in-range canonical Kotodama V1 Quantity."
         )
     }
     guard quantity.canonicalString == value, value != "0" else {
         throw ToriiClientError.invalidPayload(
-            "amount must use the exact canonical representation of a strictly positive Numeric."
+            "amount must use the exact canonical representation of a strictly positive Quantity."
         )
     }
     return value
@@ -18893,6 +18893,16 @@ fileprivate func normalizeGovernanceZkPublicInputs(_ inputs: [String: ToriiJSONV
             "\(field) must include owner, amount, and duration_blocks when providing lock hints."
         )
     }
+    if hasAmount {
+        guard case let .string(amount)? = normalized["amount"] else {
+            throw ToriiClientError.invalidPayload(
+                "\(field).amount must be a canonical non-negative Kotodama V1 Quantity string."
+            )
+        }
+        normalized["amount"] = .string(
+            try canonicalGovernanceQuantity(amount, field: "\(field).amount")
+        )
+    }
     try ensureGovernanceZkOwnerCanonical(normalized, field: field)
     return normalized
 }
@@ -18982,6 +18992,16 @@ fileprivate func governanceZkHintPresent(_ value: ToriiJSONValue?) -> Bool {
     return true
 }
 
+fileprivate func canonicalGovernanceQuantity(_ value: String, field: String) throws -> String {
+    do {
+        return try KotodamaNumericV1Codec.decodeQuantityJSON(value).canonicalString
+    } catch {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be a canonical non-negative Kotodama V1 Quantity string."
+        )
+    }
+}
+
 public struct ToriiGovernancePlainBallotRequest: Encodable, Sendable {
     public var authority: String
     public var chainId: String
@@ -19015,6 +19035,21 @@ public struct ToriiGovernancePlainBallotRequest: Encodable, Sendable {
         self.amount = amount
         self.durationBlocks = durationBlocks
         self.direction = direction
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let canonicalAmount = try canonicalGovernanceQuantity(
+            amount,
+            field: "governance plain ballot amount"
+        )
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(authority, forKey: .authority)
+        try container.encode(chainId, forKey: .chainId)
+        try container.encode(referendumId, forKey: .referendumId)
+        try container.encode(owner, forKey: .owner)
+        try container.encode(canonicalAmount, forKey: .amount)
+        try container.encode(durationBlocks, forKey: .durationBlocks)
+        try container.encode(direction, forKey: .direction)
     }
 }
 
@@ -19247,6 +19282,7 @@ public struct ToriiGovernanceProposalGetResponse: Decodable, Sendable {
 public struct ToriiGovernanceLockRecord: Decodable, Sendable {
     public let owner: String
     public let amount: String
+    public let slashed: String
     public let expiryHeight: UInt64
     public let direction: UInt8
     public let durationBlocks: UInt64
@@ -19254,6 +19290,7 @@ public struct ToriiGovernanceLockRecord: Decodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case owner
         case amount
+        case slashed
         case expiryHeight = "expiry_height"
         case direction
         case durationBlocks = "duration_blocks"
@@ -19262,21 +19299,18 @@ public struct ToriiGovernanceLockRecord: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         owner = try container.decode(String.self, forKey: .owner)
-        if let stringValue = try? container.decode(String.self, forKey: .amount) {
-            let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                throw DecodingError.dataCorruptedError(forKey: .amount,
-                                                       in: container,
-                                                       debugDescription: "amount must be a non-empty string")
-            }
-            amount = trimmed
-        } else if let intValue = try? container.decode(UInt64.self, forKey: .amount) {
-            amount = String(intValue)
-        } else {
-            throw DecodingError.dataCorruptedError(forKey: .amount,
-                                                   in: container,
-                                                   debugDescription: "amount must be a string or unsigned integer")
-        }
+        amount = try ToriiNativeAmxWire.quantity(
+            container.decode(String.self, forKey: .amount),
+            key: .amount,
+            container: container,
+            field: "governance lock amount"
+        )
+        slashed = try ToriiNativeAmxWire.quantity(
+            container.decode(String.self, forKey: .slashed),
+            key: .slashed,
+            container: container,
+            field: "governance lock slashed amount"
+        )
         expiryHeight = try container.decode(UInt64.self, forKey: .expiryHeight)
         direction = try container.decode(UInt8.self, forKey: .direction)
         durationBlocks = try container.decodeIfPresent(UInt64.self, forKey: .durationBlocks) ?? 0
@@ -20150,7 +20184,7 @@ enum ToriiNativeAmxWire {
         return true
     }
 
-    static func numeric<K: CodingKey>(
+    static func unsignedDecimal<K: CodingKey>(
         _ value: String,
         key: K,
         container: KeyedDecodingContainer<K>,
@@ -20161,10 +20195,27 @@ enum ToriiNativeAmxWire {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "\(field) must be a canonical non-negative Numeric string."
+                debugDescription: "\(field) must be a canonical unsigned decimal string."
             )
         }
         return value
+    }
+
+    static func quantity<K: CodingKey>(
+        _ value: String,
+        key: K,
+        container: KeyedDecodingContainer<K>,
+        field: String
+    ) throws -> String {
+        do {
+            return try KotodamaNumericV1Codec.decodeQuantityJSON(value).canonicalString
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(field) must be a canonical non-negative Kotodama V1 Quantity string."
+            )
+        }
     }
 
     static func u128<K: CodingKey>(
@@ -20173,7 +20224,7 @@ enum ToriiNativeAmxWire {
         container: KeyedDecodingContainer<K>,
         field: String
     ) throws -> String {
-        let canonical = try numeric(
+        let canonical = try unsignedDecimal(
             value,
             key: key,
             container: container,
@@ -21563,25 +21614,25 @@ public struct ToriiNexusFeeScheduleInputs: Decodable, Sendable, Equatable {
         transactionBytesLength = try container.decode(UInt64.self, forKey: .transactionBytesLength)
         instructionCount = try container.decode(UInt64.self, forKey: .instructionCount)
         gasUsed = try container.decode(UInt64.self, forKey: .gasUsed)
-        baseFee = try ToriiNativeAmxWire.numeric(
+        baseFee = try ToriiNativeAmxWire.quantity(
             container.decode(String.self, forKey: .baseFee),
             key: .baseFee,
             container: container,
             field: "Nexus base_fee"
         )
-        perByteFee = try ToriiNativeAmxWire.numeric(
+        perByteFee = try ToriiNativeAmxWire.quantity(
             container.decode(String.self, forKey: .perByteFee),
             key: .perByteFee,
             container: container,
             field: "Nexus per_byte_fee"
         )
-        perInstructionFee = try ToriiNativeAmxWire.numeric(
+        perInstructionFee = try ToriiNativeAmxWire.quantity(
             container.decode(String.self, forKey: .perInstructionFee),
             key: .perInstructionFee,
             container: container,
             field: "Nexus per_instruction_fee"
         )
-        perGasUnitFee = try ToriiNativeAmxWire.numeric(
+        perGasUnitFee = try ToriiNativeAmxWire.quantity(
             container.decode(String.self, forKey: .perGasUnitFee),
             key: .perGasUnitFee,
             container: container,
@@ -21647,7 +21698,7 @@ public struct ToriiNexusFeeReceipt: Decodable, Sendable, Equatable {
             container: container,
             field: "Nexus fee_asset_id"
         )
-        feeAmount = try ToriiNativeAmxWire.numeric(
+        feeAmount = try ToriiNativeAmxWire.quantity(
             container.decode(String.self, forKey: .feeAmount),
             key: .feeAmount,
             container: container,

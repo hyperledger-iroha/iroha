@@ -841,9 +841,9 @@ isi! {
 impl crate::seal::Instruction for SetSorafsReputationJournalAuthorityPolicy {}
 
 isi! {
-    /// Commit one terminal native PoR projection to the global reputation journal.
+    /// Commit one terminal native `PoR` projection to the global reputation journal.
     pub struct AppendSorafsPorReputationJournalEntry {
-        /// Canonical policy-bound, content-addressed PoR journal entry.
+        /// Canonical policy-bound, content-addressed `PoR` journal entry.
         pub entry: ReputationJournalEntryV1,
     }
 }
@@ -1533,7 +1533,7 @@ impl SetSorafsReputationJournalAuthorityPolicy {
 }
 
 impl AppendSorafsPorReputationJournalEntry {
-    /// Construct a canonical PoR reputation-journal append.
+    /// Construct a canonical `PoR` reputation-journal append.
     #[must_use]
     pub fn new(entry: ReputationJournalEntryV1) -> Self {
         Self { entry }

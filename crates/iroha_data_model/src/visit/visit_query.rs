@@ -15,28 +15,26 @@ use crate::{
 #[cfg(test)]
 static SINGULAR_QUERY_FALLBACK_HIT: AtomicBool = AtomicBool::new(false);
 
-/// Dispatch a singular query to the matching visitor method.
-pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &SingularQueryBox) {
-    macro_rules! singular_query_visitors {
-        ( $($visitor:ident($query:ident)),+ $(,)? ) => {
-            #[allow(unreachable_patterns)]
-            match query {
-                $( SingularQueryBox::$query(query) => visitor.$visitor(&query), )+
-                // Fallback for newly added singular queries to keep compilation stable in tests
-                _ => {
-                    #[cfg(test)]
-                    {
-                        SINGULAR_QUERY_FALLBACK_HIT.store(true, Ordering::Relaxed);
-                        panic!(
-                            "singular query fallback matched a variant; add a visit_singular_query arm"
-                        );
-                    }
+macro_rules! try_visit_singular_queries {
+    ($visitor:expr, $query:expr; $($method:ident($variant:ident)),+ $(,)?) => {
+        match $query {
+            $(
+                SingularQueryBox::$variant(query) => {
+                    ($visitor).$method(query);
+                    true
                 }
-            }
-        };
-    }
+            )+
+            _ => false,
+        }
+    };
+}
 
-    singular_query_visitors! {
+fn try_visit_non_sorafs_singular_query<V: Visit + ?Sized>(
+    visitor: &mut V,
+    query: &SingularQueryBox,
+) -> bool {
+    try_visit_singular_queries! {
+        visitor, query;
         visit_find_executor_data_model(FindExecutorDataModel),
         visit_find_parameters(FindParameters),
         visit_find_account_by_id(FindAccountById),
@@ -64,6 +62,23 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_da_pin_intent_by_alias(FindDaPinIntentByAlias),
         visit_find_da_pin_intent_by_lane_epoch_sequence(FindDaPinIntentByLaneEpochSequence),
         visit_find_lane_relay_envelope_by_ref(FindLaneRelayEnvelopeByRef),
+        visit_find_dataspace_name_owner_by_id(FindDataspaceNameOwnerById),
+        visit_find_musubi_release_by_ref(FindMusubiReleaseByRef),
+        visit_find_musubi_package_versions(FindMusubiPackageVersions),
+        visit_find_musubi_package_releases(FindMusubiPackageReleases),
+        visit_search_musubi_packages(SearchMusubiPackages),
+        visit_find_musubi_short_alias_by_name(FindMusubiShortAliasByName),
+        visit_find_domain_by_id(FindDomainById),
+        visit_find_fee_sponsor_program_by_id(FindFeeSponsorProgramById),
+    }
+}
+
+fn try_visit_sorafs_singular_query<V: Visit + ?Sized>(
+    visitor: &mut V,
+    query: &SingularQueryBox,
+) -> bool {
+    try_visit_singular_queries! {
+        visitor, query;
         visit_find_sorafs_provider_owner(FindSorafsProviderOwner),
         visit_find_sorafs_orderbook_policy(FindSorafsOrderbookPolicy),
         visit_find_sorafs_orderbook_order_by_id(FindSorafsOrderbookOrderById),
@@ -112,15 +127,25 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_sorafs_moderation_status(FindSorafsModerationStatus),
         visit_find_sorafs_moderation_snapshot(FindSorafsModerationSnapshot),
         visit_find_sorafs_moderation_events(FindSorafsModerationEvents),
-        visit_find_dataspace_name_owner_by_id(FindDataspaceNameOwnerById),
-        visit_find_musubi_release_by_ref(FindMusubiReleaseByRef),
-        visit_find_musubi_package_versions(FindMusubiPackageVersions),
-        visit_find_musubi_package_releases(FindMusubiPackageReleases),
-        visit_search_musubi_packages(SearchMusubiPackages),
-        visit_find_musubi_short_alias_by_name(FindMusubiShortAliasByName),
-        visit_find_domain_by_id(FindDomainById),
-        visit_find_fee_sponsor_program_by_id(FindFeeSponsorProgramById),
     }
+}
+
+#[cfg(test)]
+fn handle_unvisited_singular_query(visited: bool) {
+    if !visited {
+        SINGULAR_QUERY_FALLBACK_HIT.store(true, Ordering::Relaxed);
+        panic!("singular query fallback matched a variant; add a visit_singular_query arm");
+    }
+}
+
+#[cfg(not(test))]
+fn handle_unvisited_singular_query(_: bool) {}
+
+/// Dispatch a singular query to the matching visitor method.
+pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &SingularQueryBox) {
+    let visited = try_visit_non_sorafs_singular_query(visitor, query)
+        || try_visit_sorafs_singular_query(visitor, query);
+    handle_unvisited_singular_query(visited);
 }
 
 #[cfg(not(feature = "fast_dsl"))]

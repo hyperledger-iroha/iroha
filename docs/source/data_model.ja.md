@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   - テストとフィクスチャは、アカウント ID 自体にドメインの仮定をエンコードするのではなく、最初にユニバーサル `AccountId` をシードし、次にエイリアス リース、エイリアスのアクセス許可、およびドメイン所有の状態を個別に追加する必要があります。
   - パブリック単数アカウント検索はエイリアス (`FindAliasesByAccountId`) に焦点を当てます。アカウント ID 自体はドメインレスのままです。### 資産の定義と資産
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` は、バージョン管理とチェックサムを備えたプレフィックスのない Base58 アドレスとしてテキストで公開されます。
-- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`。
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Quantity }`。
   - `name` は人に向けた表示テキストが必要であり、`#`/`@` を含めることはできません。
   - `alias` はオプションであり、次のいずれかである必要があります。
     - `<name>#<domain>.<dataspace>`
@@ -67,8 +67,8 @@ translator: machine-google-reviewed
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`。
   - ビルダー: `AssetDefinition::new(id, spec)` またはコンビニエンス `numeric(id)`; `name` は必須であり、`.with_name(...)` 経由で設定する必要があります。
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`。
-- `Asset { id, value: Numeric }` とストレージに優しい `AssetEntry`/`AssetValue`。- `AssetBalanceScope`: 無制限の残高の場合は `Global`、データスペース制限のある残高の場合は `Dataspace(DataSpaceId)`。
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` は概要 API 用に公開されました。
+- `Asset { id, value: Quantity }` とストレージに優しい `AssetEntry`/`AssetValue`。- `AssetBalanceScope`: 無制限の残高の場合は `Global`、データスペース制限のある残高の場合は `Dataspace(DataSpaceId)`。
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Quantity>` は概要 API 用に公開されました。
 
 ### NFT
 - `NftId { domain: DomainId, name: Name }`。
@@ -182,7 +182,7 @@ translator: machine-google-reviewed
 ```rust
 use iroha_data_model::prelude::*;
 use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 // Domain
 let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
@@ -203,7 +203,7 @@ let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Numeric::from(100));
+let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
 
 // Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
 let chain_id: ChainId = "dev-chain".parse().unwrap();

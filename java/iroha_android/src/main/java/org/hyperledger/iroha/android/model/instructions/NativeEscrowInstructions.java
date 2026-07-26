@@ -9,7 +9,7 @@ import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.numeric.NumericV1;
 
-/** Typed Android builders and constants for native numeric asset escrow instructions. */
+/** Typed Android builders and constants for native Quantity asset escrow instructions. */
 public final class NativeEscrowInstructions {
 
   private static final String ARG_ACTION = "action";

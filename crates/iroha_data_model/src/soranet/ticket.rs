@@ -58,8 +58,12 @@ pub enum TicketSignatureError {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "scope", content = "value"))]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 #[allow(clippy::exhaustive_enums)]
 pub enum TicketScopeV1 {
@@ -75,8 +79,12 @@ pub enum TicketScopeV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct TicketBodyV1 {
     /// Blinded content identifier protected by the `SoraNet` salt schedule.
@@ -113,8 +121,12 @@ impl TicketBodyV1 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct TicketEnvelopeV1 {
     /// Canonical ticket body.

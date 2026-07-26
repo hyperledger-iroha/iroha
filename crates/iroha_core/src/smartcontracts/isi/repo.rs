@@ -279,10 +279,10 @@ impl Execute for RepoIsi {
         let cash_destination = AssetId::new(cash_def_id.clone(), initiator.clone());
         state_transaction
             .world
-            .withdraw_numeric_asset(&cash_source, cash_leg.quantity().as_numeric())?;
+            .withdraw_numeric_asset(&cash_source, cash_leg.quantity())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&cash_destination, cash_leg.quantity().as_numeric())?;
+            .deposit_numeric_asset(&cash_destination, cash_leg.quantity())?;
 
         let collateral_holder_account = custodian.clone().unwrap_or_else(|| counterparty.clone());
         let collateral_source = AssetId::new(collateral_def_id.clone(), initiator.clone());
@@ -290,11 +290,10 @@ impl Execute for RepoIsi {
             AssetId::new(collateral_def_id.clone(), collateral_holder_account.clone());
         state_transaction
             .world
-            .withdraw_numeric_asset(&collateral_source, collateral_leg.quantity().as_numeric())?;
-        state_transaction.world.deposit_numeric_asset(
-            &collateral_destination,
-            collateral_leg.quantity().as_numeric(),
-        )?;
+            .withdraw_numeric_asset(&collateral_source, collateral_leg.quantity())?;
+        state_transaction
+            .world
+            .deposit_numeric_asset(&collateral_destination, collateral_leg.quantity())?;
 
         let agreement = RepoAgreement::new(
             agreement_id.clone(),
@@ -504,21 +503,20 @@ impl Execute for ReverseRepoIsi {
         let cash_destination = AssetId::new(cash_def_id.clone(), counterparty.clone());
         state_transaction
             .world
-            .withdraw_numeric_asset(&cash_source, cash_leg.quantity().as_numeric())?;
+            .withdraw_numeric_asset(&cash_source, cash_leg.quantity())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&cash_destination, cash_leg.quantity().as_numeric())?;
+            .deposit_numeric_asset(&cash_destination, cash_leg.quantity())?;
 
         let collateral_source =
             AssetId::new(collateral_def_id.clone(), collateral_holder_account.clone());
         let collateral_destination = AssetId::new(collateral_def_id.clone(), initiator.clone());
         state_transaction
             .world
-            .withdraw_numeric_asset(&collateral_source, collateral_leg.quantity().as_numeric())?;
-        state_transaction.world.deposit_numeric_asset(
-            &collateral_destination,
-            collateral_leg.quantity().as_numeric(),
-        )?;
+            .withdraw_numeric_asset(&collateral_source, collateral_leg.quantity())?;
+        state_transaction
+            .world
+            .deposit_numeric_asset(&collateral_destination, collateral_leg.quantity())?;
 
         state_transaction
             .world
@@ -1562,7 +1560,7 @@ mod tests {
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
             stx.world
-                .deposit_numeric_asset(&alice_cash_id, interest_due.as_numeric())
+                .deposit_numeric_asset(&alice_cash_id, &interest_due)
                 .expect("seed interest funds");
         }
 
@@ -1713,7 +1711,7 @@ mod tests {
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
             stx.world
-                .deposit_numeric_asset(&alice_cash_id, interest_due.as_numeric())
+                .deposit_numeric_asset(&alice_cash_id, &interest_due)
                 .expect("seed interest funds");
         }
 
@@ -1721,7 +1719,7 @@ mod tests {
         let extra_collateral = Quantity::from(50u32);
         let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
         stx.world
-            .deposit_numeric_asset(&bob_collateral_id, extra_collateral.as_numeric())
+            .deposit_numeric_asset(&bob_collateral_id, &extra_collateral)
             .expect("seed substitution collateral");
 
         let adjusted_collateral = stored_agreement
@@ -1880,7 +1878,7 @@ mod tests {
         if !interest_due.is_zero() {
             let alice_cash = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
             stx.world
-                .deposit_numeric_asset(&alice_cash, interest_due.as_numeric())
+                .deposit_numeric_asset(&alice_cash, &interest_due)
                 .expect("seed interest");
         }
 
@@ -1965,7 +1963,7 @@ mod tests {
         if !interest_due.is_zero() {
             let alice_cash = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
             stx.world
-                .deposit_numeric_asset(&alice_cash, interest_due.as_numeric())
+                .deposit_numeric_asset(&alice_cash, &interest_due)
                 .expect("seed interest");
         }
 
@@ -2066,7 +2064,7 @@ mod tests {
         let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
         if !interest_due.is_zero() {
             stx.world
-                .deposit_numeric_asset(&alice_cash_id, interest_due.as_numeric())
+                .deposit_numeric_asset(&alice_cash_id, &interest_due)
                 .expect("seed interest funds");
         }
 
@@ -2447,14 +2445,14 @@ mod tests {
             if !interest_due.is_zero() {
                 let alice_cash = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
                 stx.world
-                    .deposit_numeric_asset(&alice_cash, interest_due.as_numeric())
+                    .deposit_numeric_asset(&alice_cash, &interest_due)
                     .expect("seed interest funds");
             }
 
             let extra_collateral = Quantity::from(75u32);
             let bob_collateral_id = AssetId::new(collateral_def_id.clone(), BOB_ID.clone());
             stx.world
-                .deposit_numeric_asset(&bob_collateral_id, extra_collateral.as_numeric())
+                .deposit_numeric_asset(&bob_collateral_id, &extra_collateral)
                 .expect("seed substitution collateral");
             let adjusted_collateral = stored_agreement
                 .collateral_leg()

@@ -276,8 +276,6 @@ use capacity::{
 };
 use config::{GcConfig, RepairConfig, StorageConfig};
 use iroha_crypto::numeric::{Numeric, Quantity, RoundingMode};
-#[cfg(test)]
-use iroha_data_model::sorafs::repair::GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1;
 use iroha_data_model::{
     account::AccountId,
     da::ingest::DaStripeLayout,
@@ -326,6 +324,8 @@ use reserve_transaction_forwarder::{
     ReserveTransactionSigningRequestV1,
 };
 use sorafs_car::{CarBuildPlan, PorProof};
+#[cfg(test)]
+use sorafs_manifest::repair::GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1;
 use sorafs_manifest::reputation::signed::{
     MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES, decode_reputation_trust_policy,
     decode_signed_reputation_snapshot,
@@ -13434,8 +13434,8 @@ mod tests {
         DagCodecId, ManifestBuilder, PinPolicy, REPUTATION_PROVIDER_INPUT_VERSION_V1,
         REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
         REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1, REPUTATION_TRUSTED_SIGNER_VERSION_V1,
-        ReputationDegradationFlagV1, ReputationProviderInputV1, ReputationProviderMetricsV1,
-        ReputationReserveStageV1, ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
+        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+        ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
         ReputationSnapshotTrustPolicyV1, ReputationTrustedSignerV1, ReputationWeightsV1,
         SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
         SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
@@ -16965,7 +16965,7 @@ mod tests {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
 
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_quarantine_key_wrapper(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
@@ -17061,7 +17061,7 @@ mod tests {
             .data_dir(root.join("storage"))
             .evidence_viewer_audit_schedule(Some(schedule))
             .build();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_quarantine_key_wrapper(cfg);
         assert_eq!(
             handle.configured_evidence_viewer_audit_schedule(),
             Some(schedule)
@@ -17168,7 +17168,7 @@ mod tests {
         assert!(err.to_string().contains("evidence viewer audit schedule"));
 
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_quarantine_key_wrapper(cfg);
         seed_moderation_evidence_viewer_activity(
             &handle,
             "cid:bafy-evidence-viewer-oversized-due-report",
@@ -20655,6 +20655,7 @@ mod tests {
             &handle,
         );
         let manifest_id = hex::encode(digest);
+        ensure_test_capacity_provider(&handle);
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let committed = fs::read(&checkpoint_path).expect("read committed auxiliary checkpoint");
         fs::remove_file(&checkpoint_path).expect("remove auxiliary checkpoint");

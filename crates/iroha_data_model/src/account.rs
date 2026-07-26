@@ -318,8 +318,12 @@ impl ParsedAccountId {
 #[repr(transparent)]
 #[norito(transparent, decode_from_slice)]
 #[cfg_attr(
-    any(feature = "ffi_export", feature = "ffi_import"),
-    ffi_type(unsafe {robust})
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
 )]
 pub struct OpaqueAccountId(Hash);
 

@@ -9366,14 +9366,24 @@ impl Iroha {
             // node key for reproducible deployments; reference production
             // must inject its governed PKCS#11/HSM-backed signer here.
             .with_sorafs_orderbook_transaction_signer(Arc::new(config.common.key_pair.clone()))
+            .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
+            .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
+        let runtime_deps = if config
+            .torii
+            .sorafs_storage
+            .moderation_orchestrator
+            .is_some()
+        {
             // Moderation orchestration signs exact, bounded native ISI
             // envelopes through an independent runtime-only boundary. The
             // reference launcher adapts the node key for reproducibility;
             // production operators must inject the governed PKCS#11/HSM
             // signer through ToriiRuntimeDeps at this boundary.
-            .with_sorafs_moderation_transaction_signer(Arc::new(config.common.key_pair.clone()))
-            .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
-            .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
+            runtime_deps
+                .with_sorafs_moderation_transaction_signer(Arc::new(config.common.key_pair.clone()))
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
             runtime_deps.with_sorafs_cache(cache)
         } else {

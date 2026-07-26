@@ -626,14 +626,15 @@ pub fn reserve_finalized_event_source_entry(
     )?;
     validate_reserve_source_id(
         "policy_digest",
-        &record.event.policy_digest,
+        record.event.policy_digest(),
         reserve_finalized_event_source_error,
     )?;
-    let occurred_at_unix = unix_ms_to_secs(record.event.occurred_at_unix_ms)
+    let occurred_at_unix = unix_ms_to_secs(*record.event.occurred_at_unix_ms())
         .map_err(reserve_finalized_event_source_error)?;
 
+    let event_kind = *record.event.kind();
     let operation_required = matches!(
-        record.event.kind,
+        event_kind,
         SorafsReserveLedgerEventKind::MovementRequested
             | SorafsReserveLedgerEventKind::MovementApproved
             | SorafsReserveLedgerEventKind::MovementRejected
@@ -641,12 +642,12 @@ pub fn reserve_finalized_event_source_entry(
             | SorafsReserveLedgerEventKind::AppealAccepted
             | SorafsReserveLedgerEventKind::AppealRejected
     );
-    match record.event.kind {
+    match event_kind {
         SorafsReserveLedgerEventKind::PolicyActivated => {
-            if record.event.provider_id.is_some()
-                || record.event.operation_id.is_some()
-                || record.event.provider_revision != 0
-                || record.event.resulting_lifecycle_stage.is_some()
+            if record.event.provider_id().is_some()
+                || record.event.operation_id().is_some()
+                || *record.event.provider_revision() != 0
+                || record.event.resulting_lifecycle_stage().is_some()
             {
                 return Err(reserve_finalized_event_source_error(
                     "policy activation must not carry provider state",
@@ -654,7 +655,7 @@ pub fn reserve_finalized_event_source_entry(
             }
         }
         _ => {
-            let provider_id = record.event.provider_id.ok_or_else(|| {
+            let provider_id = record.event.provider_id().as_ref().ok_or_else(|| {
                 reserve_finalized_event_source_error("provider transition must carry provider_id")
             })?;
             validate_reserve_source_id(
@@ -662,37 +663,38 @@ pub fn reserve_finalized_event_source_entry(
                 provider_id.as_bytes(),
                 reserve_finalized_event_source_error,
             )?;
-            if record.event.provider_revision == 0 {
+            if *record.event.provider_revision() == 0 {
                 return Err(reserve_finalized_event_source_error(
                     "provider_revision must be non-zero",
                 ));
             }
-            if record.event.resulting_lifecycle_stage.is_none() {
+            if record.event.resulting_lifecycle_stage().is_none() {
                 return Err(reserve_finalized_event_source_error(
                     "provider transition must carry resulting_lifecycle_stage",
                 ));
             }
-            if operation_required != record.event.operation_id.is_some() {
+            if operation_required != record.event.operation_id().is_some() {
                 return Err(reserve_finalized_event_source_error(
                     "operation_id presence does not match reserve transition kind",
                 ));
             }
-            if let Some(operation_id) = record.event.operation_id {
+            if let Some(operation_id) = record.event.operation_id().as_ref() {
                 validate_reserve_source_id(
                     "operation_id",
-                    &operation_id,
+                    operation_id,
                     reserve_finalized_event_source_error,
                 )?;
             }
         }
     }
 
-    let event_kind = reserve_ledger_event_kind_label(record.event.kind);
+    let event_kind_label = reserve_ledger_event_kind_label(event_kind);
     let block_hash_hex = hex::encode(record.block_hash);
-    let policy_digest_hex = hex::encode(record.event.policy_digest);
+    let policy_digest_hex = hex::encode(record.event.policy_digest());
     let provider_id_hex = record
         .event
-        .provider_id
+        .provider_id()
+        .as_ref()
         .map(|provider_id| hex::encode(provider_id.as_bytes()));
     let subject_key = provider_id_hex
         .as_deref()
@@ -710,34 +712,34 @@ pub fn reserve_finalized_event_source_entry(
         "reserve_finalized_ledger".to_string(),
     );
     metadata.insert("event_index".to_string(), record.event_index.to_string());
-    metadata.insert("event_kind".to_string(), event_kind.to_string());
+    metadata.insert("event_kind".to_string(), event_kind_label.to_string());
     metadata.insert(
         "occurred_at_unix_ms".to_string(),
-        record.event.occurred_at_unix_ms.to_string(),
+        record.event.occurred_at_unix_ms().to_string(),
     );
     metadata.insert("policy_digest_hex".to_string(), policy_digest_hex.clone());
     metadata.insert(
         "provider_revision".to_string(),
-        record.event.provider_revision.to_string(),
+        record.event.provider_revision().to_string(),
     );
     metadata.insert("sequence".to_string(), record.sequence.to_string());
     metadata.insert(
         "authority_account_digest_hex".to_string(),
         reserve_private_field_digest_hex(
             "authority_account",
-            record.event.authority.to_string().as_bytes(),
+            record.event.authority().to_string().as_bytes(),
         ),
     );
     if let Some(provider_id_hex) = &provider_id_hex {
         metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
     }
-    if let Some(operation_id) = record.event.operation_id {
+    if let Some(operation_id) = record.event.operation_id().as_ref() {
         metadata.insert("operation_id_hex".to_string(), hex::encode(operation_id));
     }
-    if let Some(stage) = record.event.resulting_lifecycle_stage {
+    if let Some(stage) = record.event.resulting_lifecycle_stage().as_ref() {
         metadata.insert(
             "resulting_lifecycle_stage".to_string(),
-            reserve_lifecycle_stage_label(stage).to_string(),
+            reserve_lifecycle_stage_label(*stage).to_string(),
         );
     }
     let metadata = metadata_vec(metadata);
@@ -752,12 +754,12 @@ pub fn reserve_finalized_event_source_entry(
             record.sequence, record.block_height, block_hash_hex, record.event_index
         ),
         occurred_at_unix,
-        kind: match record.event.kind {
+        kind: match event_kind {
             SorafsReserveLedgerEventKind::AppealAccepted
             | SorafsReserveLedgerEventKind::AppealRejected => {
                 ModerationLedgerEntryKindV1::AppealOutcome
             }
-            _ => ModerationLedgerEntryKindV1::Custom(format!("sorafs_reserve_{event_kind}")),
+            _ => ModerationLedgerEntryKindV1::Custom(format!("sorafs_reserve_{event_kind_label}")),
         },
         subject,
         subject_digest: source_subject_digest(
@@ -767,7 +769,7 @@ pub fn reserve_finalized_event_source_entry(
         ),
         payload_digest,
         summary_digest: source_summary_digest("reserve_finalized_event", &metadata),
-        policy_digest: Some(record.event.policy_digest),
+        policy_digest: Some(*record.event.policy_digest()),
         evidence_uris: Vec::new(),
         metadata,
     };
@@ -3997,9 +3999,21 @@ mod tests {
         .expect("account id")
     }
 
-    fn reserve_finalized_event_fixture(
+    #[derive(Clone, norito::derive::Encode)]
+    struct ReserveLedgerEventWireFixture {
         kind: SorafsReserveLedgerEventKind,
-    ) -> ReserveFinalizedEventV1 {
+        provider_id: Option<iroha_data_model::sorafs::capacity::ProviderId>,
+        operation_id: Option<[u8; 32]>,
+        policy_digest: [u8; 32],
+        provider_revision: u64,
+        resulting_lifecycle_stage: Option<ReserveLifecycleStage>,
+        authority: iroha_data_model::account::AccountId,
+        occurred_at_unix_ms: u64,
+    }
+
+    fn reserve_ledger_event_wire_fixture(
+        kind: SorafsReserveLedgerEventKind,
+    ) -> ReserveLedgerEventWireFixture {
         let policy_activation = kind == SorafsReserveLedgerEventKind::PolicyActivated;
         let operation = matches!(
             kind,
@@ -4010,24 +4024,52 @@ mod tests {
                 | SorafsReserveLedgerEventKind::AppealAccepted
                 | SorafsReserveLedgerEventKind::AppealRejected
         );
+        ReserveLedgerEventWireFixture {
+            kind,
+            provider_id: (!policy_activation)
+                .then(|| iroha_data_model::sorafs::capacity::ProviderId::new([0xB2; 32])),
+            operation_id: operation.then_some([0xC3; 32]),
+            policy_digest: [0xD4; 32],
+            provider_revision: if policy_activation { 0 } else { 9 },
+            resulting_lifecycle_stage: (!policy_activation).then_some(ReserveLifecycleStage::Grace),
+            authority: gar_operator_account(),
+            occurred_at_unix_ms: 1_800_000_123_000,
+        }
+    }
+
+    fn decode_reserve_ledger_event_fixture(
+        fixture: &ReserveLedgerEventWireFixture,
+    ) -> iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent {
+        let encoded = fixture.encode();
+        let mut input = encoded.as_slice();
+        let event = <iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent as norito::codec::Decode>::decode(
+            &mut input,
+        )
+        .expect("reserve-ledger wire fixture decodes");
+        assert_eq!(
+            event.encode(),
+            encoded,
+            "reserve-ledger mirror must remain byte-identical to canonical event encoding"
+        );
+        event
+    }
+
+    fn reserve_finalized_event_from_wire_fixture(
+        fixture: &ReserveLedgerEventWireFixture,
+    ) -> ReserveFinalizedEventV1 {
         ReserveFinalizedEventV1 {
             sequence: 17,
             block_height: 43,
             block_hash: [0xA1; 32],
             event_index: 2,
-            event: iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent {
-                kind,
-                provider_id: (!policy_activation)
-                    .then(|| iroha_data_model::sorafs::capacity::ProviderId::new([0xB2; 32])),
-                operation_id: operation.then_some([0xC3; 32]),
-                policy_digest: [0xD4; 32],
-                provider_revision: if policy_activation { 0 } else { 9 },
-                resulting_lifecycle_stage: (!policy_activation)
-                    .then_some(ReserveLifecycleStage::Grace),
-                authority: gar_operator_account(),
-                occurred_at_unix_ms: 1_800_000_123_000,
-            },
+            event: decode_reserve_ledger_event_fixture(fixture),
         }
+    }
+
+    fn reserve_finalized_event_fixture(
+        kind: SorafsReserveLedgerEventKind,
+    ) -> ReserveFinalizedEventV1 {
+        reserve_finalized_event_from_wire_fixture(&reserve_ledger_event_wire_fixture(kind))
     }
 
     fn gar_receipt_fixture(action: GarEnforcementActionV1) -> GarEnforcementReceiptV1 {
@@ -5242,7 +5284,8 @@ mod tests {
         let expected_provider_id = hex::encode(
             event
                 .event
-                .provider_id
+                .provider_id()
+                .as_ref()
                 .expect("provider transition")
                 .as_bytes(),
         );
@@ -5259,7 +5302,7 @@ mod tests {
             entry.kind,
             ModerationLedgerEntryKindV1::Custom("sorafs_reserve_movement_approved".to_string())
         );
-        assert_eq!(entry.policy_digest, Some(event.event.policy_digest));
+        assert_eq!(entry.policy_digest, Some(*event.event.policy_digest()));
         assert_eq!(
             entry.subject,
             format!("reserve-provider:{expected_provider_id}")
@@ -5293,7 +5336,7 @@ mod tests {
             entry
                 .metadata
                 .iter()
-                .all(|item| item.value != event.event.authority.to_string()),
+                .all(|item| item.value != event.event.authority().to_string()),
             "raw authority account must not enter public transparency metadata"
         );
         let canonical = event.encode();
@@ -5334,7 +5377,10 @@ mod tests {
         );
         assert_eq!(
             policy_entry.subject,
-            format!("reserve-policy:{}", hex::encode(policy.event.policy_digest))
+            format!(
+                "reserve-policy:{}",
+                hex::encode(policy.event.policy_digest())
+            )
         );
 
         for kind in [
@@ -5365,43 +5411,65 @@ mod tests {
         let mut zero_hash = base.clone();
         zero_hash.block_hash = [0; 32];
         malformed.push(zero_hash);
-        let mut zero_policy = base.clone();
-        zero_policy.event.policy_digest = [0; 32];
-        malformed.push(zero_policy);
-        let mut sub_second_timestamp = base.clone();
-        sub_second_timestamp.event.occurred_at_unix_ms = 999;
-        malformed.push(sub_second_timestamp);
-        let mut missing_provider = base.clone();
-        missing_provider.event.provider_id = None;
-        malformed.push(missing_provider);
-        let mut zero_provider = base.clone();
-        zero_provider.event.provider_id =
+
+        let mut zero_policy =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        zero_policy.policy_digest = [0; 32];
+        malformed.push(reserve_finalized_event_from_wire_fixture(&zero_policy));
+
+        let mut sub_second_timestamp =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        sub_second_timestamp.occurred_at_unix_ms = 999;
+        malformed.push(reserve_finalized_event_from_wire_fixture(
+            &sub_second_timestamp,
+        ));
+
+        let mut missing_provider =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        missing_provider.provider_id = None;
+        malformed.push(reserve_finalized_event_from_wire_fixture(&missing_provider));
+
+        let mut zero_provider =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        zero_provider.provider_id =
             Some(iroha_data_model::sorafs::capacity::ProviderId::new([0; 32]));
-        malformed.push(zero_provider);
-        let mut zero_revision = base.clone();
-        zero_revision.event.provider_revision = 0;
-        malformed.push(zero_revision);
-        let mut missing_stage = base.clone();
-        missing_stage.event.resulting_lifecycle_stage = None;
-        malformed.push(missing_stage);
-        let mut missing_operation = base.clone();
-        missing_operation.event.operation_id = None;
-        malformed.push(missing_operation);
-        let mut zero_operation = base.clone();
-        zero_operation.event.operation_id = Some([0; 32]);
-        malformed.push(zero_operation);
+        malformed.push(reserve_finalized_event_from_wire_fixture(&zero_provider));
+
+        let mut zero_revision =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        zero_revision.provider_revision = 0;
+        malformed.push(reserve_finalized_event_from_wire_fixture(&zero_revision));
+
+        let mut missing_stage =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        missing_stage.resulting_lifecycle_stage = None;
+        malformed.push(reserve_finalized_event_from_wire_fixture(&missing_stage));
+
+        let mut missing_operation =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        missing_operation.operation_id = None;
+        malformed.push(reserve_finalized_event_from_wire_fixture(
+            &missing_operation,
+        ));
+
+        let mut zero_operation =
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        zero_operation.operation_id = Some([0; 32]);
+        malformed.push(reserve_finalized_event_from_wire_fixture(&zero_operation));
 
         let mut unexpected_operation =
-            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::RentCharged);
-        unexpected_operation.event.operation_id = Some([0xE5; 32]);
-        malformed.push(unexpected_operation);
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::RentCharged);
+        unexpected_operation.operation_id = Some([0xE5; 32]);
+        malformed.push(reserve_finalized_event_from_wire_fixture(
+            &unexpected_operation,
+        ));
 
         let mut malformed_policy =
-            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
-        malformed_policy.event.provider_id = Some(
-            iroha_data_model::sorafs::capacity::ProviderId::new([0xF6; 32]),
-        );
-        malformed.push(malformed_policy);
+            reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
+        malformed_policy.provider_id = Some(iroha_data_model::sorafs::capacity::ProviderId::new(
+            [0xF6; 32],
+        ));
+        malformed.push(reserve_finalized_event_from_wire_fixture(&malformed_policy));
 
         for event in malformed {
             assert!(

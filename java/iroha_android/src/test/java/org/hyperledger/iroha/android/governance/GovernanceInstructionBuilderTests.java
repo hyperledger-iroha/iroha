@@ -31,6 +31,7 @@ public final class GovernanceInstructionBuilderTests {
     castZkBallotRejectsNonObjectPublicInputs();
     castZkBallotRejectsInvalidHexHints();
     castPlainBallotRoundTrip();
+    castPlainBallotRejectsNoncanonicalQuantities();
     enactReferendumRoundTrip();
     finalizeReferendumRoundTrip();
     persistCouncilRoundTrip();
@@ -238,14 +239,69 @@ public final class GovernanceInstructionBuilderTests {
         CastPlainBallotInstruction.builder()
             .setReferendumId("ref-42")
             .setOwnerAccountId(ownerAccountId)
-            .setAmount(new BigInteger("125000"))
+            .setAmount("18446744073709551616.25")
             .setDurationBlocks(512)
             .setDirection(1)
             .build();
     assert "ref-42".equals(instruction.referendumId()) : "referendum id mismatch";
     assert ownerAccountId.equals(instruction.ownerAccountId()) : "owner mismatch";
-    assert "125000".equals(instruction.amount()) : "amount mismatch";
+    assert "18446744073709551616.25".equals(instruction.amount()) : "amount mismatch";
     assert instruction.direction() == 1 : "direction mismatch";
+
+    final CastPlainBallotInstruction typedQuantity =
+        CastPlainBallotInstruction.builder()
+            .setReferendumId("ref-typed")
+            .setOwnerAccountId(ownerAccountId)
+            .setAmount(
+                org.hyperledger.iroha.android.numeric.NumericV1.QuantityValue.parseCanonical(
+                    "1.25"))
+            .setDurationBlocks(1)
+            .setDirection(0)
+            .build();
+    assert "1.25".equals(typedQuantity.amount()) : "typed Quantity mismatch";
+
+    final CastPlainBallotInstruction integerConvenience =
+        CastPlainBallotInstruction.builder()
+            .setReferendumId("ref-integer")
+            .setOwnerAccountId(ownerAccountId)
+            .setAmount(new BigInteger("125000"))
+            .setDurationBlocks(1)
+            .setDirection(0)
+            .build();
+    assert "125000".equals(integerConvenience.amount()) : "integer convenience mismatch";
+  }
+
+  private static void castPlainBallotRejectsNoncanonicalQuantities() {
+    final String ownerAccountId = sampleI105(0x12);
+    for (final String amount :
+        List.of("", " ", "\t1", "1 ", "+1", "01", "1.", ".5", "1e0", "-1", "-0", "1.0",
+            "1.2300", "0.0")) {
+      boolean builderFailed = false;
+      try {
+        CastPlainBallotInstruction.builder()
+            .setReferendumId("ref-invalid")
+            .setOwnerAccountId(ownerAccountId)
+            .setAmount(amount);
+      } catch (final IllegalArgumentException expected) {
+        builderFailed = true;
+      }
+      assert builderFailed : "builder accepted noncanonical Quantity `" + amount + "`";
+
+      final Map<String, String> arguments = new java.util.LinkedHashMap<>();
+      arguments.put("action", "CastPlainBallot");
+      arguments.put("referendum_id", "ref-invalid");
+      arguments.put("owner", ownerAccountId);
+      arguments.put("amount", amount);
+      arguments.put("duration_blocks", "10");
+      arguments.put("direction", "1");
+      boolean readbackFailed = false;
+      try {
+        CastPlainBallotInstruction.fromArguments(arguments);
+      } catch (final IllegalArgumentException expected) {
+        readbackFailed = true;
+      }
+      assert readbackFailed : "readback accepted noncanonical Quantity `" + amount + "`";
+    }
   }
 
   private static void enactReferendumRoundTrip() {

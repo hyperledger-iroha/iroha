@@ -323,7 +323,7 @@ private func nativeAmxDiagnosticsPayload(
             "block_height": 42,
             "payer_account_id": "payer",
             "fee_asset_id": "xor#universal",
-            "fee_amount": "123.4500",
+            "fee_amount": "18446744073709551616.25",
             "schedule": [
                 "tx_bytes_len": 1024,
                 "instruction_count": 2,
@@ -17467,7 +17467,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(commitment.totalXorVariance, "10.05")
         XCTAssertEqual(commitment.swapMetadata?.liquidityProfile, .tier2)
         XCTAssertEqual(commitment.swapMetadata?.volatilityClass, .stable)
-        XCTAssertEqual(commitment.nexusFeeReceipts.first?.feeAmount, "123.4500")
+        XCTAssertEqual(
+            commitment.nexusFeeReceipts.first?.feeAmount,
+            "18446744073709551616.25"
+        )
         XCTAssertEqual(receipt.version, 2)
         XCTAssertEqual(receipt.legs.count, 2)
         XCTAssertEqual(receipt.chainIdHash, nativeAmxTestHash(0x11))
@@ -17739,6 +17742,39 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 ToriiSumeragiDiagnosticsSnapshot.self,
                 from: legacyReceipt
             )
+        )
+    }
+
+    func testSumeragiDiagnosticsRejectsNoncanonicalNexusFeeQuantities() throws {
+        let overflowing = String(repeating: "9", count: 155)
+        let invalidAmounts: [Any] = [
+            1, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", overflowing,
+        ]
+        for invalid in invalidAmounts {
+            let payload = try mutatedNativeAmxDiagnosticsPayload { root in
+                var commitments = root["lane_settlement_commitments"] as! [[String: Any]]
+                var receipts = commitments[0]["nexus_fee_receipts"] as! [[String: Any]]
+                receipts[0]["fee_amount"] = invalid
+                commitments[0]["nexus_fee_receipts"] = receipts
+                root["lane_settlement_commitments"] = commitments
+            }
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: payload),
+                "noncanonical fee_amount \(invalid) must be rejected"
+            )
+        }
+
+        let schedulePayload = try mutatedNativeAmxDiagnosticsPayload { root in
+            var commitments = root["lane_settlement_commitments"] as! [[String: Any]]
+            var receipts = commitments[0]["nexus_fee_receipts"] as! [[String: Any]]
+            var schedule = receipts[0]["schedule"] as! [String: Any]
+            schedule["base_fee"] = "2.0"
+            receipts[0]["schedule"] = schedule
+            commitments[0]["nexus_fee_receipts"] = receipts
+            root["lane_settlement_commitments"] = commitments
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: schedulePayload)
         )
     }
 
@@ -20250,6 +20286,41 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
+    func testSubmitGovernancePlainBallotRequiresCanonicalLosslessQuantity() throws {
+        let canonical = "18446744073709551616.25"
+        let request = ToriiGovernancePlainBallotRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            chainId: "chain",
+            referendumId: "ref-1",
+            owner: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            amount: canonical,
+            durationBlocks: 5,
+            direction: "Aye"
+        )
+        let data = try JSONEncoder().encode(request)
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(json["amount"] as? String, canonical)
+
+        let overflowing = String(repeating: "9", count: 155)
+        for invalid in ["+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", overflowing] {
+            let invalidRequest = ToriiGovernancePlainBallotRequest(
+                authority: request.authority,
+                chainId: request.chainId,
+                referendumId: request.referendumId,
+                owner: request.owner,
+                amount: invalid,
+                durationBlocks: request.durationBlocks,
+                direction: request.direction
+            )
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(invalidRequest),
+                "noncanonical amount \(invalid) must be rejected"
+            )
+        }
+    }
+
     func testSubmitGovernanceZkBallotEncodesPublicInputs() {
         let expectation = expectation(description: "zk ballot")
         StubURLProtocol.handler = { request in
@@ -20307,7 +20378,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                                      proofB64: "AAAA",
                                                      publicInputs: [
                                                         "owner": .string(owner),
-                                                        "amount": .string("250"),
+                                                        "amount": .string("18446744073709551616.25"),
                                                         "durationBlocks": .number(12),
                                                         "rootHintHex": .string("0x\(String(repeating: "Aa", count: 32))"),
                                                         "nullifierHex": .string("blake2b32:\(String(repeating: "BB", count: 32))"),
@@ -20328,7 +20399,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                                      proofB64: "AAAA",
                                                      publicInputs: [
                                                         "owner": .string(owner),
-                                                        "amount": .string("250"),
+                                                        "amount": .string("18446744073709551616.25"),
                                                         "duration_blocks": .number(12),
                                                         "root_hint": .string("0x\(String(repeating: "Cc", count: 32))"),
                                                         "nullifier": .string("blake2b32:\(String(repeating: "DD", count: 32))"),
@@ -20340,6 +20411,42 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
         XCTAssertEqual(publicInputs["root_hint"] as? String, String(repeating: "cc", count: 32))
         XCTAssertEqual(publicInputs["nullifier"] as? String, String(repeating: "dd", count: 32))
+        XCTAssertEqual(
+            publicInputs["amount"] as? String,
+            "18446744073709551616.25"
+        )
+    }
+
+    func testSubmitGovernanceZkBallotRejectsNoncanonicalQuantityHints() throws {
+        let owner = try canonicalOwnerLiteral()
+        let overflowing = String(repeating: "9", count: 155)
+        let invalidAmounts: [ToriiJSONValue] = [
+            .number(1),
+            .string("+1"),
+            .string("01"),
+            .string("1.0"),
+            .string("1.2300"),
+            .string(" 1"),
+            .string("-1"),
+            .string(overflowing),
+        ]
+        for amount in invalidAmounts {
+            let request = ToriiGovernanceZkBallotRequest(
+                authority: owner,
+                chainId: "chain",
+                electionId: "election-1",
+                proofB64: "AAAA",
+                publicInputs: [
+                    "owner": .string(owner),
+                    "amount": amount,
+                    "duration_blocks": .number(12),
+                ]
+            )
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(request),
+                "noncanonical amount \(amount) must be rejected"
+            )
+        }
     }
 
     func testSubmitGovernanceZkBallotRejectsInvalidHexHints() throws {

@@ -16,6 +16,7 @@ use blake3::hash as blake3_hash;
 use iroha_core::{
     smartcontracts::ValidSingularQuery,
     state::{StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly},
+    telemetry::SorafsReserveFinalizedProjection,
 };
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -799,16 +800,16 @@ fn refresh_sorafs_reserve_finalized_telemetry(
         return Err(SorafsReserveFinalizedTelemetryErrorV1::ProjectionMismatch);
     }
     state.telemetry.with_metrics(|metrics| {
-        metrics.record_sorafs_reserve_finalized_projection(
-            provider_metrics.finalized_cursor.height,
-            provider_metrics.lifecycle_stage_counts,
-            provider_metrics.credit_principal_micro_xor,
-            provider_metrics.credit_shortfall_micro_xor,
-            provider_metrics.accrued_interest_micro_xor,
-            projection.open_appeals,
-            projection.custody_counts,
-            projection.reconciled_counts,
-        );
+        metrics.record_sorafs_reserve_finalized_projection(&SorafsReserveFinalizedProjection {
+            finalized_height: provider_metrics.finalized_cursor.height,
+            lifecycle_stage_counts: provider_metrics.lifecycle_stage_counts,
+            credit_principal_micro_xor: provider_metrics.credit_principal_micro_xor,
+            credit_shortfall_micro_xor: provider_metrics.credit_shortfall_micro_xor,
+            accrued_interest_micro_xor: provider_metrics.accrued_interest_micro_xor,
+            open_appeals: projection.open_appeals,
+            custody_counts: projection.custody_counts,
+            chain_reconciled_counts: projection.reconciled_counts,
+        });
     });
     Ok(SorafsReserveFinalizedTelemetryRefreshV1::Published)
 }

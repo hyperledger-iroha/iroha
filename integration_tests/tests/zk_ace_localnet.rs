@@ -24,7 +24,7 @@ use iroha::{
         },
         permission::Permission,
         prelude::{
-            AssetDefinitionId, AssetId, DomainId, FindAssets, Identifiable, Json, Numeric,
+            AssetDefinitionId, AssetId, DomainId, FindAssets, Identifiable, Json, Quantity,
             QueryBuilderExt,
         },
         proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
@@ -228,7 +228,7 @@ fn wait_for_balance(
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
 
-    let expected_value = Numeric::from(expected);
+    let expected_value = Quantity::from(expected);
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "assets were not queried".to_owned();
 
@@ -241,7 +241,7 @@ fn wait_for_balance(
                         asset.id().definition() == asset_definition_id
                             && asset.id().account() == account_id
                     })
-                    .map(|asset| asset.value().clone().into_numeric());
+                    .map(|asset| asset.value().clone());
                 last_observed = format!("{observed:?}");
                 if observed.as_ref() == Some(&expected_value) {
                     return Ok(());

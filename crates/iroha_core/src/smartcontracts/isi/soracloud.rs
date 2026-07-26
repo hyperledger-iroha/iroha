@@ -44772,10 +44772,7 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect_err("noncanonical compute cap must fail");
 
-        assert!(
-            error.to_string().contains("canonical V1 cap"),
-            "unexpected error: {error}"
-        );
+        assert_invalid_parameter_contains(error, "canonical V1 cap");
         assert_eq!(stx.world.soracloud_hf_sources.len(), source_count_before);
         assert_eq!(
             stx.world.soracloud_hf_shared_lease_pools.len(),

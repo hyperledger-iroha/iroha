@@ -3,7 +3,7 @@ import Foundation
 /// An exact positive offline-cash amount expressed in the asset's atomic units.
 ///
 /// Kagemusha proofs use an unsigned 128-bit integer amount, while public asset
-/// balances use Iroha `Numeric` values. Keeping the asset scale beside the
+/// balances use Iroha `Quantity` values. Keeping the asset scale beside the
 /// atomic value prevents callers from accidentally charging or minting the
 /// atomic integer as a scale-zero public amount.
 public struct KagemushaScaledAmount: Equatable, Hashable, Sendable {
@@ -63,11 +63,14 @@ public struct KagemushaScaledAmount: Equatable, Hashable, Sendable {
         try self.init(atomicUnits: combined, scale: scale)
     }
 
-    /// Public Iroha `Numeric` spelling at the authoritative asset scale.
+    /// Exact fixed-scale decimal at the authoritative asset scale.
     ///
     /// For example, `atomicUnits=10750000000, scale=9` is
     /// `10.750000000`, never the scale-zero value `10750000000`.
-    public var scaledNumericDecimal: String {
+    ///
+    /// This fixed-scale projection is proof-side evidence; use
+    /// ``displayDecimal`` for the canonical public `Quantity` spelling.
+    public var fixedScaleDecimal: String {
         guard scale > 0 else { return atomicUnits }
         var digits = atomicUnits
         let requiredDigits = Int(scale) + 1
@@ -78,10 +81,10 @@ public struct KagemushaScaledAmount: Equatable, Hashable, Sendable {
         return String(digits[..<splitIndex]) + "." + String(digits[splitIndex...])
     }
 
-    /// Minimal user-facing decimal spelling without insignificant zeroes.
+    /// Canonical public `Quantity` spelling without insignificant zeroes.
     public var displayDecimal: String {
         guard scale > 0 else { return atomicUnits }
-        var value = scaledNumericDecimal
+        var value = fixedScaleDecimal
         while value.last == "0" { value.removeLast() }
         if value.last == "." { value.removeLast() }
         return value
@@ -215,7 +218,7 @@ public enum KagemushaScaledAmountError: Error, Equatable, LocalizedError {
         case .atomicUnitsOverflow:
             return "Kagemusha atomic amount does not fit in u128."
         case .scaleTooLarge:
-            return "Kagemusha asset scale exceeds Iroha Numeric's supported range."
+            return "Kagemusha asset scale exceeds Iroha Quantity's supported range."
         case let .scaleMismatch(expected, actual):
             return "Kagemusha amount scales must match; expected \(expected), got \(actual)."
         case .emptyAmountSequence:
