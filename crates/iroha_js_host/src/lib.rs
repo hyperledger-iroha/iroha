@@ -2123,7 +2123,7 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
                     "usage subscription trigger must use an execute-trigger filter",
                 ));
             };
-            let trigger_id = filter.trigger_id().as_ref().ok_or_else(|| {
+            let trigger_id = filter.trigger_id().ok_or_else(|| {
                 napi::Error::new(
                     napi::Status::InvalidArg,
                     "usage subscription trigger filter must bind a trigger id",

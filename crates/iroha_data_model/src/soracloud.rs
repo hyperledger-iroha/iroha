@@ -20434,7 +20434,7 @@ mod tests {
 
         let mut wrong_backend = sample.clone();
         let mut wrong_backend_envelope = envelope.clone();
-        wrong_backend_envelope.backend = BackendTag::Groth16;
+        wrong_backend_envelope.backend = BackendTag::Halo2IpaPasta;
         replace_fhe_input_admission_open_verify_envelope(
             &mut wrong_backend,
             &wrong_backend_envelope,
@@ -20645,7 +20645,6 @@ mod tests {
         assert_eq!(bounds.max_aux_bytes, 0);
         assert!(!bounds.allow_aux);
         assert!(bounds.require_nonzero_vk_hash);
-        assert!(!bounds.allow_pending_production_backends);
     }
 
     #[test]
@@ -20942,7 +20941,7 @@ mod tests {
 
         let mut wrong_backend = sample.clone();
         let mut wrong_backend_envelope = envelope.clone();
-        wrong_backend_envelope.backend = BackendTag::Groth16;
+        wrong_backend_envelope.backend = BackendTag::Halo2IpaPasta;
         replace_fhe_public_key_open_verify_envelope(&mut wrong_backend, &wrong_backend_envelope);
         let err = wrong_backend
             .validate()
@@ -21136,7 +21135,6 @@ mod tests {
         assert_eq!(bounds.max_aux_bytes, 0);
         assert!(!bounds.allow_aux);
         assert!(bounds.require_nonzero_vk_hash);
-        assert!(!bounds.allow_pending_production_backends);
     }
 
     #[test]
@@ -21441,7 +21439,7 @@ mod tests {
 
         let mut wrong_backend = sample.clone();
         let mut wrong_backend_envelope = envelope.clone();
-        wrong_backend_envelope.backend = BackendTag::Groth16;
+        wrong_backend_envelope.backend = BackendTag::Halo2IpaPasta;
         replace_fhe_bootstrap_key_open_verify_envelope(&mut wrong_backend, &wrong_backend_envelope);
         let err = wrong_backend
             .validate()
@@ -21636,7 +21634,6 @@ mod tests {
         assert_eq!(bounds.max_aux_bytes, 0);
         assert!(!bounds.allow_aux);
         assert!(bounds.require_nonzero_vk_hash);
-        assert!(!bounds.allow_pending_production_backends);
     }
 
     #[test]
@@ -21959,7 +21956,7 @@ mod tests {
 
         let mut wrong_backend = sample.clone();
         let mut wrong_backend_envelope = envelope.clone();
-        wrong_backend_envelope.backend = BackendTag::Groth16;
+        wrong_backend_envelope.backend = BackendTag::Halo2IpaPasta;
         replace_fhe_full_bootstrap_material_open_verify_envelope(
             &mut wrong_backend,
             &wrong_backend_envelope,
@@ -22166,7 +22163,6 @@ mod tests {
         assert_eq!(bounds.max_aux_bytes, 0);
         assert!(!bounds.allow_aux);
         assert!(bounds.require_nonzero_vk_hash);
-        assert!(!bounds.allow_pending_production_backends);
     }
 
     #[test]
@@ -22500,7 +22496,7 @@ mod tests {
 
         let mut wrong_backend = sample.clone();
         let mut wrong_backend_envelope = envelope.clone();
-        wrong_backend_envelope.backend = BackendTag::Groth16;
+        wrong_backend_envelope.backend = BackendTag::Halo2IpaPasta;
         replace_fhe_full_bootstrap_execution_open_verify_envelope(
             &mut wrong_backend,
             &wrong_backend_envelope,
@@ -22720,7 +22716,6 @@ mod tests {
         assert_eq!(bounds.max_aux_bytes, 0);
         assert!(!bounds.allow_aux);
         assert!(bounds.require_nonzero_vk_hash);
-        assert!(!bounds.allow_pending_production_backends);
     }
 
     #[test]

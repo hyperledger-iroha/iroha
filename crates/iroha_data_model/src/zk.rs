@@ -61,405 +61,44 @@ pub const OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES: usize = 1024 * 1024;
 /// Default maximum auxiliary metadata size for non-admission `OpenVerify` callers.
 pub const OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES: usize = 64 * 1024;
 
-/// Backend tag for zero-knowledge verifiers.
+/// Low-level proof engine supported by generic [`OpenVerifyEnvelope`] verification.
+///
+/// Privacy protocols and verifier profiles are deliberately not represented by
+/// this enum. They have protocol-specific data-model types and must not be
+/// inferred from aliases or free-form catalog labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 pub enum BackendTag {
-    /// Halo2 IPA over Pasta curves
+    /// Halo2 IPA over Pasta curves.
     Halo2IpaPasta,
-    /// Halo2 over BN254 (optional)
-    Halo2Bn254,
-    /// Groth16 generic backend marker.
-    Groth16,
-    /// STARK/FRI (transparent, no trusted setup)
+    /// Native transparent STARK/FRI.
     Stark,
-    /// Unknown/unsupported backend
-    Unsupported,
-    /// Zcash Orchard Halo2/IPA action-bundle backend.
-    Halo2IpaOrchard,
-    /// Penumbra MASP Groth16 backend over BLS12-377/Decaf377.
-    Groth16Bls12377,
-    /// Monero FCMP++ curve-tree membership backend.
-    FcmpPlusPlusCurveTree,
-    /// Lattice polynomial-commitment/SIS backend.
-    LatticePcsSis,
-    /// Miden STARK note-transaction backend.
-    MidenStark,
-    /// Aztec plonkish private-kernel backend.
-    AztecPlonkishPrivateKernel,
-    /// Post-quantum MASP STARK/FRI backend.
-    PqMaspStarkFri,
-    /// Anonymous PGC k-out-of-n backend.
-    AnonymousPgc,
-    /// `VeRange` transparent range-proof backend.
-    VeRange,
-    /// zkAt policy-private authenticator backend.
-    ZkAt,
-    /// ZK-AMS recursive anonymous admission backend.
-    RecursiveAnonymousAdmission,
-    /// Vega existing-credential ZK backend.
-    VegaExistingCredentialZk,
-    /// Silent-threshold anonymous credential backend.
-    SilentThresholdAnoncred,
-    /// ZK-X.509 on-chain identity backend.
-    ZkX509,
-    /// SIS-with-hints anonymous credential backend.
-    SisWithHints,
 }
 
 impl BackendTag {
-    /// Return the canonical JSON/catalog label for this backend tag.
+    /// All generic `OpenVerify` engines, in canonical Norito order.
+    pub const ALL: [Self; 2] = [Self::Halo2IpaPasta, Self::Stark];
+
+    /// Return the canonical JSON label for this engine.
     #[must_use]
     pub const fn canonical_label(self) -> &'static str {
         match self {
             BackendTag::Halo2IpaPasta => "halo2-ipa-pasta",
-            BackendTag::Halo2Bn254 => "halo2-bn254",
-            BackendTag::Groth16 => "groth16",
             BackendTag::Stark => "stark",
-            BackendTag::Unsupported => "unsupported",
-            BackendTag::Halo2IpaOrchard => "halo2-ipa-orchard",
-            BackendTag::Groth16Bls12377 => "groth16-bls12-377",
-            BackendTag::FcmpPlusPlusCurveTree => "fcmp-plus-plus-curve-tree",
-            BackendTag::LatticePcsSis => "lattice-pcs-sis",
-            BackendTag::MidenStark => "miden-stark",
-            BackendTag::AztecPlonkishPrivateKernel => "aztec-plonkish-private-kernel",
-            BackendTag::PqMaspStarkFri => "pq-masp-stark-fri",
-            BackendTag::AnonymousPgc => "anonymous-pgc",
-            BackendTag::VeRange => "verange",
-            BackendTag::ZkAt => "zkat",
-            BackendTag::RecursiveAnonymousAdmission => "recursive-anonymous-admission",
-            BackendTag::VegaExistingCredentialZk => "vega-existing-credential-zk",
-            BackendTag::SilentThresholdAnoncred => "silent-threshold-anoncred",
-            BackendTag::ZkX509 => "zk-x509",
-            BackendTag::SisWithHints => "sis-with-hints",
         }
     }
 
-    /// Return true for exact protocol-family tags that are cataloged but not
-    /// production-admissible until a real engine and external audit are wired.
-    #[must_use]
-    pub const fn is_pending_production_backend(self) -> bool {
-        matches!(
-            self,
-            BackendTag::Halo2IpaOrchard
-                | BackendTag::Groth16Bls12377
-                | BackendTag::FcmpPlusPlusCurveTree
-                | BackendTag::LatticePcsSis
-                | BackendTag::MidenStark
-                | BackendTag::AztecPlonkishPrivateKernel
-                | BackendTag::PqMaspStarkFri
-                | BackendTag::AnonymousPgc
-                | BackendTag::VeRange
-                | BackendTag::ZkAt
-                | BackendTag::RecursiveAnonymousAdmission
-                | BackendTag::VegaExistingCredentialZk
-                | BackendTag::SilentThresholdAnoncred
-                | BackendTag::ZkX509
-                | BackendTag::SisWithHints
-        )
-    }
-
-    /// Return true for legacy supported tags that are preserved for decoding
-    /// compatibility, but are not admitted by production `OpenVerify` flows.
-    #[must_use]
-    pub const fn is_legacy_non_production_backend(self) -> bool {
-        matches!(self, BackendTag::Halo2Bn254 | BackendTag::Groth16)
-    }
-
-    /// Parse a backend label from catalog, SDK, CLI, or Torii input into the
-    /// closest explicit backend tag.
+    /// Parse an exact canonical JSON label.
     ///
-    /// Exact pending-production protocol families are checked before broad
-    /// backend-family aliases so labels such as `halo2/ipa/orchard` and
-    /// `groth16/bls12-377` remain fail-closed instead of collapsing into
-    /// generic Halo2 or Groth16 families.
+    /// This parser intentionally performs no trimming, case folding, family
+    /// inference, or alias normalization.
     #[must_use]
-    pub fn from_catalog_label(raw: &str) -> Self {
-        let label = raw.trim().to_ascii_lowercase();
-        if label.is_empty() {
-            return BackendTag::Unsupported;
-        }
-        let compact = label
-            .chars()
-            .filter(char::is_ascii_alphanumeric)
-            .collect::<String>();
-
-        if label == "unsupported" || compact == "unsupported" {
-            return BackendTag::Unsupported;
-        }
-
-        if has_catalog_production_claim_fragment(&compact)
-            || has_catalog_developer_only_fragment(&label)
-        {
-            return BackendTag::Unsupported;
-        }
-        if has_catalog_trusted_setup_fragment(&label, &compact)
-            && !catalog_label_is_exact_trusted_setup_pending_family(&label, &compact)
-            && !catalog_label_is_exact_legacy_trusted_setup_family(&label)
-        {
-            return BackendTag::Unsupported;
-        }
-
-        if compact.contains("pqmasp") || compact.contains("postquantummasp") {
-            return BackendTag::PqMaspStarkFri;
-        }
-        if compact.contains("anonymouspgc") || compact.contains("pgckoutofn") {
-            return BackendTag::AnonymousPgc;
-        }
-        if compact.contains("verange") {
-            return BackendTag::VeRange;
-        }
-        if compact.contains("zkat") || compact.contains("policyprivateauthenticator") {
-            return BackendTag::ZkAt;
-        }
-        if compact.contains("zkams") || compact.contains("recursiveanonymousadmission") {
-            return BackendTag::RecursiveAnonymousAdmission;
-        }
-        if compact.contains("vega") || compact.contains("existingcredentialzk") {
-            return BackendTag::VegaExistingCredentialZk;
-        }
-        if compact.contains("silentthreshold") || compact.contains("thresholdanonymouscredential") {
-            return BackendTag::SilentThresholdAnoncred;
-        }
-        if compact.contains("zkx509") || compact.contains("x509") || compact.contains("zkvmx509") {
-            return BackendTag::ZkX509;
-        }
-        if compact.contains("siswithhints")
-            || compact.contains("sishints")
-            || compact.contains("latticeanonymouscredentials")
-        {
-            return BackendTag::SisWithHints;
-        }
-        if compact.contains("orchard") || compact.contains("zcashorchard") {
-            return BackendTag::Halo2IpaOrchard;
-        }
-        if compact.contains("penumbra")
-            || compact.contains("masp")
-            || compact.contains("bls12377")
-            || compact.contains("decaf377")
-        {
-            return BackendTag::Groth16Bls12377;
-        }
-        if compact.contains("fcmp") || compact.contains("monero") || compact.contains("curvetree") {
-            return BackendTag::FcmpPlusPlusCurveTree;
-        }
-        if compact.contains("lattice") || compact.contains("pcssis") || compact.contains("jindo") {
-            return BackendTag::LatticePcsSis;
-        }
-        if compact.contains("miden") {
-            return BackendTag::MidenStark;
-        }
-        if compact.contains("aztec") {
-            return BackendTag::AztecPlonkishPrivateKernel;
-        }
-
-        match label.as_str() {
-            "halo2-bn254" | "halo2/bn254" => return BackendTag::Halo2Bn254,
-            "groth16" | "groth16/bn254" => return BackendTag::Groth16,
-            _ => {}
-        }
-
-        if catalog_label_is_risky_supported_family_alias(&label, &compact) {
-            return BackendTag::Unsupported;
-        }
-
-        if compact.contains("halo2") && compact.contains("bn254") {
-            return BackendTag::Halo2Bn254;
-        }
-        if compact.contains("groth16") {
-            return BackendTag::Groth16;
-        }
-        if compact.contains("stark") {
-            return BackendTag::Stark;
-        }
-        if compact == "halo2ipa"
-            || compact == "halo2ipapasta"
-            || compact == "halo2pasta"
-            || (compact.contains("halo2") && (compact.contains("ipa") || compact.contains("pasta")))
-        {
-            return BackendTag::Halo2IpaPasta;
-        }
-
-        BackendTag::Unsupported
-    }
-
-    /// Return true when a raw backend label names a cataloged protocol family
-    /// whose production engine and audit gates are still pending.
-    #[must_use]
-    pub fn is_pending_production_backend_label(raw: &str) -> bool {
-        Self::from_catalog_label(raw).is_pending_production_backend()
-    }
-}
-
-fn catalog_label_is_risky_supported_family_alias(label: &str, compact: &str) -> bool {
-    has_catalog_production_claim_fragment(compact)
-        || has_catalog_trusted_setup_fragment(label, compact)
-        || has_catalog_developer_only_fragment(label)
-}
-
-fn catalog_label_is_exact_trusted_setup_pending_family(label: &str, compact: &str) -> bool {
-    matches!(
-        label,
-        "groth16-bls12-377"
-            | "groth16/bls12-377"
-            | "groth16-bls12-377-decaf377"
-            | "groth16/bls12-377/decaf377"
-            | "bls12-377"
-    ) || matches!(
-        compact,
-        "groth16bls12377" | "groth16bls12377decaf377" | "bls12377" | "decaf377"
-    )
-}
-
-fn catalog_label_is_exact_legacy_trusted_setup_family(label: &str) -> bool {
-    matches!(
-        label,
-        "halo2-bn254" | "halo2/bn254" | "groth16" | "groth16/bn254"
-    )
-}
-
-fn has_catalog_production_claim_fragment(compact: &str) -> bool {
-    [
-        "productionready",
-        "productionhardened",
-        "productionenabled",
-        "productionapproved",
-        "productioncertified",
-        "productionclaim",
-        "claimedproduction",
-        "mainnetready",
-        "mainnetcomplete",
-        "mainnetclaim",
-        "claimedmainnet",
-        "mainnetcertified",
-        "mainnetapproved",
-        "mainnetrelease",
-        "auditedproduction",
-        "externallyaudited",
-        "thirdpartyaudited",
-        "boiaudited",
-        "auditedmainnet",
-        "externalaudit",
-        "auditpassed",
-        "auditapproved",
-        "auditsignoff",
-        "auditclaim",
-        "claimedaudit",
-        "securityreviewpassed",
-        "securityauditpassed",
-        "securityaudited",
-        "externalsecurityreview",
-        "certifiedproduction",
-        "certifiedmainnet",
-        "releaseready",
-        "releaseapproved",
-        "releasecertified",
-    ]
-    .iter()
-    .any(|fragment| compact.contains(fragment))
-}
-
-fn has_catalog_trusted_setup_fragment(label: &str, compact: &str) -> bool {
-    label
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .any(|segment| {
-            matches!(
-                segment,
-                "groth16"
-                    | "kzg"
-                    | "bn254"
-                    | "bn256"
-                    | "bls12"
-                    | "srs"
-                    | "crs"
-                    | "ptau"
-                    | "ceremony"
-                    | "powersoftau"
-            )
-        })
-        || [
-            "groth16",
-            "kzg",
-            "bn254",
-            "bn256",
-            "bls12381",
-            "bls12",
-            "srs",
-            "crs",
-            "ptau",
-            "ceremony",
-            "trustedsetup",
-            "structuredreferencestring",
-            "universalsrs",
-            "powersoftau",
-        ]
-        .iter()
-        .any(|fragment| compact.contains(fragment))
-}
-
-const CATALOG_DEVELOPER_ONLY_TOKEN_MARKERS: &[&str] = &[
-    "debug", "mock", "fixture", "dev", "todo", "draft", "pending", "replace",
-];
-const CATALOG_DEVELOPER_ONLY_EXACT_TOKENS: &[&str] = &[
-    "test",
-    "dummy",
-    "fake",
-    "stub",
-    "sample",
-    "placeholder",
-    "todo",
-    "draft",
-];
-const CATALOG_DEVELOPER_ONLY_COMPACT_FRAGMENTS: &[&str] = &[
-    "notforproduction",
-    "notproduction",
-    "notproductionready",
-    "notready",
-    "replacebeforeproduction",
-    "replacebeforemainnet",
-    "draftonly",
-];
-
-fn has_catalog_developer_only_fragment(label: &str) -> bool {
-    let compact = label
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .collect::<String>();
-    if CATALOG_DEVELOPER_ONLY_COMPACT_FRAGMENTS
-        .iter()
-        .any(|fragment| compact.contains(fragment))
-    {
-        return true;
-    }
-
-    let mut letter_run = String::new();
-    for token in label
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-    {
-        if CATALOG_DEVELOPER_ONLY_TOKEN_MARKERS
-            .iter()
-            .any(|marker| token.contains(marker))
-            || CATALOG_DEVELOPER_ONLY_EXACT_TOKENS.contains(&token)
-        {
-            return true;
-        }
-        if token.len() == 1 {
-            letter_run.push_str(token);
-        } else {
-            if CATALOG_DEVELOPER_ONLY_TOKEN_MARKERS
-                .iter()
-                .any(|marker| letter_run.contains(marker))
-                || CATALOG_DEVELOPER_ONLY_EXACT_TOKENS.contains(&letter_run.as_str())
-            {
-                return true;
-            }
-            letter_run.clear();
+    pub const fn from_canonical_label(label: &str) -> Option<Self> {
+        match label.as_bytes() {
+            b"halo2-ipa-pasta" => Some(Self::Halo2IpaPasta),
+            b"stark" => Some(Self::Stark),
+            _ => None,
         }
     }
-    CATALOG_DEVELOPER_ONLY_TOKEN_MARKERS
-        .iter()
-        .any(|marker| letter_run.contains(marker))
-        || CATALOG_DEVELOPER_ONLY_EXACT_TOKENS.contains(&letter_run.as_str())
 }
 
 #[cfg(feature = "json")]
@@ -475,24 +114,15 @@ impl norito::json::JsonDeserialize for BackendTag {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let label = parser.parse_string()?;
-        let backend = BackendTag::from_catalog_label(&label);
-        if backend.canonical_label() == label {
-            Ok(backend)
-        } else {
-            Err(norito::json::Error::InvalidField {
-                field: "backend".to_owned(),
-                message: format!("unknown or non-canonical backend label `{label}`"),
-            })
-        }
+        BackendTag::from_canonical_label(&label).ok_or_else(|| norito::json::Error::InvalidField {
+            field: "backend".to_owned(),
+            message: format!("unknown or non-canonical backend label `{label}`"),
+        })
     }
 }
 
 /// Size and policy bounds for validating an [`OpenVerifyEnvelope`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "validation bounds intentionally expose independent policy switches"
-)]
 pub struct OpenVerifyEnvelopeBounds {
     /// Maximum circuit identifier bytes.
     pub max_circuit_id_bytes: usize,
@@ -506,12 +136,6 @@ pub struct OpenVerifyEnvelopeBounds {
     pub allow_aux: bool,
     /// Whether the verifier-key hash must be non-zero.
     pub require_nonzero_vk_hash: bool,
-    /// Whether exact protocol-family backends that are cataloged but pending
-    /// production engine/audit gates may pass this generic shape validation.
-    pub allow_pending_production_backends: bool,
-    /// Whether legacy supported tags preserved for decode/catalog compatibility
-    /// may pass this generic shape validation.
-    pub allow_legacy_non_production_backends: bool,
 }
 
 impl Default for OpenVerifyEnvelopeBounds {
@@ -523,8 +147,6 @@ impl Default for OpenVerifyEnvelopeBounds {
             max_aux_bytes: OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES,
             allow_aux: false,
             require_nonzero_vk_hash: true,
-            allow_pending_production_backends: false,
-            allow_legacy_non_production_backends: false,
         }
     }
 }
@@ -532,15 +154,6 @@ impl Default for OpenVerifyEnvelopeBounds {
 /// Validation failure for a generic [`OpenVerifyEnvelope`] admission check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenVerifyEnvelopeValidationError {
-    /// The envelope uses the explicit unsupported backend marker or a backend
-    /// tag preserved only for non-production compatibility.
-    UnsupportedBackend,
-    /// The envelope uses a cataloged production backend whose engine/audit gate
-    /// is not enabled for generic chain admission.
-    PendingProductionBackend {
-        /// Backend that remains fail-closed.
-        backend: BackendTag,
-    },
     /// The circuit identifier is empty or whitespace-only.
     EmptyCircuitId,
     /// The circuit identifier contains unsupported characters or delimiters.
@@ -590,12 +203,6 @@ pub enum OpenVerifyEnvelopeValidationError {
 impl core::fmt::Display for OpenVerifyEnvelopeValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::UnsupportedBackend => write!(f, "OpenVerifyEnvelope backend is unsupported"),
-            Self::PendingProductionBackend { backend } => write!(
-                f,
-                "OpenVerifyEnvelope backend {} is pending production engine and audit gates",
-                backend.canonical_label()
-            ),
             Self::EmptyCircuitId => write!(f, "OpenVerifyEnvelope circuit id is empty"),
             Self::InvalidCircuitId => write!(
                 f,
@@ -715,27 +322,11 @@ impl OpenVerifyEnvelope {
     /// # Errors
     ///
     /// Returns [`OpenVerifyEnvelopeValidationError`] when the envelope violates
-    /// the supplied backend, size, or non-empty field bounds.
+    /// the supplied size or non-empty field bounds.
     pub fn validate_with_bounds(
         &self,
         bounds: OpenVerifyEnvelopeBounds,
     ) -> Result<(), OpenVerifyEnvelopeValidationError> {
-        if self.backend == BackendTag::Unsupported {
-            return Err(OpenVerifyEnvelopeValidationError::UnsupportedBackend);
-        }
-        if self.backend.is_legacy_non_production_backend()
-            && !bounds.allow_legacy_non_production_backends
-        {
-            return Err(OpenVerifyEnvelopeValidationError::UnsupportedBackend);
-        }
-        if self.backend.is_pending_production_backend() && !bounds.allow_pending_production_backends
-        {
-            return Err(
-                OpenVerifyEnvelopeValidationError::PendingProductionBackend {
-                    backend: self.backend,
-                },
-            );
-        }
         if self.circuit_id.trim().is_empty() {
             return Err(OpenVerifyEnvelopeValidationError::EmptyCircuitId);
         }
@@ -1284,29 +875,8 @@ mod tests {
     }
 
     #[test]
-    fn backend_tag_norito_discriminants_preserve_legacy_order_and_pending_range() {
-        for (backend, expected_tag) in [
-            (BackendTag::Halo2IpaPasta, 0u32),
-            (BackendTag::Halo2Bn254, 1),
-            (BackendTag::Groth16, 2),
-            (BackendTag::Stark, 3),
-            (BackendTag::Unsupported, 4),
-            (BackendTag::Halo2IpaOrchard, 5),
-            (BackendTag::Groth16Bls12377, 6),
-            (BackendTag::FcmpPlusPlusCurveTree, 7),
-            (BackendTag::LatticePcsSis, 8),
-            (BackendTag::MidenStark, 9),
-            (BackendTag::AztecPlonkishPrivateKernel, 10),
-            (BackendTag::PqMaspStarkFri, 11),
-            (BackendTag::AnonymousPgc, 12),
-            (BackendTag::VeRange, 13),
-            (BackendTag::ZkAt, 14),
-            (BackendTag::RecursiveAnonymousAdmission, 15),
-            (BackendTag::VegaExistingCredentialZk, 16),
-            (BackendTag::SilentThresholdAnoncred, 17),
-            (BackendTag::ZkX509, 18),
-            (BackendTag::SisWithHints, 19),
-        ] {
+    fn backend_tag_norito_discriminants_are_exhaustive_and_canonical() {
+        for (backend, expected_tag) in [(BackendTag::Halo2IpaPasta, 0u32), (BackendTag::Stark, 1)] {
             let encoded = backend.encode();
             assert_eq!(
                 encoded.as_slice(),
@@ -1325,107 +895,32 @@ mod tests {
     }
 
     #[test]
-    fn backend_tag_catalog_label_parser_preserves_pending_protocol_families() {
-        for (label, expected) in [
-            ("halo2-ipa-orchard", BackendTag::Halo2IpaOrchard),
-            ("halo2/ipa/orchard", BackendTag::Halo2IpaOrchard),
-            ("orchard", BackendTag::Halo2IpaOrchard),
-            ("anonymous-pgc", BackendTag::AnonymousPgc),
-            ("anonymous-pgc-k-out-of-n", BackendTag::AnonymousPgc),
-            ("verange-transparent-range", BackendTag::VeRange),
-            ("zkAt policy-private authenticator", BackendTag::ZkAt),
-            (
-                "recursive-anonymous-admission",
-                BackendTag::RecursiveAnonymousAdmission,
-            ),
-            (
-                "zk-ams-recursive-admission-v0",
-                BackendTag::RecursiveAnonymousAdmission,
-            ),
-            (
-                "vega-existing-credential-zk",
-                BackendTag::VegaExistingCredentialZk,
-            ),
-            (
-                "threshold-anonymous-credentials",
-                BackendTag::SilentThresholdAnoncred,
-            ),
-            (
-                "silent-threshold-anoncred",
-                BackendTag::SilentThresholdAnoncred,
-            ),
-            ("zkvm-x509-identity", BackendTag::ZkX509),
-            ("zk-x509-onchain-identity-v0", BackendTag::ZkX509),
-            ("sis-with-hints", BackendTag::SisWithHints),
-            ("lattice-anonymous-credentials", BackendTag::SisWithHints),
-            ("groth16-bls12-377", BackendTag::Groth16Bls12377),
-            ("groth16/bls12-377", BackendTag::Groth16Bls12377),
-            ("groth16-bls12-377-decaf377", BackendTag::Groth16Bls12377),
-            ("bls12-377", BackendTag::Groth16Bls12377),
-            ("decaf377", BackendTag::Groth16Bls12377),
-            ("penumbra-masp", BackendTag::Groth16Bls12377),
-            ("halo2/ipa/penumbra", BackendTag::Groth16Bls12377),
-            ("halo2/ipa/masp", BackendTag::Groth16Bls12377),
-            ("monero-fcmp++", BackendTag::FcmpPlusPlusCurveTree),
-            ("fcmp++", BackendTag::FcmpPlusPlusCurveTree),
-            (
-                "fcmp-plus-plus-curve-tree",
-                BackendTag::FcmpPlusPlusCurveTree,
-            ),
-            ("halo2/ipa/monero", BackendTag::FcmpPlusPlusCurveTree),
-            ("halo2/ipa/curve-tree", BackendTag::FcmpPlusPlusCurveTree),
-            ("lattice-pcs-sis", BackendTag::LatticePcsSis),
-            ("jindo-lattice-pcs-zk", BackendTag::LatticePcsSis),
-            ("miden-stark", BackendTag::MidenStark),
-            (
-                "aztec-plonkish-private-kernel",
-                BackendTag::AztecPlonkishPrivateKernel,
-            ),
-            ("pq-masp-stark-fri", BackendTag::PqMaspStarkFri),
-            ("post-quantum-masp", BackendTag::PqMaspStarkFri),
-        ] {
-            assert_eq!(
-                BackendTag::from_catalog_label(label),
-                expected,
-                "{label} must parse to its exact pending backend tag",
-            );
+    fn backend_tag_norito_rejects_unknown_discriminants() {
+        for tag in [2_u32, 3, u32::MAX] {
+            let encoded = tag.to_le_bytes();
             assert!(
-                BackendTag::is_pending_production_backend_label(label),
-                "{label} must remain marked as pending production",
+                BackendTag::decode(&mut encoded.as_slice()).is_err(),
+                "unknown discriminant {tag} must be rejected",
             );
         }
     }
 
     #[test]
-    fn backend_tag_catalog_label_parser_preserves_supported_legacy_families() {
+    fn backend_tag_parser_accepts_only_canonical_engine_labels() {
         for (label, expected) in [
             ("halo2-ipa-pasta", BackendTag::Halo2IpaPasta),
-            ("halo2/ipa", BackendTag::Halo2IpaPasta),
-            ("halo2/pasta/ipa/vote-bool", BackendTag::Halo2IpaPasta),
-            ("halo2-bn254", BackendTag::Halo2Bn254),
-            ("halo2/bn254", BackendTag::Halo2Bn254),
-            ("groth16", BackendTag::Groth16),
-            ("groth16/bn254", BackendTag::Groth16),
             ("stark", BackendTag::Stark),
-            ("stark/fri", BackendTag::Stark),
-            ("stark/fri/sha256-goldilocks", BackendTag::Stark),
-            ("stark/fri/poseidon2-goldilocks", BackendTag::Stark),
-            ("stark/fri/sha256_goldilocks.v1", BackendTag::Stark),
         ] {
             assert_eq!(
-                BackendTag::from_catalog_label(label),
-                expected,
-                "{label} must keep legacy backend-family mapping",
+                BackendTag::from_canonical_label(label),
+                Some(expected),
+                "{label} must parse exactly",
             );
         }
-        assert_eq!(
-            BackendTag::from_catalog_label("unknown/privacy/backend"),
-            BackendTag::Unsupported
-        );
     }
 
     #[test]
-    fn backend_tag_catalog_label_parser_rejects_adversarial_supported_family_aliases() {
+    fn backend_tag_parser_rejects_aliases_retired_families_and_adversarial_labels() {
         for label in [
             "halo2/ipa:kzg",
             "halo2/ipa:KZG",
@@ -1493,23 +988,22 @@ mod tests {
             "stark/fri/external-security-review",
             "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
         ] {
-            assert_eq!(
-                BackendTag::from_catalog_label(label),
-                BackendTag::Unsupported,
-                "{label} must not collapse into a supported backend tag",
-            );
             assert!(
-                !BackendTag::is_pending_production_backend_label(label),
-                "{label} is an unsupported alias, not an exact pending-production protocol tag",
+                BackendTag::from_canonical_label(label).is_none(),
+                "{label} must not collapse into a supported backend tag",
             );
         }
     }
 
     #[test]
     fn open_verify_envelope_admission_validation_accepts_canonical_shape() {
-        valid_open_verify_admission_envelope()
-            .validate_for_admission()
-            .expect("valid envelope");
+        for backend in BackendTag::ALL {
+            let mut envelope = valid_open_verify_admission_envelope();
+            envelope.backend = backend;
+            envelope
+                .validate_for_admission()
+                .unwrap_or_else(|error| panic!("{}: {error}", backend.canonical_label()));
+        }
     }
 
     #[test]
@@ -1586,19 +1080,14 @@ mod tests {
         use OpenVerifyEnvelopeValidationError::{
             AllZeroProofBytes, AllZeroPublicInputs, EmptyCircuitId, EmptyProofBytes,
             EmptyPublicInputs, NonEmptyAux, ProofBytesTooLarge, PublicInputsTooLarge,
-            UnsupportedBackend, ZeroVerifierKeyHash,
+            ZeroVerifierKeyHash,
         };
 
         let cases: [(
             &str,
             fn(&mut OpenVerifyEnvelope),
             OpenVerifyEnvelopeValidationError,
-        ); 11] = [
-            (
-                "unsupported backend",
-                |env| env.backend = BackendTag::Unsupported,
-                UnsupportedBackend,
-            ),
+        ); 10] = [
             (
                 "empty circuit id",
                 |env| env.circuit_id = " \t\n".to_owned(),
@@ -1665,174 +1154,59 @@ mod tests {
         }
     }
 
-    #[test]
-    fn open_verify_envelope_admission_rejects_adversarial_backend_aliases_after_parsing() {
-        use OpenVerifyEnvelopeValidationError::UnsupportedBackend;
-
-        for label in [
-            "halo2/ipa:kzg",
-            "halo2/ipa:mock-proof",
-            "halo2/ipa:release-ready",
-            "stark/fri/prod-groth-16",
-            "stark/fri/boi-audited",
-            "stark/fri/dev-fixture",
-        ] {
-            let mut envelope = valid_open_verify_admission_envelope();
-            envelope.backend = BackendTag::from_catalog_label(label);
-
-            assert_eq!(
-                envelope.validate_for_admission().unwrap_err(),
-                UnsupportedBackend,
-                "{label} must remain fail-closed after label parsing",
-            );
-        }
-    }
-
-    #[test]
-    fn open_verify_envelope_admission_rejects_legacy_non_production_backends() {
-        use OpenVerifyEnvelopeValidationError::UnsupportedBackend;
-
-        for (label, backend) in [
-            ("halo2-bn254", BackendTag::Halo2Bn254),
-            ("halo2/bn254", BackendTag::Halo2Bn254),
-            ("groth16", BackendTag::Groth16),
-            ("groth16/bn254", BackendTag::Groth16),
-        ] {
-            assert!(
-                backend.is_legacy_non_production_backend(),
-                "{label} must be categorized as a non-production compatibility tag",
-            );
-
-            let mut envelope = valid_open_verify_admission_envelope();
-            envelope.backend = BackendTag::from_catalog_label(label);
-
-            assert_eq!(
-                envelope.backend, backend,
-                "{label} must still parse to the legacy compatibility tag",
-            );
-            assert_eq!(
-                envelope.validate_for_admission().unwrap_err(),
-                UnsupportedBackend,
-                "{label} must not pass default chain admission",
-            );
-
-            envelope
-                .validate_with_bounds(OpenVerifyEnvelopeBounds {
-                    allow_legacy_non_production_backends: true,
-                    ..OpenVerifyEnvelopeBounds::default()
-                })
-                .expect("explicit non-admission bounds can inspect legacy backend envelopes");
-        }
-    }
-
-    #[test]
-    fn open_verify_envelope_admission_rejects_pending_production_backends() {
-        use OpenVerifyEnvelopeValidationError::PendingProductionBackend;
-
-        for backend in [
-            BackendTag::Halo2IpaOrchard,
-            BackendTag::Groth16Bls12377,
-            BackendTag::FcmpPlusPlusCurveTree,
-            BackendTag::LatticePcsSis,
-            BackendTag::MidenStark,
-            BackendTag::AztecPlonkishPrivateKernel,
-            BackendTag::PqMaspStarkFri,
-            BackendTag::AnonymousPgc,
-            BackendTag::VeRange,
-            BackendTag::ZkAt,
-            BackendTag::RecursiveAnonymousAdmission,
-            BackendTag::VegaExistingCredentialZk,
-            BackendTag::SilentThresholdAnoncred,
-            BackendTag::ZkX509,
-            BackendTag::SisWithHints,
-        ] {
-            let mut envelope = valid_open_verify_admission_envelope();
-            envelope.backend = backend;
-
-            assert_eq!(
-                envelope.validate_for_admission().unwrap_err(),
-                PendingProductionBackend { backend },
-                "{} must remain fail-closed for chain admission",
-                backend.canonical_label(),
-            );
-
-            envelope
-                .validate_with_bounds(OpenVerifyEnvelopeBounds {
-                    allow_pending_production_backends: true,
-                    ..OpenVerifyEnvelopeBounds::default()
-                })
-                .expect("explicit non-admission bounds can inspect pending backend envelopes");
-        }
-    }
-
     #[cfg(feature = "json")]
     #[test]
     fn backend_tag_json_accepts_only_exact_canonical_labels() {
-        for backend in [
-            BackendTag::Halo2IpaPasta,
-            BackendTag::Halo2Bn254,
-            BackendTag::Groth16,
-            BackendTag::Stark,
-            BackendTag::Unsupported,
-            BackendTag::Halo2IpaOrchard,
-            BackendTag::Groth16Bls12377,
-            BackendTag::FcmpPlusPlusCurveTree,
-            BackendTag::LatticePcsSis,
-            BackendTag::MidenStark,
-            BackendTag::AztecPlonkishPrivateKernel,
-            BackendTag::PqMaspStarkFri,
-            BackendTag::AnonymousPgc,
-            BackendTag::VeRange,
-            BackendTag::ZkAt,
-            BackendTag::RecursiveAnonymousAdmission,
-            BackendTag::VegaExistingCredentialZk,
-            BackendTag::SilentThresholdAnoncred,
-            BackendTag::ZkX509,
-            BackendTag::SisWithHints,
-        ] {
+        for backend in BackendTag::ALL {
             let json = format!("\"{}\"", backend.canonical_label());
             let decoded = norito::json::from_str::<BackendTag>(&json)
                 .expect("canonical backend label must decode");
             assert_eq!(decoded, backend);
+            assert_json_roundtrip(&backend);
         }
 
         for alias in [
+            "",
             "halo2/ipa",
             "HALO2-IPA-PASTA",
             " halo2-ipa-pasta",
             "halo2-ipa-pasta ",
+            "halo2_ipa_pasta",
+            "halo2-ipa-pasta\0",
             "stark/fri",
+            "STARK",
+            "stark ",
+            "st\u{0430}rk",
+            "halo2-bn254",
+            "groth16",
             "groth16/bn254",
+            "unsupported",
+            "halo2-ipa-orchard",
             "orchard",
+            "groth16-bls12-377",
+            "fcmp-plus-plus-curve-tree",
+            "lattice-pcs-sis",
+            "miden-stark",
+            "aztec-plonkish-private-kernel",
+            "pq-masp-stark-fri",
+            "anonymous-pgc",
+            "verange",
+            "zkat",
+            "recursive-anonymous-admission",
+            "vega-existing-credential-zk",
+            "silent-threshold-anoncred",
+            "zk-x509",
+            "sis-with-hints",
             "unknown/privacy/backend",
         ] {
-            let json = format!("\"{alias}\"");
+            let json = norito::json::to_json(alias).expect("encode adversarial label");
             norito::json::from_str::<BackendTag>(&json)
                 .expect_err("backend aliases and unknown labels must be rejected by JSON");
         }
-    }
 
-    #[cfg(feature = "json")]
-    #[test]
-    fn backend_tag_json_roundtrips_exact_pending_production_families() {
-        for backend in [
-            BackendTag::Halo2IpaOrchard,
-            BackendTag::Groth16Bls12377,
-            BackendTag::FcmpPlusPlusCurveTree,
-            BackendTag::LatticePcsSis,
-            BackendTag::MidenStark,
-            BackendTag::AztecPlonkishPrivateKernel,
-            BackendTag::PqMaspStarkFri,
-            BackendTag::AnonymousPgc,
-            BackendTag::VeRange,
-            BackendTag::ZkAt,
-            BackendTag::RecursiveAnonymousAdmission,
-            BackendTag::VegaExistingCredentialZk,
-            BackendTag::SilentThresholdAnoncred,
-            BackendTag::ZkX509,
-            BackendTag::SisWithHints,
-        ] {
-            assert_json_roundtrip(&backend);
+        for invalid_json in ["null", "true", "0", "{}", "[]"] {
+            norito::json::from_str::<BackendTag>(invalid_json)
+                .expect_err("non-string backend labels must be rejected");
         }
     }
 

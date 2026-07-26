@@ -29,9 +29,9 @@ use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use iroha_core::{
     state::{State as CoreState, WorldReadOnly},
     zk::{
-        hash_proof, hash_vk, is_developer_only_backend_label, is_pending_production_backend_label,
-        is_production_claim_backend_label, is_production_verify_backend_label,
-        is_trusted_setup_backend_label, verify_backend, verify_backend_with_timing_checked,
+        hash_proof, hash_vk, is_developer_only_backend_label, is_production_claim_backend_label,
+        is_production_verify_backend_label, is_trusted_setup_backend_label, verify_backend,
+        verify_backend_with_timing_checked,
     },
 };
 use iroha_data_model::proof::{
@@ -753,7 +753,6 @@ fn backend_allowed(backend: &str, allowlist: &[String]) -> bool {
     !is_trusted_setup_backend_label(backend)
         && !is_developer_only_backend_label(backend)
         && !is_production_claim_backend_label(backend)
-        && !is_pending_production_backend_label(backend)
         && !is_unsupported_stark_fri_backend_label(backend)
         && is_production_verify_backend_label(backend)
         && (allowlist.is_empty() || allowlist.iter().any(|allowed| backend.starts_with(allowed)))

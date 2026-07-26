@@ -292,7 +292,7 @@
           "path": "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
           "required_tokens": [
             "\"rust_owner\": \"iroha_data_model::block::consensus\"",
-            "pub(super) fn write_fixture(check_only: bool)"
+            "pub fn write_fixture(check_only: bool)"
           ]
         },
         {
@@ -2354,11 +2354,11 @@
         },
         {
           "path": "crates/iroha_core/src/kura.rs",
-          "kind": "fn",
-          "symbol": "pending_control_sidecar_bytes_within_limit",
+          "kind": "method",
+          "symbol": "PendingControlSidecarLimits::combined_bytes_within_limit",
           "required_tokens": [
             "pending_merge_bytes.checked_add",
-            "MAX_PENDING_CERTIFIED_MERGE_BYTES",
+            "total <= self.aggregate_bytes",
             "None => false"
           ]
         },
@@ -2367,13 +2367,13 @@
           "kind": "fn",
           "symbol": "pending_queue_plan_admission_paths_unlocked",
           "required_tokens": [
-            "MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATES",
+            "self.pending_control_sidecar_limits.queue_plan_admissions",
             "std::fs::read_dir",
             "symlink_metadata",
             "is_symlink",
             "sidecar_is_single_link",
             "MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES",
-            "pending_merge_bytes_within_limit",
+            "merge_bytes_within_limit(total_bytes)",
             "paths.sort"
           ]
         },
@@ -2432,8 +2432,8 @@
             "ensure_prune_recovery_not_required",
             "pending_merge_entry_paths_unlocked",
             "pending_queue_plan_admission_paths_unlocked",
-            "pending_control_sidecar_bytes_within_limit",
-            "limit.min(MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATES)",
+            "combined_bytes_within_limit(merge_bytes, admission_bytes)",
+            "limit.min(self.pending_control_sidecar_limits.queue_plan_admissions)",
             "read_pending_queue_plan_admission_path"
           ]
         },
@@ -2445,7 +2445,7 @@
             "begin_total_disk_usage_mutation",
             "reconcile_pending_merge_temp_files_unlocked",
             "reconcile_pending_queue_plan_admission_temp_files_unlocked",
-            "pending_control_sidecar_bytes_within_limit",
+            "combined_bytes_within_limit",
             "create_exclusive_pending_queue_plan_admission_temp",
             "std::fs::hard_link",
             "sync_all",
@@ -2461,7 +2461,7 @@
             "begin_total_disk_usage_mutation",
             "path_bytes_before",
             "sidecar_has_link_count",
-            "stable_count == MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATES",
+            "stable_count == self.pending_control_sidecar_limits.queue_plan_admissions",
             "pending_queue_plan_admission_paths_unlocked",
             "update_disk_usage_delta",
             "accounting_mutation.finish"

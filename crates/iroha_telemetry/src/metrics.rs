@@ -26,13 +26,13 @@ use iroha_config::{
 use iroha_data_model::{
     block::consensus_v2::PERMISSIONED_TAG,
     da::types::DaRentQuote,
+    offline::OfflineStatus,
     prelude::Quantity,
     soranet::privacy_metrics::{
         SoranetPrivacyBucketMetricsV1, SoranetPrivacyModeV1, SoranetPrivacySuppressionReasonV1,
     },
 };
 use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
-use iroha_torii_shared::offline_api::OfflineStatus;
 use norito::{
     core::DecodeFromSlice,
     derive::{NoritoDeserialize, NoritoSerialize},

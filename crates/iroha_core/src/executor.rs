@@ -5896,13 +5896,6 @@ impl Executor {
                             "verifying key backend mismatch".to_owned(),
                         ));
                     }
-                    if iroha_data_model::zk::BackendTag::is_pending_production_backend_label(
-                        backend.as_str(),
-                    ) {
-                        return Err(ValidationFail::NotPermitted(
-                            "pending-production proof backends are not supported".to_owned(),
-                        ));
-                    }
                     if crate::zk::is_production_claim_backend_label(backend.as_str()) {
                         return Err(ValidationFail::NotPermitted(
                             "production-claim proof backends are not supported".to_owned(),
@@ -5944,12 +5937,6 @@ impl Executor {
                     let block_height = state_transaction.block_height();
                     let (expected_commitment, vk_active) =
                         if let Some(rec) = state_transaction.world.verifying_keys.get(&vk_ref) {
-                            if rec.backend.is_pending_production_backend() {
-                                return Err(ValidationFail::NotPermitted(
-                                    "pending-production verifying key backends are not supported"
-                                        .to_owned(),
-                                ));
-                            }
                             if let Some(ns_hint) = namespace_hint.as_deref() {
                                 if !rec.namespace.is_empty() && rec.namespace != ns_hint {
                                     return Err(ValidationFail::NotPermitted(

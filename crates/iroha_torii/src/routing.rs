@@ -29122,7 +29122,6 @@ fn mk_record_from_inputs(
     use iroha_data_model::{
         confidential::ConfidentialStatus,
         proof::{VerifyingKeyBox, VerifyingKeyRecord},
-        zk::BackendTag,
     };
     let VkRecordInputs {
         backend,
@@ -29141,6 +29140,14 @@ fn mk_record_from_inputs(
         activation_height,
         withdraw_height,
     } = inputs;
+    let backend_tag =
+        iroha_core::zk::production_verify_backend_tag(backend.as_str()).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "unsupported generic OpenVerify backend `{backend}`"
+                )),
+            ))
+        })?;
     let mut key_opt = None;
     let commitment: [u8; 32];
     let vk_len_value;
@@ -29194,7 +29201,6 @@ fn mk_record_from_inputs(
             ),
         )));
     }
-    let backend_tag = BackendTag::from_catalog_label(backend.as_str());
     let schema_hash = parse_hex32_str(
         &public_inputs_schema_hash_hex,
         "public_inputs_schema_hash_hex",
@@ -29346,10 +29352,8 @@ fn vk_detail_to_json(
 
 #[cfg(all(test, feature = "app_api"))]
 mod vk_record_input_tests {
-    use iroha_data_model::confidential::ConfidentialStatus;
-    use iroha_data_model::zk::BackendTag;
-
     use super::*;
+    use iroha_data_model::confidential::ConfidentialStatus;
 
     fn sample_hex32(fill: u8) -> String {
         hex::encode([fill; 32])
@@ -29457,16 +29461,17 @@ mod vk_record_input_tests {
     }
 
     #[test]
-    fn mk_record_from_inputs_preserves_pending_protocol_backend_tags() {
-        for (backend, expected) in [
-            ("halo2/ipa/orchard", BackendTag::Halo2IpaOrchard),
-            ("groth16/bls12-377", BackendTag::Groth16Bls12377),
-            ("penumbra-masp", BackendTag::Groth16Bls12377),
-            ("monero-fcmp++", BackendTag::FcmpPlusPlusCurveTree),
-            ("sis-with-hints", BackendTag::SisWithHints),
-            ("post-quantum-masp", BackendTag::PqMaspStarkFri),
+    fn mk_record_from_inputs_rejects_protocol_names_as_generic_backends() {
+        for backend in [
+            "halo2/ipa/orchard",
+            "groth16/bls12-377",
+            "penumbra-masp",
+            "monero-fcmp++",
+            "sis-with-hints",
+            "post-quantum-masp",
+            "unknown/privacy/backend",
         ] {
-            let record = mk_record_from_inputs(VkRecordInputs {
+            let error = mk_record_from_inputs(VkRecordInputs {
                 backend: backend.to_string(),
                 version: 1,
                 status: Some(ConfidentialStatus::Proposed),
@@ -29483,15 +29488,12 @@ mod vk_record_input_tests {
                 activation_height: None,
                 withdraw_height: None,
             })
-            .expect("record created");
-
-            assert_eq!(
-                record.backend, expected,
-                "{backend} must not collapse into a generic supported backend",
-            );
+            .expect_err("protocol names must not be accepted as generic verifier engines");
             assert!(
-                record.backend.is_pending_production_backend(),
-                "{backend} must remain pending production",
+                error
+                    .to_string()
+                    .contains("unsupported generic OpenVerify backend"),
+                "unexpected error for {backend}: {error}",
             );
         }
     }
