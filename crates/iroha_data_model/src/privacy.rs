@@ -2666,17 +2666,14 @@ impl PrivacyProofEnvelopeV1 {
                 },
             );
         }
-        let PrivacyProtocolLifecycleV1::Active {
-            state_since_height, ..
-        } = activation.lifecycle
-        else {
+        let PrivacyProtocolLifecycleV1::Active(active) = activation.lifecycle else {
             return Err(PrivacyProofEnvelopeValidationError::ActivationNotActive);
         };
-        if current_height < state_since_height {
+        if current_height < active.state_since_height {
             return Err(
                 PrivacyProofEnvelopeValidationError::ActivationNotEffective {
                     current_height,
-                    effective_height: state_since_height,
+                    effective_height: active.state_since_height,
                 },
             );
         }
@@ -2861,4 +2858,83 @@ pub enum PrivacyProofEnvelopeValidationError {
     /// Governed and envelope engine-manifest digests differ.
     #[error("privacy activation engine-manifest digest differs from envelope")]
     ActivationEngineManifestDigestMismatch,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_envelope_and_activation() -> (PrivacyProofEnvelopeV1, PrivacyProtocolActivationRecordV1)
+    {
+        let protocol_id = PrivacyProtocolIdV1::IrohaJindoMlePallasD19V0;
+        let parameter_id = PrivacyParameterIdV1::new([1; 32]);
+        let parameter_digest = PrivacyParameterDigestV1::new([2; 32]);
+        let verifier_digest = PrivacyVerifierDigestV1::new([3; 32]);
+        let statement_schema_digest = PrivacyStatementSchemaDigestV1::new([4; 32]);
+        let engine_manifest_digest = PrivacyEngineManifestDigestV1::new([5; 32]);
+        let scalar = PrivacyPallasScalarV1::new([0; 32]);
+        let statement = PrivacyStatementV1::IrohaJindoMlePallasD19V0(
+            IrohaJindoMlePallasD19StatementV1::new(
+                PrivacyStatementContextV1 {
+                    chain_id: ChainId::from("privacy-activation-test"),
+                    action_index: 0,
+                    parameter_id,
+                    parameter_digest,
+                    verifier_digest,
+                    statement_schema_digest,
+                },
+                vec![PrivacyCommitmentV1::new([6; 32])],
+                [scalar; IROHA_JINDO_MLE_DIMENSION_V1],
+                vec![scalar],
+            )
+            .expect("fixture statement count fits u32"),
+        );
+        let statement_digest = statement.digest().expect("fixture statement encodes");
+        let envelope = PrivacyProofEnvelopeV1 {
+            protocol_id,
+            proof_system_id: protocol_id.expected_proof_system(),
+            engine_id: protocol_id.expected_engine(),
+            parameter_digest,
+            verifier_digest,
+            statement_schema_digest,
+            engine_manifest_digest,
+            statement_digest,
+            statement,
+            proof: PrivacyProofV1::IrohaJindoMlePallasD19V0(PrivacyProofBytesV1::new(vec![7])),
+        };
+        let activation = PrivacyProtocolActivationRecordV1 {
+            protocol_id,
+            proof_system_id: protocol_id.expected_proof_system(),
+            engine_id: protocol_id.expected_engine(),
+            parameter_id,
+            parameter_digest,
+            verifier_digest,
+            statement_schema_digest,
+            engine_manifest_digest,
+            lifecycle: PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: 1,
+                activated_at_height: 2,
+                state_since_height: 5,
+            }),
+            limits: PrivacyConsensusLimitsV1::taira_default(),
+            assurance: PrivacyAssuranceV1::Experimental,
+        };
+        (envelope, activation)
+    }
+
+    #[test]
+    fn activation_effective_height_uses_active_lifecycle_payload() {
+        let (envelope, activation) = valid_envelope_and_activation();
+
+        assert_eq!(
+            envelope.validate_against_activation(&activation, 4),
+            Err(
+                PrivacyProofEnvelopeValidationError::ActivationNotEffective {
+                    current_height: 4,
+                    effective_height: 5,
+                }
+            )
+        );
+        assert_eq!(envelope.validate_against_activation(&activation, 5), Ok(()));
+    }
 }
