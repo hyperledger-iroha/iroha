@@ -1,0 +1,14 @@
+{
+  "matrixName": "local-smoke",
+  "targets": [
+    {
+      "label": "node20-local",
+      "command": "npm run lint:test",
+      "versionCommand": "node --version",
+      "timeoutSeconds": 1800,
+      "env": {
+        "CI": "1"
+      }
+    }
+  ]
+}

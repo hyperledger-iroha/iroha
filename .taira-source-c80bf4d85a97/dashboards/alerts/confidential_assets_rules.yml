@@ -1,0 +1,86 @@
+groups:
+  - name: confidential-assets
+    interval: 1m
+    rules:
+      - alert: ConfidentialTreeDepthZero
+        expr: |
+          (
+            iroha_confidential_tree_commitments{asset_id!=""} > 0
+          )
+          and on(asset_id)
+          (
+            iroha_confidential_tree_depth{asset_id!=""} == 0
+          )
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Confidential commitment tree depth dropped to zero"
+          description: |
+            Asset {{ $labels.asset_id }} has commitments recorded but the reported tree depth is zero.
+            Inspect the frontier checkpoints and root history gauges before allowing additional
+            confidential traffic.
+      - alert: ConfidentialVerifierCacheMissSpike
+        expr: |
+          sum(rate(iroha_zk_verifier_cache_events_total{event="miss"}[5m]))
+            / clamp_min(sum(rate(iroha_zk_verifier_cache_events_total{event=~"hit|miss"}[5m])), 1e-6)
+            > 0.4
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Verifier cache miss ratio above 40%"
+          description: |
+            More than 40% of verifier cache lookups are missing over the last 10 minutes.
+            Validate that Halo2 params and verifying keys are stable before tightening the gas schedule.
+      - alert: ConfidentialGasMismatch
+        expr: |
+          (
+            max without(instance, job) (iroha_confidential_gas_base_verify)
+            -
+            min without(instance, job) (iroha_confidential_gas_base_verify)
+          ) != 0
+          or (
+            max without(instance, job) (iroha_confidential_gas_per_public_input)
+            -
+            min without(instance, job) (iroha_confidential_gas_per_public_input)
+          ) != 0
+          or (
+            max without(instance, job) (iroha_confidential_gas_per_proof_byte)
+            -
+            min without(instance, job) (iroha_confidential_gas_per_proof_byte)
+          ) != 0
+          or (
+            max without(instance, job) (iroha_confidential_gas_per_nullifier)
+            -
+            min without(instance, job) (iroha_confidential_gas_per_nullifier)
+          ) != 0
+          or (
+            max without(instance, job) (iroha_confidential_gas_per_commitment)
+            -
+            min without(instance, job) (iroha_confidential_gas_per_commitment)
+          ) != 0
+        for: 3m
+        labels:
+          severity: page
+        annotations:
+          summary: "Confidential gas schedule diverged across validators"
+          description: |
+            At least one validator is reporting a different confidential gas multiplier than its peers.
+            Confirm the active config (`confidential.gas`) and redeploy or hot-reload to restore parity
+            before approving confidential transactions.
+      - alert: ConfidentialGasTelemetryMissing
+        expr: |
+          absent(iroha_confidential_gas_base_verify)
+          or absent(iroha_confidential_gas_per_public_input)
+          or absent(iroha_confidential_gas_per_proof_byte)
+          or absent(iroha_confidential_gas_per_nullifier)
+          or absent(iroha_confidential_gas_per_commitment)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Confidential gas multipliers not exported"
+          description: |
+            Prometheus cannot scrape one or more confidential gas multipliers. Verify that telemetry is
+            enabled and scrape targets are healthy so governance can validate gas parity.

@@ -1,0 +1,57 @@
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/norito/examples/register-and-mint.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 470eb5de8cd9a7f94275062d1e8c3a448a2d734bf86f650ce94a3971baa3527d
+source_last_modified: "2026-04-08T09:19:38.793794+00:00"
+translation_last_reviewed: 2026-04-08
+---
+
+---
+slug: /norito/examples/register-and-mint
+title: Registrar dominio e cunhar ativos
+description: Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
+---
+
+Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
+
+## Roteiro do livro razao
+
+- Garanta que a conta de destino (por exemplo `<i105-account-id>`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
+- Invoque o entrypoint `register_and_mint` para criar a definicao do ativo ROSE e cunhar 250 unidades para Alice em uma unica transacao.
+- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha ledger asset list all --verbose` para confirmar que a cunhagem foi bem-sucedida.
+
+## Guias de SDK relacionados
+
+- [Quickstart do SDK Rust](/sdks/rust)
+- [Quickstart do SDK Python](/sdks/python)
+- [Quickstart do SDK JavaScript](/sdks/javascript)
+
+[Baixe a fonte Kotodama](/norito-snippets/register-and-mint.ko)
+
+```kotodama
+// Register a new asset and mint some to the specified account.
+seiyaku RegisterAndMint {
+    kotoage fn register_and_mint() authorize("AssetManager") {
+        // name, symbol, quantity (precision or supply depending on host), mintable flag
+        let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+        let symbol = "ROSE";
+        let qty = 1000;
+        // interpretation depends on data model (example only)
+        let mintable = 1;
+        // 1 = mintable, 0 = fixed
+        ledger::asset::register(
+            asset_definition: asset,
+            name: symbol,
+            scale: qty,
+            mintable: mintable,
+        );
+        // Mint 250 ROSE to Alice
+        let to = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", );
+        ledger::asset::mint(account: to, asset_definition: asset, amount: 250);
+    }
+}
+```

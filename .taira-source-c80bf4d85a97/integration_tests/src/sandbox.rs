@@ -1,0 +1,1664 @@
+use std::{
+    any::Any,
+    env,
+    ops::{Deref, DerefMut},
+    panic::{self, AssertUnwindSafe},
+    sync::{Arc, Condvar, Mutex, OnceLock},
+    time::Duration,
+};
+
+use eyre::{Report, Result};
+use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
+use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
+
+use crate::sync::get_status_with_retry;
+
+const NETWORK_BASE_SEED_ENV: &str = "IROHA_TEST_NETWORK_BASE_SEED";
+
+fn scenario_seed_override() -> Option<String> {
+    env::var(NETWORK_BASE_SEED_ENV)
+        .ok()
+        .filter(|seed| !seed.is_empty())
+}
+
+fn with_scenario_seed(builder: NetworkBuilder, context: &str) -> NetworkBuilder {
+    match scenario_seed_override() {
+        Some(seed) => {
+            eprintln!("{context}: deterministic network seed = {seed}");
+            builder.with_base_seed(seed)
+        }
+        _ => builder.with_base_seed_if_unset(context),
+    }
+}
+
+/// Optional guard that limits concurrent integration tests which spin up a network.
+///
+/// Defaults to one network at a time so plain `cargo test` stays usable on WSL and
+/// memory-constrained VMs. Set `IROHA_TEST_NETWORK_PARALLELISM=<N>` to override or
+/// `IROHA_TEST_SERIALIZE_NETWORKS=1` to force serialization explicitly.
+#[must_use]
+pub struct SerialGuard {
+    #[allow(dead_code)]
+    guard: Option<NetworkPermit>,
+}
+
+/// Network wrapper that keeps the optional serial guard alive for the entire test scope.
+pub struct SerializedNetwork {
+    network: Option<Network>,
+    guard: Option<SerialGuard>,
+    shutdown_done: bool,
+    runtime_handle: Option<Handle>,
+}
+
+impl SerializedNetwork {
+    /// Wrap a network with an optional serial guard held for its full lifetime.
+    pub fn new(network: Network, guard: SerialGuard) -> Self {
+        Self {
+            network: Some(network),
+            guard: Some(guard),
+            shutdown_done: false,
+            runtime_handle: Handle::try_current().ok(),
+        }
+    }
+
+    /// Wrap a network with an explicit runtime handle for shutdown coordination.
+    pub fn new_with_handle(network: Network, guard: SerialGuard, handle: Handle) -> Self {
+        Self {
+            network: Some(network),
+            guard: Some(guard),
+            shutdown_done: false,
+            runtime_handle: Some(handle),
+        }
+    }
+
+    /// Asynchronously shut down running peers and release the optional serial guard.
+    pub async fn shutdown_and_release(mut self) {
+        self.shutdown_done = true;
+        let Some(network) = self.network.take() else {
+            return;
+        };
+        let Some(guard) = self.guard.take() else {
+            return;
+        };
+
+        let shutdown_completed = if network.peers().iter().any(NetworkPeer::is_running) {
+            tokio::time::timeout(SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT, network.shutdown())
+                .await
+                .is_ok()
+        } else {
+            true
+        };
+
+        if !shutdown_completed {
+            eprintln!(
+                "warning: graceful test network shutdown did not complete within {:?}; falling back to drop cleanup",
+                SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT
+            );
+        }
+        drop(network);
+        drop(guard);
+    }
+
+    /// Shut down running peers before releasing the optional serial guard.
+    pub fn shutdown_blocking(mut self) {
+        self.shutdown_done = true;
+        self.shutdown_blocking_inner();
+    }
+
+    fn shutdown_blocking_inner(&mut self) {
+        let Some(network) = self.network.take() else {
+            return;
+        };
+        let Some(guard) = self.guard.take() else {
+            return;
+        };
+
+        if !network.peers().iter().any(NetworkPeer::is_running) {
+            drop(guard);
+            return;
+        }
+
+        let handle = self
+            .runtime_handle
+            .clone()
+            .or_else(|| Handle::try_current().ok());
+        let runtime_flavor = handle.as_ref().map(Handle::runtime_flavor);
+        let inside_runtime = Handle::try_current().is_ok();
+        let shutdown = move || {
+            let shutdown_completed = if let Some(handle) = handle.as_ref() {
+                if matches!(handle.runtime_flavor(), RuntimeFlavor::CurrentThread) {
+                    // Current-thread runtimes cannot be driven from another thread.
+                    shutdown_network_with_fresh_runtime(&network)
+                } else {
+                    handle.block_on(async {
+                        tokio::time::timeout(
+                            SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT,
+                            network.shutdown(),
+                        )
+                        .await
+                        .is_ok()
+                    })
+                }
+            } else {
+                shutdown_network_with_fresh_runtime(&network)
+            };
+
+            if !shutdown_completed {
+                eprintln!(
+                    "warning: graceful test network shutdown did not complete within {:?}; falling back to drop cleanup",
+                    SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT
+                );
+            }
+            drop(network);
+            drop(guard);
+        };
+
+        if inside_runtime && matches!(runtime_flavor, Some(RuntimeFlavor::CurrentThread)) {
+            // Avoid blocking the current-thread runtime; release the guard after shutdown.
+            std::thread::spawn(shutdown);
+            return;
+        }
+        run_shutdown_blocking(shutdown);
+    }
+}
+
+fn run_shutdown_blocking<F>(shutdown: F)
+where
+    F: FnOnce() + Send,
+{
+    if Handle::try_current().is_ok() {
+        std::thread::scope(|scope| {
+            scope.spawn(shutdown);
+        });
+        return;
+    }
+    shutdown();
+}
+
+fn shutdown_network_with_fresh_runtime(network: &Network) -> bool {
+    match Runtime::new() {
+        Ok(rt) => rt.block_on(async {
+            tokio::time::timeout(SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT, network.shutdown())
+                .await
+                .is_ok()
+        }),
+        Err(err) => {
+            eprintln!("warning: failed to create runtime for shutdown: {err}");
+            false
+        }
+    }
+}
+
+impl Deref for SerializedNetwork {
+    type Target = Network;
+
+    fn deref(&self) -> &Self::Target {
+        self.network.as_ref().expect("serialized network missing")
+    }
+}
+
+impl DerefMut for SerializedNetwork {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.network.as_mut().expect("serialized network missing")
+    }
+}
+
+impl Drop for SerializedNetwork {
+    fn drop(&mut self) {
+        if self.shutdown_done {
+            return;
+        }
+        self.shutdown_blocking_inner();
+    }
+}
+
+struct NetworkPermit {
+    state: Arc<NetworkPermitState>,
+}
+
+struct NetworkPermitState {
+    state: Mutex<PermitState>,
+    cvar: Condvar,
+}
+
+struct PermitState {
+    limit: usize,
+    in_use: usize,
+}
+
+impl NetworkPermitState {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(PermitState {
+                limit: network_parallelism_limit(),
+                in_use: 0,
+            }),
+            cvar: Condvar::new(),
+        }
+    }
+}
+
+impl Drop for NetworkPermit {
+    fn drop(&mut self) {
+        let mut state = self
+            .state
+            .state
+            .lock()
+            .expect("network permit mutex poisoned");
+        state.in_use = state.in_use.saturating_sub(1);
+        self.state.cvar.notify_one();
+    }
+}
+
+const SERIAL_GUARD_LOG_INTERVAL: Duration = Duration::from_secs(60);
+const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
+const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
+const DEFAULT_NETWORK_PARALLELISM: usize = 1;
+const NETWORK_START_ATTEMPTS: usize = 3;
+const NETWORK_START_ATTEMPTS_MAX: usize = 16;
+const NETWORK_START_RETRY_DELAY: Duration = Duration::from_secs(1);
+const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
+const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
+const NETWORK_PERMIT_WAIT_TIMEOUT_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT";
+const NETWORK_START_ATTEMPTS_ENV: &str = "IROHA_TEST_NETWORK_START_ATTEMPTS";
+const NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5 * 60);
+/// Test-only switch that turns a sandbox-related network skip into a test failure.
+pub const REQUIRE_NETWORK_ENV: &str = "IROHA_TEST_REQUIRE_NETWORK";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NetworkStartRequirement {
+    Optional,
+    Required,
+}
+
+fn parse_network_start_requirement(raw: Option<&str>) -> Result<NetworkStartRequirement> {
+    let Some(raw) = raw else {
+        return Ok(NetworkStartRequirement::Optional);
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(NetworkStartRequirement::Required),
+        "0" | "false" | "no" | "off" => Ok(NetworkStartRequirement::Optional),
+        _ => Err(Report::msg(format!(
+            "{REQUIRE_NETWORK_ENV} must be one of 1, true, yes, on, 0, false, no, or off; got {raw:?}"
+        ))),
+    }
+}
+
+fn network_start_requirement() -> Result<NetworkStartRequirement> {
+    match env::var(REQUIRE_NETWORK_ENV) {
+        Ok(raw) => parse_network_start_requirement(Some(&raw)),
+        Err(env::VarError::NotPresent) => parse_network_start_requirement(None),
+        Err(env::VarError::NotUnicode(_)) => Err(Report::msg(format!(
+            "{REQUIRE_NETWORK_ENV} must contain valid UTF-8"
+        ))),
+    }
+}
+
+fn parse_network_start_attempts(raw: Option<&str>) -> Result<usize> {
+    let Some(raw) = raw else {
+        return Ok(NETWORK_START_ATTEMPTS);
+    };
+    let attempts = raw.trim().parse::<usize>().map_err(|error| {
+        Report::msg(format!(
+            "{NETWORK_START_ATTEMPTS_ENV} must be an integer in 1..={NETWORK_START_ATTEMPTS_MAX}; got {raw:?}: {error}"
+        ))
+    })?;
+    if !(1..=NETWORK_START_ATTEMPTS_MAX).contains(&attempts) {
+        return Err(Report::msg(format!(
+            "{NETWORK_START_ATTEMPTS_ENV} must be in 1..={NETWORK_START_ATTEMPTS_MAX}; got {attempts}"
+        )));
+    }
+    Ok(attempts)
+}
+
+fn network_start_attempts() -> Result<usize> {
+    match env::var(NETWORK_START_ATTEMPTS_ENV) {
+        Ok(raw) => parse_network_start_attempts(Some(&raw)),
+        Err(env::VarError::NotPresent) => parse_network_start_attempts(None),
+        Err(env::VarError::NotUnicode(_)) => Err(Report::msg(format!(
+            "{NETWORK_START_ATTEMPTS_ENV} must contain valid UTF-8"
+        ))),
+    }
+}
+
+fn apply_network_start_requirement<T>(
+    network: Option<T>,
+    context: &str,
+    requirement: NetworkStartRequirement,
+) -> Result<Option<T>> {
+    if network.is_none() && requirement == NetworkStartRequirement::Required {
+        return Err(Report::msg(format!(
+            "{context}: required integration-test network was unavailable; \
+             {REQUIRE_NETWORK_ENV}=1 forbids treating sandbox socket restrictions as a successful skip"
+        )));
+    }
+    Ok(network)
+}
+
+/// Enforce the test-network requirement selected by [`REQUIRE_NETWORK_ENV`].
+///
+/// Ordinary developer runs may retain an unavailable sandbox network as `None`. When the
+/// environment switch is enabled, the same condition is an explicit error so CI and release
+/// acceptance runs cannot report a skipped network scenario as passing. Invalid switch values
+/// also fail closed.
+///
+/// # Errors
+///
+/// Returns an error when the switch is malformed or requires a network that was unavailable.
+pub fn enforce_network_start_requirement<T>(
+    network: Option<T>,
+    context: &str,
+) -> Result<Option<T>> {
+    apply_network_start_requirement(network, context, network_start_requirement()?)
+}
+
+fn handle_sandboxed_network_start<T>(context: &str, reason: &str) -> Result<Option<T>> {
+    enforce_network_start_requirement::<T>(None, context)?;
+    eprintln!(
+        "sandboxed network restriction detected while running {context}; skipping network startup ({reason})"
+    );
+    Ok(None)
+}
+
+fn network_permit_state() -> &'static Arc<NetworkPermitState> {
+    static NETWORK_STATE: OnceLock<Arc<NetworkPermitState>> = OnceLock::new();
+    NETWORK_STATE.get_or_init(|| Arc::new(NetworkPermitState::new()))
+}
+
+fn serialize_networks_enabled() -> bool {
+    if let Some(value) = test_override_serialization() {
+        return value;
+    }
+    if current_test_binary_prefers_serialization() {
+        return true;
+    }
+    let Ok(raw) = env::var(SERIALIZE_NETWORKS_ENV) else {
+        return false;
+    };
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn current_test_binary_prefers_serialization() -> bool {
+    env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .is_some_and(|name| test_binary_prefers_serialization(&name))
+}
+
+fn test_binary_prefers_serialization(name: &str) -> bool {
+    let canonical = name.split_once('-').map_or(name, |(prefix, _)| prefix);
+    matches!(canonical, "consensus_and_da")
+}
+
+#[derive(Clone, Copy, Default)]
+struct TestOverrides {
+    serialize: Option<bool>,
+    parallelism: Option<usize>,
+}
+
+/// Guard that restores network-parallelism overrides on drop.
+#[must_use]
+pub struct NetworkParallelismGuard {
+    previous: TestOverrides,
+}
+
+fn test_override_state() -> &'static Mutex<TestOverrides> {
+    static OVERRIDES: OnceLock<Mutex<TestOverrides>> = OnceLock::new();
+    OVERRIDES.get_or_init(|| Mutex::new(TestOverrides::default()))
+}
+
+fn test_override_serialization() -> Option<bool> {
+    let guard = test_override_state()
+        .lock()
+        .expect("test override mutex poisoned");
+    guard.serialize
+}
+
+fn test_override_parallelism() -> Option<usize> {
+    let guard = test_override_state()
+        .lock()
+        .expect("test override mutex poisoned");
+    guard.parallelism
+}
+
+/// Override network-parallelism limits for integration tests.
+///
+/// This is a global override; keep the returned guard alive for the duration of the override.
+pub fn override_network_parallelism(
+    serialize: Option<bool>,
+    parallelism: Option<usize>,
+) -> NetworkParallelismGuard {
+    let mut guard = test_override_state()
+        .lock()
+        .expect("test override mutex poisoned");
+    let previous = *guard;
+    guard.serialize = serialize;
+    guard.parallelism = parallelism;
+    NetworkParallelismGuard { previous }
+}
+
+impl Drop for NetworkParallelismGuard {
+    fn drop(&mut self) {
+        let mut guard = test_override_state()
+            .lock()
+            .expect("test override mutex poisoned");
+        *guard = self.previous;
+    }
+}
+
+fn default_network_parallelism() -> usize {
+    DEFAULT_NETWORK_PARALLELISM
+}
+
+fn network_parallelism_limit() -> usize {
+    if serialize_networks_enabled() {
+        return 1;
+    }
+    if let Some(value) = test_override_parallelism().filter(|value| *value > 0) {
+        return value;
+    }
+    if let Ok(raw) = env::var(NETWORK_PARALLELISM_ENV)
+        && let Ok(parsed) = raw.trim().parse::<usize>()
+        && parsed > 0
+    {
+        return parsed;
+    }
+    default_network_parallelism()
+}
+
+fn network_permit_wait_timeout() -> Option<Duration> {
+    let timeout = crate::timeouts::read_env_duration(
+        NETWORK_PERMIT_WAIT_TIMEOUT_ENV,
+        NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT,
+    );
+    (!timeout.is_zero()).then_some(timeout)
+}
+
+fn acquire_network_permit() -> NetworkPermit {
+    let state = network_permit_state().clone();
+    let mut waited = Duration::ZERO;
+    let mut next_log = SERIAL_GUARD_LOG_INTERVAL;
+    let wait_timeout = network_permit_wait_timeout();
+    let mut guard = state.state.lock().expect("network permit mutex poisoned");
+    loop {
+        guard.limit = network_parallelism_limit();
+        if guard.in_use < guard.limit {
+            guard.in_use = guard.in_use.saturating_add(1);
+            drop(guard);
+            return NetworkPermit { state };
+        }
+        if waited >= next_log {
+            eprintln!(
+                "network guard has waited {waited:?}; {in_use}/{limit} permits in use",
+                in_use = guard.in_use,
+                limit = guard.limit
+            );
+            next_log = next_log.saturating_add(SERIAL_GUARD_LOG_INTERVAL);
+        }
+        if let Some(timeout) = wait_timeout
+            && waited >= timeout
+        {
+            let in_use = guard.in_use;
+            let limit = guard.limit;
+            drop(guard);
+            panic!(
+                "timed out after {timeout:?} waiting for integration-test network permit; \
+                 {in_use}/{limit} permits in use. Set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 \
+                 to disable this timeout"
+            );
+        }
+        let (next, _) = state
+            .cvar
+            .wait_timeout(guard, SERIAL_GUARD_POLL_INTERVAL)
+            .expect("network permit mutex poisoned during wait");
+        guard = next;
+        waited = waited.saturating_add(SERIAL_GUARD_POLL_INTERVAL);
+    }
+}
+
+/// Acquire the global integration-test permit to bound concurrent network startup.
+pub fn serial_guard() -> SerialGuard {
+    SerialGuard {
+        guard: Some(acquire_network_permit()),
+    }
+}
+
+#[allow(clippy::unused_async)]
+async fn serial_guard_async() -> SerialGuard {
+    serial_guard()
+}
+
+fn panic_reason(panic: &(dyn Any + Send)) -> Option<String> {
+    panic
+        .downcast_ref::<&str>()
+        .map(std::string::ToString::to_string)
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+}
+
+fn is_retryable_network_startup_error(err: &Report) -> bool {
+    if err.chain().any(|cause| {
+        let normalized = cause.to_string().to_ascii_lowercase();
+        normalized.contains("failed closed")
+            || normalized.contains("fail-closed")
+            || normalized.contains("fatal consensus")
+            || normalized.contains("restart is required")
+            || normalized.contains("restart-required")
+            || normalized.contains("panicked at")
+    }) {
+        return false;
+    }
+
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        text.contains("expected peers to start within timeout")
+            || text.contains("peer startup failed; startup snapshot:")
+    })
+}
+
+/// Attempt to start a blocking test network.
+///
+/// Sandbox socket restrictions return `None` for ordinary developer runs and fail when
+/// [`REQUIRE_NETWORK_ENV`] requires the real network scenario to execute.
+///
+/// # Errors
+///
+/// Returns the underlying [`eyre::Report`] when network startup fails.
+#[allow(dead_code)] // Shared helper: not every integration binary uses it.
+pub fn start_network_blocking_or_skip(
+    builder: NetworkBuilder,
+    context: &str,
+) -> Result<Option<(SerializedNetwork, Runtime)>> {
+    let network_start_attempts = network_start_attempts()?;
+    let guard = serial_guard();
+    let builder = with_scenario_seed(builder, context)
+        .with_auto_populated_trusted_peers()
+        .with_min_peers(MIN_NETWORK_PEERS);
+    for attempt in 1..=network_start_attempts {
+        let (network, runtime) =
+            match panic::catch_unwind(AssertUnwindSafe(|| builder.clone().build_blocking())) {
+                Ok(tuple) => tuple,
+                Err(panic) => {
+                    if let Some(reason) = panic_reason(panic.as_ref())
+                        && is_sandbox_message(&reason)
+                    {
+                        return handle_sandboxed_network_start(context, &reason);
+                    }
+                    panic::resume_unwind(panic);
+                }
+            };
+        match runtime.block_on(async { network.start_all().await }) {
+            Ok(_) => {
+                runtime
+                    .block_on(async { network.ensure_blocks(1).await })
+                    .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
+                get_status_with_retry(&network.client())
+                    .map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
+                return Ok(Some((
+                    SerializedNetwork::new_with_handle(network, guard, runtime.handle().clone()),
+                    runtime,
+                )));
+            }
+            Err(err) => {
+                runtime.block_on(async { network.shutdown().await });
+                let retry =
+                    attempt < network_start_attempts && is_retryable_network_startup_error(&err);
+                drop(network);
+                drop(runtime);
+                if retry {
+                    eprintln!(
+                        "warning: {context} fresh network startup attempt {attempt}/{network_start_attempts} failed with retryable error; rebuilding in {:?}: {err}",
+                        NETWORK_START_RETRY_DELAY
+                    );
+                    std::thread::sleep(NETWORK_START_RETRY_DELAY);
+                    continue;
+                }
+                return Err(sandbox_error(err, context));
+            }
+        }
+    }
+    unreachable!("positive network startup attempt bound must return from the loop")
+}
+
+/// Build a blocking test network without starting peers; skip when the sandbox forbids binding.
+///
+/// Returns `None` when sandbox restrictions prevent binding; panics for non-sandbox failures.
+#[allow(dead_code)] // Shared helper: not every integration binary uses it.
+pub fn build_network_blocking_or_skip(
+    builder: NetworkBuilder,
+    context: &str,
+) -> Option<(SerializedNetwork, Runtime)> {
+    let guard = serial_guard();
+    let builder = with_scenario_seed(builder, context)
+        .with_auto_populated_trusted_peers()
+        .with_min_peers(MIN_NETWORK_PEERS);
+    let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
+        builder.build_blocking()
+    })) {
+        Ok(tuple) => tuple,
+        Err(panic) => {
+            if let Some(reason) = panic_reason(panic.as_ref())
+                && is_sandbox_message(&reason)
+            {
+                eprintln!(
+                    "sandboxed network restriction detected while running {context}; skipping network build ({reason})"
+                );
+                return None;
+            }
+            panic::resume_unwind(panic);
+        }
+    };
+    Some((
+        SerializedNetwork::new_with_handle(network, guard, runtime.handle().clone()),
+        runtime,
+    ))
+}
+
+/// Attempt to start an async test network.
+///
+/// Sandbox socket restrictions return `None` for ordinary developer runs and fail when
+/// [`REQUIRE_NETWORK_ENV`] requires the real network scenario to execute.
+///
+/// # Errors
+///
+/// Returns the underlying [`eyre::Report`] when the async startup fails.
+#[allow(dead_code)] // Shared helper: not every integration binary uses it.
+pub async fn start_network_async_or_skip(
+    builder: NetworkBuilder,
+    context: &str,
+) -> Result<Option<SerializedNetwork>> {
+    let network_start_attempts = network_start_attempts()?;
+    let guard = serial_guard_async().await;
+    let builder = with_scenario_seed(builder, context)
+        .with_auto_populated_trusted_peers()
+        .with_min_peers(MIN_NETWORK_PEERS);
+    for attempt in 1..=network_start_attempts {
+        let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.clone().build())) {
+            Ok(network) => network,
+            Err(panic) => {
+                if let Some(reason) = panic_reason(panic.as_ref())
+                    && is_sandbox_message(&reason)
+                {
+                    return handle_sandboxed_network_start(context, &reason);
+                }
+                panic::resume_unwind(panic);
+            }
+        };
+        match network.start_all().await {
+            Ok(_) => {
+                network
+                    .ensure_blocks(1)
+                    .await
+                    .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
+                let client = network.client();
+                let status = tokio::task::spawn_blocking(move || get_status_with_retry(&client))
+                    .await
+                    .map_err(|err| sandbox_error(Report::new(err), context))?;
+                status.map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
+                return Ok(Some(SerializedNetwork::new(network, guard)));
+            }
+            Err(err) => {
+                network.shutdown().await;
+                let retry =
+                    attempt < network_start_attempts && is_retryable_network_startup_error(&err);
+                drop(network);
+                if retry {
+                    eprintln!(
+                        "warning: {context} fresh network startup attempt {attempt}/{network_start_attempts} failed with retryable error; rebuilding in {:?}: {err}",
+                        NETWORK_START_RETRY_DELAY
+                    );
+                    tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
+                    continue;
+                }
+                return Err(sandbox_error(err, context));
+            }
+        }
+    }
+    unreachable!("positive network startup attempt bound must return from the loop")
+}
+
+/// Build an async test network without starting peers; skip when the sandbox forbids binding.
+///
+/// Returns `None` when sandbox restrictions prevent binding; panics for non-sandbox failures.
+#[allow(dead_code)] // Shared helper: not every integration binary uses it.
+pub fn build_network_or_skip(builder: NetworkBuilder, context: &str) -> Option<SerializedNetwork> {
+    let guard = serial_guard();
+    let builder = with_scenario_seed(builder, context)
+        .with_auto_populated_trusted_peers()
+        .with_min_peers(MIN_NETWORK_PEERS);
+    let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.build())) {
+        Ok(network) => network,
+        Err(panic) => {
+            if let Some(reason) = panic_reason(panic.as_ref())
+                && is_sandbox_message(&reason)
+            {
+                eprintln!(
+                    "sandboxed network restriction detected while running {context}; skipping network build ({reason})"
+                );
+                return None;
+            }
+            panic::resume_unwind(panic);
+        }
+    };
+    Some(SerializedNetwork::new(network, guard))
+}
+
+/// Convert a result into an optional value, tagging sandbox-related denials as errors.
+///
+/// # Errors
+///
+/// Propagates the provided [`eyre::Report`], wrapping sandbox denials with a clearer message.
+pub fn handle_result<T>(result: Result<T>, context: &str) -> Result<Option<T>> {
+    result
+        .map(Some)
+        .map_err(|err| sandbox_error(err.wrap_err(context.to_string()), context))
+}
+
+/// Translate sandbox-related startup failures into explicit test failures.
+///
+/// # Errors
+///
+/// Returns the original [`eyre::Report`] when the message does not match known sandbox denials.
+pub fn handle_sandbox_error<T>(err: Report, context: &str) -> Result<Option<T>> {
+    Err(sandbox_error(err, context))
+}
+
+/// Extract a human-readable explanation when an error looks like a sandbox denial.
+pub fn sandbox_reason(err: &Report) -> Option<String> {
+    detect_sandbox_reason(err)
+}
+
+fn sandbox_error(err: Report, context: &str) -> Report {
+    if let Some(reason) = detect_sandbox_reason(&err) {
+        err.wrap_err(format!(
+            "sandboxed network restriction detected while running {context}; integration tests must not be skipped ({reason})"
+        ))
+    } else {
+        err
+    }
+}
+
+fn detect_sandbox_reason(err: &Report) -> Option<String> {
+    for cause in err.chain() {
+        let text = cause.to_string();
+        if is_sandbox_message(&text) {
+            return Some(text);
+        }
+    }
+
+    let display = err.to_string();
+    if is_sandbox_message(&display) {
+        return Some(display);
+    }
+
+    None
+}
+
+fn is_sandbox_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("permission denied") || lower.contains("operation not permitted")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::time::Instant;
+
+    use super::*;
+    use tempfile::TempDir;
+    use toml::Value as TomlValue;
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    const TEST_NETWORK_BIN_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
+    const TEST_NETWORK_BIN_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
+
+    #[allow(unsafe_code)]
+    fn remove_env_var(key: &str) {
+        // Safety: tests serialize env mutation with ENV_LOCK.
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    fn set_env_var(key: &str, value: &str) {
+        // Safety: tests serialize env mutation with ENV_LOCK.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
+
+    struct EnvRestore {
+        key: &'static str,
+        value: Option<String>,
+    }
+
+    impl EnvRestore {
+        fn remove(key: &'static str) -> Self {
+            let value = std::env::var(key).ok();
+            remove_env_var(key);
+            Self { key, value }
+        }
+
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            set_env_var(key, value);
+            Self {
+                key,
+                value: previous,
+            }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            if let Some(value) = &self.value {
+                set_env_var(self.key, value);
+            } else {
+                remove_env_var(self.key);
+            }
+        }
+    }
+
+    fn lock_env_guard() -> MutexGuard<'static, ()> {
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|err| {
+                eprintln!("warning: env lock poisoned; continuing with recovered guard");
+                err.into_inner()
+            })
+    }
+
+    struct BuildEnvRestore {
+        _reentrant_build: EnvRestore,
+        _permit_dir: EnvRestore,
+        _iroha_bin: Option<EnvRestore>,
+        _irohad_bin: Option<EnvRestore>,
+        _permit_dir_owner: TempDir,
+    }
+
+    fn allow_reentrant_build_guard() -> BuildEnvRestore {
+        let permit_dir_owner = tempfile::tempdir().expect("sandbox permit dir");
+        let permit_dir = permit_dir_owner.path().to_string_lossy().into_owned();
+        let (iroha_bin, irohad_bin) = reusable_test_network_binaries();
+        BuildEnvRestore {
+            _reentrant_build: EnvRestore::set("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1"),
+            _permit_dir: EnvRestore::set("IROHA_TEST_NETWORK_PERMIT_DIR", &permit_dir),
+            _iroha_bin: env_override_for_existing_binary(TEST_NETWORK_BIN_IROHA_ENV, iroha_bin),
+            _irohad_bin: env_override_for_existing_binary(TEST_NETWORK_BIN_IROHAD_ENV, irohad_bin),
+            _permit_dir_owner: permit_dir_owner,
+        }
+    }
+
+    fn env_override_for_existing_binary(
+        key: &'static str,
+        path: Option<PathBuf>,
+    ) -> Option<EnvRestore> {
+        if std::env::var_os(key).is_some() {
+            return None;
+        }
+
+        path.map(|path| {
+            let value = path.to_string_lossy().into_owned();
+            EnvRestore::set(key, &value)
+        })
+    }
+
+    fn reusable_test_network_binaries() -> (Option<PathBuf>, Option<PathBuf>) {
+        let irohad_bin = crate::binary_resolver::newest_existing_binary_path([
+            crate::binary_resolver::find_primary_target_irohad_binary_path(),
+            crate::binary_resolver::find_existing_irohad_binary_path(),
+        ]);
+        let iroha_bin = irohad_bin.as_deref().and_then(sibling_iroha_binary_path);
+
+        (iroha_bin, irohad_bin)
+    }
+
+    fn sibling_iroha_binary_path(irohad_bin: &Path) -> Option<PathBuf> {
+        let candidate = irohad_bin
+            .parent()?
+            .join(crate::binary_resolver::cli_binary_name());
+        candidate.is_file().then_some(candidate)
+    }
+
+    fn network_permit_snapshot() -> (usize, usize) {
+        let state = network_permit_state();
+        let guard = state.state.lock().expect("network permit mutex poisoned");
+        (guard.limit, guard.in_use)
+    }
+
+    fn wait_for_network_permits_to_drain(context: &str) {
+        let timeout = Duration::from_secs(30);
+        let start = Instant::now();
+        loop {
+            let (_, in_use) = network_permit_snapshot();
+            if in_use == 0 {
+                return;
+            }
+            if start.elapsed() >= timeout {
+                panic!(
+                    "{context}: timed out waiting for network permits to drain; {in_use} still in use"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn skip_if_sandboxed(test_name: &str) -> bool {
+        match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
+            Ok(listener) => {
+                drop(listener);
+                false
+            }
+            Err(err) => {
+                if is_sandbox_message(&err.to_string())
+                    || err.kind() == std::io::ErrorKind::PermissionDenied
+                {
+                    eprintln!(
+                        "sandboxed network restriction detected while running {test_name}; skipping"
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn detects_sandbox_messages() {
+        assert!(is_sandbox_message("operation not permitted"));
+        assert!(sandbox_reason(&Report::msg("Permission denied")).is_some());
+        let err =
+            handle_result::<()>(Err(Report::msg("Operation not permitted")), "ctx").unwrap_err();
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("sandboxed network restriction detected"),
+            "permission errors should be reported as sandbox denials, got {err_text:?}"
+        );
+
+        // Non-permission path should propagate without sandbox context
+        let err =
+            handle_result::<()>(Err(Report::msg("peer exited unexpectedly")), "ctx").unwrap_err();
+        assert!(
+            !err.to_string()
+                .contains("sandboxed network restriction detected"),
+            "non-permission errors should not be tagged as sandbox denials"
+        );
+    }
+
+    #[test]
+    fn network_start_requirement_parser_is_explicit_and_fails_closed() {
+        assert_eq!(
+            parse_network_start_requirement(None).unwrap(),
+            NetworkStartRequirement::Optional
+        );
+        for raw in ["1", "true", "TRUE", " yes ", "on"] {
+            assert_eq!(
+                parse_network_start_requirement(Some(raw)).unwrap(),
+                NetworkStartRequirement::Required,
+                "{raw:?} must enable required-network mode"
+            );
+        }
+        for raw in ["0", "false", "FALSE", " no ", "off"] {
+            assert_eq!(
+                parse_network_start_requirement(Some(raw)).unwrap(),
+                NetworkStartRequirement::Optional,
+                "{raw:?} must disable required-network mode"
+            );
+        }
+        for raw in ["", "required", "tru", "2"] {
+            let err = parse_network_start_requirement(Some(raw)).unwrap_err();
+            assert!(
+                err.to_string().contains(REQUIRE_NETWORK_ENV),
+                "malformed value {raw:?} must report the controlling switch: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn network_start_attempt_parser_is_bounded_and_fails_closed() {
+        assert_eq!(
+            parse_network_start_attempts(None).unwrap(),
+            NETWORK_START_ATTEMPTS
+        );
+        assert_eq!(parse_network_start_attempts(Some(" 1 ")).unwrap(), 1);
+        assert_eq!(
+            parse_network_start_attempts(Some(&NETWORK_START_ATTEMPTS_MAX.to_string())).unwrap(),
+            NETWORK_START_ATTEMPTS_MAX
+        );
+        let too_many = (NETWORK_START_ATTEMPTS_MAX + 1).to_string();
+        for raw in ["", "0", "not-a-number", too_many.as_str()] {
+            let err = parse_network_start_attempts(Some(raw)).unwrap_err();
+            assert!(
+                err.to_string().contains(NETWORK_START_ATTEMPTS_ENV),
+                "malformed value {raw:?} must report the controlling switch: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn network_start_attempts_reads_the_release_override() {
+        let _env_guard = lock_env_guard();
+        let _restore = EnvRestore::set(NETWORK_START_ATTEMPTS_ENV, "1");
+        assert_eq!(network_start_attempts().unwrap(), 1);
+    }
+
+    #[test]
+    fn scenario_seed_override_requires_a_nonempty_explicit_seed() {
+        let _env_guard = lock_env_guard();
+        let _restore = EnvRestore::remove(NETWORK_BASE_SEED_ENV);
+        assert_eq!(scenario_seed_override(), None);
+
+        set_env_var(NETWORK_BASE_SEED_ENV, "matrix:seed:03");
+        assert_eq!(scenario_seed_override().as_deref(), Some("matrix:seed:03"));
+
+        set_env_var(NETWORK_BASE_SEED_ENV, "");
+        assert_eq!(scenario_seed_override(), None);
+    }
+
+    #[test]
+    fn required_network_mode_rejects_only_an_unavailable_network() {
+        assert_eq!(
+            apply_network_start_requirement(
+                Some(7),
+                "available",
+                NetworkStartRequirement::Required
+            )
+            .unwrap(),
+            Some(7)
+        );
+        assert_eq!(
+            apply_network_start_requirement::<()>(
+                None,
+                "optional",
+                NetworkStartRequirement::Optional,
+            )
+            .unwrap(),
+            None
+        );
+
+        let err = apply_network_start_requirement::<()>(
+            None,
+            "four_peer_acceptance",
+            NetworkStartRequirement::Required,
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("four_peer_acceptance"));
+        assert!(message.contains("IROHA_TEST_REQUIRE_NETWORK=1"));
+        assert!(message.contains("successful skip"));
+    }
+
+    #[test]
+    fn sandboxed_network_start_helper_preserves_optional_developer_skip() {
+        let _env_guard = lock_env_guard();
+        let _restore = EnvRestore::set(REQUIRE_NETWORK_ENV, "0");
+
+        assert_eq!(
+            handle_sandboxed_network_start::<()>("optional_network", "operation not permitted")
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn sandboxed_network_start_helper_fails_required_release_scenario() {
+        let _env_guard = lock_env_guard();
+        let _restore = EnvRestore::set(REQUIRE_NETWORK_ENV, "1");
+
+        let err = handle_sandboxed_network_start::<()>(
+            "required_multilane_network",
+            "operation not permitted",
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("required_multilane_network"));
+        assert!(message.contains("IROHA_TEST_REQUIRE_NETWORK=1"));
+        assert!(message.contains("successful skip"));
+    }
+
+    #[test]
+    fn extracts_panic_reason() {
+        let panic_payload: Box<dyn Any + Send> = Box::new("operation not permitted");
+        assert_eq!(
+            panic_reason(panic_payload.as_ref()),
+            Some("operation not permitted".to_string())
+        );
+    }
+
+    #[test]
+    fn startup_retry_classifier_matches_timeout_snapshot_errors() {
+        let err = Report::msg(
+            "expected peers to start within timeout (240s); startup snapshot: [peer#0 running=true]",
+        );
+        assert!(is_retryable_network_startup_error(&err));
+
+        let err = Report::msg("peer startup failed; startup snapshot: [peer#1 running=false]");
+        assert!(is_retryable_network_startup_error(&err));
+    }
+
+    #[test]
+    fn startup_retry_classifier_rejects_decisive_fatal_evidence() {
+        for evidence in [
+            "Sumeragi v2 effect services failed closed: exact ownership violation",
+            "authoritative Sumeragi v2 runner stopped fail-closed",
+            "fatal consensus operation requires process restart",
+            "process restart is required after a fatal consensus failure",
+            "Sumeragi consensus is restart-required after a fatal live-runner failure",
+            "thread 'sumeragi' panicked at invariant violation",
+        ] {
+            let err = Report::msg(format!(
+                "peer startup failed; startup snapshot: [peer#0 stdout_tail={evidence:?}]"
+            ));
+            assert!(
+                !is_retryable_network_startup_error(&err),
+                "fatal startup evidence must not be hidden by a retry: {evidence}"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_retry_classifier_ignores_non_startup_errors() {
+        let err = Report::msg("failed to parse account_id literal");
+        assert!(!is_retryable_network_startup_error(&err));
+    }
+
+    #[test]
+    fn reentrant_build_guard_prefers_existing_network_binaries() {
+        let _env_guard = lock_env_guard();
+        let _iroha_restore = EnvRestore::remove(TEST_NETWORK_BIN_IROHA_ENV);
+        let _irohad_restore = EnvRestore::remove(TEST_NETWORK_BIN_IROHAD_ENV);
+        let expected = reusable_test_network_binaries();
+
+        {
+            let _build_guard = allow_reentrant_build_guard();
+            assert_eq!(
+                std::env::var(TEST_NETWORK_BIN_IROHA_ENV).ok(),
+                expected
+                    .0
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+            );
+            assert_eq!(
+                std::env::var(TEST_NETWORK_BIN_IROHAD_ENV).ok(),
+                expected
+                    .1
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+            );
+        }
+
+        assert!(std::env::var(TEST_NETWORK_BIN_IROHA_ENV).is_err());
+        assert!(std::env::var(TEST_NETWORK_BIN_IROHAD_ENV).is_err());
+    }
+
+    #[test]
+    fn reentrant_build_guard_preserves_explicit_network_binary_overrides() {
+        let _env_guard = lock_env_guard();
+        let _iroha_restore = EnvRestore::set(TEST_NETWORK_BIN_IROHA_ENV, "/tmp/explicit-iroha");
+        let _irohad_restore = EnvRestore::set(TEST_NETWORK_BIN_IROHAD_ENV, "/tmp/explicit-iroha3d");
+
+        let _build_guard = allow_reentrant_build_guard();
+
+        assert_eq!(
+            std::env::var(TEST_NETWORK_BIN_IROHA_ENV).as_deref(),
+            Ok("/tmp/explicit-iroha")
+        );
+        assert_eq!(
+            std::env::var(TEST_NETWORK_BIN_IROHAD_ENV).as_deref(),
+            Ok("/tmp/explicit-iroha3d")
+        );
+    }
+
+    #[test]
+    fn env_restore_roundtrips_env_var() {
+        let _env_guard = lock_env_guard();
+        let key = "IROHA_TEST_SANDBOX_ENV_RESTORE";
+        let original = std::env::var(key).ok();
+
+        remove_env_var(key);
+        {
+            let _restore = EnvRestore::remove(key);
+            assert!(std::env::var(key).is_err());
+        }
+        assert!(std::env::var(key).is_err());
+
+        set_env_var(key, "1");
+        {
+            let _restore = EnvRestore::remove(key);
+            assert!(std::env::var(key).is_err());
+        }
+        assert_eq!(std::env::var(key).as_deref(), Ok("1"));
+
+        match original {
+            Some(value) => set_env_var(key, &value),
+            None => remove_env_var(key),
+        }
+    }
+
+    #[test]
+    fn serialized_network_holds_serial_guard() {
+        if skip_if_sandboxed("serialized_network_holds_serial_guard") {
+            return;
+        }
+        let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
+        let _override_guard = override_network_parallelism(Some(true), None);
+        let guard = serial_guard();
+        let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .build();
+        let serialized = SerializedNetwork::new(network, guard);
+
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(limit, 1);
+        assert_eq!(in_use, 1);
+
+        drop(serialized);
+        let (_, in_use) = network_permit_snapshot();
+        assert_eq!(in_use, 0);
+    }
+
+    #[test]
+    fn network_permit_releases_mutex_after_acquire() {
+        let _env_guard = lock_env_guard();
+        let _override_guard = override_network_parallelism(None, Some(1));
+        let permit = acquire_network_permit();
+        let state = network_permit_state();
+        assert!(
+            state.state.try_lock().is_ok(),
+            "network permit mutex should be released after acquiring"
+        );
+        drop(permit);
+    }
+
+    #[test]
+    fn serialized_network_shutdown_blocking_releases_guard() {
+        if skip_if_sandboxed("serialized_network_shutdown_blocking_releases_guard") {
+            return;
+        }
+        let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
+        let _override_guard = override_network_parallelism(Some(true), None);
+        let guard = serial_guard();
+        let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .build();
+        let serialized = SerializedNetwork::new(network, guard);
+
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(limit, 1);
+        assert_eq!(in_use, 1);
+
+        serialized.shutdown_blocking();
+        let (_, in_use) = network_permit_snapshot();
+        assert_eq!(in_use, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serialized_network_shutdown_async_releases_guard() {
+        if skip_if_sandboxed("serialized_network_shutdown_async_releases_guard") {
+            return;
+        }
+        let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
+        let _override_guard = override_network_parallelism(Some(true), None);
+        let guard = serial_guard();
+        let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .build();
+        let serialized = SerializedNetwork::new(network, guard);
+
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(limit, 1);
+        assert_eq!(in_use, 1);
+
+        serialized.shutdown_and_release().await;
+        let (_, in_use) = network_permit_snapshot();
+        assert_eq!(in_use, 0);
+    }
+
+    #[test]
+    fn serialized_network_new_with_handle_stores_handle() {
+        if skip_if_sandboxed("serialized_network_new_with_handle_stores_handle") {
+            return;
+        }
+        let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
+        let _override_guard = override_network_parallelism(Some(true), None);
+        let guard = serial_guard();
+        let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .build();
+        let rt = Runtime::new().expect("runtime");
+        let serialized = SerializedNetwork::new_with_handle(network, guard, rt.handle().clone());
+
+        assert!(serialized.runtime_handle.is_some());
+    }
+
+    #[test]
+    fn serialized_network_drop_completes_on_current_thread_runtime() {
+        if skip_if_sandboxed("serialized_network_drop_completes_on_current_thread_runtime") {
+            return;
+        }
+        let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
+        let guard = serial_guard();
+        let builder = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .with_min_peers(MIN_NETWORK_PEERS)
+            // This test exercises SerializedNetwork drop behavior. Give startup enough headroom
+            // under heavily loaded hosts so bootstrap timeouts do not mask drop regressions.
+            .with_peer_startup_timeout(Duration::from_secs(480));
+        let runtime = Runtime::new().expect("runtime");
+        let network = runtime.block_on(async {
+            for attempt in 1..=NETWORK_START_ATTEMPTS {
+                let network = builder.clone().build();
+                match network.start_all().await {
+                    Ok(_) => return network,
+                    Err(err) => {
+                        network.shutdown().await;
+                        let retry = attempt < NETWORK_START_ATTEMPTS
+                            && is_retryable_network_startup_error(&err);
+                        drop(network);
+                        if retry {
+                            eprintln!(
+                                "warning: serialized_network_drop_completes_on_current_thread_runtime fresh startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; rebuilding in {:?}: {err}",
+                                NETWORK_START_RETRY_DELAY
+                            );
+                            tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
+                            continue;
+                        }
+                        panic!("start network: {err:?}");
+                    }
+                }
+            }
+            unreachable!("positive network startup attempt bound must return from the loop")
+        });
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("current-thread runtime");
+            let handle = rt.handle().clone();
+            rt.block_on(async move {
+                let serialized = SerializedNetwork::new_with_handle(network, guard, handle);
+                drop(serialized);
+            });
+            wait_for_network_permits_to_drain(
+                "serialized_network_drop_completes_on_current_thread_runtime",
+            );
+            let _ = tx.send(());
+        });
+
+        assert!(
+            rx.recv_timeout(Duration::from_secs(120)).is_ok(),
+            "serialized network drop should complete under current-thread runtime"
+        );
+    }
+
+    #[test]
+    fn serial_guard_applies_default_parallelism() {
+        let _env_guard = lock_env_guard();
+        wait_for_network_permits_to_drain("serial_guard_applies_default_parallelism");
+        let _serialize_guard = EnvRestore::remove(SERIALIZE_NETWORKS_ENV);
+        let _parallelism_guard = EnvRestore::remove(NETWORK_PARALLELISM_ENV);
+        let _override_guard = override_network_parallelism(Some(false), None);
+        let (_, in_use_before) = network_permit_snapshot();
+        let guard = serial_guard();
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(
+            limit, DEFAULT_NETWORK_PARALLELISM,
+            "default network parallelism should be WSL-safe"
+        );
+        assert_eq!(in_use, in_use_before.saturating_add(1));
+        drop(guard);
+        let (_, in_use_after) = network_permit_snapshot();
+        assert_eq!(in_use_after, in_use_before);
+    }
+
+    #[test]
+    fn network_parallelism_env_override_applies() {
+        let _env_guard = lock_env_guard();
+        wait_for_network_permits_to_drain("network_parallelism_env_override_applies");
+        let _serialize_guard = EnvRestore::remove(SERIALIZE_NETWORKS_ENV);
+        let _parallelism_guard = EnvRestore::remove(NETWORK_PARALLELISM_ENV);
+        let _override_guard = override_network_parallelism(None, Some(2));
+
+        let guard = serial_guard();
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(limit, 2);
+        assert_eq!(in_use, 1);
+        drop(guard);
+    }
+
+    #[test]
+    fn serialization_overrides_parallelism_limit() {
+        let _env_guard = lock_env_guard();
+        wait_for_network_permits_to_drain("serialization_overrides_parallelism_limit");
+        let _override_guard = override_network_parallelism(Some(true), Some(4));
+
+        let guard = serial_guard();
+        let (limit, in_use) = network_permit_snapshot();
+        assert_eq!(limit, 1);
+        assert_eq!(in_use, 1);
+        drop(guard);
+    }
+
+    #[test]
+    fn network_permit_wait_timeout_env_override_applies() {
+        let _env_guard = lock_env_guard();
+        let _timeout_guard = EnvRestore::remove(NETWORK_PERMIT_WAIT_TIMEOUT_ENV);
+        assert_eq!(
+            network_permit_wait_timeout(),
+            Some(NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT)
+        );
+
+        let _timeout_guard = EnvRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "25ms");
+        assert_eq!(
+            network_permit_wait_timeout(),
+            Some(Duration::from_millis(25))
+        );
+
+        drop(_timeout_guard);
+        let _timeout_guard = EnvRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "0");
+        assert_eq!(network_permit_wait_timeout(), None);
+    }
+
+    #[test]
+    fn serial_guard_panics_after_wait_timeout() {
+        let _env_guard = lock_env_guard();
+        wait_for_network_permits_to_drain("serial_guard_panics_after_wait_timeout");
+        let _timeout_guard = EnvRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "25ms");
+        let _override_guard = override_network_parallelism(Some(true), None);
+        let held_guard = serial_guard();
+
+        let started = Instant::now();
+        let panic = match std::panic::catch_unwind(serial_guard) {
+            Ok(_) => panic!("serial_guard should panic when permit wait timeout elapses"),
+            Err(panic) => panic,
+        };
+        let panic_message = panic
+            .downcast_ref::<&str>()
+            .map(std::string::ToString::to_string)
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<missing panic message>".to_owned());
+        assert!(
+            panic_message.contains("timed out"),
+            "panic should explain permit wait timeout, got: {panic_message}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(20),
+            "permit wait should not panic before timeout elapsed"
+        );
+
+        drop(held_guard);
+    }
+
+    #[test]
+    fn consensus_grouped_binary_prefers_serialization() {
+        assert!(test_binary_prefers_serialization("consensus_and_da"));
+        assert!(test_binary_prefers_serialization("consensus_and_da-abcdef"));
+        assert!(!test_binary_prefers_serialization("network_functional"));
+    }
+
+    #[test]
+    fn build_network_or_skip_returns_network() {
+        if skip_if_sandboxed("build_network_or_skip_returns_network") {
+            return;
+        }
+        let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
+        let result = build_network_or_skip(
+            NetworkBuilder::new(),
+            "build_network_or_skip_returns_network",
+        );
+        let Some(network) = result else {
+            panic!("expected a network to be built");
+        };
+        let mut layers = network.config_layers();
+        let trusted = layers
+            .next()
+            .expect("trusted peers layer must be present")
+            .into_owned();
+        assert!(trusted.contains_key("trusted_peers"));
+        let pops = trusted
+            .get("trusted_peers_pop")
+            .and_then(TomlValue::as_array)
+            .expect("trusted_peers_pop array must be present");
+        assert!(
+            !pops.is_empty(),
+            "trusted_peers_pop should include at least one entry"
+        );
+    }
+
+    #[test]
+    fn build_network_blocking_or_skip_returns_network() {
+        if skip_if_sandboxed("build_network_blocking_or_skip_returns_network") {
+            return;
+        }
+        let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
+        let result = build_network_blocking_or_skip(
+            NetworkBuilder::new(),
+            "build_network_blocking_or_skip_returns_network",
+        );
+        let Some((network, _rt)) = result else {
+            panic!("expected a network to be built");
+        };
+        let mut layers = network.config_layers();
+        let trusted = layers
+            .next()
+            .expect("trusted peers layer must be present")
+            .into_owned();
+        assert!(trusted.contains_key("trusted_peers"));
+        let pops = trusted
+            .get("trusted_peers_pop")
+            .and_then(TomlValue::as_array)
+            .expect("trusted_peers_pop array must be present");
+        assert!(
+            !pops.is_empty(),
+            "trusted_peers_pop should include at least one entry"
+        );
+    }
+
+    #[test]
+    fn start_network_blocking_or_skip_includes_trusted_peer_pops() -> Result<()> {
+        if skip_if_sandboxed("start_network_blocking_or_skip_includes_trusted_peer_pops") {
+            return Ok(());
+        }
+        let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
+        let result = start_network_blocking_or_skip(
+            NetworkBuilder::new(),
+            "start_network_blocking_or_skip_includes_trusted_peer_pops",
+        )?;
+        let Some((network, _rt)) = result else {
+            return Ok(());
+        };
+        let mut layers = network.config_layers();
+        let trusted = layers
+            .next()
+            .expect("trusted peers layer must be present")
+            .into_owned();
+        assert!(trusted.contains_key("trusted_peers"));
+        let pops = trusted
+            .get("trusted_peers_pop")
+            .and_then(TomlValue::as_array)
+            .expect("trusted_peers_pop array must be present");
+        assert!(
+            !pops.is_empty(),
+            "trusted_peers_pop should include at least one entry"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn start_network_async_or_skip_includes_trusted_peer_pops() -> Result<()> {
+        if skip_if_sandboxed("start_network_async_or_skip_includes_trusted_peer_pops") {
+            return Ok(());
+        }
+        let _env_guard = lock_env_guard();
+        let _build_guard = allow_reentrant_build_guard();
+        let result = start_network_async_or_skip(
+            NetworkBuilder::new(),
+            "start_network_async_or_skip_includes_trusted_peer_pops",
+        )
+        .await?;
+        let Some(network) = result else {
+            return Ok(());
+        };
+        {
+            let mut layers = network.config_layers();
+            let trusted = layers
+                .next()
+                .expect("trusted peers layer must be present")
+                .into_owned();
+            assert!(trusted.contains_key("trusted_peers"));
+            let pops = trusted
+                .get("trusted_peers_pop")
+                .and_then(TomlValue::as_array)
+                .expect("trusted_peers_pop array must be present");
+            assert!(
+                !pops.is_empty(),
+                "trusted_peers_pop should include at least one entry"
+            );
+        }
+        network.shutdown().await;
+        Ok(())
+    }
+
+    #[test]
+    fn run_shutdown_blocking_executes_outside_runtime() {
+        let counter = AtomicUsize::new(0);
+        run_shutdown_blocking(|| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn run_shutdown_blocking_executes_inside_runtime() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_handle = Arc::clone(&counter);
+        let rt = Runtime::new().expect("runtime");
+        rt.block_on(async {
+            run_shutdown_blocking(move || {
+                counter_handle.fetch_add(1, Ordering::SeqCst);
+            });
+        });
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+}

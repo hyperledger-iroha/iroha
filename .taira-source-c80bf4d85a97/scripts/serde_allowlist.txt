@@ -1,0 +1,4 @@
+# Crate paths allowed to depend on serde/serde_json for now.
+# Keep this file empty unless a production crate truly requires serde;
+# add entries as relative paths (e.g., crates/your_crate) when migration
+# is not yet possible.

@@ -1,0 +1,49 @@
+{
+  "provider_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "stake": {
+    "pool_id_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "stake_amount": "8000"
+  },
+  "committed_capacity_gib": 480,
+  "chunker_commitments": [
+    {
+      "profile_handle": "sorafs.sf1@1.0.0",
+      "profile_aliases": [
+        "sorafs.sf1@1.0.0",
+        "sorafs-sf1"
+      ],
+      "committed_gib": 480,
+      "capability_refs": [
+        "torii_gateway",
+        "chunk_range_fetch"
+      ]
+    }
+  ],
+  "lane_commitments": [
+    {
+      "lane_id": "global",
+      "max_gib": 400
+    },
+    {
+      "lane_id": "archive",
+      "max_gib": 120
+    }
+  ],
+  "pricing": {
+    "currency": "xor",
+    "rate_per_gib_hour_milliu": 9,
+    "min_commitment_hours": 24,
+    "notes": "primary region capacity"
+  },
+  "valid_from": 1700500000,
+  "valid_until": 1701104800,
+  "metadata": {
+    "region": "global",
+    "tier": "primary"
+  },
+  "record_window": {
+    "registered_epoch": 1700500000,
+    "valid_from_epoch": 1700500000,
+    "valid_until_epoch": 1701104800
+  }
+}

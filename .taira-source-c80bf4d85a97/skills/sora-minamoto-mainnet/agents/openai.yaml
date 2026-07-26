@@ -1,0 +1,4 @@
+interface:
+  display_name: "SORA Minamoto Mainnet"
+  short_description: "Use Torii MCP on the Minamoto mainnet"
+  default_prompt: "Use $sora-minamoto-mainnet to inspect the SORA Minamoto mainnet through its Torii MCP endpoint; perform writes only when explicitly requested."

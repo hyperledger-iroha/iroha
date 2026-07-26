@@ -1,0 +1,84 @@
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+TryItConsole を '@site/src/components/TryItConsole.jsx' からインポートします。
+
+# Torii API の概要
+
+Torii ゲートウェイは、Iroha と対話するための REST + WebSocket サーフェスを公開します。
+ノード。正規の OpenAPI ドキュメントは次のように生成されます。
+
+```bash
+cargo xtask openapi
+```
+
+上記のコマンドを実行すると、`docs/portal/static/openapi/torii.json` と書き込まれます。
+`docusaurus-plugin-openapi-docs` 統合をフィードするため、このセクションが更新されます
+自動的に。ジェネレーターはメモリ内の Torii ルーターを起動し、次のことを試みます。
+OpenAPI エンドポイントをクエリします。それが失敗した場合 (ルーターの初期化など)
+エラー)、代わりに決定的なプレースホルダー仕様が発行されます。
+
+## 現在のステータス
+
+- **仕様ソース:** `cargo xtask openapi` は Torii ルーターに直接クエリを実行します。の
+  フォールバック スタブは、ルーターが OpenAPI の公開に失敗した場合にのみ発行されます。
+  文書。
+- **決定性:** JSON 出力は、CI での安定した差分を確保するために正規化されています。
+- **認証:** 「Try it」サンドボックスは、リクエストを
+  制約付きステージング プロキシ。オペレータは Torii エンドポイントとベアラーを提供する必要があります
+  呼び出しを発行する前にトークンを取得します。
+- **バージョン セレクター:** Swagger UI、RapiDoc、および完全な Torii OpenAPI ページ
+  `openapi/versions.json` というドロップダウンを公開して比較できるようにします
+  歴史的なスナップショット。 `Latest (tracked)` オプションは次を指します。
+  `/openapi/torii.json`、他のすべてのエントリは対応する
+  `openapi/versions/<version>/torii.json` アーティファクト。
+- **スナップショット ワークフロー:** `npm run docs:version -- <label>` を実行した後、更新します。
+  `npm run sync-openapi -- --version=<label> --latest` と一致する OpenAPI ファイル
+  そのため、ドロップダウンでは、凍結されたスナップショットとローリングの「最新」ビルドの両方を読み込むことができます。
+
+ルーターを使用したエクストラクターは、Torii サーフェス全体を出力するようになりました。を見た場合は、
+プレースホルダー スタブをビルド時の失敗として扱い、Torii を検査します。
+ルーターの起動ログ。
+
+## サンドボックスを試してみる (DOCS-3)
+
+開発者ポータルには、REST リクエストを中継する小さなコンソールが組み込まれています。
+ノードベースのプロキシ。プロキシは CORS、レート制限、およびオプションのベアラーを強制します
+トークンを使用して、ウィジェットが資格情報を公開せずにステージング ゲートウェイと通信できるようにします。
+完全なオペレータ チェックリストについては、`docs/devportal/try-it.md` を参照してください。
+
+Docusaurus 開発サーバーと並行してプロキシを起動します。
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- プロキシは `TRYIT_PROXY_LISTEN` (デフォルトは `127.0.0.1:8787`) をリッスンし、
+  `/proxy/...` リクエストを `TRYIT_PROXY_TARGET` に転送します。
+- 静的ベアラー トークンに `TRYIT_PROXY_BEARER` を指定するか、呼び出し元に提供させます
+  「ベアラー トークン」フィールド経由でリクエストごとに 1 つ。
+- レート制限のデフォルトは 1 分あたり 60 リクエストで、調整可能
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`。
+
+> ⚠️ プロキシはステージング/デモアクセスを目的としています。本番展開
+> 強化された入力の背後で実行し、同じレート制限ポリシーを再利用する必要があります。
+> Torii の前。
+
+<TryItConsole />

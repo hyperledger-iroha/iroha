@@ -5,9 +5,10 @@ use axum::{
     http::HeaderMap,
 };
 use iroha_core::state::{StateReadOnly as _, WorldReadOnly as _};
+use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{
     account::AccountId,
-    governance::types::{AtWindow, ProposalKind},
+    governance::types::{AtWindow, ParliamentBody, ProposalKind},
     isi::{
         InstructionBox, frame_instruction_payload,
         governance::{
@@ -25,13 +26,12 @@ use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, ValidationFeeCurrentPolicyProofRequestV1,
     ValidationFeeCurrentPolicyProofV1, ValidationFeeParliamentBodyProgressV1,
-    ValidationFeeParliamentSnapshotV1, ValidationFeeProposalDetailQueryV1,
-    ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
-    ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
-    ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListV1,
-    ValidationFeePlainBallotDirectionV1, ValidationFeePlainBallotDraftRequestV1,
-    ValidationFeePlainBallotDraftResponseV1,
-    ValidationFeeProposalLockV1, ValidationFeeProposalLocksV1,
+    ValidationFeeParliamentSnapshotV1, ValidationFeePlainBallotDirectionV1,
+    ValidationFeePlainBallotDraftRequestV1, ValidationFeePlainBallotDraftResponseV1,
+    ValidationFeeProposalDetailQueryV1, ValidationFeeProposalDetailV1,
+    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
+    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalInstructionDraftV1,
+    ValidationFeeProposalListV1, ValidationFeeProposalLockV1, ValidationFeeProposalLocksV1,
     ValidationFeeProposalPipelineStageV1, ValidationFeeProposalPipelineV1,
     ValidationFeeProposalRecordV1, ValidationFeeProposalReferendumV1,
     ValidationFeeProposalStatusV1, ValidationFeeProposalTallyV1,
@@ -41,8 +41,7 @@ use mv::storage::StorageReadOnly as _;
 
 use crate::{
     Error, JsonBody, NoritoBody, NoritoJson, NoritoQuery, SharedAppState, check_access,
-    gov::validation_fee_plain_electorate_rules,
-    utils::extractors::NoritoOnly,
+    gov::validation_fee_plain_electorate_rules, utils::extractors::NoritoOnly,
 };
 
 fn inconsistent(message: impl Into<String>) -> Error {
@@ -105,6 +104,144 @@ fn retained_plain_electorate_rules(
     Ok(rules)
 }
 
+const VALIDATION_FEE_PARLIAMENT_BODIES: [ParliamentBody; 7] = [
+    ParliamentBody::RulesCommittee,
+    ParliamentBody::AgendaCouncil,
+    ParliamentBody::InterestPanel,
+    ParliamentBody::ReviewPanel,
+    ParliamentBody::PolicyJury,
+    ParliamentBody::OversightCommittee,
+    ParliamentBody::FmaCommittee,
+];
+
+fn validate_retained_parliament_snapshot(
+    proposal: &iroha_core::state::GovernanceProposalRecord,
+) -> Result<(), Error> {
+    let snapshot = proposal
+        .parliament_snapshot
+        .as_ref()
+        .ok_or_else(|| inconsistent("validation-fee proposal has no Parliament snapshot"))?;
+    if snapshot.bodies.selection_epoch != snapshot.selection_epoch {
+        return Err(inconsistent(
+            "validation-fee Parliament snapshot selection epoch is inconsistent",
+        ));
+    }
+    for body in VALIDATION_FEE_PARLIAMENT_BODIES {
+        let roster = snapshot.bodies.rosters.get(&body).ok_or_else(|| {
+            inconsistent(format!(
+                "validation-fee Parliament snapshot is missing {body:?}"
+            ))
+        })?;
+        if roster.body != body || roster.epoch != snapshot.selection_epoch {
+            return Err(inconsistent(format!(
+                "validation-fee Parliament roster for {body:?} is inconsistent"
+            )));
+        }
+        let members = roster.members.iter().collect::<std::collections::BTreeSet<_>>();
+        let alternates = roster
+            .alternates
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        if members.len() != roster.members.len()
+            || alternates.len() != roster.alternates.len()
+            || !members.is_disjoint(&alternates)
+        {
+            return Err(inconsistent(format!(
+                "validation-fee Parliament roster for {body:?} has duplicate membership"
+            )));
+        }
+    }
+    let encoded = norito::to_bytes(&snapshot.bodies)
+        .map_err(|_| inconsistent("validation-fee Parliament snapshot cannot be encoded"))?;
+    let digest = Blake2b512::digest(encoded);
+    let mut roster_root = [0_u8; 32];
+    roster_root.copy_from_slice(&digest[..32]);
+    if roster_root != snapshot.roster_root {
+        return Err(inconsistent(
+            "validation-fee Parliament snapshot roster root is inconsistent",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_retained_proposal_state(
+    proposal_id: [u8; 32],
+    proposal: &iroha_core::state::GovernanceProposalRecord,
+    referendum: iroha_core::state::GovernanceReferendumRecord,
+    rules: &ValidationFeePlainElectorateRulesV1,
+) -> Result<(), Error> {
+    validate_retained_parliament_snapshot(proposal)?;
+    let span = referendum
+        .h_end
+        .checked_sub(referendum.h_start)
+        .and_then(|distance| distance.checked_add(1))
+        .ok_or_else(|| inconsistent("validation-fee referendum window is invalid"))?;
+    if span != rules.ballot_duration_blocks {
+        return Err(inconsistent(
+            "validation-fee referendum window differs from retained PLAIN electorate rules",
+        ));
+    }
+
+    let Some(evidence) = proposal.finalization_evidence.as_ref() else {
+        if referendum.status == iroha_core::state::GovernanceReferendumStatus::Closed
+            || proposal.status != iroha_core::state::GovernanceProposalStatus::Proposed
+        {
+            return Err(inconsistent(
+                "validation-fee proposal status differs from its missing finalization evidence",
+            ));
+        }
+        return Ok(());
+    };
+    if referendum.status != iroha_core::state::GovernanceReferendumStatus::Closed
+        || evidence.proposal_id != proposal_id
+        || evidence.referendum_id != proposal_id
+        || evidence.finalized_at_height != referendum.h_end
+        || evidence.mode != VotingMode::Plain
+        || evidence.min_turnout != rules.min_turnout
+        || evidence.approval_threshold_numerator != rules.approval_threshold_numerator
+        || evidence.approval_threshold_denominator != rules.approval_threshold_denominator
+    {
+        return Err(inconsistent(
+            "validation-fee finalization evidence differs from retained proposal state",
+        ));
+    }
+    let turnout = evidence
+        .approve
+        .checked_add(evidence.reject)
+        .and_then(|value| value.checked_add(evidence.abstain))
+        .ok_or_else(|| inconsistent("validation-fee finalization turnout overflow"))?;
+    let expected_approval = if turnout >= rules.min_turnout {
+        let approve = evidence
+            .approve
+            .checked_mul(u128::from(rules.approval_threshold_denominator))
+            .ok_or_else(|| inconsistent("validation-fee finalization approval overflow"))?;
+        let required = turnout
+            .checked_mul(u128::from(rules.approval_threshold_numerator))
+            .ok_or_else(|| inconsistent("validation-fee finalization threshold overflow"))?;
+        approve >= required
+    } else {
+        false
+    };
+    if evidence.approved != expected_approval {
+        return Err(inconsistent(
+            "validation-fee finalization decision does not match its checked tally",
+        ));
+    }
+    let status_matches = match proposal.status {
+        iroha_core::state::GovernanceProposalStatus::Approved
+        | iroha_core::state::GovernanceProposalStatus::Enacted
+        | iroha_core::state::GovernanceProposalStatus::Superseded => evidence.approved,
+        iroha_core::state::GovernanceProposalStatus::Rejected => !evidence.approved,
+        iroha_core::state::GovernanceProposalStatus::Proposed => false,
+    };
+    if !status_matches {
+        return Err(inconsistent(
+            "validation-fee proposal status differs from its finalization decision",
+        ));
+    }
+    Ok(())
+}
+
 fn parliament_body_progress(
     proposal: &iroha_core::state::GovernanceProposalRecord,
     approvals: Option<&iroha_core::state::GovernanceStageApprovals>,
@@ -130,9 +267,33 @@ fn parliament_body_progress(
                 "validation-fee Parliament snapshot is missing {body:?}"
             ))
         })?;
-        let stage = approvals
-            .and_then(|records| records.stages.get(&body))
-            .filter(|record| record.epoch == snapshot.selection_epoch);
+        let stage = approvals.and_then(|records| records.stages.get(&body));
+        if let Some(stage) = stage {
+            let expected_required =
+                iroha_core::state::council_quorum_threshold(roster.members.len(), stage.quorum_bps);
+            let decision_sets_are_disjoint = stage
+                .approvers
+                .is_disjoint(&stage.rejections)
+                && stage.approvers.is_disjoint(&stage.abstentions)
+                && stage.rejections.is_disjoint(&stage.abstentions);
+            let decisions_are_members = stage
+                .approvers
+                .iter()
+                .chain(&stage.rejections)
+                .chain(&stage.abstentions)
+                .all(|account| roster.members.contains(account));
+            if stage.epoch != snapshot.selection_epoch
+                || stage.quorum_bps == 0
+                || stage.quorum_bps > 10_000
+                || stage.required != expected_required
+                || !decision_sets_are_disjoint
+                || !decisions_are_members
+            {
+                return Err(inconsistent(format!(
+                    "validation-fee Parliament decisions for {body:?} are inconsistent"
+                )));
+            }
+        }
         let required = stage.map_or_else(
             || iroha_core::state::council_quorum_threshold(roster.members.len(), quorum_bps),
             |record| record.required,
@@ -191,8 +352,7 @@ fn integer_sqrt_u128(n: u128) -> u128 {
 fn live_plain_tally(
     locks: Option<&iroha_core::state::GovernanceLocksForReferendum>,
     referendum_end: u64,
-    conviction_step_blocks: u64,
-    max_conviction: u64,
+    rules: &ValidationFeePlainElectorateRulesV1,
 ) -> Result<(u128, u128, u128), Error> {
     let mut approve = 0_u128;
     let mut reject = 0_u128;
@@ -200,7 +360,15 @@ fn live_plain_tally(
     let Some(locks) = locks else {
         return Ok((approve, reject, abstain));
     };
-    for record in locks.locks.values() {
+    for (owner, record) in &locks.locks {
+        if &record.owner != owner
+            || record.amount != rules.ballot_amount
+            || record.duration_blocks != rules.ballot_duration_blocks
+        {
+            return Err(inconsistent(
+                "validation-fee citizen lock differs from retained PLAIN electorate rules",
+            ));
+        }
         if record.expiry_height < referendum_end {
             continue;
         }
@@ -208,8 +376,8 @@ fn live_plain_tally(
             inconsistent("validation-fee citizen ballot amount is outside the integer tally domain")
         })?;
         let factor = 1_u64
-            .saturating_add(record.duration_blocks / conviction_step_blocks.max(1))
-            .min(max_conviction);
+            .saturating_add(record.duration_blocks / rules.conviction_step_blocks)
+            .min(rules.max_conviction);
         let weight = integer_sqrt_u128(units)
             .checked_mul(u128::from(factor))
             .ok_or_else(|| inconsistent("validation-fee citizen tally overflow"))?;
@@ -217,7 +385,11 @@ fn live_plain_tally(
             0 => &mut approve,
             1 => &mut reject,
             2 => &mut abstain,
-            _ => continue,
+            _ => {
+                return Err(inconsistent(
+                    "validation-fee citizen lock has an invalid ballot direction",
+                ));
+            }
         };
         *target = target
             .checked_add(weight)
@@ -297,6 +469,8 @@ fn public_proposal_record(
             "validation-fee proposal retained a non-plain referendum",
         ));
     }
+    let rules = retained_plain_electorate_rules(&proposal.kind)?;
+    validate_retained_proposal_state(proposal_id, proposal, referendum, rules)?;
     let snapshot = proposal
         .parliament_snapshot
         .as_ref()
@@ -433,6 +607,12 @@ pub(crate) async fn handler_proposal_detail(
         .get(&proposal_id)
         .copied()
         .ok_or_else(|| inconsistent("validation-fee proposal has no exact retained referendum"))?;
+    validate_retained_proposal_state(
+        proposal_id_bytes,
+        proposal,
+        referendum,
+        plain_electorate_rules,
+    )?;
     let gov = app.state.governance_snapshot();
     let approvals = world.governance_stage_approvals().get(&proposal_id);
     let body_progress = parliament_body_progress(
@@ -441,34 +621,35 @@ pub(crate) async fn handler_proposal_detail(
         gov.parliament_quorum_bps,
         query.account_id.as_ref(),
     )?;
-    let (approve, reject, abstain, approved) =
-        if let Some(evidence) = proposal.finalization_evidence.as_ref() {
-            if evidence.mode != VotingMode::Plain
-                || evidence.min_turnout != plain_electorate_rules.min_turnout
-                || evidence.approval_threshold_numerator
-                    != plain_electorate_rules.approval_threshold_numerator
-                || evidence.approval_threshold_denominator
-                    != plain_electorate_rules.approval_threshold_denominator
-            {
-                return Err(inconsistent(
-                    "validation-fee finalization evidence differs from retained PLAIN electorate rules",
-                ));
-            }
-            (
-                evidence.approve,
-                evidence.reject,
-                evidence.abstain,
-                Some(evidence.approved),
-            )
-        } else {
-            let (approve, reject, abstain) = live_plain_tally(
-                world.governance_locks().get(&proposal_id),
-                referendum.h_end,
-                plain_electorate_rules.conviction_step_blocks,
-                plain_electorate_rules.max_conviction,
-            )?;
-            (approve, reject, abstain, None)
-        };
+    let live_tally = live_plain_tally(
+        world.governance_locks().get(&proposal_id),
+        referendum.h_end,
+        plain_electorate_rules,
+    )?;
+    let (approve, reject, abstain, approved) = if let Some(evidence) =
+        proposal.finalization_evidence.as_ref()
+    {
+        if evidence.mode != VotingMode::Plain
+            || evidence.min_turnout != plain_electorate_rules.min_turnout
+            || evidence.approval_threshold_numerator
+                != plain_electorate_rules.approval_threshold_numerator
+            || evidence.approval_threshold_denominator
+                != plain_electorate_rules.approval_threshold_denominator
+        {
+            return Err(inconsistent(
+                "validation-fee finalization evidence differs from retained PLAIN electorate rules",
+            ));
+        }
+        (
+            evidence.approve,
+            evidence.reject,
+            evidence.abstain,
+            Some(evidence.approved),
+        )
+    } else {
+        let (approve, reject, abstain) = live_tally;
+        (approve, reject, abstain, None)
+    };
     let turnout = approve
         .checked_add(reject)
         .and_then(|value| value.checked_add(abstain))
@@ -589,6 +770,34 @@ fn canonical_draft_instruction(
     Ok((proposal_kind, instruction))
 }
 
+fn validate_draft_plain_electorate_rules(
+    requested: &ValidationFeePlainElectorateRulesV1,
+    gov: &iroha_config::parameters::actual::Governance,
+) -> Result<(), Error> {
+    if !gov.plain_voting_enabled {
+        return Err(inconsistent(
+            "validation-fee proposal drafting requires active PLAIN governance voting",
+        ));
+    }
+    if gov.voting_asset_id != gov.citizenship_asset_id {
+        return Err(inconsistent(
+            "validation-fee PLAIN governance requires one shared voting and citizenship asset",
+        ));
+    }
+    let expected = validation_fee_plain_electorate_rules(gov);
+    if let Some(reason) = expected.invariant_error() {
+        return Err(inconsistent(format!(
+            "active governance cannot form valid validation-fee PLAIN electorate rules: {reason}"
+        )));
+    }
+    if requested != &expected {
+        return Err(bad_request(
+            "validation-fee PLAIN electorate rules differ from active governance policy",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_draft_referendum_window(
     window: Option<AtWindow>,
     current_tip: u64,
@@ -657,27 +866,7 @@ pub(crate) async fn handler_proposal_draft(
     .await?;
     let (proposal_kind, instruction) = canonical_draft_instruction(&request)?;
     let gov = app.state.governance_snapshot();
-    if !gov.plain_voting_enabled {
-        return Err(inconsistent(
-            "validation-fee proposal drafting requires active PLAIN governance voting",
-        ));
-    }
-    if gov.voting_asset_id != gov.citizenship_asset_id {
-        return Err(inconsistent(
-            "validation-fee PLAIN governance requires one shared voting and citizenship asset",
-        ));
-    }
-    let expected_plain_electorate_rules = validation_fee_plain_electorate_rules(&gov);
-    if let Some(reason) = expected_plain_electorate_rules.invariant_error() {
-        return Err(inconsistent(format!(
-            "active governance cannot form valid validation-fee PLAIN electorate rules: {reason}"
-        )));
-    }
-    if request.plain_electorate_rules != expected_plain_electorate_rules {
-        return Err(bad_request(
-            "validation-fee PLAIN electorate rules differ from active governance policy",
-        ));
-    }
+    validate_draft_plain_electorate_rules(&request.plain_electorate_rules, &gov)?;
     let current_tip = u64::try_from(app.state.committed_height())
         .map_err(|_| inconsistent("ledger height does not fit validation-fee draft timing"))?;
     validate_draft_referendum_window(
@@ -750,6 +939,7 @@ pub(crate) async fn handler_plain_ballot_draft(
         .get(&proposal_id)
         .copied()
         .ok_or_else(|| inconsistent("validation-fee proposal has no exact retained referendum"))?;
+    validate_retained_proposal_state(proposal_id_bytes, proposal, referendum, rules)?;
     if referendum.mode != iroha_core::state::GovernanceReferendumMode::Plain {
         return Err(inconsistent(
             "validation-fee proposal retained a non-plain referendum",
@@ -779,9 +969,10 @@ pub(crate) async fn handler_plain_ballot_draft(
             "validation-fee referendum accepts one effective ballot per account",
         ));
     }
-    let citizen = world.citizens().get(&request.owner).ok_or_else(|| {
-        bad_request("validation-fee ballot owner has no retained citizen record")
-    })?;
+    let citizen = world
+        .citizens()
+        .get(&request.owner)
+        .ok_or_else(|| bad_request("validation-fee ballot owner has no retained citizen record"))?;
     if citizen.amount < rules.citizenship_amount {
         return Err(bad_request(
             "validation-fee ballot owner is below the proposal-bound citizenship amount",
@@ -796,6 +987,18 @@ pub(crate) async fn handler_plain_ballot_draft(
     let gate_height = approvals.approval_gate_height.ok_or_else(|| {
         inconsistent("validation-fee proposal has not crossed its Parliament approval gate")
     })?;
+    let snapshot = proposal
+        .parliament_snapshot
+        .as_ref()
+        .ok_or_else(|| inconsistent("validation-fee proposal has no Parliament snapshot"))?;
+    if VALIDATION_FEE_PARLIAMENT_BODIES.into_iter().any(|body| {
+        !approvals.quorum_met(body, snapshot.selection_epoch)
+            || approvals.rejection_quorum_met(body, snapshot.selection_epoch)
+    }) {
+        return Err(inconsistent(
+            "validation-fee proposal does not retain current seven-body Parliament approval",
+        ));
+    }
     let eligible = if request.owner == proposal.proposer {
         citizen.bonded_height <= gate_height
     } else {
@@ -886,6 +1089,65 @@ mod tests {
     fn omitted_draft_window_is_left_for_atomic_core_resolution() {
         validate_draft_referendum_window(None, u64::MAX, 600, 3_600)
             .expect("omitted lifecycle window does not precompute against a stale tip");
+    }
+
+    #[test]
+    fn draft_electorate_rules_must_exactly_match_live_governance() {
+        let mut gov = iroha_config::parameters::actual::Governance {
+            plain_voting_enabled: true,
+            min_turnout: 1,
+            ..iroha_config::parameters::actual::Governance::default()
+        };
+        gov.citizenship_asset_id = gov.voting_asset_id.clone();
+        let expected = validation_fee_plain_electorate_rules(&gov);
+        assert_eq!(expected.max_members, 256);
+        assert!(expected.invariant_error().is_none());
+        validate_draft_plain_electorate_rules(&expected, &gov)
+            .expect("exact live electorate rules");
+
+        let mut different = expected;
+        different.max_members = 255;
+        validate_draft_plain_electorate_rules(&different, &gov)
+            .expect_err("an otherwise valid rule set must not differ from live governance");
+    }
+
+    #[test]
+    fn typed_plain_ballot_forces_retained_amount_duration_and_direction() {
+        let mut gov = iroha_config::parameters::actual::Governance {
+            plain_voting_enabled: true,
+            min_turnout: 1,
+            min_bond_amount: 150_u64.into(),
+            window_span: 3_600,
+            ..iroha_config::parameters::actual::Governance::default()
+        };
+        gov.citizenship_asset_id = gov.voting_asset_id.clone();
+        let rules = validation_fee_plain_electorate_rules(&gov);
+        let owner = iroha_test_samples::ALICE_ID.clone();
+        for (direction, native_code) in [
+            (ValidationFeePlainBallotDirectionV1::Aye, 0),
+            (ValidationFeePlainBallotDirectionV1::Nay, 1),
+            (ValidationFeePlainBallotDirectionV1::Abstain, 2),
+        ] {
+            let ballot = canonical_plain_ballot(&"11".repeat(32), owner.clone(), direction, &rules);
+            assert_eq!(ballot.owner, owner);
+            assert_eq!(ballot.amount, 150_u64.into());
+            assert_eq!(ballot.duration_blocks, 3_600);
+            assert_eq!(ballot.direction, native_code);
+
+            let instruction: InstructionBox = ballot.clone().into();
+            let draft = framed_instruction_draft(&instruction).expect("frame exact native ballot");
+            let framed = hex::decode(draft.payload_hex).expect("decode framed ballot hex");
+            let decoded =
+                iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &framed)
+                    .expect("decode exact native ballot");
+            assert_eq!(
+                decoded
+                    .as_any()
+                    .downcast_ref::<CastPlainBallot>()
+                    .expect("typed CastPlainBallot"),
+                &ballot
+            );
+        }
     }
 }
 

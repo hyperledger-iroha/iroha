@@ -1,0 +1,16 @@
+{
+  "sid_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "tokens": {
+    "app": "app-token-vector",
+    "wallet": "wallet-token-vector",
+    "management": "management-token-vector",
+    "relay": "relay-token-vector"
+  },
+  "token_hashes": {
+    "app": "876e1d2e33feb60b26ee915667ecc6625e71f6052156268c01e45bcba05781b3",
+    "wallet": "0f70f4cacff393e445f597fbb94fbe14986d647733b0dad1bde42073c9c6f00d",
+    "management": "deba26ef2f1f1e4ebe1813ca0726c2a4f429272b81585418fe5e329515fe6f48"
+  },
+  "relay_mac_key_hex": "6e2a63fd0b73a49586613c8e138087f941675f95073450714fd1e7d2df7e2160",
+  "relay_auth_hash_hex": "65de07a9c6110f16b6b7c64e63c71437d88d122344e1a67d2c932a16187cce2f"
+}

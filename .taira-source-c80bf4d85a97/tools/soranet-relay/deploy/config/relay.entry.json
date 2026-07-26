@@ -1,0 +1,78 @@
+{
+  "mode": "Entry",
+  "listen": "0.0.0.0:4433",
+  "admin_listen": "127.0.0.1:9090",
+  "tls": {
+    "certificate_path": "/etc/soranet/relay/tls/server.crt",
+    "private_key_path": "/etc/soranet/relay/tls/server.key"
+  },
+  "pow": {
+    "required": true,
+    "difficulty": 16,
+    "max_future_skew_secs": 600,
+    "min_ticket_ttl_secs": 45,
+    "puzzle": {
+      "enabled": true,
+      "memory_kib": 8192,
+      "time_cost": 3,
+      "lanes": 2
+    },
+    "token": {
+      "enabled": true,
+      "issuer_public_key_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "max_ttl_secs": 600,
+      "clock_skew_secs": 10,
+      "revocation_list_hex": [],
+      "revocation_list_path": "/etc/soranet/relay/token_revocations.json"
+    }
+  },
+  "padding": {
+    "cell_size": 1024,
+    "max_idle_millis": 200,
+    "global_rate_limit_bytes_per_sec": 262144,
+    "burst_bytes": 524288
+  },
+  "congestion": {
+    "max_circuits_per_client": 12,
+    "handshake_cooldown_millis": 250
+  },
+  "privacy": {
+    "bucket_secs": 60,
+    "min_handshakes": 12,
+    "flush_delay_buckets": 1,
+    "force_flush_buckets": 6,
+    "max_completed_buckets": 60,
+    "expected_shares": 2,
+    "event_buffer_capacity": 4096
+  },
+  "compliance": {
+    "enable": true,
+    "log_path": "/var/log/soranet/relay_compliance.jsonl",
+    "hash_salt_hex": "fedcba98765432100123456789abcdef0123456789abcdef0123456789abcdef",
+    "max_log_bytes": 67108864,
+    "max_backup_files": 7,
+    "pipeline_spool_dir": "/var/spool/soranet/audit"
+  },
+  "handshake": {
+    "descriptor_manifest_path": "/etc/soranet/relay/secrets/relay-descriptor-manifest.json",
+    "descriptor_commit_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "kem": [
+      { "id": "ml-kem-768", "required": true },
+      { "id": "ml-kem-1024", "required": false }
+    ],
+    "signatures": [
+      { "id": "dilithium3", "required": true },
+      { "id": "ed25519", "required": false }
+    ],
+    "grease": [
+      { "typ": 32528, "value_hex": "deadbeef" },
+      { "typ": 32529, "value_hex": "cafebabe" }
+    ]
+  },
+  "guard_directory": {
+    "snapshot_path": "/etc/soranet/relay/guards/current_snapshot.norito",
+    "expected_directory_hash_hex": "fedcba98765432100123456789abcdef0123456789abcdef0123456789abcdef",
+    "allow_missing_entry": false,
+    "pinning_proof_path": "/var/lib/soranet/relay/guard_pinning_proof.json"
+  }
+}

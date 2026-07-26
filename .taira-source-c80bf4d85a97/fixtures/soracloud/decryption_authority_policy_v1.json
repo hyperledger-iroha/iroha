@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "policy_name": "phi_threshold_policy",
+  "mode": {
+    "mode": "ThresholdService",
+    "value": null
+  },
+  "approver_quorum": 2,
+  "approver_ids": [
+    "compliance_council",
+    "patient_advocate",
+    "privacy_officer"
+  ],
+  "allow_break_glass": false,
+  "jurisdiction_tag": "us_hipaa",
+  "require_consent_evidence": true,
+  "max_ttl_blocks": 1440,
+  "audit_tag": "phi.access.review"
+}

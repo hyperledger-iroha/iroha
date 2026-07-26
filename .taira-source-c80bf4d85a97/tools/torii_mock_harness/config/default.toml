@@ -1,0 +1,49 @@
+# Default scenarios for the Torii mock harness CLI.
+
+[[scenario]]
+name = "submit"
+description = "Submits a SignedTransaction via HttpClientTransportHarnessTests and waits for a committed status response using the Java harness."
+runner = "java/iroha_android/run_tests.sh"
+fixture = "java/iroha_android/src/test/resources/transaction_payloads.json"
+tests = [
+  "org.hyperledger.iroha.android.client.HttpClientTransportHarnessTests",
+]
+
+[[scenario]]
+name = "status-retry"
+description = "Exercises the retry path where status polling sees transient 404 responses."
+runner = "java/iroha_android/run_tests.sh"
+fixture = "java/iroha_android/src/test/resources/transaction_payloads.json"
+tests = [
+  "org.hyperledger.iroha.android.client.HttpClientTransportHarnessTests",
+]
+
+[[scenario]]
+name = "governance"
+description = "Runs the governance/status transport harness to ensure status polling plus governance retries succeed end-to-end."
+runner = "java/iroha_android/run_tests.sh"
+fixture = "java/iroha_android/src/test/resources/transaction_payloads.json"
+tests = [
+  "org.hyperledger.iroha.android.client.HttpClientTransportStatusTests",
+  "org.hyperledger.iroha.android.client.HttpClientTransportHarnessTests",
+]
+
+# Additional scenarios will be appended as the shared harness expands.
+
+[[scenario]]
+name = "submit-swift"
+description = "Swift Torii client smoke harness using the shared Norito RPC fixtures."
+runner = "scripts/swift/mock_harness_smoke.sh"
+fixture = "fixtures/norito_rpc/schema_hashes.json"
+tests = [
+  "swift/mock-harness",
+]
+
+[[scenario]]
+name = "submit-js"
+description = "JavaScript Torii client smoke harness using the shared Norito RPC fixtures."
+runner = "javascript/iroha_js/scripts/mock_harness_smoke.sh"
+fixture = "fixtures/norito_rpc/schema_hashes.json"
+tests = [
+  "javascript/mock-harness",
+]

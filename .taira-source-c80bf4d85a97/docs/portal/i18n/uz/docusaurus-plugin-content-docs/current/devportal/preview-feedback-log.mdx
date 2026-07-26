@@ -1,0 +1,264 @@
+---
+id: preview-feedback-log
+lang: uz
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback-log.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Preview feedback logging
+sidebar_label: Feedback logging
+description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+import previewFeedbackSummary '@site/src/data/previewFeedbackSummary.json';FeedbackSummaryTable() funksiyasi {
+  const to'lqinlar = oldindan ko'rishFeedbackSummary?.to'lqinlar ?? [];
+  agar (to'lqinlar.uzunlik === 0) {
+    qaytish (
+      
+        Oldindan koʻrish boʻyicha fikr-mulohaza yozuvlari qayd etilmagan
+        {' '}
+        {previewFeedbackSummary?.manba ?? 'artifacts/docs_portal_preview/feedback_log.json'}
+        .
+      
+    );
+  }
+  qaytish (
+    
+      
+        
+          To'lqin
+          Holat
+          Jami tadbirlar
+          Taklif qiladi
+          Takliflarni ochish
+          Tasdiqlangan
+          Bekor qilingan
+          Tekshiruv
+          Muammolar
+          Bajarish %
+          Qabul qilish %
+          Javob tezligi
+          Aksiyaning kechikishi (oʻrtacha soat)
+          Tekshiruv kechikishi (oʻrtacha soat)
+          So'nggi voqea
+          Oxirgi tadbirdan keyingi kunlar
+        
+      
+      
+        {waves.map((to'lqin) => {
+          const feedback = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
+          const masalalari = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
+          const acknowledgments =
+            wave.acknowledgements ?? wave.eventCounts?.e'tirof etilgan ?? 0;
+          const bekor qilish =
+            wave.revocations ?? wave.eventCounts?.['access-revoked'] ?? 0;
+          const respondRate =
+            wave.responseRatePercent == null? '—' : `${wave.responseRatePercent}%`;
+          const completionPercent =
+            wave.inviteCompletionPercent == null
+              ? '—'
+              : `${wave.inviteCompletionPercent}%`;
+          const ackPercent =
+            wave.ackRatePercent == null? '—' : `${wave.ackRatePercent}%`;
+          const ackLatency =
+            wave.ackLatencyHoursAvg == null? '—' : wave.ackLatencyHoursAvg;
+          const feedbackLatency =
+            wave.feedbackLatencyHoursAvg == null? '—' : wave.feedbackLatencyHoursAvg;
+          qaytish (
+            
+              {wave.wave}
+              {wave.status ?? 'kutishda'}
+              {wave.totalEvents}
+              {wave.invites?.jami ?? 0}
+              {wave.invites?.open ?? 0}
+              {acknowledgements}
+              {bekor qilishlar}
+              {fikr}
+              {muammolar}
+              {completionPercent}
+              {ackPercent}
+              {responseRate}
+              
+                {ackLatency}
+              
+              
+                {feedbackLatency}
+              
+              {wave.lastEventTimestamp ?? '—'}
+              {wave.daysSinceLastEvent ?? '—'}
+            
+          );})}
+      
+    
+  );
+}
+
+Yo'l xaritasi biz tekshiruvchilarni taklif qilganda tekshirilishi mumkin bo'lgan dalillarni talab qiladi
+docs portalini oldindan ko'rish. Ushbu eslatma ushbu dalillarni qanday qilib qo'lga kiritishni tushuntiradi
+`preview-feedback-log` yordamchisi, natijada olingan artefaktlarni qanday baham ko'rish mumkin
+boshqaruv va to'lqin yopilgandan keyin dayjestlarni qayerga topshirish kerak.
+
+## Nima uchun fikr-mulohazalarni qayd etamiz
+
+- **Muvofiqlik:** har bir taklif oldindan ko'rishga kim qachon kirganini yozib qo'yishi kerak
+  qabul qilinadigan foydalanish siyosatini tan oldi va ularga kirish huquqi bekor qilinganda.
+- **Telemetriya korrelyatsiyasi:** jurnal portal telemetriya ko'rsatkichlarini o'zaro bog'lash imkonini beradi
+  yoki Muayyan taklif kogortalari bilan trafikni sinab ko'ring.
+- **Boshqaruv dalillari:** har bir DOCS-SORA nazorat punkti mashina tomonidan o‘qilishi kerak
+  takliflar soni, ochiq sharhlovchilar va koʻzga koʻringanlarning holatini koʻrsatadigan xulosa
+  masalalar.
+
+Barcha dalillar `artifacts/docs_portal_preview/` ostida yashaydi, shuning uchun ularni biriktirish mumkin
+CI jurnallarini qirib tashlamasdan taklif to'lqin chiptasiga yoki boshqaruvni ko'rib chiqishga.
+
+## Jonli taklif xulosasi
+
+`docs/portal/scripts/preview-feedback-summary.mjs` umumiy jurnalni qabul qiladi va
+`npm run build` davomida `src/data/previewFeedbackSummary.json` yozadi. Jadval
+quyida ko'rib chiquvchilar joriy taklif izini ko'rishlari uchun JSON-ni taqdim etadi
+CLI yordamchisini ishga tushirmasdan.
+
+
+
+Takliflar jamiga qo'shimcha ravishda, xulosa endi tasdiq va ko'rinadi
+bekor qilish soni, olingan javob darajasi (teskari aloqalar soni
+jami takliflar) va o'rtacha kechikish (hoverable p95 bilan).
+taklif va sharhlovchining roziligi yoki fikr-mulohazalarini yuborish. Yangi
+**Bajarilishi %** ustunida qancha taklif yopilganligi ko‘rsatilgan (tasdiqlangan yoki
+bekor qilingan), shu bilan birga **Ack %** qancha oluvchilar aniq tasdiqlaganini ta'kidlaydi.
+qabul qilinadigan foydalanish bosqichlari. Bu olingan foizlar va faqat JSON uchun
+bekor qilish/chiqarish stavkalari - boshqaruv panelini taqdim eting, shunda sharhlovchilar tasdiqlaydi
+ham ishtirok darajalari, ham CLI yordamchisini ishga tushirmasdan ishlash vaqti.
+**Holat** ustuni to‘lqinning harakatsizligini ko‘rsatadi
+faol (`active`), yopiq, lekin 14 kunlik monitoring oynasida (`closed`) yoki
+arxivga tayyor (`archived`). **So‘nggi voqeadan keyingi kunlar** ko‘rsatkichi qandayligini ko‘rsatadi
+Kengashlar aniqlay olishlari uchun oxirgi taklif/mulohazalar harakatidan beri uzoq vaqt o'tdi
+o'ralgan yoki uzoq vaqt qabul qiluvchilarni qayta jalb qilish kerak bo'lgan to'lqinlar.
+
+### To'lqin `preview-20260218` xulosasi- **Qoʻl:** Moliyaviy beta, kuzatuv operatsiyalari, SDK hamkori va ekotizim himoyachisi sharhlovchilari **2026‑02‑18** da keyingi DOCS-SORA nazorat punkti oldidan taklif qilingan.
+- **Metriklar:** 4 ta taklif, 4 ta minnatdorchilik, 4 ta bekor qilish va 4 ta fikr-mulohaza yuborish (`responseRatePercent = 100`), kuzatuv kohorti tomonidan bitta kuzatuv muammosi (`DOCS-SORA-Preview-20260218`).
+- **Dalillar:** `artifacts/docs_portal_preview/feedback_log.json` endi ushbu to'lqin uchun batafsil voqea vaqt jadvalini o'z ichiga oladi va `artifacts/docs_portal_preview/preview-20260218-summary.json` biz boshqaruv paketlariga biriktiradigan normallashtirilgan ko'rsatkichlarni oladi. Portal ma'lumotlarini `npm run --prefix docs/portal preview:log -- --summary --summary-json` orqali qayta tiklash bir xil raqamlarni `src/data/previewFeedbackSummary.json` ichiga oladi.
+- **To'lqin yordamchisi:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` bir qadamda har bir to'lqin sarhisobi, dayjest va yangilangan portal ma'lumotlarini chiqaradi.
+- **Kuzatuvlar:** Kuzatish mumkin bo'lgan fikr-mulohazalar, sinab ko'rish so'rovlari uchun qo'shimcha CSP misollarini qamrab oldi; Docs/DevRel `docs/portal/docs/sorafs/observability-plan.md` (§4.2) ostida yozishni kuzatib boradi, shuning uchun keyingi taklif to'lqini tuzatishni tasdiqlashi mumkin. Toʻliq maʼlumot [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) da saqlanadi, vaqt jadvali [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md).
+
+## Hodisalar taksonomiyasi
+
+| Tadbir | Qachon yozib olish kerak | Eslatmalar |
+| --- | --- | --- |
+| `invite-sent` | Taklif xatini yuborganingizdan so'ng darhol. | Takliflar soni toʻgʻri qolishi uchun har bir qabul qiluvchiga bittadan yozuv qoʻshing. |
+| `acknowledged` | Ko'rib chiquvchi tasdiqlaganida, ular xavfsizlik/kuzatish hujjatlarini o'qiydilar va nazorat summasi eshigidan o'tadilar. | Majburiy emas, lekin hamkorlar uchun tavsiya etiladi. |
+| `feedback-submitted` | Tekshiruvchi xulosani kelishilgan kuzatuvchi orqali taqdim etganda. | Muammoni/havolani `--notes` maydoniga kiriting. |
+| `issue-opened` | DOCS-SORA qayta muammoni taqdim etganda, fikr-mulohazalardan kelib chiqadi. | Fikr-mulohazalarni oldindan ko‘rish uchun boshqaruvga yo‘l xaritasi elementlarini o‘zaro bog‘lashda yordam beradi. |
+| `access-revoked` | Ko'rib chiquvchining oldindan ko'rish oynasi tugasa yoki kirish muddatidan oldin bekor qilinadi. | “Ochiq oluvchilar” soni toʻgʻri qolishi uchun talab qilinadi. |
+
+Agar sizga qo'shimcha tadbir kerak bo'lsa, uni qo'shing
+`docs/portal/scripts/preview-feedback-log.mjs` ichida `VALID_EVENTS` va yangilash
+bu jadval xuddi shu o'zgarishda.
+
+## Ish jarayonini qayd qilish
+
+`npm run preview:log` orqasidagi yordamchi bitta JSON jurnalini yozadi.
+barcha voqealar. Har bir yozuvda to'lqin yorlig'i, qabul qiluvchi, voqea, vaqt tamg'asi va
+ixtiyoriy eslatmalar. Misol:
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-02-04T18:20:15.321Z",
+  "entries": [
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "invite-sent",
+      "timestamp": "2026-02-04T18:05:02.114Z",
+      "notes": "seed reviewer"
+    },
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "feedback-submitted",
+      "timestamp": "2026-02-05T09:14:43.009Z",
+      "notes": "docs-preview/42"
+    }
+  ]
+}
+```
+
+Buyruqlar:
+
+```bash
+# Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
+npm run --prefix docs/portal preview:log -- \
+  --wave preview-20260204 \
+  --recipient alice@example.com \
+  --event invite-sent \
+  --notes "seed reviewer"
+
+# Produce a text summary for the current repo
+npm run --prefix docs/portal preview:log -- --summary
+
+# Emit machine-readable summary for a specific wave
+npm run --prefix docs/portal preview:log -- \
+  --summary --summary-json --filter-wave preview-20260204 \
+  > artifacts/docs_portal_preview/preview-20260204-summary.json
+
+# Regenerate the portal summary data file
+npm run --prefix docs/portal generate:preview-summary
+
+# Generate a Markdown digest skeleton for a wave
+npm run --prefix docs/portal preview:digest -- \
+  --wave preview-20260204 \
+  --invite-start 2026-02-04T00:00:00Z \
+  --invite-end 2026-02-18T00:00:00Z \
+  --dashboard "https://grafana.example/d/docs-preview?var-wave=preview-20260204" \
+  --out artifacts/docs_portal_preview/preview-20260204-digest.md
+```
+
+Maslahatlar:
+
+- Xususiyatlar bo'limida ishlaganda jurnalni versiya nazorati ostida joylashtiring
+  nazoratchilar o'zgarishlarni ko'rib chiqishlari mumkin. Uzoq davom etadigan to'lqinlar uchun jurnalni saqlang
+  boshqaruv chiptasi va oxirgi versiyasini reliz artefaktlariga ilova qiling.
+- `preview:log` to'g'ridan-to'g'ri tizimga kirishingiz kerak bo'lganda `--log <path>` ni qabul qiladi
+  SoraFS to'plami yoki CI ish maydoni.
+- Har doim `--notes` maslahatini qo'shing (muammo havolasi, GitHub tutqichi, kohort identifikatori)
+  Xulosa retrospektiv davomida foydalidir.
+- Sizga aniqlangan qisqacha vaqt belgilari kerak bo'lganda (CI yoki docs snapshotlari uchun),
+  Xulosa ishga tushirishdan oldin `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` ni o'rnating
+  yordamchi. Bu `generatedAt`, holat va kun hisoblagichlarini izchil saqlaydi
+  qayta qurish bo'ylab.
+
+## Xulosalar, dayjestlar va arxivlar1. **Har bir to‘lqinli xulosa:** JSON xulosasini yarating va uni taklifnomaga biriktiring
+   chipta xom jurnali bilan birga. Xulosa umumiy takliflarni sanab o'tadi, ochiq
+   qabul qiluvchilar va fikr-mulohazalar hisobga olinadi, shuning uchun boshqaruv har bir narsani qo'lga kiritganimizni tasdiqlashi mumkin
+   sharhlovchi. Portal qurilishi shuningdek, jami xulosani quyidagi manzilda nashr etadi
+   `src/data/previewFeedbackSummary.json`, shuning uchun manfaatdor tomonlar oqimni ko'rishlari mumkin
+   CLI-ni ishga tushirmasdan suratga olish.
+2. **Haftalik dayjest:** `npm run --prefix docs/portal preview:digest -- --wave <label>` ni ishga tushiring
+   Markdown ko'rsatkichlarini oldindan to'ldirish uchun, so'ngra to'ldiruvchi bo'limlarni moslashtiring
+   shablondan foydalanish
+   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
+   manfaatdor tomonlar bilan baham ko'rishdan oldin. Hech bo'lmaganda qo'shing: to'lqin yorlig'i, ochiq
+   sharhlovchilar, muhim topilmalar va keyingi harakatlar.
+3. **Arxiv:** yopiq to‘lqinli jurnallarni ko‘chiring
+   `artifacts/docs_portal_preview/archive/<wave>/` va faqat eng yangisini saqlang
+   ildizida faol to'lqin. Bu CI artefaktlarini saqlagan holda kichik bo'lib qoladi
+   audit izi.
+
+## Yo'l xaritasiga ulanish
+
+- Har doim so'raganingizda taklifnoma va o'yin kitoblaridan ushbu hujjatga havola qiling
+  sharhlovchilar fikr bildirishlari uchun (qarang
+  [`preview-invite-flow`](./preview-invite-flow.md),
+  [`reviewer-onboarding`](./reviewer-onboarding.md) va
+  [`public-preview-invite`](./public-preview-invite.md)).
+- DOCS-SORA to'lqinni yopayotganda `status.md` da yaratilgan xulosani eslatib o'ting
+  yo'l xaritasi elementlari (masalan, DOCS-1b/2b/3c) artefaktni keltirishi mumkin.
+- Tashqi SoraFS ga yuklashda xesh dayjestlarini xulosa bilan birga saqlang
+  sharhlovchilar dalillar to'plamini tekshirishlari mumkin.
+
+Ro‘yxatga olish ish jarayonini shu yerda kodlangan holda saqlash yo‘l xaritasi talabini blokdan chiqaradi
+“Boshqaruv uchun fikr-mulohaza/temetriyani yozib oling” va sarflangan vaqtni qisqartiradi
+har bir bosqichda takliflar tarixini qayta tiklash.

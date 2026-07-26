@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha'ya hoş geldiniz!",
+  "error.trace_config_setup": "Konfigürasyon izleme ayarlanamadı",
+  "error.config": "Yapılandırma hatası:",
+  "error.logger": "Günlük sistemi başlatılamadı",
+  "error.start": "Iroha başlatılamadı",
+  "error.run": "Iroha çalıştırılırken hata oluştu",
+  "error.start_p2p": "Eşler arası ağ başlatılamıyor",
+  "error.init_kura": "Kura başlatılamıyor (blok depolama)",
+  "error.start_dev_telemetry": "Geliştirici telemetri hizmeti başlatılamadı",
+  "error.start_telemetry": "Telemetri hizmeti başlatılamıyor",
+  "error.listen_os_signal": "İşletim sistemi sinyalleri için dinleme ayarlanamıyor",
+  "error.start_torii": "Torii (Iroha HTTP API geçidi) başlatılamadı"
+}

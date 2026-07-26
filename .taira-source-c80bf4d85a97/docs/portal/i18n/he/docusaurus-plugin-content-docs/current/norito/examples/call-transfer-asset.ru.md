@@ -1,0 +1,47 @@
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/examples/call-transfer-asset.ru.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+---
+slug: /norito/examples/call-transfer-asset
+כותרת: Вызвать перенос с хоста из Kotodama
+תיאור: Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` עם востройно метаданных.
+מקור: crates/ivm/docs/examples/08_call_transfer_asset.ko
+---
+
+Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроеннок метаданных.
+
+## Пошаговый обход реестра
+
+- Пополните полномочия контракта (например `<i105-account-id>`) אקטיב, который он будет переводить, ивыдить `CanTransfer` или эквивалентное разрешение.
+- צור קשר עם `call_transfer_asset`, מתקנים 5 מכשירים עם תקשורת בתקן `<i105-account-id>`, ончейн-автоматизация может оборачивать вызовы хоста.
+- Проверьте балансы через `FindAccountAssets` או `iroha_cli ledger assets list --account <i105-account-id>` и просмотрите события, чтобы подтвердитан, чтобы подтвердитан, чтобы подтвердитан, чтобы контекст перевода.
+
+## Связанные руководства SDK
+
+- [Quickstart Rust SDK](/sdks/rust)
+- [Quickstart Python SDK](/sdks/python)
+- [Quickstart JavaScript SDK](/sdks/javascript)
+
+[Скачать исходник Kotodama](/norito-snippets/call-transfer-asset.ko)
+
+```kotodama
+// Direct builtin call (no raw call syntax) inside a seiyaku.
+seiyaku TransferCall {
+    kotoage fn pay() authorize("AssetTransferRole") {
+        ledger::asset::transfer(
+            source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", ),
+            destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", ),
+            asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            amount: 10,
+            dataspace: DataSpaceId::parse("0"),
+        );
+    }
+}
+```

@@ -1,0 +1,47 @@
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/norito/examples/call-transfer-asset.ur.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+---
+slug: /norito/examples/call-transfer-asset
+título: Kotodama سے ہوسٹ ٹرانسفر کال کریں
+description: دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
+fonte: crates/ivm/docs/examples/08_call_transfer_asset.ko
+---
+
+دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
+
+## لیجر واک تھرو
+
+- کنٹریکٹ اتھارٹی (مثلا `<i105-account-id>`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور A versão `CanTransfer` é uma ferramenta de teste padrão
+- `call_transfer_asset` انٹری پوائنٹ کال کریں تاکہ کنٹریکٹ اکاؤنٹ سے `<i105-account-id>` کو 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account <i105-account-id>` کے ذریعے بیلنس دیکھیں اور ایونٹس چیک کریں تاکہ تصدیق ہو کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
+
+## Como instalar o SDK
+
+- [Início rápido do Rust SDK](/sdks/rust)
+- [início rápido do SDK do Python](/sdks/python)
+- [início rápido do SDK JavaScript](/sdks/javascript)
+
+[Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/call-transfer-asset.ko)
+
+```kotodama
+// Direct builtin call (no raw call syntax) inside a seiyaku.
+seiyaku TransferCall {
+    kotoage fn pay() authorize("AssetTransferRole") {
+        ledger::asset::transfer(
+            source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", ),
+            destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", ),
+            asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            amount: 10,
+            dataspace: DataSpaceId::parse("0"),
+        );
+    }
+}
+```

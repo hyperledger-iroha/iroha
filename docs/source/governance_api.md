@@ -15,6 +15,12 @@ Overview
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
 - Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
 - JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`). `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers.
+- Rust (`iroha::client::Client`):
+  `post_validation_fee_plain_ballot_draft` accepts the typed
+  `ValidationFeePlainBallotDraftRequestV1`, calls the proposal-bound route, and
+  rejects a response unless its canonical framed `CastPlainBallot` exactly
+  matches the requested proposal id, owner, and direction together with the
+  returned immutable amount and duration.
 
 Endpoints
 
@@ -51,8 +57,22 @@ Endpoints
     integer fields in this projection are canonical unsigned decimal strings.
 - POST `/v1/validation-fee/proposals/draft`
   - Builds exactly one native PLAIN validation-fee proposal instruction for
-    local signing. Legacy signed-policy, governance-keyset, detached-signature,
-    and ZK compatibility shapes are not accepted.
+    local signing. The strict request requires `plain_electorate_rules`; those
+    exact rules are included in the native proposal fingerprint and retained
+    for ballot eligibility, amount, duration, conviction, turnout, and approval
+    checks. Legacy signed-policy, governance-keyset, detached-signature, and ZK
+    compatibility shapes are not accepted.
+- POST `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft`
+  - Strict request:
+    `{ "version": 1, "owner": "<i105-account-id>", "direction": "AYE" | "NAY" | "ABSTAIN" }`.
+  - Returns exactly one canonical framed `CastPlainBallot` instruction for
+    local signing. The response repeats the exact proposal id, owner,
+    direction, proposal-bound amount, and proposal-bound duration.
+  - The route fails closed unless the referendum is PLAIN and open at the next
+    possible inclusion height, all seven retained Parliament bodies still
+    satisfy the proposal snapshot, the citizen satisfies the immutable
+    proposal gate rule, and the account has not already cast an effective
+    ballot. Callers cannot override amount or duration.
 
 - POST `/v1/gov/proposals/deploy-contract`
   - Request (JSON):

@@ -1,0 +1,33 @@
+---
+lang: ka
+direction: ltr
+source: docs/portal/docs/reference/torii-swagger.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+SwaggerUiPanel-ის იმპორტი '@site/src/components/SwaggerUiPanel.jsx'-დან;
+
+# Torii API (Swagger UI)
+
+ამ გვერდზე ჩაშენებულია Torii OpenAPI დოკუმენტი `swagger-ui-react`-ის გამოყენებით. გამოიყენეთ ის როცა
+გსურთ Swagger-ის ნაცნობი განლაგება, მოითხოვეთ ნიმუშები და ცდის შესაძლებლობა
+გამოიტანეთ მოთხოვნები პირდაპირ ბრაუზერში.
+
+## გამოყენების რჩევები
+
+- მიაწოდეთ გადამტანი ჟეტონი პანელში ყოველი მოთხოვნის წინასწარ ავტორიზაციისთვის. ჟეტონები არის
+  გადამისამართებულია პროქსისთვის `X-TryIt-Auth` სათაურის გამოყენებით და არასოდეს შენარჩუნდება.
+- დააკონფიგურირეთ `TRYIT_PROXY_PUBLIC_URL` პორტალის სერვისის დროს ვიჯეტის
+  აგზავნის მოთხოვნებს შეფუთული დადგმის პროქსის მეშვეობით. ჩნდება გამაფრთხილებელი ბანერი
+  თუ პროქსი გამორთულია.
+- აირჩიეთ OpenAPI სნეპშოტი ჩამოსაშლელი მენიუდან უახლეს სპეციფიკაციას შორის გადასართავად
+  და დაარქივებული ვერსიები გენერირებული `npm run sync-openapi`-ის მიერ.
+- სცადეთ პროქსით მხარდაჭერილი „[Try it](/api/overview#try-it-sandbox-docs-3)“ კონსოლი
+  დადგმული გარემოსთვის, სადაც CORS ხელს უშლის Torii პირდაპირ წვდომას.
+- შეინახეთ ახალი OpenAPI სნეპშოტი `cargo xtask openapi`-ით (იხ.
+  `docs/portal/static/openapi/torii.json`).
+
+<SwaggerUiPanel />

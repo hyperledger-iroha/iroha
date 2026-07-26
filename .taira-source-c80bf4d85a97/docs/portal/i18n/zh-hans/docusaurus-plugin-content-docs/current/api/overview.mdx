@@ -1,0 +1,83 @@
+---
+lang: zh-hans
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+从 '@site/src/components/TryItConsole.jsx' 导入 TryItConsole；
+
+# Torii API 概述
+
+Torii 网关公开 REST + WebSocket 表面，用于与 Iroha 交互
+节点。规范的 OpenAPI 文档是通过以下方式生成的：
+
+```bash
+cargo xtask openapi
+```
+
+运行上面的命令会写入 `docs/portal/static/openapi/torii.json` 和
+提供 `docusaurus-plugin-openapi-docs` 集成，因此本节更新
+自动。生成器启动内存中的 Torii 路由器并尝试
+查询其OpenAPI端点；如果失败（例如，路由器初始化
+错误）而是发出确定性占位符规范。
+
+## 当前状态
+
+- **规格来源：** `cargo xtask openapi`直接查询Torii路由器；的
+  仅当路由器无法公开 OpenAPI 时才会发出后备存根
+  文档。
+- **确定性：** JSON 输出被规范化，以确保 CI 中的稳定差异。
+- **身份验证：** “尝试一下”沙箱现在通过
+  受约束的暂存代理。运营商必须提供 Torii 端点和承载
+  发出调用之前的令牌。
+- **版本选择器：** Swagger UI、RapiDoc 和完整的 Torii OpenAPI 页面
+  公开一个显示 `openapi/versions.json` 的下拉菜单，以便您可以进行比较
+  历史快照。 `Latest (tracked)` 选项指向
+  `/openapi/torii.json`，而所有其他条目加载相应的
+  `openapi/versions/<version>/torii.json`神器。
+- **快照工作流程：** 运行 `npm run docs:version -- <label>` 后，刷新
+  与 `npm run sync-openapi -- --version=<label> --latest` 匹配的 OpenAPI 文件
+  因此下拉菜单可以加载冻结快照和滚动的“最新”版本。
+
+支持路由器的提取器现在发出完整的 Torii 表面。如果您看到
+占位符存根，将其视为构建时失败并检查 Torii
+路由器启动日志。
+
+## 尝试沙盒 (DOCS-3)
+
+开发人员门户嵌入了一个小型控制台，可通过
+基于节点的代理。代理强制实施 CORS、速率限制和可选承载
+令牌，以便小部件可以与临时网关通信而无需暴露凭据。
+有关完整的操作员清单，请参阅 `docs/devportal/try-it.md`。
+
+与 Docusaurus 开发服务器一起启动代理：
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- 代理侦听 `TRYIT_PROXY_LISTEN`（默认 `127.0.0.1:8787`）并且
+  将任何 `/proxy/...` 请求转发到 `TRYIT_PROXY_TARGET`。
+- 为静态不记名令牌提供 `TRYIT_PROXY_BEARER` 或让调用者提供
+  每个请求通过“承载令牌”字段发送一个。
+- 速率限制默认为每分钟 60 个请求，可以通过调整
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`。
+
+> ⚠️ 代理用于暂存/演示访问。生产部署
+> 应该运行在强化的入口后面，并在中重用相同的速率限制策略
+> Torii 正面。
+

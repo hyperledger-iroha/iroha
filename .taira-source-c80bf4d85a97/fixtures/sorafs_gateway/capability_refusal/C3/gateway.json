@@ -1,0 +1,9 @@
+{
+  "base_fixture": "../1.0.0",
+  "mutations": {
+    "governance.council_signatures[0].signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "notes": [
+    "Replace the council signature in the admission envelope with an invalid payload so the manifest digest check fails."
+  ]
+}

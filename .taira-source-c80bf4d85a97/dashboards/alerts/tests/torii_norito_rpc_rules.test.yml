@@ -1,0 +1,32 @@
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'torii_request_failures_total{scheme="norito_rpc",code="500"}'
+        values: '0 1 2 3 4 5 6'
+      - series: 'torii_request_duration_seconds_bucket{scheme="norito_rpc",le="0.5"}'
+        values: '10 10 10 10 10 10 10'
+      - series: 'torii_request_duration_seconds_bucket{scheme="norito_rpc",le="1"}'
+        values: '10 10 11 12 13 14 15'
+      - series: 'torii_request_duration_seconds_bucket{scheme="norito_rpc",le="+Inf"}'
+        values: '10 10 11 12 13 14 15'
+      - series: 'torii_request_duration_seconds_count{scheme="norito_rpc"}'
+        values: '0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ToriiNoritoRpcErrorSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              description: "More than five 5xx responses observed in the past five minutes."
+      - eval_time: 6m
+        alertname: ToriiNoritoRpcLatencyDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+      - eval_time: 6m
+        alertname: ToriiNoritoRpcSilentTraffic
+        exp_alerts:
+          - exp_labels:
+              severity: critical

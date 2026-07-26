@@ -1,0 +1,7 @@
+{
+  "accel": {
+    "enable_metal": false,
+    "enable_cuda": false,
+    "merkle_min_leaves_gpu": 128
+  }
+}

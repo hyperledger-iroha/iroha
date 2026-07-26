@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Vítejte v Hyperledger Iroha!",
+  "error.trace_config_setup": "Nelze nastavit trasování konfigurace",
+  "error.config": "Chyba konfigurace",
+  "error.logger": "Nelze inicializovat záznamník",
+  "error.start": "Spuštění Iroha se nezdařilo",
+  "error.run": "Při spouštění Iroha došlo k chybě",
+  "error.start_p2p": "Nelze spustit síť peer-to-peer",
+  "error.init_kura": "Nelze inicializovat Kura (blokové úložiště)",
+  "error.start_dev_telemetry": "Nelze spustit vývojovou telemetrickou službu",
+  "error.start_telemetry": "Nelze spustit telemetrickou službu",
+  "error.listen_os_signal": "Nelze nastavit poslech signálů OS",
+  "error.start_torii": "Nelze spustit Torii (brána Iroha http API)"
+}

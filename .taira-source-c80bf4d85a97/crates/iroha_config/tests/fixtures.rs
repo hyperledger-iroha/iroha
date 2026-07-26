@@ -1,0 +1,5198 @@
+#![allow(clippy::needless_raw_string_hashes, clippy::assertions_on_constants)] // triggered by `expect!` snapshots
+//! Test fixtures exercising `iroha_config` parameter loading and validation.
+
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{Mutex, MutexGuard, Once},
+    time::Duration,
+};
+
+use assertables::assert_contains;
+use error_stack::{Report, ResultExt};
+use expect_test::expect;
+use iroha_config::parameters::user::ParseError;
+#[allow(unused_imports)]
+use iroha_config::parameters::{
+    actual::{
+        BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
+        LaneProfile, NexusFeeSettlementMode, NexusStorage, OperatorAuthLockout,
+        OperatorTokenFallback, OperatorTokenSource, OracleChangeThresholds, OracleEconomics,
+        OracleGovernance, OracleTwitterBinding, Queue, Root as Config, SoranetVpn, Streaming,
+        StreamingSoranetAccessKind, StreamingSoravpn, StreamingSync, ToriiOperatorAuth,
+        TransactionGossiper,
+    },
+    defaults,
+    user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
+};
+use iroha_config_base::{env::MockEnv, read::ConfigReader};
+use iroha_crypto::{Algorithm, PublicKey};
+use iroha_data_model::{account::AccountId, name::Name};
+use soranet_pq::MlKemSuite;
+use thiserror::Error;
+use toml::Value as TomlValue;
+use url::Url;
+
+fn fixtures_dir() -> PathBuf {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"))
+            .expect("tests run relative to crate root");
+    });
+    PathBuf::from("tests/fixtures")
+}
+
+fn parse_env(raw: impl AsRef<str>) -> HashMap<String, String> {
+    raw.as_ref()
+        .lines()
+        .map(|line| {
+            let mut items = line.split('=');
+            let key = items
+                .next()
+                .expect("line should be in {key}={value} format");
+            let value = items
+                .next()
+                .expect("line should be in {key}={value} format");
+            (key.to_string(), value.to_string())
+        })
+        .collect()
+}
+
+fn test_env_from_file(p: impl AsRef<Path>) -> MockEnv {
+    let contents = fs::read_to_string(p).expect("the path should be valid");
+    let map = parse_env(contents);
+    MockEnv::with_map(map)
+}
+
+fn strip_ansi_codes(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if matches!(chars.peek(), Some('[')) {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+struct AddressRuntimeGuard {
+    default_domain_label: std::sync::Arc<str>,
+    chain_discriminant: u16,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl AddressRuntimeGuard {
+    fn capture() -> Self {
+        static ADDRESS_RUNTIME_LOCK: Mutex<()> = Mutex::new(());
+        let lock = ADDRESS_RUNTIME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self {
+            default_domain_label: iroha_data_model::account::address::default_domain_name(),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for AddressRuntimeGuard {
+    fn drop(&mut self) {
+        let _ = iroha_data_model::account::address::set_default_domain_name(
+            self.default_domain_label.to_string(),
+        );
+        iroha_data_model::account::address::set_chain_discriminant(self.chain_discriminant);
+    }
+}
+
+#[derive(Error, Debug)]
+#[error("failed to load config from fixtures")]
+struct FixtureConfigLoadError;
+
+fn load_config_from_fixtures(path: impl AsRef<Path>) -> Result<Config, FixtureConfigLoadError> {
+    let config = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join(path))
+        .change_context(FixtureConfigLoadError)?
+        .read_and_complete::<UserConfig>()
+        .change_context(FixtureConfigLoadError)?
+        .parse()
+        .change_context(FixtureConfigLoadError)?;
+
+    Ok(config)
+}
+
+#[allow(dead_code)]
+fn load_user_config_from_fixtures(
+    path: impl AsRef<Path>,
+) -> Result<UserConfig, FixtureConfigLoadError> {
+    ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join(path))
+        .change_context(FixtureConfigLoadError)?
+        .read_and_complete::<UserConfig>()
+        .change_context(FixtureConfigLoadError)
+}
+
+#[test]
+fn quic_datagram_buffers_default_to_one_mib() {
+    assert_eq!(
+        defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        1024 * 1024
+    );
+    assert_eq!(
+        defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
+        1024 * 1024
+    );
+    assert!(
+        defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get()
+            >= defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get()
+    );
+    assert!(
+        defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get()
+            >= defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get()
+    );
+}
+
+/// This test not only asserts that the minimal set of fields is enough;
+/// it also gives an insight into every single default value
+#[test]
+#[allow(clippy::too_many_lines)]
+fn minimal_config_snapshot() {
+    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("config should be valid");
+
+    // Snapshot updated to include new Sumeragi fields and other defaults
+    expect![[r#"
+        Root {
+            common: Common {
+                chain: ChainId(
+                    "0",
+                ),
+                key_pair: KeyPair {
+                    public_key: PublicKey(
+                        bls_normal(
+                            "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2",
+                        ),
+                    ),
+                    private_key: "[REDACTED PrivateKey]",
+                },
+                peer: Peer {
+                    address: Ipv4(
+                        127.0.0.1:1337,
+                    ),
+                    id: ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2,
+                },
+                trusted_peers: WithOrigin {
+                    value: TrustedPeers {
+                        myself: Peer {
+                            address: Ipv4(
+                                127.0.0.1:1337,
+                            ),
+                            id: ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2,
+                        },
+                        others: UniqueVec(
+                            [],
+                        ),
+                        pops: {
+                            PublicKey(
+                                bls_normal(
+                                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2",
+                                ),
+                            ): [
+                                133,
+                                21,
+                                218,
+                                117,
+                                15,
+                                129,
+                                24,
+                                42,
+                                171,
+                                165,
+                                194,
+                                47,
+                                201,
+                                240,
+                                58,
+                                1,
+                                232,
+                                30,
+                                216,
+                                94,
+                                68,
+                                149,
+                                162,
+                                202,
+                                107,
+                                41,
+                                167,
+                                28,
+                                12,
+                                133,
+                                73,
+                                83,
+                                126,
+                                49,
+                                231,
+                                156,
+                                221,
+                                246,
+                                255,
+                                40,
+                                91,
+                                158,
+                                34,
+                                208,
+                                217,
+                                220,
+                                23,
+                                206,
+                                15,
+                                70,
+                                231,
+                                208,
+                                207,
+                                120,
+                                178,
+                                239,
+                                159,
+                                234,
+                                181,
+                                12,
+                                132,
+                                154,
+                                30,
+                                168,
+                                225,
+                                228,
+                                240,
+                                126,
+                                150,
+                                111,
+                                97,
+                                19,
+                                250,
+                                168,
+                                169,
+                                153,
+                                49,
+                                117,
+                                69,
+                                217,
+                                241,
+                                17,
+                                184,
+                                224,
+                                138,
+                                114,
+                                115,
+                                145,
+                                55,
+                                16,
+                                180,
+                                58,
+                                32,
+                                177,
+                                156,
+                                8,
+                            ],
+                        },
+                    },
+                    origin: File {
+                        id: ParameterId(trusted_peers),
+                        path: "tests/fixtures/base_trusted_peers.toml",
+                    },
+                },
+                default_account_domain_label: WithOrigin {
+                    value: "default.universal",
+                    origin: Default {
+                        id: ParameterId(default_account_domain_label),
+                    },
+                },
+                chain_discriminant: WithOrigin {
+                    value: 753,
+                    origin: Default {
+                        id: ParameterId(chain_discriminant),
+                    },
+                },
+            },
+            network: Network {
+                address: WithOrigin {
+                    value: Ipv4(
+                        127.0.0.1:1337,
+                    ),
+                    origin: File {
+                        id: ParameterId(network.address),
+                        path: "tests/fixtures/base.toml",
+                    },
+                },
+                public_address: WithOrigin {
+                    value: Ipv4(
+                        127.0.0.1:1337,
+                    ),
+                    origin: File {
+                        id: ParameterId(network.public_address),
+                        path: "tests/fixtures/base.toml",
+                    },
+                },
+                relay_mode: Disabled,
+                relay_hub_addresses: [],
+                relay_ttl: 8,
+                soranet_handshake: SoranetHandshake {
+                    descriptor_commit: WithOrigin {
+                        value_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
+                        origin: Default {
+                            id: ParameterId(network.soranet_handshake.descriptor_commit),
+                        },
+                    },
+                    client_capabilities: WithOrigin {
+                        value_hex: "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
+                        origin: Default {
+                            id: ParameterId(network.soranet_handshake.client_capabilities),
+                        },
+                    },
+                    relay_capabilities: WithOrigin {
+                        value_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
+                        origin: Default {
+                            id: ParameterId(network.soranet_handshake.relay_capabilities),
+                        },
+                    },
+                    trust_gossip: true,
+                    kem_id: 1,
+                    sig_id: 1,
+                    resume_hash: None,
+                    pow: SoranetPow { required: true, difficulty: 0, max_future_skew_secs: 300, min_ticket_ttl_secs: 30, ticket_ttl_secs: 60, revocation_store_capacity: 8192, revocation_max_ttl_secs: 900, revocation_store_path: ./storage/soranet/ticket_revocations.norito, puzzle: Some { memory_kib: 65536, time_cost: 2, lanes: 1 }, signed_ticket_public_key: None },
+                },
+                soranet_privacy: SoranetPrivacy {
+                    bucket_secs: 60,
+                    min_handshakes: 12,
+                    flush_delay_buckets: 1,
+                    force_flush_buckets: 6,
+                    max_completed_buckets: 120,
+                    max_share_lag_buckets: 12,
+                    expected_shares: 2,
+                    event_buffer_capacity: 4096,
+                },
+                soranet_vpn: SoranetVpn {
+                    enabled: false,
+                    cell_size_bytes: 1024,
+                    flow_label_bits: 24,
+                    cover_to_data_per_mille: 250,
+                    max_cover_burst: 3,
+                    heartbeat_ms: 500,
+                    jitter_ms: 10,
+                    padding_budget_ms: 15,
+                    guard_refresh: 3600s,
+                    lease: 600s,
+                    dns_push_interval: 90s,
+                    exit_class: "standard",
+                    meter_family: "soranet.vpn.standard",
+                    helper_ticket_secret: None,
+                    fee_asset_id: "xor#universal.universal",
+                    escrow_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                    operator_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                    lease_fee: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 3,
+                        },
+                    ),
+                    settlement_grace: 60s,
+                    route_pushes: [
+                        "0.0.0.0/0",
+                        "::/0",
+                    ],
+                    excluded_routes: [],
+                    dns_servers: [
+                        "1.1.1.1",
+                    ],
+                    relay_tls_spki_sha256_hex: None,
+                },
+                lane_profile: Core,
+                require_sm_handshake_match: true,
+                require_sm_openssl_preview_match: true,
+                idle_timeout: 300s,
+                reply_writer_flush_timeout: 30s,
+                connect_startup_delay: 0ns,
+                dial_timeout: 5s,
+                deferred_send_ttl: 1.5s,
+                deferred_send_max_per_peer: 256,
+                deferred_send_max_bytes_per_peer: 33554432,
+                deferred_send_max_bytes_total: 134217728,
+                peer_gossip_period: 1s,
+                peer_gossip_max_period: 30s,
+                trust_gossip: true,
+                trust_decay_half_life: 300s,
+                trust_penalty_bad_gossip: 5,
+                trust_penalty_unknown_peer: 3,
+                trust_min_score: -20,
+                debug_packet_loss_inbound_percent: 0,
+                debug_packet_loss_outbound_percent: 0,
+                dns_refresh_interval: None,
+                dns_refresh_ttl: None,
+                p2p_proxy: None,
+                p2p_proxy_required: false,
+                p2p_no_proxy: [],
+                p2p_proxy_tls_verify: true,
+                p2p_proxy_tls_pinned_cert_der_base64: None,
+                quic_enabled: false,
+                quic_datagrams_enabled: true,
+                quic_datagram_max_payload_bytes: 1200,
+                quic_datagram_receive_buffer_bytes: 1048576,
+                quic_datagram_send_buffer_bytes: 1048576,
+                scion: ScionConfig {
+                    enabled: false,
+                    fallback_to_legacy: true,
+                    listen_endpoint: None,
+                    routes: {},
+                },
+                tls_enabled: false,
+                tls_fallback_to_plain: false,
+                tls_listen_address: None,
+                tls_inbound_only: false,
+                prefer_ws_fallback: false,
+                p2p_queue_cap_high: 8192,
+                p2p_queue_cap_low: 32768,
+                p2p_post_queue_cap: 2048,
+                p2p_outbound_frame_queue_max_high_bytes: 134217728,
+                p2p_outbound_frame_queue_max_low_bytes: 67108864,
+                p2p_outbound_frame_queue_max_high_frames: 8192,
+                p2p_outbound_frame_queue_max_low_frames: 4096,
+                p2p_subscriber_queue_cap: 8192,
+                consensus_ingress_rate_per_sec: Some(
+                    300,
+                ),
+                consensus_ingress_burst: Some(
+                    300,
+                ),
+                consensus_ingress_bytes_per_sec: Some(
+                    67108864,
+                ),
+                consensus_ingress_bytes_burst: Some(
+                    67108864,
+                ),
+                consensus_ingress_critical_rate_per_sec: Some(
+                    300,
+                ),
+                consensus_ingress_critical_burst: Some(
+                    300,
+                ),
+                consensus_ingress_critical_bytes_per_sec: Some(
+                    134217728,
+                ),
+                consensus_ingress_critical_bytes_burst: Some(
+                    134217728,
+                ),
+                consensus_ingress_penalty_threshold: 32,
+                consensus_ingress_penalty_window: 5s,
+                consensus_ingress_penalty_cooldown: 10s,
+                happy_eyeballs_stagger: 100ms,
+                addr_ipv6_first: false,
+                max_incoming: None,
+                max_total_connections: None,
+                accept_rate_per_ip_per_sec: None,
+                accept_burst_per_ip: None,
+                max_accept_buckets: 4096,
+                accept_bucket_idle: 600s,
+                accept_prefix_v4_bits: 24,
+                accept_prefix_v6_bits: 64,
+                accept_rate_per_prefix_per_sec: None,
+                accept_burst_per_prefix: None,
+                low_priority_rate_per_sec: None,
+                low_priority_burst: None,
+                low_priority_bytes_per_sec: None,
+                low_priority_bytes_burst: None,
+                allowlist_only: false,
+                allow_keys: [],
+                deny_keys: [],
+                allow_cidrs: [],
+                deny_cidrs: [],
+                disconnect_on_post_overflow: true,
+                max_frame_bytes: 17825820,
+                tcp_nodelay: true,
+                tcp_keepalive: Some(
+                    60s,
+                ),
+                max_frame_bytes_consensus: 17825792,
+                max_frame_bytes_control: 2097152,
+                max_frame_bytes_block_sync: 17825792,
+                max_frame_bytes_tx_gossip: 262144,
+                max_frame_bytes_peer_gossip: 65536,
+                max_frame_bytes_health: 32768,
+                max_frame_bytes_other: 131072,
+                tls_only_v1_3: false,
+                quic_max_idle_timeout: None,
+            },
+            genesis: Genesis {
+                public_key: PublicKey(
+                    ed25519(
+                        "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB",
+                    ),
+                ),
+                file: None,
+                manifest_json: None,
+                expected_hash: None,
+                bootstrap_allowlist: [],
+                bootstrap_max_bytes: 16777216,
+                bootstrap_response_throttle: 1s,
+                bootstrap_request_timeout: 3s,
+                bootstrap_retry_interval: 1s,
+                bootstrap_max_attempts: 5,
+                bootstrap_enabled: true,
+            },
+            torii: Torii {
+                address: WithOrigin {
+                    value: Ipv4(
+                        127.0.0.1:8080,
+                    ),
+                    origin: File {
+                        id: ParameterId(torii.address),
+                        path: "tests/fixtures/base.toml",
+                    },
+                },
+                max_content_len: Bytes(
+                    64000000,
+                ),
+                data_dir: "./storage/torii",
+                receipt_signer: None,
+                query_rate_per_authority_per_sec: Some(
+                    25,
+                ),
+                query_burst_per_authority: Some(
+                    50,
+                ),
+                query_max_inflight: 128,
+                query_heavy_max_inflight: 32,
+                query_queue_timeout: 25ms,
+                tx_rate_per_authority_per_sec: Some(
+                    10000,
+                ),
+                tx_burst_per_authority: Some(
+                    20000,
+                ),
+                deploy_rate_per_origin_per_sec: Some(
+                    4,
+                ),
+                deploy_burst_per_origin: Some(
+                    8,
+                ),
+                soracloud_public_rate_per_ip_per_sec: Some(
+                    5,
+                ),
+                soracloud_public_burst_per_ip: Some(
+                    10,
+                ),
+                soracloud_public_max_inflight: 32,
+                soracloud_public_max_response_bytes: Bytes(
+                    67108864,
+                ),
+                soracloud_mutation_rate_per_account_origin_per_sec: Some(
+                    8,
+                ),
+                soracloud_mutation_burst_per_account_origin: Some(
+                    16,
+                ),
+                soracloud_mutation_max_inflight: 64,
+                soracloud_mutation_max_body_bytes: Bytes(
+                    8388608,
+                ),
+                soracloud_upload_max_body_bytes: Bytes(
+                    67108864,
+                ),
+                require_api_token: false,
+                api_tokens: [],
+                api_fee_asset_id: None,
+                api_fee_amount: None,
+                api_fee_receiver: None,
+                soranet_privacy_ingest: SoranetPrivacyIngest {
+                    enabled: false,
+                    require_token: true,
+                    tokens: [],
+                    rate_per_sec: Some(
+                        8,
+                    ),
+                    burst: Some(
+                        16,
+                    ),
+                    allow_cidrs: [],
+                },
+                api_allow_cidrs: [],
+                peer_telemetry_urls: [],
+                peer_geo: ToriiPeerGeo {
+                    enabled: false,
+                    endpoint: None,
+                },
+                debug_match_filters: false,
+                operator_auth: ToriiOperatorAuth {
+                    enabled: false,
+                    require_mtls: false,
+                    mtls_trusted_proxy_cidrs: [
+                        "127.0.0.0/8",
+                        "::1/128",
+                    ],
+                    token_fallback: Bootstrap,
+                    token_source: OperatorTokens,
+                    tokens: [],
+                    rate_per_minute: Some(
+                        30,
+                    ),
+                    burst: Some(
+                        10,
+                    ),
+                    lockout: OperatorAuthLockout {
+                        failures: Some(
+                            5,
+                        ),
+                        window: 300s,
+                        duration: 900s,
+                    },
+                    webauthn: None,
+                },
+                operator_signatures: ToriiOperatorSignatures {
+                    enabled: true,
+                    allow_node_key: true,
+                    allowed_public_keys: [],
+                    max_clock_skew: 60s,
+                    nonce_ttl: 300s,
+                    replay_cache_capacity: 10000,
+                },
+                preauth_max_connections: Some(
+                    1024,
+                ),
+                preauth_max_connections_per_ip: Some(
+                    64,
+                ),
+                preauth_rate_per_ip_per_sec: Some(
+                    20,
+                ),
+                preauth_burst_per_ip: Some(
+                    10,
+                ),
+                preauth_temp_ban: Some(
+                    60s,
+                ),
+                preauth_allow_cidrs: [],
+                preauth_scheme_limits: [],
+                api_high_load_tx_threshold: None,
+                api_high_load_stream_threshold: None,
+                api_high_load_subscription_threshold: None,
+                events_buffer_capacity: 10000,
+                ws_message_timeout: 10s,
+                webhooks_enabled: false,
+                zk_attachments_enabled: false,
+                attachments_ttl_secs: 604800,
+                attachments_max_bytes: 4194304,
+                attachments_per_tenant_max_count: 128,
+                attachments_per_tenant_max_bytes: 67108864,
+                attachments_allowed_mime_types: [
+                    "application/x-norito",
+                    "application/json",
+                    "application/x-zk1",
+                ],
+                attachments_max_expanded_bytes: 16777216,
+                attachments_max_archive_depth: 2,
+                attachments_sanitizer_mode: Subprocess,
+                attachments_sanitize_timeout_ms: 1000,
+                zk_prover_enabled: false,
+                zk_prover_scan_period_secs: 30,
+                zk_prover_reports_ttl_secs: 604800,
+                zk_prover_max_inflight: 2,
+                zk_prover_max_scan_bytes: 16777216,
+                zk_prover_max_scan_millis: 2000,
+                zk_prover_keys_dir: "./storage/torii/zk_prover/keys",
+                zk_prover_allowed_backends: [
+                    "halo2/",
+                ],
+                zk_prover_allowed_circuits: [],
+                zk_ivm_prove_max_inflight: 1,
+                zk_ivm_prove_max_queue: 16,
+                zk_ivm_tooling_timeout_ms: 60000,
+                zk_ivm_prove_job_ttl_secs: 1800,
+                zk_ivm_prove_job_max_entries: 1024,
+                zk_ivm_prove_job_max_retained_bytes: Bytes(
+                    134217728,
+                ),
+                connect: Connect {
+                    enabled: true,
+                    ws_max_sessions: 10000,
+                    ws_per_ip_max_sessions: 10,
+                    ws_rate_per_ip_per_min: 120,
+                    session_ttl: 300s,
+                    frame_max_bytes: 64000,
+                    session_buffer_max_bytes: 262144,
+                    ping_interval: 30s,
+                    ping_miss_tolerance: 3,
+                    ping_min_interval: 15s,
+                    dedupe_ttl: 120s,
+                    dedupe_cap: 8192,
+                    relay_enabled: true,
+                    relay_strategy: "broadcast",
+                    p2p_ttl_hops: 8,
+                },
+                iso_bridge: IsoBridge {
+                    enabled: false,
+                    dedupe_ttl_secs: 300,
+                    default_profile: "generic-iso20022",
+                    profiles: [],
+                    store_dir: None,
+                    store_retention_secs: 0,
+                    store_max_records: 0,
+                    audit_export_dir: None,
+                    embedded_signature_policy: None,
+                    signer: None,
+                    account_aliases: [],
+                    currency_assets: [],
+                    reference_data: IsoReferenceData {
+                        refresh_interval: 86400s,
+                        isin_crosswalk_path: None,
+                        bic_lei_path: None,
+                        mic_directory_path: None,
+                        csd_venue_path: None,
+                        securities_account_path: None,
+                        cash_leg_path: None,
+                        cache_dir: None,
+                    },
+                },
+                da_ingest: DaIngest {
+                    replay_cache_capacity: 4096,
+                    replay_cache_ttl: 900s,
+                    replay_cache_max_sequence_lag: 4096,
+                    replay_cache_store_dir: "./storage/da_replay",
+                    manifest_store_dir: "./storage/da_manifests",
+                    spool_queue_capacity: 1024,
+                    spool_batch_max: 32,
+                    governance_metadata_key: None,
+                    governance_metadata_key_label: None,
+                    taikai_anchor: None,
+                    replication_policy: DaReplicationPolicy {
+                        default: RetentionPolicy {
+                            hot_retention_secs: 21600,
+                            cold_retention_secs: 2592000,
+                            required_replicas: 3,
+                            storage_class: Warm,
+                            governance_tag: GovernanceTag(
+                                "da.default",
+                            ),
+                        },
+                        overrides: {
+                            TaikaiSegment: RetentionPolicy {
+                                hot_retention_secs: 86400,
+                                cold_retention_secs: 1209600,
+                                required_replicas: 5,
+                                storage_class: Hot,
+                                governance_tag: GovernanceTag(
+                                    "da.taikai.live",
+                                ),
+                            },
+                            NexusLaneSidecar: RetentionPolicy {
+                                hot_retention_secs: 21600,
+                                cold_retention_secs: 604800,
+                                required_replicas: 4,
+                                storage_class: Warm,
+                                governance_tag: GovernanceTag(
+                                    "da.sidecar",
+                                ),
+                            },
+                            GovernanceArtifact: RetentionPolicy {
+                                hot_retention_secs: 43200,
+                                cold_retention_secs: 15552000,
+                                required_replicas: 3,
+                                storage_class: Cold,
+                                governance_tag: GovernanceTag(
+                                    "da.governance",
+                                ),
+                            },
+                        },
+                        taikai_availability: {
+                            Hot: RetentionPolicy {
+                                hot_retention_secs: 86400,
+                                cold_retention_secs: 1209600,
+                                required_replicas: 5,
+                                storage_class: Hot,
+                                governance_tag: GovernanceTag(
+                                    "da.taikai.live",
+                                ),
+                            },
+                            Warm: RetentionPolicy {
+                                hot_retention_secs: 21600,
+                                cold_retention_secs: 2592000,
+                                required_replicas: 4,
+                                storage_class: Warm,
+                                governance_tag: GovernanceTag(
+                                    "da.taikai.warm",
+                                ),
+                            },
+                            Cold: RetentionPolicy {
+                                hot_retention_secs: 3600,
+                                cold_retention_secs: 15552000,
+                                required_replicas: 3,
+                                storage_class: Cold,
+                                governance_tag: GovernanceTag(
+                                    "da.taikai.archive",
+                                ),
+                            },
+                        },
+                    },
+                    rent_policy: DaRentPolicyV1 {
+                        version: 1,
+                        base_rate_per_gib_month: XorQuantity(
+                            Quantity(
+                                Numeric {
+                                    mantissa: 25,
+                                    scale: 2,
+                                },
+                            ),
+                        ),
+                        protocol_reserve_bps: 2000,
+                        pdp_bonus_bps: 500,
+                        potr_bonus_bps: 250,
+                        egress_credit_per_gib: XorQuantity(
+                            Quantity(
+                                Numeric {
+                                    mantissa: 15,
+                                    scale: 4,
+                                },
+                            ),
+                        ),
+                    },
+                    telemetry_cluster_label: None,
+                },
+                sorafs_discovery: SorafsDiscovery {
+                    discovery_enabled: true,
+                    known_capabilities: [
+                        "torii_gateway",
+                        "chunk_range_fetch",
+                        "vendor_reserved",
+                    ],
+                    replay_checkpoint_path: "sorafs_discovery/provider_advert_replay.to",
+                    replay_checkpoint_max_entries: 65536,
+                    admission: Some(
+                        SorafsAdmission {
+                            envelopes_dir: "tests/fixtures/sorafs_admission",
+                            trusted_council_keys: [
+                                PublicKey(
+                                    ed25519(
+                                        "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56",
+                                    ),
+                                ),
+                            ],
+                            signature_threshold: 1,
+                        },
+                    ),
+                    publish: SorafsPublishDiscovery {
+                        gateway_base_url: None,
+                        pin_torii_urls: [],
+                    },
+                },
+                sorafs_storage: SorafsStorage {
+                    enabled: false,
+                    provider_id: None,
+                    data_dir: "./storage/sorafs",
+                    max_capacity_bytes: Bytes(
+                        107374182400,
+                    ),
+                    max_parallel_fetches: 32,
+                    max_pins: 10000,
+                    por_sample_interval_secs: 600,
+                    pdp_sample_window: 64,
+                    pdp_tree_memory_limit_bytes: Bytes(
+                        536870912,
+                    ),
+                    moderation_screening_enabled: false,
+                    moderation_screening_authority_bundle_path: None,
+                    moderation_screening_authority_bundle_digest: None,
+                    pop_credentials: None,
+                    moderation_orchestrator: None,
+                    evidence_viewer: None,
+                    reputation_runtime: None,
+                    hedging_billing_runtime: None,
+                    provider_ingest_runtime: None,
+                    pdp_provider: SorafsPdpProviderPolicy {
+                        max_pending_records: 4096,
+                        max_terminal_records: 65536,
+                        checkpoint_max_bytes: Bytes(
+                            134217728,
+                        ),
+                        challenge_max_bytes: Bytes(
+                            524288,
+                        ),
+                        proof_max_bytes: Bytes(
+                            16777216,
+                        ),
+                        min_response_window_secs: 240,
+                        max_response_window_secs: 600,
+                        max_future_skew_secs: 5,
+                        terminal_retention_secs: 86400,
+                    },
+                    runtime: SorafsRuntimeRetention {
+                        event_history_limit: 4096,
+                        state_entry_limit: 65536,
+                        checkpoint_max_bytes: Bytes(
+                            67108864,
+                        ),
+                        proof_outcome_forwarder_interval: 1s,
+                        proof_outcome_max_attempts: 8,
+                    },
+                    alias: None,
+                    adverts: SorafsAdvertOverrides {
+                        stake_pointer: None,
+                        availability: "hot",
+                        max_latency_ms: 500,
+                        topics: [
+                            "sorafs.sf1.primary:universal",
+                        ],
+                    },
+                    metering_smoothing: SorafsMeteringSmoothing {
+                        gib_hours_alpha: None,
+                        por_success_alpha: None,
+                    },
+                    stream_tokens: SorafsTokenConfig {
+                        enabled: false,
+                        signer_handle: None,
+                        signer_public_key: None,
+                        key_version: 1,
+                        default_ttl_secs: 900,
+                        default_max_streams: 4,
+                        default_rate_limit_bytes: 8388608,
+                        default_requests_per_minute: 120,
+                    },
+                    orderbook_worker: SorafsOrderbookWorker {
+                        enabled: false,
+                        scan_interval: 1s,
+                        match_batch_limit: 64,
+                        maintenance_batch_limit: 128,
+                        max_pending: 4096,
+                        max_completed: 65536,
+                        max_dead_letters: 4096,
+                        max_attempts: 8,
+                        checkpoint_max_bytes: Bytes(
+                            67108864,
+                        ),
+                    },
+                    reserve_worker: SorafsReserveWorker {
+                        enabled: false,
+                        scan_interval: 1s,
+                        scan_batch_limit: 128,
+                        max_pending: 4096,
+                        max_completed: 65536,
+                        max_dead_letters: 4096,
+                        max_attempts: 8,
+                        checkpoint_max_bytes: Bytes(
+                            67108864,
+                        ),
+                    },
+                    reputation_trust_policy_path: None,
+                    hedging_feed_trust_policy_path: None,
+                    privacy_aggregates: SorafsPrivacyAggregateSchedule {
+                        enabled: false,
+                        cycle_seconds: 604800,
+                        first_cycle_start_unix: 0,
+                        publish_delay_seconds: 3600,
+                        aggregate_id_prefix: "sfm4c-cycle",
+                        query_id: None,
+                        population_inventory: [],
+                        metric_schema: [],
+                        privacy_mode: "differential_privacy_with_suppression",
+                        epsilon_numerator: 4,
+                        epsilon_denominator: 5,
+                        per_subject_metric_cap: 1,
+                        suppression_threshold: 25,
+                        policy_digest: None,
+                        composition_budget_epsilon_numerator: 12,
+                        composition_budget_epsilon_denominator: 1,
+                        composition_budget_max_publications: 52,
+                    },
+                    evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule {
+                        enabled: false,
+                        cycle_seconds: 86400,
+                        publish_delay_seconds: 3600,
+                    },
+                    governance_dag_dir: None,
+                    governance_dag_publisher_peer_id: None,
+                    governance_dag_signer_handle: None,
+                    governance_dag_publisher_public_key_hex: None,
+                    governance_dag_service: SorafsGovernanceDagService {
+                        enabled: false,
+                        state_dir: None,
+                        ipfs_api_url: None,
+                        head_mode: "signed_http",
+                        signed_head_url: None,
+                        ipns_name: None,
+                        ipns_key_name: None,
+                        ipfs_authenticator_handle: None,
+                        head_authenticator_handle: None,
+                        checkpoint_store_handle: None,
+                        publisher_public_key_hex: None,
+                        poll_interval: 5s,
+                        connect_timeout: 3s,
+                        request_timeout: 15s,
+                        dns_timeout: 2s,
+                        max_response_bytes: Bytes(
+                            4194304,
+                        ),
+                        max_request_bytes: Bytes(
+                            67108864,
+                        ),
+                        mirror_max_entries: 65536,
+                        mirror_max_bytes: Bytes(
+                            536870912,
+                        ),
+                        max_head_age_secs: 900,
+                        max_future_skew_secs: 60,
+                        allow_insecure_http: false,
+                        allow_private_ipfs_endpoint: false,
+                        allow_private_head_endpoint: false,
+                        allow_head_bootstrap: false,
+                        listen_addr: "127.0.0.1:9094",
+                    },
+                },
+                sorafs_repair: SorafsRepair {
+                    enabled: false,
+                    claim_ttl_secs: 900,
+                    heartbeat_interval_secs: 60,
+                    max_attempts: 3,
+                    worker_concurrency: 4,
+                },
+                sorafs_gc: SorafsGc {
+                    enabled: false,
+                    state_dir: None,
+                    interval_secs: 900,
+                    max_deletions_per_run: 500,
+                    retention_grace_secs: 86400,
+                },
+                sorafs_quota: SorafsQuota {
+                    capacity_declaration: SorafsQuotaWindow {
+                        max_events: Some(
+                            4,
+                        ),
+                        window: 3600s,
+                    },
+                    capacity_telemetry: SorafsQuotaWindow {
+                        max_events: Some(
+                            12,
+                        ),
+                        window: 900s,
+                    },
+                    capacity_dispute: SorafsQuotaWindow {
+                        max_events: Some(
+                            2,
+                        ),
+                        window: 1800s,
+                    },
+                    por_submission: SorafsQuotaWindow {
+                        max_events: Some(
+                            60,
+                        ),
+                        window: 900s,
+                    },
+                },
+                sorafs_alias_cache: SorafsAliasCachePolicy {
+                    positive_ttl: 600s,
+                    refresh_window: 120s,
+                    hard_expiry: 900s,
+                    negative_ttl: 60s,
+                    revocation_ttl: 300s,
+                    rotation_max_age: 21600s,
+                    successor_grace: 300s,
+                    governance_grace: 0ns,
+                },
+                sorafs_gateway: SorafsGateway {
+                    require_manifest_envelope: true,
+                    enforce_admission: true,
+                    enforce_capabilities: false,
+                    salt_schedule_dir: None,
+                    site_bindings: SorafsGatewaySiteBindings {
+                        path: None,
+                        max_bytes: Bytes(
+                            1048576,
+                        ),
+                        max_sites: 1024,
+                    },
+                    cdn_policy_path: None,
+                    rate_limit: SorafsGatewayRateLimit {
+                        max_requests: Some(
+                            300,
+                        ),
+                        window: 60s,
+                        ban: Some(
+                            30s,
+                        ),
+                    },
+                    rollout_phase: Canary,
+                    anonymity_policy: Some(
+                        GuardPq,
+                    ),
+                    untrusted_hosting: SorafsGatewayUntrustedHosting {
+                        enabled: false,
+                        cid_host_suffixes: SorafsGatewayCidHostSuffixes {
+                            live: "sorafs.sora.org",
+                            taira: "sorafs.taira.sora.org",
+                        },
+                        path_gateway_redirect: true,
+                        redirect_html_only: true,
+                    },
+                    acme: SorafsGatewayAcme {
+                        enabled: false,
+                        account_email: None,
+                        directory_url: "https://acme-v02.api.letsencrypt.org/directory",
+                        hostnames: [],
+                        dns_provider_id: None,
+                        renewal_window: 2592000s,
+                        retry_backoff: 1800s,
+                        retry_jitter: 300s,
+                        challenges: SorafsGatewayAcmeChallenges {
+                            dns01: true,
+                            tls_alpn_01: true,
+                        },
+                        ech_enabled: false,
+                    },
+                    compliance: None,
+                    direct_mode: None,
+                },
+                sorafs_por: SorafsPor {
+                    enabled: false,
+                    epoch_interval_secs: 3600,
+                    response_window_secs: 900,
+                    state_dir: "./storage/sorafs/por",
+                    drand: SorafsPorDrand {
+                        scheme: "",
+                        chain_hash: [
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                        ],
+                        public_key: [
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                        ],
+                        genesis_time: 0,
+                        period_secs: 0,
+                        endpoints: [],
+                        quorum: 2,
+                        max_endpoints: 8,
+                        connect_timeout: 3s,
+                        request_timeout: 5s,
+                        max_body_bytes: 4096,
+                        max_beacon_age_secs: 30,
+                        max_future_skew_secs: 3,
+                        state_path: "./storage/sorafs/por/drand-high-water.to",
+                    },
+                    vrf_state_path: "./storage/sorafs/por/provider-vrf-state.to",
+                    vrf_submission_deadline_secs: 300,
+                    vrf_max_entries: 65536,
+                    vrf_retention_epochs: 168,
+                    vrf_max_clock_skew_secs: 60,
+                    auditor_signature_threshold: 1,
+                },
+                sorafs_appeal_finance_settlement: SorafsAppealFinanceSettlement {
+                    asset_definition_id: AssetDefinitionId {
+                        aid_bytes: [
+                            59,
+                            45,
+                            238,
+                            246,
+                            130,
+                            60,
+                            72,
+                            205,
+                            167,
+                            236,
+                            51,
+                            224,
+                            2,
+                            182,
+                            29,
+                            55,
+                        ],
+                        projection: None,
+                    },
+                    asset_scale: 9,
+                    pricing: SorafsAppealPricingPolicy {
+                        version: "baseline-v1",
+                        quote_ttl_secs: 900,
+                        default_panel_size: 7,
+                        urgency_multipliers: SorafsAppealUrgencyMultipliers {
+                            normal: Numeric {
+                                mantissa: 1,
+                                scale: 0,
+                            },
+                            high: Numeric {
+                                mantissa: 12,
+                                scale: 1,
+                            },
+                        },
+                        classes: SorafsAppealPricingClasses {
+                            content: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 150,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 50,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 100,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 2500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            access: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 200,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 30,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 50,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 2500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            fraud: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 20,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 50,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 5000,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            other: SorafsAppealPricingClassPolicy {
+                                base_rate_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 120,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                backlog_target: 40,
+                                backlog_cap: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                                size_divisor_mb: Numeric {
+                                    mantissa: 100,
+                                    scale: 0,
+                                },
+                                size_cap: Numeric {
+                                    mantissa: 2,
+                                    scale: 0,
+                                },
+                                min_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 100,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                max_deposit_xor: XorQuantity(
+                                    Quantity(
+                                        Numeric {
+                                            mantissa: 2500,
+                                            scale: 0,
+                                        },
+                                    ),
+                                ),
+                                surge_multiplier: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                        },
+                    },
+                    settlement: SorafsAppealSettlementPolicy {
+                        version: "baseline-v1",
+                        default_panel_size: 7,
+                        panel_rewards: SorafsAppealPanelRewards {
+                            stipend_per_juror_xor: XorQuantity(
+                                Quantity(
+                                    Numeric {
+                                        mantissa: 25,
+                                        scale: 0,
+                                    },
+                                ),
+                            ),
+                            case_bonus_xor: XorQuantity(
+                                Quantity(
+                                    Numeric {
+                                        mantissa: 10,
+                                        scale: 0,
+                                    },
+                                ),
+                            ),
+                        },
+                        rules: SorafsAppealSettlementRules {
+                            decisions: SorafsAppealDecisionRules {
+                                uphold: SorafsAppealSettlementRule {
+                                    refund_rate: Numeric {
+                                        mantissa: 0,
+                                        scale: 0,
+                                    },
+                                    treasury_rate: Numeric {
+                                        mantissa: 1,
+                                        scale: 0,
+                                    },
+                                },
+                                overturn: SorafsAppealSettlementRule {
+                                    refund_rate: Numeric {
+                                        mantissa: 1,
+                                        scale: 0,
+                                    },
+                                    treasury_rate: Numeric {
+                                        mantissa: 0,
+                                        scale: 0,
+                                    },
+                                },
+                                modify: SorafsAppealSettlementRule {
+                                    refund_rate: Numeric {
+                                        mantissa: 1,
+                                        scale: 0,
+                                    },
+                                    treasury_rate: Numeric {
+                                        mantissa: 0,
+                                        scale: 0,
+                                    },
+                                },
+                            },
+                            withdrawn_before_panel: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 9,
+                                    scale: 1,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                            },
+                            withdrawn_after_panel: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 1,
+                                    scale: 0,
+                                },
+                            },
+                            frivolous: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 5,
+                                    scale: 1,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 5,
+                                    scale: 1,
+                                },
+                            },
+                            escalated: SorafsAppealSettlementRule {
+                                refund_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                                treasury_rate: Numeric {
+                                    mantissa: 0,
+                                    scale: 0,
+                                },
+                            },
+                        },
+                    },
+                    submitter_signers: [],
+                    worker_scan_interval: 30s,
+                    worker_max_retry_attempts: 3,
+                    worker_max_pending: 4096,
+                    worker_max_completed: 16384,
+                    worker_max_dead_letters: 1024,
+                    worker_checkpoint_max_bytes: 67108864,
+                },
+                transport: ToriiTransport {
+                    trusted_proxy_cidrs: [],
+                    norito_rpc: NoritoRpcTransport {
+                        enabled: true,
+                        require_mtls: false,
+                        mtls_trusted_proxy_cidrs: [
+                            "127.0.0.0/8",
+                            "::1/128",
+                        ],
+                        allowed_clients: [],
+                        stage: Disabled,
+                    },
+                },
+                mcp: ToriiMcp {
+                    enabled: false,
+                    max_request_bytes: 1048576,
+                    max_tools_per_list: 500,
+                    profile: ReadOnly,
+                    expose_operator_routes: false,
+                    allow_tool_prefixes: [],
+                    deny_tool_prefixes: [],
+                    rate_per_minute: Some(
+                        240,
+                    ),
+                    burst: Some(
+                        120,
+                    ),
+                    async_job_ttl_secs: 300,
+                    async_job_max_entries: 2000,
+                },
+                cors: ToriiCors {
+                    enabled: false,
+                    allowed_origins: [],
+                    allowed_methods: [],
+                    allowed_headers: [],
+                    exposed_headers: [],
+                    max_age_secs: 3600,
+                },
+                proof_api: ProofApi {
+                    rate_per_minute: Some(
+                        120,
+                    ),
+                    burst: Some(
+                        60,
+                    ),
+                    max_body_bytes: Bytes(
+                        8388608,
+                    ),
+                    body_max_inflight: 8,
+                    body_read_timeout: 15s,
+                    egress_bytes_per_sec: Some(
+                        8388608,
+                    ),
+                    egress_burst_bytes: Some(
+                        67108864,
+                    ),
+                    max_list_limit: 200,
+                    request_timeout: 1s,
+                    cache_max_age: 30s,
+                    retry_after: 1s,
+                },
+                account_onboarding: None,
+                faucet: None,
+                kagemusha_commands: None,
+                ram_lfe: None,
+                tx_history: None,
+                recipient_lookup: ToriiRecipientLookup {
+                    policy_id: Name(
+                        "cbuae_aed_sbp_pkr",
+                    ),
+                    requests_per_minute: 30,
+                    request_timeout: 4s,
+                    routes: [],
+                },
+                app_api: AppApi {
+                    default_list_limit: 100,
+                    max_list_limit: 500,
+                    max_fetch_size: 500,
+                    rate_limit_cost_per_row: 1,
+                    request_signature_max_clock_skew: 60s,
+                    request_signature_nonce_ttl: 300s,
+                    request_signature_replay_cache_capacity: 10000,
+                },
+                webhook: Webhook {
+                    queue_capacity: 10000,
+                    max_attempts: 12,
+                    backoff_initial: 1s,
+                    backoff_max: 60s,
+                    connect_timeout: 10s,
+                    write_timeout: 10s,
+                    read_timeout: 10s,
+                },
+                webhook_security: WebhookSecurity {
+                    enabled: true,
+                    allow_cidrs: [],
+                },
+                push: Push {
+                    enabled: false,
+                    rate_per_minute: Some(
+                        60,
+                    ),
+                    burst: Some(
+                        30,
+                    ),
+                    connect_timeout: 5s,
+                    request_timeout: 10s,
+                    max_topics_per_device: 32,
+                    fcm_project_id: None,
+                    fcm_service_account_path: None,
+                    fcm_api_key: None,
+                    apns_environment: "sandbox",
+                    apns_topic: None,
+                    apns_team_id: None,
+                    apns_key_id: None,
+                    apns_private_key_path: None,
+                    apns_endpoint: None,
+                    apns_auth_token: None,
+                },
+            },
+            soracloud_runtime: SoracloudRuntime {
+                production_mode: false,
+                state_dir: "./storage/soracloud_runtime",
+                reconcile_interval: 5s,
+                hydration_concurrency: 4,
+                cache_budgets: SoracloudRuntimeCacheBudgets {
+                    bundle_bytes: 536870912,
+                    static_asset_bytes: 536870912,
+                    journal_bytes: 536870912,
+                    checkpoint_bytes: 536870912,
+                    model_artifact_bytes: 1073741824,
+                    model_weight_bytes: 4294967296,
+                },
+                inrou: SoracloudRuntimeInrou {
+                    max_concurrent_vms: 8,
+                    enabled: false,
+                    proxy_only: false,
+                    start_grace: 30s,
+                    stop_grace: 10s,
+                },
+                submission: SoracloudRuntimeSubmission {
+                    fee_payer: Authority,
+                },
+                egress: SoracloudRuntimeEgress {
+                    default_allow: false,
+                    allowed_hosts: [],
+                    rate_per_minute: None,
+                    max_bytes_per_minute: None,
+                },
+                hf: SoracloudRuntimeHuggingFace {
+                    hub_base_url: "https://huggingface.co",
+                    api_base_url: "https://huggingface.co/api",
+                    inference_base_url: "https://router.huggingface.co/hf-inference/models",
+                    request_timeout: 15s,
+                    local_execution_enabled: true,
+                    local_runner_program: "python3",
+                    local_runner_timeout: 120s,
+                    model_host_heartbeat_ttl: 30s,
+                    allow_inference_bridge_fallback: false,
+                    import_max_files: 32,
+                    import_max_file_bytes: 268435456,
+                    import_max_total_bytes: 2147483648,
+                    import_file_allowlist: [
+                        "*.gguf",
+                        "*.safetensors",
+                        "*.safetensors.index.json",
+                        "chat_template.jinja",
+                        "config.json",
+                        "generation_config.json",
+                        "merges.txt",
+                        "preprocessor_config.json",
+                        "processor_config.json",
+                        "pytorch_model.bin",
+                        "pytorch_model.bin.index.json",
+                        "rust_model.ot",
+                        "sentencepiece.bpe.model",
+                        "special_tokens_map.json",
+                        "tokenizer.json",
+                        "tokenizer.model",
+                        "tokenizer_config.json",
+                        "vocab.json",
+                        "vocab.txt",
+                    ],
+                    inference_token: None,
+                },
+            },
+            kura: Kura {
+                init_mode: Strict,
+                store_dir: WithOrigin {
+                    value: "./storage",
+                    origin: Default {
+                        id: ParameterId(kura.store_dir),
+                    },
+                },
+                max_disk_usage_bytes: Bytes(
+                    0,
+                ),
+                blocks_in_memory: 1024,
+                block_sync_roster_retention: 7200,
+                roster_sidecar_retention: 512,
+                eviction_required_replicas: 3,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity: 256,
+                fsync_mode: Batched,
+                fsync_interval: 50ms,
+            },
+            sumeragi: Sumeragi {
+                role: Validator,
+                block: SumeragiBlock {
+                    max_transactions: 512,
+                    max_payload_bytes: 16777216,
+                    proposal_queue_scan_multiplier: 4,
+                },
+                queues: SumeragiQueues {
+                    commands: 1024,
+                    authenticated_non_validator_sources: 2,
+                    bodies: 518,
+                    body_bytes: 242221056,
+                    body_source_bytes: 34603008,
+                    chunks: 2048,
+                    ready_bodies: 128,
+                },
+                limits: SumeragiV2RuntimeLimits {
+                    authenticated_merge_qc_capacity: 64,
+                    merge_leader_body_frame_headroom_bytes: 1048576,
+                    autonomous_carrier_headroom_bytes: 1048576,
+                    autonomous_producer_recheck: 100ms,
+                    historical_recovery_stuck_attempts: 32,
+                    historical_recovery_retry_tier_attempts: 4,
+                    historical_recovery_max_retry_tier: 6,
+                    sidecar_service_burst: 8,
+                    merge_sidecar_inbound_session_capacity: 32,
+                    merge_sidecar_inbound_sessions_per_peer: 4,
+                    merge_sidecar_inbound_assembly_bytes: 67108864,
+                    merge_sidecar_inbound_assembly_bytes_per_peer: 33554432,
+                    merge_sidecar_deferred_block_capacity: 128,
+                    merge_sidecar_future_block_distance: 64,
+                    merge_sidecar_request_timeout: 10s,
+                    merge_sidecar_outbound_sessions_per_source: 2,
+                    merge_sidecar_outbound_bytes_per_source: 16777216,
+                    merge_sidecar_server_request_gates_per_source: 4,
+                    pending_certified_merge_entry_capacity: 1024,
+                    pending_queue_plan_admission_capacity: 1024,
+                    pending_control_sidecar_bytes: 268435456,
+                    merge_signing_guard_record_capacity: 1024,
+                    merge_signing_guard_record_bytes: 16842752,
+                    merge_signing_guard_total_bytes: 268435456,
+                    native_amx_signing_guard_record_capacity: 524288,
+                    native_amx_signing_guard_record_bytes: 16384,
+                    native_amx_signing_guard_anchor_bytes: 4096,
+                },
+                keys: SumeragiKeys {
+                    activation_lead_blocks: 1,
+                    overlap_grace_blocks: 8,
+                    expiry_grace_blocks: 0,
+                    require_hsm: false,
+                    allowed_algorithms: {
+                        BlsNormal,
+                    },
+                    allowed_hsm_providers: {
+                        "pkcs11",
+                        "softkey",
+                        "yubihsm",
+                    },
+                },
+            },
+            block_sync: BlockSync {
+                gossip_period: 10s,
+                gossip_max_period: 30s,
+                gossip_size: 4,
+            },
+            transaction_gossiper: TransactionGossiper {
+                gossip_period: 1s,
+                gossip_size: 500,
+                gossip_resend_ticks: 3,
+                dataspace: DataspaceGossip {
+                    drop_unknown_dataspace: false,
+                    restricted_target_cap: None,
+                    public_target_cap: Some(
+                        16,
+                    ),
+                    public_target_reshuffle: 1s,
+                    restricted_target_reshuffle: 1s,
+                    restricted_fallback: Drop,
+                    restricted_public_payload: Refuse,
+                },
+            },
+            live_query_store: LiveQueryStore {
+                idle_time: 10s,
+                capacity: 128,
+                capacity_per_user: 128,
+            },
+            logger: Logger {
+                level: INFO,
+                filter: None,
+                format: Full,
+                terminal_colors: false,
+            },
+            queue: Queue {
+                capacity: 262144,
+                capacity_per_user: 262144,
+                max_retained_bytes: 134217728,
+                transaction_time_to_live: 86400s,
+                expired_cull_interval: 1s,
+                expired_cull_batch: 256,
+                plan_journal_max_bytes: 67108864,
+            },
+            nexus: Nexus {
+                enabled: true,
+                storage: NexusStorage {
+                    max_disk_usage_bytes: Bytes(
+                        274877906944,
+                    ),
+                    budget_source: Unset,
+                    auto_default: None,
+                    budget_enforce_interval_blocks: 10,
+                    max_wsv_memory_bytes: Bytes(
+                        8589934592,
+                    ),
+                    disk_budget_weights: NexusStorageWeights {
+                        kura_blocks_bps: 3000,
+                        wsv_snapshots_bps: 2000,
+                        sorafs_bps: 4000,
+                        soranet_spool_bps: 500,
+                        soravpn_spool_bps: 500,
+                    },
+                },
+                staking: NexusStaking {
+                    public_validator_mode: StakeElected,
+                    restricted_validator_mode: AdminManaged,
+                    min_validator_stake: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 0,
+                        },
+                    ),
+                    max_validators: 32,
+                    unbonding_delay: 0ns,
+                    withdraw_grace: 0ns,
+                    max_slash_bps: 10000,
+                    reward_dust_threshold: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
+                    stake_asset_id: "5tTiKE1CkjJoGHhmf5FxQoSg5hMt",
+                    stake_escrow_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                    slash_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                },
+                fees: NexusFees {
+                    fee_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+                    fee_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                    base_fee: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
+                    per_byte_fee: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
+                    per_instruction_fee: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 3,
+                        },
+                    ),
+                    per_gas_unit_fee: Quantity(
+                        Numeric {
+                            mantissa: 5,
+                            scale: 5,
+                        },
+                    ),
+                    sponsor_vault_custody_account_id: sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT,
+                    settlement_mode: Direct,
+                    successful_claim_fee_exempt_authorities: [],
+                },
+                relay_worker: NexusRelayWorker {
+                    enabled: false,
+                    authority_account_id: None,
+                    max_pending_relays: 1024,
+                    retry_backoff: 5s,
+                    max_retry_attempts: 10,
+                },
+                hf_shared_leases: NexusHfSharedLeases {
+                    drain_grace: 5s,
+                    warmup_no_show_slash_bps: 500,
+                    assigned_heartbeat_miss_slash_bps: 250,
+                    assigned_heartbeat_miss_strike_threshold: 3,
+                    advert_contradiction_slash_bps: 1000,
+                },
+                uploaded_models: NexusUploadedModels {
+                    chunk_plaintext_bytes: 4194304,
+                    max_plaintext_bytes_per_model: 68719476736,
+                    max_chunk_count_per_model: 16384,
+                    max_active_private_sessions_per_apartment: 4,
+                    max_session_token_budget: 16384,
+                    max_session_image_budget: 8,
+                },
+                endorsement: NexusEndorsement {
+                    committee_keys: [],
+                    quorum: 0,
+                },
+                axt: NexusAxt {
+                    slot_length_ms: 1,
+                    max_clock_skew_ms: 0,
+                    proof_cache_ttl_slots: 1,
+                    replay_retention_slots: 128,
+                },
+                lane_relay_emergency: LaneRelayEmergency {
+                    enabled: false,
+                    multisig_threshold: 3,
+                    multisig_members: 5,
+                    max_ttl_blocks: 20,
+                },
+                lane_catalog: LaneCatalog {
+                    lane_count: 1,
+                    lanes: [
+                        LaneConfig {
+                            id: LaneId(
+                                0,
+                            ),
+                            dataspace_id: DataSpaceId(
+                                0,
+                            ),
+                            alias: "default",
+                            description: None,
+                            visibility: Public,
+                            lane_type: None,
+                            governance: None,
+                            settlement: None,
+                            storage: FullReplica,
+                            proof_scheme: MerkleSha256,
+                            metadata: {},
+                        },
+                    ],
+                },
+                configured_lane_catalog: LaneCatalog {
+                    lane_count: 1,
+                    lanes: [
+                        LaneConfig {
+                            id: LaneId(
+                                0,
+                            ),
+                            dataspace_id: DataSpaceId(
+                                0,
+                            ),
+                            alias: "default",
+                            description: None,
+                            visibility: Public,
+                            lane_type: None,
+                            governance: None,
+                            settlement: None,
+                            storage: FullReplica,
+                            proof_scheme: MerkleSha256,
+                            metadata: {},
+                        },
+                    ],
+                },
+                lane_config: LaneConfig {
+                    entries: [
+                        LaneConfigEntry {
+                            lane_id: LaneId(
+                                0,
+                            ),
+                            shard_id: 0,
+                            dataspace_id: DataSpaceId(
+                                0,
+                            ),
+                            visibility: Public,
+                            storage_profile: FullReplica,
+                            proof_scheme: MerkleSha256,
+                            alias: "default",
+                            slug: "default",
+                            kura_segment: "lane_000_default",
+                            merge_segment: "lane_000_default_merge",
+                            key_prefix: [
+                                0,
+                                0,
+                                0,
+                                0,
+                            ],
+                            manifest_policy: Strict,
+                            confidential_compute: false,
+                            confidential_policy: None,
+                            confidential_access: [],
+                        },
+                    ],
+                    by_id: {
+                        LaneId(
+                            0,
+                        ): 0,
+                    },
+                },
+                dataspace_catalog: DataSpaceCatalog {
+                    entries: [
+                        DataSpaceMetadata {
+                            id: DataSpaceId(
+                                0,
+                            ),
+                            alias: "universal",
+                            description: None,
+                            fault_tolerance: 1,
+                        },
+                    ],
+                },
+                dataspace_fee_sponsor_program_ids: {},
+                routing_policy: LaneRoutingPolicy {
+                    default_lane: LaneId(
+                        0,
+                    ),
+                    default_dataspace: DataSpaceId(
+                        0,
+                    ),
+                    rules: [],
+                },
+                registry: LaneRegistry {
+                    manifest_directory: None,
+                    cache_directory: None,
+                    poll_interval: 60s,
+                },
+                governance: GovernanceCatalog {
+                    default_module: None,
+                    modules: {},
+                },
+                compliance: LaneCompliance {
+                    enabled: false,
+                    audit_only: true,
+                    policy_dir: None,
+                },
+                fusion: Fusion {
+                    floor_teu: 4000,
+                    exit_teu: 6000,
+                    observation_slots: 2,
+                    max_window_slots: 16,
+                },
+                autoscale: Autoscale {
+                    enabled: false,
+                    min_lanes: 1,
+                    max_lanes: 8,
+                    target_block_ms: 1000,
+                    scale_out_latency_ratio: 1.2,
+                    scale_in_latency_ratio: 0.8,
+                    scale_out_utilization_ratio: 0.85,
+                    scale_in_utilization_ratio: 0.4,
+                    scale_out_window_blocks: 32,
+                    scale_in_window_blocks: 96,
+                    cooldown_blocks: 64,
+                    per_lane_target_tps: 50,
+                    last_transition_height: 0,
+                },
+                commit: Commit {
+                    window_slots: 2,
+                },
+                da: Da {
+                    q_in_slot_total: 2048,
+                    q_in_slot_per_ds_min: 8,
+                    sample_size_base: 64,
+                    sample_size_max: 96,
+                    threshold_base: 43,
+                    per_attester_shards: 25,
+                    audit: DaAudit {
+                        sample_size: 32,
+                        window_count: 20,
+                        interval: 600s,
+                    },
+                    recovery: DaRecovery {
+                        request_timeout: 86400s,
+                    },
+                    rotation: DaRotation {
+                        max_hits_per_window: 4,
+                        window_slots: 64,
+                        seed_tag: "iroha:da:rotate:v1\0",
+                        latency_decay: 0.25,
+                    },
+                },
+            },
+            snapshot: Snapshot {
+                mode: ReadWrite,
+                create_every_ms: DurationMs(
+                    600s,
+                ),
+                store_dir: WithOrigin {
+                    value: "./storage/snapshot",
+                    origin: Default {
+                        id: ParameterId(snapshot.store_dir),
+                    },
+                },
+                merkle_chunk_size_bytes: 1048576,
+                max_payload_bytes: 1073741824,
+                verification_public_key: None,
+                signing_private_key: None,
+                bootstrap: SnapshotBootstrapPolicy {
+                    enabled: false,
+                    audited_sha256: None,
+                    audited_height: None,
+                },
+            },
+            telemetry_enabled: true,
+            telemetry_profile: Operator,
+            telemetry: None,
+            telemetry_redaction: TelemetryRedaction {
+                mode: Strict,
+                allowlist: [],
+            },
+            telemetry_integrity: TelemetryIntegrity {
+                enabled: true,
+                state_dir: None,
+                signing_key: None,
+                signing_key_id: None,
+            },
+            dev_telemetry: DevTelemetry {
+                out_file: None,
+                panic_on_duplicate_metrics: false,
+            },
+            pipeline: Pipeline {
+                ivm_proved: IvmProvedExecution {
+                    enabled: false,
+                    skip_replay: false,
+                    allowed_circuits: [],
+                },
+                dynamic_prepass: true,
+                access_set_cache_enabled: true,
+                parallel_overlay: true,
+                workers: 0,
+                stateless_cache_cap: 4096,
+                parallel_apply: true,
+                ready_queue_heap: false,
+                gpu_key_bucket: false,
+                debug_trace_scheduler_inputs: false,
+                debug_trace_tx_eval: false,
+                signature_batch_max: 0,
+                signature_batch_max_ed25519: 64,
+                signature_batch_max_secp256k1: 16,
+                signature_batch_max_pqc: 8,
+                signature_batch_max_bls: 16,
+                cache_size: 128,
+                ivm_cache_max_decoded_ops: 8000000,
+                ivm_cache_max_bytes: 67108864,
+                ivm_prover_threads: 0,
+                overlay_max_instructions: 0,
+                overlay_max_bytes: 0,
+                overlay_chunk_instructions: 256,
+                gas: Gas {
+                    tech_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                    accepted_assets: [],
+                    units_per_gas: [],
+                },
+                ivm_max_cycles_upper_bound: 1000000,
+                ivm_max_decoded_instructions: 1048576,
+                ivm_max_decoded_bytes: 4194304,
+                quarantine_max_txs_per_block: 0,
+                quarantine_tx_max_cycles: 0,
+                quarantine_tx_max_millis: 0,
+                query_default_cursor_mode: Ephemeral,
+                query_max_fetch_size: 500,
+                query_stored_min_gas_units: 0,
+                amx_per_dataspace_budget_ms: 30,
+                amx_group_budget_ms: 140,
+                amx_per_instruction_ns: 50,
+                amx_per_memory_access_ns: 80,
+                amx_per_syscall_ns: 120,
+            },
+            tiered_state: TieredState {
+                enabled: true,
+                hot_retained_keys: 0,
+                hot_retained_bytes: Bytes(
+                    8589934592,
+                ),
+                hot_retained_grace_snapshots: 1,
+                cold_store_root: Some(
+                    "./storage/tiered_state",
+                ),
+                da_store_root: None,
+                max_snapshots: 2,
+                max_cold_bytes: Bytes(
+                    0,
+                ),
+            },
+            compute: Compute {
+                enabled: false,
+                namespaces: {
+                    Name(
+                        "compute",
+                    ),
+                },
+                default_ttl_slots: 32,
+                max_ttl_slots: 512,
+                max_request_bytes: Bytes(
+                    524288,
+                ),
+                max_response_bytes: Bytes(
+                    524288,
+                ),
+                max_gas_per_call: 5000000,
+                resource_profiles: {
+                    Name(
+                        "cpu-balanced",
+                    ): ComputeResourceBudget {
+                        max_cycles: 10000000,
+                        max_memory_bytes: 268435456,
+                        max_stack_bytes: 4194304,
+                        max_io_bytes: 25165824,
+                        max_egress_bytes: 12582912,
+                        allow_gpu_hints: true,
+                        allow_wasi: true,
+                    },
+                    Name(
+                        "cpu-small",
+                    ): ComputeResourceBudget {
+                        max_cycles: 5000000,
+                        max_memory_bytes: 134217728,
+                        max_stack_bytes: 2097152,
+                        max_io_bytes: 16777216,
+                        max_egress_bytes: 8388608,
+                        allow_gpu_hints: false,
+                        allow_wasi: false,
+                    },
+                },
+                default_resource_profile: Name(
+                    "cpu-small",
+                ),
+                price_families: {
+                    Name(
+                        "default",
+                    ): ComputePriceWeights {
+                        cycles_per_unit: 1000000,
+                        egress_bytes_per_unit: 1024,
+                        unit_label: "cu",
+                    },
+                },
+                default_price_family: Name(
+                    "default",
+                ),
+                auth_policy: Either,
+                sandbox: ComputeSandboxRules {
+                    mode: IvmOnly,
+                    randomness: SeededFromRequest,
+                    storage: ReadOnly,
+                    deny_nondeterministic_syscalls: true,
+                    allow_gpu_hints: false,
+                    allow_tee_hints: false,
+                },
+                economics: ComputeEconomics {
+                    max_cu_per_call: 100000,
+                    max_amplification_ratio: 16,
+                    fee_split: ComputeFeeSplit {
+                        burn_bps: 2000,
+                        validators_bps: 6000,
+                        providers_bps: 2000,
+                    },
+                    sponsor_policy: ComputeSponsorPolicy {
+                        max_cu_per_call: 10000,
+                        max_daily_cu: 100000,
+                    },
+                    price_bounds: {
+                        Low: ComputePriceDeltaBounds {
+                            max_cycles_delta_bps: 500,
+                            max_egress_delta_bps: 500,
+                        },
+                        Balanced: ComputePriceDeltaBounds {
+                            max_cycles_delta_bps: 1500,
+                            max_egress_delta_bps: 1500,
+                        },
+                        High: ComputePriceDeltaBounds {
+                            max_cycles_delta_bps: 3000,
+                            max_egress_delta_bps: 3000,
+                        },
+                    },
+                    price_risk_classes: {
+                        Name(
+                            "default",
+                        ): Balanced,
+                    },
+                    price_family_baseline: {
+                        Name(
+                            "default",
+                        ): ComputePriceWeights {
+                            cycles_per_unit: 1000000,
+                            egress_bytes_per_unit: 1024,
+                            unit_label: "cu",
+                        },
+                    },
+                    price_amplifiers: ComputePriceAmplifiers {
+                        gpu_bps: 13000,
+                        tee_bps: 15000,
+                        best_effort_bps: 12500,
+                    },
+                },
+                slo: ComputeSlo {
+                    max_inflight_per_route: 32,
+                    queue_depth_per_route: 512,
+                    max_requests_per_second: 200,
+                    target_p50_latency_ms: 25,
+                    target_p95_latency_ms: 75,
+                    target_p99_latency_ms: 120,
+                },
+            },
+            content: Content {
+                max_bundle_bytes: 1048576,
+                max_files: 128,
+                max_path_len: 256,
+                max_retention_blocks: 10000,
+                chunk_size_bytes: 65536,
+                publish_allow_accounts: [],
+                limits: ContentLimits {
+                    max_requests_per_second: 200,
+                    request_burst: 200,
+                    max_egress_bytes_per_second: 16777216,
+                    egress_burst_bytes: 8388608,
+                },
+                default_cache_max_age_secs: 300,
+                max_cache_max_age_secs: 86400,
+                immutable_bundles: true,
+                default_auth_mode: Public,
+                slo: ContentSlo {
+                    target_p50_latency_ms: 50,
+                    target_p99_latency_ms: 250,
+                    target_availability_bps: 9990,
+                },
+                pow: ContentPow {
+                    difficulty_bits: 0,
+                    header_name: "x-iroha-pow",
+                },
+                stripe_layout: DaStripeLayout {
+                    total_stripes: 1,
+                    shards_per_stripe: 1,
+                    row_parity_stripes: 0,
+                },
+            },
+            oracle: Oracle {
+                history_depth: 2048,
+                governance: OracleGovernance {
+                    intake_sla_blocks: 12,
+                    rules_sla_blocks: 24,
+                    cop_sla_blocks: 36,
+                    technical_sla_blocks: 36,
+                    policy_jury_sla_blocks: 48,
+                    enact_sla_blocks: 48,
+                    intake_min_votes: 1,
+                    rules_min_votes: 1,
+                    cop_min_votes: OracleChangeThresholds {
+                        low: 1,
+                        medium: 2,
+                        high: 3,
+                    },
+                    technical_min_votes: 2,
+                    policy_jury_min_votes: OracleChangeThresholds {
+                        low: 2,
+                        medium: 3,
+                        high: 4,
+                    },
+                },
+                twitter_binding: OracleTwitterBinding {
+                    feed_id: Name(
+                        "twitter_follow_binding",
+                    ),
+                    pepper_id: "pepper-social-v1",
+                    max_ttl_ms: 86400000,
+                    min_ttl_ms: 300000,
+                    min_update_spacing_ms: 30000,
+                },
+            },
+            ivm: Ivm {
+                memory_budget_profile: Name(
+                    "cpu-small",
+                ),
+                banner: Banner {
+                    show: true,
+                    beep: true,
+                },
+            },
+            norito: Norito {
+                allow_gpu_compression: true,
+                max_archive_len: 1073741824,
+            },
+            hijiri: Hijiri {
+                fee_policy: None,
+            },
+            fraud_monitoring: FraudMonitoring {
+                enabled: false,
+                service_endpoints: [],
+                connect_timeout: 500ms,
+                request_timeout: 1.5s,
+                missing_assessment_grace: 0ns,
+                required_minimum_band: None,
+                attesters: [],
+            },
+            zk: Zk {
+                halo2: Halo2 {
+                    enabled: false,
+                    curve: Pallas,
+                    backend: Ipa,
+                    max_k: 16,
+                    verifier_budget_ms: 20,
+                    verifier_max_batch: 16,
+                    verifier_worker_threads: 0,
+                    verifier_queue_cap: 0,
+                    verifier_enqueue_wait_ms: 25,
+                    verifier_retry_ring_cap: 2048,
+                    verifier_retry_max_attempts: 3,
+                    verifier_retry_tick_ms: 5,
+                    max_envelope_bytes: 1048576,
+                    max_proof_bytes: 196608,
+                    max_transcript_label_len: 64,
+                    enforce_transcript_label_ascii: true,
+                },
+                fastpq: Fastpq {
+                    execution_mode: Cpu,
+                    poseidon_mode: Cpu,
+                    proof_sidecar_queue_cap: 1024,
+                    proof_sidecar_max_bytes: Bytes(
+                        1048576,
+                    ),
+                    proof_sidecar_max_retries: 16,
+                    device_class: None,
+                    chip_family: None,
+                    gpu_kind: None,
+                    metal_queue_fanout: None,
+                    metal_queue_column_threshold: None,
+                    metal_max_in_flight: None,
+                    metal_threadgroup_width: None,
+                    metal_trace: false,
+                    metal_debug_enum: false,
+                    metal_debug_fused: false,
+                },
+                stark: Stark {
+                    enabled: false,
+                    max_envelope_bytes: 1048576,
+                    max_proof_bytes: 1048576,
+                },
+                sccp: Sccp {
+                    max_pending_outbound_messages: 65536,
+                    max_pending_outbound_payload_bytes: 268435456,
+                    max_proofs_per_transaction: 1,
+                    max_proofs_per_block: 4,
+                    max_proof_bytes_per_proof: 8388608,
+                    max_proof_bytes_per_transaction: 8388608,
+                    max_proof_bytes_per_block: 33554432,
+                    max_native_headers_per_transaction: 1004,
+                    max_native_headers_per_block: 4016,
+                    max_ethereum_light_client_updates_per_transaction: 128,
+                    max_ethereum_light_client_updates_per_block: 512,
+                    max_native_header_bytes_per_transaction: 8388608,
+                    max_native_header_bytes_per_block: 33554432,
+                    max_secp256k1_recoveries_per_transaction: 1005,
+                    max_secp256k1_recoveries_per_block: 4020,
+                    max_bls_aggregate_checks_per_transaction: 1004,
+                    max_bls_aggregate_checks_per_block: 4016,
+                    max_bls_signer_contributions_per_transaction: 131713,
+                    max_bls_signer_contributions_per_block: 526852,
+                    max_bn254_pairing_checks_per_transaction: 1,
+                    max_bn254_pairing_checks_per_block: 4,
+                },
+                root_history_cap: 2048,
+                ballot_history_cap: 1024,
+                empty_root_on_empty: false,
+                merkle_depth: 0,
+                preverify_max_bytes: 1048576,
+                preverify_budget_bytes: 0,
+                proof_history_cap: 4096,
+                proof_retention_grace_blocks: 256,
+                proof_prune_batch: 512,
+                bridge_proof_max_range_len: 4096,
+                bridge_proof_max_past_age_blocks: 0,
+                bridge_proof_max_future_drift_blocks: 0,
+                poseidon_params_id: None,
+                pedersen_params_id: None,
+                kaigi_roster_join_vk: None,
+                kaigi_roster_leave_vk: None,
+                kaigi_usage_vk: None,
+                max_proof_size_bytes: 1048576,
+                max_nullifiers_per_tx: 8,
+                max_commitments_per_tx: 8,
+                max_confidential_ops_per_block: 256,
+                verify_timeout: 750ms,
+                max_anchor_age_blocks: 10000,
+                max_proof_bytes_block: 1048576,
+                max_verify_calls_per_tx: 128,
+                max_verify_calls_per_block: 128,
+                max_public_inputs: 32,
+                reorg_depth_bound: 10000,
+                policy_transition_delay_blocks: 100,
+                policy_transition_window_blocks: 200,
+                tree_roots_history_len: 10000,
+                tree_frontier_checkpoint_interval: 100,
+                registry_max_vk_entries: 64,
+                registry_max_params_entries: 32,
+                registry_max_delta_per_block: 4,
+                gas: ConfidentialGas {
+                    proof_base: 250000,
+                    per_public_input: 2000,
+                    per_proof_byte: 5,
+                    per_nullifier: 300,
+                    per_commitment: 500,
+                },
+            },
+            gov: Governance {
+                vk_ballot: None,
+                vk_tally: None,
+                voting_asset_id: AssetDefinitionId {
+                    aid_bytes: [
+                        59,
+                        45,
+                        238,
+                        246,
+                        130,
+                        60,
+                        72,
+                        205,
+                        167,
+                        236,
+                        51,
+                        224,
+                        2,
+                        182,
+                        29,
+                        55,
+                    ],
+                    projection: None,
+                },
+                citizenship_asset_id: AssetDefinitionId {
+                    aid_bytes: [
+                        59,
+                        45,
+                        238,
+                        246,
+                        130,
+                        60,
+                        72,
+                        205,
+                        167,
+                        236,
+                        51,
+                        224,
+                        2,
+                        182,
+                        29,
+                        55,
+                    ],
+                    projection: None,
+                },
+                citizenship_bond_amount: Quantity(
+                    Numeric {
+                        mantissa: 150,
+                        scale: 0,
+                    },
+                ),
+                citizenship_escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                min_bond_amount: Quantity(
+                    Numeric {
+                        mantissa: 150,
+                        scale: 0,
+                    },
+                ),
+                bond_escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                slash_receiver_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                slash_double_vote_bps: 2500,
+                slash_invalid_proof_bps: 5000,
+                slash_ineligible_proof_bps: 1500,
+                alias_teu_minimum: Quantity(
+                    Numeric {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                ),
+                alias_frontier_telemetry: true,
+                debug_trace_pipeline: false,
+                jdg_signature_schemes: {
+                    SimpleThreshold,
+                },
+                runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy {
+                    mode: Optional,
+                    require_sbom: false,
+                    require_slsa: false,
+                    trusted_signers: {},
+                    signature_threshold: 0,
+                },
+                citizen_service: CitizenServiceDiscipline {
+                    seat_cooldown_blocks: 10000,
+                    max_seats_per_epoch: 1,
+                    free_declines_per_epoch: 1,
+                    decline_slash_bps: 250,
+                    no_show_slash_bps: 1000,
+                    misconduct_slash_bps: 5000,
+                    role_bond_multipliers: {},
+                },
+                viral_incentives: ViralIncentives {
+                    incentive_pool_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                    escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                    reward_asset_definition_id: AssetDefinitionId {
+                        aid_bytes: [
+                            59,
+                            45,
+                            238,
+                            246,
+                            130,
+                            60,
+                            72,
+                            205,
+                            167,
+                            236,
+                            51,
+                            224,
+                            2,
+                            182,
+                            29,
+                            55,
+                        ],
+                        projection: None,
+                    },
+                    follow_reward_amount: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 0,
+                        },
+                    ),
+                    sender_bonus_amount: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 1,
+                        },
+                    ),
+                    max_daily_claims_per_uaid: 1,
+                    max_claims_per_binding: 1,
+                    daily_budget: Quantity(
+                        Numeric {
+                            mantissa: 1000,
+                            scale: 0,
+                        },
+                    ),
+                    halt: false,
+                    deny_uaids: [],
+                    deny_binding_digests: [],
+                    promo_starts_at_ms: None,
+                    promo_ends_at_ms: None,
+                    campaign_cap: Quantity(
+                        Numeric {
+                            mantissa: 0,
+                            scale: 0,
+                        },
+                    ),
+                },
+                sorafs_pin_policy: SorafsPinPolicyConstraints {
+                    min_replicas_floor: 1,
+                    max_replicas_ceiling: None,
+                    max_retention_epoch: None,
+                    allowed_storage_classes: None,
+                    require_council_signatures: false,
+                    approval_quorum: 1,
+                    approval_signers: [],
+                },
+                sorafs_pin_fee_asset_id: AssetDefinitionId {
+                    aid_bytes: [
+                        135,
+                        90,
+                        13,
+                        251,
+                        89,
+                        152,
+                        65,
+                        103,
+                        146,
+                        177,
+                        110,
+                        48,
+                        130,
+                        149,
+                        55,
+                        45,
+                    ],
+                    projection: None,
+                },
+                sorafs_pin_fee_treasury_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                sorafs_pricing: PricingScheduleRecord {
+                    version: 1,
+                    currency_code: "xor",
+                    default_storage_class: Hot,
+                    tiers: [
+                        TierRate {
+                            storage_class: Hot,
+                            storage_price_per_gib_month: Quantity(
+                                Numeric {
+                                    mantissa: 5,
+                                    scale: 1,
+                                },
+                            ),
+                            egress_price_per_gib: Quantity(
+                                Numeric {
+                                    mantissa: 5,
+                                    scale: 2,
+                                },
+                            ),
+                        },
+                        TierRate {
+                            storage_class: Warm,
+                            storage_price_per_gib_month: Quantity(
+                                Numeric {
+                                    mantissa: 2,
+                                    scale: 1,
+                                },
+                            ),
+                            egress_price_per_gib: Quantity(
+                                Numeric {
+                                    mantissa: 2,
+                                    scale: 2,
+                                },
+                            ),
+                        },
+                        TierRate {
+                            storage_class: Cold,
+                            storage_price_per_gib_month: Quantity(
+                                Numeric {
+                                    mantissa: 5,
+                                    scale: 2,
+                                },
+                            ),
+                            egress_price_per_gib: Quantity(
+                                Numeric {
+                                    mantissa: 1,
+                                    scale: 2,
+                                },
+                            ),
+                        },
+                    ],
+                    collateral: CollateralPolicy {
+                        multiplier_bps: 30000,
+                        onboarding_discount_bps: 5000,
+                        onboarding_period_secs: 2592000,
+                    },
+                    credit: CreditPolicy {
+                        settlement_window_secs: 604800,
+                        settlement_grace_secs: 172800,
+                        low_balance_alert_bps: 2000,
+                    },
+                    discounts: DiscountSchedule {
+                        loyalty_months_required: 12,
+                        loyalty_discount_bps: 1000,
+                        commitment_tiers: [
+                            CommitmentDiscountTier {
+                                minimum_commitment_gib_month: 500,
+                                discount_bps: 500,
+                            },
+                            CommitmentDiscountTier {
+                                minimum_commitment_gib_month: 2000,
+                                discount_bps: 1500,
+                            },
+                        ],
+                    },
+                    notes: Some(
+                        "Launch pricing schedule (0.50/0.20/0.05 XOR GiB·month; egress 0.05/0.02/0.01 XOR)",
+                    ),
+                },
+                sorafs_penalty: SorafsPenaltyPolicy {
+                    utilisation_floor_bps: 7500,
+                    uptime_floor_bps: 9500,
+                    por_success_floor_bps: 9700,
+                    strike_threshold: 3,
+                    penalty_bond_bps: 2500,
+                    cooldown_windows: 2,
+                    max_pdp_failures: 0,
+                    max_potr_breaches: 0,
+                },
+                sorafs_telemetry: SorafsTelemetryPolicy {
+                    require_submitter: false,
+                    require_nonce: true,
+                    max_window_gap: 21600s,
+                    reject_zero_capacity: true,
+                    submitters: [],
+                    per_provider_submitters: {},
+                },
+                sorafs_provider_owners: {},
+                conviction_step_blocks: 100,
+                max_conviction: 6,
+                min_enactment_delay: 20,
+                window_span: 100,
+                plain_voting_enabled: false,
+                approval_threshold_q_num: 1,
+                approval_threshold_q_den: 2,
+                min_turnout: 0,
+                parliament_committee_size: 21,
+                parliament_term_blocks: 43200,
+                parliament_min_stake: Quantity(
+                    Numeric {
+                        mantissa: 1,
+                        scale: 0,
+                    },
+                ),
+                parliament_eligibility_asset_id: AssetDefinitionId {
+                    aid_bytes: [
+                        131,
+                        79,
+                        23,
+                        127,
+                        21,
+                        66,
+                        77,
+                        153,
+                        151,
+                        206,
+                        138,
+                        177,
+                        49,
+                        158,
+                        123,
+                        238,
+                    ],
+                    projection: None,
+                },
+                parliament_alternate_size: None,
+                parliament_quorum_bps: 6667,
+                rules_committee_size: 7,
+                agenda_council_size: 9,
+                interest_panel_size: 11,
+                review_panel_size: 13,
+                policy_jury_size: 25,
+                oversight_committee_size: 7,
+                fma_committee_size: 5,
+                pipeline_study_sla_blocks: 20,
+                pipeline_review_sla_blocks: 100,
+                pipeline_decision_sla_blocks: 1,
+                pipeline_enactment_sla_blocks: 200,
+                pipeline_rules_sla_blocks: 20,
+                pipeline_agenda_sla_blocks: 40,
+            },
+            nts: Nts {
+                sample_interval: 5s,
+                sample_cap_per_round: 8,
+                max_rtt_ms: 500,
+                trim_percent: 10,
+                per_peer_buffer: 16,
+                smoothing_enabled: false,
+                smoothing_alpha: 0.2,
+                max_adjust_ms_per_min: 50,
+                min_samples: 3,
+                max_offset_ms: 1000,
+                max_confidence_ms: 500,
+                enforcement_mode: Warn,
+            },
+            accel: Acceleration {
+                enable_simd: true,
+                enable_cuda: true,
+                enable_metal: true,
+                max_gpus: None,
+                merkle_min_leaves_gpu: 8192,
+                merkle_min_leaves_metal: None,
+                merkle_min_leaves_cuda: None,
+                prefer_cpu_sha2_max_leaves_aarch64: None,
+                prefer_cpu_sha2_max_leaves_x86: None,
+            },
+            concurrency: Concurrency {
+                scheduler_min_threads: 0,
+                scheduler_max_threads: 0,
+                rayon_global_threads: 0,
+                scheduler_stack_bytes: 33554432,
+                prover_stack_bytes: 33554432,
+                sumeragi_stack_bytes: 67108864,
+                guest_stack_bytes: 4194304,
+                gas_to_stack_multiplier: 4,
+            },
+            confidential: Confidential {
+                enabled: false,
+                assume_valid: false,
+                verifier_backend: "halo2-ipa-pallas",
+                max_proof_size_bytes: 1048576,
+                max_nullifiers_per_tx: 8,
+                max_commitments_per_tx: 8,
+                max_confidential_ops_per_block: 256,
+                verify_timeout: 750ms,
+                max_anchor_age_blocks: 10000,
+                max_proof_bytes_block: 1048576,
+                max_verify_calls_per_tx: 128,
+                max_verify_calls_per_block: 128,
+                max_public_inputs: 32,
+                reorg_depth_bound: 10000,
+                policy_transition_delay_blocks: 100,
+                policy_transition_window_blocks: 200,
+                tree_roots_history_len: 10000,
+                tree_frontier_checkpoint_interval: 100,
+                registry_max_vk_entries: 64,
+                registry_max_params_entries: 32,
+                registry_max_delta_per_block: 4,
+                gas: ConfidentialGas {
+                    proof_base: 250000,
+                    per_public_input: 2000,
+                    per_proof_byte: 5,
+                    per_nullifier: 300,
+                    per_commitment: 500,
+                },
+            },
+            crypto: Crypto {
+                enable_sm_openssl_preview: false,
+                sm_intrinsics: Auto,
+                default_hash: "blake2b-256",
+                allowed_signing: [
+                    Ed25519,
+                    Secp256k1,
+                ],
+                sm2_distid_default: "1234567812345678",
+                allowed_curve_ids: [
+                    1,
+                    4,
+                ],
+            },
+            settlement: Settlement {
+                repo: Repo {
+                    default_haircut_bps: 1500,
+                    margin_frequency_secs: 86400,
+                    eligible_collateral: [],
+                    collateral_substitution_matrix: {},
+                },
+                offline: Offline {
+                    enabled: true,
+                    escrow_required: true,
+                    escrow_accounts: {},
+                    kagemusha_release_policy_path: None,
+                    kagemusha_artifact_dir: None,
+                    kagemusha_max_decoded_bytes: 268435456,
+                },
+                router: Router {
+                    twap_window: 60s,
+                    epsilon_bps: 25,
+                    buffer_alert_pct: 75,
+                    buffer_throttle_pct: 25,
+                    buffer_xor_only_pct: 10,
+                    buffer_halt_pct: 2,
+                    buffer_horizon_hours: 72,
+                },
+            },
+            streaming: Streaming {
+                key_material: StreamingKeyMaterial {
+                    identity: KeyPair {
+                        public_key: PublicKey(
+                            ed25519(
+                                "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB",
+                            ),
+                        ),
+                        private_key: "[REDACTED PrivateKey]",
+                    },
+                    kyber_public: None,
+                    kyber_secret: None,
+                    kyber_fingerprint: None,
+                    kem_suite: MlKem768,
+                },
+                session_store_dir: "./storage/streaming",
+                feature_bits: 0,
+                soranet: StreamingSoranet {
+                    enabled: true,
+                    exit_multiaddr: "/dns/torii/udp/9443/quic",
+                    padding_budget_ms: Some(
+                        25,
+                    ),
+                    access_kind: Authenticated,
+                    channel_salt: "iroha.soranet.channel.seed.v1",
+                    provision_spool_dir: "./storage/streaming/soranet_routes",
+                    provision_spool_max_bytes: Bytes(
+                        0,
+                    ),
+                    provision_window_segments: 4,
+                    provision_queue_capacity: 256,
+                },
+                soravpn: StreamingSoravpn {
+                    provision_spool_dir: "./storage/streaming/soravpn_routes",
+                    provision_spool_max_bytes: Bytes(
+                        0,
+                    ),
+                },
+                sync: StreamingSync {
+                    enabled: false,
+                    observe_only: true,
+                    min_window_ms: 5000,
+                    ewma_threshold_ms: 10,
+                    hard_cap_ms: 12,
+                },
+                codec: StreamingCodec {
+                    cabac_mode: Disabled,
+                    trellis_block_sizes: [],
+                    rans_tables_path: "codec/rans/tables/rans_seed0.toml",
+                    entropy_mode: RansBundled,
+                    bundle_width: 2,
+                    bundle_accel: None,
+                },
+            },
+        }"#]]
+    .assert_eq(&format!("{config:#?}"));
+}
+
+#[test]
+fn torii_receipt_signer_parses() {
+    let config =
+        load_config_from_fixtures("torii_receipt_signer.toml").expect("config should be valid");
+    let signer = config
+        .torii
+        .receipt_signer
+        .expect("receipt signer should be configured");
+    let expected = PublicKey::from_str(
+        "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB",
+    )
+    .expect("receipt public key");
+    assert_eq!(signer.public_key(), &expected);
+    assert_eq!(
+        signer
+            .public_key()
+            .try_algorithm()
+            .expect("fixture receipt public key must be well-formed"),
+        Algorithm::Ed25519
+    );
+}
+
+#[test]
+fn torii_ram_lfe_parses() {
+    let config = load_config_from_fixtures("torii_ram_lfe.toml").expect("config should be valid");
+    let runtime = config
+        .torii
+        .ram_lfe
+        .expect("RAM-LFE runtime should be configured");
+    assert_eq!(runtime.programs.len(), 1);
+
+    let program = &runtime.programs[0];
+    let expected_program_id = "phone_retail".parse().expect("program id");
+    assert_eq!(program.program_id, expected_program_id);
+    assert_eq!(program.secret, vec![0x01, 0x02, 0x03, 0x04]);
+    assert_eq!(
+        program.receipt_ttl,
+        Some(Duration::from_millis(30_000)),
+        "receipt ttl should parse as milliseconds"
+    );
+}
+
+#[test]
+fn ivm_banner_defaults_enabled() {
+    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("config should be valid");
+
+    assert!(config.ivm.banner.show, "banner should default to on");
+    assert!(config.ivm.banner.beep, "beep should default to on");
+}
+
+#[test]
+fn torii_max_content_len_defaults_to_sixty_four_megabytes() {
+    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("config should be valid");
+
+    assert_eq!(
+        config.torii.max_content_len.0,
+        defaults::torii::MAX_CONTENT_LEN.0,
+        "minimal configs should inherit the runtime Torii body-cap default"
+    );
+}
+
+#[test]
+fn ivm_banner_override_applies() {
+    let config =
+        load_config_from_fixtures("ivm_banner_override.toml").expect("config should be valid");
+
+    assert!(
+        !config.ivm.banner.show,
+        "override should disable banner rendering"
+    );
+    assert!(
+        !config.ivm.banner.beep,
+        "override should disable beep rendering"
+    );
+}
+
+#[test]
+fn ivm_memory_budget_profile_defaults_to_compute_profile() {
+    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("config should be valid");
+    assert_eq!(
+        config.ivm.memory_budget_profile,
+        config.compute.default_resource_profile
+    );
+}
+
+#[test]
+fn ivm_memory_budget_profile_override_applies() {
+    let config = load_config_from_fixtures("ivm_memory_budget_profile_override.toml")
+        .expect("config should be valid");
+    assert_eq!(
+        config.ivm.memory_budget_profile,
+        Name::from_str("cpu-balanced").expect("valid profile name")
+    );
+}
+
+#[test]
+fn nexus_lane_requires_alias() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{LaneDescriptor, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("   ".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+
+#[test]
+fn nexus_rejects_zero_axt_slot_length() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("core".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        axt: NexusAxt {
+            slot_length_ms: 0,
+            max_clock_skew_ms:
+                iroha_config::parameters::defaults::nexus::axt::CLOCK_SKEW_MS_DEFAULT,
+            proof_cache_ttl_slots:
+                iroha_config::parameters::defaults::nexus::axt::PROOF_CACHE_TTL_SLOTS,
+            replay_retention_slots:
+                iroha_config::parameters::defaults::nexus::axt::REPLAY_RETENTION_SLOTS,
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+
+#[test]
+fn nexus_relay_worker_requires_lane_relay_burn() {
+    use iroha_config::parameters::user::{Nexus, NexusRelayWorker};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        relay_worker: NexusRelayWorker {
+            enabled: true,
+            ..NexusRelayWorker::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let error = format!("{:?}", emitter.into_result().expect_err("invalid config"));
+    assert!(error.contains("nexus.relay_worker.enabled"));
+}
+
+#[test]
+fn nexus_relay_worker_parses_with_lane_relay_burn() {
+    use iroha_config::parameters::actual::NexusFeeSettlementMode;
+    use iroha_config::parameters::user::{Nexus, NexusFees, NexusRelayWorker};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        fees: NexusFees {
+            settlement_mode: "lane_relay_burn".to_owned(),
+            ..NexusFees::default()
+        },
+        relay_worker: NexusRelayWorker {
+            enabled: true,
+            max_retry_attempts: 3,
+            ..NexusRelayWorker::default()
+        },
+        ..Nexus::default()
+    };
+
+    let parsed = nexus.parse(&mut emitter).expect("valid config");
+    emitter.into_result().expect("no parse errors");
+    assert!(parsed.relay_worker.enabled);
+    assert_eq!(parsed.relay_worker.max_retry_attempts.get(), 3);
+    assert_eq!(
+        parsed.fees.settlement_mode,
+        NexusFeeSettlementMode::LaneRelayBurn
+    );
+    assert_eq!(
+        parsed.fees.sponsor_vault_custody_account_id,
+        defaults::nexus::fees::sponsor_vault_custody_account_id()
+    );
+}
+
+#[test]
+fn nexus_rejects_out_of_range_axt_slot_length() {
+    let result = load_config_from_fixtures("bad.nexus_axt_slot_length_too_large.toml");
+    assert!(
+        result.is_err(),
+        "slot length above guardrail must be rejected"
+    );
+}
+
+#[test]
+fn nexus_rejects_negative_axt_slot_length() {
+    let result = load_config_from_fixtures("bad.nexus_axt_slot_length_negative.toml");
+    assert!(result.is_err(), "negative slot length must be rejected");
+}
+
+#[test]
+fn nexus_rejects_axt_clock_skew_above_slot_length() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("core".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        axt: NexusAxt {
+            slot_length_ms: 1_000,
+            max_clock_skew_ms: 2_000,
+            proof_cache_ttl_slots:
+                iroha_config::parameters::defaults::nexus::axt::PROOF_CACHE_TTL_SLOTS,
+            replay_retention_slots:
+                iroha_config::parameters::defaults::nexus::axt::REPLAY_RETENTION_SLOTS,
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+
+#[test]
+fn nexus_rejects_zero_axt_replay_retention_slots() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{LaneDescriptor, Nexus, NexusAxt};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("core".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        axt: NexusAxt {
+            slot_length_ms: 1_000,
+            max_clock_skew_ms: 0,
+            proof_cache_ttl_slots:
+                iroha_config::parameters::defaults::nexus::axt::PROOF_CACHE_TTL_SLOTS,
+            replay_retention_slots: 0,
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+
+#[test]
+fn nexus_rejects_out_of_range_axt_replay_retention_slots() {
+    let result = load_config_from_fixtures("bad.nexus_axt_replay_retention_too_large.toml");
+    assert!(
+        result.is_err(),
+        "replay retention above guardrail must be rejected"
+    );
+}
+
+#[test]
+fn nexus_axt_fields_load_from_fixture() {
+    let config = load_config_from_fixtures("nexus_axt_full.toml").expect("config should be valid");
+    assert_eq!(config.nexus.axt.slot_length_ms.get(), 1_000);
+    assert_eq!(config.nexus.axt.max_clock_skew_ms, 250);
+    assert_eq!(config.nexus.axt.proof_cache_ttl_slots.get(), 8);
+    assert_eq!(config.nexus.axt.replay_retention_slots.get(), 256);
+}
+
+#[test]
+fn nexus_multilane_requires_enable_flag() {
+    let result = load_config_from_fixtures("bad.nexus_multilane_disabled.toml");
+    let err = result.expect_err("multi-lane catalogs must require nexus.enabled");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("nexus.enabled"),
+        "error should point at nexus.enabled being required (got {debug})"
+    );
+    assert!(
+        debug.contains("multi-lane"),
+        "error should mention multi-lane catalogs (got {debug})"
+    );
+}
+
+#[test]
+fn nexus_lane_overrides_rejected_when_disabled() {
+    let result = load_config_from_fixtures("bad.nexus_lane_overrides_disabled.toml");
+    let err = result.expect_err("lane overrides must be rejected when nexus is disabled");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("nexus.enabled"),
+        "error should point at nexus.enabled being required (got {debug})"
+    );
+    assert!(
+        debug.contains("single-lane"),
+        "error should explain that overrides are ignored in single-lane mode (got {debug})"
+    );
+}
+
+#[test]
+fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
+    let report = load_config_from_fixtures("bad.sumeragi_legacy_v1_fields.toml")
+        .expect_err("retired v1 actor/global-RBC schema must be rejected");
+    let message = format!("{report:?}");
+    assert!(
+        message.contains("collectors")
+            || message.contains("advanced")
+            || message.contains("recovery"),
+        "diagnostic should identify a retired v1 table: {message}",
+    );
+}
+
+#[test]
+fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage() {
+    let report = load_config_from_fixtures("bad.retired_plan_journal_toggle.toml")
+        .expect_err("the first release must not expose a journal-disabled runtime path");
+    let message = strip_ansi_codes(&format!("{report:?}"));
+    assert_contains!(message, "unknown parameter: `queue.plan_journal_enabled`");
+}
+
+#[test]
+fn nexus_lane_relay_emergency_requires_nexus_enabled() {
+    use iroha_config::parameters::user::{LaneRelayEmergency, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: false,
+        lane_relay_emergency: LaneRelayEmergency {
+            enabled: true,
+            ..LaneRelayEmergency::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter
+        .into_result()
+        .expect_err("lane relay emergency should require nexus.enabled");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(
+        debug,
+        "nexus.lane_relay_emergency.enabled requires nexus.enabled = true"
+    );
+}
+
+#[test]
+fn nexus_lane_relay_emergency_rejects_zero_threshold() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("core".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        lane_relay_emergency: LaneRelayEmergency {
+            enabled: true,
+            multisig_threshold: 0,
+            multisig_members: 5,
+            max_ttl_blocks: 20,
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter
+        .into_result()
+        .expect_err("zero threshold must be rejected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(
+        debug,
+        "nexus.lane_relay_emergency.multisig_threshold must be > 0"
+    );
+}
+
+#[test]
+fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("core".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        lane_relay_emergency: LaneRelayEmergency {
+            enabled: true,
+            multisig_threshold: 6,
+            multisig_members: 5,
+            max_ttl_blocks: 20,
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter
+        .into_result()
+        .expect_err("threshold above members must be rejected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(
+        debug,
+        "nexus.lane_relay_emergency.multisig_threshold 6 must be <= multisig_members 5"
+    );
+}
+
+#[test]
+fn nexus_storage_weights_require_full_budget() {
+    use iroha_config::parameters::user::{Nexus, NexusStorage, NexusStorageWeights};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        storage: NexusStorage {
+            disk_budget_weights: NexusStorageWeights {
+                kura_blocks_bps: 9_000,
+                wsv_snapshots_bps: 0,
+                sorafs_bps: 0,
+                soranet_spool_bps: 0,
+                soravpn_spool_bps: 0,
+            },
+            ..NexusStorage::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter
+        .into_result()
+        .expect_err("invalid storage weights must be rejected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "nexus.storage.disk_budget_weights");
+}
+
+#[test]
+fn nexus_profile_template_enables_multilane_defaults() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .join("defaults/nexus/config.toml");
+
+    let config = ConfigReader::new()
+        .read_toml_with_extends(&config_path)
+        .change_context(FixtureConfigLoadError)
+        .and_then(|reader| {
+            reader
+                .read_and_complete::<UserConfig>()
+                .change_context(FixtureConfigLoadError)
+        })
+        .and_then(|user| user.parse().change_context(FixtureConfigLoadError))
+        .expect("Nexus profile config should parse");
+
+    assert!(
+        config.nexus.enabled,
+        "Nexus profile must set nexus.enabled = true"
+    );
+    assert_eq!(config.nexus.lane_catalog.lane_count().get(), 3);
+    assert_eq!(
+        config.nexus.dataspace_catalog.entries().len(),
+        3,
+        "profile should ship dataspace catalog entries for each lane"
+    );
+    let lane_aliases: Vec<_> = config
+        .nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .map(|lane| lane.alias.as_str())
+        .collect();
+    assert_eq!(lane_aliases, ["core", "governance", "zk"]);
+    let dataspace_aliases: Vec<_> = config
+        .nexus
+        .dataspace_catalog
+        .entries()
+        .iter()
+        .map(|entry| entry.alias.as_str())
+        .collect();
+    assert_eq!(dataspace_aliases, ["universal", "governance", "zk"]);
+    assert_eq!(config.nexus.routing_policy.rules.len(), 2);
+    assert!(
+        !config.nexus.lane_relay_emergency.enabled,
+        "Nexus profile must leave lane relay emergency overrides disabled by default"
+    );
+    assert_eq!(
+        config.nexus.lane_relay_emergency.multisig_threshold.get(),
+        3
+    );
+    assert_eq!(config.nexus.lane_relay_emergency.multisig_members.get(), 5);
+}
+
+#[test]
+fn lane_profile_home_applies_throttles() {
+    let config = load_config_from_fixtures("home_lane_profile.toml")
+        .expect("config should be valid with lane profile override");
+    let expected_limits = LaneProfile::Home.derived_limits();
+    let network = &config.network;
+
+    assert_eq!(network.lane_profile, LaneProfile::Home);
+    assert_eq!(network.max_incoming, expected_limits.max_incoming);
+    assert_eq!(
+        network.max_total_connections,
+        expected_limits.max_total_connections
+    );
+    assert_eq!(
+        network.low_priority_bytes_per_sec,
+        expected_limits.low_priority_bytes_per_sec
+    );
+    assert_eq!(
+        network.low_priority_rate_per_sec,
+        expected_limits.low_priority_rate_per_sec
+    );
+}
+
+#[test]
+fn streaming_soranet_overrides_apply() {
+    let config = load_config_from_fixtures("streaming_soranet_override.toml")
+        .expect("config should load with soranet overrides");
+    let soranet = &config.streaming.soranet;
+
+    assert!(
+        soranet.enabled,
+        "override should keep SoraNet provisioning enabled"
+    );
+    assert_eq!(
+        soranet.exit_multiaddr, "/dns/test-exit/quic",
+        "override exit multiaddr should propagate"
+    );
+    assert_eq!(
+        soranet.padding_budget_ms,
+        Some(42),
+        "override padding budget should propagate"
+    );
+    assert_eq!(
+        soranet.access_kind,
+        StreamingSoranetAccessKind::ReadOnly,
+        "access policy override should convert into runtime enum"
+    );
+    assert_eq!(
+        soranet.channel_salt, "custom.seed.v1",
+        "channel salt override should propagate as provided string"
+    );
+    assert_eq!(
+        soranet.provision_window_segments,
+        defaults::streaming::soranet::PROVISION_WINDOW_SEGMENTS,
+        "provision window should default when not overridden"
+    );
+    assert_eq!(
+        soranet.provision_queue_capacity,
+        defaults::streaming::soranet::PROVISION_QUEUE_CAPACITY,
+        "provision queue capacity should default when not overridden"
+    );
+}
+
+#[test]
+fn streaming_bundled_requires_build_flag() {
+    assert!(
+        norito::streaming::BUNDLED_RANS_BUILD_AVAILABLE,
+        "Bundled rANS must be compiled in for the first release; rebuild with ENABLE_RANS_BUNDLES=1"
+    );
+    let result = load_config_from_fixtures("streaming_bundled.toml");
+    result.expect("streaming_bundled config should load on bundled builds");
+}
+
+#[test]
+fn streaming_bundle_width_above_tables_rejected() {
+    assert!(
+        norito::streaming::BUNDLED_RANS_BUILD_AVAILABLE,
+        "Bundled rANS must be compiled in for the first release; rebuild with ENABLE_RANS_BUNDLES=1"
+    );
+    let result = load_config_from_fixtures("bad.streaming_bundle_width.toml");
+    let err = result.expect_err("bundle width above available bundled tables must be rejected");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("bundle_width"),
+        "error should surface the bundle_width guard (got {debug})"
+    );
+    assert!(
+        debug.contains("1..=3"),
+        "error should report the available bundled width from the tables (got {debug})"
+    );
+}
+
+#[test]
+fn streaming_bundle_width_below_minimum_rejected() {
+    assert!(
+        norito::streaming::BUNDLED_RANS_BUILD_AVAILABLE,
+        "Bundled rANS must be compiled in for the first release; rebuild with ENABLE_RANS_BUNDLES=1"
+    );
+    let result = load_config_from_fixtures("bad.streaming_bundle_width_small.toml");
+    let err = result.expect_err("bundle width below minimum must be rejected");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("bundle_width"),
+        "error should surface the bundle_width guard (got {debug})"
+    );
+    assert!(
+        debug.contains("at least 2"),
+        "error should report the minimum bundled width requirement (got {debug})"
+    );
+}
+
+#[test]
+fn streaming_bundle_width_zero_rejected() {
+    assert!(
+        norito::streaming::BUNDLED_RANS_BUILD_AVAILABLE,
+        "Bundled rANS must be compiled in for the first release; rebuild with ENABLE_RANS_BUNDLES=1"
+    );
+    let result = load_config_from_fixtures("bad.streaming_bundle_width_zero.toml");
+    let err = result.expect_err("zero bundle width must be rejected");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("bundle_width"),
+        "error should surface the bundle_width guard (got {debug})"
+    );
+    assert!(
+        debug.contains("1..=3"),
+        "error should report the available bundled width from the tables (got {debug})"
+    );
+}
+
+#[test]
+fn streaming_invalid_kyber_suite_rejected() {
+    let result = load_config_from_fixtures("bad.streaming_kyber_suite.toml");
+    assert!(
+        result.is_err(),
+        "invalid streaming.kyber_suite must be rejected"
+    );
+}
+
+#[test]
+fn soranet_handshake_kem_suite_override() {
+    let config = load_config_from_fixtures("soranet_handshake_kem_suite_override.toml")
+        .expect("config should load with handshake override");
+    assert_eq!(
+        config.network.soranet_handshake.kem_id,
+        MlKemSuite::MlKem512.kem_id(),
+        "override should downshift the KEM suite id"
+    );
+}
+
+#[test]
+fn soranet_handshake_invalid_kem_suite_rejected() {
+    let result = load_config_from_fixtures("bad.soranet_handshake_kem_suite.toml");
+    assert!(
+        result.is_err(),
+        "invalid network.soranet_handshake.kem_suite must be rejected"
+    );
+}
+
+#[test]
+fn routing_policy_dataspace_resolution() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RouteMatcher, RoutingPolicy, RoutingRule,
+    };
+    use iroha_config_base::util::Emitter;
+    use iroha_data_model::nexus::DataSpaceId;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(2).expect("nonzero"),
+        lane_catalog: vec![
+            LaneDescriptor {
+                index: Some(0),
+                alias: Some("primary".into()),
+                dataspace: Some("universal".into()),
+                description: None,
+                ..LaneDescriptor::default()
+            },
+            LaneDescriptor {
+                index: Some(1),
+                alias: Some("alpha".into()),
+                dataspace: Some("alpha".into()),
+                description: None,
+                ..LaneDescriptor::default()
+            },
+        ],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_program_id: None,
+        }],
+        routing_policy: RoutingPolicy {
+            default_lane: Some(1),
+            default_dataspace: Some("alpha".into()),
+            rules: vec![RoutingRule {
+                lane: Some(0),
+                dataspace: Some("universal".into()),
+                matcher: RouteMatcher::default(),
+            }],
+        },
+        ..Nexus::default()
+    };
+
+    let parsed = nexus
+        .parse(&mut emitter)
+        .expect("routing policy should parse");
+    assert!(emitter.into_result().is_ok());
+
+    assert_eq!(parsed.routing_policy.default_dataspace, DataSpaceId::new(1));
+    assert_eq!(
+        parsed.routing_policy.rules[0].dataspace,
+        Some(DataSpaceId::UNIVERSAL)
+    );
+}
+
+#[test]
+fn routing_policy_lane_dataspace_mismatch_rejected() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
+    };
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            dataspace: Some("universal".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_program_id: None,
+        }],
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("alpha".into()),
+            rules: Vec::new(),
+        },
+        ..Nexus::default()
+    };
+
+    let parsed = nexus.parse(&mut emitter);
+    assert!(
+        parsed.is_none(),
+        "mismatched default dataspace must be rejected"
+    );
+    let err = emitter
+        .into_result()
+        .expect_err("routing policy mismatch should surface parse errors");
+    let debug = format!("{err:?}");
+    assert!(
+        debug.contains("routing default dataspace"),
+        "error should mention mismatched default dataspace (got {debug})"
+    );
+}
+
+#[test]
+fn dataspace_fault_tolerance_zero_rejected() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{DataSpaceDescriptor, LaneDescriptor, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
+            description: None,
+            fault_tolerance: Some(0),
+            fee_sponsor_program_id: None,
+        }],
+        ..Nexus::default()
+    };
+
+    let parsed = nexus.parse(&mut emitter);
+    assert!(parsed.is_none(), "fault_tolerance=0 must be rejected");
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "fault_tolerance must be >= 1");
+}
+
+#[test]
+fn dataspace_manifest_hash_required_for_non_universal() {
+    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_program_id: None,
+        }],
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "must specify `manifest_hash`");
+}
+
+#[test]
+fn dataspace_explicit_id_must_match_manifest_hash() {
+    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: Some(
+                "0200000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_program_id: None,
+        }],
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "does not match manifest_hash-derived id");
+}
+
+#[test]
+fn dataspace_fee_sponsor_program_id_parses() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
+    };
+    use iroha_config_base::util::Emitter;
+    use iroha_data_model::nexus::DataSpaceId;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let program_id = format!(
+        "{}/default",
+        defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID
+    );
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            dataspace: Some("alpha".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_program_id: Some(program_id.clone()),
+        }],
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("alpha".into()),
+            ..RoutingPolicy::default()
+        },
+        ..Nexus::default()
+    };
+
+    let parsed = nexus
+        .parse(&mut emitter)
+        .expect("dataspace fee sponsor should parse");
+    assert!(emitter.into_result().is_ok());
+    assert_eq!(
+        parsed
+            .dataspace_fee_sponsor_program_ids
+            .get(&DataSpaceId::new(1))
+            .map(ToString::to_string),
+        Some(program_id)
+    );
+}
+
+#[test]
+fn dataspace_fee_sponsor_program_id_rejects_malformed_literal() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
+    };
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            dataspace: Some("alpha".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_program_id: Some("missing-program-separator".into()),
+        }],
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("alpha".into()),
+            ..RoutingPolicy::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "fee_sponsor_program_id");
+}
+
+#[test]
+fn dataspace_fee_sponsor_program_id_requires_nexus_enabled() {
+    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
+    use iroha_config_base::util::Emitter;
+    use iroha_data_model::nexus::DataSpaceId;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: false,
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("universal".into()),
+            id: Some(DataSpaceId::UNIVERSAL.as_u64()),
+            manifest_hash: None,
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_program_id: Some(format!(
+                "{}/default",
+                defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID
+            )),
+        }],
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "nexus.enabled");
+}
+
+#[test]
+fn routing_policy_unknown_dataspace_rejected() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{LaneDescriptor, Nexus, RoutingPolicy};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("unknown".into()),
+            ..RoutingPolicy::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+
+#[test]
+fn lane_registry_rejects_zero_poll_interval() {
+    use std::{num::NonZeroU32, time::Duration};
+
+    use iroha_config::parameters::user::{LaneDescriptor, LaneRegistryConfig, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("core".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        registry: LaneRegistryConfig {
+            poll_interval_ms: Duration::from_secs(0).into(),
+            ..LaneRegistryConfig::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+
+#[test]
+fn governance_default_module_must_exist() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{GovernanceCatalogConfig, LaneDescriptor, Nexus};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        governance: GovernanceCatalogConfig {
+            default_module: Some("missing".into()),
+            ..GovernanceCatalogConfig::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
+}
+
+#[test]
+fn governance_catalog_trims_and_parses_modules() {
+    use std::{collections::BTreeMap, num::NonZeroU32};
+
+    use iroha_config::parameters::user::{
+        GovernanceCatalogConfig, GovernanceModule, LaneDescriptor, Nexus,
+    };
+    use iroha_config_base::util::Emitter;
+
+    let mut modules = BTreeMap::new();
+    modules.insert(
+        " parliament ".into(),
+        GovernanceModule {
+            module_type: Some(" council ".into()),
+            params: {
+                let mut params = BTreeMap::new();
+                params.insert(" quorum ".into(), " 67 ".into());
+                params
+            },
+        },
+    );
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        governance: GovernanceCatalogConfig {
+            default_module: Some("parliament".into()),
+            modules,
+        },
+        ..Nexus::default()
+    };
+
+    let parsed = nexus.parse(&mut emitter).expect("governance should parse");
+    assert!(emitter.into_result().is_ok());
+    let catalog = parsed.governance;
+    assert_eq!(catalog.default_module.as_deref(), Some("parliament"));
+    let module = catalog
+        .modules
+        .get("parliament")
+        .expect("module should be trimmed");
+    assert_eq!(module.module_type.as_deref(), Some("council"));
+    assert_eq!(module.params.get("quorum"), Some(&"67".to_string()));
+}
+
+#[test]
+fn config_with_genesis() {
+    let _config =
+        load_config_from_fixtures("minimal_alone_with_genesis.toml").expect("should be valid");
+}
+
+#[test]
+fn parse_applies_default_account_domain_override_during_config_parse() {
+    let _runtime_guard = AddressRuntimeGuard::capture();
+
+    iroha_data_model::account::address::set_default_domain_name("sora")
+        .expect("set baseline default domain");
+    iroha_data_model::account::address::set_chain_discriminant(0x02F1);
+
+    let config = load_config_from_fixtures("minimal_default_account_domain.toml")
+        .expect("config with domain override should parse");
+
+    assert_eq!(
+        config.common.default_account_domain_label.value(),
+        "wonderland"
+    );
+    assert_eq!(*config.common.chain_discriminant.value(), 777);
+    assert_eq!(
+        config.gov.bond_escrow_account,
+        defaults::governance::bond_escrow_account_id()
+    );
+    assert_eq!(
+        config.gov.citizenship_escrow_account,
+        defaults::governance::citizenship_escrow_account_id()
+    );
+    assert_eq!(
+        config.gov.slash_receiver_account,
+        defaults::governance::slash_receiver_account_id()
+    );
+    assert_eq!(
+        iroha_data_model::account::address::default_domain_name().as_ref(),
+        "sora"
+    );
+    assert_eq!(
+        iroha_data_model::account::address::chain_discriminant(),
+        0x02F1
+    );
+}
+
+#[test]
+fn self_is_presented_in_trusted_peers() {
+    let config =
+        load_config_from_fixtures("minimal_alone_with_genesis.toml").expect("valid config");
+
+    assert!(
+        config
+            .common
+            .trusted_peers
+            .value()
+            .clone()
+            .into_non_empty_vec()
+            .contains(config.common.peer.id())
+    );
+}
+
+#[test]
+fn missing_fields() {
+    let error = load_config_from_fixtures("bad.missing_fields.toml")
+        .expect_err("should fail without missing fields");
+
+    let msg = strip_ansi_codes(&format!("{error:?}"));
+
+    assert_contains!(msg, "missing parameter: `chain`");
+    assert_contains!(msg, "missing parameter: `public_key`");
+    assert_contains!(msg, "missing parameter: `network.address`");
+}
+
+#[test]
+fn extra_fields() {
+    let error = load_config_from_fixtures("bad.extra_fields.toml")
+        .expect_err("should fail with extra field");
+
+    let msg = strip_ansi_codes(&format!("{error:?}"));
+
+    assert_contains!(msg, "Found unrecognised parameters");
+    assert_contains!(msg, "unknown parameter: `bar`");
+    assert_contains!(msg, "unknown parameter: `foo`");
+}
+
+#[test]
+fn ivm_memory_budget_profile_must_exist() {
+    let error = load_config_from_fixtures("bad.ivm_memory_budget_profile.toml")
+        .expect_err("should fail with unknown memory budget profile");
+    let msg = strip_ansi_codes(&format!("{error:?}"));
+    assert_contains!(msg, "ivm.memory_budget_profile");
+    assert_contains!(msg, "compute.resource_profiles");
+}
+
+#[test]
+fn sorafs_penalty_and_telemetry_roundtrip() {
+    let config = load_config_from_fixtures("sorafs_penalty_and_telemetry.toml")
+        .expect("config should parse with SoraFS governance overrides");
+
+    let penalty = config.gov.sorafs_penalty;
+    assert_eq!(penalty.utilisation_floor_bps, 7600);
+    assert_eq!(penalty.uptime_floor_bps, 9650);
+    assert_eq!(penalty.por_success_floor_bps, 9800);
+    assert_eq!(penalty.strike_threshold, 4);
+    assert_eq!(penalty.penalty_bond_bps, 1800);
+    assert_eq!(penalty.cooldown_windows, 3);
+    assert_eq!(penalty.max_pdp_failures, 1);
+    assert_eq!(penalty.max_potr_breaches, 2);
+    assert_eq!(penalty.cooldown_window_secs(1_800), 5_400);
+
+    let telemetry = &config.gov.sorafs_telemetry;
+    assert!(!telemetry.require_submitter);
+    assert!(telemetry.require_nonce);
+    assert!(telemetry.reject_zero_capacity);
+    assert_eq!(telemetry.max_window_gap, Duration::from_secs(7_200));
+    let expected: Vec<_> = defaults::governance::sorafs_telemetry::submitters()
+        .iter()
+        .map(|id| {
+            AccountId::parse_encoded(id)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("default submitter must parse")
+        })
+        .collect();
+    assert_eq!(telemetry.submitters, expected);
+}
+
+#[test]
+fn sorafs_penalty_unknown_field_rejected() {
+    let error = load_config_from_fixtures("bad.sorafs_penalty_unknown.toml")
+        .expect_err("unknown penalty field should be rejected");
+
+    let msg = strip_ansi_codes(&format!("{error:?}"));
+    assert_contains!(
+        msg,
+        "unknown parameter: `gov.sorafs_penalty.unexpected_penalty_knob`"
+    );
+}
+
+#[test]
+fn sorafs_telemetry_unknown_field_rejected() {
+    let error = load_config_from_fixtures("bad.sorafs_telemetry_unknown.toml")
+        .expect_err("unknown telemetry field should be rejected");
+
+    let msg = strip_ansi_codes(&format!("{error:?}"));
+    assert_contains!(
+        msg,
+        "unknown parameter: `gov.sorafs_telemetry.unknown_submitter_field`"
+    );
+}
+
+#[test]
+fn sorafs_site_binding_zero_entry_limit_is_rejected() {
+    assert!(
+        load_config_from_fixtures("bad.sorafs_site_bindings_zero_sites.toml").is_err(),
+        "site binding entry limits must remain non-zero"
+    );
+}
+
+/// Aims the purpose of checking that every single provided env variable is consumed and parsed
+/// into a valid config.
+#[test]
+fn full_envs_set_is_consumed() {
+    let env = test_env_from_file(fixtures_dir().join("full.env"));
+
+    // Read, complete, and fully parse into the actual config to ensure all
+    // env-backed fields (including nested sections) are queried and consumed.
+    let config = ConfigReader::new()
+        .with_env(env.clone())
+        .read_and_complete::<UserConfig>()
+        .expect("should be fine to read user view")
+        .parse()
+        .expect("should parse into actual config");
+    assert_eq!(
+        config.streaming.key_material.identity().algorithm(),
+        iroha_crypto::Algorithm::Ed25519
+    );
+
+    // Ensure every provided variable was consumed by the reader.
+    assert_eq!(env.unvisited(), HashSet::new());
+    // NOTE: The config now includes many additional env-backed knobs with defaults
+    // (e.g., `PIPELINE_*`, `NORITO_*`, `ZK_*`, etc.). The reader probes them even
+    // if not present in the environment. That makes `env.unknown()` non-empty in
+    // this test scenario. We intentionally no longer assert on `unknown()` here.
+}
+
+#[test]
+fn config_from_file_and_env() {
+    let env = test_env_from_file(fixtures_dir().join("minimal_file_and_env.env"));
+
+    ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("minimal_file_and_env.toml"))
+        .expect("files are fine")
+        .read_and_complete::<UserConfig>()
+        .expect("should be fine")
+        .parse()
+        .expect("should be fine, again");
+}
+
+#[test]
+fn full_config_parses_fine() {
+    let cfg = load_config_from_fixtures("full.toml").expect("should be fine");
+    let sorafs = &cfg.torii.sorafs_discovery;
+    println!("sorafs parsed {sorafs:?}");
+    assert!(
+        sorafs.discovery_enabled,
+        "sorafs.discovery.discovery_enabled not parsed"
+    );
+    assert_eq!(
+        sorafs.known_capabilities,
+        vec![
+            "torii_gateway".to_string(),
+            "chunk_range_fetch".to_string(),
+            "vendor_reserved".to_string()
+        ]
+    );
+    assert_eq!(
+        sorafs.replay_checkpoint_path,
+        PathBuf::from("sorafs_discovery/test-provider-advert-replay.to")
+    );
+    assert_eq!(sorafs.replay_checkpoint_max_entries.get(), 4_096);
+    let admission = sorafs
+        .admission
+        .as_ref()
+        .expect("sorafs.discovery.admission.envelopes_dir missing");
+    assert_eq!(
+        admission.envelopes_dir,
+        PathBuf::from("tests/fixtures/sorafs_admission")
+    );
+    assert_eq!(admission.trusted_council_keys.len(), 1);
+    assert_eq!(admission.signature_threshold.get(), 1);
+
+    let alias_policy = cfg.torii.sorafs_alias_cache;
+    assert_eq!(alias_policy.positive_ttl.as_secs(), 600);
+    assert_eq!(alias_policy.refresh_window.as_secs(), 120);
+    let site_bindings = &cfg.torii.sorafs_gateway.site_bindings;
+    assert_eq!(
+        site_bindings.path,
+        Some(PathBuf::from("site-bindings/test.json"))
+    );
+    assert_eq!(site_bindings.max_bytes.get(), 4_096);
+    assert_eq!(site_bindings.max_sites.get(), 7);
+    let storage = &cfg.torii.sorafs_storage;
+    assert!(storage.enabled, "sorafs.storage.enabled not parsed");
+    assert_eq!(storage.data_dir, PathBuf::from("./storage/sorafs"));
+    assert_eq!(storage.max_capacity_bytes.0, 107_374_182_400);
+    assert_eq!(storage.max_parallel_fetches, 64);
+    assert_eq!(storage.max_pins, 20000);
+    assert_eq!(storage.por_sample_interval_secs, 900);
+    assert_eq!(storage.alias.as_deref(), Some("tenant.alpha"));
+    assert_eq!(
+        storage.adverts.stake_pointer.as_deref(),
+        Some("stake.pool.default")
+    );
+    assert_eq!(storage.adverts.availability, "warm");
+    assert_eq!(storage.adverts.max_latency_ms, 750);
+    assert_eq!(
+        storage.adverts.topics,
+        vec![
+            "sorafs.sf1.primary:global".to_string(),
+            "sorafs.sf1.backup:eu".to_string()
+        ]
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn taira_config_enables_untrusted_cid_hosting() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .join("configs/soranexus/taira/config.toml");
+
+    let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
+    let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
+
+    let dataspaces = doc
+        .get("nexus")
+        .and_then(TomlValue::as_table)
+        .and_then(|nexus| nexus.get("dataspace_catalog"))
+        .and_then(TomlValue::as_array)
+        .expect("nexus.dataspace_catalog should be configured");
+    let external_dataspace = dataspaces
+        .iter()
+        .find(|entry| {
+            entry
+                .get("alias")
+                .and_then(TomlValue::as_str)
+                .is_some_and(|alias| alias == "is")
+        })
+        .expect("Taira profile should include the external `is` dataspace");
+    assert_eq!(
+        external_dataspace.get("id").and_then(TomlValue::as_integer),
+        Some(6_647_857_470_246_403_404),
+        "external dataspace id should match its manifest hash"
+    );
+
+    let nexus = doc
+        .get("nexus")
+        .and_then(TomlValue::as_table)
+        .expect("nexus should be configured");
+    assert_eq!(
+        nexus.get("lane_count").and_then(TomlValue::as_integer),
+        Some(4),
+        "Taira profile should reserve a lane for the external dataspace"
+    );
+    let lanes = nexus
+        .get("lane_catalog")
+        .and_then(TomlValue::as_array)
+        .expect("nexus.lane_catalog should be configured");
+    assert!(
+        lanes.iter().any(|lane| {
+            lane.get("alias")
+                .and_then(TomlValue::as_str)
+                .is_some_and(|alias| alias == "external-poc")
+                && lane
+                    .get("dataspace")
+                    .and_then(TomlValue::as_str)
+                    .is_some_and(|dataspace| dataspace == "is")
+        }),
+        "Taira profile should bind the external dataspace to a lane"
+    );
+    let routing_rules = nexus
+        .get("routing_policy")
+        .and_then(TomlValue::as_table)
+        .and_then(|policy| policy.get("rules"))
+        .and_then(TomlValue::as_array)
+        .expect("nexus.routing_policy.rules should be configured");
+    let has_is_instruction_route = |instruction: &str| {
+        routing_rules.iter().any(|rule| {
+            rule.get("lane").and_then(TomlValue::as_integer) == Some(3)
+                && rule.get("dataspace").and_then(TomlValue::as_str) == Some("is")
+                && rule
+                    .get("matcher")
+                    .and_then(TomlValue::as_table)
+                    .and_then(|matcher| matcher.get("instruction"))
+                    .and_then(TomlValue::as_str)
+                    == Some(instruction)
+        })
+    };
+    for instruction in [
+        "smartcontract::deploy",
+        "shield",
+        "zk::zk_transfer",
+        "unshield",
+        "register_asset_hidden_zk_pool",
+        "asset_hidden_zk_transfer",
+    ] {
+        assert!(
+            has_is_instruction_route(instruction),
+            "Taira profile should route {instruction} to the external `is` lane"
+        );
+    }
+
+    let block = doc
+        .get("sumeragi")
+        .and_then(TomlValue::as_table)
+        .and_then(|sumeragi| sumeragi.get("block"))
+        .and_then(TomlValue::as_table)
+        .expect("sumeragi.block should be configured");
+    assert_eq!(
+        block
+            .get("max_transactions")
+            .and_then(TomlValue::as_integer),
+        Some(96),
+        "Taira profile should cap total proposal size"
+    );
+    assert_eq!(
+        block
+            .get("max_ivm_transactions")
+            .and_then(TomlValue::as_integer),
+        None,
+        "Sumeragi v2 profiles must not use the retired IVM transaction-count cap"
+    );
+    assert_eq!(
+        block
+            .get("max_payload_bytes")
+            .and_then(TomlValue::as_integer),
+        Some(16 * 1024 * 1024),
+        "Taira profile should cap proposal payload bytes"
+    );
+    assert_eq!(
+        block
+            .get("proposal_queue_scan_multiplier")
+            .and_then(TomlValue::as_integer),
+        Some(4),
+        "Taira profile should keep enough scan budget for cheap txs"
+    );
+
+    let queues = doc
+        .get("sumeragi")
+        .and_then(TomlValue::as_table)
+        .and_then(|sumeragi| sumeragi.get("queues"))
+        .and_then(TomlValue::as_table)
+        .expect("sumeragi.queues should be configured");
+    assert_eq!(
+        queues
+            .get("authenticated_non_validator_sources")
+            .and_then(TomlValue::as_integer),
+        Some(2),
+        "Taira should reserve two independent authenticated non-validator ingress lanes"
+    );
+    assert_eq!(
+        queues.get("body_bytes").and_then(TomlValue::as_integer),
+        Some(231 * 1024 * 1024),
+        "Taira aggregate canonical wire-byte budget should isolate its seven ingress source lanes"
+    );
+    assert_eq!(
+        queues
+            .get("body_source_bytes")
+            .and_then(TomlValue::as_integer),
+        Some(33 * 1024 * 1024),
+        "Taira should retain one canonical outer-ingress wire-byte quota per source"
+    );
+
+    let untrusted = doc
+        .get("sorafs")
+        .and_then(TomlValue::as_table)
+        .and_then(|sorafs| sorafs.get("gateway"))
+        .and_then(TomlValue::as_table)
+        .and_then(|gateway| gateway.get("untrusted_hosting"))
+        .and_then(TomlValue::as_table)
+        .expect("sorafs.gateway.untrusted_hosting should be configured");
+
+    assert_eq!(
+        untrusted.get("enabled").and_then(TomlValue::as_bool),
+        Some(true),
+        "Taira profile should enable CID-host routing"
+    );
+    assert_eq!(
+        untrusted
+            .get("path_gateway_redirect")
+            .and_then(TomlValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        untrusted
+            .get("redirect_html_only")
+            .and_then(TomlValue::as_bool),
+        Some(true)
+    );
+
+    let suffixes = untrusted
+        .get("cid_host_suffixes")
+        .and_then(TomlValue::as_table)
+        .expect("CID host suffixes should be configured");
+    assert_eq!(
+        suffixes.get("live").and_then(TomlValue::as_str),
+        Some("sorafs.sora.org")
+    );
+    assert_eq!(
+        suffixes.get("taira").and_then(TomlValue::as_str),
+        Some("sorafs.taira.sora.org")
+    );
+
+    let runtime = doc
+        .get("soracloud_runtime")
+        .and_then(TomlValue::as_table)
+        .expect("soracloud_runtime should be configured");
+    assert_eq!(
+        runtime.get("production_mode").and_then(TomlValue::as_bool),
+        Some(true),
+        "Taira profile should run the Soracloud runtime in production posture"
+    );
+    assert_eq!(
+        runtime
+            .get("inrou")
+            .and_then(TomlValue::as_table)
+            .and_then(|inrou| inrou.get("enabled"))
+            .and_then(TomlValue::as_bool),
+        Some(true),
+        "Soracloud production mode requires Inrou to be explicitly enabled"
+    );
+    assert_eq!(
+        runtime
+            .get("submission")
+            .and_then(TomlValue::as_table)
+            .and_then(|submission| submission.get("fee_payer"))
+            .and_then(TomlValue::as_str),
+        Some("sponsor"),
+        "Taira Soracloud submissions should use the exact genesis sponsor program"
+    );
+}
+
+#[test]
+fn crypto_section_defaults_applied() {
+    use iroha_crypto::Algorithm;
+
+    let cfg = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("minimal config should be valid");
+    let crypto = &cfg.crypto;
+
+    assert_eq!(
+        crypto.enable_sm_openssl_preview,
+        defaults::crypto::ENABLE_SM_OPENSSL_PREVIEW
+    );
+    assert_eq!(crypto.default_hash, defaults::crypto::DEFAULT_HASH);
+    assert_eq!(
+        crypto.allowed_signing,
+        vec![Algorithm::Ed25519, Algorithm::Secp256k1]
+    );
+    assert_eq!(
+        crypto.sm2_distid_default,
+        defaults::crypto::SM2_DISTID_DEFAULT
+    );
+    assert_eq!(crypto.allowed_curve_ids, vec![1, 4]);
+}
+
+#[test]
+fn crypto_section_respects_env_overrides() {
+    use iroha_crypto::Algorithm;
+
+    let (default_hash, allowed_signing_env) = if cfg!(feature = "sm") {
+        ("sm3-256", "ed25519,secp256k1,sm2")
+    } else {
+        ("blake2b-256", "ed25519,secp256k1")
+    };
+
+    let mut env = MockEnv::new()
+        .set("CRYPTO_DEFAULT_HASH", default_hash)
+        .set("CRYPTO_ALLOWED_SIGNING", allowed_signing_env)
+        .set("CRYPTO_SM2_DISTID_DEFAULT", "CN12345678901234")
+        .set("CRYPTO_CURVES_ALLOWED_IDS", "1,4");
+
+    env = env.set(
+        "CRYPTO_SM_OPENSSL_PREVIEW",
+        if cfg!(feature = "sm-ffi-openssl") {
+            "true"
+        } else {
+            "false"
+        },
+    );
+
+    let cfg = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<UserConfig>()
+        .expect("user view with env overrides")
+        .parse()
+        .expect("actual config with env overrides");
+    let crypto = &cfg.crypto;
+
+    assert_eq!(crypto.default_hash, default_hash);
+    assert_eq!(crypto.sm2_distid_default, "CN12345678901234");
+    assert_eq!(
+        crypto.enable_sm_openssl_preview,
+        cfg!(feature = "sm-ffi-openssl")
+    );
+
+    #[cfg(feature = "sm")]
+    assert_eq!(
+        crypto.allowed_signing,
+        vec![Algorithm::Ed25519, Algorithm::Secp256k1, Algorithm::Sm2]
+    );
+
+    #[cfg(not(feature = "sm"))]
+    assert_eq!(
+        crypto.allowed_signing,
+        vec![Algorithm::Ed25519, Algorithm::Secp256k1]
+    );
+
+    assert_eq!(crypto.allowed_curve_ids, vec![1, 4]);
+}
+
+#[test]
+fn fraud_monitoring_config_overrides_and_defaults() {
+    let cfg = load_config_from_fixtures("fraud_monitoring.toml")
+        .expect("fraud monitoring config should parse");
+    let fraud = &cfg.fraud_monitoring;
+
+    assert!(fraud.enabled);
+
+    let endpoints: Vec<&str> = fraud.service_endpoints.iter().map(Url::as_str).collect();
+    assert_eq!(
+        endpoints,
+        vec![
+            "https://fraud.local/assess",
+            "https://fraud.secondary/verify"
+        ],
+    );
+
+    assert_eq!(
+        fraud.connect_timeout,
+        defaults::fraud_monitoring::CONNECT_TIMEOUT,
+    );
+    assert_eq!(fraud.request_timeout, Duration::from_millis(1_800));
+    assert_eq!(fraud.missing_assessment_grace, Duration::from_secs(5),);
+    assert_eq!(fraud.required_minimum_band, Some(FraudRiskBand::Medium));
+}
+
+#[test]
+fn sumeragi_v2_explicit_schema_parses() {
+    use iroha_config::parameters::actual::NodeRole;
+
+    let cfg = load_config_from_fixtures("sumeragi_v2.toml")
+        .expect("first-release v2 configuration should parse");
+
+    assert_eq!(
+        cfg.network
+            .max_total_connections
+            .map(std::num::NonZeroUsize::get),
+        Some(32)
+    );
+    assert_eq!(cfg.sumeragi.role, NodeRole::Observer);
+    assert_eq!(cfg.sumeragi.block.max_transactions.get(), 333);
+    assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 8 * 1024 * 1024);
+    assert_eq!(cfg.sumeragi.block.proposal_queue_scan_multiplier.get(), 3);
+    assert_eq!(cfg.sumeragi.queues.commands.get(), 512);
+    assert_eq!(
+        cfg.sumeragi
+            .queues
+            .authenticated_non_validator_sources
+            .get(),
+        2
+    );
+    assert_eq!(cfg.sumeragi.queues.bodies.get(), 96);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 68 * 1024 * 1024);
+    assert_eq!(
+        cfg.sumeragi.queues.body_source_bytes.get(),
+        17 * 1024 * 1024
+    );
+    assert_eq!(cfg.sumeragi.queues.chunks.get(), 768);
+    assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 48);
+    assert_eq!(cfg.sumeragi.keys.activation_lead_blocks, 2);
+    assert_eq!(cfg.sumeragi.keys.overlap_grace_blocks, 12);
+    assert_eq!(cfg.sumeragi.keys.expiry_grace_blocks, 3);
+    assert!(cfg.sumeragi.keys.require_hsm);
+    assert_eq!(cfg.sumeragi.keys.allowed_hsm_providers.len(), 2);
+    let shared = cfg
+        .sumeragi
+        .v2_config(
+            Duration::from_secs(1),
+            iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+        )
+        .expect("node-local settings must satisfy the v2 runtime contract");
+    assert_eq!(shared.block_cadence_ms, 1_000);
+    assert_eq!(shared.limits.max_queue_scan, 999);
+}
+
+#[test]
+fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
+    for (fixture, expected) in [
+        (
+            "bad.sumeragi_command_queue_too_small.toml",
+            "sumeragi.queues.commands must be at least 8",
+        ),
+        (
+            "bad.sumeragi_body_source_bytes_too_small.toml",
+            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, and 65536 timeout-vote bytes (minimum 33784840, configured 16777216)",
+        ),
+        (
+            "bad.sumeragi_body_queue_too_small.toml",
+            "sumeragi.queues.bodies must reserve four positions for at least one validator, two per authenticated non-validator source, and two anonymous positions (minimum 10, configured 9)",
+        ),
+        (
+            "bad.sumeragi_body_bytes_too_small.toml",
+            "sumeragi.queues.body_bytes must reserve one validator, every configured authenticated non-validator source, and the anonymous source partition (minimum 138412032, configured 138412031)",
+        ),
+        (
+            "bad.sumeragi_empty_hsm_provider.toml",
+            "sumeragi.keys.allowed_hsm_providers must not contain empty names",
+        ),
+    ] {
+        let report = load_config_from_fixtures(fixture)
+            .expect_err("invalid first-release v2 configuration must fail closed");
+        assert_contains!(format!("{report:?}"), expected);
+    }
+}
+
+#[test]
+fn sumeragi_v2_does_not_accept_retired_environment_toggles() {
+    let baseline = ConfigReader::new()
+        .with_env(MockEnv::new())
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<UserConfig>()
+        .expect("read user config")
+        .parse()
+        .expect("parse actual config");
+
+    let with_retired_env = ConfigReader::new()
+        .with_env(
+            MockEnv::new()
+                .set("SUMERAGI_COLLECTORS_K", "99")
+                .set("SUMERAGI_VNEXT_SUSPICION_TIMEOUT_MS", "1")
+                .set("SUMERAGI_RBC_CHUNK_MAX_BYTES", "1"),
+        )
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<UserConfig>()
+        .expect("retired environment names are not schema inputs")
+        .parse()
+        .expect("retired environment names cannot alter v2 config");
+
+    assert_eq!(
+        baseline
+            .sumeragi
+            .v2_config(
+                Duration::from_secs(1),
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            )
+            .expect("baseline v2 config"),
+        with_retired_env
+            .sumeragi
+            .v2_config(
+                Duration::from_secs(1),
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            )
+            .expect("v2 config with irrelevant environment"),
+    );
+}
+#[cfg(feature = "gost")]
+#[test]
+fn gost_config_rejects_tc26_consensus_keys() {
+    let error = load_config_from_fixtures("gost_with_trusted_peers.toml")
+        .expect_err("gost consensus keys should be rejected");
+    let message = strip_ansi_codes(&format!("{error:?}"));
+    assert_contains!(
+        message,
+        "public_key/private_key must be BLS-normal for consensus"
+    );
+}
+
+#[test]
+fn pipeline_workers_env_parses() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::{env::MockEnv, read::ConfigReader};
+
+    // Default: use minimal base file so required params are satisfied,
+    // then ensure workers fall back to defaults (0 = auto)
+    let cfg = ConfigReader::new()
+        .with_env(MockEnv::new())
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user view")
+        .parse();
+    assert!(cfg.is_ok());
+
+    // Override via env
+    let env = MockEnv::new().set("PIPELINE_WORKERS", "7");
+    let cfg2: Actual = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("read user config with env")
+        .parse()
+        .expect("parse actual config with env");
+    assert_eq!(cfg2.pipeline.workers, 7);
+}
+
+#[test]
+fn logger_level_env_accepts_lowercase() {
+    use iroha_config::{
+        logger::Level,
+        parameters::{actual::Root as Actual, user::Root as User},
+    };
+    use iroha_config_base::{env::MockEnv, read::ConfigReader};
+
+    let env = MockEnv::new().set("LOG_LEVEL", "info");
+    let cfg: Actual = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config with env")
+        .parse()
+        .expect("actual config with lowercase log level env");
+
+    assert_eq!(cfg.logger.level, Level::INFO);
+}
+
+#[test]
+fn tls_fallback_defaults_to_tls_only() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+
+    assert!(!cfg.network.tls_enabled);
+    assert!(
+        !cfg.network.tls_fallback_to_plain,
+        "plaintext fallback must stay opt-in when TLS-over-TCP is enabled"
+    );
+}
+
+#[test]
+fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+
+    assert!(
+        cfg.torii.transport.trusted_proxy_cidrs.is_empty(),
+        "trusted proxy CIDRs should default to empty until operators opt in"
+    );
+}
+
+#[test]
+fn network_defaults_carry_maximal_sumeragi_v2_progress_frames() {
+    const MAX_CERTIFIED_BODY_RESPONSE_BYTES: usize = 16_811_581;
+
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES.get(),
+        17 * 1024 * 1024 + defaults::network::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES
+    );
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES_CONSENSUS,
+        defaults::network::MAX_PLAINTEXT_FRAME_BYTES
+    );
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC,
+        defaults::network::MAX_PLAINTEXT_FRAME_BYTES
+    );
+    assert!(
+        defaults::network::MAX_FRAME_BYTES.get() > MAX_CERTIFIED_BODY_RESPONSE_BYTES,
+        "the encrypted frame cap must retain room for the P2P wrapper and AEAD overhead"
+    );
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES_CONTROL.get(),
+        2 * 1024 * 1024,
+        "consensus-safety proposals and timeout certificates use the control topic"
+    );
+}
+
+#[test]
+fn sumeragi_v2_defaults_match_fresh_network_profile() {
+    use defaults::sumeragi::npos;
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
+
+    assert_eq!(defaults::sumeragi::PROTOCOL_VERSION, 3);
+    assert_eq!(defaults::sumeragi::BLOCK_CADENCE_MS, 1_000);
+    assert_eq!(defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER, 10);
+    assert_eq!(defaults::sumeragi::RETRANSMIT_DIVISOR, 5);
+    assert_eq!(defaults::sumeragi::BLOCK_MAX_TRANSACTIONS.get(), 512);
+    assert_eq!(
+        defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get(),
+        16 * 1024 * 1024,
+    );
+    assert_eq!(defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get(), 1_024);
+    assert_eq!(
+        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
+        2
+    );
+    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 518);
+    assert_eq!(
+        defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
+        4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            + 2 * defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
+            + 2
+    );
+    assert_eq!(
+        defaults::sumeragi::QUEUE_BODY_BYTES.get(),
+        231 * 1024 * 1024
+    );
+    assert_eq!(
+        defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        33 * 1024 * 1024
+    );
+    assert_eq!(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES, 64 * 1024);
+    assert_eq!(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES, 64 * 1024);
+    assert_eq!(defaults::sumeragi::QUEUE_CHUNK_CAPACITY.get(), 2_048);
+    assert_eq!(defaults::sumeragi::QUEUE_READY_BODY_CAPACITY.get(), 128);
+    assert_eq!(npos::EPOCH_LENGTH_BLOCKS, 3_600);
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+    assert_eq!(cfg.sumeragi.block.max_transactions.get(), 512);
+    assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 16 * 1024 * 1024);
+    assert_eq!(cfg.sumeragi.queues.commands.get(), 1_024);
+    assert_eq!(
+        cfg.sumeragi
+            .queues
+            .authenticated_non_validator_sources
+            .get(),
+        2
+    );
+    assert_eq!(cfg.sumeragi.queues.bodies.get(), 518);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 231 * 1024 * 1024);
+    assert_eq!(
+        cfg.sumeragi.queues.body_source_bytes.get(),
+        33 * 1024 * 1024
+    );
+    assert_eq!(cfg.sumeragi.queues.chunks.get(), 2_048);
+    assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 128);
+    cfg.sumeragi
+        .v2_config(
+            Duration::from_secs(1),
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+        )
+        .expect("default parsed configuration must satisfy the v2 contract");
+}
+// type alias used through fixtures for newer error-stack API
+type Result<T, E> = core::result::Result<T, Report<E>>;

@@ -1,0 +1,23 @@
+{
+  "capabilities": 2,
+  "endpoint_count": 2,
+  "expires_at": 900,
+  "issued_at": 220,
+  "public_key_hex": "884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b",
+  "signature_hex": "5e999628a0dc7ad56e0653fd44a79d9a9a1989f424e220c6cbe4d218456e3956297da1dd6ec4d4f171b46275039d8bc21ba7a023783778eb5c3f88ba51f1890b",
+  "stream_budget": {
+    "burst_bytes": 4500000,
+    "max_bytes_per_sec": 9000000,
+    "max_in_flight": 8
+  },
+  "transport_hints": [
+    {
+      "priority": 0,
+      "protocol": "torii_http_range"
+    },
+    {
+      "priority": 1,
+      "protocol": "quic_stream"
+    }
+  ]
+}

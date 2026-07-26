@@ -1,0 +1,179 @@
+---
+lang: am
+direction: ltr
+source: docs/portal/docs/ministry/agenda-workflow.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Agenda Council Workflow
+description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+CodeBlockን ከ'@ገጽታ/ኮድብሎክ' አስመጣ፤
+የማስመጣት ምደባ ማጠቃለያ ከ'@site/docs/emples/ministry/agenda_sortition_summary_example.json';
+
+const ማጠቃለያ = sortition ማጠቃለያ;
+
+ተግባር ደርድር ማጠቃለያ ሰንጠረዥ({ረድፎች}) {
+  መመለስ (
+    <ጠረጴዛ>
+      <ርዕስ>
+        <tr>
+          <th>ማስገቢያ</th>
+          <th>አባል</th>
+          <th>ሚና </th>
+          <th>Org</th>
+          <th>ክብደት</th>
+          <th>ኢንትሮፒ (የተቆረጠ)</th>
+        </tr>
+      </ thead>
+      <tbody>
+        {rows.map((ረድፍ፣ ማውጫ) => (
+          <tr key={I18NI0000007X}>
+            <td>{ኢንዴክስ + 1}</td>
+            <td><code>{row.member_id}</code></td>
+            <td>{row.role}</td>
+            <td>{row.organization}</td>
+            <td>{row.weight}</td>
+            <td><code>{row.draw_entropy_hex.slice(0, 16)}…</code></td>
+          </tr>
+        )))
+      </tbody>
+    </ ሠንጠረዥ>
+  );
+}
+
+## አጠቃላይ እይታ
+
+የፍኖተ ካርታ ንጥል **MINFO-2** ከፕሮፖዛል ሽፋን ወደ ወሳኙ መንገድ ይፈልጋል
+ማንም ሰው ጉዳዩ እንዴት አጀንዳው ላይ እንደደረሰ ማረጋገጥ እንዲችል የህዝብ መለያ ማስረጃ
+ምክር ቤት. ይህ ገጽ ከዚህ ቀደም ያረፉትን የCLI ረዳቶችን በቀጥታ ወደ
+የገንቢ ፖርታል ስለዚህ ሃሳብ ሰጪዎች፣ ኦዲተሮች እና የመድረክ ቡድኖች ተመሳሳይ መከተል ይችላሉ።
+ሞኖ-ሪፖን ሳይገልጹ የማረጋገጫ ዝርዝር።
+
+የአሰራር ሂደቱ ሶስት ተደጋጋሚ እርምጃዎችን ያካትታል.
+
+1. የ`AgendaProposalV1` ክፍያዎችን በአገር ውስጥ ያረጋግጡ እና የተባዙ ሃሽዎችን ውድቅ ያድርጉ።
+   ማስረከቡ የአማካኝነት ወረፋ ከመድረሱ በፊት.
+2. የምክር ቤት ሰራተኞች እንዲችሉ ከፕሮፖዛሉ ጋር የተባዙ-የመዝገብ ቤቶችን ያትሙ
+   ቆራጥነትን ሳያጡ የቀደሙ ጉዳዮችን ይፈልጉ ።
+3. የመደርደር አጋዥን ያሂዱ፣ የመርክል ማረጋገጫ ቅርቅቡን ያዙ እና ገጹን ላይ ያድርጉት
+   ዜጎች ስዕሉን እንደገና መጫወት እንዲችሉ በፖርታሉ ውስጥ የተመረጠ ዝርዝር።
+
+ሁሉም ረዳቶች በ I18NI0000009X ውስጥ ይኖራሉ; የ Norito እቅድ ነው።
+በ `docs/source/ministry/agenda_council_proposal.md` ስር ተመዝግቧል።
+
+## 1. ሀሳቦችን በአገር ውስጥ ያረጋግጡ
+
+JSON ሸክሞችን ለመጫን እና አስፈላጊውን ማስረጃ ለማረጋገጥ CLI ን ይጠቀሙ (ሀሽ
+ቤተሰቦች፣ የመፍጨት ርዝማኔዎች፣ የቋንቋ መለያ፣ የአስገቢ ግንኙነት) አሉ። የ
+አረጋጋጭ ኮድን ከI18NT0000003X የማስገቢያ ዱካ ያካፍላል፣ ስለዚህ የሚያልፍ ሀሳብ
+እዚህ በፖርታሉ ውስጥ ሲሰቀልም ያልፋል።
+
+<CodeBlock language="bash">{`ካርጎ xtask ሚኒስቴር-አጀንዳ ይረጋገጣል \\
+  --የፕሮፖዛል ሰነዶች/ምሳሌዎች/ሚኒስትሪ/አጀንዳ_ፕሮፖዛል_example.json \\
+  --መዝገብ ቤት ሰነዶች/ምሳሌዎች/ሚኒስትሪ/አጀንዳ_duplicate_registry.json`}</ CodeBlock>
+
+- ታሪካዊ ክፍያዎችን በሚወስኑበት ጊዜ `--allow-registry-conflicts` ይጨምሩ; አዲስ
+  የጣት አሻራ አስቀድሞ ሲኖር ማስረከብ በፍጥነት መውደቅ አለበት።
+- የምሳሌዎች ማውጫው ኤስዲኬዎች እንዲችሉ የማመሳከሪያ ፕሮፖዛል እና መዝገቡን ይልካል
+  ያለ ሃርድ-ኮድ የግል ክፍያ ቅርጸቱን ተጠቀም።
+
+## 2. የተባዛ-የመዝገብ አውድ ያትሙ
+
+እያንዳንዱ ተቀባይነት ያለው ሀሳብ ከዚህ በፊት ምክክር የተደረገውን የመመዝገቢያ ምግብን ያካትታል
+አስገባ። ለዚያ መዝገብ የSoraFS CID ወይም Torii አንጸባራቂ መንገድን ያንሱ እና ያክሉ
+የምክር ቤት ገምጋሚዎች ተመሳሳዩን JSON እንዲያረጋግጡ ወደ እርስዎ ያስገቡት ሜታዳታ።
+
+```json title="Duplicate registry (excerpt)"
+{
+  "entries": [
+    {
+      "hash_family": "blake3-256",
+      "hash_hex": "0d714bed4b7c63c23a2cf8ee9ce6c3cde1007907c427b4a0754e8ad31c91338d",
+      "proposal_id": "AC-2025-014",
+      "note": "Already handled in 2025-08 incident"
+    }
+  ]
+}
+```
+
+CLI ግጭትን ሲዘግብ፣ ፖርታሉ የተገናኙትን የፕሮፖዛል መታወቂያዎችን ያሳያል
+ኦፕሬተሮች እንደገና ግቤትን በቆራጥነት ማዋሃድ ወይም ውድቅ ማድረግ ይችላሉ።
+
+## 3. የመደርደር ማጠቃለያውን ያሂዱ እና ያትሙ
+
+አንድ ዶክ ከተዘጋጀ በኋላ የሚወስነውን የመለየት ረዳት ያሂዱ። ይበላል።
+የስም ዝርዝር JSON፣ ዘር እና ዒላማ ማስገቢያ ቆጠራ፣ ከዚያም በመርክል-ማስረጃ የተደገፈ ያመነጫል።
+ማጠቃለያ JSON ማጠቃለያው ፖርታል በ **ካውንስል ስዕል** ውስጥ የሚያቀርበው ነው።
+ፓነል.
+
+<CodeBlock language="bash">{`ካርጎ xtask ሚኒስቴር-አጀንዳ ምደባ \\
+  --ሮስተር ሰነዶች/ምሳሌዎች/ሚኒስትሪ/አጀንዳ_ካውንስል_roster.json \\
+  -- ቦታዎች 3 \\
+  --ዘር 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
+  --ውፅዓት ቅርሶች/ሚኒስትሪ/መደብ/2026-03-12.json`}</ CodeBlock>
+
+የተገኘውን JSON በ I18NT0000002X (ወይም ከተፈረመው የአጀንዳ ፓኬት ጋር) ያከማቹ እና
+በፕሮፖዛል መከታተያ ውስጥ ያለውን CID ያገናኙ። የገንቢው መግቢያው ተመሳሳይ ነው የሚበላው።
+JSON መዋቅር; ከታች ያለው ምሳሌ የተጠቃለለ ያደርገዋል
+`agenda_sortition_summary_example.json`.
+
+### ምሳሌ የምክር ቤት ዕጣ
+
+<ጠረጴዛ>
+  <ርዕስ>
+    <tr>
+      <th>መስክ</th>
+      <th>ዋጋ </th>
+    </tr>
+  </ thead>
+  <tbody>
+    <tr>
+      <td>አልጎሪዝም</td>
+      <td><code>{summary.algorithm}</code></td>
+    </tr>
+    <tr>
+      <td>የሮስተር መፍጨት (BLAKE3)</td>
+      <td><code>{summary.roster_digest.blake3_hex}</code></td>
+    </tr>
+    <tr>
+      <td>የሮስተር መፍጨት (SHA-256)</td>
+      <td><code>{summary.roster_digest.sha256_hex}</code></td>
+    </tr>
+    <tr>
+      <td>ዘር</td>
+      <td><code>{summary.seed_hex}</code></td>
+    </tr>
+    <tr>
+      <td>ስሎቶች</td>
+      <td>{summary.slots}</td>
+    </tr>
+    <tr>
+      <td>ብቁ አባላት</td>
+      <td>{summary.eligible_members}</td>
+    </tr>
+    <tr>
+      <td>የመርክል ሥር</td>
+      <td><code>{summary.merkle_root_hex}</code></td>
+    </tr>
+  </tbody>
+</ ሠንጠረዥ>
+
+<SummarySummaryTable rows={summary.selected} />
+
+እያንዳንዱ የተመረጠው አባል የሚከተሉትን ያጠቃልላል
+
+- `draw_entropy_hex` (32 BLAKE3 ባይት) ስለዚህ ማንም ሰው የ RNG ውፅዓትን እንደገና ማስላት ይችላል።
+- `eligible_index` እና `original_index` ስለዚህ ኦዲተሮች መርጦ መውጣቱን ማረጋገጥ ይችላሉ።
+  የተከበረ.
+- የሮስተር ቅጠልን የሚሸፍን የ Merkle ማረጋገጫ; ዛፉን እንደገና ማባዛት ያረጋግጣል
+  በፓኬቱ ውስጥ የታተመ ዝርዝር ከስዕሉ ጋር ይዛመዳል።
+
+### የውሳኔ መዝገብ
+
+ምክር ቤቱ በውሳኔ ሃሳብ ላይ ድምጽ ሲሰጥ የውሳኔውን ማስታወሻ እና የ
+የመለየት ማጠቃለያ CID ለአስተዳደር እርምጃ (Torii I18NI0000016X ግቤት)። ፖርታል
+ገጾቹ ማስታወሻውን፣ የድምጽ መጠኑን እና ከላይ የሚታየውን JSON ያገናኛሉ ስለዚህ እያንዳንዱን ድርጊት
+በ **MINFO-2** የሚያስፈልገውን ሙሉ ማስረጃ ሰንሰለት ይዟል።

@@ -1,0 +1,171 @@
+---
+lang: az
+direction: ltr
+source: docs/portal/docs/ministry/agenda-workflow.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Agenda Council Workflow
+description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+CodeBlock-u '@theme/CodeBlock'dan idxal edin;
+'@site/docs/examples/ministry/agenda_sortition_summary_example.json'dan sortitionSummary import;
+
+const xülasə = çeşidləmə Xülasə;
+
+Funksiya Çeşidləmə Xülasə Cədvəli ({sətirlər}) {
+  qayıtmaq (
+    
+      
+        
+          Yuva
+          Üzv
+          Rolu
+          Org
+          Çəki
+          Entropiya (kəsilmiş)
+        
+      
+      
+        {sətirlər.map((sətir, indeks) => (
+          
+            {indeks + 1}
+            {row.member_id}
+            {row.role}
+            {row.organization}
+            {sətir.çəki}
+            {row.draw_entropy_hex.slice(0, 16)}...
+          
+        ))}
+      
+    
+  );
+}
+
+## Baxış
+
+Yol xəritəsi elementi **MINFO-2** təklifdən tutmuş deterministik yol tələb edir
+hər kəs bir işin gündəmə necə gəldiyini təsdiqləyə bildiyi üçün ictimai çeşidləmə sübutu
+şura. Bu səhifə əvvəllər quraşdırılmış CLI köməkçilərini birbaşa şəbəkəyə bağlayır
+inkişaf etdirici portalı təklif edənlər, auditorlar və platforma komandaları eyni şeyi izləyə bilər
+mono-repodan söz açmadan yoxlama siyahısı.
+
+İş axını üç təkrarlanan addımı əhatə edir:1. `AgendaProposalV1` faydalı yükləri yerli olaraq təsdiqləyin və dublikat hashları rədd edin
+   təqdimetmə moderasiya növbəsinə çatmazdan əvvəl.
+2. Təkliflə yanaşı reyestrdəki dublikatları dərc edin ki, şura işçiləri bunu edə bilsinlər.
+   determinizmi itirmədən əvvəlki halları izləyin.
+3. Çeşidləmə köməkçisini işə salın, Merkle sübut dəstini tutun və səthə çıxarın
+   vətəndaşların püşkatmanı təkrar oynaya bilməsi üçün portal daxilində seçilmiş siyahı.
+
+Bütün köməkçilər `cargo xtask ministry-agenda`-də yaşayır; Norito sxemidir
+`docs/source/ministry/agenda_council_proposal.md` altında sənədləşdirilmişdir.
+
+## 1. Təklifləri yerli olaraq təsdiq edin
+
+JSON yüklərini silmək üçün CLI-dən istifadə edin və tələb olunan sübutu təsdiqləyin (hash
+ailələr, həzm uzunluqları, dil etiketi, təqdim edən əlaqə) mövcuddur. The
+validator kodu Torii qəbul yolu ilə paylaşır, ona görə də təklif keçəcək
+burada da portal vasitəsilə yükləndikdə keçəcək.
+
+{`yük xtask nazirliyi-gündəmi doğrulayın \\
+  --proposal docs/examples/ministry/agenda_proposal_example.json \\
+  --registry docs/examples/ministry/agenda_duplicate_registry.json`}
+
+- Tarixi faydalı yükləri təyin edərkən `--allow-registry-conflicts` əlavə edin; yeni
+  barmaq izi artıq mövcud olduqda təqdimatlar tez uğursuz olmalıdır.
+- Nümunələr kataloqu istinad təklifi və reyestri göndərir ki, SDK-lar edə bilsin
+  xüsusi yükləri kodlaşdırmadan formatı qəbul edin.
+
+## 2. Dublikat-reyestr kontekstini dərc edinQəbul edilmiş hər bir təklifə əvvəllər məsləhət görülmüş reyestr həzmi daxildir
+udmaq. Həmin reyestr üçün SoraFS CID və ya Torii manifest yolunu çəkin və əlavə edin
+onu təqdim etdiyiniz metadataya daxil edin ki, şura rəyçiləri eyni JSON-u yoxlaya bilsinlər.
+
+```json title="Duplicate registry (excerpt)"
+{
+  "entries": [
+    {
+      "hash_family": "blake3-256",
+      "hash_hex": "0d714bed4b7c63c23a2cf8ee9ce6c3cde1007907c427b4a0754e8ad31c91338d",
+      "proposal_id": "AC-2025-014",
+      "note": "Already handled in 2025-08 incident"
+    }
+  ]
+}
+```
+
+CLI toqquşma barədə məlumat verdikdə, portal əlaqəli təklif ID-lərini belə göstərir
+operatorlar deterministik şəkildə təkrar göndərmələri birləşdirə və ya rədd edə bilər.
+
+## 3. Çeşidləmə xülasəsini işə salın və dərc edin
+
+Doket hazır olduqdan sonra deterministik çeşidləmə köməkçisini işə salın. istehlak edir
+siyahı JSON, toxum və hədəf slot sayı, sonra Merkle-sübutlu dəstəklənir
+xülasə. Xülasə JSON portalın **Şura tirajında** göstərdiyi şeydir
+panel.
+
+{`yük xtask nazirlik-gündəmin çeşidlənməsi \\
+  --roster docs/examples/ministry/agenda_council_roster.json \\
+  --yuvalar 3 \\
+  --toxum 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
+  --output artefacts/ministry/sortition/2026-03-12.json`}
+
+Yaranan JSON-u SoraFS-də (və ya imzalanmış gündəm paketinin yanında) saxlayın və
+təklif izləyicisində CID-ni əlaqələndirin. Tərtibatçı portalı da eyni şeyi istehlak edir
+JSON strukturu; aşağıdakı nümunə paketi göstərir
+`agenda_sortition_summary_example.json`.
+
+### Nümunə şura püşkatması
+  
+    
+      Sahə
+      Dəyər
+    
+  
+  
+    
+      Alqoritm
+      {summary.alqoritm}
+    
+    
+      Kataloq cədvəli (BLAKE3)
+      {summary.roster_digest.blake3_hex}
+    
+    
+      Kataloq cədvəli (SHA-256)
+      {summary.roster_digest.sha256_hex}
+    
+    
+      Toxum
+      {summary.seed_hex}
+    
+    
+      Yuvalar
+      {summary.slots}
+    
+    
+      Uyğun üzvlər
+      {summary.eligible_members}
+    
+    
+      Merkle kökü
+      {summary.merkle_root_hex}
+    
+  
+
+
+
+
+Hər bir seçilmiş üzv daxildir:
+
+- `draw_entropy_hex` (32 BLAKE3 bayt) beləliklə hər kəs RNG çıxışını yenidən hesablaya bilər.
+- `eligible_index` və `original_index` beləliklə, auditorlar imtinaların olduğunu sübut edə bilsinlər
+  fəxri ad.
+- Siyahı vərəqini əhatə edən Merkle sübutu; ağacın çoxalması təsdiq edir
+  Paket içərisində nəşr olunan siyahı püşkatma ilə uyğun gəlir.
+
+### Qərar jurnalıŞura bir təklifə səs verdikdə, qərar memorandumunu və onu əlavə edin
+icmal CID-ni idarəetmə fəaliyyətinə çeşidləyin (Torii `/v1/gov/*` girişi). Portal
+səhifələr yaddaşı, səs sayısını və yuxarıda göstərilən JSON-u hər bir hərəkətlə əlaqələndirir
+**MINFO-2** tərəfindən tələb olunan tam sübut zəncirini ehtiva edir.

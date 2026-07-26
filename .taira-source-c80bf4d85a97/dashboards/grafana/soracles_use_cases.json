@@ -1,0 +1,100 @@
+{
+  "title": "Soracles Use Cases",
+  "uid": "soracles-use-cases",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "refresh": "30s",
+  "tags": ["soracles", "oracles"],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Feed Events (all kits)",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(iroha_oracle_feed_events_total)",
+          "refId": "A",
+          "legendFormat": "events"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Evidence Coverage",
+      "description": "Events carrying evidence hashes / total events",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(iroha_oracle_feed_events_with_evidence_total) / clamp_max(sum(iroha_oracle_feed_events_total), 1)",
+          "refId": "A",
+          "legendFormat": "coverage"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Event Rate by Feed",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (feed_id)(rate(iroha_oracle_feed_events_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{feed_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 }
+    }
+  ]
+}

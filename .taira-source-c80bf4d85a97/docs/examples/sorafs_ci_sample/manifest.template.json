@@ -1,0 +1,18 @@
+{
+  "manifest_path": "{{ manifest_path }}",
+  "manifest_digest_hex": "{{ manifest_blake3_hex }}",
+  "chunk_digest_sha3_256_hex": "{{ chunk_digest_sha3_256_hex }}",
+  "pin_policy": {
+    "min_replicas": {{ pin_min_replicas }},
+    "retention_epoch": {{ pin_retention_epoch }},
+    "storage_class": "{{ pin_storage_class }}"
+  },
+  "root_cids_hex": [
+    "{{ root_cid_hex }}"
+  ],
+  "metadata": {
+    "example_payload_path": "{{ payload_source_path }}",
+    "car_summary": "{{ car_summary_path }}",
+    "chunk_plan": "{{ chunk_plan_path }}"
+  }
+}

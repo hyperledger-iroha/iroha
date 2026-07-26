@@ -1,0 +1,14 @@
+{
+  "info.welcome": "\u2066Hyperledger Iroha\u2069 ۾ ڀليڪار!",
+  "error.trace_config_setup": "ترتيب ٽريسنگ سيٽ اپ نه ٿي سگهي",
+  "error.config": "ترتيب ۾ غلطي!",
+  "error.logger": "لاگنگ نظام شروع نه ٿي سگهيو",
+  "error.start": "\u2066Iroha\u2069 شروع نه ٿي سگهيو",
+  "error.run": "\u2066Iroha\u2069 هلائڻ دوران غلطي پيش آئي",
+  "error.start_p2p": "\u2066P2P\u2069 نيٽورڪ شروع نه ٿي سگهيو",
+  "error.init_kura": "\u2066Kura\u2069 (بلاڪ اسٽوريج) شروع نه ٿي سگهيو",
+  "error.start_dev_telemetry": "ترقياتي ٽيلميٽري سروس شروع نه ٿي سگهيو",
+  "error.start_telemetry": "ٽيلميٽري سروس شروع نه ٿي سگهيو",
+  "error.listen_os_signal": "OS سگنلن کي ٻڌڻ لاءِ سيٽ اپ نه ٿي سگهيو",
+  "error.start_torii": "\u2066Torii\u2069 (\u2066Iroha HTTP API\u2069 گيٽ وي) شروع نه ٿي سگهيو"
+}

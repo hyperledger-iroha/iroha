@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Bem-vindo ao Hyperledger Iroha!",
+  "error.trace_config_setup": "Não foi possível configurar o rastreamento de configuração",
+  "error.config": "Erro de configuração",
+  "error.logger": "Não foi possível inicializar o sistema de registro",
+  "error.start": "Falha ao iniciar Iroha",
+  "error.run": "Ocorreu um erro durante a execução do Iroha",
+  "error.start_p2p": "Não foi possível iniciar a rede P2P",
+  "error.init_kura": "Não foi possível inicializar o Kura (armazenamento em bloco)",
+  "error.start_dev_telemetry": "Não foi possível iniciar o serviço de telemetria de desenvolvimento",
+  "error.start_telemetry": "Não foi possível iniciar o serviço de telemetria",
+  "error.listen_os_signal": "Não foi possível configurar a escuta de sinais do sistema operacional",
+  "error.start_torii": "Não foi possível iniciar o Torii (gateway Iroha HTTP API)"
+}

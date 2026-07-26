@@ -1,0 +1,39 @@
+{
+  "feed_id": [
+    "twitter_follow_binding"
+  ],
+  "feed_config_version": [
+    1
+  ],
+  "slot": 24,
+  "request_hash": "hash:99B1F08BCCE212105E7A4BB8F4589DBFD78B469A0928877B725E23F4B5B360A7#DDF8",
+  "outcome": {
+    "result": "Success",
+    "detail": {
+      "value": {
+        "mantissa": "36956587003717982388190835231522344358",
+        "scale": 0
+      },
+      "entries": [
+        {
+          "oracle_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+          "observation_hash": "hash:BC14324600B96C1DCC544FA02073C1D0EBE633FFD89454E7733B74582F97257B#89C2",
+          "value": {
+            "mantissa": "36956587003717982388190835231522344358",
+            "scale": 0
+          },
+          "outlier": false
+        },
+        {
+          "oracle_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+          "observation_hash": "hash:DB585BE14C40678CEF88D382E85BDD7ADAC3EE756D9014F89E4A6C8E913CEE83#1AF2",
+          "value": {
+            "mantissa": "36956587003717982388190835231522344358",
+            "scale": 0
+          },
+          "outlier": false
+        }
+      ]
+    }
+  }
+}

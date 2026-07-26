@@ -1,0 +1,96 @@
+From 405cc5418317d6f8612e6267aa8123176454bced Mon Sep 17 00:00:00 2001
+From: Dmitry Selivanov <diselivanov@gmail.com>
+Date: Fri, 6 Feb 2026 10:25:30 +0700
+Subject: [PATCH] Add operator field serialization to offline certificate
+ classes
+
+Fix 400 error "missing field 'operator'" during certificate issuance
+and allowance registration by adding operator to toJsonMap() methods.
+---
+ .../iroha/android/offline/OfflineJsonParser.java          | 2 ++
+ .../iroha/android/offline/OfflineWalletCertificate.java   | 8 ++++++++
+ .../android/offline/OfflineWalletCertificateDraft.java    | 1 +
+ 3 files changed, 11 insertions(+)
+
+diff --git a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java
+index 7321227a9..bb650ca0f 100644
+--- a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java
++++ b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java
+@@ -213,6 +213,7 @@ public final class OfflineJsonParser {
+   private static OfflineWalletCertificate parseCertificate(
+       final Map<String, Object> entry, final String path) {
+     final String controller = asString(entry.get("controller"), path + ".controller");
++    final String operator = asString(entry.get("operator"), path + ".operator");
+     final Map<String, Object> allowanceEntry =
+         expectObject(entry.get("allowance"), path + ".allowance");
+     final OfflineAllowanceCommitment allowance =
+@@ -245,6 +246,7 @@ public final class OfflineJsonParser {
+     final Long refreshAtMs = asOptionalLong(entry.get("refresh_at_ms"), path + ".refresh_at_ms");
+     return new OfflineWalletCertificate(
+         controller,
++        operator,
+         allowance,
+         spendPublicKey,
+         attestationReport,
+diff --git a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificate.java b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificate.java
+index a37c57355..38193b93e 100644
+--- a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificate.java
++++ b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificate.java
+@@ -7,6 +7,7 @@ import java.util.Objects;
+ /** Operator-signed offline wallet certificate payload. */
+ public final class OfflineWalletCertificate {
+   private final String controller;
++  private final String operator;
+   private final OfflineAllowanceCommitment allowance;
+   private final String spendPublicKey;
+   private final byte[] attestationReport;
+@@ -21,6 +22,7 @@ public final class OfflineWalletCertificate {
+ 
+   public OfflineWalletCertificate(
+       final String controller,
++      final String operator,
+       final OfflineAllowanceCommitment allowance,
+       final String spendPublicKey,
+       final byte[] attestationReport,
+@@ -33,6 +35,7 @@ public final class OfflineWalletCertificate {
+       final String attestationNonceHex,
+       final Long refreshAtMs) {
+     this.controller = Objects.requireNonNull(controller, "controller");
++    this.operator = Objects.requireNonNull(operator, "operator");
+     this.allowance = Objects.requireNonNull(allowance, "allowance");
+     this.spendPublicKey = Objects.requireNonNull(spendPublicKey, "spendPublicKey");
+     this.attestationReport = Objects.requireNonNull(attestationReport, "attestationReport").clone();
+@@ -51,6 +54,10 @@ public final class OfflineWalletCertificate {
+     return controller;
+   }
+ 
++  public String operator() {
++    return operator;
++  }
++
+   public OfflineAllowanceCommitment allowance() {
+     return allowance;
+   }
+@@ -98,6 +105,7 @@ public final class OfflineWalletCertificate {
+   public java.util.Map<String, Object> toJsonMap() {
+     final java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
+     map.put("controller", controller);
++    map.put("operator", operator);
+     map.put("allowance", allowance.toJsonMap());
+     map.put("spend_public_key", spendPublicKey);
+     map.put("attestation_report", OfflineAllowanceCommitment.encodeBytes(attestationReport));
+diff --git a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificateDraft.java b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificateDraft.java
+index b3d69c888..b2e45ddb1 100644
+--- a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificateDraft.java
++++ b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificateDraft.java
+@@ -98,6 +98,7 @@ public final class OfflineWalletCertificateDraft {
+   public Map<String, Object> toJsonMap() {
+     final Map<String, Object> map = new LinkedHashMap<>();
+     map.put("controller", controller);
++    map.put("operator", operator);
+     map.put("allowance", allowance.toJsonMap());
+     map.put("spend_public_key", spendPublicKey);
+     map.put("attestation_report", OfflineAllowanceCommitment.encodeBytes(attestationReport));
+-- 
+2.52.0
+

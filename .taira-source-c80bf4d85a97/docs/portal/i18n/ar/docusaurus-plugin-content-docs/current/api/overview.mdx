@@ -1,0 +1,84 @@
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+قم باستيراد TryItConsole من '@site/src/components/TryItConsole.jsx'؛
+
+# نظرة عامة على واجهة برمجة التطبيقات Torii
+
+تعرض بوابة Torii سطح REST + WebSocket للتفاعل مع Iroha
+العقد. يتم إنشاء مستند OpenAPI الأساسي عبر:
+
+```bash
+cargo xtask openapi
+```
+
+تشغيل الأمر أعلاه يكتب `docs/portal/static/openapi/torii.json` و
+يغذي التكامل `docusaurus-plugin-openapi-docs` حتى يتم تحديث هذا القسم
+تلقائيا. يقوم المولد بتدوير جهاز توجيه Torii في الذاكرة ويحاول
+الاستعلام عن نقطة النهاية OpenAPI الخاصة بها؛ إذا فشل ذلك (على سبيل المثال، تهيئة جهاز التوجيه
+الأخطاء) يتم إصدار مواصفات العنصر النائب الحتمي بدلاً من ذلك.
+
+## الوضع الحالي
+
+- **مصدر المواصفات:** يستعلم `cargo xtask openapi` عن جهاز التوجيه Torii مباشرةً؛ ال
+  يتم إصدار كعب الروتين الاحتياطي فقط عندما يفشل جهاز التوجيه في كشف OpenAPI
+  وثيقة.
+- **الحتمية:** تم تحديد مخرجات JSON بشكل أساسي لضمان الاختلاف المستقر في CI.
+- **المصادقة:** يقوم صندوق الحماية "جربه" الآن بإعادة توجيه الطلبات من خلال ملف
+  وكيل التدريج مقيد. يجب على المشغلين توفير نقطة نهاية Torii وحاملها
+  رمز قبل إصدار المكالمات.
+- **محدد الإصدار:** Swagger UI، وRapiDoc، وصفحة Torii OpenAPI الكاملة
+  اعرض قائمة منسدلة تقرأ `openapi/versions.json` حتى تتمكن من المقارنة
+  لقطات تاريخية. يشير الخيار `Latest (tracked)` إلى
+  `/openapi/torii.json`، بينما تقوم جميع الإدخالات الأخرى بتحميل ما يقابلها
+  قطعة أثرية `openapi/versions/<version>/torii.json`.
+- **سير عمل اللقطة:** بعد تشغيل `npm run docs:version -- <label>`، قم بالتحديث
+  الملف OpenAPI المطابق مع `npm run sync-openapi -- --version=<label> --latest`
+  حتى تتمكن القائمة المنسدلة من تحميل كل من اللقطة المجمدة والإصدار "الأحدث" المتداول.
+
+يقوم الآن المستخرج المدعوم بجهاز التوجيه بإصدار سطح Torii بالكامل. إذا رأيت
+كعب روتين العنصر النائب، تعامل معه على أنه فشل في وقت الإنشاء وقم بفحص Torii
+سجلات بدء تشغيل جهاز التوجيه.
+
+## جرب وضع الحماية (DOCS-3)
+
+تتضمن بوابة المطور وحدة تحكم صغيرة تقوم بترحيل طلبات REST من خلال ملف
+الوكيل القائم على العقدة. يفرض الوكيل CORS وحدود المعدل والحامل الاختياري
+الرموز المميزة حتى يتمكن عنصر واجهة المستخدم من التحدث إلى بوابات التدريج دون الكشف عن بيانات الاعتماد.
+راجع `docs/devportal/try-it.md` للحصول على القائمة المرجعية الكاملة للمشغل.
+
+ابدأ تشغيل الوكيل بجانب خادم التطوير Docusaurus:
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- يستمع الوكيل إلى `TRYIT_PROXY_LISTEN` (`127.0.0.1:8787` الافتراضي) و
+  يقوم بإعادة توجيه أية طلبات `/proxy/...` إلى `TRYIT_PROXY_TARGET`.
+- توفير `TRYIT_PROXY_BEARER` للرموز المميزة لحاملها أو السماح للمتصلين بتوفيرها
+  واحد لكل طلب عبر حقل "الرمز المميز لحامله".
+- حدود المعدل الافتراضية هي 60 طلبًا في الدقيقة ويمكن ضبطها
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+
+> ⚠️ الوكيل مخصص للوصول المرحلي/التجريبي. عمليات نشر الإنتاج
+> يجب أن يعمل خلف الدخول المتشدد وإعادة استخدام نفس سياسة تحديد المعدل في
+> أمام Torii.
+
+<تري إت كونسول />

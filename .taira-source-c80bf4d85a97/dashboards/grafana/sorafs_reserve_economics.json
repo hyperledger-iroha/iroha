@@ -1,0 +1,535 @@
+{
+  "title": "SoraFS Reserve Economics",
+  "uid": "sorafs-reserve-econ",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "tags": [
+    "sorafs",
+    "economics"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Datasource",
+        "type": "datasource",
+        "pluginId": "prometheus",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "Prometheus"
+        }
+      },
+      {
+        "name": "ledger_label",
+        "label": "Reserve Ledger Label",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(sorafs_reserve_ledger_rent_due_xor, label)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "transfer_kind",
+        "label": "Transfer Kind",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(sorafs_reserve_ledger_transfer_xor, transfer)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "reserve_stage",
+        "label": "Reserve Lifecycle Stage",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(torii_sorafs_reserve_credit_draw_micro_xor, stage)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "reserve_route",
+        "label": "Reserve Route",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(torii_sorafs_reserve_service_requests_total, route)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Reserve Snapshot (XOR)",
+      "id": 1,
+      "datasource": "$datasource",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum by (label) (sorafs_reserve_ledger_rent_due_xor{label=~\"$ledger_label\"})",
+          "legendFormat": "Rent due ({{label}})",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (label) (sorafs_reserve_ledger_reserve_shortfall_xor{label=~\"$ledger_label\"})",
+          "legendFormat": "Reserve shortfall ({{label}})",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (label) (sorafs_reserve_ledger_top_up_shortfall_xor{label=~\"$ledger_label\"})",
+          "legendFormat": "Top-up shortfall ({{label}})",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "axisLabel": "XOR"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Top-up Required",
+      "id": 2,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 9},
+      "targets": [
+        {
+          "expr": "max(sorafs_reserve_ledger_requires_top_up{label=~\"$ledger_label\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "max": 1,
+          "min": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "No action"
+                },
+                "1": {
+                  "text": "Run top-up"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": 0},
+              {"color": "red", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Underwriting Healthy",
+      "id": 3,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 9},
+      "targets": [
+        {
+          "expr": "min(sorafs_reserve_ledger_meets_underwriting{label=~\"$ledger_label\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "max": 1,
+          "min": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Breach"
+                },
+                "1": {
+                  "text": "Meets policy"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "green", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Instruction Count",
+      "id": 4,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 9},
+      "targets": [
+        {
+          "expr": "max(sorafs_reserve_ledger_instruction_total{label=~\"$ledger_label\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Transfers by Kind (XOR)",
+      "id": 5,
+      "datasource": "$datasource",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 15},
+      "targets": [
+        {
+          "expr": "sum by (transfer) (sorafs_reserve_ledger_transfer_xor{label=~\"$ledger_label\",transfer=~\"$transfer_kind\"})",
+          "legendFormat": "{{transfer}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "axisLabel": "XOR"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "title": "Latest Transfer Breakdown",
+      "id": 6,
+      "datasource": "$datasource",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 15},
+      "targets": [
+        {
+          "expr": "sorafs_reserve_ledger_transfer_xor{label=~\"$ledger_label\",transfer=~\"$transfer_kind\"}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value": "XOR",
+              "transfer": "Transfer kind"
+            }
+          }
+        }
+      ],
+      "description": "Reflects the most recent `sorafs reserve ledger` digest for the selected label."
+    },
+    {
+      "type": "stat",
+      "title": "Rent Transfer Coverage",
+      "id": 7,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 24},
+      "targets": [
+        {
+          "expr": "(sum by (label) (sorafs_reserve_ledger_rent_due_xor{label=~\"$ledger_label\"}) == 0)\n+ (sum by (label) (sorafs_reserve_ledger_rent_due_xor{label=~\"$ledger_label\"}) > 0)\n* (sum by (label) (sorafs_reserve_ledger_transfer_xor{label=~\"$ledger_label\",transfer=\"rent\"}) / clamp_min(sum by (label) (sorafs_reserve_ledger_rent_due_xor{label=~\"$ledger_label\"}), 0.000001))",
+          "legendFormat": "{{label}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1.2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "orange", "value": 0.9},
+              {"color": "green", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Ratio of rent transfers to the projected rent due. Equals 1 when rent is fully covered or not required."
+    },
+    {
+      "type": "stat",
+      "title": "Reserve Top-up Coverage",
+      "id": 8,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 24},
+      "targets": [
+        {
+          "expr": "(sum by (label) (sorafs_reserve_ledger_top_up_shortfall_xor{label=~\"$ledger_label\"}) == 0)\n+ (sum by (label) (sorafs_reserve_ledger_top_up_shortfall_xor{label=~\"$ledger_label\"}) > 0)\n* (sum by (label) (sorafs_reserve_ledger_transfer_xor{label=~\"$ledger_label\",transfer=\"reserve_top_up\"}) / clamp_min(sum by (label) (sorafs_reserve_ledger_top_up_shortfall_xor{label=~\"$ledger_label\"}), 0.000001))",
+          "legendFormat": "{{label}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1.2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "orange", "value": 0.9},
+              {"color": "green", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Ratio of reserve top-up transfers to the projected top-up shortfall. Equals 1 when the reserve digest is fully funded or no top-up is required."
+    },
+    {
+      "type": "timeseries",
+      "title": "Finalized Lifecycle Stages",
+      "id": 9,
+      "datasource": "$datasource",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
+      "targets": [
+        {
+          "expr": "sum by (stage) (torii_sorafs_reserve_lifecycle_stage_providers)",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Current provider count by authoritative lifecycle stage from one reconciled finalized projection."
+    },
+    {
+      "type": "timeseries",
+      "title": "Finalized Credit Exposure (XOR)",
+      "id": 10,
+      "datasource": "$datasource",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 30},
+      "targets": [
+        {
+          "expr": "sum by (stage) (torii_sorafs_reserve_credit_draw_micro_xor{stage=~\"$reserve_stage\"}) / 1e6",
+          "legendFormat": "{{stage}} principal",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (stage) (torii_sorafs_reserve_credit_shortfall_micro_xor{stage=~\"$reserve_stage\"}) / 1e6",
+          "legendFormat": "{{stage}} shortfall",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (stage) (torii_sorafs_reserve_accrued_interest_micro_xor{stage=~\"$reserve_stage\"}) / 1e6",
+          "legendFormat": "{{stage}} interest",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "axisLabel": "XOR"
+          }
+        },
+        "overrides": []
+      },
+      "description": "Committed credit principal, uncovered shortfall, and accrued interest grouped by a bounded lifecycle-stage label."
+    },
+    {
+      "type": "stat",
+      "title": "Defaults and Open Appeals",
+      "id": 11,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 38},
+      "targets": [
+        {
+          "expr": "torii_sorafs_reserve_defaulted_providers",
+          "legendFormat": "defaulted providers",
+          "refId": "A"
+        },
+        {
+          "expr": "torii_sorafs_reserve_appeal_backlog",
+          "legendFormat": "open appeals",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": 0},
+              {"color": "orange", "value": 1},
+              {"color": "red", "value": 10}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Defaulted providers and open appeals reconciled from the finalized reserve journal and provider accounts."
+    },
+    {
+      "type": "timeseries",
+      "title": "Movement Custody and Chain Reconciliation",
+      "id": 12,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 38},
+      "targets": [
+        {
+          "expr": "sum by (status) (torii_sorafs_reserve_custody_movements)",
+          "legendFormat": "{{status}} custody",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (status) (torii_sorafs_reserve_chain_reconciled_movements)",
+          "legendFormat": "{{status}} reconciled",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Finalized movement status counts rebuilt from the typed reserve event journal."
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Service Requests / 5m",
+      "id": 13,
+      "datasource": "$datasource",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 44},
+      "targets": [
+        {
+          "expr": "sum by (route, result) (increase(torii_sorafs_reserve_service_requests_total{route=~\"$reserve_route\"}[5m]))",
+          "legendFormat": "{{route}} {{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Signed reserve service request outcomes over five-minute windows."
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Rate Limits / 5m",
+      "id": 14,
+      "datasource": "$datasource",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 44},
+      "targets": [
+        {
+          "expr": "sum by (route, reason) (increase(torii_sorafs_reserve_service_rate_limit_total{route=~\"$reserve_route\"}[5m]))",
+          "legendFormat": "{{route}} {{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Reserve service rate-limit events by route and reason."
+    },
+    {
+      "type": "stat",
+      "title": "Finalized Projection Health",
+      "id": 15,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 52},
+      "targets": [
+        {
+          "expr": "torii_sorafs_reserve_finalized_projection_ready",
+          "legendFormat": "ready",
+          "refId": "A"
+        },
+        {
+          "expr": "torii_sorafs_reserve_finalized_projection_height",
+          "legendFormat": "finalized height",
+          "refId": "B"
+        },
+        {
+          "expr": "increase(torii_sorafs_reserve_finalized_projection_failure_total[5m])",
+          "legendFormat": "refresh failures / 5m",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Readiness is one only after the typed event journal catches up and pending movement/appeal totals match committed provider accounts at the published height."
+    }
+  ]
+}

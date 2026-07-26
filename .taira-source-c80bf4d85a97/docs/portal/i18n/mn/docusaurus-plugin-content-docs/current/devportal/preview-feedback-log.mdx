@@ -1,0 +1,273 @@
+---
+id: preview-feedback-log
+lang: mn
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback-log.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Preview feedback logging
+sidebar_label: Feedback logging
+description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+'@site/src/data/previewFeedbackSummary.json'-оос урьдчилан харахFeedbackSummary-г импортлох;
+
+функц Санал хүсэлт хураангуй хүснэгт() {
+  const waves = previewFeedbackSummary?.waves ?? [];
+  хэрэв (долгионы урт === 0) {
+    буцах (
+      <p>
+        Урьдчилан үзэх санал хүсэлтийн оруулгууд бүртгэгдээгүй байна
+        {' '}
+        <code>{урьдчилан харахFeedbackSummary?.эх сурвалж ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
+        .
+      </p>
+    );
+  }
+  буцах (
+    <хүснэгт>
+      <толгой>
+        <tr>
+          <th>Давалгаа</th>
+          <th>Төлөв</th>
+          <th>Нийт үйл явдал</th>
+          <th>Урилга</th>
+          <th>Урилгыг нээх</th>
+          <th>Зөвшөөрсөн</th>
+          <th>Хүчингүй болгосон</th>
+          <th>Санал хүсэлт</th>
+          <th>Асуудал</th>
+          <th>Гүйцэтгэл %</th>
+          <th>Хүлээн авах %</th>
+          <th>Хариултын хурд</th>
+          <th>Акийн хоцролт (дундаж цаг)</th>
+          <th>Санал хүсэлтийн хоцрогдол (дундаж цаг)</th>
+          <th>Сүүлчийн үйл явдал</th>
+          <th>Сүүлийн үйл явдлаас хойшхи хоногууд</th>
+        </tr>
+      </thead>
+      <tbody>
+        {waves.map((долгион) => {
+          const санал хүсэлт = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
+          const асуудлууд = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
+          const acknowledgements =
+            долгион. талархал ?? долгион.eventCounts?.хүлээн зөвшөөрсөн ?? 0;
+          const хүчингүй болгох =
+            долгион.цуцлалт ?? wave.eventCounts?.['access-revoked'] ?? 0;
+          const respondRate =
+            wave.responseRatePercent == null ? '—' : `${wave.responseRatePercent}%`;
+          const completionPercent =
+            wave.inviteCompletionPercent == null
+              ? '—'
+              : `${wave.inviteCompletionPercent}%`;
+          const ackPercent =
+            wave.ackRatePercent == null ? '—' : `${wave.ackRatePercent}%`;
+          const ackLatency =
+            wave.ackLatencyHoursAvg == null ? '—' : wave.ackLatencyHoursAvg;
+          const feedbackХоцролт =
+            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedbackLatencyHoursAvg;
+          буцах (
+            <tr key={wave.wave}>
+              <td>{wave.wave}</td>
+              <td>{долгион.байдал ?? 'хүлээгдэж байна'}</td>
+              <td>{wave.totalEvents}</td>
+              <td>{далайн.урьсан?.нийт ?? 0}</td>
+              <td>{долгион.урьдаг?.нээлттэй ?? 0}</td>
+              <td>{баярлалаа}</td>
+              <td>{цуцлалт}</td>
+              <td>{санал хүсэлт}</td>
+              <td>{асуудал}</td>
+              <td>{completionPercent}</td>
+              <td>{ackPercent}</td>
+              <td>{responseRate}</td>
+              <td title={wave.ackLatencyHoursP95 == null ? тодорхойгүй: `p95 ${wave.ackLatencyHoursP95}h`}>
+                {ackLatency}
+              </td>
+              <td
+                гарчиг={
+                  wave.feedbackLatencyHoursP95 == null
+                    ? тодорхойгүй
+                    : `p95 ${wave.feedbackLatencyHoursP95}h`
+                }
+              >
+                {feedbackLatency}
+              </td>
+              <td>{wave.lastEventTimestamp ?? '—'}</td>
+              <td>{wave.daysSinceLastEvent ?? '—'}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </хүснэгт>
+  );
+}
+
+Замын зураг нь хянан шалгагчдыг урих бүрд баталгаажуулах боломжтой нотлох баримтыг шаарддаг
+docs порталыг урьдчилан үзэх. Энэхүү тэмдэглэл нь тухайн нотлох баримтыг хэрхэн олж авахыг тайлбарласан болно
+`preview-feedback-log` туслах, үүссэн олдворуудыг хэрхэн хуваалцах талаар
+засаглал, давалгаа хаагдсаны дараа хураангуйг хаана гаргах вэ.
+
+## Бид яагаад санал хүсэлтийг бүртгэдэг вэ?
+
+- **Дагаж мөрдөх:** урилга бүр хэн, хэзээ урьдчилан үзэхэд хандсаныг бичих ёстой
+  ашиглахыг зөвшөөрөх бодлогыг хүлээн зөвшөөрч, тэдгээрийн хандалтыг цуцалсан үед.
+- **Телеметрийн хамаарал:** лог нь портал телеметрийн огцом өсөлтийг уялдуулах боломжийг бидэнд олгодог
+  эсвэл тодорхой урилгатай бүлгүүдтэй замын хөдөлгөөнд оролцож үзээрэй.
+- **Засаглалын нотлох баримт:** DOCS-SORA шалган нэвтрүүлэх цэг бүрт машинаар унших боломжтой
+  урилгын тоо, нээлттэй шүүмжлэгч болон онцгүй байдлын төлөвийг харуулсан хураангуй
+  асуудлууд.
+
+Бүх нотлох баримтууд `artifacts/docs_portal_preview/`-ийн дагуу амьдардаг тул хавсаргаж болно
+CI бүртгэлийг хусахгүйгээр урих долгионы тасалбар эсвэл засаглалын тоймд.
+
+## Шууд урилгын хураангуй
+
+`docs/portal/scripts/preview-feedback-summary.mjs` нь хуваалцсан лог болон
+`npm run build` үед `src/data/previewFeedbackSummary.json` бичдэг. Ширээ
+Доорх нь JSON-г харуулж байгаа тул хянагчид одоогийн урилгын ул мөрийг харах боломжтой
+CLI туслагчийг ажиллуулахгүйгээр.
+
+<Санал хүсэлтийн хураангуй хүснэгт />Урилгын нийлбэрээс гадна хураангуй нь одоо хүлээн зөвшөөрөгдсөн болон гарч ирнэ
+хүчингүй болгосны тоо, гарган авсан хариуны хувь (санал хүсэлтийг
+нийт урилга) болон дундаж хоцролт (хэвэрдэг p95) хооронд
+урилга, шүүмжлэгчийн хүлээн зөвшөөрөлт эсвэл санал хүсэлт. Шинэ
+**Гүйцэтгэл %** багана нь хичнээн урилга хаагдсаныг харуулдаг (хүлээн зөвшөөрсөн эсвэл
+хүчингүй болгосон), харин **Ack %** нь хичнээн хүлээн авагчийг тодорхой баталгаажуулсныг онцлон харуулдаг.
+ашиглахыг зөвшөөрөх алхамууд. Эдгээр гарал үүсэлтэй хувь, дээр нь зөвхөн JSON
+хүчингүй болгох/асуудлын хувь хэмжээ—засаглалын хяналтын самбарыг оруулснаар хянагчдыг баталгаажуулна
+CLI туслахыг ажиллуулахгүйгээр оролцооны түвшин болон эргэлтийн хугацаа хоёулаа.
+**Статус** багана нь долгион хэвээр байгаа эсэхийг тодруулна
+идэвхтэй (`active`), хаалттай боловч 14 хоногийн хяналтын цонхонд (`closed`), эсвэл
+архивлахад бэлэн (`archived`). **Сүүлийн үйл явдлаас хойших өдрүүд** хэмжигдэхүүн нь яаж гэдгийг харуулдаг
+Зөвлөлүүдийг олж мэдэхийн тулд эцсийн урилга/санал хүсэлт гарснаас хойш удаан хугацаа өнгөрчээ
+ороосон байх шаардлагатай долгион эсвэл дахин удаан хүлээсэн хүлээн авагчдыг татах.
+
+### долгион `preview-20260218` тойм
+
+- **Хамрах хүрээ:** Дараагийн DOCS-SORA хяналтын цэгийн өмнө **2026‑02‑18**-ны өдөр урьсан санхүүгийн бета хувилбар, ажиглалтын үйл ажиллагаа, SDK түнш, экосистемийн өмгөөлөгчийн шинжээчдийг урьсан.
+- **Хэмжүүр:** Ажиглалтын когортоос гаргасан нэг удаа дараагийн асуудал (`DOCS-SORA-Preview-20260218`) бүхий 4 урилга, 4 хүлээн зөвшөөрөлт, 4 цуцлалт, 4 санал хүсэлт (`responseRatePercent = 100`).
+- **Нотлох баримт:** `artifacts/docs_portal_preview/feedback_log.json` нь одоо энэ долгионы үйл явдлын нарийвчилсан цагийн хуваарийг багтаасан бөгөөд `artifacts/docs_portal_preview/preview-20260218-summary.json` нь бидний засаглалын багцад хавсаргасан хэмжигдэхүүнүүдийг авдаг. Порталын өгөгдлийг `npm run --prefix docs/portal preview:log -- --summary --summary-json`-ээр сэргээхэд ижил тоонууд `src/data/previewFeedbackSummary.json` руу татагдана.
+- **Долгионы туслагч:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` нь долгион тус бүрийн хураангуй, задлах, шинэчилсэн портал өгөгдлийг нэг алхамаар гаргадаг.
+- **Дагах ажил:** Ажиглагдах боломжтой санал хүсэлт нь Try it хүсэлтийн нэмэлт CSP жишээнүүдийг багтаасан; Docs/DevRel нь `docs/portal/docs/sorafs/observability-plan.md` (§4.2) доор бичсэн бичлэгийг хянаж байгаа тул дараагийн урилга нь засварыг баталгаажуулах боломжтой. Бүрэн тоймыг [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)-д хадгалсан, он цагийн хэлхээсийг [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md) дээр авсан.
+
+## Үйл явдлын ангилал зүй
+
+| Үйл явдал | Хэзээ бичих вэ | Тэмдэглэл |
+| --- | --- | --- |
+| `invite-sent` | Урилгын имэйл илгээсний дараа шууд. | Хүлээн авагч бүрт нэг оруулгыг хавсаргаснаар урилгын тоо үнэн зөв байх болно. |
+| `acknowledged` | Шүүгч баталгаажуулсны дараа тэд аюулгүй байдлын/ажиглалтын баримт бичгийг уншиж, шалгах нийлбэрийн хаалгыг ажиллуулна. | Нэмэлт боловч хамтрагч бүлэгт хэрэглэхийг зөвлөж байна. |
+| `feedback-submitted` | Шүүгч дүгнэлтээ тохиролцсон хянагчаар илгээх үед. | `--notes` талбарт асуудал/холбоосыг оруулна уу. |
+| `issue-opened` | DOCS-SORA-д санал хүсэлтийн дагуу асуудал гарна. | Санал хүсэлтийг урьдчилан харахын тулд замын зураглалын зүйлийг хооронд нь уялдуулахад засаглалд тусалдаг. |
+| `access-revoked` | Шүүгчийн урьдчилан харах цонх дуусах эсвэл хандах эрхийг эрт цуцалсны дараа. | "Нээлттэй хүлээн авагчдын" тоо үнэн зөв байхын тулд шаардлагатай. |
+
+Хэрэв танд нэмэлт арга хэмжээ хэрэгтэй бол үүнийг нэмнэ үү
+`VALID_EVENTS` дотор `docs/portal/scripts/preview-feedback-log.mjs` ба шинэчлэх
+энэ хүснэгт ижил өөрчлөлттэй байна.
+
+## Бүртгэлийн ажлын урсгал
+
+`npm run preview:log`-ийн ард байгаа туслах нь нэг JSON бүртгэл бичдэг.
+бүх үйл явдал. Бичлэг бүр долгионы шошго, хүлээн авагч, үйл явдал, цагийн тэмдэг, болон
+нэмэлт тэмдэглэл. Жишээ:
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-02-04T18:20:15.321Z",
+  "entries": [
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "invite-sent",
+      "timestamp": "2026-02-04T18:05:02.114Z",
+      "notes": "seed reviewer"
+    },
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "feedback-submitted",
+      "timestamp": "2026-02-05T09:14:43.009Z",
+      "notes": "docs-preview/42"
+    }
+  ]
+}
+```
+
+Тушаалууд:
+
+```bash
+# Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
+npm run --prefix docs/portal preview:log -- \
+  --wave preview-20260204 \
+  --recipient alice@example.com \
+  --event invite-sent \
+  --notes "seed reviewer"
+
+# Produce a text summary for the current repo
+npm run --prefix docs/portal preview:log -- --summary
+
+# Emit machine-readable summary for a specific wave
+npm run --prefix docs/portal preview:log -- \
+  --summary --summary-json --filter-wave preview-20260204 \
+  > artifacts/docs_portal_preview/preview-20260204-summary.json
+
+# Regenerate the portal summary data file
+npm run --prefix docs/portal generate:preview-summary
+
+# Generate a Markdown digest skeleton for a wave
+npm run --prefix docs/portal preview:digest -- \
+  --wave preview-20260204 \
+  --invite-start 2026-02-04T00:00:00Z \
+  --invite-end 2026-02-18T00:00:00Z \
+  --dashboard "https://grafana.example/d/docs-preview?var-wave=preview-20260204" \
+  --out artifacts/docs_portal_preview/preview-20260204-digest.md
+```
+
+Зөвлөмж:
+
+- Бусад функцийн салбар дээр ажиллахдаа логийг хувилбарын хяналтан доор байрлуулна уу
+  засварлагчид өөрчлөлтийг хянаж болно. Урт хугацааны долгионы хувьд логыг
+  засаглалын тасалбар болон эцсийн хувилбарыг хувилбарын олдворуудад хавсаргана.
+- `preview:log`, та шууд нэвтрэх шаардлагатай үед `--log <path>`-г хүлээн авдаг.
+  SoraFS багц эсвэл CI ажлын талбар.
+- Үргэлж `--notes` зөвлөмжийг (асуудлын холбоос, GitHub бариул, когортын ID) оруулаарай.
+  хураангуй нь эргээд харахад хэрэгтэй.
+- Тодорхойлолттой хураангуй цагийн тэмдэг хэрэгтэй үед (CI эсвэл баримт бичгийн агшин зуурын хувьд),
+  хураангуйг ажиллуулахын өмнө `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>`-г тохируулна уу
+  туслагч. Энэ нь `generatedAt`, статус, өдрийн тоолуурыг тогтвортой байлгадаг
+  дахин бүтээн байгуулалтууд даяар.
+
+## Дүгнэлт, тойм, архив1. **Долгионы хураангуй:** JSON хураангуйг үүсгэж урилгад хавсаргана уу
+   тасалбарыг түүхий бүртгэлийн хамт. Дүгнэлт нь нийт урилгыг тоолж, нээлттэй
+   хүлээн авагчид, санал хүсэлтийг тооцдог тул засаглал нь бидний барьж авсан бүрийг баталгаажуулах болно
+   шүүмжлэгч. Портал бүтээц нь мөн хаягаар нэгдсэн хураангуйг нийтэлдэг
+   `src/data/previewFeedbackSummary.json` тул оролцогч талууд одоогийн байдлыг харах боломжтой
+   CLI-г ажиллуулахгүйгээр хормын хувилбар.
+2. **Долоо хоног тутмын тойм:** `npm run --prefix docs/portal preview:digest -- --wave <label>` ажиллуулна
+   Markdown хэмжигдэхүүнийг урьдчилан бөглөж, дараа нь орлуулагч хэсгүүдийг тохируулна уу
+   дахь загварыг ашиглан
+   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
+   сонирхогч талуудтай хуваалцахаас өмнө. Доод тал нь: долгионы шошго, нээлттэй
+   тоймчид, онцлох олдворууд болон дараагийн үйлдлүүд.
+3. **Архив:** хаалттай долгионы бүртгэлийг зөөнө
+   `artifacts/docs_portal_preview/archive/<wave>/` ба зөвхөн хамгийн сүүлийн үеийнх нь хадгалагдана
+   үндэс дэх идэвхтэй долгион. Энэ нь CI олдворуудыг бага байлгахын зэрэгцээ хадгалдаг
+   аудитын мөр.
+
+## Замын зурагтай холбож байна
+
+- Та асуух болгондоо урилга болон тоглоомын номноос энэ баримт бичгийг лавлана уу
+  Шүүгчид санал хүсэлтээ илгээнэ (харна уу
+  [`preview-invite-flow`](./preview-invite-flow.md),
+  [`reviewer-onboarding`](./reviewer-onboarding.md) болон
+  [`public-preview-invite`](./public-preview-invite.md)).
+- DOCS-SORA долгионыг хаахдаа үүсгэсэн хураангуйг `status.md`-д дурдах.
+  замын зураглалын зүйлс (жишээ нь, DOCS-1b/2b/3c) олдворыг дурдаж болно.
+- SoraFS-д байршуулахдаа хэш хураамжийг хураангуйн хажууд хадгална.
+  хянагчид нотлох баримтын багцыг шалгаж болно.
+
+Бүртгэлийн ажлын урсгалыг энд кодчилох нь замын зураглалын шаардлагыг арилгана
+"Засаглалын хувьд санал хүсэлт/телеметрийн мэдээлэл авах" ба зарцуулсан цагийг багасгадаг
+үе шат бүрт урилгын түүхийг сэргээн засварлах.

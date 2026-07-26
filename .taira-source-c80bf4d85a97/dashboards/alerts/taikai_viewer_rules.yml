@@ -1,0 +1,71 @@
+groups:
+  - name: taikai-viewer
+    interval: 1m
+    rules:
+      - alert: TaikaiLiveEdgeDrift
+        expr: >
+          histogram_quantile(
+            0.99,
+            sum by (cluster, le) (
+              rate(taikai_ingest_live_edge_drift_ms_bucket[5m])
+            )
+          ) > 1500
+        for: 10m
+        labels:
+          severity: page
+          service: taikai-viewer
+        annotations:
+          summary: "Taikai live-edge drift above 1.5s (p99)"
+          description: >
+            Cluster {{ $labels.cluster }} drift exceeded 1.5s at p99 for 10 minutes.
+            Check ingest ladder health and confirm clocks are synchronized.
+      - alert: TaikaiIngestFailure
+        expr: sum(rate(taikai_ingest_segment_errors_total{reason!="none"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warn
+          service: taikai-viewer
+        annotations:
+          summary: "Taikai ingest errors detected"
+          description: >
+            Segment errors detected for {{ $value }} occurrences over 5 minutes.
+            Inspect taikai_ingest_segment_errors_total counters for reasons.
+      - alert: TaikaiCekRotationLag
+        expr: taikai_viewer_cek_rotation_seconds_ago > 180
+        for: 15m
+        labels:
+          severity: warn
+          service: taikai-viewer
+        annotations:
+          summary: "CEK rotation overdue"
+          description: >
+            PQ lane {{ $labels.lane }} has not rotated CEK in {{ $value }} seconds.
+            Ensure CEK publisher and viewer caches are synchronized.
+      - alert: SorafsProofHealthPenalty
+        expr: >
+          increase(
+            torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}[15m]
+          ) > 0
+        for: 1m
+        labels:
+          severity: page
+          service: taikai-viewer
+        annotations:
+          summary: "SoraFS proof-health penalty applied"
+          description: >
+            Provider {{ $labels.provider_id }} triggered {{ printf "%.0f" $value }}
+            proof-health penalty events over the last 15 minutes
+            (trigger={{ $labels.trigger }}). Investigate PDP/PoTR failures and
+            confirm collateral actions.
+      - alert: SorafsProofHealthCooldown
+        expr: torii_sorafs_proof_health_cooldown{provider_id!=""} == 1
+        for: 5m
+        labels:
+          severity: warn
+          service: taikai-viewer
+        annotations:
+          summary: "SoraFS proof-health cooldown active"
+          description: >
+            Provider {{ $labels.provider_id }} is under proof-health cooldown;
+            penalties are temporarily suppressed. Verify PoR/PoTR health and
+            cooldown clearance criteria.

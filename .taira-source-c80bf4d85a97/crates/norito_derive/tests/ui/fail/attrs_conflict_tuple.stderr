@@ -1,0 +1,7 @@
+error: conflicting attributes: #[norito(skip)] and #[norito(default)]
+ --> tests/ui/fail/attrs_conflict_tuple.rs:5:5
+  |
+5 | /     #[norito(skip)]
+6 | |     #[norito(default)]
+7 | |     u32,
+  | |_______^

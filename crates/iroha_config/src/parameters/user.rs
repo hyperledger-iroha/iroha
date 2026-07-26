@@ -1030,6 +1030,7 @@ impl Root {
         Self::derive_default_snapshot_store_dir(&mut snapshot, &kura);
         let dev_telemetry = self.dev_telemetry;
         let parsed_sorafs = self.sorafs.parse(&mut emitter);
+        let kagemusha_commands_configured = self.torii.kagemusha_commands.is_some();
         let (torii, live_query_store) = self.torii.parse(&mut emitter, parsed_sorafs);
         let soracloud_runtime = self.soracloud_runtime.parse();
         let telemetry = self.telemetry.map(actual::Telemetry::from);
@@ -1101,7 +1102,7 @@ impl Root {
         let settlement = self.settlement.parse(&mut emitter);
         let hijiri = self.hijiri.parse(&mut emitter);
 
-        if !settlement.offline.enabled && torii.kagemusha_commands.is_some() {
+        if !settlement.offline.enabled && kagemusha_commands_configured {
             emitter.emit(
                 Report::new(ParseError::InvalidSettlementConfig)
                     .attach("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
@@ -26020,7 +26021,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
-    fn disabled_offline_profile_rejects_kagemusha_commands_during_root_parse() {
+    fn disabled_offline_profile_rejects_dormant_kagemusha_commands_during_root_parse() {
         let mut table = base_table();
         let settlement = table
             .entry("settlement")
@@ -26042,7 +26043,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         torii.insert(
             "kagemusha_commands".into(),
             Value::Table(Table::from_iter([
-                ("enabled".into(), Value::Boolean(true)),
+                ("enabled".into(), Value::Boolean(false)),
                 (
                     "private_key".into(),
                     Value::String(
@@ -26064,7 +26065,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
 
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("disabled offline profile must reject Kagemusha commands");
+            .expect_err("disabled offline profile must reject dormant Kagemusha commands");
         let report = format!("{error:?}");
         assert!(
             report.contains("settlement.offline.enabled=false forbids torii.kagemusha_commands"),

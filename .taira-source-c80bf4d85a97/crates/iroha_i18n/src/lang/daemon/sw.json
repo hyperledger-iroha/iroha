@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Karibu kwenye Hyperledger Iroha!",
+  "error.trace_config_setup": "Imeshindikana kuweka ufuatiliaji wa usanidi",
+  "error.config": "Hitilafu ya usanidi!",
+  "error.logger": "Mfumo wa kumbukumbu haukuanzishwa",
+  "error.start": "Imeshindikana kuanzisha Iroha",
+  "error.run": "Hitilafu imetokea wakati wa kuendesha Iroha",
+  "error.start_p2p": "Imeshindikana kuanzisha mtandao wa P2P",
+  "error.init_kura": "Imeshindikana kuanzisha Kura (hifadhi ya vizuizi)",
+  "error.start_dev_telemetry": "Imeshindikana kuanzisha huduma ya telemetry ya maendeleo",
+  "error.start_telemetry": "Huduma ya telemetry haikuanzishwa",
+  "error.listen_os_signal": "Imeshindikana kusanidi usikilizaji wa ishara za mfumo wa uendeshaji",
+  "error.start_torii": "Imeshindikana kuanzisha Torii (lango la Iroha HTTP API)"
+}

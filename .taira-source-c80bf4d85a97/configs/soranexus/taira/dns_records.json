@@ -1,0 +1,63 @@
+{
+  "network": "sora-taira-testnet",
+  "zones": ["sora.org", "sora.net"],
+  "updated_at": "2026-04-26T00:00:00Z",
+  "records": [
+    {
+      "name": "taira.sora.org",
+      "type": "A",
+      "value": "208.83.1.62",
+      "ttl": 300,
+      "purpose": "Public Torii endpoint for the Taira testnet served by the shared edge"
+    },
+    {
+      "name": "taira-explorer.sora.org",
+      "type": "A",
+      "value": "208.83.1.62",
+      "ttl": 300,
+      "purpose": "Iroha 2 Explorer frontend for the Taira testnet"
+    },
+    {
+      "name": "mon.taira.sora.net",
+      "type": "A",
+      "value": "208.83.1.62",
+      "ttl": 300,
+      "purpose": "Owned public browser gateway apex for Taira Soracloud aliases"
+    },
+    {
+      "name": "*.mon.taira.sora.net",
+      "type": "A",
+      "value": "208.83.1.62",
+      "ttl": 300,
+      "purpose": "Wildcard DNS for Taira Soracloud pretty hosts such as solswap-indexer.sora.mon.taira.sora.net; do not add per-alias DNS records under this zone"
+    },
+    {
+      "name": "taira-validator-1.sora.org",
+      "type": "A",
+      "value": "208.83.1.62",
+      "ttl": 300,
+      "purpose": "Direct Torii hostname for validator 1 (peer 1 / convenience-node upstream on the current shared host)"
+    },
+    {
+      "name": "taira-validator-2.sora.org",
+      "type": "A",
+      "value": "208.83.1.62",
+      "ttl": 300,
+      "purpose": "Direct Torii hostname for validator 2 on the current shared host"
+    },
+    {
+      "name": "taira-validator-3.sora.org",
+      "type": "A",
+      "value": "208.83.1.62",
+      "ttl": 300,
+      "purpose": "Direct Torii hostname for validator 3 on the current shared host"
+    },
+    {
+      "name": "taira-validator-4.sora.org",
+      "type": "A",
+      "value": "208.83.1.62",
+      "ttl": 300,
+      "purpose": "Direct Torii hostname for validator 4 on the current shared host"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "sora-vpn-backend"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+description = "Relay-side Sora VPN backend daemon"
+
+[[bin]]
+name = "sora-vpn-backend"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive", "env"] }
+blake3 = { workspace = true }
+hex = { workspace = true, features = ["alloc"] }
+norito = { workspace = true }
+nix = { version = "0.30.1", features = ["signal"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal"] }

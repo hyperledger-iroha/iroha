@@ -1,0 +1,764 @@
+diff --git a/crates/iroha_config/src/parameters/actual.rs b/crates/iroha_config/src/parameters/actual.rs
+index bb02d7834ed85ba7ee75046d62950cd62c804199..c45b32a2125ee6061cc6479ff06d6117c10271dd 100644
+--- a/crates/iroha_config/src/parameters/actual.rs
++++ b/crates/iroha_config/src/parameters/actual.rs
+@@ -10928,6 +10928,8 @@ impl Default for Repo {
+ /// Kagemusha escrow and execution policy parameters.
+ #[derive(Debug, Clone)]
+ pub struct Offline {
++    /// Whether this node profile enables the mandatory offline-cash service.
++    pub enabled: bool,
+     /// Whether Kagemusha cash must be escrow-backed.
+     pub escrow_required: bool,
+     /// Escrow accounts keyed by Kagemusha asset definition.
+@@ -10943,6 +10945,7 @@ pub struct Offline {
+ impl Default for Offline {
+     fn default() -> Self {
+         Self {
++            enabled: true,
+             escrow_required: true,
+             escrow_accounts: BTreeMap::new(),
+             kagemusha_release_policy_path:
+@@ -12410,8 +12413,9 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn offline_defaults_require_escrow_even_before_release_configuration() {
++    fn offline_defaults_enable_mandatory_escrow_before_release_configuration() {
+         let offline = Offline::default();
++        assert!(offline.enabled);
+         assert!(offline.escrow_required);
+         assert!(offline.kagemusha_release_policy_path.is_none());
+         assert!(offline.kagemusha_artifact_dir.is_none());
+diff --git a/crates/iroha_config/src/parameters/user.rs b/crates/iroha_config/src/parameters/user.rs
+index f9187c0f0d5e9cec2cf4e04b484dae923e4aad69..567909531ec94b7e4a0ebda138038a6d3d80ff6c 100644
+--- a/crates/iroha_config/src/parameters/user.rs
++++ b/crates/iroha_config/src/parameters/user.rs
+@@ -1101,6 +1101,13 @@ impl Root {
+         let settlement = self.settlement.parse(&mut emitter);
+         let hijiri = self.hijiri.parse(&mut emitter);
+ 
++        if !settlement.offline.enabled && torii.kagemusha_commands.is_some() {
++            emitter.emit(
++                Report::new(ParseError::InvalidSettlementConfig)
++                    .attach("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
++            );
++        }
++
+         if let Err(err) = concurrency.validate() {
+             emitter.emit(err);
+         }
+@@ -7926,6 +7933,9 @@ pub struct Repo {
+ /// User-level Kagemusha escrow and execution configuration.
+ #[derive(Debug, ReadConfig, Clone)]
+ pub struct Offline {
++    /// Enable the mandatory Kagemusha offline-cash service for this node profile.
++    #[config(default = "true")]
++    pub enabled: bool,
+     /// Require Kagemusha cash to be escrow-backed.
+     #[config(default = "true")]
+     pub escrow_required: bool,
+@@ -7944,6 +7954,7 @@ pub struct Offline {
+ impl Default for Offline {
+     fn default() -> Self {
+         Self {
++            enabled: true,
+             escrow_required: true,
+             escrow_accounts: BTreeMap::new(),
+             kagemusha_release_policy_path:
+@@ -8169,12 +8180,22 @@ impl Offline {
+     /// Convert Kagemusha escrow policy into runtime parameters.
+     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Offline {
+         let Offline {
++            enabled,
+             escrow_required,
+             escrow_accounts,
+             kagemusha_release_policy_path,
+             kagemusha_artifact_dir,
+             mut kagemusha_max_decoded_bytes,
+         } = self;
++        if !enabled
++            && (!escrow_accounts.is_empty()
++                || kagemusha_release_policy_path.is_some()
++                || kagemusha_artifact_dir.is_some())
++        {
++            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
++                "settlement.offline.enabled=false requires empty escrow and release configuration",
++            ));
++        }
+         if !escrow_required {
+             emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                 "settlement.offline.escrow_required cannot be false; offline cash is mandatory",
+@@ -8247,6 +8268,7 @@ impl Offline {
+             }
+         }
+         actual::Offline {
++            enabled,
+             escrow_required,
+             escrow_accounts: escrow_bindings,
+             kagemusha_release_policy_path,
+@@ -25954,7 +25976,7 @@ mod duration_clamp_tests {
+             ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
+         },
+     };
+-    use iroha_primitives::numeric::Numeric;
++    use iroha_primitives::numeric::Quantity;
+     use toml::{Table, Value};
+ 
+     use crate::parameters::{actual, defaults, user::SoracloudRuntime};
+@@ -25997,6 +26019,59 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
+             .expect("load minimal user config")
+     }
+ 
++    #[test]
++    fn disabled_offline_profile_rejects_kagemusha_commands_during_root_parse() {
++        let mut table = base_table();
++        let settlement = table
++            .entry("settlement")
++            .or_insert_with(|| Value::Table(Table::new()))
++            .as_table_mut()
++            .expect("settlement table");
++        settlement.insert(
++            "offline".into(),
++            Value::Table(Table::from_iter([(
++                "enabled".into(),
++                Value::Boolean(false),
++            )])),
++        );
++
++        let torii = table
++            .get_mut("torii")
++            .and_then(Value::as_table_mut)
++            .expect("torii table");
++        torii.insert(
++            "kagemusha_commands".into(),
++            Value::Table(Table::from_iter([
++                ("enabled".into(), Value::Boolean(true)),
++                (
++                    "private_key".into(),
++                    Value::String(
++                        "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
++                            .into(),
++                    ),
++                ),
++                ("minimum_xor_balance".into(), Value::String("1".into())),
++                ("max_tx_value".into(), Value::String("1".into())),
++                (
++                    "operation_registry_max_entries".into(),
++                    Value::Integer(4_096),
++                ),
++                (
++                    "operation_registry_max_bytes".into(),
++                    Value::Integer(512 * 1_024),
++                ),
++            ])),
++        );
++
++        let error = actual::Root::from_toml_source(TomlSource::inline(table))
++            .expect_err("disabled offline profile must reject Kagemusha commands");
++        let report = format!("{error:?}");
++        assert!(
++            report.contains("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
++            "{report}"
++        );
++    }
++
+     fn sorafs_table_mut(table: &mut Table) -> &mut Table {
+         table
+             .entry("sorafs")
+@@ -29010,11 +29085,12 @@ mod settlement_offline_tests {
+     use super::*;
+ 
+     #[test]
+-    fn offline_parse_defaults_to_mandatory_escrow() {
++    fn offline_parse_defaults_to_enabled_mandatory_escrow() {
+         let mut emitter = Emitter::new();
+         let actual = Offline::default().parse(&mut emitter);
+ 
+         assert!(emitter.into_result().is_ok());
++        assert!(actual.enabled);
+         assert!(actual.escrow_required);
+         assert!(actual.kagemusha_release_policy_path.is_none());
+         assert!(actual.kagemusha_artifact_dir.is_none());
+@@ -29024,6 +29100,37 @@ mod settlement_offline_tests {
+         );
+     }
+ 
++    #[test]
++    fn offline_parse_accepts_explicit_disabled_empty_profile() {
++        let mut emitter = Emitter::new();
++        let actual = Offline {
++            enabled: false,
++            ..Offline::default()
++        }
++        .parse(&mut emitter);
++
++        assert!(emitter.into_result().is_ok());
++        assert!(!actual.enabled);
++        assert!(actual.escrow_required);
++        assert!(actual.escrow_accounts.is_empty());
++        assert!(actual.kagemusha_release_policy_path.is_none());
++        assert!(actual.kagemusha_artifact_dir.is_none());
++    }
++
++    #[test]
++    fn offline_parse_rejects_disabled_profile_with_dormant_release_configuration() {
++        let mut emitter = Emitter::new();
++        let _ = Offline {
++            enabled: false,
++            kagemusha_release_policy_path: Some("release-policy.norito".into()),
++            kagemusha_artifact_dir: Some("artifacts".into()),
++            ..Offline::default()
++        }
++        .parse(&mut emitter);
++
++        assert!(emitter.into_result().is_err());
++    }
++
+     #[test]
+     fn offline_parse_rejects_false_escrow_opt_out() {
+         let mut emitter = Emitter::new();
+diff --git a/crates/iroha_config/tests/fixtures.rs b/crates/iroha_config/tests/fixtures.rs
+index f302d05c36c91810e423a9de78fabd359754d8b2..dad27116e681e32e8769f1eb87c1c1190f15c6a6 100644
+--- a/crates/iroha_config/tests/fixtures.rs
++++ b/crates/iroha_config/tests/fixtures.rs
+@@ -3047,6 +3047,7 @@ fn minimal_config_snapshot() {
+                     collateral_substitution_matrix: {},
+                 },
+                 offline: Offline {
++                    enabled: true,
+                     escrow_required: true,
+                     escrow_accounts: {},
+                     kagemusha_release_policy_path: None,
+diff --git a/crates/iroha_core/src/smartcontracts/isi/domain.rs b/crates/iroha_core/src/smartcontracts/isi/domain.rs
+index 29a263f2e960a5bcf2c55c0829172f83ddbf0252..3402960fb962acc236862ffdeeb40c725005611c 100644
+--- a/crates/iroha_core/src/smartcontracts/isi/domain.rs
++++ b/crates/iroha_core/src/smartcontracts/isi/domain.rs
+@@ -752,6 +752,25 @@ pub mod isi {
+         iroha_data_model::offline::offline_escrow_account_id(chain_id, definition_id)
+     }
+ 
++    fn ensure_offline_asset_profile_compatible(
++        asset_definition: &AssetDefinition,
++        state_transaction: &StateTransaction<'_, '_>,
++    ) -> Result<(), Error> {
++        if asset_definition_offline_enabled(asset_definition.metadata())?
++            && !state_transaction.settlement.offline.enabled
++        {
++            return Err(InstructionExecutionError::InvariantViolation(
++                format!(
++                    "{}offline_disabled:asset definition metadata `{OFFLINE_ASSET_ENABLED_METADATA_KEY}=true` requires settlement.offline.enabled=true",
++                    iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX,
++                )
++                .into(),
++            )
++            .into());
++        }
++        Ok(())
++    }
++
+     pub(crate) fn ensure_offline_escrow_account(
+         asset_definition: &AssetDefinition,
+         _authority: &AccountId,
+@@ -760,6 +779,7 @@ pub mod isi {
+         if !asset_definition_offline_enabled(asset_definition.metadata())? {
+             return Ok(());
+         }
++        ensure_offline_asset_profile_compatible(asset_definition, state_transaction)?;
+ 
+         let definition_id = asset_definition.id();
+         let derived = offline_escrow_account_id(state_transaction.chain_id(), definition_id);
+@@ -2287,6 +2307,7 @@ pub mod isi {
+                 )
+                 .into());
+             }
++            ensure_offline_asset_profile_compatible(&asset_definition, state_transaction)?;
+             let mut stored_definition = asset_definition.clone();
+             stored_definition.alias = None;
+             state_transaction
+@@ -3033,6 +3054,17 @@ pub mod isi {
+                 crate::smartcontracts::limits::DEFAULT_JSON_LIMIT,
+             )?;
+ 
++            if ensure_offline_escrow {
++                let mut proposed_definition = state_transaction
++                    .world
++                    .asset_definition(&asset_definition_id)
++                    .map_err(Error::from)?;
++                proposed_definition
++                    .metadata_mut()
++                    .insert(key.clone(), value.clone());
++                ensure_offline_asset_profile_compatible(&proposed_definition, state_transaction)?;
++            }
++
+             state_transaction
+                 .world
+                 .asset_definition_mut(&asset_definition_id)
+@@ -9185,6 +9217,59 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn disabled_profile_rejects_offline_asset_registration_without_state_change() {
++        let mut state = test_state();
++        let authority = (*ALICE_ID).clone();
++        let domain_id: DomainId =
++            DomainId::try_new("offline-disabled", "universal").expect("domain id");
++        seed_domain(&mut state, &domain_id, &authority);
++
++        let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("asset name"));
++        let mut metadata = Metadata::default();
++        metadata.insert(
++            OFFLINE_ASSET_ENABLED_METADATA_KEY
++                .parse()
++                .expect("metadata key"),
++            Json::new(true),
++        );
++        let definition = NewAssetDefinition {
++            id: definition_id.clone(),
++            name: "USD".to_owned(),
++            description: None,
++            alias: None,
++            spec: NumericSpec::integer(),
++            mintable: Mintable::Infinitely,
++            logo: None,
++            metadata,
++            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
++            confidential_policy: AssetConfidentialPolicy::transparent(),
++        };
++
++        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
++        let mut block = state.block(header);
++        let mut tx = block.transaction();
++        tx.settlement.offline.enabled = false;
++
++        let error = Register::asset_definition(definition)
++            .execute(&authority, &mut tx)
++            .expect_err("disabled profile must reject offline-enabled asset registration");
++        assert!(
++            error
++                .to_string()
++                .contains("offline_reason::offline_disabled"),
++            "unexpected disabled-profile rejection: {error}"
++        );
++        assert!(
++            tx.world.asset_definition(&definition_id).is_err(),
++            "rejected registration must not insert the asset definition"
++        );
++        assert!(
++            tx.settlement.offline.escrow_accounts.is_empty(),
++            "rejected registration must not create an escrow binding"
++        );
++    }
++
+     #[test]
+     fn register_asset_definition_without_offline_flag_skips_escrow() {
+         let mut state = test_state();
+@@ -10981,6 +11066,67 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn disabled_profile_rejects_offline_metadata_without_state_change() {
++        let mut state = test_state();
++        let authority = (*ALICE_ID).clone();
++        let domain_id: DomainId =
++            DomainId::try_new("offline-metadata-disabled", "universal").expect("domain id");
++        seed_domain(&mut state, &domain_id, &authority);
++
++        let definition_id = AssetDefinitionId::new(domain_id, "gbp".parse().expect("asset name"));
++        let definition = NewAssetDefinition {
++            id: definition_id.clone(),
++            name: "GBP".to_owned(),
++            description: None,
++            alias: None,
++            spec: NumericSpec::integer(),
++            mintable: Mintable::Infinitely,
++            logo: None,
++            metadata: Metadata::default(),
++            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
++            confidential_policy: AssetConfidentialPolicy::transparent(),
++        };
++
++        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
++        let mut block = state.block(header);
++        let mut tx = block.transaction();
++        Register::asset_definition(definition)
++            .execute(&authority, &mut tx)
++            .expect("register baseline asset definition");
++        tx.settlement.offline.enabled = false;
++
++        let metadata_key: Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
++            .parse()
++            .expect("metadata key");
++        let error = SetKeyValue::asset_definition(
++            definition_id.clone(),
++            metadata_key.clone(),
++            Json::new(true),
++        )
++        .execute(&authority, &mut tx)
++        .expect_err("disabled profile must reject offline metadata activation");
++        assert!(
++            error
++                .to_string()
++                .contains("offline_reason::offline_disabled"),
++            "unexpected disabled-profile rejection: {error}"
++        );
++        assert!(
++            tx.world
++                .asset_definition(&definition_id)
++                .expect("baseline definition remains registered")
++                .metadata()
++                .get(&metadata_key)
++                .is_none(),
++            "rejected metadata activation must not change the asset definition"
++        );
++        assert!(
++            tx.settlement.offline.escrow_accounts.is_empty(),
++            "rejected metadata activation must not create an escrow binding"
++        );
++    }
++
+     #[test]
+     fn unregister_asset_definition_rejects_when_definition_has_repo_agreement_state() {
+         let mut state = test_state();
+diff --git a/crates/iroha_core/src/smartcontracts/isi/offline.rs b/crates/iroha_core/src/smartcontracts/isi/offline.rs
+index 21f065f40ea5eb92323215d32f0f864524b22769..33c93fa3b83eab19d0da46d7b3ea1e90fb5dc64c 100644
+--- a/crates/iroha_core/src/smartcontracts/isi/offline.rs
++++ b/crates/iroha_core/src/smartcontracts/isi/offline.rs
+@@ -77,6 +77,17 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
+     InstructionExecutionError::InvariantViolation(boxed)
+ }
+ 
++fn ensure_offline_enabled(state_transaction: &StateTransaction<'_, '_>) -> Result<(), Error> {
++    if !state_transaction.settlement.offline.enabled {
++        return Err(labeled_invariant(
++            "offline_disabled",
++            "offline cash is disabled by validator configuration",
++        )
++        .into());
++    }
++    Ok(())
++}
++
+ fn verify_legacy_note_signature(
+     signature: &Signature,
+     signer: &PublicKey,
+@@ -6979,6 +6990,7 @@ pub mod isi {
+             authority: &AccountId,
+             state_transaction: &mut StateTransaction<'_, '_>,
+         ) -> Result<(), Error> {
++            ensure_offline_enabled(state_transaction)?;
+             let issue = self.issue;
+             validate_legacy_note_certificate(&issue.key_certificate)?;
+             if issue.amount <= Numeric::zero() {
+@@ -7060,6 +7072,7 @@ pub mod isi {
+             authority: &AccountId,
+             state_transaction: &mut StateTransaction<'_, '_>,
+         ) -> Result<(), Error> {
++            ensure_offline_enabled(state_transaction)?;
+             let redemption = self.redemption;
+             if redemption.input_nullifiers.is_empty() || redemption.input_nullifiers.len() > 4 {
+                 return Err(labeled_invariant(
+@@ -7212,6 +7225,7 @@ pub mod isi {
+             authority: &AccountId,
+             state_transaction: &mut StateTransaction<'_, '_>,
+         ) -> Result<(), Error> {
++            ensure_offline_enabled(state_transaction)?;
+             let audit = self.audit;
+             if audit.input_nullifiers.is_empty()
+                 || audit.input_nullifiers.len() > 4
+@@ -7391,6 +7405,7 @@ pub mod isi {
+             authority: &AccountId,
+             state_transaction: &mut StateTransaction<'_, '_>,
+         ) -> Result<(), Error> {
++            ensure_offline_enabled(state_transaction)?;
+             let registration = self.registration;
+             let (registration_hash, admission_policy_hash) =
+                 validate_offline_device_attestation_registration(
+@@ -7561,6 +7576,7 @@ pub mod isi {
+             authority: &AccountId,
+             state_transaction: &mut StateTransaction<'_, '_>,
+         ) -> Result<(), Error> {
++            ensure_offline_enabled(state_transaction)?;
+             if !can_manage_offline_device_attestation_policy(state_transaction, authority) {
+                 return Err(labeled_invariant(
+                     "unauthorized_controller",
+@@ -8137,6 +8153,7 @@ pub mod isi {
+             authority: &AccountId,
+             state_transaction: &mut StateTransaction<'_, '_>,
+         ) -> Result<(), Error> {
++            ensure_offline_enabled(state_transaction)?;
+             ensure_kagemusha_recursive_release_v4_activation_authorized(
+                 state_transaction,
+                 authority,
+@@ -8319,6 +8336,7 @@ pub mod isi {
+             authority: &AccountId,
+             state_transaction: &mut StateTransaction<'_, '_>,
+         ) -> Result<(), Error> {
++            ensure_offline_enabled(state_transaction)?;
+             let request = self.request;
+             request
+                 .validate_public_binding()
+@@ -8566,6 +8584,7 @@ pub mod isi {
+             authority: &AccountId,
+             state_transaction: &mut StateTransaction<'_, '_>,
+         ) -> Result<(), Error> {
++            ensure_offline_enabled(state_transaction)?;
+             let request = self.request;
+             request
+                 .validate_public_binding()
+@@ -9034,6 +9053,35 @@ pub mod isi {
+             )
+         }
+ 
++        #[test]
++        fn disabled_profile_rejects_offline_mutation_before_state_change() {
++            let state = offline_test_state();
++            let mut block = state.block(offline_test_header());
++            let mut state_transaction = block.transaction();
++            state_transaction.settlement.offline.enabled = false;
++
++            let error = SetOfflineDeviceAttestationPolicy::new(
++                default_offline_device_attestation_policy()
++                    .expect("built-in policy fixture must be valid"),
++            )
++            .execute(&ALICE_ID, &mut state_transaction)
++            .expect_err("disabled profile must reject every offline mutation");
++            assert!(
++                error
++                    .to_string()
++                    .contains("offline_reason::offline_disabled"),
++                "unexpected disabled-profile rejection: {error}"
++            );
++            assert!(
++                state_transaction
++                    .world
++                    .smart_contract_state
++                    .get(&*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY)
++                    .is_none(),
++                "rejected policy mutation must not change consensus state"
++            );
++        }
++
+         fn release_activation_device_policy() -> OfflineDeviceAttestationPolicy {
+             let mut policy = default_offline_device_attestation_policy()
+                 .expect("built-in roots form a valid activation-policy template");
+diff --git a/crates/iroha_torii/src/lib.rs b/crates/iroha_torii/src/lib.rs
+index b3d5b17d73e259c59f748427be201c37b025ee25..f35d8926cfbeb0b4f6584b0a5121958639dcfabe 100644
+--- a/crates/iroha_torii/src/lib.rs
++++ b/crates/iroha_torii/src/lib.rs
+@@ -12651,6 +12651,19 @@ pub fn ensure_mandatory_offline_configuration(
+     offline_config: &iroha_config::parameters::actual::Offline,
+     command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
+ ) -> Result<(), String> {
++    if !offline_config.enabled {
++        if !offline_config.escrow_accounts.is_empty()
++            || offline_config.kagemusha_release_policy_path.is_some()
++            || offline_config.kagemusha_artifact_dir.is_some()
++            || command_config.is_some()
++        {
++            return Err(
++                "settlement.offline.enabled=false forbids dormant escrow, release, and command configuration"
++                    .to_owned(),
++            );
++        }
++        return Ok(());
++    }
+     if !offline_config.escrow_required {
+         return Err("settlement.offline.escrow_required must be true".to_owned());
+     }
+@@ -12802,6 +12815,9 @@ pub fn ensure_mandatory_offline_startup_readiness(
+     fee_asset_selector: &str,
+ ) -> Result<(), String> {
+     ensure_mandatory_offline_configuration(offline_config, command_config)?;
++    if !offline_config.enabled {
++        return Ok(());
++    }
+     let command_config = command_config
+         .cloned()
+         .ok_or_else(|| "torii.kagemusha_commands is mandatory for offline cash".to_owned())?;
+@@ -13395,14 +13411,19 @@ mod offline_kagemusha_readiness_tests {
+     #[test]
+     fn mandatory_health_and_readyz_status_fail_closed_with_http_503() {
+         assert_eq!(
+-            mandatory_offline_probe_status(false),
++            mandatory_offline_probe_status(true, false),
+             axum::http::StatusCode::SERVICE_UNAVAILABLE,
+             "both mandatory offline readiness probes must reject an offline-incomplete node",
+         );
+         assert_eq!(
+-            mandatory_offline_probe_status(true),
++            mandatory_offline_probe_status(true, true),
+             axum::http::StatusCode::OK,
+         );
++        assert_eq!(
++            mandatory_offline_probe_status(false, false),
++            axum::http::StatusCode::OK,
++            "an explicitly disabled optional service cannot fail node readiness",
++        );
+     }
+ 
+     #[tokio::test]
+@@ -13480,6 +13501,27 @@ mod offline_kagemusha_readiness_tests {
+         assert!(error.contains("torii.kagemusha_commands is mandatory"));
+     }
+ 
++    #[test]
++    fn explicit_disabled_offline_profile_is_empty_and_accepted() {
++        let mut offline = iroha_config::parameters::actual::Offline {
++            enabled: false,
++            ..iroha_config::parameters::actual::Offline::default()
++        };
++        ensure_mandatory_offline_configuration(&offline, None)
++            .expect("an explicit empty disabled profile is valid");
++
++        let asset_definition_id = AssetDefinitionId::new(
++            iroha_data_model::domain::DomainId::try_new("boi", "is").expect("fixture asset domain"),
++            "ds".parse().expect("fixture asset name"),
++        );
++        offline
++            .escrow_accounts
++            .insert(asset_definition_id, iroha_test_samples::ALICE_ID.clone());
++        let error = ensure_mandatory_offline_configuration(&offline, None)
++            .expect_err("disabled profiles must reject dormant escrow configuration");
++        assert!(error.contains("enabled=false"));
++    }
++
+     #[test]
+     fn mandatory_offline_startup_uses_the_exact_complete_replayed_escrow_catalog() {
+         let configured_asset = AssetDefinitionId::new(
+@@ -17280,6 +17322,19 @@ fn mandatory_offline_status_snapshot(
+     app: &AppState,
+ ) -> iroha_torii_shared::offline_api::OfflineStatus {
+     let offline_config = app.state.view().settlement.offline.clone();
++    if !offline_config.enabled {
++        return iroha_torii_shared::offline_api::OfflineStatus {
++            mandatory: false,
++            cash_handoff_capability:
++                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
++            required_bridge_abi_version:
++                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
++            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
++            ready: false,
++            assets: Vec::new(),
++            blockers: Vec::new(),
++        };
++    }
+     let command_config = app
+         .offline_commands
+         .as_deref()
+@@ -17351,8 +17406,8 @@ fn mandatory_offline_status_snapshot(
+ }
+ 
+ #[cfg(feature = "app_api")]
+-fn mandatory_offline_probe_status(ready: bool) -> StatusCode {
+-    if ready {
++fn mandatory_offline_probe_status(mandatory: bool, ready: bool) -> StatusCode {
++    if !mandatory || ready {
+         StatusCode::OK
+     } else {
+         StatusCode::SERVICE_UNAVAILABLE
+@@ -17362,6 +17417,7 @@ fn mandatory_offline_probe_status(ready: bool) -> StatusCode {
+ #[cfg(feature = "app_api")]
+ fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
+     let offline_config = app.state.view().settlement.offline.clone();
++    let mandatory = offline_config.enabled;
+     let command_config = app
+         .offline_commands
+         .as_deref()
+@@ -17374,12 +17430,17 @@ fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
+         command_config.as_ref(),
+         &fee_asset_selector,
+     );
+-    let ready = result.is_ok();
+-    let blockers = result.err().into_iter().collect::<Vec<_>>();
++    let ready = mandatory && result.is_ok();
++    let blockers = if mandatory {
++        result.err().into_iter().collect::<Vec<_>>()
++    } else {
++        Vec::new()
++    };
+     crate::utils::respond_json_value_with_status(
+-        mandatory_offline_probe_status(ready),
++        mandatory_offline_probe_status(mandatory, ready),
+         json_object([
+             json_entry("live", true),
++            json_entry("mandatory", mandatory),
+             json_entry("ready", ready),
+             json_entry(
+                 "cash_handoff_capability",
+diff --git a/crates/irohad/src/main.rs b/crates/irohad/src/main.rs
+index ddc01d053ef89e37d3e334edd7b031907748ffd0..8d1a2734b1d4589ab9905aee5521c8b967a34df9 100644
+--- a/crates/irohad/src/main.rs
++++ b/crates/irohad/src/main.rs
+@@ -8397,36 +8397,40 @@ impl Iroha {
+         }
+         // Thread chain id into state for VRF prehash binding.
+         state.chain_id = config.common.chain.clone();
+-        let kagemusha_release_catalog = match (
+-            config
+-                .settlement
+-                .offline
+-                .kagemusha_release_policy_path
+-                .as_deref(),
+-            config.settlement.offline.kagemusha_artifact_dir.as_deref(),
+-        ) {
+-            (None, None) => {
+-                return Err(Report::new(StartError::InitKura).attach(
+-                    "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
+-                ));
+-            }
+-            (Some(policy_path), Some(artifact_dir)) => {
+-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
+-                    policy_path,
+-                    artifact_dir,
+-                    config.settlement.offline.kagemusha_max_decoded_bytes,
+-                )
+-                .map_err(|error| {
+-                    Report::new(StartError::InitKura).attach(format!(
+-                        "failed to authenticate Kagemusha V4 release catalog: {error}"
+-                    ))
+-                })?
+-            }
+-            _ => {
+-                return Err(Report::new(StartError::InitKura).attach(
+-                    "Kagemusha V4 release policy and artifact directory must be configured together",
+-                ));
++        let kagemusha_release_catalog = if config.settlement.offline.enabled {
++            match (
++                config
++                    .settlement
++                    .offline
++                    .kagemusha_release_policy_path
++                    .as_deref(),
++                config.settlement.offline.kagemusha_artifact_dir.as_deref(),
++            ) {
++                (None, None) => {
++                    return Err(Report::new(StartError::InitKura).attach(
++                        "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
++                    ));
++                }
++                (Some(policy_path), Some(artifact_dir)) => {
++                    iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
++                        policy_path,
++                        artifact_dir,
++                        config.settlement.offline.kagemusha_max_decoded_bytes,
++                    )
++                    .map_err(|error| {
++                        Report::new(StartError::InitKura).attach(format!(
++                            "failed to authenticate Kagemusha V4 release catalog: {error}"
++                        ))
++                    })?
++                }
++                _ => {
++                    return Err(Report::new(StartError::InitKura).attach(
++                        "Kagemusha V4 release policy and artifact directory must be configured together",
++                    ));
++                }
+             }
++        } else {
++            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
+         };
+         state.set_kagemusha_release_catalog(kagemusha_release_catalog);
+         if !loaded_state_from_snapshot {

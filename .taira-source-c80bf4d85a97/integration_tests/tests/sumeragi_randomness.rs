@@ -1,0 +1,1320 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Integration tests for Sumeragi VRF randomness edge cases.
+//!
+//! These scenarios exercise late reveals to ensure telemetry exposes penalty
+//! clearing behaviour and seed continuity.
+
+use std::{
+    collections::HashSet,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use base64::Engine as _;
+use eyre::{Result, WrapErr, ensure, eyre};
+use integration_tests::sandbox;
+use iroha::client::{Client, Status};
+use iroha_core::sumeragi::consensus::{NPOS_TAG, vrf_commit_preimage, vrf_reveal_preimage};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+use iroha_data_model::{
+    ChainId, Level,
+    block::consensus::{VrfCommit, VrfReveal},
+    isi::{Log, SetParameter},
+    parameter::{Parameter, system::SumeragiNposParameters},
+};
+use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use norito::json::{self, Value};
+use reqwest::Client as HttpClient;
+use sha2::{Digest as _, Sha256};
+use tokio::time::sleep;
+
+const EPOCH_LENGTH_BLOCKS: u64 = 16;
+const VRF_COMMIT_WINDOW_BLOCKS: u64 = 4;
+const VRF_REVEAL_WINDOW_BLOCKS: u64 = 1;
+const VRF_LATE_REVEAL_SAFETY_BLOCKS: u64 = 3;
+const BLOCK_TIME_MS: u64 = 600;
+const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
+const TELEMETRY_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+const TELEMETRY_RETRY_ATTEMPTS: usize = 30;
+const HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT: u64 = 2;
+const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
+const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
+const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
+const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
+
+static OPERATOR_NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Late VRF reveal should clear penalties and leave the epoch seed unchanged.
+#[allow(clippy::too_many_lines)] // Complex scenario requires sequential orchestration.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> {
+    init_instruction_registry();
+
+    let builder = randomness_network_builder();
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(npos_late_vrf_reveal_clears_penalty_and_preserves_seed),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let default_client = network.client();
+    let (epoch, auto_snapshot, client) =
+        wait_for_epoch_commitment_snapshot(&network, &default_client).await?;
+
+    let http = HttpClient::new();
+    let telemetry_url = client
+        .torii_url
+        .join("v1/sumeragi/telemetry")
+        .wrap_err("compose telemetry URL")?;
+
+    let chain_id = network.chain_id();
+    let (target_signer, signer_key_pair, reveal, commitment) =
+        find_recorded_vrf_material(network.peers(), &chain_id, epoch, &auto_snapshot)?;
+    client
+        .get_sumeragi_diagnostics()?
+        .npos
+        .ok_or_else(|| eyre!("NPoS diagnostics missing on NPoS network"))?;
+    let mode_tag = NPOS_TAG;
+    let commit_sig_hex = vrf_commit_signature_hex(
+        &chain_id,
+        &signer_key_pair,
+        epoch,
+        target_signer,
+        commitment,
+        mode_tag,
+    );
+    let reveal_sig_hex = vrf_reveal_signature_hex(
+        &chain_id,
+        &signer_key_pair,
+        epoch,
+        target_signer,
+        reveal,
+        mode_tag,
+    );
+
+    submit_vrf_commit(
+        &client,
+        &http,
+        epoch,
+        target_signer,
+        commitment,
+        &commit_sig_hex,
+    )
+    .await?;
+    submit_progress_log(&client, "vrf commit flush")?;
+
+    let commitment_hex = hex::encode(commitment);
+    // Wait until the submitted commitment is visible for the target signer.
+    let snapshot_before = wait_for_epoch_record(&client, epoch, |json| {
+        json.get("participants")
+            .and_then(Value::as_array)
+            .is_some_and(|participants| {
+                participants.iter().any(|participant| {
+                    participant.get("signer").and_then(Value::as_u64)
+                        == Some(u64::from(target_signer))
+                        && participant.get("commitment").and_then(Value::as_str)
+                            == Some(commitment_hex.as_str())
+                        && participant.get("reveal").is_none()
+                })
+            })
+    })
+    .await?;
+    let status_before = wait_for_sumeragi_status(&client, |json| {
+        let prf = json.get("prf")?.as_object()?;
+        let seed = prf.get("epoch_seed")?.as_str()?;
+        Some(!seed.is_empty())
+    })
+    .await?;
+    let prf_seed_before = status_before
+        .get("prf")
+        .and_then(Value::as_object)
+        .and_then(|prf| prf.get("epoch_seed"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let seed_before = snapshot_before
+        .get("seed_hex")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+
+    // Advance height well outside the reveal window.
+    // `vrf_reveal_window_blocks` is relative to the commit window, so the
+    // inclusive reveal deadline is `commit + reveal`.
+    // Keep a safety margin because consensus message handling can lag behind
+    // externally reported block height by a couple of blocks under load.
+    let reveal_cutoff_height = epoch
+        .saturating_mul(EPOCH_LENGTH_BLOCKS)
+        .saturating_add(VRF_COMMIT_WINDOW_BLOCKS)
+        .saturating_add(VRF_REVEAL_WINDOW_BLOCKS)
+        .saturating_add(VRF_LATE_REVEAL_SAFETY_BLOCKS);
+    let epoch_end_height = epoch.saturating_add(1).saturating_mul(EPOCH_LENGTH_BLOCKS);
+    wait_for_height_total_at_least_before(&client, reveal_cutoff_height, epoch_end_height).await?;
+
+    let snapshot_after = submit_late_reveal_until_recorded(
+        &client,
+        &http,
+        epoch,
+        target_signer,
+        reveal,
+        &reveal_sig_hex,
+    )
+    .await?;
+
+    let seed_after = snapshot_after
+        .get("seed_hex")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    ensure!(
+        seed_before == seed_after,
+        "late reveal must not mutate epoch seed (before={seed_before}, after={seed_after})"
+    );
+
+    let late_reveals = snapshot_after
+        .get("late_reveals")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let late_signers: HashSet<u32> = late_reveals
+        .iter()
+        .filter_map(|entry| entry.get("signer").and_then(Value::as_u64))
+        .map(|val| {
+            u32::try_from(val).expect("validator identifiers must fit into u32 for the test setup")
+        })
+        .collect();
+    ensure!(
+        late_signers.contains(&target_signer),
+        "late reveal snapshot must list signer {target_signer}"
+    );
+
+    let status_after_late = wait_for_sumeragi_status(&client, |json| {
+        let prf = json.get("prf")?.as_object()?;
+        let seed = prf.get("epoch_seed")?.as_str()?;
+        if seed != prf_seed_before {
+            return Some(false);
+        }
+        json.get("vrf_late_reveals_total")
+            .and_then(Value::as_u64)
+            .map(|late| late >= 1)
+    })
+    .await?;
+    ensure!(
+        status_after_late
+            .get("vrf_late_reveals_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= 1,
+        "status endpoint should reflect late reveal acceptance"
+    );
+    ensure!(
+        status_after_late
+            .get("prf")
+            .and_then(Value::as_object)
+            .and_then(|prf| prf.get("epoch_seed"))
+            .and_then(Value::as_str)
+            .is_some_and(|seed| seed == prf_seed_before),
+        "late reveal must not change PRF seed exposed via status"
+    );
+
+    // Telemetry follows the active epoch summary, so verify the late reveal
+    // before epoch rollover switches the active epoch record.
+    let telemetry = wait_for_telemetry(&http, &telemetry_url, |json| {
+        let vrf = json.get("vrf").and_then(Value::as_object)?;
+        let epoch_reported = vrf.get("epoch").and_then(Value::as_u64)?;
+        let late = vrf.get("late_reveals_total").and_then(Value::as_u64)?;
+        let committed_empty = vrf
+            .get("committed_no_reveal")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty);
+        Some(epoch_reported == epoch && late >= 1 && committed_empty)
+    })
+    .await?;
+    let vrf = telemetry
+        .get("vrf")
+        .and_then(Value::as_object)
+        .expect("telemetry vrf summary");
+    ensure!(
+        vrf.get("late_reveals_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= 1,
+        "telemetry should record a late reveal"
+    );
+    ensure!(
+        vrf.get("committed_no_reveal")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "telemetry committed_no_reveal list should be empty"
+    );
+
+    // Wait for the epoch to finalize (height multiple of epoch length).
+    let finalize_height = epoch.saturating_add(1).saturating_mul(EPOCH_LENGTH_BLOCKS);
+    wait_for_height_total_at_least(&network, &client, finalize_height, "vrf finalize tick").await?;
+
+    let penalties = wait_for_penalties(&client, epoch, |json| {
+        json.get("committed_no_reveal")
+            .and_then(Value::as_array)
+            .is_some_and(|committed| {
+                !committed
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .any(|signer| signer == u64::from(target_signer))
+            })
+    })
+    .await?;
+    let committed: Vec<u32> = penalties
+        .get("committed_no_reveal")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .map(|val| {
+            u32::try_from(val).expect("validator identifiers must fit into u32 for the test setup")
+        })
+        .collect();
+    ensure!(
+        !committed.contains(&target_signer),
+        "committed_no_reveal should not include late reveal signer {target_signer}, got {committed:?}"
+    );
+
+    let status_final = wait_for_sumeragi_status(&client, |json| {
+        let epoch_reported = json.get("vrf_penalty_epoch")?.as_u64()?;
+        let committed = json.get("vrf_committed_no_reveal_total")?.as_u64()?;
+        let late = json.get("vrf_late_reveals_total")?.as_u64()?;
+        Some(
+            epoch_reported == epoch
+                && late >= 1
+                && committed <= network.peers().len().saturating_sub(1) as u64,
+        )
+    })
+    .await?;
+    ensure!(
+        status_final
+            .get("vrf_late_reveals_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= 1,
+        "status should retain late reveal count after epoch finalization"
+    );
+
+    network.shutdown().await;
+    Ok(())
+}
+
+fn randomness_network_builder() -> NetworkBuilder {
+    randomness_network_builder_with_params(short_epoch_npos_parameters())
+}
+
+fn randomness_network_builder_with_params(params: SumeragiNposParameters) -> NetworkBuilder {
+    NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
+        .with_block_cadence(Duration::from_millis(BLOCK_TIME_MS))
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        })
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            params.into_custom_parameter(),
+        )))
+}
+
+fn short_epoch_npos_parameters() -> SumeragiNposParameters {
+    SumeragiNposParameters {
+        vrf_commit_window_blocks: VRF_COMMIT_WINDOW_BLOCKS,
+        vrf_reveal_window_blocks: VRF_REVEAL_WINDOW_BLOCKS,
+        epoch_length_blocks: std::num::NonZeroU64::new(EPOCH_LENGTH_BLOCKS)
+            .expect("test epoch must be non-zero"),
+        ..SumeragiNposParameters::default()
+    }
+}
+
+fn commitment_from_reveal(reveal: &[u8; 32]) -> [u8; 32] {
+    iroha_crypto::Hash::new(reveal).into()
+}
+
+fn find_recorded_vrf_material(
+    peers: &[iroha_test_network::NetworkPeer],
+    chain_id: &ChainId,
+    epoch: u64,
+    snapshot: &Value,
+) -> Result<(u32, KeyPair, [u8; 32], [u8; 32])> {
+    let participants = snapshot
+        .get("participants")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("VRF epoch snapshot is missing participants"))?;
+    for participant in participants {
+        let Some(commitment_hex) = participant.get("commitment").and_then(Value::as_str) else {
+            continue;
+        };
+        let signer = participant
+            .get("signer")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| eyre!("VRF participant is missing signer"))?;
+        let signer = u32::try_from(signer).wrap_err("VRF signer index exceeds u32")?;
+        for peer in peers {
+            let Some(key_pair) = peer.bls_key_pair() else {
+                continue;
+            };
+            let (reveal, commitment) = derive_vrf_material(chain_id, key_pair, epoch, signer);
+            if hex::encode(commitment) == commitment_hex {
+                return Ok((signer, key_pair.clone(), reveal, commitment));
+            }
+        }
+    }
+    eyre::bail!("no local BLS key matched recorded VRF commitments for epoch {epoch}")
+}
+
+fn derive_vrf_material(
+    chain_id: &ChainId,
+    signer_key_pair: &KeyPair,
+    epoch: u64,
+    signer: u32,
+) -> ([u8; 32], [u8; 32]) {
+    let chain_hash = iroha_crypto::Hash::new(chain_id.clone().into_inner().as_bytes());
+    let mut message = Vec::with_capacity(
+        VRF_INPUT_DOMAIN.len() + chain_hash.as_ref().len() + core::mem::size_of::<u64>() * 2,
+    );
+    message.extend_from_slice(VRF_INPUT_DOMAIN);
+    message.extend_from_slice(chain_hash.as_ref());
+    message.extend_from_slice(&epoch.to_be_bytes());
+    message.extend_from_slice(&u64::from(signer).to_be_bytes());
+    let signature_payload = checked_signature_payload(
+        signer_key_pair.private_key(),
+        &message,
+        "fixture VRF input signature",
+    );
+    let reveal: [u8; 32] = iroha_crypto::Hash::new(signature_payload.as_slice()).into();
+    let commitment = commitment_from_reveal(&reveal);
+    (reveal, commitment)
+}
+
+fn checked_signature_payload(private_key: &PrivateKey, payload: &[u8], context: &str) -> Vec<u8> {
+    Signature::try_new(private_key, payload)
+        .unwrap_or_else(|error| panic!("{context}: {error}"))
+        .payload()
+        .to_vec()
+}
+
+fn vrf_commit_signature_hex(
+    chain_id: &ChainId,
+    signer_key_pair: &KeyPair,
+    epoch: u64,
+    signer: u32,
+    commitment: [u8; 32],
+    mode_tag: &str,
+) -> String {
+    let commit = VrfCommit {
+        epoch,
+        signer,
+        commitment,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vrf_commit_preimage(chain_id, mode_tag, &commit);
+    hex::encode(checked_signature_payload(
+        signer_key_pair.private_key(),
+        &preimage,
+        "fixture VRF commit signature",
+    ))
+}
+
+fn vrf_reveal_signature_hex(
+    chain_id: &ChainId,
+    signer_key_pair: &KeyPair,
+    epoch: u64,
+    signer: u32,
+    reveal: [u8; 32],
+    mode_tag: &str,
+) -> String {
+    let reveal = VrfReveal {
+        epoch,
+        signer,
+        reveal,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vrf_reveal_preimage(chain_id, mode_tag, &reveal);
+    hex::encode(checked_signature_payload(
+        signer_key_pair.private_key(),
+        &preimage,
+        "fixture VRF reveal signature",
+    ))
+}
+
+#[test]
+fn vrf_signature_helpers_use_checked_signature_payloads() {
+    let key_pair = KeyPair::try_from_seed(
+        b"integration_tests::sumeragi_randomness::vrf".to_vec(),
+        Algorithm::BlsNormal,
+    )
+    .expect("fixture VRF BLS key");
+    let chain_id = ChainId::from("sumeragi-randomness-checked-signatures");
+    let epoch = 17_u64;
+    let signer = 3_u32;
+
+    let checked_payload =
+        checked_signature_payload(key_pair.private_key(), b"fixture", "fixture signature");
+    let expected_payload = Signature::try_new(key_pair.private_key(), b"fixture")
+        .expect("fixture signature")
+        .payload()
+        .to_vec();
+    assert_eq!(checked_payload, expected_payload);
+
+    let chain_hash = iroha_crypto::Hash::new(chain_id.clone().into_inner().as_bytes());
+    let mut vrf_input = Vec::new();
+    vrf_input.extend_from_slice(VRF_INPUT_DOMAIN);
+    vrf_input.extend_from_slice(chain_hash.as_ref());
+    vrf_input.extend_from_slice(&epoch.to_be_bytes());
+    vrf_input.extend_from_slice(&u64::from(signer).to_be_bytes());
+    let expected_reveal: [u8; 32] = iroha_crypto::Hash::new(
+        Signature::try_new(key_pair.private_key(), &vrf_input)
+            .expect("fixture VRF input signature")
+            .payload(),
+    )
+    .into();
+
+    let (reveal, commitment) = derive_vrf_material(&chain_id, &key_pair, epoch, signer);
+    assert_eq!(reveal, expected_reveal);
+    assert_eq!(commitment, commitment_from_reveal(&expected_reveal));
+
+    let commit = VrfCommit {
+        epoch,
+        signer,
+        commitment,
+        bls_sig: Vec::new(),
+    };
+    let commit_preimage = vrf_commit_preimage(&chain_id, NPOS_TAG, &commit);
+    assert_eq!(
+        vrf_commit_signature_hex(&chain_id, &key_pair, epoch, signer, commitment, NPOS_TAG),
+        hex::encode(
+            Signature::try_new(key_pair.private_key(), &commit_preimage)
+                .expect("fixture VRF commit signature")
+                .payload()
+        )
+    );
+
+    let reveal_record = VrfReveal {
+        epoch,
+        signer,
+        reveal,
+        bls_sig: Vec::new(),
+    };
+    let reveal_preimage = vrf_reveal_preimage(&chain_id, NPOS_TAG, &reveal_record);
+    assert_eq!(
+        vrf_reveal_signature_hex(&chain_id, &key_pair, epoch, signer, reveal, NPOS_TAG),
+        hex::encode(
+            Signature::try_new(key_pair.private_key(), &reveal_preimage)
+                .expect("fixture VRF reveal signature")
+                .payload()
+        )
+    );
+}
+
+async fn submit_vrf_commit(
+    client: &Client,
+    http: &HttpClient,
+    epoch: u64,
+    signer: u32,
+    commitment: [u8; 32],
+    bls_sig_hex: &str,
+) -> Result<()> {
+    let url = client
+        .torii_url
+        .join("v1/sumeragi/vrf/commit")
+        .wrap_err("compose VRF commit URL")?;
+    let body = format!(
+        "{{\"epoch\":{epoch},\"signer\":{signer},\"commitment_hex\":\"{}\",\"bls_sig_hex\":\"{bls_sig_hex}\"}}",
+        hex::encode(commitment),
+    )
+    .into_bytes();
+    let mut request = http
+        .post(url.clone())
+        .header("content-type", "application/json")
+        .body(body.clone());
+    for (name, value) in operator_signature_headers(client, "POST", url.path(), &body) {
+        request = request.header(name, value);
+    }
+    if let Some(auth) = client.headers.get("Authorization") {
+        request = request.header("Authorization", auth);
+    }
+    let response = request.send().await.wrap_err("submit VRF commit")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        eyre::bail!("VRF commit submission failed: {status}: {body}");
+    }
+    Ok(())
+}
+
+async fn submit_vrf_reveal(
+    client: &Client,
+    http: &HttpClient,
+    epoch: u64,
+    signer: u32,
+    reveal: [u8; 32],
+    bls_sig_hex: &str,
+) -> Result<()> {
+    let url = client
+        .torii_url
+        .join("v1/sumeragi/vrf/reveal")
+        .wrap_err("compose VRF reveal URL")?;
+    let body = format!(
+        "{{\"epoch\":{epoch},\"signer\":{signer},\"reveal_hex\":\"{}\",\"bls_sig_hex\":\"{bls_sig_hex}\"}}",
+        hex::encode(reveal),
+    )
+    .into_bytes();
+    let mut request = http
+        .post(url.clone())
+        .header("content-type", "application/json")
+        .body(body.clone());
+    for (name, value) in operator_signature_headers(client, "POST", url.path(), &body) {
+        request = request.header(name, value);
+    }
+    if let Some(auth) = client.headers.get("Authorization") {
+        request = request.header("Authorization", auth);
+    }
+    let response = request.send().await.wrap_err("submit VRF reveal")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        eyre::bail!("VRF reveal submission failed: {status}: {body}");
+    }
+    Ok(())
+}
+
+async fn submit_late_reveal_until_recorded(
+    client: &Client,
+    http: &HttpClient,
+    epoch: u64,
+    signer: u32,
+    reveal: [u8; 32],
+    bls_sig_hex: &str,
+) -> Result<Value> {
+    const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+    const PROCESSING_POLL_INTERVAL: Duration = Duration::from_millis(50);
+    const PROCESSING_POLLS: usize = 40;
+    const RETRIES: usize = 60;
+    const SEAL_GRACE_BLOCKS: u64 = 3;
+
+    let mut last_snapshot = None;
+    let mut epoch_finalized = false;
+    let epoch_end_height = epoch.saturating_add(1).saturating_mul(EPOCH_LENGTH_BLOCKS);
+    let seal_deadline_height = epoch_end_height.saturating_add(SEAL_GRACE_BLOCKS);
+    let mut last_progress_height = None;
+    let mut accepted_in_status = false;
+    for attempt in 0..RETRIES {
+        let status = client.get_status()?;
+        if !accepted_in_status && status.blocks < epoch_end_height {
+            submit_vrf_reveal(client, http, epoch, signer, reveal, bls_sig_hex).await?;
+        }
+
+        // First poll the snapshot without forcing progress. Committing a block
+        // immediately after every submit can race straight into finalization.
+        for _ in 0..PROCESSING_POLLS {
+            let snapshot = client.get_sumeragi_vrf_epoch_json(epoch)?;
+            if snapshot
+                .get("late_reveals_total")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                >= 1
+            {
+                return Ok(snapshot);
+            }
+
+            epoch_finalized = snapshot
+                .get("finalized")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            last_snapshot = Some(snapshot);
+            accepted_in_status |= client
+                .get_sumeragi_status_json()
+                .ok()
+                .and_then(|json| {
+                    json.get("vrf_late_reveals_total")
+                        .and_then(Value::as_u64)
+                        .map(|late| late >= 1)
+                })
+                .unwrap_or(false);
+            if epoch_finalized && !accepted_in_status {
+                break;
+            }
+            sleep(PROCESSING_POLL_INTERVAL).await;
+        }
+
+        let status = client.get_status()?;
+        if !accepted_in_status && status.blocks >= epoch_end_height {
+            break;
+        }
+        if epoch_finalized && !accepted_in_status {
+            break;
+        }
+        if accepted_in_status && status.blocks > seal_deadline_height {
+            break;
+        }
+        submit_progress_log_if_stalled(
+            client,
+            status.blocks,
+            "vrf late-reveal progress tick",
+            attempt,
+            &mut last_progress_height,
+        )?;
+        sleep(RETRY_INTERVAL).await;
+    }
+
+    let last_payload = last_snapshot.as_ref().map_or_else(String::new, |value| {
+        json::to_string_pretty(value).unwrap_or_default()
+    });
+    let final_blocks = client
+        .get_status()
+        .map(|status| status.blocks.to_string())
+        .unwrap_or_else(|err| format!("unavailable: {err}"));
+    let status_payload = sumeragi_status_debug_summary(client);
+    eyre::bail!(
+        "late reveal was not recorded for epoch {epoch}; signer={signer}; final_blocks={final_blocks}; last_payload={last_payload}; sumeragi_status={status_payload}"
+    )
+}
+
+fn operator_signature_headers(
+    client: &Client,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> Vec<(&'static str, String)> {
+    let Some(operator_key_pair) = client.operator_key_pair.as_ref() else {
+        return Vec::new();
+    };
+
+    let timestamp_ms: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let nonce_counter = OPERATOR_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut nonce_bytes = [0_u8; 12];
+    nonce_bytes[..8].copy_from_slice(&nonce_counter.to_le_bytes());
+    let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+
+    let mut hasher = Sha256::new();
+    hasher.update(body);
+    let body_hash_hex = hex::encode(hasher.finalize());
+    let message = format!(
+        "{}\n{}\n\n{}\n{}\n{}",
+        method.to_ascii_uppercase(),
+        path,
+        body_hash_hex,
+        timestamp_ms,
+        nonce
+    )
+    .into_bytes();
+    let signature_b64 =
+        base64::engine::general_purpose::STANDARD.encode(checked_signature_payload(
+            operator_key_pair.private_key(),
+            &message,
+            "operator request signature",
+        ));
+
+    vec![
+        (
+            HEADER_OPERATOR_PUBLIC_KEY,
+            operator_key_pair.public_key().to_string(),
+        ),
+        (HEADER_OPERATOR_TIMESTAMP_MS, timestamp_ms.to_string()),
+        (HEADER_OPERATOR_NONCE, nonce),
+        (HEADER_OPERATOR_SIGNATURE, signature_b64),
+    ]
+}
+
+async fn wait_for_epoch_record<F>(client: &Client, epoch: u64, predicate: F) -> Result<Value>
+where
+    F: Fn(&Value) -> bool,
+{
+    const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+    const RETRIES: usize = 150;
+    let mut last = None;
+    for attempt in 0..RETRIES {
+        let value = client.get_sumeragi_vrf_epoch_json(epoch)?;
+        last = Some(value.clone());
+        if value.get("found").and_then(Value::as_bool).unwrap_or(false) && predicate(&value) {
+            return Ok(value);
+        }
+        if attempt + 1 == RETRIES {
+            break;
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+    let last_payload = last.as_ref().map_or_else(String::new, |value| {
+        json::to_string_pretty(value).unwrap_or_default()
+    });
+    eyre::bail!("VRF epoch record not available for epoch {epoch}; last_payload={last_payload}")
+}
+
+async fn wait_for_penalties<F>(client: &Client, epoch: u64, predicate: F) -> Result<Value>
+where
+    F: Fn(&Value) -> bool,
+{
+    const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+    const RETRIES: usize = 150;
+    let mut last = None;
+    for attempt in 0..RETRIES {
+        let value = client.get_sumeragi_vrf_penalties_json(epoch)?;
+        last = Some(value.clone());
+        if predicate(&value) {
+            return Ok(value);
+        }
+        if attempt + 1 == RETRIES {
+            break;
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+    let last_payload = last.as_ref().map_or_else(String::new, |value| {
+        json::to_string_pretty(value).unwrap_or_default()
+    });
+    eyre::bail!(
+        "VRF penalties snapshot not available for epoch {epoch}; last_payload={last_payload}"
+    )
+}
+
+async fn wait_for_sumeragi_status<F>(client: &Client, predicate: F) -> Result<Value>
+where
+    F: Fn(&Value) -> Option<bool>,
+{
+    const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+    const RETRIES: usize = 30;
+    for attempt in 0..RETRIES {
+        let value = client.get_sumeragi_status_json()?;
+        if predicate(&value).unwrap_or(false) {
+            return Ok(value);
+        }
+        if attempt + 1 == RETRIES {
+            break;
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+    eyre::bail!("sumeragi status endpoint did not report expected snapshot")
+}
+
+async fn wait_for_telemetry<F>(http: &HttpClient, url: &reqwest::Url, predicate: F) -> Result<Value>
+where
+    F: Fn(&Value) -> Option<bool>,
+{
+    for attempt in 0..TELEMETRY_RETRY_ATTEMPTS {
+        let response = http
+            .get(url.clone())
+            .header("accept", "application/json")
+            .send()
+            .await
+            .wrap_err("fetch telemetry payload")?;
+        ensure!(
+            response.status().is_success(),
+            "telemetry endpoint returned {}",
+            response.status()
+        );
+        let body = response.text().await.wrap_err("telemetry body")?;
+        let value: Value = json::from_str(&body)?;
+        if predicate(&value).unwrap_or(false) {
+            return Ok(value);
+        }
+        if attempt + 1 == TELEMETRY_RETRY_ATTEMPTS {
+            break;
+        }
+        sleep(TELEMETRY_RETRY_INTERVAL).await;
+    }
+    eyre::bail!("telemetry endpoint did not report expected counters")
+}
+
+fn epoch_and_position_from_height(height: u64) -> (u64, u64) {
+    epoch_and_position_from_height_with_length(height, EPOCH_LENGTH_BLOCKS)
+}
+
+fn epoch_and_position_from_height_with_length(height: u64, epoch_length: u64) -> (u64, u64) {
+    let epoch_length = epoch_length.max(1);
+    let normalized_height = height.max(1);
+    let epoch = (normalized_height - 1) / epoch_length;
+    let position = ((normalized_height - 1) % epoch_length) + 1;
+    (epoch, position)
+}
+
+fn submit_progress_log(client: &Client, message: impl Into<String>) -> Result<()> {
+    client.submit(
+        progress_log_instruction(message),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    Ok(())
+}
+
+fn progress_log_instruction(message: impl Into<String>) -> Log {
+    Log::new(Level::INFO, message.into())
+}
+
+fn submit_progress_log_if_stalled(
+    client: &Client,
+    current_height: u64,
+    label: &str,
+    attempt: usize,
+    last_progress_height: &mut Option<u64>,
+) -> Result<()> {
+    if *last_progress_height != Some(current_height) {
+        *last_progress_height = Some(current_height);
+        let message = format!("{label} {attempt}");
+        submit_progress_log(client, message)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn should_submit_height_progress_tick_retries_per_height() {
+    assert!(should_submit_height_progress_tick(None, 2, 0, 25, 0, 2));
+    assert!(should_submit_height_progress_tick(Some(1), 2, 1, 25, 0, 2));
+    assert!(!should_submit_height_progress_tick(
+        Some(2),
+        2,
+        24,
+        25,
+        0,
+        2
+    ));
+    assert!(should_submit_height_progress_tick(Some(2), 2, 25, 25, 0, 2));
+    assert!(!should_submit_height_progress_tick(Some(2), 2, 25, 0, 0, 2));
+    assert!(!should_submit_height_progress_tick(
+        Some(2),
+        2,
+        25,
+        25,
+        3,
+        2
+    ));
+    assert!(!should_submit_height_progress_tick(
+        Some(2),
+        3,
+        26,
+        25,
+        1,
+        0
+    ));
+}
+
+#[test]
+fn progress_log_instruction_uses_info_level_and_message() {
+    let instruction = progress_log_instruction("tick");
+
+    assert_eq!(instruction.level, Level::INFO);
+    assert_eq!(instruction.msg, "tick");
+}
+
+fn vrf_snapshot_has_commitment(snapshot: &Value) -> bool {
+    snapshot
+        .get("found")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && snapshot
+            .get("participants")
+            .and_then(Value::as_array)
+            .is_some_and(|participants| {
+                participants.iter().any(|participant| {
+                    participant
+                        .get("commitment")
+                        .and_then(Value::as_str)
+                        .is_some()
+                })
+            })
+}
+
+fn summarize_vrf_epoch_snapshot(label: &str, epoch: u64, snapshot: &Value) -> String {
+    let found = snapshot
+        .get("found")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let participant_count = snapshot
+        .get("participants")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let roster_len = snapshot
+        .get("roster_len")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let updated_at_height = snapshot
+        .get("updated_at_height")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    format!(
+        "{label}:epoch={epoch}:found={found}:participants={participant_count}:roster_len={roster_len}:updated_at_height={updated_at_height}"
+    )
+}
+
+async fn wait_for_epoch_commitment_snapshot(
+    network: &sandbox::SerializedNetwork,
+    fallback: &Client,
+) -> Result<(u64, Value, Client)> {
+    const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+    const RETRIES: usize = 300;
+    let mut last_snapshots = Vec::new();
+    let mut last_submitted_height = None;
+    for attempt in 0..RETRIES {
+        let fallback_status = fallback.get_status()?;
+        let network_statuses = collect_network_statuses(network).await;
+        let highest_height = network_statuses
+            .iter()
+            .map(|(_, status)| status.blocks)
+            .chain(core::iter::once(fallback_status.blocks))
+            .max()
+            .unwrap_or_default();
+        let mut candidate_epochs = Vec::new();
+        for height in network_statuses
+            .iter()
+            .map(|(_, status)| status.blocks)
+            .chain(core::iter::once(highest_height))
+            .chain(core::iter::once(fallback_status.blocks))
+        {
+            let (epoch, _) = epoch_and_position_from_height(height);
+            if !candidate_epochs.contains(&epoch) {
+                candidate_epochs.push(epoch);
+            }
+        }
+        candidate_epochs.sort_unstable();
+
+        last_snapshots.clear();
+        for (idx, peer) in network.peers().iter().enumerate() {
+            let peer_client = peer.client();
+            for epoch in &candidate_epochs {
+                match peer_client.get_sumeragi_vrf_epoch_json(*epoch) {
+                    Ok(snapshot) => {
+                        last_snapshots.push(summarize_vrf_epoch_snapshot(
+                            &format!("peer {idx}"),
+                            *epoch,
+                            &snapshot,
+                        ));
+                        if vrf_snapshot_has_commitment(&snapshot) {
+                            return Ok((*epoch, snapshot, peer_client));
+                        }
+                    }
+                    Err(err) => last_snapshots.push(format!("peer {idx}:epoch={epoch}:err:{err}")),
+                }
+            }
+        }
+
+        for epoch in &candidate_epochs {
+            match fallback.get_sumeragi_vrf_epoch_json(*epoch) {
+                Ok(snapshot) => {
+                    last_snapshots
+                        .push(summarize_vrf_epoch_snapshot("fallback", *epoch, &snapshot));
+                    if vrf_snapshot_has_commitment(&snapshot) {
+                        return Ok((*epoch, snapshot, fallback.clone()));
+                    }
+                }
+                Err(err) => last_snapshots.push(format!("fallback:epoch={epoch}:err:{err}")),
+            }
+        }
+
+        let lowest_queue_size = network_statuses
+            .iter()
+            .map(|(_, status)| status.queue_size)
+            .chain(core::iter::once(fallback_status.queue_size))
+            .min()
+            .unwrap_or(fallback_status.queue_size);
+        if should_submit_height_progress_tick(
+            last_submitted_height,
+            highest_height,
+            attempt,
+            25,
+            lowest_queue_size,
+            HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT,
+        ) && submit_height_progress_log(
+            network,
+            fallback,
+            &network_statuses,
+            Log::new(
+                Level::INFO,
+                format!("vrf commitment wait tick height {highest_height} attempt {attempt}"),
+            ),
+        )? {
+            last_submitted_height = Some(highest_height);
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+    eyre::bail!("failed to observe VRF commitment snapshot; last_snapshots={last_snapshots:?}")
+}
+
+async fn wait_for_height_total_at_least_before(
+    client: &Client,
+    min_height: u64,
+    max_height_exclusive: u64,
+) -> Result<()> {
+    const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+    const RETRIES: usize = 300;
+    let mut last_progress_height = None;
+    for attempt in 0..RETRIES {
+        let status = client.get_status()?;
+        ensure!(
+            status.blocks < max_height_exclusive,
+            "advanced to block height {} before late reveal could be submitted; epoch end is {max_height_exclusive}",
+            status.blocks
+        );
+        if status.blocks >= min_height {
+            return Ok(());
+        }
+        submit_progress_log_if_stalled(
+            client,
+            status.blocks,
+            "vrf advance height tick",
+            attempt,
+            &mut last_progress_height,
+        )?;
+        sleep(RETRY_INTERVAL).await;
+    }
+    let final_blocks = client
+        .get_status()
+        .map(|status| status.blocks.to_string())
+        .unwrap_or_else(|err| format!("unavailable: {err}"));
+    let status_payload = sumeragi_status_debug_summary(client);
+    eyre::bail!(
+        "failed to reach block height {min_height}; final_blocks={final_blocks}; sumeragi_status={status_payload}"
+    )
+}
+
+async fn wait_for_height_total_at_least(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    min_height: u64,
+    label: &str,
+) -> Result<()> {
+    const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+    const RETRIES: usize = 3_000;
+    const RESUBMIT_EVERY_ATTEMPTS: usize = 100;
+    let mut last_submitted_height = None;
+    let quorum = commit_quorum_size(network.peers().len()).max(1);
+    let mut last_network_snapshot = Vec::new();
+    for attempt in 0..RETRIES {
+        let status = client.get_status()?;
+        if status.blocks >= min_height {
+            return Ok(());
+        }
+        let network_statuses = collect_network_statuses(network).await;
+        last_network_snapshot = format_network_statuses(&network_statuses);
+        let highest_height = network_statuses
+            .iter()
+            .map(|(_, status)| status.blocks)
+            .chain(core::iter::once(status.blocks))
+            .max()
+            .unwrap_or_default();
+        if count_heights_at_or_above(
+            network_statuses.iter().map(|(_, status)| status.blocks),
+            min_height,
+        ) >= quorum
+        {
+            return Ok(());
+        }
+        let lowest_queue_size = network_statuses
+            .iter()
+            .map(|(_, status)| status.queue_size)
+            .chain(core::iter::once(status.queue_size))
+            .min()
+            .unwrap_or(status.queue_size);
+        if should_submit_height_progress_tick(
+            last_submitted_height,
+            highest_height,
+            attempt,
+            RESUBMIT_EVERY_ATTEMPTS,
+            lowest_queue_size,
+            HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT,
+        ) {
+            if submit_height_progress_log(
+                network,
+                client,
+                &network_statuses,
+                Log::new(
+                    Level::INFO,
+                    format!("{label} height {highest_height} attempt {attempt}"),
+                ),
+            )? {
+                last_submitted_height = Some(highest_height);
+            }
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+    let final_blocks = client
+        .get_status()
+        .map(|status| status.blocks.to_string())
+        .unwrap_or_else(|err| format!("unavailable: {err}"));
+    let status_payload = sumeragi_status_debug_summary(client);
+    eyre::bail!(
+        "failed to reach block height {min_height}; final_blocks={final_blocks}; \
+         network_statuses={last_network_snapshot:?}; sumeragi_status={status_payload}"
+    )
+}
+
+async fn collect_network_statuses(network: &sandbox::SerializedNetwork) -> Vec<(usize, Status)> {
+    let mut statuses = Vec::new();
+    for (idx, peer) in network.peers().iter().enumerate() {
+        if let Ok(status) = peer.status().await {
+            statuses.push((idx, status));
+        }
+    }
+    statuses
+}
+
+fn format_network_statuses(statuses: &[(usize, Status)]) -> Vec<String> {
+    statuses
+        .iter()
+        .map(|(idx, status)| {
+            format!(
+                "#{idx}:height={} queue={} queued={} inflight={}",
+                status.blocks, status.queue_size, status.queue_queued, status.queue_inflight
+            )
+        })
+        .collect()
+}
+
+fn count_heights_at_or_above<I>(heights: I, target_height: u64) -> usize
+where
+    I: IntoIterator<Item = u64>,
+{
+    heights
+        .into_iter()
+        .filter(|height| *height >= target_height)
+        .count()
+}
+
+fn commit_quorum_size(peer_count: usize) -> usize {
+    let tolerated_faults = peer_count.saturating_sub(1) / 3;
+    peer_count.saturating_sub(tolerated_faults)
+}
+
+fn submit_height_progress_log(
+    network: &sandbox::SerializedNetwork,
+    fallback: &Client,
+    statuses: &[(usize, Status)],
+    instruction: Log,
+) -> Result<bool> {
+    let mut candidates = statuses
+        .iter()
+        .filter(|(_, status)| status.queue_size <= HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT)
+        .map(|(idx, status)| (*idx, status.blocks))
+        .collect::<Vec<_>>();
+    candidates.sort_by(|(left_idx, left_height), (right_idx, right_height)| {
+        right_height
+            .cmp(left_height)
+            .then_with(|| left_idx.cmp(right_idx))
+    });
+
+    let mut errors = Vec::new();
+    for (idx, _) in candidates {
+        let Some(peer) = network.peers().get(idx) else {
+            continue;
+        };
+        let client = peer.client();
+        match client.submit(
+            instruction.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
+            Ok(_) => return Ok(true),
+            Err(err) => errors.push(format!("peer {idx}: {err}")),
+        }
+    }
+
+    let fallback_queue = fallback.get_status()?.queue_size;
+    if fallback_queue <= HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT {
+        return fallback
+            .submit(
+                instruction,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .map(|_| true)
+            .map_err(Into::into);
+    }
+
+    eprintln!(
+        "skipping height progress log because no peer queue is below fallback limit \
+         (fallback_queue={fallback_queue}, limit={HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT}, errors={errors:?})"
+    );
+    Ok(false)
+}
+
+fn should_submit_height_progress_tick(
+    last_submitted_height: Option<u64>,
+    current_height: u64,
+    attempt: usize,
+    resubmit_every_attempts: usize,
+    queue_size: u64,
+    queue_limit: u64,
+) -> bool {
+    queue_size <= queue_limit
+        && (last_submitted_height != Some(current_height)
+            || (resubmit_every_attempts > 0 && attempt.is_multiple_of(resubmit_every_attempts)))
+}
+
+fn sumeragi_status_debug_summary(client: &Client) -> String {
+    let Ok(value) = client.get_sumeragi_status_json() else {
+        return String::new();
+    };
+    let keys = [
+        "mode_tag",
+        "prf",
+        "vrf_late_reveals_total",
+        "commit_qc",
+        "highest_qc",
+        "locked_qc",
+        "tx_queue",
+        "view_change_causes",
+        "worker_loop",
+        "pending_rbc",
+    ];
+    let mut entries = Vec::new();
+    for key in keys {
+        if let Some(entry) = value.get(key) {
+            let encoded = json::to_string(entry).unwrap_or_default();
+            entries.push(format!("\"{key}\":{encoded}"));
+        }
+    }
+    format!("{{{}}}", entries.join(","))
+}
+
+#[test]
+fn epoch_and_position_mapping_handles_genesis_and_boundaries() {
+    assert_eq!(epoch_and_position_from_height(0), (0, 1));
+    assert_eq!(epoch_and_position_from_height(1), (0, 1));
+    assert_eq!(
+        epoch_and_position_from_height(EPOCH_LENGTH_BLOCKS),
+        (0, EPOCH_LENGTH_BLOCKS)
+    );
+    assert_eq!(
+        epoch_and_position_from_height(EPOCH_LENGTH_BLOCKS + 1),
+        (1, 1)
+    );
+}
+
+#[test]
+fn epoch_and_position_mapping_handles_custom_epoch_length() {
+    assert_eq!(epoch_and_position_from_height_with_length(0, 4), (0, 1));
+    assert_eq!(epoch_and_position_from_height_with_length(4, 4), (0, 4));
+    assert_eq!(epoch_and_position_from_height_with_length(5, 4), (1, 1));
+}
+
+#[test]
+fn vrf_snapshot_has_commitment_requires_found_epoch_and_commitment() {
+    let empty: Value = json::from_str(r#"{"found":false,"participants":[]}"#)
+        .expect("empty snapshot JSON should decode");
+    assert!(!vrf_snapshot_has_commitment(&empty));
+
+    let missing_commitment: Value =
+        json::from_str(r#"{"found":true,"participants":[{"signer":0}]}"#)
+            .expect("missing-commitment snapshot JSON should decode");
+    assert!(!vrf_snapshot_has_commitment(&missing_commitment));
+
+    let committed: Value =
+        json::from_str(r#"{"found":true,"participants":[{"signer":0,"commitment":"abcd"}]}"#)
+            .expect("committed snapshot JSON should decode");
+    assert!(vrf_snapshot_has_commitment(&committed));
+}
+
+#[test]
+fn commitment_from_reveal_matches_runtime_hashing() {
+    let reveal = [0xAB; 32];
+    let expected: [u8; 32] = iroha_crypto::Hash::new(reveal).into();
+    assert_eq!(commitment_from_reveal(&reveal), expected);
+}

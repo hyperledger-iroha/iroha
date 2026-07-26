@@ -1,0 +1,60 @@
+{
+  "seiyaku_name": "SmokeTransfer",
+  "code_hash": "hash:05FEEFDADCF8C128E6285144E302E2857785708386E28BD33655AE35BA90E46F#25BE",
+  "abi_hash": "hash:DCBB03608ED9D87B4A8D942C0D7045D3044DE8D4D8413347C87143386F56AEC1#AABE",
+  "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
+  "features_bitmap": 0,
+  "access_set_hints": {
+    "read_keys": [
+      "account:sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+      "account:sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+      "asset:*",
+      "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76#dataspace:0",
+      "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV#dataspace:0",
+      "asset_def:*",
+      "asset_def:61CtjvNd9T3THAR65GsMVHr82Bjc"
+    ],
+    "write_keys": [
+      "asset:*",
+      "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76#dataspace:0",
+      "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV#dataspace:0"
+    ],
+    "dynamic_reads": [],
+    "dynamic_writes": []
+  },
+  "entrypoints": [
+    {
+      "name": "main",
+      "kind": {
+        "kind": "Kotoage",
+        "value": null
+      },
+      "params": [],
+      "argument_schema": null,
+      "return_type": null,
+      "return_schema": null,
+      "permission": "Admin",
+      "read_keys": [
+        "asset:*",
+        "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV#dataspace:0",
+        "account:sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+        "asset_def:*",
+        "asset_def:61CtjvNd9T3THAR65GsMVHr82Bjc",
+        "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76#dataspace:0",
+        "account:sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+      ],
+      "write_keys": [
+        "asset:*",
+        "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV#dataspace:0",
+        "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76#dataspace:0"
+      ],
+      "access_hints_complete": true,
+      "access_hints_skipped": [],
+      "triggers": []
+    }
+  ],
+  "states": [],
+  "error_codes": null,
+  "kotoba": null,
+  "provenance": null
+}

@@ -1,0 +1,52 @@
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/norito/examples/nft-flow.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 7c00f9054efaa3e657b07033da99a6f6e700f7bad64325c2f1f6621b27469bef
+source_last_modified: "2026-04-08T09:19:38.795735+00:00"
+translation_last_reviewed: 2026-04-08
+---
+
+---
+slug: /norito/examples/nft-flow
+title: Acuñar, transferir y quemar un NFT
+description: Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.
+source: crates/ivm/docs/examples/12_nft_flow.ko
+---
+
+Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.
+
+## Recorrido del libro mayor
+
+- Asegúrate de que exista la definición del NFT (por ejemplo `n0#wonderland`) junto con las cuentas de propietario/receptor usadas en el fragmento (`<i105-account-id>`, `<i105-account-id>`).
+- Invoca el entrypoint `nft_issue_and_transfer` para acuñar el NFT, transferirlo de Alice a Bob y adjuntar una bandera de metadatos que describa la emisión.
+- Inspecciona el estado del libro mayor de NFT con `iroha ledger nft list all --verbose` o los equivalentes del SDK para verificar la transferencia, luego confirma que el activo se elimina una vez que se ejecuta la instrucción de quema.
+
+## Guías de SDK relacionadas
+
+- [Quickstart del SDK de Rust](/sdks/rust)
+- [Quickstart del SDK de Python](/sdks/python)
+- [Quickstart del SDK de JavaScript](/sdks/javascript)
+
+[Descarga la fuente de Kotodama](/norito-snippets/nft-flow.ko)
+
+```kotodama
+// Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
+seiyaku NftFlow {
+    kotoage fn nft_issue_and_transfer() authorize("NftAuthority") {
+        let owner = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", );
+        let nft = NftId::parse("n0$wonderland.universal");
+        ledger::nft::mint(nft, owner);
+        let to = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", );
+        ledger::nft::transfer(source: owner, nft: nft, destination: to);
+        ledger::nft::set_metadata(
+            nft: nft,
+            key: Name::parse("issued"),
+            value: Json::parse("{\"issued\":\"demo\"}"),
+        );
+        ledger::nft::burn(nft);
+    }
+}
+```

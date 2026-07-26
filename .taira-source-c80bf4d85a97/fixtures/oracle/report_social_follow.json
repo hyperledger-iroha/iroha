@@ -1,0 +1,34 @@
+{
+  "body": {
+    "entries": [
+      {
+        "observation_hash": "hash:20AD92D8800C8D6FF171A62DF259011EDFA933F7BAF9FB3A06D9092A1BDABEF7#050B",
+        "oracle_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        "outlier": false,
+        "value": {
+          "mantissa": "170052220750163104028821061988450963712",
+          "scale": 0
+        }
+      },
+      {
+        "observation_hash": "hash:7939802AE4C8748104EB3BE6F47AF126519E1F2EB950370BCE4F2BD16CAAFDD5#B984",
+        "oracle_id": "sorauﾛ1Pﾀ2ｻﾚｴｷｸBﾖｺzBVSﾌﾕﾒRBqwdﾌsﾍﾌﾂﾊﾈ1Yﾔzy6ｹ5xYWX98C",
+        "outlier": false,
+        "value": {
+          "mantissa": "170052220750163104028821061988450963712",
+          "scale": 0
+        }
+      }
+    ],
+    "feed_config_version": [
+      1
+    ],
+    "feed_id": [
+      "social_follow_twitter"
+    ],
+    "request_hash": "hash:E574D26AFD742A3F3AE7CB2923CFE3A4F5B65CB3AD19004EAA8B05A20889E72D#81B7",
+    "slot": 15,
+    "submitter": "sorauﾛ1Pﾀ2ｻﾚｴｷｸBﾖｺzBVSﾌﾕﾒRBqwdﾌsﾍﾌﾂﾊﾈ1Yﾔzy6ｹ5xYWX98C"
+  },
+  "signature": "3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333"
+}

@@ -1,0 +1,20 @@
+groups:
+  - name: soranet-constant-rate
+    interval: 1m
+    rules:
+      - alert: SoranetConstantRateDummyRatioLow
+        expr: avg by (mode, constant_rate_profile) (soranet_constant_rate_dummy_ratio) < 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraNet constant-rate cover too thin"
+          description: "Dummy share dropped below 20% for {{ $labels.mode }}/{{ $labels.constant_rate_profile }} over 5m; investigate saturated lanes or mis-sized presets before PQ-only rollout."
+      - alert: SoranetConstantRateQueueBacklog
+        expr: max by (mode, constant_rate_profile) (soranet_constant_rate_queue_depth) > 32
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraNet constant-rate queue backlog"
+          description: "Constant-rate queue depth exceeded 32 cells for {{ $labels.mode }}/{{ $labels.constant_rate_profile }} across 5 minutes; check lane caps, congestion, and relay uplink before enabling cover-by-default."

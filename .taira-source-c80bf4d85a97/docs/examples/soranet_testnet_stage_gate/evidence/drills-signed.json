@@ -1,0 +1,80 @@
+{
+  "attachments": [
+    {
+      "blake3": "6c51111c16ce911abd6fa16f1e95cd5ceedb8095d600687b567ddfd8099df4fd",
+      "label": "exit-bond",
+      "path": "docs/examples/soranet_testnet_stage_gate/evidence/exit_bond_manifest.to",
+      "sha256": "44aafaf83c45774c6a994f5248c69e435ddd8a3f21934934ccd75955f1c12d16",
+      "size": 108
+    },
+    {
+      "blake3": "ab76c28e9679c1d81fdee72ed67fec6d1acf227a4bb8978c3d53cc22ffb958b9",
+      "label": "guard-rotation",
+      "path": "docs/examples/soranet_testnet_stage_gate/evidence/guard_rotation.log",
+      "sha256": "4e7589618d2e4efca0b2c19843fe33b0430e431d132c02d5eb0398f2aca7b10c",
+      "size": 182
+    }
+  ],
+  "drill_log": {
+    "blake3": "79192330decab7987735f5c5cc815d80cd5e0406e74098cb0efc837fa0a87b5b",
+    "bytes": 486,
+    "path": "docs/examples/soranet_testnet_stage_gate/evidence/drills-log.json",
+    "sha256": "6533a6346f20910389e7e1b33b2d7ab8828e4f71bdac5a35d7b14a6382bf28f9",
+    "value": [
+      {
+        "alert_id": "alert://soranet/brownout/1234",
+        "event": "brownout",
+        "notes": "Switched to anon-guard-pq within 3m12s",
+        "region": "NRT",
+        "restore_secs": 192,
+        "timestamp": "2026-11-05T03:17:00Z"
+      },
+      {
+        "alert_id": "alert://soranet/downgrade/9801",
+        "event": "downgrade-drill",
+        "notes": "Forced PQ downgrade to anon-majority; recovered after guard drain",
+        "region": "AMS",
+        "restore_secs": 145,
+        "timestamp": "2026-11-09T18:04:00Z"
+      }
+    ]
+  },
+  "generated_unix_ms": 1763735049330,
+  "promotion": "T0->T1",
+  "signing": {
+    "algorithm": "ed25519",
+    "payload": {
+      "attachments": [
+        {
+          "blake3": "6c51111c16ce911abd6fa16f1e95cd5ceedb8095d600687b567ddfd8099df4fd",
+          "bytes": 108,
+          "label": "exit-bond",
+          "path": "docs/examples/soranet_testnet_stage_gate/evidence/exit_bond_manifest.to",
+          "sha256": "44aafaf83c45774c6a994f5248c69e435ddd8a3f21934934ccd75955f1c12d16"
+        },
+        {
+          "blake3": "ab76c28e9679c1d81fdee72ed67fec6d1acf227a4bb8978c3d53cc22ffb958b9",
+          "bytes": 182,
+          "label": "guard-rotation",
+          "path": "docs/examples/soranet_testnet_stage_gate/evidence/guard_rotation.log",
+          "sha256": "4e7589618d2e4efca0b2c19843fe33b0430e431d132c02d5eb0398f2aca7b10c"
+        }
+      ],
+      "log_blake3": "79192330decab7987735f5c5cc815d80cd5e0406e74098cb0efc837fa0a87b5b",
+      "log_sha256": "6533a6346f20910389e7e1b33b2d7ab8828e4f71bdac5a35d7b14a6382bf28f9",
+      "promotion": "T0->T1",
+      "version": 1,
+      "window": {
+        "end": "2026-11-14",
+        "start": "2026-11-01"
+      }
+    },
+    "public_key_hex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+    "signature_hex": "8fa1e4be227fee93ceb7a8a5aa2f73a798f38d50844f3c33f34237320ab8bff7b7eccb975d3a19effcb348df451fdbc6bb9404bcd35d6c2dd8b58729b144dc01"
+  },
+  "version": 1,
+  "window": {
+    "end": "2026-11-14",
+    "start": "2026-11-01"
+  }
+}

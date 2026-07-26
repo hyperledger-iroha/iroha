@@ -1,0 +1,10725 @@
+#!/usr/bin/env python3
+"""Aggregate ISO 20022 production-readiness evidence.
+
+Purpose:
+  This offline release gate combines the ISO XSD fixture preflight and operator
+  production-evidence summaries into one digest-bound readiness report. It
+  fails closed on missing strict XSD closure, local-test evidence overrides,
+  plan-only or partial canary evidence, weak receipt evidence, non-production
+  trust policy, and provider/environment drift.
+
+Prerequisites:
+  Python 3.11+. No third party Python packages are required. XSD summaries
+  should come from ``iso_xsd_fixture_verify.py`` and evidence summaries should
+  come from ``iso_operator_evidence_verify.py``.
+
+Safety:
+  The script is read-only unless ``--summary-out`` is supplied. It does not
+  contact Torii, rail gateways, notaries, PKI endpoints, OCSP, CRL, or remote
+  schema repositories.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import errno
+import hashlib
+import ipaddress
+import json
+import math
+import os
+import re
+import secrets
+import stat
+import sys
+import unicodedata
+import urllib.parse
+from pathlib import Path
+from typing import Any
+
+
+READINESS_VERSION = 1
+EVIDENCE_VERSION = 1
+CANARY_SUMMARY_VERSION = 1
+RECEIPT_SUMMARY_VERSION = 2
+TRUST_SUMMARY_VERSION = 1
+XSD_SUMMARY_VERSION = 3
+PENDING_XSD_PROBE_SUMMARY_VERSION = 2
+SUMMARY_DIGEST_FIELD = "summary_sha256"
+PENDING_XSD_PROBE_MAX_TIMEOUT_SECS = 300.0
+PENDING_XSD_PROBE_MAX_BYTES = 65536
+MAX_FRESHNESS_BUDGET_DAYS = 36500
+MAX_TRUST_DER_BLOBS = 8
+MAX_TRUST_DER_BYTES = 1024 * 1024
+MAX_RAIL_MESSAGE_ID_CHARS = 128
+MAX_PROFILE_ID_CHARS = 128
+MAX_TRUST_POLICY_CHARS = 128
+MAX_TRUST_SOURCE_TEXT_CHARS = 256
+MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
+MAX_SUMMARY_INPUT_PATHS = 64
+MAX_JSON_LIST_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
+MAX_TIMESTAMP_CHARS = 128
+MAX_SOURCE_URL_CHARS = 2048
+MAX_LOCAL_PATH_CHARS = 4096
+MAX_CLEAN_STRING_CHARS = 4096
+MAX_XML_IDENTIFIER_CHARS = 256
+MAX_SOURCE_REPOSITORY_CHARS = 2048
+MAX_SOURCE_PATH_CHARS = 2048
+MAX_REVIEWED_GAP_REASON_CHARS = 1024
+MAX_PENDING_SCHEMA_ORGANISATION_CHARS = 256
+ISO_NAMESPACE_PREFIX = "urn:iso:std:iso:20022:tech:xsd:"
+MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}\.[0-9]{3}\.[0-9]{2}$")
+ISO_SCHEMA_DOWNLOAD_PATH_RE = re.compile(r"^/message/[1-9][0-9]*/download$")
+ISO_SCHEMA_ARCHIVE_QUERY_RE = re.compile(r"^page=[1-9][0-9]*$")
+ISO_MESSAGE_NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9]*V[0-9]{2}$")
+ISO_MESSAGE_NAME_VERSION_RE = re.compile(r"V([0-9]{2})$")
+PROBE_ERROR_KIND_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
+ISO_SUBMITTING_ORGANISATION_PART_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9&'().-]*(?:(?: |/)[A-Za-z0-9][A-Za-z0-9&'().-]*)*$"
+)
+PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+CONTEXT_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+PLACEHOLDER_CONTEXT_IDS = {
+    "ci",
+    "dev",
+    "development",
+    "dummy",
+    "example",
+    "fake",
+    "local",
+    "not-production",
+    "not-production-ready",
+    "placeholder",
+    "sample",
+    "template",
+    "test",
+}
+PLACEHOLDER_CONTEXT_TOKENS = {
+    "dummy",
+    "example",
+    "fake",
+    "placeholder",
+    "sample",
+    "template",
+    "test",
+}
+PLACEHOLDER_CONTEXT_PHRASES = (
+    "not-production",
+    "not-production-ready",
+)
+MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
+RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
+CLI_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+JSON_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+CLI_CANONICAL_NUMBER_RE = re.compile(
+    r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
+)
+CANONICAL_TIMESTAMP_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+    r"[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?"
+    r"(?:Z|[+-][0-9]{2}:[0-9]{2})"
+)
+CLI_NONFINITE_NUMBER_TEXTS = {
+    "inf",
+    "+inf",
+    "-inf",
+    "infinity",
+    "+infinity",
+    "-infinity",
+    "nan",
+    "+nan",
+    "-nan",
+}
+
+
+def _is_negative_zero_number_text(value: str) -> bool:
+    if not value.startswith("-"):
+        return False
+    mantissa = re.split(r"[eE]", value[1:], maxsplit=1)[0]
+    return all(ch in {"0", "."} for ch in mantissa)
+SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+SOURCE_REPOSITORY_RE = re.compile(
+    r"^https://github\.com/[a-z0-9_.-]+/[a-z0-9_.-]+$"
+)
+SOURCE_REPOSITORY_OWNER_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$"
+)
+SOURCE_REPOSITORY_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?$")
+PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS = {
+    "dummy",
+    "example",
+    "example-org",
+    "example-owner",
+    "example-repo",
+    "fake",
+    "placeholder",
+    "replace-before-production",
+    "sample",
+    "template",
+    "test",
+    "operator-canary",
+    "operator-canary-bank",
+}
+PROFILE_DIRECTIONS = {"inbound", "outbound", "follow-up"}
+KNOWN_RAILS = {
+    "generic-iso20022",
+    "swift-cbpr-plus",
+    "fedwire-funds",
+    "sepa-sct-inst",
+    "securities-csd",
+}
+EXPECTED_CANARY_STAGE_ORDER = ("rail", "notary", "verify")
+REQUIRED_CANARY_STAGES = set(EXPECTED_CANARY_STAGE_ORDER)
+REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
+STAGE_RECEIPT_KINDS = {
+    "rail": "iso-rail-gateway",
+    "notary": "iso-audit-notary",
+}
+REQUIRE_VERIFIED = "require-verified"
+TRUST_SIGNATURE_POLICIES = {"record-only", "reject-unsupported", REQUIRE_VERIFIED}
+RECEIPT_PATH_SUFFIX = ".receipt.json"
+RETIRED_RAIL_MESSAGE_TYPES = {"colr.007"}
+SUPPORTED_RAIL_MESSAGE_TYPES = {
+    "pacs.008",
+    "pacs.009",
+    "pacs.002",
+    "pacs.004",
+    "camt.056",
+    "sese.023",
+    "sese.024",
+    "sese.025",
+    "colr.012",
+}
+RAIL_MESSAGE_TYPES = {
+    "generic-iso20022": {
+        "pacs.008",
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+    "swift-cbpr-plus": {
+        "pacs.008",
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+    "fedwire-funds": {
+        "pacs.008",
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+    "sepa-sct-inst": {
+        "pacs.008",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+    "securities-csd": {
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
+}
+ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
+SCHEMA_SOURCE_KEYS = {"repository", "commit", "path", "license", "sha256"}
+TRUST_SOURCE_KEYS = {"authority", "version", "url", "retrieved_at"}
+TRUST_DER_PROOF_KEYS = {"sha256", "byte_len"}
+ANCHOR_DIR = "anchors"
+INDEX_FILE = "messages.index.json"
+LATEST_ANCHOR_FILE = "latest.notary.json"
+PLACEHOLDER_TRUST_SOURCE_MARKERS = (
+    "dummy",
+    "fake",
+    "placeholder",
+    "replace-before-production",
+    "sample",
+    "template",
+)
+PLACEHOLDER_TRUST_SOURCE_HOSTS = {
+    "example",
+    "example.com",
+    "example.invalid",
+    "example.net",
+    "operator-canary.bank",
+    "example.org",
+}
+LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
+NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
+PRODUCTION_FALSE_POLICY_FLAGS = {
+    "allow_plan_only",
+    "allow_dry_run",
+    "allow_insecure_http",
+    "allow_default_profile",
+    "allow_failed_receipts",
+    "allow_partial_canary",
+    "allow_canary_stage_receipts_only",
+    "allow_receipt_source_missing",
+    "allow_record_only_trust",
+    "allow_synthetic_trust",
+    "allow_missing_trust_source",
+    "allow_profile_json_not_emitted",
+}
+EVIDENCE_FRESHNESS_POLICY_FIELDS = {
+    "max_canary_age_days",
+    "max_trust_age_days",
+    "max_trust_source_age_days",
+}
+EVIDENCE_SUMMARY_KEYS = {
+    "version",
+    "verified_at",
+    "ok",
+    "canary_summaries",
+    "trust_summaries",
+    "receipt_verification",
+    "policy",
+    SUMMARY_DIGEST_FIELD,
+}
+EVIDENCE_POLICY_KEYS = {
+    "provider",
+    "environment",
+    "default_rail_profile",
+    *PRODUCTION_FALSE_POLICY_FLAGS,
+    *EVIDENCE_FRESHNESS_POLICY_FIELDS,
+}
+COMPACT_CANARY_KEYS = {
+    "version",
+    "path",
+    "config_path",
+    "provider",
+    "environment",
+    "started_at",
+    "finished_at",
+    "ok",
+    "plan_only",
+    "require_explicit_policy",
+    "stage_names",
+    "stage_dry_run",
+    "stage_command_modes",
+    "stage_windows",
+    "receipt_summary",
+    SUMMARY_DIGEST_FIELD,
+}
+COMPACT_STAGE_WINDOW_KEYS = {"name", "started_at", "finished_at"}
+COMPACT_STAGE_COMMAND_MODE_KEYS = {
+    "name",
+    "rail_uses_message",
+    "rail_submitted_message_count",
+    "notary_uses_all",
+    "notary_endpoint_count",
+    "notary_published_anchor_count",
+}
+RECEIPT_SUMMARY_KEYS = {
+    "version",
+    "ok",
+    "verified_receipts",
+    "receipt_kind",
+    "allow_failed",
+    "allow_insecure_http",
+    "allow_default_profile",
+    "require_source_files",
+    "receipts",
+    SUMMARY_DIGEST_FIELD,
+}
+RECEIPT_ENTRY_KEYS = {
+    "path",
+    "receipt_kind",
+    "receipt_sha256",
+    "ok",
+    "status_code",
+    "response_body_sha256",
+    "endpoint_requires_insecure_http",
+    "anchor_path",
+    "store_dir",
+    "index_path",
+    "anchor_sha256",
+    "index_sha256",
+    "record_count",
+    "message_type",
+    "payload_sha256",
+    "profile",
+    "rail_message_id",
+    "source_path",
+}
+NOTARY_RECEIPT_METADATA_KEYS = {
+    "anchor_path",
+    "store_dir",
+    "index_path",
+    "anchor_sha256",
+    "index_sha256",
+    "record_count",
+}
+RAIL_RECEIPT_METADATA_KEYS = {
+    "message_type",
+    "payload_sha256",
+    "profile",
+    "rail_message_id",
+    "source_path",
+}
+RECEIPT_MATERIAL_DIGEST_FIELDS = (
+    "response_body_sha256",
+    "payload_sha256",
+    "anchor_sha256",
+    "index_sha256",
+)
+RECEIPT_SOURCE_MATERIAL_FIELDS_BY_KIND = {
+    "iso-audit-notary": (
+        "anchor_path",
+        "anchor_sha256",
+        "index_path",
+        "index_sha256",
+    ),
+    "iso-rail-gateway": ("source_path", "payload_sha256", "rail_message_id"),
+}
+CANARY_RECEIPT_SOURCE_MATERIAL_REUSE_CODES = (
+    ("source_path", "evidence.canary_receipt_source_path_reused"),
+    ("payload_sha256", "evidence.canary_receipt_payload_digest_reused"),
+    ("rail_message_id", "evidence.canary_receipt_rail_message_id_reused"),
+    ("anchor_path", "evidence.canary_receipt_anchor_path_reused"),
+    ("anchor_sha256", "evidence.canary_receipt_anchor_digest_reused"),
+    ("index_path", "evidence.canary_receipt_index_path_reused"),
+    ("index_sha256", "evidence.canary_receipt_index_digest_reused"),
+)
+ARCHIVE_RECEIPT_SOURCE_MATERIAL_REUSE_CODES = (
+    ("source_path", "evidence.archive_receipt_source_path_reused"),
+    ("payload_sha256", "evidence.archive_receipt_payload_digest_reused"),
+    ("rail_message_id", "evidence.archive_receipt_rail_message_id_reused"),
+    ("anchor_path", "evidence.archive_receipt_anchor_path_reused"),
+    ("anchor_sha256", "evidence.archive_receipt_anchor_digest_reused"),
+    ("index_path", "evidence.archive_receipt_index_path_reused"),
+    ("index_sha256", "evidence.archive_receipt_index_digest_reused"),
+)
+TRUST_DER_PROOF_FIELDS = (
+    "x509_trust_anchor_der",
+    "revoked_certificate_der",
+    "x509_crl_der",
+    "x509_ocsp_response_der",
+)
+CANARY_SUMMARY_RECEIPT_ROLE_CODES = {
+    "receipt_summary": "evidence.canary_summary_digest_matches_receipt_summary",
+    "receipt": "evidence.canary_summary_digest_matches_receipt",
+    "receipt_material": "evidence.canary_summary_digest_matches_receipt_material",
+}
+CANARY_SUMMARY_TRUST_ROLE_CODES = {
+    "profile_json": "evidence.canary_summary_digest_matches_trust_profile_json",
+    "bundle": "evidence.canary_summary_digest_matches_trust_bundle",
+    "der_proof": "evidence.canary_summary_digest_matches_trust_der_proof",
+}
+TRUST_SUMMARY_RECEIPT_ROLE_CODES = {
+    "receipt_summary": "trust.summary_digest_matches_receipt_summary",
+    "receipt": "trust.summary_digest_matches_receipt",
+    "receipt_material": "trust.summary_digest_matches_receipt_material",
+}
+TRUST_SUMMARY_TRUST_ROLE_CODES = {
+    "profile_json": "trust.summary_digest_matches_profile_json",
+    "bundle": "trust.summary_digest_matches_bundle",
+    "der_proof": "trust.summary_digest_matches_der_proof",
+}
+XSD_DIGEST_EVIDENCE_ROLE_CODES = {
+    "summary": "xsd.summary_digest_matches_evidence_material",
+    "manifest": "xsd.manifest_digest_matches_evidence_material",
+    "schema": "xsd.schema_digest_matches_evidence_material",
+    "fixture": "xsd.fixture_digest_matches_evidence_material",
+    "blocked_source": "xsd.blocked_source_digest_matches_evidence_material",
+    "profile_catalog": "xsd.profile_catalog_digest_matches_evidence_material",
+    "profile_catalog_json": "xsd.profile_catalog_json_digest_matches_evidence_material",
+}
+XSD_PATH_EVIDENCE_ROLE_CODES = {
+    "summary": "xsd.summary_path_matches_evidence_material",
+    "manifest": "xsd.manifest_path_matches_evidence_material",
+    "schema": "xsd.schema_path_matches_evidence_material",
+    "fixture": "xsd.fixture_path_matches_evidence_material",
+    "blocked_source": "xsd.blocked_source_path_matches_evidence_material",
+    "profile_catalog": "xsd.profile_catalog_path_matches_evidence_material",
+}
+XSD_DIGEST_PENDING_PROBE_ROLE_CODES = {
+    "summary": "xsd.summary_digest_matches_pending_probe_summary",
+    "manifest": "xsd.manifest_digest_matches_pending_probe_summary",
+    "schema": "xsd.schema_digest_matches_pending_probe_summary",
+    "fixture": "xsd.fixture_digest_matches_pending_probe_summary",
+    "blocked_source": "xsd.blocked_source_digest_matches_pending_probe_summary",
+    "profile_catalog": "xsd.profile_catalog_digest_matches_pending_probe_summary",
+    "profile_catalog_json": (
+        "xsd.profile_catalog_json_digest_matches_pending_probe_summary"
+    ),
+}
+XSD_PATH_PENDING_PROBE_ROLE_CODES = {
+    "summary": "xsd.summary_path_matches_pending_probe_summary",
+    "manifest": "xsd.manifest_path_matches_pending_probe_summary",
+    "schema": "xsd.schema_path_matches_pending_probe_summary",
+    "fixture": "xsd.fixture_path_matches_pending_probe_summary",
+    "blocked_source": "xsd.blocked_source_path_matches_pending_probe_summary",
+    "profile_catalog": "xsd.profile_catalog_path_matches_pending_probe_summary",
+}
+EVIDENCE_DIGEST_PENDING_PROBE_CODE = "evidence.digest_matches_pending_probe_summary"
+EVIDENCE_PATH_PENDING_PROBE_CODE = "evidence.path_matches_pending_probe_summary"
+TRUST_SUMMARY_KEYS = {
+    "version",
+    "path",
+    "verified_at",
+    "ok",
+    "verified_bundles",
+    "max_source_age_days",
+    "allow_synthetic_der",
+    "allow_record_only",
+    "allow_insecure_source_url",
+    "profile_json_emitted",
+    "profile_json_emittable",
+    "profile_json_sha256",
+    "profiles",
+    SUMMARY_DIGEST_FIELD,
+}
+TRUST_PROFILE_KEYS = {
+    "path",
+    "profile_id",
+    "rail",
+    "environment",
+    "bundle_sha256",
+    "source",
+    "embedded_signature_policy",
+    "signature_public_key_pin_count",
+    "x509_trust_anchor_pin_count",
+    "x509_trust_anchor_der",
+    "revoked_certificate_pin_count",
+    "revoked_certificate_der",
+    "x509_required_certificate_policy_oid_count",
+    "x509_require_crl_revocation_check",
+    "x509_crl_count",
+    "x509_crl_der",
+    "x509_require_ocsp_revocation_check",
+    "x509_ocsp_response_count",
+    "x509_ocsp_response_der",
+}
+XSD_SUMMARY_KEYS = {
+    "version",
+    "ok",
+    "verified_at",
+    "manifest",
+    "manifest_sha256",
+    "verified_schemas",
+    "verified_fixtures",
+    "schema_backed_fixtures",
+    "schema_validated_fixtures",
+    "profile_checked_versions",
+    "profile_schema_backed_versions",
+    "missing_schema_fixtures",
+    "schema_only_entries",
+    "missing_profile_schema_versions",
+    "missing_profile_schema_message_ids",
+    "unreviewed_profile_schema_message_id_count",
+    "unreviewed_profile_schema_message_ids",
+    "blocked_schema_source_count",
+    "blocked_schema_sources",
+    "pending_schema_source_count",
+    "pending_schema_sources",
+    "schemas",
+    "fixtures",
+    "profile_catalog",
+    "strict",
+    SUMMARY_DIGEST_FIELD,
+}
+XSD_SCHEMA_KEYS = {
+    "path",
+    "message_def_id",
+    "target_namespace",
+    "payload_root",
+    "sha256",
+    "schema_only",
+    "schema_only_reason",
+    "source",
+}
+XSD_FIXTURE_KEYS = {
+    "path",
+    "message_def_id",
+    "payload_root",
+    "sha256",
+    "schema",
+    "schema_backed",
+    "schema_validated",
+    "missing_schema_reason",
+}
+XSD_GAP_ENTRY_KEYS = {"path", "message_def_id", "reason"}
+XSD_BLOCKED_SCHEMA_SOURCE_KEYS = {
+    "message_def_id",
+    "source",
+    "reason",
+    "restriction_markers",
+}
+XSD_BLOCKED_SCHEMA_SOURCE_PROVENANCE_KEYS = {"repository", "commit", "path", "sha256"}
+XSD_PENDING_SCHEMA_SOURCE_KEYS = {
+    "message_def_id",
+    "source",
+    "reason",
+}
+XSD_PENDING_SCHEMA_SOURCE_PROVENANCE_KEYS = {
+    "catalogue_url",
+    "download_url",
+    "download_type",
+    "message_name",
+    "submitting_organisation",
+}
+XSD_PENDING_SCHEMA_DOWNLOAD_TYPES = {"XSD"}
+PENDING_XSD_PROBE_STATUSES = {
+    "reachable",
+    "unexpected",
+    "http_error",
+    "timeout",
+    "network_error",
+}
+PENDING_XSD_PROBE_SUMMARY_KEYS = {
+    "version",
+    "probed_at",
+    "ok",
+    "probe_count",
+    "successful_probe_count",
+    "timeout_secs",
+    "max_bytes",
+    "probes",
+    SUMMARY_DIGEST_FIELD,
+}
+PENDING_XSD_PROBE_KEYS = {
+    "message_def_id",
+    "message_name",
+    "submitting_organisation",
+    "catalogue_url",
+    "download_url",
+    "target_namespace",
+    "status",
+    "http_status",
+    "content_type",
+    "downloaded_bytes",
+    "sample_sha256",
+    "truncated",
+    "looks_like_xsd",
+    "error_kind",
+}
+KNOWN_PENDING_SCHEMA_SOURCE_METADATA = {
+    "colr.012.001.05": {
+        "catalogue_url": "https://www.iso20022.org/iso-20022-message-definitions",
+        "download_url": "https://www.iso20022.org/message/22504/download",
+        "download_type": "XSD",
+        "message_name": "CollateralSubstitutionConfirmationV05",
+        "submitting_organisation": "SWIFT, FPL, ISDA/FpML, ISITC",
+    },
+    "sese.023.001.09": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17196/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV09",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.023.001.11": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22545/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV11",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.024.001.09": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17236/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV09",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.024.001.10": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17241/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV10",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.08": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17286/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV08",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.10": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/21776/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV10",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.11": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22547/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV11",
+        "submitting_organisation": "SWIFT",
+    },
+}
+KNOWN_BLOCKED_SCHEMA_SOURCE_METADATA = {
+    "pacs.002.001.12": {
+        "source": {
+            "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+            "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+            "path": "XSDtoGo/xsd/pacs.002.001.12.xsd",
+            "sha256": "92630b81604db82429006f6898455ddb3700dce0584ae909d7863dba8a3ce3bb",
+        },
+        "restriction_markers": [
+            "swift-copyright-header",
+            "licensed-product-redistribution-agreement",
+            "no-public-distribution-right",
+            "exclusive-swift-property",
+        ],
+    },
+    "pacs.008.001.10": {
+        "source": {
+            "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+            "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+            "path": "XSDtoGo/xsd/pacs.008.001.10.xsd",
+            "sha256": "f0105110928868142f496740303413d213fc182161391134f424f7271295d986",
+        },
+        "restriction_markers": [
+            "swift-copyright-header",
+            "licensed-product-redistribution-agreement",
+            "no-public-distribution-right",
+            "exclusive-swift-property",
+        ],
+    },
+    "pacs.009.001.10": {
+        "source": {
+            "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+            "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+            "path": "XSDtoGo/xsd/pacs.009.001.10.xsd",
+            "sha256": "cd3ae758c3694f9ac7b5a0fb6d208eb21b6e3be7f57882cca62a8c60915899af",
+        },
+        "restriction_markers": [
+            "swift-copyright-header",
+            "licensed-product-redistribution-agreement",
+            "no-public-distribution-right",
+            "exclusive-swift-property",
+        ],
+    },
+}
+XSD_ISO_SCHEMA_CATALOGUE_PATHS = {
+    "/iso-20022-message-definitions",
+    "/catalogue-messages/iso-20022-messages-archive",
+}
+XSD_BLOCKED_SCHEMA_RESTRICTION_MARKERS = {
+    "swift-copyright-header",
+    "licensed-product-redistribution-agreement",
+    "no-public-distribution-right",
+    "exclusive-swift-property",
+}
+XSD_BLOCKED_SCHEMA_DISTRIBUTION_RESTRICTION_MARKERS = (
+    XSD_BLOCKED_SCHEMA_RESTRICTION_MARKERS - {"swift-copyright-header"}
+)
+XSD_STRICT_KEYS = {
+    "require_schema_backed_fixtures",
+    "require_fixture_for_schema",
+    "require_profile_schema_backed_versions",
+    "validate_xml_schema",
+}
+XSD_PROFILE_CATALOG_KEYS = {
+    "path",
+    "sha256",
+    "catalog_json_sha256",
+    "profiles",
+    "checked_versions",
+    "schema_backed_versions",
+    "missing_schema_versions",
+    "skipped_family_versions",
+    "versions",
+}
+REPOSITORY_XSD_FIXTURE_MANIFEST_PARTS = (
+    "fixtures",
+    "iso20022",
+    "xsd",
+    "fixture_manifest.json",
+)
+REPOSITORY_CANARY_RUNBOOK_PARTS = (
+    "fixtures",
+    "iso20022",
+    "operator_canary",
+)
+REPOSITORY_TRUST_BUNDLE_PARTS = (
+    "fixtures",
+    "iso20022",
+    "trust_bundles",
+)
+REPOSITORY_XML_FIXTURE_PARTS = (
+    "fixtures",
+    "iso20022",
+)
+XSD_PROFILE_VERSION_KEYS = {
+    "profile_id",
+    "message_type",
+    "direction",
+    "message_def_id",
+    "schema_backed",
+}
+XSD_PROFILE_MISSING_VERSION_KEYS = {
+    "profile_id",
+    "message_type",
+    "direction",
+    "message_def_id",
+}
+XSD_PROFILE_MISSING_MESSAGE_KEYS = {
+    "message_def_id",
+    "profile_version_count",
+    "reviewed_missing_schema_fixture",
+    "reviewed_schema_only",
+    "blocked_source",
+    "pending_source",
+}
+XSD_PROFILE_UNREVIEWED_MESSAGE_KEYS = {
+    "message_def_id",
+    "profile_version_count",
+}
+XSD_PROFILE_SKIPPED_VERSION_KEYS = {
+    "profile_id",
+    "message_type",
+    "direction",
+    "version",
+}
+SECRET_KEY_FRAGMENTS = (
+    "authorization",
+    "private_key",
+    "private-key",
+    "private key",
+    "private.key",
+    "privatekey",
+    "password",
+    "passphrase",
+    "api_key",
+    "api-key",
+    "api key",
+    "api.key",
+    "apikey",
+    "access_key",
+    "access-key",
+    "access key",
+    "access.key",
+    "accesskey",
+    "session_key",
+    "session-key",
+    "session key",
+    "session.key",
+    "sessionkey",
+    "client_secret",
+    "client-secret",
+    "client secret",
+    "client.secret",
+    "clientsecret",
+    "cookie",
+    "set-cookie",
+    "set cookie",
+    "set.cookie",
+    "setcookie",
+    "x-iroha-signature",
+    "x_iroha_signature",
+    "x iroha signature",
+    "x.iroha.signature",
+    "xirohasignature",
+)
+SECRET_KEY_EXACT = {
+    "bearer",
+    "bearer_token",
+    "secret",
+    "token",
+}
+SECRET_VALUE_PATTERNS = [
+    re.compile(r"\bauthorization\s*:", re.IGNORECASE),
+    re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(
+        r"\b(?:token|secret|private[\s_./\\-]*key|password|passphrase|api[\s_./\\-]*key|access[\s_./\\-]*key|session[\s_./\\-]*key|client[\s_./\\-]*secret|cookie|set[\s_./\\-]*cookie)\s*[:=]\s*\S+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bx[\s_./\\-]*iroha[\s_./\\-]*signature\s*:", re.IGNORECASE),
+]
+
+
+def _secret_scan_values(raw: str) -> tuple[str, ...]:
+    values = [raw]
+    decoded = raw
+    for _ in range(4):
+        if "%" not in decoded:
+            break
+        next_decoded = urllib.parse.unquote(decoded)
+        if next_decoded == decoded:
+            break
+        values.append(next_decoded)
+        decoded = next_decoded
+    return tuple(values)
+
+
+def _contains_secret_material(value: str) -> bool:
+    return any(
+        pattern.search(candidate)
+        for raw_candidate in _secret_scan_values(value)
+        for candidate in _secret_value_forms(raw_candidate)
+        for pattern in SECRET_VALUE_PATTERNS
+    )
+
+
+def _secret_value_forms(value: str) -> tuple[str, ...]:
+    return _secret_base_forms(value)
+
+
+def _secret_base_forms(value: str) -> tuple[str, ...]:
+    folded = value.casefold()
+    forms: list[str] = []
+    for candidate in (
+        folded,
+        unicodedata.normalize("NFKC", folded).casefold(),
+        unicodedata.normalize("NFKD", folded).casefold(),
+    ):
+        without_obfuscation = "".join(
+            ch for ch in candidate if not _is_secret_obfuscation_char(ch)
+        )
+        obfuscation_spaced = "".join(
+            " " if _is_secret_obfuscation_char(ch) else ch for ch in candidate
+        )
+        forms.extend((candidate, without_obfuscation, obfuscation_spaced))
+    return tuple(dict.fromkeys(forms))
+
+
+def _is_secret_obfuscation_char(ch: str) -> bool:
+    category = unicodedata.category(ch)
+    return category == "Cf" or category.startswith("M")
+
+
+def _secret_identifier_forms(value: str) -> tuple[str, ...]:
+    forms: list[str] = []
+    for candidate in _secret_base_forms(value):
+        forms.extend(
+            (
+                candidate,
+                re.sub(r"[\s_./\\-]+", " ", candidate).strip(),
+                re.sub(r"[\s_./\\-]+", "", candidate),
+            )
+        )
+    return tuple(dict.fromkeys(forms))
+
+
+def _contains_secret_marker(value: str, markers: tuple[str, ...]) -> bool:
+    candidate_forms = _secret_identifier_forms(value)
+    return any(
+        marker_form in candidate_form
+        for marker in markers
+        for marker_form in _secret_identifier_forms(marker)
+        for candidate_form in candidate_forms
+    )
+
+
+def _contains_secret_identifier_material(value: str) -> bool:
+    strong_markers = (
+        "private_key",
+        "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
+        "password",
+        "passphrase",
+        "api_key",
+        "api-key",
+        "api key",
+        "api.key",
+        "apikey",
+        "access_key",
+        "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
+        "session_key",
+        "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
+        "client_secret",
+        "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
+        "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
+        "x-iroha-signature",
+        "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
+    )
+    paired_markers = ("authorization", "bearer", "token", "cookie")
+    return any(
+        _contains_secret_marker(candidate, strong_markers)
+        or (
+            _contains_secret_marker(candidate, ("secret",))
+            and _contains_secret_marker(candidate, paired_markers)
+        )
+        for candidate in _secret_scan_values(value)
+    )
+
+
+class ReadinessError(RuntimeError):
+    """Raised when a readiness input is malformed or digest-tampered."""
+
+
+def sha256_hex(data: bytes) -> str:
+    """Return a lowercase SHA-256 hex digest."""
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _safe_os_error_detail(error: OSError) -> str:
+    try:
+        detail = getattr(error, "strerror", None)
+    except Exception:
+        return "I/O error"
+    if not isinstance(detail, str) or not detail.strip():
+        return "I/O error"
+    if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
+        return "I/O error"
+    lowered = detail.casefold()
+    secret_markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private",
+        "password",
+        "passphrase",
+        "api key",
+        "access key",
+        "session key",
+        "client secret",
+        "cookie",
+        "x-iroha-signature",
+    )
+    if "\\" in detail or "/" in detail or "file:" in lowered:
+        return "I/O error"
+    if any(marker in lowered for marker in secret_markers):
+        return "I/O error"
+    return detail
+
+
+def _reject_secret_string(value: str, label: str) -> None:
+    if _contains_secret_material(value) or _contains_secret_identifier_material(value):
+        raise ReadinessError(f"{label} contains secret-looking material")
+
+
+def _contains_unsafe_json_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"})
+        or ord(ch) == 0x7F
+        or unicodedata.category(ch) == "Cf"
+        for ch in value
+    )
+
+
+def _contains_control_character(value: str) -> bool:
+    return any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F or unicodedata.category(ch) == "Cf"
+        for ch in value
+    )
+
+
+def _plain_text(value: str, label: str) -> str:
+    try:
+        return str.__str__(value)
+    except Exception:
+        raise ReadinessError(f"{label} must be valid text") from None
+
+
+def _normalise_cli_argv(argv: list[str] | None) -> list[str]:
+    if argv is None:
+        raw_sys_argv = sys.argv
+        if type(raw_sys_argv) is not list:
+            raise ReadinessError("sys.argv must be a plain argument list")
+        raw_args = raw_sys_argv[1:]
+    else:
+        raw_args = argv
+    if type(raw_args) is not list:
+        raise ReadinessError("argv must be a plain argument list")
+    normalised: list[str] = []
+    for index, value in enumerate(raw_args):
+        if not isinstance(value, str):
+            raise ReadinessError(f"argv[{index}] must be a string")
+        normalised.append(_plain_text(value, f"argv[{index}]"))
+    return normalised
+
+
+def _require_plain_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    if type(args) is not argparse.Namespace:
+        raise ReadinessError("args must be an argparse.Namespace")
+    return args
+
+
+def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise ReadinessError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
+    if isinstance(value, dict):
+        if type(value) is not dict:
+            raise ReadinessError(f"{label} contains non-plain JSON object")
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise ReadinessError(
+                f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
+            )
+        for key, child in value.items():
+            if not isinstance(key, str):
+                raise ReadinessError(f"{label} contains forbidden non-string field")
+            key_text = _plain_text(key, f"{label} field")
+            if _is_secret_looking_key(key_text):
+                raise ReadinessError(f"{label} contains forbidden secret-looking field")
+            if _is_control_bearing_key(key_text):
+                raise ReadinessError(f"{label} contains forbidden control-bearing field")
+            _check_no_secret_material(child, f"{label}.{key_text}", _depth=_depth + 1)
+    elif isinstance(value, list):
+        if type(value) is not list:
+            raise ReadinessError(f"{label} contains non-plain JSON array")
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise ReadinessError(
+                f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
+        for offset, child in enumerate(value):
+            _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
+    elif isinstance(value, str):
+        value = _plain_text(value, label)
+        if _contains_unsafe_json_control(value):
+            raise ReadinessError(f"{label} contains unsafe control characters")
+        _reject_secret_string(value, label)
+
+
+def _read_regular_file(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    display_label: str | None = None,
+) -> bytes:
+    label = display_label or str(path)
+    if max_bytes is not None and (
+        type(max_bytes) is not int or max_bytes <= 0
+    ):
+        raise ReadinessError("max file bytes must be a positive integer")
+    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as error:
+        raise ReadinessError(f"{label} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise ReadinessError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReadinessError(f"cannot inspect {label}: I/O error") from None
+    mode = metadata.st_mode
+    if stat.S_ISLNK(mode):
+        raise ReadinessError(f"{label} must not be a symlink")
+    if not stat.S_ISREG(mode):
+        raise ReadinessError(f"{label} must be a regular file")
+    if max_bytes is not None and metadata.st_size > max_bytes:
+        raise ReadinessError(f"{label} exceeds {max_bytes} byte JSON limit")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = -1
+    try:
+        fd = os.open(path, flags)
+        fd_metadata = os.fstat(fd)
+        if not stat.S_ISREG(fd_metadata.st_mode):
+            raise ReadinessError(f"{label} must be a regular file")
+        if max_bytes is not None and fd_metadata.st_size > max_bytes:
+            raise ReadinessError(f"{label} exceeds {max_bytes} byte JSON limit")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            limit = max_bytes + 1 if max_bytes is not None else -1
+            raw = handle.read(limit)
+        if max_bytes is not None and len(raw) > max_bytes:
+            raise ReadinessError(f"{label} exceeds {max_bytes} byte JSON limit")
+        return raw
+    except FileNotFoundError as error:
+        raise ReadinessError(f"{label} does not exist") from error
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise ReadinessError(f"{label} must not be a symlink") from error
+        detail = _safe_os_error_detail(error)
+        raise ReadinessError(f"cannot open {label} for reading: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReadinessError(f"cannot open {label} for reading: I/O error") from None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
+
+
+def _reject_output_path_smuggling(path: Path, label: str) -> None:
+    raw = str(path)
+    if not raw or not path.name:
+        raise ReadinessError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise ReadinessError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise ReadinessError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise ReadinessError(f"{label} must not contain URI or drive prefixes")
+    _reject_secret_string(raw, label)
+    _reject_percent_encoded_path_smuggling(raw, label)
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    if any(part.startswith("-") for part in parts if part):
+        raise ReadinessError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in parts):
+        raise ReadinessError(f"{label} must not contain dot or parent segments")
+
+
+def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
+    if not raw:
+        raise ReadinessError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise ReadinessError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise ReadinessError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise ReadinessError(f"{label} must not contain URI or drive prefixes")
+    _reject_secret_string(raw, label)
+    _reject_percent_encoded_path_smuggling(raw, label)
+    parts = raw.split("/")
+    checked_parts = parts[1:] if raw.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise ReadinessError(f"{label} must not contain empty path segments")
+    if any(part.startswith("-") for part in checked_parts):
+        raise ReadinessError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in checked_parts):
+        raise ReadinessError(f"{label} must not contain dot or parent segments")
+
+
+def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
+    index = 0
+    while True:
+        index = raw.find("%", index)
+        if index == -1:
+            return
+        token = raw[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise ReadinessError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise ReadinessError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        if byte in {0x2E, 0x2F, 0x5C}:
+            raise ReadinessError(
+                f"{label} must not contain encoded dot or separator characters"
+            )
+        if byte == 0x3B:
+            raise ReadinessError(f"{label} must not contain encoded semicolon parameters")
+        if byte in {0x23, 0x3A, 0x3F, 0x40, 0x5B, 0x5D}:
+            raise ReadinessError(
+                f"{label} must not contain encoded URL delimiter characters"
+            )
+        if byte == 0x25:
+            raise ReadinessError(f"{label} must not contain encoded percent characters")
+        index += 3
+
+
+def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
+    raw_args = _normalise_cli_argv(argv)
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            raise ReadinessError("argument terminator is not supported")
+        if arg in value_flags:
+            index += 2
+            continue
+        if any(arg.startswith(f"{flag}=") for flag in value_flags):
+            index += 1
+            continue
+        if _contains_control_character(arg):
+            raise ReadinessError("CLI argument must not contain control characters")
+        if any(ord(ch) > 0x7E for ch in arg):
+            raise ReadinessError("CLI argument must use printable ASCII")
+        _reject_secret_string(arg, "CLI argument")
+        index += 1
+
+
+def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = _normalise_cli_argv(argv)
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            raise ReadinessError("argument terminator is not supported")
+        flag, separator, _value = arg.partition("=")
+        if separator and flag in flags:
+            raise ReadinessError(f"{flag} does not take a value")
+        if (
+            arg in flags
+            and index + 1 < len(raw_args)
+            and not raw_args[index + 1].startswith("--")
+        ):
+            raise ReadinessError(f"{arg} does not take a value")
+        index += 1
+
+
+def _reject_raw_context_cli_value(raw: str, flag: str) -> None:
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{flag} must not contain control characters")
+    if not raw.strip():
+        return
+    if raw != raw.strip():
+        raise ReadinessError(f"{flag} must not have surrounding whitespace")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise ReadinessError(f"{flag} must use printable ASCII")
+    _reject_secret_looking_identifier(raw, flag)
+
+
+def _preflight_required_cli_values(
+    argv: list[str] | None,
+    flags: set[str],
+    value_name: str,
+) -> None:
+    raw_args = _normalise_cli_argv(argv)
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            raise ReadinessError("argument terminator is not supported")
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise ReadinessError(f"{flag} requires a {value_name} value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("-"):
+                    raise ReadinessError(f"{flag} requires a {value_name} value")
+                if value_name == "context":
+                    _reject_raw_context_cli_value(value, flag)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("-"):
+                    raise ReadinessError(f"{flag} requires a {value_name} value")
+                if value_name == "context":
+                    _reject_raw_context_cli_value(value, flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = _normalise_cli_argv(argv)
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            raise ReadinessError("argument terminator is not supported")
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise ReadinessError(f"{flag} requires a path value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise ReadinessError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise ReadinessError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
+    if raw != raw.strip() or _contains_control_character(raw):
+        raise ReadinessError(f"{flag} must be a numeric value")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise ReadinessError(f"{flag} must use printable ASCII")
+    if integer:
+        canonical = CLI_CANONICAL_INT_RE.fullmatch(raw) is not None
+    else:
+        canonical = (
+            raw.lower() in CLI_NONFINITE_NUMBER_TEXTS
+            or CLI_CANONICAL_NUMBER_RE.fullmatch(raw) is not None
+        )
+    if not canonical or _is_negative_zero_number_text(raw):
+        raise ReadinessError(f"{flag} must be a numeric value")
+    try:
+        parsed = int(raw, 10) if integer else float(raw)
+    except ValueError as error:
+        raise ReadinessError(f"{flag} must be a numeric value") from error
+    if (
+        not integer
+        and raw.lower() not in CLI_NONFINITE_NUMBER_TEXTS
+        and not math.isfinite(parsed)
+    ):
+        raise ReadinessError(f"{flag} must be a numeric value")
+
+
+def _preflight_numeric_cli_values(
+    argv: list[str] | None,
+    *,
+    integer_flags: set[str],
+    number_flags: set[str],
+) -> None:
+    raw_args = _normalise_cli_argv(argv)
+    flags = integer_flags | number_flags
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            raise ReadinessError("argument terminator is not supported")
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise ReadinessError(f"{flag} requires a numeric value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise ReadinessError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise ReadinessError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _reject_repository_output_path(path: Path, label: str) -> None:
+    if _receipt_path_is_repository_fixture(str(path)):
+        raise ReadinessError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
+
+
+def _same_existing_file(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _path_resolve(path: Path, label: str) -> Path:
+    try:
+        return path.resolve()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise ReadinessError(f"cannot resolve {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReadinessError(f"cannot resolve {label}: I/O error") from None
+
+
+def _reject_summary_output_input_alias(
+    summary_out: Path | None,
+    inputs: tuple[tuple[str, Path], ...],
+) -> None:
+    if summary_out is None:
+        return
+    for label, path in inputs:
+        if str(summary_out) == str(path) or _same_existing_file(summary_out, path):
+            raise ReadinessError(f"summary_out must not reuse {label} path")
+
+
+def _ensure_text_output_target(
+    path: Path,
+    *,
+    display_label: str | None = None,
+    create_parent: bool = True,
+) -> None:
+    label = display_label if display_label is not None else "output path"
+    _reject_output_path_smuggling(path, label)
+    _reject_repository_output_path(path, label)
+    try:
+        _reject_symlinked_existing_ancestors(path.parent, display_label=label)
+    except NotADirectoryError as error:
+        raise ReadinessError(f"{label} must be a directory") from error
+    if create_parent:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as error:
+            raise ReadinessError(f"{label} must be a directory") from error
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(f"cannot create {label} parent: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise ReadinessError(f"cannot create {label} parent: I/O error") from None
+    def inspected_exists(target: Path, role: str) -> bool:
+        try:
+            return target.exists() or target.is_symlink()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(
+                f"cannot inspect {label} {role}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise ReadinessError(
+                f"cannot inspect {label} {role}: I/O error"
+            ) from None
+
+    def inspected_lstat(target: Path, role: str) -> os.stat_result:
+        try:
+            return target.lstat()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(
+                f"cannot inspect {label} {role}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise ReadinessError(
+                f"cannot inspect {label} {role}: I/O error"
+            ) from None
+
+    if inspected_exists(path.parent, "parent"):
+        parent_mode = inspected_lstat(path.parent, "parent").st_mode
+        if stat.S_ISLNK(parent_mode):
+            raise ReadinessError(f"{label} must not be a symlink")
+        if not stat.S_ISDIR(parent_mode):
+            raise ReadinessError(f"{label} must be a directory")
+    if inspected_exists(path, "leaf"):
+        metadata = inspected_lstat(path, "leaf")
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ReadinessError(f"{label} must not be a symlink")
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ReadinessError(f"{label} must be a regular file")
+        if metadata.st_nlink > 1:
+            raise ReadinessError(f"{label} must not be hard-linked")
+
+
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _ensure_text_output_target(path, display_label=label)
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_fd = os.open(path.parent, parent_flags | nofollow)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise ReadinessError(f"{label} must not be a symlink") from error
+        raise ReadinessError(f"{label} must be a directory") from error
+
+    fd = -1
+    leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
+    tmp_name = f".iso-{leaf_digest[:16]}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    tmp_created = False
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+        try:
+            fd = os.open(tmp_name, flags | nofollow, 0o600, dir_fd=parent_fd)
+            tmp_created = True
+        except OSError as error:
+            if error.errno == errno.ELOOP:
+                raise ReadinessError(f"{label} temp file must not be a symlink") from error
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(
+                f"cannot open temporary output for {label}: {detail}"
+            ) from error
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ReadinessError(f"{label} temp file must be a regular file")
+        if opened.st_nlink > 1:
+            raise ReadinessError(f"{label} temp file must not be hard-linked")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(
+                f"cannot write temporary output for {label}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise ReadinessError(
+                f"cannot write temporary output for {label}: I/O error"
+            ) from None
+        try:
+            os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(f"cannot replace {label}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise ReadinessError(f"cannot replace {label}: I/O error") from None
+        tmp_created = False
+        try:
+            os.fsync(parent_fd)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
+        if tmp_created:
+            try:
+                os.unlink(tmp_name, dir_fd=parent_fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
+        try:
+            os.close(parent_fd)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
+
+
+def _reject_symlinked_existing_ancestors(
+    path: Path,
+    *,
+    display_label: str | None = None,
+) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            return
+        except NotADirectoryError:
+            raise
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            label = display_label or str(current)
+            raise ReadinessError(
+                f"cannot inspect {label} ancestors: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            label = display_label or str(current)
+            raise ReadinessError(
+                f"cannot inspect {label} ancestors: I/O error"
+            ) from None
+        if stat.S_ISLNK(mode):
+            if path.is_absolute() and current.parent == Path(path.anchor):
+                continue
+            label = display_label or str(current)
+            raise ReadinessError(f"{label} must not be a symlink")
+
+
+def _load_json(path: Path, *, display_label: str | None = None) -> Any:
+    label = display_label or str(path)
+    try:
+        raw = _read_regular_file(
+            path,
+            max_bytes=MAX_SUMMARY_JSON_BYTES,
+            display_label=label,
+        )
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ReadinessError(f"{label} is not UTF-8 JSON") from error
+    try:
+        value = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
+            parse_constant=_reject_json_constant,
+        )
+    except json.JSONDecodeError as error:
+        raise ReadinessError(f"{label} is not valid JSON") from error
+    except RecursionError as error:
+        raise ReadinessError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
+    _reject_json_surrogates(value)
+    return value
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise ReadinessError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ReadinessError("duplicate key in JSON object")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ReadinessError("JSON contains non-finite numeric constant")
+
+
+def _parse_canonical_json_int(value: str) -> int:
+    if JSON_CANONICAL_INT_RE.fullmatch(value) is None:
+        raise ReadinessError("JSON contains non-canonical numeric value")
+    return int(value, 10)
+
+
+def _parse_canonical_json_float(value: str) -> float:
+    if CLI_CANONICAL_NUMBER_RE.fullmatch(value) is None:
+        raise ReadinessError("JSON contains non-canonical numeric value")
+    parsed = float(value)
+    if parsed == float("inf") or parsed == float("-inf"):
+        raise ReadinessError("JSON contains non-finite numeric constant")
+    if parsed == 0.0 and value.startswith("-"):
+        raise ReadinessError("JSON contains non-canonical numeric value")
+    return parsed
+
+
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise ReadinessError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
+    if isinstance(value, str):
+        value = _plain_text(value, "JSON string")
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+            raise ReadinessError("JSON contains invalid Unicode surrogate")
+    elif isinstance(value, list):
+        if type(value) is not list:
+            raise ReadinessError("JSON array must be a plain array")
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise ReadinessError(
+                f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
+        for item in value:
+            _reject_json_surrogates(item, _depth=_depth + 1)
+    elif isinstance(value, dict):
+        if type(value) is not dict:
+            raise ReadinessError("JSON object must be a plain object")
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise ReadinessError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
+        for key, item in value.items():
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
+
+
+def _require_object(value: Any, label: str) -> dict[str, Any]:
+    if type(value) is not dict:
+        raise ReadinessError(f"{label} must be a JSON object")
+    return value
+
+
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> set[str]:
+    if type(value) is not dict:
+        raise ReadinessError(f"{label} contains unknown keys")
+    present: set[str] = set()
+    for key in value:
+        if not isinstance(key, str):
+            raise ReadinessError(f"{label} contains unknown keys")
+        present.add(_plain_text(key, f"{label} field"))
+    if present - allowed:
+        raise ReadinessError(f"{label} contains unknown keys")
+    return present
+
+
+def _is_secret_looking_key(value: Any) -> bool:
+    markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private_key",
+        "private-key",
+        "private key",
+        "private.key",
+        "privatekey",
+        "password",
+        "passphrase",
+        "api_key",
+        "api-key",
+        "api key",
+        "api.key",
+        "apikey",
+        "access_key",
+        "access-key",
+        "access key",
+        "access.key",
+        "accesskey",
+        "session_key",
+        "session-key",
+        "session key",
+        "session.key",
+        "sessionkey",
+        "client_secret",
+        "client-secret",
+        "client secret",
+        "client.secret",
+        "clientsecret",
+        "cookie",
+        "set-cookie",
+        "set cookie",
+        "set.cookie",
+        "setcookie",
+        "x-iroha-signature",
+        "x_iroha_signature",
+        "x iroha signature",
+        "x.iroha.signature",
+        "xirohasignature",
+    )
+    return any(
+        _contains_secret_marker(candidate, markers)
+        for candidate in _secret_scan_values(str(value))
+    )
+
+
+def _is_control_bearing_key(value: Any) -> bool:
+    return _contains_control_character(str(value))
+
+
+def _reject_secret_looking_identifier(value: str, label: str) -> None:
+    if _contains_secret_material(value) or _is_secret_looking_key(value):
+        raise ReadinessError(f"{label} must not contain secret-looking material")
+
+
+def _reject_non_ascii_context(value: str, label: str) -> None:
+    if any(ord(ch) > 0x7E for ch in value):
+        raise ReadinessError(f"{label} must use printable ASCII")
+
+
+def _reject_noncanonical_context_id(value: str, label: str) -> None:
+    if CONTEXT_ID_RE.fullmatch(value) is None:
+        raise ReadinessError(f"{label} must be a canonical lowercase context id")
+
+
+def _reject_placeholder_context_id(value: str, label: str) -> None:
+    if (
+        value in PLACEHOLDER_CONTEXT_IDS
+        or any(token in PLACEHOLDER_CONTEXT_TOKENS for token in value.split("-"))
+        or any(phrase in value for phrase in PLACEHOLDER_CONTEXT_PHRASES)
+    ):
+        raise ReadinessError(f"{label} must not use placeholder context id")
+
+
+def _require_list(value: Any, label: str) -> list[Any]:
+    if type(value) is not list:
+        raise ReadinessError(f"{label} must be a JSON array")
+    if len(value) > MAX_JSON_LIST_ITEMS:
+        raise ReadinessError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
+    return value
+
+
+def _require_string(value: dict[str, Any], key: str, label: str) -> str:
+    raw = value.get(key)
+    field_label = f"{label}.{key}"
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{field_label} must be a non-empty string")
+    raw = _plain_text(raw, field_label)
+    if not raw.strip():
+        raise ReadinessError(f"{field_label} must be a non-empty string")
+    if len(raw) > MAX_CLEAN_STRING_CHARS:
+        raise ReadinessError(f"{field_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{field_label} must not contain control characters")
+    if raw != raw.strip():
+        raise ReadinessError(f"{field_label} must not have surrounding whitespace")
+    return raw
+
+
+def _require_context_string(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    _reject_noncanonical_context_id(raw, f"{label}.{key}")
+    _reject_placeholder_context_id(raw, f"{label}.{key}")
+    return raw
+
+
+def _require_cli_string(value: str | None, label: str) -> str:
+    if value is None:
+        raise ReadinessError(f"provide {label}")
+    if not isinstance(value, str):
+        raise ReadinessError(f"{label} must be a string")
+    value = _plain_text(value, label)
+    if not value.strip():
+        raise ReadinessError(f"provide {label}")
+    if len(value) > MAX_CLEAN_STRING_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
+    if _contains_control_character(value):
+        raise ReadinessError(f"{label} must not contain control characters")
+    if value != value.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    _reject_non_ascii_context(value, label)
+    _reject_secret_looking_identifier(value, label)
+    _reject_noncanonical_context_id(value, label)
+    _reject_placeholder_context_id(value, label)
+    return value
+
+
+def _require_positive_cli_int(value: int | None, label: str) -> int:
+    if value is None:
+        raise ReadinessError(f"provide {label}")
+    if type(value) is not int or value <= 0:
+        raise ReadinessError(f"{label} must be a positive integer")
+    if value > MAX_FRESHNESS_BUDGET_DAYS:
+        raise ReadinessError(
+            f"{label} must be no larger than {MAX_FRESHNESS_BUDGET_DAYS}"
+        )
+    return value
+
+
+def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
+    seen: dict[str, int] = {}
+    for offset, path in enumerate(paths):
+        key = str(_path_resolve(path, f"{label}[{offset}]"))
+        if key in seen:
+            raise ReadinessError(f"{label}[{offset}] duplicates {label}[{seen[key]}]")
+        seen[key] = offset
+
+
+def _reject_duplicate_compact_summaries(
+    summaries: list[dict[str, Any]],
+    label: str,
+) -> None:
+    seen_paths: dict[str, int] = {}
+    seen_digests: dict[str, int] = {}
+    for offset, summary in enumerate(summaries):
+        path = summary["path"]
+        if path in seen_paths:
+            raise ReadinessError(
+                f"{label}[{offset}].path duplicates {label}[{seen_paths[path]}].path"
+            )
+        seen_paths[path] = offset
+        digest = summary[SUMMARY_DIGEST_FIELD]
+        if digest in seen_digests:
+            raise ReadinessError(
+                f"{label}[{offset}].{SUMMARY_DIGEST_FIELD} duplicates "
+                f"{label}[{seen_digests[digest]}].{SUMMARY_DIGEST_FIELD}"
+            )
+        seen_digests[digest] = offset
+
+
+def _require_bool(value: dict[str, Any], key: str, label: str) -> bool:
+    raw = value.get(key)
+    if not isinstance(raw, bool):
+        raise ReadinessError(f"{label}.{key} must be a boolean")
+    return raw
+
+
+def _require_cli_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ReadinessError(f"{label} must be a boolean")
+    return value
+
+
+def _optional_cli_path(value: Any, label: str) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        raise ReadinessError(f"{label} must be a path")
+    if isinstance(value, str):
+        return Path(_plain_text(value, label))
+    if type(value) is type(Path()):
+        return Path(value)
+    raise ReadinessError(f"{label} must be a path")
+
+
+def _require_positive_int(value: dict[str, Any], key: str, label: str) -> int:
+    raw = value.get(key)
+    if type(raw) is not int or raw <= 0:
+        raise ReadinessError(f"{label}.{key} must be a positive integer")
+    return raw
+
+
+def _require_positive_days(value: dict[str, Any], key: str, label: str) -> int:
+    raw = _require_positive_int(value, key, label)
+    if raw > MAX_FRESHNESS_BUDGET_DAYS:
+        raise ReadinessError(
+            f"{label}.{key} must be no larger than {MAX_FRESHNESS_BUDGET_DAYS}"
+        )
+    return raw
+
+
+def _require_nonnegative_int(value: dict[str, Any], key: str, label: str) -> int:
+    raw = value.get(key)
+    if type(raw) is not int or raw < 0:
+        raise ReadinessError(f"{label}.{key} must be a non-negative integer")
+    return raw
+
+
+def _require_positive_number(value: dict[str, Any], key: str, label: str) -> float:
+    raw = value.get(key)
+    if type(raw) not in (int, float):
+        raise ReadinessError(f"{label}.{key} must be a positive finite number")
+    parsed = float(raw)
+    if not (parsed > 0.0 and parsed < float("inf")):
+        raise ReadinessError(f"{label}.{key} must be a positive finite number")
+    return parsed
+
+
+def _is_lower_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(ch in "0123456789abcdef" for ch in value)
+    )
+
+
+def _require_sha256(value: dict[str, Any], key: str, label: str) -> str:
+    raw = value.get(key)
+    if isinstance(raw, str):
+        _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    if not _is_lower_sha256(raw):
+        raise ReadinessError(f"{label}.{key} must be a lowercase SHA-256 digest")
+    _reject_all_zero_sha256(raw, f"{label}.{key}")
+    return raw
+
+
+def _reject_all_zero_sha256(value: str, label: str) -> None:
+    if all(ch == "0" for ch in value):
+        raise ReadinessError(f"{label} must not be all zero")
+
+
+def _require_nonzero_sha256(value: dict[str, Any], key: str, label: str) -> str:
+    digest = _require_sha256(value, key, label)
+    _reject_all_zero_sha256(digest, f"{label}.{key}")
+    return digest
+
+
+def _require_compact_der_entries(
+    value: dict[str, Any],
+    key: str,
+    label: str,
+) -> list[dict[str, int | str]]:
+    items = _require_list(value.get(key), f"{label}.{key}")
+    if len(items) > MAX_TRUST_DER_BLOBS:
+        raise ReadinessError(
+            f"{label}.{key} must not contain more than {MAX_TRUST_DER_BLOBS} entries"
+        )
+    result: list[dict[str, int | str]] = []
+    seen: dict[str, int] = {}
+    for offset, raw_entry in enumerate(items):
+        entry_label = f"{label}.{key}[{offset}]"
+        entry = _require_object(raw_entry, entry_label)
+        _reject_unknown_keys(entry, TRUST_DER_PROOF_KEYS, entry_label)
+        digest = _require_sha256(entry, "sha256", entry_label)
+        _reject_all_zero_sha256(digest, f"{entry_label}.sha256")
+        if digest in seen:
+            raise ReadinessError(
+                f"{entry_label}.sha256 duplicates {label}.{key}[{seen[digest]}].sha256"
+            )
+        seen[digest] = offset
+        byte_len = _require_positive_int(entry, "byte_len", entry_label)
+        if byte_len > MAX_TRUST_DER_BYTES:
+            raise ReadinessError(
+                f"{entry_label}.byte_len must be no more than {MAX_TRUST_DER_BYTES}"
+            )
+        result.append({"sha256": digest, "byte_len": byte_len})
+    return result
+
+
+def _compact_der_order_keys(
+    entries: list[dict[str, int | str]],
+) -> list[tuple[str, int]]:
+    return [
+        (str(entry["sha256"]), int(entry["byte_len"]))
+        for entry in entries
+    ]
+
+
+def _block_compact_der_role_reuse(
+    roles: tuple[tuple[str, list[dict[str, int | str]]], ...],
+    label: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    seen: dict[str, tuple[str, int]] = {}
+    for role, entries in roles:
+        for offset, entry in enumerate(entries):
+            digest = str(entry["sha256"])
+            if digest in seen:
+                previous_role, previous_offset = seen[digest]
+                _blocker(
+                    blockers,
+                    "trust.der_proof_reused_across_roles",
+                    (
+                        f"{label}.{role}[{offset}].sha256 reuses "
+                        f"{label}.{previous_role}[{previous_offset}].sha256 "
+                        "across trust material roles"
+                    ),
+                    path,
+                )
+            else:
+                seen[digest] = (role, offset)
+
+
+def _block_trust_digest_role_confusion(
+    profile_json_sha256: str | None,
+    profiles: list[dict[str, Any]],
+    label: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    bundle_digests: dict[str, str] = {}
+    der_digests: dict[str, str] = {}
+    der_roles = (
+        "x509_trust_anchor_der",
+        "revoked_certificate_der",
+        "x509_crl_der",
+        "x509_ocsp_response_der",
+    )
+    for profile_offset, profile in enumerate(profiles):
+        profile_label = f"{label}.profiles[{profile_offset}]"
+        bundle_digests[profile["bundle_sha256"]] = f"{profile_label}.bundle_sha256"
+        for der_role in der_roles:
+            for der_offset, entry in enumerate(profile[der_role]):
+                der_digests[str(entry["sha256"])] = (
+                    f"{profile_label}.{der_role}[{der_offset}].sha256"
+                )
+
+    if profile_json_sha256 is not None:
+        if profile_json_sha256 in bundle_digests:
+            _blocker(
+                blockers,
+                "trust.profile_json_digest_matches_bundle",
+                (
+                    f"{label}.profile_json_sha256 reuses "
+                    f"{bundle_digests[profile_json_sha256]}"
+                ),
+                path,
+            )
+        if profile_json_sha256 in der_digests:
+            _blocker(
+                blockers,
+                "trust.profile_json_digest_matches_der_proof",
+                (
+                    f"{label}.profile_json_sha256 reuses "
+                    f"{der_digests[profile_json_sha256]}"
+                ),
+                path,
+            )
+
+    for bundle_digest, bundle_label in bundle_digests.items():
+        if bundle_digest in der_digests:
+            _blocker(
+                blockers,
+                "trust.bundle_digest_matches_der_proof",
+                f"{bundle_label} reuses {der_digests[bundle_digest]}",
+                path,
+            )
+
+
+def _validate_receipt_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
+    _reject_path_smuggling(raw, label)
+    if _receipt_path_is_repository_fixture(raw):
+        raise ReadinessError(
+            f"{label} must not point to checked-in ISO fixture artifacts"
+        )
+    if not raw.endswith(RECEIPT_PATH_SUFFIX):
+        raise ReadinessError(f"{label} must point to a {RECEIPT_PATH_SUFFIX} file")
+    return raw
+
+
+def _validate_xml_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
+    _reject_path_smuggling(raw, label)
+    if not raw.endswith(".xml"):
+        raise ReadinessError(f"{label} must point to an .xml file")
+    return raw
+
+
+def _validate_notary_anchor_path(raw: str, label: str, index_sha256: str) -> str:
+    raw = _plain_text(raw, label)
+    _reject_path_smuggling(raw, label)
+    parts = raw.split("/")
+    leaf = parts[-1] if parts else ""
+    if leaf == LATEST_ANCHOR_FILE:
+        return raw
+    expected_leaf = f"{index_sha256}.notary.json"
+    if len(parts) >= 2 and parts[-2] == ANCHOR_DIR and leaf == expected_leaf:
+        return raw
+    raise ReadinessError(
+        f"{label} must be {LATEST_ANCHOR_FILE} or {ANCHOR_DIR}/<index_sha256>.notary.json"
+    )
+
+
+def _validate_notary_store_dir(
+    receipt: dict[str, Any],
+    entry_label: str,
+    *,
+    require_source_files: bool,
+) -> str | None:
+    if "store_dir" not in receipt or receipt["store_dir"] is None:
+        if require_source_files:
+            raise ReadinessError(f"{entry_label}.store_dir must be recorded")
+        return None
+    raw = receipt["store_dir"]
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{entry_label}.store_dir must be a non-empty path")
+    raw = _plain_text(raw, f"{entry_label}.store_dir")
+    if not raw.strip():
+        raise ReadinessError(f"{entry_label}.store_dir must be a non-empty path")
+    _reject_path_smuggling(raw, f"{entry_label}.store_dir")
+    return raw
+
+
+def _expected_notary_index_path(anchor_path: str) -> str:
+    parts = anchor_path.split("/")
+    if parts[-1] == LATEST_ANCHOR_FILE:
+        export_parts = parts[:-1]
+    else:
+        export_parts = parts[:-2]
+    return "/".join([*export_parts, INDEX_FILE]) if export_parts else INDEX_FILE
+
+
+def _validate_notary_index_path(
+    receipt: dict[str, Any],
+    entry_label: str,
+    anchor_path: str,
+    *,
+    require_source_files: bool,
+) -> str | None:
+    if "index_path" not in receipt or receipt["index_path"] is None:
+        if require_source_files:
+            raise ReadinessError(f"{entry_label}.index_path must be recorded")
+        return None
+    raw = receipt["index_path"]
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{entry_label}.index_path must be a non-empty path")
+    raw = _plain_text(raw, f"{entry_label}.index_path")
+    if not raw.strip():
+        raise ReadinessError(f"{entry_label}.index_path must be a non-empty path")
+    _reject_path_smuggling(raw, f"{entry_label}.index_path")
+    if _receipt_path_is_repository_fixture(raw):
+        raise ReadinessError(
+            f"{entry_label}.index_path must not point to checked-in ISO fixture artifacts"
+        )
+    if raw != _expected_notary_index_path(anchor_path):
+        raise ReadinessError(
+            f"{entry_label}.index_path must be the {INDEX_FILE} peer of anchor_path"
+        )
+    return raw
+
+
+def _validate_compact_summary_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
+    _reject_path_smuggling(raw, label)
+    if not raw.endswith(".json"):
+        raise ReadinessError(f"{label} must point to a .json file")
+    return raw
+
+
+def _validate_config_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
+    _reject_path_smuggling(raw, label)
+    if not raw.endswith(".json"):
+        raise ReadinessError(f"{label} must point to a .json file")
+    return raw
+
+
+def _validate_trust_bundle_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
+    _reject_path_smuggling(raw, label)
+    if not raw.endswith(".json"):
+        raise ReadinessError(f"{label} must point to a .json file")
+    return raw
+
+
+def _reject_path_smuggling(raw: str, label: str) -> None:
+    raw = _plain_text(raw, label)
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise ReadinessError(f"{label} must use printable ASCII")
+    if raw != raw.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise ReadinessError(f"{label} must not start with a dash")
+    if ";" in raw:
+        raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise ReadinessError(f"{label} must not contain URI or drive prefixes")
+    _reject_secret_string(raw, label)
+    _reject_percent_encoded_path_smuggling(raw, label)
+    parts = raw.split("/")
+    checked_parts = parts[1:] if raw.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise ReadinessError(f"{label} must not contain empty path segments")
+    if any(part.startswith("-") for part in checked_parts):
+        raise ReadinessError(f"{label} must not contain leading-dash path segments")
+    normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
+    if any(part in {".", ".."} for part in normalized_parts):
+        raise ReadinessError(f"{label} must not contain dot or parent segments")
+    if "\\" in raw:
+        raise ReadinessError(f"{label} must use forward slashes")
+
+
+def _require_message_def_id(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    if MESSAGE_DEF_ID_RE.fullmatch(raw) is None:
+        raise ReadinessError(f"{label}.{key} must be a lowercase ISO message id")
+    return raw
+
+
+def _require_xsd_identifier(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    if len(raw) > MAX_XML_IDENTIFIER_CHARS:
+        raise ReadinessError(
+            f"{label}.{key} must be no longer than {MAX_XML_IDENTIFIER_CHARS} characters"
+        )
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
+def _require_profile_id(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    if len(raw) > MAX_PROFILE_ID_CHARS:
+        raise ReadinessError(
+            f"{label}.{key} must be no longer than {MAX_PROFILE_ID_CHARS} characters"
+        )
+    if PROFILE_ID_RE.fullmatch(raw) is None:
+        raise ReadinessError(f"{label}.{key} must be a canonical lowercase profile id")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
+def _optional_profile_id(value: dict[str, Any], key: str, label: str) -> str | None:
+    raw = value.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ReadinessError(
+            f"{label}.{key} must be null or a canonical lowercase profile id"
+        )
+    return _require_profile_id(value, key, label)
+
+
+def _reject_overlong_trust_policy(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_POLICY_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_TRUST_POLICY_CHARS} characters"
+        )
+
+
+def _reject_overlong_trust_source_text(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_SOURCE_TEXT_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
+        )
+
+
+def _require_rail(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    if raw not in KNOWN_RAILS:
+        raise ReadinessError(
+            f"{label}.{key} must be one of " + ", ".join(sorted(KNOWN_RAILS))
+        )
+    return raw
+
+
+def _require_message_type(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    if MESSAGE_TYPE_RE.fullmatch(raw) is None:
+        raise ReadinessError(f"{label}.{key} must be lowercase ISO family id")
+    return raw
+
+
+def _require_nullable_rail_message_id(
+    value: dict[str, Any],
+    key: str,
+    label: str,
+) -> str | None:
+    if key not in value:
+        raise ReadinessError(f"{label}.{key} must be recorded")
+    raw = value[key]
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{label}.{key} must be null or a non-empty string")
+    raw = _plain_text(raw, f"{label}.{key}")
+    if not raw.strip():
+        raise ReadinessError(f"{label}.{key} must be null or a non-empty string")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label}.{key} must not contain control characters")
+    if raw != raw.strip():
+        raise ReadinessError(f"{label}.{key} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label}.{key} must not contain whitespace")
+    if len(raw) > MAX_RAIL_MESSAGE_ID_CHARS:
+        raise ReadinessError(
+            f"{label}.{key} must be at most {MAX_RAIL_MESSAGE_ID_CHARS} characters"
+        )
+    if RAIL_MESSAGE_ID_RE.fullmatch(raw) is None:
+        raise ReadinessError(f"{label}.{key} must be a canonical ASCII rail message id")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
+def _require_receipt_kind(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
+def _require_stage_name(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
+def _verify_stage_command_modes(
+    canary: dict[str, Any],
+    label: str,
+    stage_names: list[str],
+    dry_run_by_stage: dict[str, bool],
+    plan_only: bool,
+) -> list[dict[str, Any]]:
+    raw_modes = _require_list(
+        canary.get("stage_command_modes"),
+        f"{label}.stage_command_modes",
+    )
+    if len(raw_modes) != len(stage_names):
+        raise ReadinessError(
+            f"{label}.stage_command_modes must match stage_names length"
+        )
+    modes: list[dict[str, Any]] = []
+    for offset, raw_mode in enumerate(raw_modes):
+        mode_label = f"{label}.stage_command_modes[{offset}]"
+        mode = _require_object(raw_mode, mode_label)
+        _reject_unknown_keys(mode, COMPACT_STAGE_COMMAND_MODE_KEYS, mode_label)
+        name = _require_stage_name(mode, "name", mode_label)
+        if name != stage_names[offset]:
+            raise ReadinessError(
+                f"{mode_label}.name must match stage_names[{offset}]"
+            )
+        rail_uses_message = _require_bool(mode, "rail_uses_message", mode_label)
+        rail_submitted_message_count = _require_nonnegative_int(
+            mode,
+            "rail_submitted_message_count",
+            mode_label,
+        )
+        notary_uses_all = _require_bool(mode, "notary_uses_all", mode_label)
+        notary_endpoint_count = _require_nonnegative_int(
+            mode,
+            "notary_endpoint_count",
+            mode_label,
+        )
+        notary_published_anchor_count = _require_nonnegative_int(
+            mode,
+            "notary_published_anchor_count",
+            mode_label,
+        )
+        if name != "rail":
+            if rail_uses_message:
+                raise ReadinessError(
+                    f"{mode_label}.rail_uses_message must be false for non-rail stages"
+                )
+            if rail_submitted_message_count != 0:
+                raise ReadinessError(
+                    f"{mode_label}.rail_submitted_message_count must be zero for non-rail stages"
+                )
+        else:
+            rail_is_observed = not plan_only and not dry_run_by_stage.get(name, False)
+            if rail_is_observed:
+                if rail_submitted_message_count <= 0:
+                    raise ReadinessError(
+                        f"{mode_label}.rail_submitted_message_count must be positive for executed rail stage"
+                    )
+                if rail_uses_message and rail_submitted_message_count != 1:
+                    raise ReadinessError(
+                        f"{mode_label}.rail_submitted_message_count must be one when rail_uses_message=true"
+                    )
+            elif rail_submitted_message_count != 0:
+                raise ReadinessError(
+                    f"{mode_label}.rail_submitted_message_count must be zero for dry-run or plan-only rail stage"
+                )
+        if name != "notary":
+            if notary_uses_all:
+                raise ReadinessError(
+                    f"{mode_label}.notary_uses_all must be false for non-notary stages"
+                )
+            if notary_endpoint_count != 0:
+                raise ReadinessError(
+                    f"{mode_label}.notary_endpoint_count must be zero for non-notary stages"
+                )
+            if notary_published_anchor_count != 0:
+                raise ReadinessError(
+                    f"{mode_label}.notary_published_anchor_count must be zero for non-notary stages"
+                )
+        elif notary_endpoint_count <= 0:
+            raise ReadinessError(
+                f"{mode_label}.notary_endpoint_count must be positive for notary stage"
+            )
+        else:
+            notary_is_observed = not plan_only and not dry_run_by_stage.get(name, False)
+            if notary_is_observed:
+                if notary_published_anchor_count <= 0:
+                    raise ReadinessError(
+                        f"{mode_label}.notary_published_anchor_count must be positive for executed notary stage"
+                    )
+                if not notary_uses_all and notary_published_anchor_count != 1:
+                    raise ReadinessError(
+                        f"{mode_label}.notary_published_anchor_count must be one unless notary_uses_all=true"
+                    )
+            elif notary_published_anchor_count != 0:
+                raise ReadinessError(
+                    f"{mode_label}.notary_published_anchor_count must be zero for dry-run or plan-only notary stage"
+                )
+        modes.append(
+            {
+                "name": name,
+                "rail_uses_message": rail_uses_message,
+                "rail_submitted_message_count": rail_submitted_message_count,
+                "notary_uses_all": notary_uses_all,
+                "notary_endpoint_count": notary_endpoint_count,
+                "notary_published_anchor_count": notary_published_anchor_count,
+            }
+        )
+    return modes
+
+
+def _canary_receipts_by_kind(
+    receipt_summary: dict[str, Any],
+    receipt_kind: str,
+) -> list[dict[str, Any]]:
+    return [
+        receipt
+        for receipt in receipt_summary["receipts"]
+        if receipt["receipt_kind"] == receipt_kind
+    ]
+
+
+def _check_canary_command_mode_receipt_binding(
+    label: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+    stage_command_modes: list[dict[str, Any]],
+    dry_run_by_stage: dict[str, bool],
+    receipt_summary: dict[str, Any] | None,
+) -> None:
+    if receipt_summary is None:
+        return
+    modes_by_stage = {mode["name"]: mode for mode in stage_command_modes}
+    rail_mode = modes_by_stage.get("rail")
+    if (
+        rail_mode is not None
+        and not dry_run_by_stage.get("rail", False)
+    ):
+        rail_receipts = _canary_receipts_by_kind(
+            receipt_summary,
+            "iso-rail-gateway",
+        )
+        if len(rail_receipts) != rail_mode["rail_submitted_message_count"]:
+            if rail_mode["rail_uses_message"]:
+                message = (
+                    f"{label}.receipt_summary rail receipt count must be one when "
+                    "stage_command_modes rail_uses_message=true"
+                )
+            else:
+                message = (
+                    f"{label}.receipt_summary rail receipt count must match "
+                    "stage_command_modes rail_submitted_message_count"
+                )
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_rail_message_receipt_count",
+                message,
+                path,
+            )
+
+    notary_mode = modes_by_stage.get("notary")
+    if notary_mode is None or dry_run_by_stage.get("notary", False):
+        return
+    notary_receipts = _canary_receipts_by_kind(
+        receipt_summary,
+        "iso-audit-notary",
+    )
+    if not notary_receipts:
+        return
+    endpoint_count = notary_mode["notary_endpoint_count"]
+    notary_uses_all = notary_mode["notary_uses_all"]
+    published_anchor_count = notary_mode["notary_published_anchor_count"]
+    notary_anchor_paths = [
+        receipt.get("anchor_path") for receipt in notary_receipts
+    ]
+    if not all(isinstance(anchor_path, str) for anchor_path in notary_anchor_paths):
+        return
+    has_latest_anchor = any(
+        anchor_path.split("/")[-1] == LATEST_ANCHOR_FILE
+        for anchor_path in notary_anchor_paths
+    )
+    has_digest_addressed_anchor = any(
+        anchor_path.split("/")[-1] != LATEST_ANCHOR_FILE
+        for anchor_path in notary_anchor_paths
+    )
+    if notary_uses_all:
+        if has_latest_anchor:
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_notary_anchor_mismatch",
+                (
+                    f"{label}.receipt_summary records latest notary anchor but "
+                    "stage_command_modes notary_uses_all=true"
+                ),
+                path,
+            )
+        if len(notary_receipts) % endpoint_count != 0:
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_notary_endpoint_count_mismatch",
+                (
+                    f"{label}.receipt_summary notary receipt count must be a "
+                    "multiple of stage_command_modes notary_endpoint_count when "
+                    "notary_uses_all=true"
+                ),
+                path,
+            )
+        if len(notary_receipts) != endpoint_count * published_anchor_count:
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_notary_anchor_count_mismatch",
+                (
+                    f"{label}.receipt_summary notary receipt count must match "
+                    "stage_command_modes notary_published_anchor_count and "
+                    "notary_endpoint_count when notary_uses_all=true"
+                ),
+                path,
+            )
+    else:
+        if has_digest_addressed_anchor:
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_notary_anchor_mismatch",
+                (
+                    f"{label}.receipt_summary records digest-addressed notary anchor "
+                    "but stage_command_modes notary_uses_all=false"
+                ),
+                path,
+            )
+        if len(notary_receipts) != endpoint_count:
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_notary_endpoint_count_mismatch",
+                (
+                    f"{label}.receipt_summary notary receipt count must match "
+                    "stage_command_modes notary_endpoint_count unless "
+                    "notary_uses_all=true"
+                ),
+                path,
+            )
+
+
+def _block_receipt_metadata_error(
+    blockers: list[dict[str, Any]],
+    code: str,
+    message: str,
+    path: Path,
+) -> None:
+    _blocker(blockers, code, message, path)
+
+
+def _check_receipt_entry_sha256(
+    receipt: dict[str, Any],
+    key: str,
+    entry_label: str,
+    metadata_code: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> str | None:
+    raw = receipt.get(key)
+    if isinstance(raw, str):
+        try:
+            _reject_secret_looking_identifier(raw, f"{entry_label}.{key}")
+        except ReadinessError as error:
+            _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
+            return None
+    if not _is_lower_sha256(raw):
+        _block_receipt_metadata_error(
+            blockers,
+            metadata_code,
+            f"{entry_label}.{key} must be a canonical SHA-256",
+            path,
+        )
+        return None
+    if all(ch == "0" for ch in raw):
+        _block_receipt_metadata_error(
+            blockers,
+            metadata_code,
+            f"{entry_label}.{key} must not be all zero",
+            path,
+        )
+        return None
+    return raw
+
+
+def _block_forbidden_receipt_metadata(
+    receipt: dict[str, Any],
+    forbidden_keys: set[str],
+    entry_label: str,
+    receipt_kind: str,
+    metadata_code: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    present_forbidden: list[str] = []
+    for raw_key in receipt:
+        if not isinstance(raw_key, str):
+            _block_receipt_metadata_error(
+                blockers,
+                metadata_code,
+                f"{entry_label} contains forbidden metadata",
+                path,
+            )
+            return
+        key = _plain_text(raw_key, f"{entry_label} field")
+        if key in forbidden_keys:
+            present_forbidden.append(key)
+    for key in sorted(present_forbidden):
+        _block_receipt_metadata_error(
+            blockers,
+            metadata_code,
+            f"{entry_label}.{key} is not valid for {receipt_kind}",
+            path,
+        )
+
+
+def _valid_nonzero_sha256(value: Any) -> bool:
+    return isinstance(value, str) and _is_lower_sha256(value) and any(
+        ch != "0" for ch in value
+    )
+
+
+def _block_receipt_digest_role_reuse(
+    receipt: dict[str, Any],
+    entry_label: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+    *,
+    receipt_kind: str,
+    digest_role_reuse_code: str,
+) -> None:
+    roles = ["receipt_sha256", "response_body_sha256"]
+    if receipt_kind == "iso-audit-notary":
+        roles.extend(("anchor_sha256", "index_sha256"))
+    elif receipt_kind == "iso-rail-gateway":
+        roles.append("payload_sha256")
+    else:
+        return
+
+    seen: dict[str, str] = {}
+    for role in roles:
+        digest = receipt.get(role)
+        if not _valid_nonzero_sha256(digest):
+            continue
+        if digest in seen:
+            _blocker(
+                blockers,
+                digest_role_reuse_code,
+                f"{entry_label}.{role} reuses {entry_label}.{seen[digest]}",
+                path,
+            )
+        else:
+            seen[digest] = role
+
+
+def _block_receipt_entry_metadata_errors(
+    receipt: dict[str, Any],
+    entry_label: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+    *,
+    receipt_kind: str,
+    allow_default_profile: bool,
+    require_source_files: bool,
+    metadata_code: str,
+) -> None:
+    if receipt_kind == "iso-audit-notary":
+        _block_forbidden_receipt_metadata(
+            receipt,
+            RAIL_RECEIPT_METADATA_KEYS,
+            entry_label,
+            receipt_kind,
+            metadata_code,
+            path,
+            blockers,
+        )
+        _check_receipt_entry_sha256(
+            receipt,
+            "anchor_sha256",
+            entry_label,
+            metadata_code,
+            path,
+            blockers,
+        )
+        index_sha256 = _check_receipt_entry_sha256(
+            receipt,
+            "index_sha256",
+            entry_label,
+            metadata_code,
+            path,
+            blockers,
+        )
+        anchor_path = None
+        if index_sha256 is not None:
+            try:
+                anchor_path = _validate_notary_anchor_path(
+                    _require_string(receipt, "anchor_path", entry_label),
+                    f"{entry_label}.anchor_path",
+                    index_sha256,
+                )
+            except ReadinessError as error:
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    str(error),
+                    path,
+                )
+            else:
+                if _receipt_path_is_repository_fixture(anchor_path):
+                    _block_receipt_metadata_error(
+                        blockers,
+                        metadata_code,
+                        (
+                            f"{entry_label}.anchor_path must not point to "
+                            "checked-in ISO fixture artifacts"
+                        ),
+                        path,
+                    )
+        try:
+            store_dir = _validate_notary_store_dir(
+                receipt,
+                entry_label,
+                require_source_files=require_source_files,
+            )
+        except ReadinessError as error:
+            _block_receipt_metadata_error(
+                blockers,
+                metadata_code,
+                str(error),
+                path,
+            )
+        else:
+            if store_dir is not None and _receipt_path_is_repository_fixture(store_dir):
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    (
+                        f"{entry_label}.store_dir must not point to "
+                        "checked-in ISO fixture artifacts"
+                    ),
+                    path,
+                )
+        if index_sha256 is not None and anchor_path is not None:
+            try:
+                index_path = _validate_notary_index_path(
+                    receipt,
+                    entry_label,
+                    anchor_path,
+                    require_source_files=require_source_files,
+                )
+            except ReadinessError as error:
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    str(error),
+                    path,
+                )
+            else:
+                if index_path is not None and _receipt_path_is_repository_fixture(index_path):
+                    _block_receipt_metadata_error(
+                        blockers,
+                        metadata_code,
+                        (
+                            f"{entry_label}.index_path must not point to "
+                            "checked-in ISO fixture artifacts"
+                        ),
+                        path,
+                    )
+        record_count = receipt.get("record_count")
+        if type(record_count) is not int or record_count <= 0:
+            _block_receipt_metadata_error(
+                blockers,
+                metadata_code,
+                f"{entry_label}.record_count must be a positive integer",
+                path,
+            )
+    elif receipt_kind == "iso-rail-gateway":
+        _block_forbidden_receipt_metadata(
+            receipt,
+            NOTARY_RECEIPT_METADATA_KEYS,
+            entry_label,
+            receipt_kind,
+            metadata_code,
+            path,
+            blockers,
+        )
+        try:
+            message_type = _require_message_type(receipt, "message_type", entry_label)
+        except ReadinessError as error:
+            _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
+        else:
+            if message_type not in SUPPORTED_RAIL_MESSAGE_TYPES:
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    f"{entry_label}.message_type is unsupported",
+                    path,
+                )
+        _check_receipt_entry_sha256(
+            receipt,
+            "payload_sha256",
+            entry_label,
+            metadata_code,
+            path,
+            blockers,
+        )
+        if "profile" not in receipt:
+            _block_receipt_metadata_error(
+                blockers,
+                metadata_code,
+                f"{entry_label}.profile must be recorded",
+                path,
+            )
+        elif receipt["profile"] is None:
+            if not allow_default_profile:
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    f"{entry_label}.profile must be a non-empty string",
+                    path,
+                )
+        else:
+            try:
+                _require_profile_id(receipt, "profile", entry_label)
+            except ReadinessError as error:
+                _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
+        try:
+            _require_nullable_rail_message_id(receipt, "rail_message_id", entry_label)
+        except ReadinessError as error:
+            _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
+        try:
+            source_path = _validate_xml_path(
+                _require_string(receipt, "source_path", entry_label),
+                f"{entry_label}.source_path",
+            )
+        except ReadinessError as error:
+            _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
+        else:
+            if _receipt_path_is_repository_fixture(source_path):
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    (
+                        f"{entry_label}.source_path must not point to "
+                        "checked-in ISO XML fixtures"
+                    ),
+                    path,
+                )
+
+
+def _receipt_entry_content_metadata(receipt: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+    receipt_kind = receipt.get("receipt_kind")
+    generic_keys = (
+        "ok",
+        "status_code",
+        "response_body_sha256",
+        "endpoint_requires_insecure_http",
+    )
+    if receipt_kind == "iso-audit-notary":
+        keys = (
+            "anchor_path",
+            "store_dir",
+            "index_path",
+            "anchor_sha256",
+            "index_sha256",
+            "record_count",
+        )
+    elif receipt_kind == "iso-rail-gateway":
+        keys = (
+            "message_type",
+            "payload_sha256",
+            "profile",
+            "rail_message_id",
+            "source_path",
+        )
+    else:
+        raise ReadinessError("unsupported receipt_kind")
+    return tuple((key, receipt.get(key)) for key in (*generic_keys, *keys))
+
+
+def _receipt_entry_for_readiness_output(
+    receipt: dict[str, Any],
+    *,
+    receipt_kind: str,
+) -> dict[str, Any]:
+    output = dict(receipt)
+    if "ok" in output and output["ok"] is not True:
+        output["ok"] = "unsupported"
+    if receipt_kind not in REQUIRED_RECEIPT_KINDS:
+        output["receipt_kind"] = "unsupported"
+    elif receipt_kind == "iso-rail-gateway":
+        try:
+            message_type = _require_message_type(output, "message_type", "receipt")
+        except ReadinessError:
+            output["message_type"] = "unsupported"
+        else:
+            if message_type not in SUPPORTED_RAIL_MESSAGE_TYPES:
+                output["message_type"] = "unsupported"
+        if "profile" in output:
+            if output["profile"] is not None:
+                try:
+                    _require_profile_id(output, "profile", "receipt")
+                except ReadinessError:
+                    output["profile"] = "unsupported"
+        if "rail_message_id" in output:
+            try:
+                _require_nullable_rail_message_id(output, "rail_message_id", "receipt")
+            except ReadinessError:
+                output["rail_message_id"] = "unsupported"
+        if "source_path" in output:
+            try:
+                source_path = _validate_xml_path(
+                    _require_string(output, "source_path", "receipt"),
+                    "receipt.source_path",
+                )
+            except ReadinessError:
+                output["source_path"] = "unsupported"
+            else:
+                if _receipt_path_is_repository_fixture(source_path):
+                    output["source_path"] = "unsupported"
+    elif receipt_kind == "iso-audit-notary":
+        if "anchor_sha256" in output and not _valid_nonzero_sha256(
+            output["anchor_sha256"]
+        ):
+            output["anchor_sha256"] = "unsupported"
+        index_sha256 = output.get("index_sha256")
+        index_sha256_valid = _valid_nonzero_sha256(index_sha256)
+        if "index_sha256" in output and not index_sha256_valid:
+            output["index_sha256"] = "unsupported"
+        anchor_path: str | None = None
+        if "anchor_path" in output:
+            if index_sha256_valid:
+                try:
+                    anchor_path = _validate_notary_anchor_path(
+                        _require_string(output, "anchor_path", "receipt"),
+                        "receipt.anchor_path",
+                        index_sha256,
+                    )
+                except ReadinessError:
+                    output["anchor_path"] = "unsupported"
+                    anchor_path = None
+                else:
+                    if _receipt_path_is_repository_fixture(anchor_path):
+                        output["anchor_path"] = "unsupported"
+                        anchor_path = None
+            else:
+                output["anchor_path"] = "unsupported"
+        if "store_dir" in output:
+            try:
+                store_dir = _validate_notary_store_dir(
+                    output,
+                    "receipt",
+                    require_source_files=False,
+                )
+            except ReadinessError:
+                output["store_dir"] = "unsupported"
+            else:
+                if store_dir is not None and _receipt_path_is_repository_fixture(
+                    store_dir
+                ):
+                    output["store_dir"] = "unsupported"
+        if "index_path" in output:
+            if anchor_path is None:
+                output["index_path"] = "unsupported"
+            else:
+                try:
+                    index_path = _validate_notary_index_path(
+                        output,
+                        "receipt",
+                        anchor_path,
+                        require_source_files=False,
+                    )
+                except ReadinessError:
+                    output["index_path"] = "unsupported"
+                else:
+                    if index_path is not None and _receipt_path_is_repository_fixture(
+                        index_path
+                    ):
+                        output["index_path"] = "unsupported"
+        if "record_count" in output and (
+            type(output["record_count"]) is not int or output["record_count"] <= 0
+        ):
+            output["record_count"] = "unsupported"
+    return output
+
+
+def _version_for_readiness_output(value: Any, expected: int) -> int | str:
+    if type(value) is int and value == expected:
+        return value
+    return "unsupported"
+
+
+def _context_for_readiness_output(value: str, expected: str | None) -> str:
+    if expected is not None and value != expected:
+        return "unsupported"
+    return value
+
+
+def _nonproduction_flag_for_readiness_output(value: bool) -> bool | str:
+    if value:
+        return "unsupported"
+    return value
+
+
+def _required_flag_for_readiness_output(value: bool) -> bool | str:
+    if not value:
+        return "unsupported"
+    return value
+
+
+def _plain_public_json_value(value: Any) -> Any:
+    if type(value) is dict:
+        output: dict[str, Any] = {}
+        for key, child in value.items():
+            if type(key) is not str:
+                return "unsupported"
+            output[key] = _plain_public_json_value(child)
+        return output
+    if type(value) is list:
+        return [_plain_public_json_value(item) for item in value]
+    if (
+        value is None
+        or type(value) is str
+        or type(value) is bool
+        or type(value) is int
+    ):
+        return value
+    if type(value) is float:
+        return value if math.isfinite(value) else "unsupported"
+    return "unsupported"
+
+
+def _public_json_object_without_private_fields(summary: Any) -> dict[str, Any]:
+    if type(summary) is not dict:
+        return {}
+    output: dict[str, Any] = {}
+    for key, value in summary.items():
+        if type(key) is not str or key.startswith("_"):
+            continue
+        output[key] = _plain_public_json_value(value)
+    return output
+
+
+def _evidence_policy_for_readiness_output(
+    policy: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    output = dict(policy)
+    for field in sorted(PRODUCTION_FALSE_POLICY_FLAGS):
+        if field in output:
+            output[field] = _nonproduction_flag_for_readiness_output(output[field])
+    output["provider"] = _context_for_readiness_output(
+        policy["provider"],
+        args.provider,
+    )
+    output["environment"] = _context_for_readiness_output(
+        policy["environment"],
+        args.environment,
+    )
+    for field in sorted(EVIDENCE_FRESHNESS_POLICY_FIELDS):
+        value = output.get(field)
+        if (
+            type(value) is not int
+            or value > getattr(args, field)
+        ):
+            output[field] = "unsupported"
+    return output
+
+
+def _canary_for_readiness_output(
+    canary: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    output = dict(canary)
+    output["plan_only"] = _nonproduction_flag_for_readiness_output(
+        canary["plan_only"],
+    )
+    output["require_explicit_policy"] = _required_flag_for_readiness_output(
+        canary["require_explicit_policy"],
+    )
+    output["stage_dry_run"] = [
+        _nonproduction_flag_for_readiness_output(dry_run)
+        for dry_run in canary["stage_dry_run"]
+    ]
+    output["provider"] = _context_for_readiness_output(
+        canary["provider"],
+        args.provider,
+    )
+    output["environment"] = _context_for_readiness_output(
+        canary["environment"],
+        args.environment,
+    )
+    return output
+
+
+def _freshness_budget_for_readiness_output(
+    value: int | None,
+    release_budget: int,
+) -> int | str | None:
+    if value is None:
+        return None
+    if type(value) is not int or value > release_budget:
+        return "unsupported"
+    return value
+
+
+def _receipt_summary_entry_order_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+    return (entry["receipt_kind"], entry["path"], entry["receipt_sha256"])
+
+
+def _require_profile_direction(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    if raw not in PROFILE_DIRECTIONS:
+        raise ReadinessError(
+            f"{label}.{key} must be one of " + ", ".join(sorted(PROFILE_DIRECTIONS))
+        )
+    return raw
+
+
+def _validate_schema_source_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
+    if "\\" in raw:
+        raise ReadinessError(f"{label} must use forward slashes")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    _reject_non_ascii_context(raw, label)
+    if raw != raw.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    if ";" in raw:
+        raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise ReadinessError(f"{label} must not contain URI or drive prefixes")
+    _reject_percent_encoded_path_smuggling(raw, label)
+    _reject_secret_string(raw, label)
+    path = Path(raw)
+    if path.is_absolute():
+        raise ReadinessError(f"{label} must be relative")
+    if not raw.endswith(".xsd"):
+        raise ReadinessError(f"{label} must point to an .xsd file")
+    parts = raw.split("/")
+    if any(part.startswith("-") for part in parts if part):
+        raise ReadinessError(f"{label} must not contain leading-dash path segments")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ReadinessError(f"{label} must not contain empty, dot, or parent segments")
+    return raw
+
+
+def _validate_fixture_summary_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
+    if "\\" in raw:
+        raise ReadinessError(f"{label} must use forward slashes")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    _reject_non_ascii_context(raw, label)
+    if raw != raw.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    if ";" in raw:
+        raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise ReadinessError(f"{label} must not contain URI or drive prefixes")
+    _reject_percent_encoded_path_smuggling(raw, label)
+    _reject_secret_string(raw, label)
+    if Path(raw).is_absolute():
+        raise ReadinessError(f"{label} must be relative")
+    if not raw.endswith(".xml"):
+        raise ReadinessError(f"{label} must point to an .xml file")
+    parts = raw.split("/")
+    if any(part.startswith("-") for part in parts if part):
+        raise ReadinessError(f"{label} must not contain leading-dash path segments")
+    if any(part in {"", "."} for part in parts):
+        raise ReadinessError(f"{label} must not contain empty or dot segments")
+    seen_child_segment = False
+    for part in parts:
+        if part == "..":
+            if seen_child_segment:
+                raise ReadinessError(f"{label} parent segments must be leading")
+        else:
+            seen_child_segment = True
+    return raw
+
+
+def _validate_reviewed_gap_reason(raw: Any, label: str) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{label} must be a non-empty string when provided")
+    raw = _plain_text(raw, label)
+    if not raw.strip():
+        raise ReadinessError(f"{label} must be a non-empty string when provided")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if len(raw) > MAX_REVIEWED_GAP_REASON_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_REVIEWED_GAP_REASON_CHARS} characters"
+        )
+    _reject_non_ascii_context(raw, label)
+    _reject_secret_looking_identifier(raw, label)
+    return raw
+
+
+def _path_contains_component_sequence(raw: str, components: tuple[str, ...]) -> bool:
+    parts = [part.casefold() for part in raw.split("/") if part]
+    target = [part.casefold() for part in components]
+    if len(parts) < len(target):
+        return False
+    last_start = len(parts) - len(target)
+    return any(
+        parts[offset : offset + len(target)] == target
+        for offset in range(last_start + 1)
+    )
+
+
+def _xsd_manifest_is_repository_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XSD_FIXTURE_MANIFEST_PARTS)
+
+
+def _canary_config_path_is_repository_template(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_CANARY_RUNBOOK_PARTS)
+
+
+def _trust_bundle_path_is_repository_template(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_TRUST_BUNDLE_PARTS)
+
+
+def _receipt_path_is_repository_fixture(raw: str) -> bool:
+    return _path_contains_component_sequence(raw, REPOSITORY_XML_FIXTURE_PARTS)
+
+
+def _source_repository_placeholder_forms(component: str) -> tuple[str, tuple[str, ...], set[str]]:
+    lowered = component.casefold()
+    tokens = tuple(token for token in re.split(r"[-_.]+", lowered) if token)
+    joined_windows = {
+        "".join(tokens[start:end])
+        for start in range(len(tokens))
+        for end in range(start + 1, len(tokens) + 1)
+    }
+    return lowered, tokens, joined_windows
+
+
+def _source_repository_component_is_placeholder(component: str) -> bool:
+    lowered, tokens, joined_windows = _source_repository_placeholder_forms(component)
+    if lowered in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        return True
+    if lowered.endswith(".example"):
+        return True
+    if any(token in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS for token in tokens):
+        return True
+    for marker in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        _marker_lowered, marker_tokens, _marker_windows = (
+            _source_repository_placeholder_forms(marker)
+        )
+        if marker_tokens and "".join(marker_tokens) in joined_windows:
+            return True
+    return False
+
+
+def _xsd_source_repository_is_invalid(repository: str) -> bool:
+    if len(repository) > MAX_SOURCE_REPOSITORY_CHARS:
+        return True
+    if SOURCE_REPOSITORY_RE.fullmatch(repository) is None or repository.endswith(".git"):
+        return True
+    repository_parts = urllib.parse.urlparse(repository).path.strip("/").split("/")
+    if len(repository_parts) != 2:
+        return True
+    if SOURCE_REPOSITORY_OWNER_RE.fullmatch(repository_parts[0]) is None:
+        return True
+    if SOURCE_REPOSITORY_NAME_RE.fullmatch(repository_parts[1]) is None:
+        return True
+    return any(_source_repository_component_is_placeholder(part) for part in repository_parts)
+
+
+def _xsd_source_commit_is_invalid(commit: str) -> bool:
+    return SOURCE_COMMIT_RE.fullmatch(commit) is None or all(ch == "0" for ch in commit)
+
+
+def _reject_xsd_source_repository_secret_material(repository: str, label: str) -> None:
+    if _contains_secret_material(repository) or _is_secret_looking_key(repository):
+        raise ReadinessError(f"{label} must not contain secret-looking material")
+
+
+def _validate_known_blocked_schema_source_metadata(
+    message_def_id: str,
+    source: dict[str, str],
+    restriction_markers: list[str],
+    label: str,
+) -> None:
+    if message_def_id in KNOWN_PENDING_SCHEMA_SOURCE_METADATA:
+        raise ReadinessError(
+            f"{label}.message_def_id is tracked as official pending ISO source evidence, not blocked-source evidence"
+        )
+    expected = KNOWN_BLOCKED_SCHEMA_SOURCE_METADATA.get(message_def_id)
+    if expected is None:
+        return
+    expected_source = expected["source"]
+    for key, expected_value in expected_source.items():
+        if source[key] != expected_value:
+            raise ReadinessError(
+                f"{label}.source.{key} must match known restricted blocked-source metadata"
+            )
+    if restriction_markers != expected["restriction_markers"]:
+        raise ReadinessError(
+            f"{label}.restriction_markers must match known restricted blocked-source metadata"
+        )
+
+
+def _verify_schema_source_summary(
+    source_raw: Any,
+    label: str,
+    *,
+    message_def_id: str,
+    schema_sha256: str,
+    blockers: list[dict[str, Any]],
+    path: Path,
+) -> dict[str, str]:
+    source = _require_object(source_raw, label)
+    _reject_unknown_keys(source, SCHEMA_SOURCE_KEYS, label)
+    repository = _require_string(source, "repository", label)
+    _reject_xsd_source_repository_secret_material(repository, f"{label}.repository")
+    if _xsd_source_repository_is_invalid(repository):
+        _blocker(
+            blockers,
+            "xsd.schema_source_repository_invalid",
+            f"{label}.repository is not a canonical GitHub source URL",
+            path,
+        )
+    commit = _require_string(source, "commit", label)
+    if _xsd_source_commit_is_invalid(commit):
+        _blocker(
+            blockers,
+            "xsd.schema_source_commit_invalid",
+            f"{label}.commit is not a non-zero lowercase 40-hex Git commit",
+            path,
+        )
+    source_path = _validate_schema_source_path(_require_string(source, "path", label), f"{label}.path")
+    if Path(source_path).name != f"{message_def_id}.xsd":
+        _blocker(
+            blockers,
+            "xsd.schema_source_path_mismatch",
+            f"{label}.path filename does not match message_def_id",
+            path,
+        )
+    license_id = _require_string(source, "license", label)
+    if license_id not in ALLOWED_SCHEMA_SOURCE_LICENSES:
+        _blocker(
+            blockers,
+            "xsd.schema_source_license_invalid",
+            f"{label}.license is not an allowed redistributable source license",
+            path,
+        )
+    source_sha256 = _require_nonzero_sha256(source, "sha256", label)
+    if source_sha256 != schema_sha256:
+        _blocker(
+            blockers,
+            "xsd.schema_source_digest_mismatch",
+            f"{label}.sha256 does not match the schema digest",
+            path,
+        )
+    return {
+        "repository": repository,
+        "commit": commit,
+        "path": source_path,
+        "license": license_id,
+        "sha256": source_sha256,
+    }
+
+
+def _verify_blocked_schema_source_summary(
+    entry_raw: Any,
+    label: str,
+    *,
+    blockers: list[dict[str, Any]],
+    path: Path,
+) -> dict[str, Any]:
+    entry = _require_object(entry_raw, label)
+    _reject_unknown_keys(entry, XSD_BLOCKED_SCHEMA_SOURCE_KEYS, label)
+    message_def_id = _require_message_def_id(entry, "message_def_id", label)
+    reason = _require_string(entry, "reason", label)
+    if len(reason) > MAX_REVIEWED_GAP_REASON_CHARS:
+        raise ReadinessError(
+            f"{label}.reason must be no longer than {MAX_REVIEWED_GAP_REASON_CHARS} characters"
+        )
+    _reject_non_ascii_context(reason, f"{label}.reason")
+    _reject_secret_looking_identifier(reason, f"{label}.reason")
+    if "source" not in entry:
+        raise ReadinessError(f"{label}.source must be recorded")
+    source = _require_object(entry["source"], f"{label}.source")
+    _reject_unknown_keys(
+        source,
+        XSD_BLOCKED_SCHEMA_SOURCE_PROVENANCE_KEYS,
+        f"{label}.source",
+    )
+    repository = _require_string(source, "repository", f"{label}.source")
+    _reject_xsd_source_repository_secret_material(repository, f"{label}.source.repository")
+    if _xsd_source_repository_is_invalid(repository):
+        _blocker(
+            blockers,
+            "xsd.blocked_source_repository_invalid",
+            f"{label}.source.repository is not a canonical GitHub source URL",
+            path,
+        )
+    commit = _require_string(source, "commit", f"{label}.source")
+    if _xsd_source_commit_is_invalid(commit):
+        _blocker(
+            blockers,
+            "xsd.blocked_source_commit_invalid",
+            f"{label}.source.commit is not a non-zero lowercase 40-hex Git commit",
+            path,
+        )
+    source_path = _validate_schema_source_path(
+        _require_string(source, "path", f"{label}.source"),
+        f"{label}.source.path",
+    )
+    if Path(source_path).name != f"{message_def_id}.xsd":
+        _blocker(
+            blockers,
+            "xsd.blocked_source_path_mismatch",
+            f"{label}.source.path filename does not match message_def_id",
+            path,
+        )
+    source_sha256 = _require_nonzero_sha256(source, "sha256", f"{label}.source")
+    raw_markers = _require_list(
+        entry.get("restriction_markers"),
+        f"{label}.restriction_markers",
+    )
+    if not raw_markers:
+        raise ReadinessError(f"{label}.restriction_markers must not be empty")
+    markers: list[str] = []
+    seen_markers: dict[str, int] = {}
+    for offset, marker_raw in enumerate(raw_markers):
+        marker_label = f"{label}.restriction_markers[{offset}]"
+        if not isinstance(marker_raw, str):
+            raise ReadinessError(f"{marker_label} must be a non-empty string")
+        marker_raw = _plain_text(marker_raw, marker_label)
+        if not marker_raw.strip():
+            raise ReadinessError(f"{marker_label} must be a non-empty string")
+        if marker_raw != marker_raw.strip():
+            raise ReadinessError(f"{marker_label} must not have surrounding whitespace")
+        if marker_raw not in XSD_BLOCKED_SCHEMA_RESTRICTION_MARKERS:
+            raise ReadinessError(
+                f"{marker_label} must be one of "
+                + ", ".join(sorted(XSD_BLOCKED_SCHEMA_RESTRICTION_MARKERS))
+            )
+        if marker_raw in seen_markers:
+            raise ReadinessError(
+                f"{marker_label} duplicates {label}.restriction_markers[{seen_markers[marker_raw]}]"
+            )
+        seen_markers[marker_raw] = offset
+        markers.append(marker_raw)
+    if not (
+        set(markers) & XSD_BLOCKED_SCHEMA_DISTRIBUTION_RESTRICTION_MARKERS
+    ):
+        raise ReadinessError(
+            f"{label}.restriction_markers must include a redistribution restriction marker"
+        )
+    normalized_source = {
+        "repository": repository,
+        "commit": commit,
+        "path": source_path,
+        "sha256": source_sha256,
+    }
+    _validate_known_blocked_schema_source_metadata(
+        message_def_id,
+        normalized_source,
+        markers,
+        label,
+    )
+    return {
+        "message_def_id": message_def_id,
+        "source": normalized_source,
+        "reason": reason,
+        "restriction_markers": markers,
+    }
+
+
+def _validate_iso_catalogue_url(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
+    if len(raw) > MAX_SOURCE_URL_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    _reject_non_ascii_context(raw, label)
+    _reject_url_percent_encoding_smuggling(raw, label)
+    _reject_secret_looking_identifier(raw, label)
+    if "%" in raw:
+        raise ReadinessError(f"{label} must not contain percent escapes")
+    parsed = urllib.parse.urlparse(raw)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "www.iso20022.org"
+        or parsed.path not in XSD_ISO_SCHEMA_CATALOGUE_PATHS
+        or parsed.params
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ReadinessError(f"{label} must be an official ISO 20022 catalogue URL")
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    if parsed.path == "/iso-20022-message-definitions":
+        if query or "?" in raw:
+            raise ReadinessError(f"{label} must not include query parameters")
+    else:
+        if (
+            ISO_SCHEMA_ARCHIVE_QUERY_RE.fullmatch(parsed.query) is None
+            or len(query) != 1
+            or query[0][0] != "page"
+            or not query[0][1].isdigit()
+        ):
+            raise ReadinessError(f"{label} archive URL must set one numeric page")
+    return raw
+
+
+def _validate_iso_download_url(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
+    if len(raw) > MAX_SOURCE_URL_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    _reject_non_ascii_context(raw, label)
+    _reject_url_percent_encoding_smuggling(raw, label)
+    _reject_secret_looking_identifier(raw, label)
+    if "%" in raw:
+        raise ReadinessError(f"{label} must not contain percent escapes")
+    parsed = urllib.parse.urlparse(raw)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "www.iso20022.org"
+        or not ISO_SCHEMA_DOWNLOAD_PATH_RE.fullmatch(parsed.path)
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ReadinessError(f"{label} must be an official ISO 20022 XSD download URL")
+    return raw
+
+
+def _validate_iso_message_name_version(
+    message_name: str,
+    message_def_id: str,
+    label: str,
+) -> None:
+    if ISO_MESSAGE_NAME_RE.fullmatch(message_name) is None:
+        raise ReadinessError(
+            f"{label} must be a canonical ISO message name ending in VNN"
+        )
+    match = ISO_MESSAGE_NAME_VERSION_RE.search(message_name)
+    expected_version = message_def_id.rsplit(".", 1)[-1]
+    if match is None or match.group(1) != expected_version:
+        raise ReadinessError(
+            f"{label} version suffix must match message_def_id version"
+        )
+
+
+def _pending_schema_organisation_is_placeholder(raw: str) -> bool:
+    lowered = raw.casefold()
+    tokens = tuple(token for token in re.split(r"[^a-z0-9]+", lowered) if token)
+    joined_windows = {
+        "".join(tokens[start:end])
+        for start in range(len(tokens))
+        for end in range(start + 1, len(tokens) + 1)
+    }
+    if lowered in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        return True
+    if any(token in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS for token in tokens):
+        return True
+    for marker in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        marker_tokens = tuple(
+            token for token in re.split(r"[^a-z0-9]+", marker.casefold()) if token
+        )
+        if marker_tokens and "".join(marker_tokens) in joined_windows:
+            return True
+    return False
+
+
+def _validate_iso_submitting_organisation(raw: Any, label: str) -> str:
+    value = _validate_reviewed_gap_reason(raw, label)
+    if value is None:
+        raise ReadinessError(f"{label} must be recorded")
+    if len(value) > MAX_PENDING_SCHEMA_ORGANISATION_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than "
+            f"{MAX_PENDING_SCHEMA_ORGANISATION_CHARS} characters"
+        )
+    if any(ch.isspace() and ch != " " for ch in value):
+        raise ReadinessError(f"{label} must use printable ASCII spaces")
+    if "  " in value:
+        raise ReadinessError(f"{label} must use single spaces")
+    if "%" in value:
+        raise ReadinessError(f"{label} must not contain percent escapes")
+    if ";" in value:
+        raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    if ":" in value or "\\" in value or "@" in value:
+        raise ReadinessError(f"{label} must not contain URI or contact delimiters")
+    if "//" in value or "/ " in value or " /" in value:
+        raise ReadinessError(f"{label} must use slash only inside organization tokens")
+    parts = value.split(", ")
+    if any(not part or "," in part for part in parts):
+        raise ReadinessError(
+            f"{label} must be a comma-space separated list of organization names"
+        )
+    for part in parts:
+        if ISO_SUBMITTING_ORGANISATION_PART_RE.fullmatch(part) is None:
+            raise ReadinessError(
+                f"{label} must be a canonical ISO submitting organisation label"
+            )
+        if _pending_schema_organisation_is_placeholder(part):
+            raise ReadinessError(
+                f"{label} must not use placeholder organization metadata"
+            )
+    return value
+
+
+def _validate_known_pending_schema_source_metadata(
+    message_def_id: str,
+    source: dict[str, str],
+    label: str,
+) -> None:
+    expected = KNOWN_PENDING_SCHEMA_SOURCE_METADATA.get(message_def_id)
+    if expected is None:
+        return
+    for key, expected_value in expected.items():
+        if source[key] != expected_value:
+            raise ReadinessError(
+                f"{label}.source.{key} must match known official ISO pending-source metadata"
+            )
+
+
+def _verify_pending_schema_source_summary(
+    entry_raw: Any,
+    label: str,
+) -> dict[str, Any]:
+    entry = _require_object(entry_raw, label)
+    _reject_unknown_keys(entry, XSD_PENDING_SCHEMA_SOURCE_KEYS, label)
+    message_def_id = _require_message_def_id(entry, "message_def_id", label)
+    reason = _validate_reviewed_gap_reason(entry.get("reason"), f"{label}.reason")
+    if reason is None:
+        raise ReadinessError(f"{label}.reason must be recorded")
+    if "source" not in entry:
+        raise ReadinessError(f"{label}.source must be recorded")
+    source = _require_object(entry["source"], f"{label}.source")
+    _reject_unknown_keys(
+        source,
+        XSD_PENDING_SCHEMA_SOURCE_PROVENANCE_KEYS,
+        f"{label}.source",
+    )
+    catalogue_url = _validate_iso_catalogue_url(
+        _require_string(source, "catalogue_url", f"{label}.source"),
+        f"{label}.source.catalogue_url",
+    )
+    download_url = _validate_iso_download_url(
+        _require_string(source, "download_url", f"{label}.source"),
+        f"{label}.source.download_url",
+    )
+    download_type = _require_string(source, "download_type", f"{label}.source")
+    if download_type not in XSD_PENDING_SCHEMA_DOWNLOAD_TYPES:
+        raise ReadinessError(
+            f"{label}.source.download_type must be one of "
+            + ", ".join(sorted(XSD_PENDING_SCHEMA_DOWNLOAD_TYPES))
+        )
+    message_name = _validate_reviewed_gap_reason(
+        source.get("message_name"),
+        f"{label}.source.message_name",
+    )
+    if message_name is None:
+        raise ReadinessError(f"{label}.source.message_name must be recorded")
+    _validate_iso_message_name_version(
+        message_name,
+        message_def_id,
+        f"{label}.source.message_name",
+    )
+    submitting_organisation = _validate_iso_submitting_organisation(
+        source.get("submitting_organisation"),
+        f"{label}.source.submitting_organisation",
+    )
+    normalized_source = {
+        "catalogue_url": catalogue_url,
+        "download_url": download_url,
+        "download_type": download_type,
+        "message_name": message_name,
+        "submitting_organisation": submitting_organisation,
+    }
+    _validate_known_pending_schema_source_metadata(
+        message_def_id,
+        normalized_source,
+        label,
+    )
+    return {
+        "message_def_id": message_def_id,
+        "source": normalized_source,
+        "reason": reason,
+    }
+
+
+def _validate_optional_probe_text(raw: Any, label: str) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    raw = _plain_text(raw, label)
+    if not raw:
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    try:
+        if len(raw) > MAX_TRUST_SOURCE_TEXT_CHARS:
+            raise ReadinessError(
+                f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
+            )
+        if _contains_control_character(raw):
+            raise ReadinessError(f"{label} must not contain control characters")
+        _reject_non_ascii_context(raw, label)
+        _reject_secret_string(raw, label)
+    except ReadinessError:
+        raise
+    except Exception:
+        raise ReadinessError(f"{label} must be valid text") from None
+    return raw
+
+
+def _validate_probe_content_type(raw: Any, label: str) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    raw = _plain_text(raw, label)
+    if not raw:
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    try:
+        if len(raw) > MAX_TRUST_SOURCE_TEXT_CHARS:
+            raise ReadinessError(
+                f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
+            )
+        if raw != raw.strip():
+            raise ReadinessError(f"{label} must not have surrounding whitespace")
+        if _contains_control_character(raw):
+            raise ReadinessError(f"{label} must not contain control characters")
+        _reject_non_ascii_context(raw, label)
+        _reject_secret_string(raw, label)
+    except ReadinessError:
+        raise
+    except Exception:
+        raise ReadinessError(f"{label} must be valid text") from None
+    return raw
+
+
+def _expected_xsd_target_namespace(message_def_id: str) -> str:
+    return f"{ISO_NAMESPACE_PREFIX}{message_def_id}"
+
+
+def _validate_probe_target_namespace(raw: Any, label: str) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    raw = _plain_text(raw, label)
+    if not raw:
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    try:
+        if len(raw) > MAX_XML_IDENTIFIER_CHARS:
+            raise ReadinessError(
+                f"{label} must be no longer than {MAX_XML_IDENTIFIER_CHARS} characters"
+            )
+        if raw != raw.strip():
+            raise ReadinessError(f"{label} must not have surrounding whitespace")
+        if any(ch.isspace() for ch in raw):
+            raise ReadinessError(f"{label} must not contain whitespace")
+        if _contains_control_character(raw):
+            raise ReadinessError(f"{label} must not contain control characters")
+        _reject_non_ascii_context(raw, label)
+        _reject_secret_string(raw, label)
+    except ReadinessError:
+        raise
+    except Exception:
+        raise ReadinessError(f"{label} must be valid text") from None
+    return raw
+
+
+def _validate_probe_error_kind(raw: Any, label: str) -> str | None:
+    value = _validate_optional_probe_text(raw, label)
+    if value is None:
+        return None
+    if PROBE_ERROR_KIND_RE.fullmatch(value) is None:
+        raise ReadinessError(f"{label} must be a canonical exception class name")
+    return value
+
+
+def _validate_probe_http_status(raw: Any, label: str) -> int | None:
+    if raw is None:
+        return None
+    if type(raw) is not int or raw < 100 or raw > 599:
+        raise ReadinessError(f"{label} must be an HTTP status code or null")
+    return raw
+
+
+def _pending_xsd_probe_is_successful(probe: dict[str, Any]) -> bool:
+    return (
+        probe["status"] == "reachable"
+        and probe["looks_like_xsd"]
+        and probe["target_namespace"]
+        == _expected_xsd_target_namespace(probe["message_def_id"])
+    )
+
+
+def _verify_pending_xsd_probe(raw: Any, label: str) -> dict[str, Any]:
+    probe = _require_object(raw, label)
+    _reject_unknown_keys(probe, PENDING_XSD_PROBE_KEYS, label)
+    message_def_id = _require_message_def_id(probe, "message_def_id", label)
+    expected = KNOWN_PENDING_SCHEMA_SOURCE_METADATA.get(message_def_id)
+    if expected is None:
+        raise ReadinessError(f"{label}.message_def_id is not a known pending schema")
+    message_name = _validate_reviewed_gap_reason(
+        probe.get("message_name"),
+        f"{label}.message_name",
+    )
+    if message_name is None:
+        raise ReadinessError(f"{label}.message_name must be recorded")
+    _validate_iso_message_name_version(
+        message_name,
+        message_def_id,
+        f"{label}.message_name",
+    )
+    submitting_organisation = _validate_iso_submitting_organisation(
+        probe.get("submitting_organisation"),
+        f"{label}.submitting_organisation",
+    )
+    catalogue_url = _validate_iso_catalogue_url(
+        _require_string(probe, "catalogue_url", label),
+        f"{label}.catalogue_url",
+    )
+    download_url = _validate_iso_download_url(
+        _require_string(probe, "download_url", label),
+        f"{label}.download_url",
+    )
+    source = {
+        "catalogue_url": catalogue_url,
+        "download_url": download_url,
+        "download_type": "XSD",
+        "message_name": message_name,
+        "submitting_organisation": submitting_organisation,
+    }
+    _validate_known_pending_schema_source_metadata(message_def_id, source, label)
+    status = _require_string(probe, "status", label)
+    if status not in PENDING_XSD_PROBE_STATUSES:
+        raise ReadinessError(
+            f"{label}.status must be one of "
+            + ", ".join(sorted(PENDING_XSD_PROBE_STATUSES))
+        )
+    http_status = _validate_probe_http_status(
+        probe.get("http_status"),
+        f"{label}.http_status",
+    )
+    content_type = _validate_probe_content_type(
+        probe.get("content_type"),
+        f"{label}.content_type",
+    )
+    downloaded_bytes = _require_nonnegative_int(probe, "downloaded_bytes", label)
+    if downloaded_bytes:
+        sample_sha256 = _require_sha256(probe, "sample_sha256", label)
+    else:
+        sample_sha256 = probe.get("sample_sha256")
+        if sample_sha256 is not None:
+            raise ReadinessError(f"{label}.sample_sha256 must be null without downloaded bytes")
+    truncated = _require_bool(probe, "truncated", label)
+    target_namespace = _validate_probe_target_namespace(
+        probe.get("target_namespace"),
+        f"{label}.target_namespace",
+    )
+    looks_like_xsd = _require_bool(probe, "looks_like_xsd", label)
+    error_kind = _validate_probe_error_kind(
+        probe.get("error_kind"),
+        f"{label}.error_kind",
+    )
+    expected_target_namespace = _expected_xsd_target_namespace(message_def_id)
+    if status == "reachable":
+        if http_status is None or not (200 <= http_status <= 299):
+            raise ReadinessError(f"{label}.http_status must record a 2xx status")
+        if downloaded_bytes <= 0:
+            raise ReadinessError(
+                f"{label}.downloaded_bytes must be positive when reachable"
+            )
+        if not looks_like_xsd:
+            raise ReadinessError(
+                f"{label}.looks_like_xsd must be true for reachable probes"
+            )
+        if target_namespace != expected_target_namespace:
+            raise ReadinessError(
+                f"{label}.target_namespace must match message_def_id"
+            )
+    if status == "unexpected":
+        if http_status is None or not (100 <= http_status <= 399):
+            raise ReadinessError(
+                f"{label}.http_status must record a 1xx, 2xx, or 3xx status for unexpected probes"
+            )
+        if downloaded_bytes <= 0:
+            raise ReadinessError(
+                f"{label}.downloaded_bytes must be positive for unexpected probes"
+            )
+        if looks_like_xsd:
+            raise ReadinessError(
+                f"{label}.looks_like_xsd must be false for unexpected probes"
+            )
+        if target_namespace == expected_target_namespace:
+            raise ReadinessError(
+                f"{label}.target_namespace must not match message_def_id for unexpected probes"
+            )
+    if status in {"timeout", "network_error"} and http_status is not None:
+        raise ReadinessError(f"{label}.http_status must be null for {status} probes")
+    if status == "http_error" and http_status is None:
+        raise ReadinessError(f"{label}.http_status must be recorded for HTTP errors")
+    if status == "http_error" and not (400 <= http_status <= 599):
+        raise ReadinessError(
+            f"{label}.http_status must record a 4xx or 5xx status for HTTP errors"
+        )
+    if status in {"reachable", "unexpected"} and error_kind is not None:
+        raise ReadinessError(f"{label}.error_kind must be null for {status} probes")
+    if status in {"http_error", "timeout", "network_error"} and error_kind is None:
+        raise ReadinessError(f"{label}.error_kind must be recorded for failed probes")
+    if status == "http_error" and error_kind != "HTTPError":
+        raise ReadinessError(
+            f"{label}.error_kind must be HTTPError for http_error probes"
+        )
+    if status == "timeout" and error_kind != "TimeoutError":
+        raise ReadinessError(
+            f"{label}.error_kind must be TimeoutError for timeout probes"
+        )
+    if status == "network_error" and error_kind in {"HTTPError", "TimeoutError"}:
+        raise ReadinessError(
+            f"{label}.error_kind must not be HTTPError or TimeoutError for network_error probes"
+        )
+    if status == "network_error" and error_kind != "NetworkError":
+        raise ReadinessError(f"{label}.error_kind must be NetworkError for network_error probes")
+    if status in {"http_error", "timeout", "network_error"}:
+        if downloaded_bytes != 0:
+            raise ReadinessError(
+                f"{label}.downloaded_bytes must be zero for failed probes"
+            )
+        if status in {"timeout", "network_error"} and content_type is not None:
+            raise ReadinessError(
+                f"{label}.content_type must be null for {status} probes"
+            )
+        if target_namespace is not None:
+            raise ReadinessError(
+                f"{label}.target_namespace must be null for failed probes"
+            )
+        if truncated:
+            raise ReadinessError(f"{label}.truncated must be false for failed probes")
+        if looks_like_xsd:
+            raise ReadinessError(
+                f"{label}.looks_like_xsd must be false for failed probes"
+            )
+    return {
+        "message_def_id": message_def_id,
+        "message_name": message_name,
+        "submitting_organisation": submitting_organisation,
+        "catalogue_url": catalogue_url,
+        "download_url": download_url,
+        "target_namespace": target_namespace,
+        "status": status,
+        "http_status": http_status,
+        "content_type": content_type,
+        "downloaded_bytes": downloaded_bytes,
+        "sample_sha256": sample_sha256,
+        "truncated": truncated,
+        "looks_like_xsd": looks_like_xsd,
+        "error_kind": error_kind,
+    }
+
+
+def _parse_timestamp(raw: str, label: str) -> dt.datetime:
+    if len(raw) > MAX_TIMESTAMP_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_TIMESTAMP_CHARS} characters"
+        )
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = dt.datetime.fromisoformat(normalized)
+    except ValueError as error:
+        raise ReadinessError(f"{label} must be an ISO 8601 timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ReadinessError(f"{label} must include a timezone")
+    if CANONICAL_TIMESTAMP_RE.fullmatch(raw) is None or raw.endswith("-00:00"):
+        raise ReadinessError(f"{label} must use a canonical ISO 8601 timestamp")
+    parsed_utc = parsed.astimezone(dt.UTC)
+    if parsed_utc > dt.datetime.now(dt.UTC):
+        raise ReadinessError(f"{label} must not be in the future")
+    return parsed_utc
+
+
+def _require_timestamp(value: dict[str, Any], key: str, label: str) -> tuple[str, dt.datetime]:
+    raw = _require_string(value, key, label)
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label}.{key} must not contain control characters")
+    return raw, _parse_timestamp(raw, f"{label}.{key}")
+
+
+def _validate_https_source_url(
+    raw: str,
+    label: str,
+    *,
+    allow_insecure_source_url: bool = False,
+) -> str:
+    raw = _plain_text(raw, label)
+    if len(raw) > MAX_SOURCE_URL_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
+    if _contains_control_character(raw):
+        raise ReadinessError(f"{label} must not contain control characters")
+    _reject_url_percent_encoding_smuggling(raw, label)
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label} must not contain whitespace")
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        hostname = parsed.hostname
+    except ValueError as error:
+        raise ReadinessError(f"{label} is not a valid URL") from error
+    if parsed.scheme != "https":
+        if parsed.scheme == "http" and allow_insecure_source_url:
+            pass
+        elif allow_insecure_source_url:
+            raise ReadinessError(f"{label} must use HTTP or HTTPS URL")
+        else:
+            raise ReadinessError(f"{label} must use HTTPS URL")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ReadinessError(f"{label} has invalid port") from error
+    port_text = _raw_url_port_text(parsed)
+    if port_text == "":
+        raise ReadinessError(f"{label} must not include an empty port")
+    if port_text is not None:
+        if len(port_text) > 1 and port_text.startswith("0"):
+            raise ReadinessError(f"{label} port must not contain leading zeros")
+        if port == 0:
+            raise ReadinessError(f"{label} port must be positive")
+    if (parsed.scheme == "https" and port == 443) or (
+        parsed.scheme == "http" and port == 80
+    ):
+        raise ReadinessError(f"{label} must not explicitly specify the default port")
+    if not parsed.netloc or hostname is None or not hostname.strip():
+        raise ReadinessError(f"{label} must include a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ReadinessError(f"{label} must not contain credentials")
+    raw_host = _raw_url_host(parsed)
+    if "%" in raw_host:
+        raise ReadinessError(f"{label} host must not contain percent escapes")
+    if raw_host != raw_host.lower():
+        raise ReadinessError(f"{label} host must be lowercase")
+    if raw_host.endswith("."):
+        raise ReadinessError(f"{label} host must not end with a dot")
+    if any(ord(ch) > 0x7E for ch in raw_host):
+        raise ReadinessError(f"{label} host must use printable ASCII")
+    _reject_secret_looking_identifier(raw_host, f"{label} host")
+    _validate_host_labels(raw_host, label)
+    if parsed.params or parsed.query or parsed.fragment:
+        raise ReadinessError(f"{label} must not contain params, query, or fragment")
+    _validate_url_path(parsed, label)
+    hostname = hostname.strip().lower()
+    if not allow_insecure_source_url:
+        if hostname == "localhost" or hostname.endswith(".localhost"):
+            raise ReadinessError(f"{label} must not use localhost")
+        if _host_uses_rebinding_suffix(hostname):
+            raise ReadinessError(f"{label} must not use local/private rebinding hostnames")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            return raw
+        if not address.is_global:
+            raise ReadinessError(f"{label} must not use local, private, or reserved IP addresses")
+        if _address_embeds_non_global_ipv4(address):
+            raise ReadinessError(f"{label} must not embed local, private, or reserved IPv4 addresses")
+    return raw
+
+
+def _host_uses_rebinding_suffix(hostname: str) -> bool:
+    return hostname in LOCAL_REBINDING_HOST_SUFFIXES or any(
+        hostname.endswith("." + suffix) for suffix in LOCAL_REBINDING_HOST_SUFFIXES
+    )
+
+
+def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    embedded: ipaddress.IPv4Address | None = None
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            embedded = address.ipv4_mapped
+        elif address in NAT64_WELL_KNOWN_PREFIX or address in IPV4_COMPATIBLE_IPV6_PREFIX:
+            embedded = ipaddress.IPv4Address(int(address) & 0xFFFF_FFFF)
+        elif address.sixtofour is not None:
+            embedded = address.sixtofour
+        elif address.teredo is not None:
+            embedded = address.teredo[1]
+    return embedded is not None and not embedded.is_global
+
+
+def _trust_source_placeholder_forms(value: str) -> tuple[str, str, str]:
+    folded_forms = []
+    separated_forms = []
+    squeezed_forms = []
+    for candidate in (
+        value,
+        unicodedata.normalize("NFKC", value),
+        unicodedata.normalize("NFKD", value),
+    ):
+        folded = candidate.casefold()
+        folded_forms.append(folded)
+        separated_forms.append(" ".join(re.sub(r"[^a-z0-9]+", " ", folded).split()))
+        squeezed_forms.append("".join(ch for ch in folded if ch.isalnum()))
+    return (
+        " ".join(dict.fromkeys(folded_forms)),
+        " ".join(dict.fromkeys(separated_forms)),
+        " ".join(dict.fromkeys(squeezed_forms)),
+    )
+
+
+def _trust_source_text_is_placeholder(value: str) -> bool:
+    folded, separated, squeezed = _trust_source_placeholder_forms(value)
+    for marker in PLACEHOLDER_TRUST_SOURCE_MARKERS:
+        marker_folded, marker_separated, marker_squeezed = (
+            _trust_source_placeholder_forms(marker)
+        )
+        if (
+            marker_folded in folded
+            or marker_separated in separated
+            or marker_squeezed in squeezed
+        ):
+            return True
+    return False
+
+
+def _trust_source_url_uses_placeholder_host(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    return hostname in PLACEHOLDER_TRUST_SOURCE_HOSTS or any(
+        hostname.endswith("." + host) for host in PLACEHOLDER_TRUST_SOURCE_HOSTS
+    )
+
+
+def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        bracket = netloc.find("]")
+        if bracket != -1:
+            return netloc[1:bracket]
+    return netloc.rsplit(":", 1)[0]
+
+
+def _raw_url_port_text(parsed: urllib.parse.ParseResult) -> str | None:
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        bracket = netloc.find("]")
+        if bracket == -1:
+            return None
+        remainder = netloc[bracket + 1 :]
+        if remainder.startswith(":"):
+            return remainder[1:]
+        return None
+    if ":" in netloc:
+        return netloc.rsplit(":", 1)[1]
+    return None
+
+
+def _reject_url_percent_encoding_smuggling(url: str, label: str) -> None:
+    index = 0
+    while True:
+        index = url.find("%", index)
+        if index == -1:
+            return
+        token = url[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise ReadinessError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise ReadinessError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        index += 3
+
+
+def _validate_host_labels(raw_host: str, label: str) -> None:
+    try:
+        ipaddress.ip_address(raw_host)
+        return
+    except ValueError:
+        pass
+    if ":" in raw_host:
+        raise ReadinessError(f"{label} host must be a valid IP address")
+    if len(raw_host) > 253:
+        raise ReadinessError(f"{label} host must be at most 253 characters")
+    _reject_legacy_ipv4_host_notation(raw_host, label)
+    labels = raw_host.split(".")
+    if any(not part for part in labels):
+        raise ReadinessError(f"{label} host must not contain empty labels")
+    if all(part.isdigit() for part in labels):
+        raise ReadinessError(f"{label} numeric host labels must be a valid IP address")
+    for part in labels:
+        if len(part) > 63:
+            raise ReadinessError(f"{label} host labels must be at most 63 characters")
+        if part.startswith("-") or part.endswith("-"):
+            raise ReadinessError(f"{label} host labels must not start or end with hyphen")
+        if not all(("a" <= ch <= "z") or ch.isdigit() or ch == "-" for ch in part):
+            raise ReadinessError(
+                f"{label} host labels must use lowercase ASCII letters, digits, or hyphens"
+            )
+
+
+def _reject_legacy_ipv4_host_notation(raw_host: str, label: str) -> None:
+    parts = raw_host.split(".")
+    if len(parts) > 4:
+        return
+    saw_hex_part = False
+    for part in parts:
+        if part.startswith("0x"):
+            digits = part[2:]
+            if not digits or any(ch not in "0123456789abcdef" for ch in digits):
+                return
+            saw_hex_part = True
+        elif not part.isdigit():
+            return
+    if saw_hex_part:
+        raise ReadinessError(f"{label} host must not use legacy IPv4 numeric notation")
+
+
+def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
+    path = parsed.path
+    if any(ord(ch) > 0x7E for ch in path):
+        raise ReadinessError(f"{label} path must use printable ASCII")
+    if "\\" in path:
+        raise ReadinessError(f"{label} path must use forward slashes")
+    if ";" in path:
+        raise ReadinessError(f"{label} path must not contain semicolon parameters")
+    if any(token in path for token in (":", "@", "[", "]")):
+        raise ReadinessError(f"{label} path must not contain URL delimiter characters")
+    segments = path.split("/")
+    checked_segments = segments[1:] if path.startswith("/") else segments
+    if any(segment == "" for segment in checked_segments[:-1]):
+        raise ReadinessError(f"{label} path must not contain empty segments")
+    if any(segment in {".", ".."} for segment in segments):
+        raise ReadinessError(f"{label} path must not contain dot segments")
+    if _contains_secret_material(path) or _contains_secret_identifier_material(path):
+        raise ReadinessError(f"{label} path must not contain secret-looking material")
+    lowered = path.lower()
+    if any(token in lowered for token in ("%2e", "%2f", "%5c")):
+        raise ReadinessError(f"{label} path must not contain encoded dot or separator characters")
+    if "%3b" in lowered:
+        raise ReadinessError(f"{label} path must not contain encoded semicolon parameters")
+    if any(token in lowered for token in ("%23", "%3a", "%3f", "%40", "%5b", "%5d")):
+        raise ReadinessError(f"{label} path must not contain encoded URL delimiter characters")
+    if "%25" in lowered:
+        raise ReadinessError(f"{label} path must not contain encoded percent characters")
+    if re.search(r"%[89a-f][0-9a-f]", lowered):
+        raise ReadinessError(
+            f"{label} path must not contain percent-encoded non-ASCII bytes"
+        )
+
+
+def _require_summary_digest(summary: dict[str, Any], label: str) -> str:
+    expected = summary.get(SUMMARY_DIGEST_FIELD)
+    if not _is_lower_sha256(expected):
+        raise ReadinessError(f"{label} has missing or non-canonical {SUMMARY_DIGEST_FIELD}")
+    _reject_all_zero_sha256(expected, f"{label}.{SUMMARY_DIGEST_FIELD}")
+    body = dict(summary)
+    body.pop(SUMMARY_DIGEST_FIELD)
+    actual = sha256_hex(_canonical_json_bytes(body))
+    if actual != expected:
+        raise ReadinessError(f"{label} {SUMMARY_DIGEST_FIELD} mismatch")
+    return expected
+
+
+def _blocker(blockers: list[dict[str, Any]], code: str, message: str, path: Path) -> None:
+    blockers.append({"code": code, "message": message, "path": str(path)})
+
+
+def _diagnostic_order_key(diagnostic: dict[str, Any]) -> tuple[str, str, str, str]:
+    def key_value(field: str) -> str:
+        value = diagnostic.get(field)
+        if isinstance(value, str):
+            return value
+        return _canonical_json_bytes(value).decode("utf-8")
+
+    return (
+        key_value("code"),
+        key_value("path"),
+        key_value("message"),
+        _canonical_json_bytes(diagnostic).decode("utf-8"),
+    )
+
+
+def _canonical_diagnostic_entry_key(entry: Any) -> str:
+    return _canonical_json_bytes(entry).decode("utf-8")
+
+
+def _canonical_diagnostic(diagnostic: dict[str, Any]) -> dict[str, Any]:
+    result = dict(diagnostic)
+    entries = result.get("entries")
+    if isinstance(entries, list):
+        result["entries"] = sorted(entries, key=_canonical_diagnostic_entry_key)
+    return result
+
+
+def _canonical_diagnostics(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        (_canonical_diagnostic(diagnostic) for diagnostic in diagnostics),
+        key=_diagnostic_order_key,
+    )
+
+
+
+def _block_if_stale(
+    timestamp: dt.datetime,
+    *,
+    max_age_days: int,
+    code: str,
+    label: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=max_age_days)
+    if timestamp < cutoff:
+        _blocker(
+            blockers,
+            code,
+            f"{label} is older than the {max_age_days}-day freshness budget",
+            path,
+        )
+
+
+def _timestamp_is_stale_for_budget(timestamp: dt.datetime, *, max_age_days: int) -> bool:
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=max_age_days)
+    return timestamp < cutoff
+
+
+def _computed_profile_json_emittable(
+    *,
+    allow_synthetic_der: bool,
+    allow_record_only: bool,
+    allow_insecure_source_url: bool,
+    max_source_age_days: int | None,
+    profiles: list[dict[str, Any]],
+) -> bool:
+    if allow_synthetic_der or allow_record_only or allow_insecure_source_url:
+        return False
+    if max_source_age_days is None:
+        return False
+    if not profiles:
+        return False
+    for profile in profiles:
+        source = profile["source"]
+        if source is None:
+            return False
+        if (
+            _trust_source_text_is_placeholder(source["authority"])
+            or _trust_source_text_is_placeholder(source["version"])
+            or _trust_source_url_uses_placeholder_host(source["url"])
+        ):
+            return False
+        retrieved_at = _parse_timestamp(
+            source["retrieved_at"],
+            "trust profile source retrieved_at",
+        )
+        if _timestamp_is_stale_for_budget(
+            retrieved_at,
+            max_age_days=max_source_age_days,
+        ):
+            return False
+    return True
+
+
+def _trust_profile_source_requires_insecure_override(source: dict[str, str] | None) -> bool:
+    if source is None:
+        return False
+    parsed = urllib.parse.urlparse(source["url"])
+    if parsed.scheme == "http":
+        return True
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    if _host_uses_rebinding_suffix(hostname):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return (not address.is_global) or _address_embeds_non_global_ipv4(address)
+
+
+def _block_duplicate_strings(
+    values: list[str],
+    *,
+    label: str,
+    code: str,
+    message: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    seen: dict[str, int] = {}
+    for offset, value in enumerate(values):
+        if value in seen:
+            _blocker(
+                blockers,
+                code,
+                f"{message}: {label}[{offset}] duplicates {label}[{seen[value]}]",
+                path,
+            )
+        else:
+            seen[value] = offset
+
+
+def _verify_xsd_summary_entries(
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    verified_schemas: int,
+    verified_fixtures: int,
+    schema_backed_fixtures: int,
+    schema_validated_fixtures: int,
+    missing_schema_fixtures: list[Any],
+    schema_only_entries: list[Any],
+    blocked_schema_source_count: int,
+    blocked_schema_sources: list[Any],
+    pending_schema_source_count: int,
+    pending_schema_sources: list[Any],
+    blockers: list[dict[str, Any]],
+) -> None:
+    schemas_raw = _require_list(summary.get("schemas"), f"{path}.schemas")
+    fixtures_raw = _require_list(summary.get("fixtures"), f"{path}.fixtures")
+    if len(schemas_raw) != verified_schemas:
+        _blocker(
+            blockers,
+            "xsd.schema_count_mismatch",
+            "XSD summary verified_schemas does not match schemas[] length",
+            path,
+        )
+    if len(fixtures_raw) != verified_fixtures:
+        _blocker(
+            blockers,
+            "xsd.fixture_count_mismatch",
+            "XSD summary verified_fixtures does not match fixtures[] length",
+            path,
+        )
+
+    schema_paths: list[str] = []
+    declared_schema_only_paths: list[str] = []
+    declared_schema_only_entries: list[tuple[str, str, str]] = []
+    schema_ids: list[str] = []
+    schema_digests: list[str] = []
+    schema_source_refs: list[str] = []
+    schema_sources: list[dict[str, str]] = []
+    schema_ids_by_path: dict[str, str] = {}
+    schema_payload_roots_by_path: dict[str, str] = {}
+    schema_order_keys: list[tuple[str, str]] = []
+    for offset, schema_raw in enumerate(schemas_raw):
+        label = f"{path}.schemas[{offset}]"
+        schema = _require_object(schema_raw, label)
+        _reject_unknown_keys(schema, XSD_SCHEMA_KEYS, label)
+        message_def_id = _require_message_def_id(schema, "message_def_id", label)
+        schema_path = _validate_schema_source_path(
+            _require_string(schema, "path", label),
+            f"{label}.path",
+        )
+        schema_paths.append(schema_path)
+        schema_order_keys.append((message_def_id, schema_path))
+        if Path(schema_path).name != f"{message_def_id}.xsd":
+            _blocker(
+                blockers,
+                "xsd.schema_path_mismatch",
+                f"{label}.path filename does not match message_def_id",
+                path,
+            )
+        schema_ids.append(message_def_id)
+        schema_payload_root = _require_xsd_identifier(schema, "payload_root", label)
+        target_namespace = _require_xsd_identifier(schema, "target_namespace", label)
+        expected_namespace = f"urn:iso:std:iso:20022:tech:xsd:{message_def_id}"
+        if target_namespace != expected_namespace:
+            _blocker(
+                blockers,
+                "xsd.schema_target_namespace_mismatch",
+                f"{label}.target_namespace does not match message_def_id",
+                path,
+            )
+        schema_ids_by_path[schema_path] = message_def_id
+        schema_payload_roots_by_path[schema_path] = schema_payload_root
+        schema_sha256 = _require_nonzero_sha256(schema, "sha256", label)
+        schema_digests.append(schema_sha256)
+        schema_only = _require_bool(schema, "schema_only", label)
+        schema_only_reason = _validate_reviewed_gap_reason(
+            schema.get("schema_only_reason"),
+            f"{label}.schema_only_reason",
+        )
+        if schema_only:
+            declared_schema_only_paths.append(schema_path)
+            if schema_only_reason is None:
+                _blocker(
+                    blockers,
+                    "xsd.schema_only_reason_absent",
+                    f"{label} is marked schema-only without a reviewed reason",
+                    path,
+                )
+            else:
+                declared_schema_only_entries.append(
+                    (schema_path, message_def_id, schema_only_reason)
+                )
+        elif schema_only_reason is not None:
+            _blocker(
+                blockers,
+                "xsd.schema_only_reason_mismatch",
+                f"{label} is not schema-only but still records a schema-only reason",
+                path,
+            )
+        if "source" not in schema:
+            raise ReadinessError(f"{label}.source must be recorded")
+        source = _verify_schema_source_summary(
+            schema["source"],
+            f"{label}.source",
+            message_def_id=message_def_id,
+            schema_sha256=schema_sha256,
+            blockers=blockers,
+            path=path,
+        )
+        schema_source_refs.append(
+            f"{source['repository']}@{source['commit']}:{source['path']}"
+        )
+        schema_sources.append(source)
+    if schema_order_keys != sorted(schema_order_keys):
+        _blocker(
+            blockers,
+            "xsd.schemas_not_canonical_order",
+            f"{path}.schemas must be sorted by message_def_id and path",
+            path,
+        )
+    _block_duplicate_strings(
+        schema_paths,
+        label=f"{path}.schemas.path",
+        code="xsd.schema_path_duplicate",
+        message="XSD summary repeats a schema path",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        schema_ids,
+        label=f"{path}.schemas.message_def_id",
+        code="xsd.schema_id_duplicate",
+        message="XSD summary repeats a schema message_def_id",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        schema_digests,
+        label=f"{path}.schemas.sha256",
+        code="xsd.schema_digest_duplicate",
+        message="XSD summary repeats a schema digest",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        schema_source_refs,
+        label=f"{path}.schemas.source",
+        code="xsd.schema_source_duplicate",
+        message="XSD summary repeats a schema source reference",
+        path=path,
+        blockers=blockers,
+    )
+
+    if len(blocked_schema_sources) != blocked_schema_source_count:
+        _blocker(
+            blockers,
+            "xsd.blocked_schema_source_count_mismatch",
+            "XSD summary blocked_schema_source_count does not match blocked_schema_sources[] length",
+            path,
+        )
+    blocked_source_refs: list[str] = []
+    blocked_source_digests: list[str] = []
+    blocked_source_messages: list[str] = []
+    blocked_sources: list[dict[str, Any]] = []
+    blocked_source_order_keys: list[tuple[str, str, str, str]] = []
+    for offset, blocked_raw in enumerate(blocked_schema_sources):
+        label = f"{path}.blocked_schema_sources[{offset}]"
+        blocked = _verify_blocked_schema_source_summary(
+            blocked_raw,
+            label,
+            blockers=blockers,
+            path=path,
+        )
+        blocked_source_messages.append(blocked["message_def_id"])
+        blocked_source_refs.append(
+            f"{blocked['source']['repository']}@{blocked['source']['commit']}:"
+            f"{blocked['source']['path']}"
+        )
+        blocked_source_digests.append(blocked["source"]["sha256"])
+        blocked_sources.append(blocked)
+        blocked_source_order_keys.append(
+            (
+                blocked["message_def_id"],
+                blocked["source"]["repository"],
+                blocked["source"]["commit"],
+                blocked["source"]["path"],
+            )
+        )
+    if blocked_source_order_keys != sorted(blocked_source_order_keys):
+        _blocker(
+            blockers,
+            "xsd.blocked_sources_not_canonical_order",
+            (
+                f"{path}.blocked_schema_sources must be sorted by "
+                "message_def_id and source provenance"
+            ),
+            path,
+        )
+    checked_schema_ids = set(schema_ids)
+    for message_def_id in sorted(set(blocked_source_messages) & checked_schema_ids):
+        _blocker(
+            blockers,
+            "xsd.blocked_source_already_checked_in",
+            "XSD summary records blocked candidate for a checked-in schema",
+            path,
+        )
+    _block_duplicate_strings(
+        blocked_source_messages,
+        label=f"{path}.blocked_schema_sources.message_def_id",
+        code="xsd.blocked_source_message_id_duplicate",
+        message="XSD summary repeats a blocked schema source message_def_id",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        blocked_source_refs,
+        label=f"{path}.blocked_schema_sources.source",
+        code="xsd.blocked_source_duplicate",
+        message="XSD summary repeats a blocked schema source reference",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        blocked_source_digests,
+        label=f"{path}.blocked_schema_sources.sha256",
+        code="xsd.blocked_source_digest_duplicate",
+        message="XSD summary repeats a blocked schema source digest",
+        path=path,
+        blockers=blockers,
+    )
+    for digest in sorted(set(blocked_source_digests) & set(schema_digests)):
+        _blocker(
+            blockers,
+            "xsd.blocked_source_digest_matches_checked_schema",
+            "XSD summary records a blocked schema candidate digest that already "
+            "identifies a checked-in schema",
+            path,
+        )
+
+    if len(pending_schema_sources) != pending_schema_source_count:
+        _blocker(
+            blockers,
+            "xsd.pending_schema_source_count_mismatch",
+            "XSD summary pending_schema_source_count does not match pending_schema_sources[] length",
+            path,
+        )
+    pending_source_refs: list[str] = []
+    pending_source_download_urls: list[str] = []
+    pending_source_messages: list[str] = []
+    pending_source_message_names: list[str] = []
+    pending_sources: list[dict[str, Any]] = []
+    pending_source_order_keys: list[tuple[str, str, str, str, str, str]] = []
+    for offset, pending_raw in enumerate(pending_schema_sources):
+        label = f"{path}.pending_schema_sources[{offset}]"
+        pending = _verify_pending_schema_source_summary(pending_raw, label)
+        pending_source_messages.append(pending["message_def_id"])
+        pending_source_message_names.append(pending["source"]["message_name"])
+        pending_source_download_urls.append(pending["source"]["download_url"])
+        pending_source_refs.append(
+            f"{pending['source']['catalogue_url']}#"
+            f"{pending['source']['download_url']}#"
+            f"{pending['source']['download_type']}:"
+            f"{pending['source']['message_name']}:"
+            f"{pending['source']['submitting_organisation']}"
+        )
+        pending_sources.append(pending)
+        pending_source_order_keys.append(
+            (
+                pending["message_def_id"],
+                pending["source"]["catalogue_url"],
+                pending["source"]["download_url"],
+                pending["source"]["download_type"],
+                pending["source"]["message_name"],
+                pending["source"]["submitting_organisation"],
+            )
+        )
+    if pending_source_order_keys != sorted(pending_source_order_keys):
+        _blocker(
+            blockers,
+            "xsd.pending_sources_not_canonical_order",
+            (
+                f"{path}.pending_schema_sources must be sorted by "
+                "message_def_id and source provenance"
+            ),
+            path,
+        )
+    for message_def_id in sorted(set(pending_source_messages) & checked_schema_ids):
+        _blocker(
+            blockers,
+            "xsd.pending_source_already_checked_in",
+            "XSD summary records pending source for a checked-in schema",
+            path,
+        )
+    for message_def_id in sorted(set(pending_source_messages) & set(blocked_source_messages)):
+        _blocker(
+            blockers,
+            "xsd.pending_source_already_blocked",
+            "XSD summary records both pending and blocked source evidence for one schema",
+            path,
+        )
+    _block_duplicate_strings(
+        pending_source_messages,
+        label=f"{path}.pending_schema_sources.message_def_id",
+        code="xsd.pending_source_message_id_duplicate",
+        message="XSD summary repeats a pending schema source message_def_id",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        pending_source_message_names,
+        label=f"{path}.pending_schema_sources.source.message_name",
+        code="xsd.pending_source_message_name_duplicate",
+        message="XSD summary repeats a pending schema source message_name",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        pending_source_refs,
+        label=f"{path}.pending_schema_sources.source",
+        code="xsd.pending_source_duplicate",
+        message="XSD summary repeats a pending schema source reference",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        pending_source_download_urls,
+        label=f"{path}.pending_schema_sources.source.download_url",
+        code="xsd.pending_source_download_url_duplicate",
+        message="XSD summary repeats a pending schema source download URL",
+        path=path,
+        blockers=blockers,
+    )
+
+    fixture_paths: list[str] = []
+    fixture_message_ids: list[str] = []
+    fixture_digests: list[str] = []
+    backed_schema_paths: set[str] = set()
+    schema_backed_message_ids: set[str] = set()
+    computed_missing_schema_entries: list[tuple[str, str, str]] = []
+    computed_schema_backed = 0
+    computed_schema_validated = 0
+    computed_missing_schema = 0
+    schema_path_set = set(schema_paths)
+    fixture_order_keys: list[tuple[str, str]] = []
+    for offset, fixture_raw in enumerate(fixtures_raw):
+        label = f"{path}.fixtures[{offset}]"
+        fixture = _require_object(fixture_raw, label)
+        _reject_unknown_keys(fixture, XSD_FIXTURE_KEYS, label)
+        fixture_path = _validate_fixture_summary_path(
+            _require_string(fixture, "path", label),
+            f"{label}.path",
+        )
+        fixture_paths.append(fixture_path)
+        fixture_message_def_id = _require_message_def_id(fixture, "message_def_id", label)
+        fixture_message_ids.append(fixture_message_def_id)
+        fixture_order_keys.append((fixture_message_def_id, fixture_path))
+        fixture_payload_root = _require_xsd_identifier(fixture, "payload_root", label)
+        fixture_digests.append(_require_nonzero_sha256(fixture, "sha256", label))
+        schema_backed = _require_bool(fixture, "schema_backed", label)
+        schema_validated = _require_bool(fixture, "schema_validated", label)
+        schema_rel = fixture.get("schema")
+        missing_reason = _validate_reviewed_gap_reason(
+            fixture.get("missing_schema_reason"),
+            f"{label}.missing_schema_reason",
+        )
+        if schema_backed:
+            computed_schema_backed += 1
+            schema_backed_message_ids.add(fixture_message_def_id)
+            if schema_validated:
+                computed_schema_validated += 1
+            if missing_reason is not None:
+                _blocker(
+                    blockers,
+                    "xsd.fixture_missing_schema_reason_mismatch",
+                    f"{label} is schema-backed but still records a missing-schema reason",
+                    path,
+                )
+            if not isinstance(schema_rel, str):
+                _blocker(
+                    blockers,
+                    "xsd.fixture_schema_reference_missing",
+                    f"{label} is schema-backed but has no schema reference",
+                    path,
+                )
+            else:
+                schema_rel = _plain_text(schema_rel, f"{label}.schema")
+                if not schema_rel.strip():
+                    _blocker(
+                        blockers,
+                        "xsd.fixture_schema_reference_missing",
+                        f"{label} is schema-backed but has no schema reference",
+                        path,
+                    )
+                else:
+                    schema_rel = _validate_schema_source_path(schema_rel, f"{label}.schema")
+                    if schema_rel not in schema_path_set:
+                        _blocker(
+                            blockers,
+                            "xsd.fixture_schema_reference_mismatch",
+                            f"{label}.schema references an unknown schema path",
+                            path,
+                        )
+                    else:
+                        schema_message_def_id = schema_ids_by_path[schema_rel]
+                        if schema_message_def_id != fixture_message_def_id:
+                            _blocker(
+                                blockers,
+                                "xsd.fixture_schema_message_mismatch",
+                                f"{label}.schema message_def_id does not match fixture",
+                                path,
+                            )
+                        schema_payload_root = schema_payload_roots_by_path[schema_rel]
+                        if schema_payload_root != fixture_payload_root:
+                            _blocker(
+                                blockers,
+                                "xsd.fixture_payload_root_mismatch",
+                                f"{label}.schema payload_root does not match fixture",
+                                path,
+                            )
+                        backed_schema_paths.add(schema_rel)
+        else:
+            computed_missing_schema += 1
+            if schema_validated:
+                _blocker(
+                    blockers,
+                    "xsd.fixture_unbacked_schema_validated",
+                    f"{label} is marked schema_validated without a schema reference",
+                    path,
+                )
+            if schema_rel is not None:
+                _blocker(
+                    blockers,
+                    "xsd.fixture_schema_backing_mismatch",
+                    f"{label} is marked unbacked but still records a schema reference",
+                    path,
+                )
+            if missing_reason is None:
+                _blocker(
+                    blockers,
+                    "xsd.fixture_missing_schema_reason_absent",
+                    f"{label} is not schema-backed but has no reviewed missing-schema reason",
+                    path,
+                )
+            else:
+                if fixture_message_def_id in checked_schema_ids:
+                    _blocker(
+                        blockers,
+                        "xsd.fixture_missing_schema_matches_checked_schema",
+                        (
+                            f"{label} records a missing-schema fixture for an "
+                            "already checked-in schema"
+                        ),
+                        path,
+                    )
+                computed_missing_schema_entries.append(
+                    (fixture_path, fixture_message_def_id, missing_reason)
+                )
+    if fixture_order_keys != sorted(fixture_order_keys):
+        _blocker(
+            blockers,
+            "xsd.fixtures_not_canonical_order",
+            f"{path}.fixtures must be sorted by message_def_id and path",
+            path,
+        )
+    _block_duplicate_strings(
+        fixture_paths,
+        label=f"{path}.fixtures.path",
+        code="xsd.fixture_path_duplicate",
+        message="XSD summary repeats a fixture path",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        fixture_message_ids,
+        label=f"{path}.fixtures.message_def_id",
+        code="xsd.fixture_message_id_duplicate",
+        message="XSD summary repeats a fixture message_def_id",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        fixture_digests,
+        label=f"{path}.fixtures.sha256",
+        code="xsd.fixture_digest_duplicate",
+        message="XSD summary repeats a fixture digest",
+        path=path,
+        blockers=blockers,
+    )
+    for digest in sorted(set(schema_digests) & set(fixture_digests)):
+        _blocker(
+            blockers,
+            "xsd.fixture_digest_matches_schema",
+            "XSD summary records a fixture digest that already identifies a schema",
+            path,
+        )
+    for digest in sorted(set(blocked_source_digests) & set(fixture_digests)):
+        _blocker(
+            blockers,
+            "xsd.blocked_source_digest_matches_fixture",
+            "XSD summary records a blocked schema candidate digest that already "
+            "identifies a checked-in fixture",
+            path,
+        )
+    if computed_schema_backed != schema_backed_fixtures:
+        _blocker(
+            blockers,
+            "xsd.schema_backed_count_mismatch",
+            "XSD summary schema_backed_fixtures does not match fixtures[]",
+            path,
+        )
+    if computed_schema_validated != schema_validated_fixtures:
+        _blocker(
+            blockers,
+            "xsd.schema_validated_count_mismatch",
+            "XSD summary schema_validated_fixtures does not match fixtures[]",
+            path,
+        )
+    if computed_schema_validated != computed_schema_backed:
+        _blocker(
+            blockers,
+            "xsd.schema_backed_fixtures_not_validated",
+            "not all schema-backed XML fixtures were validated against their XSDs",
+            path,
+        )
+    if computed_missing_schema != len(missing_schema_fixtures):
+        _blocker(
+            blockers,
+            "xsd.missing_schema_fixture_count_mismatch",
+            "XSD summary missing_schema_fixtures does not match fixtures[]",
+            path,
+        )
+    actual_missing_schema_entries: list[tuple[str, str, str]] = []
+    for offset, raw_missing in enumerate(missing_schema_fixtures):
+        label = f"{path}.missing_schema_fixtures[{offset}]"
+        missing = _require_object(raw_missing, label)
+        _reject_unknown_keys(missing, XSD_GAP_ENTRY_KEYS, label)
+        actual_missing_schema_entries.append(
+            _xsd_gap_entry_key(missing, label, path_kind="fixture")
+        )
+    if sorted(actual_missing_schema_entries) != sorted(computed_missing_schema_entries):
+        _blocker(
+            blockers,
+            "xsd.missing_schema_fixture_entries_mismatch",
+            "XSD summary missing_schema_fixtures does not match fixtures[] entries",
+            path,
+        )
+    elif actual_missing_schema_entries != computed_missing_schema_entries:
+        _blocker(
+            blockers,
+            "xsd.missing_schema_fixture_entries_order",
+            "XSD summary missing_schema_fixtures must follow fixtures[] order",
+            path,
+        )
+    computed_schema_only_paths = schema_path_set - backed_schema_paths
+    if set(declared_schema_only_paths) != computed_schema_only_paths:
+        _blocker(
+            blockers,
+            "xsd.schema_only_flag_mismatch",
+            "XSD summary schemas[].schema_only does not match schemas[]/fixtures[]",
+            path,
+        )
+    computed_schema_only = len(computed_schema_only_paths)
+    if computed_schema_only != len(schema_only_entries):
+        _blocker(
+            blockers,
+            "xsd.schema_only_count_mismatch",
+            "XSD summary schema_only_entries does not match schemas[]/fixtures[]",
+            path,
+        )
+    actual_schema_only_entries: list[tuple[str, str, str]] = []
+    for offset, raw_schema_only in enumerate(schema_only_entries):
+        label = f"{path}.schema_only_entries[{offset}]"
+        schema_only = _require_object(raw_schema_only, label)
+        _reject_unknown_keys(schema_only, XSD_GAP_ENTRY_KEYS, label)
+        actual_schema_only_entries.append(
+            _xsd_gap_entry_key(schema_only, label, path_kind="schema")
+        )
+    if sorted(actual_schema_only_entries) != sorted(declared_schema_only_entries):
+        _blocker(
+            blockers,
+            "xsd.schema_only_entries_mismatch",
+            "XSD summary schema_only_entries does not match schemas[] entries",
+            path,
+        )
+    elif actual_schema_only_entries != declared_schema_only_entries:
+        _blocker(
+            blockers,
+            "xsd.schema_only_entries_order",
+            "XSD summary schema_only_entries must follow schemas[] order",
+            path,
+        )
+    summary["_validated_schema_sources"] = schema_sources
+    summary["_validated_schema_ids"] = schema_ids
+    summary["_validated_schema_paths"] = schema_paths
+    summary["_validated_schema_digests"] = schema_digests
+    summary["_validated_schema_source_refs"] = schema_source_refs
+    summary["_validated_blocked_schema_sources"] = blocked_sources
+    summary["_validated_blocked_schema_source_message_ids"] = blocked_source_messages
+    summary["_validated_blocked_schema_source_refs"] = blocked_source_refs
+    summary["_validated_blocked_schema_source_digests"] = blocked_source_digests
+    summary["_validated_pending_schema_sources"] = pending_sources
+    summary["_validated_pending_schema_source_message_ids"] = pending_source_messages
+    summary["_validated_pending_schema_source_message_names"] = (
+        pending_source_message_names
+    )
+    summary["_validated_pending_schema_source_refs"] = pending_source_refs
+    summary["_validated_pending_schema_source_download_urls"] = (
+        pending_source_download_urls
+    )
+    summary["_validated_fixture_message_ids"] = fixture_message_ids
+    summary["_validated_fixture_paths"] = fixture_paths
+    summary["_validated_fixture_digests"] = fixture_digests
+    summary["_validated_schema_backed_message_ids"] = schema_backed_message_ids
+
+
+def _xsd_gap_entry_key(
+    entry: dict[str, Any],
+    label: str,
+    *,
+    path_kind: str,
+) -> tuple[str, str, str]:
+    raw_path = _require_string(entry, "path", label)
+    if path_kind == "fixture":
+        gap_path = _validate_fixture_summary_path(raw_path, f"{label}.path")
+    elif path_kind == "schema":
+        gap_path = _validate_schema_source_path(raw_path, f"{label}.path")
+    else:
+        raise AssertionError(f"unsupported XSD gap path kind {path_kind!r}")
+    reason = _validate_reviewed_gap_reason(
+        _require_string(entry, "reason", label),
+        f"{label}.reason",
+    )
+    assert reason is not None
+    return (
+        gap_path,
+        _require_message_def_id(entry, "message_def_id", label),
+        reason,
+    )
+
+
+def _xsd_gap_diagnostic_entries(entries: list[Any]) -> list[dict[str, str]]:
+    """Return XSD gap diagnostics without reviewed free-form reason text."""
+
+    return [
+        {
+            "path": entry["path"],
+            "message_def_id": entry["message_def_id"],
+        }
+        for entry in entries
+        if type(entry) is dict
+    ]
+
+
+def _profile_version_key(entry: dict[str, Any], label: str) -> tuple[str, str, str, str]:
+    profile_id = _require_profile_id(entry, "profile_id", label)
+    message_type = _require_message_type(entry, "message_type", label)
+    direction = _require_profile_direction(entry, "direction", label)
+    message_def_id = _require_message_def_id(entry, "message_def_id", label)
+    if not message_def_id.startswith(message_type + "."):
+        raise ReadinessError(
+            f"{label}.message_def_id must match message_type"
+        )
+    return profile_id, message_type, direction, message_def_id
+
+
+def _require_profile_catalog_version(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    if raw != raw.strip():
+        raise ReadinessError(f"{label}.{key} must not have surrounding whitespace")
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
+def _verify_xsd_profile_catalog_entries(
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    profile_checked_versions: int,
+    profile_schema_backed_versions: int,
+    missing_profile_schema_versions: list[Any],
+    schema_backed_message_ids: set[str],
+    blockers: list[dict[str, Any]],
+) -> dict[str, str] | None:
+    if "profile_catalog" not in summary:
+        raise ReadinessError(f"{path}.profile_catalog must be recorded")
+    profile_catalog_raw = summary["profile_catalog"]
+    if profile_catalog_raw is None:
+        if (
+            profile_checked_versions
+            or profile_schema_backed_versions
+            or missing_profile_schema_versions
+        ):
+            _blocker(
+                blockers,
+                "xsd.profile_catalog_count_mismatch",
+                "XSD summary records profile counts without a profile_catalog section",
+                path,
+            )
+        return None
+
+    profile_catalog = _require_object(profile_catalog_raw, f"{path}.profile_catalog")
+    _reject_unknown_keys(profile_catalog, XSD_PROFILE_CATALOG_KEYS, f"{path}.profile_catalog")
+    profile_catalog_path = _require_string(
+        profile_catalog,
+        "path",
+        f"{path}.profile_catalog",
+    )
+    _reject_path_smuggling(profile_catalog_path, f"{path}.profile_catalog.path")
+    if _receipt_path_is_repository_fixture(profile_catalog_path):
+        _blocker(
+            blockers,
+            "xsd.repository_profile_catalog",
+            "XSD summary profile catalog path points at checked-in ISO fixture artifacts",
+            path,
+        )
+    profile_catalog_sha256 = _require_nonzero_sha256(
+        profile_catalog,
+        "sha256",
+        f"{path}.profile_catalog",
+    )
+    profile_catalog_json_sha256 = _require_nonzero_sha256(
+        profile_catalog,
+        "catalog_json_sha256",
+        f"{path}.profile_catalog",
+    )
+    catalog_profiles = _require_positive_int(
+        profile_catalog,
+        "profiles",
+        f"{path}.profile_catalog",
+    )
+    catalog_checked_versions = _require_nonnegative_int(
+        profile_catalog,
+        "checked_versions",
+        f"{path}.profile_catalog",
+    )
+    catalog_schema_backed_versions = _require_nonnegative_int(
+        profile_catalog,
+        "schema_backed_versions",
+        f"{path}.profile_catalog",
+    )
+    if catalog_checked_versions != profile_checked_versions:
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_checked_count_mismatch",
+            "XSD profile_catalog.checked_versions does not match top-level count",
+            path,
+        )
+    if catalog_schema_backed_versions != profile_schema_backed_versions:
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_schema_backed_count_mismatch",
+            "XSD profile_catalog.schema_backed_versions does not match top-level count",
+            path,
+        )
+    skipped_raw = _require_list(
+        profile_catalog.get("skipped_family_versions"),
+        f"{path}.profile_catalog.skipped_family_versions",
+    )
+    represented_profile_ids: set[str] = set()
+    seen_skipped: dict[tuple[str, str, str, str], int] = {}
+    skipped_order_keys: list[tuple[str, str, str, str]] = []
+    for offset, raw_skipped in enumerate(skipped_raw):
+        label = f"{path}.profile_catalog.skipped_family_versions[{offset}]"
+        skipped = _require_object(raw_skipped, label)
+        _reject_unknown_keys(skipped, XSD_PROFILE_SKIPPED_VERSION_KEYS, label)
+        key = (
+            _require_profile_id(skipped, "profile_id", label),
+            _require_message_type(skipped, "message_type", label),
+            _require_profile_direction(skipped, "direction", label),
+            _require_profile_catalog_version(skipped, "version", label),
+        )
+        skipped_order_keys.append(key)
+        represented_profile_ids.add(key[0])
+        if MESSAGE_DEF_ID_RE.fullmatch(key[3]) is not None:
+            _blocker(
+                blockers,
+                "xsd.profile_catalog_skipped_concrete_version",
+                f"{label}.version is concrete and should not be skipped",
+                path,
+            )
+        elif key[3] != key[1]:
+            _blocker(
+                blockers,
+                "xsd.profile_catalog_skipped_family_mismatch",
+                f"{label}.version must equal message_type",
+                path,
+            )
+        if key in seen_skipped:
+            _blocker(
+                blockers,
+                "xsd.profile_catalog_skipped_duplicate",
+                (
+                    f"{label} duplicates "
+                    f"{path}.profile_catalog.skipped_family_versions[{seen_skipped[key]}]"
+                ),
+                path,
+            )
+        else:
+            seen_skipped[key] = offset
+    if skipped_order_keys != sorted(skipped_order_keys):
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_skipped_not_canonical_order",
+            (
+                f"{path}.profile_catalog.skipped_family_versions must be sorted "
+                "by profile_id, message_type, direction, and version"
+            ),
+            path,
+        )
+    versions_raw = _require_list(
+        profile_catalog.get("versions"),
+        f"{path}.profile_catalog.versions",
+    )
+    if len(versions_raw) != profile_checked_versions:
+        _blocker(
+            blockers,
+            "xsd.profile_version_count_mismatch",
+            "XSD summary profile_checked_versions does not match profile_catalog.versions[]",
+            path,
+        )
+    computed_schema_backed = 0
+    computed_missing: list[tuple[str, str, str, str]] = []
+    seen_versions: dict[tuple[str, str, str, str], int] = {}
+    version_order_keys: list[tuple[str, str, str, str]] = []
+    for offset, raw_version in enumerate(versions_raw):
+        label = f"{path}.profile_catalog.versions[{offset}]"
+        version = _require_object(raw_version, label)
+        _reject_unknown_keys(version, XSD_PROFILE_VERSION_KEYS, label)
+        key = _profile_version_key(version, label)
+        version_order_keys.append(key)
+        represented_profile_ids.add(key[0])
+        if key in seen_versions:
+            _blocker(
+                blockers,
+                "xsd.profile_version_duplicate",
+                (
+                    f"{label} duplicates "
+                    f"{path}.profile_catalog.versions[{seen_versions[key]}]"
+                ),
+                path,
+            )
+        else:
+            seen_versions[key] = offset
+        schema_backed = _require_bool(version, "schema_backed", label)
+        expected_schema_backed = key[3] in schema_backed_message_ids
+        if schema_backed != expected_schema_backed:
+            _blocker(
+                blockers,
+                "xsd.profile_version_schema_backing_mismatch",
+                "XSD profile catalog version schema_backed flag does not match schema-backed fixtures",
+                path,
+            )
+        if schema_backed:
+            computed_schema_backed += 1
+        else:
+            computed_missing.append(key)
+    if version_order_keys != sorted(version_order_keys):
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_versions_not_canonical_order",
+            (
+                f"{path}.profile_catalog.versions must be sorted by "
+                "profile_id, message_type, direction, and message_def_id"
+            ),
+            path,
+        )
+    if computed_schema_backed != profile_schema_backed_versions:
+        _blocker(
+            blockers,
+            "xsd.profile_schema_backed_count_mismatch",
+            "XSD summary profile_schema_backed_versions does not match profile catalog",
+            path,
+        )
+    if len(represented_profile_ids) != catalog_profiles:
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_profile_count_mismatch",
+            "XSD profile_catalog.profiles does not match represented profile IDs",
+            path,
+        )
+
+    catalog_missing: list[tuple[str, str, str, str]] = []
+    catalog_missing_raw = _require_list(
+        profile_catalog.get("missing_schema_versions"),
+        f"{path}.profile_catalog.missing_schema_versions",
+    )
+    for offset, raw_missing in enumerate(catalog_missing_raw):
+        label = f"{path}.profile_catalog.missing_schema_versions[{offset}]"
+        missing = _require_object(raw_missing, label)
+        _reject_unknown_keys(missing, XSD_PROFILE_MISSING_VERSION_KEYS, label)
+        catalog_missing.append(_profile_version_key(missing, label))
+    if sorted(catalog_missing) != sorted(computed_missing):
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_missing_schema_versions_mismatch",
+            "XSD summary profile_catalog.missing_schema_versions does not match profile catalog",
+            path,
+        )
+    elif catalog_missing != computed_missing:
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_missing_schema_versions_order",
+            "XSD summary profile_catalog.missing_schema_versions must follow profile catalog version order",
+            path,
+        )
+
+    actual_missing: list[tuple[str, str, str, str]] = []
+    for offset, raw_missing in enumerate(missing_profile_schema_versions):
+        label = f"{path}.missing_profile_schema_versions[{offset}]"
+        missing = _require_object(raw_missing, label)
+        _reject_unknown_keys(missing, XSD_PROFILE_MISSING_VERSION_KEYS, label)
+        actual_missing.append(_profile_version_key(missing, label))
+    if sorted(actual_missing) != sorted(computed_missing):
+        _blocker(
+            blockers,
+            "xsd.missing_profile_schema_versions_mismatch",
+            "XSD summary missing_profile_schema_versions does not match profile catalog",
+            path,
+        )
+    elif actual_missing != computed_missing:
+        _blocker(
+            blockers,
+            "xsd.missing_profile_schema_versions_order",
+            "XSD summary missing_profile_schema_versions must follow profile catalog version order",
+            path,
+        )
+    return {
+        "path": profile_catalog_path,
+        "sha256": profile_catalog_sha256,
+        "catalog_json_sha256": profile_catalog_json_sha256,
+        "profiles": catalog_profiles,
+    }
+
+
+def _verify_missing_profile_schema_message_ids(
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    missing_profile_schema_versions: list[Any],
+    missing_schema_message_ids: set[str],
+    schema_only_message_ids: set[str],
+    blocked_schema_message_ids: set[str],
+    pending_schema_message_ids: set[str],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Verify the unique missing-message aggregate against raw profile gaps."""
+
+    raw_entries = _require_list(
+        summary.get("missing_profile_schema_message_ids"),
+        f"{path}.missing_profile_schema_message_ids",
+    )
+    counts: dict[str, int] = {}
+    for offset, raw_missing in enumerate(missing_profile_schema_versions):
+        label = f"{path}.missing_profile_schema_versions[{offset}]"
+        missing = _require_object(raw_missing, label)
+        message_def_id = _require_message_def_id(missing, "message_def_id", label)
+        counts[message_def_id] = counts.get(message_def_id, 0) + 1
+
+    expected = sorted(
+        (
+            message_def_id,
+            count,
+            message_def_id in missing_schema_message_ids,
+            message_def_id in schema_only_message_ids,
+            message_def_id in blocked_schema_message_ids,
+            message_def_id in pending_schema_message_ids,
+        )
+        for message_def_id, count in counts.items()
+    )
+    actual: list[tuple[str, int, bool, bool, bool, bool]] = []
+    seen: dict[str, int] = {}
+    for offset, raw_entry in enumerate(raw_entries):
+        label = f"{path}.missing_profile_schema_message_ids[{offset}]"
+        entry = _require_object(raw_entry, label)
+        _reject_unknown_keys(entry, XSD_PROFILE_MISSING_MESSAGE_KEYS, label)
+        message_def_id = _require_message_def_id(entry, "message_def_id", label)
+        if message_def_id in seen:
+            _blocker(
+                blockers,
+                "xsd.missing_profile_schema_message_id_duplicate",
+                (
+                    f"{label}.message_def_id duplicates "
+                    f"{path}.missing_profile_schema_message_ids"
+                    f"[{seen[message_def_id]}].message_def_id"
+                ),
+                path,
+            )
+        else:
+            seen[message_def_id] = offset
+        actual.append(
+            (
+                message_def_id,
+                _require_positive_int(entry, "profile_version_count", label),
+                _require_bool(entry, "reviewed_missing_schema_fixture", label),
+                _require_bool(entry, "reviewed_schema_only", label),
+                _require_bool(entry, "blocked_source", label),
+                _require_bool(entry, "pending_source", label),
+            )
+        )
+    if sorted(actual) != expected:
+        _blocker(
+            blockers,
+            "xsd.missing_profile_schema_message_ids_mismatch",
+            "XSD summary missing_profile_schema_message_ids does not match profile gaps",
+            path,
+        )
+    elif actual != expected:
+        _blocker(
+            blockers,
+            "xsd.missing_profile_schema_message_ids_order",
+            "XSD summary missing_profile_schema_message_ids must follow canonical message_def_id order",
+            path,
+        )
+
+
+def _unreviewed_missing_profile_schema_message_ids(
+    path: Path,
+    *,
+    missing_profile_schema_versions: list[Any],
+    reviewed_xsd_gap_message_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Return unique missing profile message ids without reviewed gap evidence."""
+
+    counts: dict[str, int] = {}
+    for offset, raw_missing in enumerate(missing_profile_schema_versions):
+        label = f"{path}.missing_profile_schema_versions[{offset}]"
+        missing = _require_object(raw_missing, label)
+        message_def_id = _require_message_def_id(missing, "message_def_id", label)
+        if message_def_id not in reviewed_xsd_gap_message_ids:
+            counts[message_def_id] = counts.get(message_def_id, 0) + 1
+    return [
+        {
+            "message_def_id": message_def_id,
+            "profile_version_count": counts[message_def_id],
+        }
+        for message_def_id in sorted(counts)
+    ]
+
+
+def _verify_unreviewed_profile_schema_message_ids(
+    summary: dict[str, Any],
+    path: Path,
+    *,
+    expected_entries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Verify the declared unique unreviewed missing-message aggregate."""
+
+    declared_count = _require_nonnegative_int(
+        summary,
+        "unreviewed_profile_schema_message_id_count",
+        str(path),
+    )
+    raw_entries = _require_list(
+        summary.get("unreviewed_profile_schema_message_ids"),
+        f"{path}.unreviewed_profile_schema_message_ids",
+    )
+    actual: list[tuple[str, int]] = []
+    seen: dict[str, int] = {}
+    for offset, raw_entry in enumerate(raw_entries):
+        label = f"{path}.unreviewed_profile_schema_message_ids[{offset}]"
+        entry = _require_object(raw_entry, label)
+        _reject_unknown_keys(entry, XSD_PROFILE_UNREVIEWED_MESSAGE_KEYS, label)
+        message_def_id = _require_message_def_id(entry, "message_def_id", label)
+        if message_def_id in seen:
+            _blocker(
+                blockers,
+                "xsd.unreviewed_profile_schema_message_id_duplicate",
+                (
+                    f"{label}.message_def_id duplicates "
+                    f"{path}.unreviewed_profile_schema_message_ids"
+                    f"[{seen[message_def_id]}].message_def_id"
+                ),
+                path,
+            )
+        else:
+            seen[message_def_id] = offset
+        actual.append(
+            (
+                message_def_id,
+                _require_positive_int(entry, "profile_version_count", label),
+            )
+        )
+
+    expected = [
+        (entry["message_def_id"], entry["profile_version_count"])
+        for entry in expected_entries
+    ]
+    if declared_count != len(raw_entries):
+        _blocker(
+            blockers,
+            "xsd.unreviewed_profile_schema_message_id_count_mismatch",
+            (
+                "XSD summary unreviewed_profile_schema_message_id_count does not "
+                "match unreviewed_profile_schema_message_ids length"
+            ),
+            path,
+        )
+    if sorted(actual) != sorted(expected):
+        _blocker(
+            blockers,
+            "xsd.unreviewed_profile_schema_message_ids_mismatch",
+            (
+                "XSD summary unreviewed_profile_schema_message_ids does not match "
+                "raw profile gaps"
+            ),
+            path,
+        )
+    elif actual != expected:
+        _blocker(
+            blockers,
+            "xsd.unreviewed_profile_schema_message_ids_order",
+            (
+                "XSD summary unreviewed_profile_schema_message_ids must follow "
+                "canonical message_def_id order"
+            ),
+            path,
+        )
+
+
+def _block_xsd_profile_catalog_digest_role_confusion(
+    profile_catalog: dict[str, str],
+    summary: dict[str, Any],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    catalog_digest = profile_catalog["sha256"]
+    catalog_json_digest = profile_catalog["catalog_json_sha256"]
+    if catalog_digest == catalog_json_digest:
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_digest_matches_catalog_json",
+            "XSD profile_catalog source digest matches its embedded JSON digest",
+            path,
+        )
+
+    checks = (
+        (
+            catalog_digest,
+            summary["_validated_schema_digests"],
+            "xsd.profile_catalog_digest_matches_schema",
+            "XSD profile_catalog source digest already identifies a checked-in schema",
+        ),
+        (
+            catalog_digest,
+            summary["_validated_fixture_digests"],
+            "xsd.profile_catalog_digest_matches_fixture",
+            "XSD profile_catalog source digest already identifies a checked-in fixture",
+        ),
+        (
+            catalog_digest,
+            summary["_validated_blocked_schema_source_digests"],
+            "xsd.profile_catalog_digest_matches_blocked_source",
+            "XSD profile_catalog source digest already identifies a blocked schema candidate",
+        ),
+        (
+            catalog_json_digest,
+            summary["_validated_schema_digests"],
+            "xsd.profile_catalog_json_digest_matches_schema",
+            "XSD profile_catalog JSON digest already identifies a checked-in schema",
+        ),
+        (
+            catalog_json_digest,
+            summary["_validated_fixture_digests"],
+            "xsd.profile_catalog_json_digest_matches_fixture",
+            "XSD profile_catalog JSON digest already identifies a checked-in fixture",
+        ),
+        (
+            catalog_json_digest,
+            summary["_validated_blocked_schema_source_digests"],
+            "xsd.profile_catalog_json_digest_matches_blocked_source",
+            "XSD profile_catalog JSON digest already identifies a blocked schema candidate",
+        ),
+    )
+    for digest, role_digests, code, message in checks:
+        if digest in set(role_digests):
+            _blocker(blockers, code, message, path)
+
+
+def _block_xsd_manifest_digest_role_confusion(
+    manifest_sha256: str,
+    profile_catalog: dict[str, str] | None,
+    summary: dict[str, Any],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Reject manifest digests reused as schema, fixture, or catalog material."""
+
+    checks: list[tuple[list[str], str, str]] = [
+        (
+            summary["_validated_schema_digests"],
+            "xsd.manifest_digest_matches_schema",
+            "XSD manifest digest already identifies a checked-in schema",
+        ),
+        (
+            summary["_validated_fixture_digests"],
+            "xsd.manifest_digest_matches_fixture",
+            "XSD manifest digest already identifies a checked-in fixture",
+        ),
+        (
+            summary["_validated_blocked_schema_source_digests"],
+            "xsd.manifest_digest_matches_blocked_source",
+            "XSD manifest digest already identifies a blocked schema candidate",
+        ),
+    ]
+    if profile_catalog is not None:
+        checks.extend(
+            [
+                (
+                    [profile_catalog["sha256"]],
+                    "xsd.manifest_digest_matches_profile_catalog",
+                    "XSD manifest digest already identifies the profile catalog source",
+                ),
+                (
+                    [profile_catalog["catalog_json_sha256"]],
+                    "xsd.manifest_digest_matches_profile_catalog_json",
+                    "XSD manifest digest already identifies the profile catalog JSON",
+                ),
+            ]
+        )
+    for role_digests, code, message in checks:
+        if manifest_sha256 in set(role_digests):
+            _blocker(blockers, code, message, path)
+
+
+def _verify_receipt_summary(
+    receipt_obj: dict[str, Any],
+    label: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+    *,
+    missing_kinds_code: str,
+    allow_failed_code: str,
+    allow_insecure_code: str,
+    allow_default_profile_code: str,
+    version_code: str,
+    source_files_code: str,
+    count_mismatch_code: str,
+    digest_missing_code: str,
+    duplicate_path_code: str,
+    duplicate_digest_code: str,
+    unsuccessful_receipt_code: str,
+    status_mismatch_code: str,
+    metadata_code: str,
+    digest_role_reuse_code: str,
+    kind_entry_mismatch_code: str,
+    receipt_entry_order_code: str,
+    summary_not_ok_code: str,
+    summary_ok_drift_code: str,
+    source_material_reuse_codes: tuple[tuple[str, str], ...],
+) -> dict[str, Any]:
+    digest = _require_summary_digest(receipt_obj, label)
+    _reject_unknown_keys(receipt_obj, RECEIPT_SUMMARY_KEYS, label)
+    version = receipt_obj.get("version")
+    if type(version) is not int or version != RECEIPT_SUMMARY_VERSION:
+        _blocker(
+            blockers,
+            version_code,
+            (
+                f"{label}.version must be receipt verifier summary version "
+                f"{RECEIPT_SUMMARY_VERSION}"
+            ),
+            path,
+        )
+    summary_ok = _require_bool(receipt_obj, "ok", label)
+    verified_receipts = _require_positive_int(
+        receipt_obj,
+        "verified_receipts",
+        label,
+    )
+    receipt_kind_raw = _require_list(
+        receipt_obj.get("receipt_kind"),
+        f"{label}.receipt_kind",
+    )
+    receipt_kind_clean: list[str] = []
+    seen_receipt_kinds: dict[str, int] = {}
+    for offset, item in enumerate(receipt_kind_raw):
+        item_label = f"{label}.receipt_kind[{offset}]"
+        if not isinstance(item, str):
+            raise ReadinessError(f"{label}.receipt_kind must contain strings")
+        item = _plain_text(item, item_label)
+        if not item.strip():
+            raise ReadinessError(f"{label}.receipt_kind must contain strings")
+        if len(item) > MAX_CLEAN_STRING_CHARS:
+            raise ReadinessError(
+                f"{item_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+            )
+        if _contains_control_character(item):
+            raise ReadinessError(
+                f"{item_label} must not contain control characters"
+            )
+        if item != item.strip():
+            raise ReadinessError(
+                f"{item_label} must not have surrounding whitespace"
+            )
+        _reject_non_ascii_context(item, item_label)
+        _reject_secret_looking_identifier(item, item_label)
+        if item in seen_receipt_kinds:
+            _blocker(
+                blockers,
+                kind_entry_mismatch_code,
+                (
+                    f"{item_label} duplicates "
+                    f"{label}.receipt_kind[{seen_receipt_kinds[item]}]"
+                ),
+                path,
+            )
+        else:
+            seen_receipt_kinds[item] = offset
+        receipt_kind_clean.append(item)
+    receipt_kind_set = set(receipt_kind_clean)
+    missing = sorted(REQUIRED_RECEIPT_KINDS - receipt_kind_set)
+    if missing:
+        _blocker(
+            blockers,
+            missing_kinds_code,
+            "receipt verification is missing kinds: " + ", ".join(missing),
+            path,
+        )
+    unsupported = sorted(receipt_kind_set - REQUIRED_RECEIPT_KINDS)
+    if unsupported:
+        _blocker(
+            blockers,
+            kind_entry_mismatch_code,
+            "receipt verification contains unsupported receipt kinds",
+            path,
+        )
+    if receipt_kind_clean != sorted(receipt_kind_set):
+        _blocker(
+            blockers,
+            kind_entry_mismatch_code,
+            f"{label}.receipt_kind must be sorted in canonical order",
+            path,
+        )
+    allow_failed = _require_bool(receipt_obj, "allow_failed", label)
+    allow_insecure_http = _require_bool(receipt_obj, "allow_insecure_http", label)
+    allow_default_profile = _require_bool(receipt_obj, "allow_default_profile", label)
+    require_source_files = _require_bool(receipt_obj, "require_source_files", label)
+    if not require_source_files:
+        _blocker(
+            blockers,
+            source_files_code,
+            "receipt verifier evidence did not require source files",
+            path,
+        )
+
+    receipts_raw = _require_list(receipt_obj.get("receipts"), f"{label}.receipts")
+    if len(receipts_raw) != verified_receipts:
+        _blocker(
+            blockers,
+            count_mismatch_code,
+            "receipt verification count does not match receipts[] entries",
+            path,
+        )
+    receipts: list[dict[str, Any]] = []
+    receipt_entry_kinds: set[str] = set()
+    seen_receipt_paths: dict[str, int] = {}
+    seen_receipt_digests: dict[str, int] = {}
+    receipt_order_keys: list[tuple[str, str, str]] = []
+    source_material_code_by_field = dict(source_material_reuse_codes)
+    seen_source_material_signatures: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+    seen_source_material_fields: dict[tuple[str, str], dict[str, int]] = {}
+    has_failed_receipt = False
+    has_insecure_receipt_endpoint = False
+    has_default_profile_receipt = False
+    for offset, receipt_raw in enumerate(receipts_raw):
+        entry_label = f"{label}.receipts[{offset}]"
+        receipt = _require_object(receipt_raw, entry_label)
+        _reject_unknown_keys(receipt, RECEIPT_ENTRY_KEYS, entry_label)
+        receipt_path = _validate_receipt_path(
+            _require_string(receipt, "path", entry_label),
+            f"{entry_label}.path",
+        )
+        if receipt_path in seen_receipt_paths:
+            _blocker(
+                blockers,
+                duplicate_path_code,
+                (
+                    f"{entry_label}.path duplicates "
+                    f"{label}.receipts[{seen_receipt_paths[receipt_path]}].path"
+                ),
+                path,
+            )
+        else:
+            seen_receipt_paths[receipt_path] = offset
+        receipt_kind = _require_receipt_kind(receipt, "receipt_kind", entry_label)
+        if receipt_kind not in REQUIRED_RECEIPT_KINDS:
+            _blocker(
+                blockers,
+                kind_entry_mismatch_code,
+                f"{entry_label}.receipt_kind is unsupported",
+                path,
+            )
+        receipt_sha256 = receipt.get("receipt_sha256")
+        receipt_order_keys.append(
+            _receipt_summary_entry_order_key(
+                {
+                    "receipt_kind": receipt_kind,
+                    "path": receipt_path,
+                    "receipt_sha256": receipt_sha256
+                    if isinstance(receipt_sha256, str)
+                    else "",
+                }
+            )
+        )
+        if not _is_lower_sha256(receipt_sha256):
+            _blocker(
+                blockers,
+                digest_missing_code,
+                f"{entry_label}.receipt_sha256 is missing or non-canonical",
+                path,
+            )
+        elif all(ch == "0" for ch in receipt_sha256):
+            _blocker(
+                blockers,
+                digest_missing_code,
+                f"{entry_label}.receipt_sha256 must not be all zero",
+                path,
+            )
+        elif receipt_sha256 in seen_receipt_digests:
+            _blocker(
+                blockers,
+                duplicate_digest_code,
+                (
+                    f"{entry_label}.receipt_sha256 duplicates "
+                    f"{label}.receipts[{seen_receipt_digests[receipt_sha256]}].receipt_sha256"
+                ),
+                path,
+            )
+        else:
+            seen_receipt_digests[receipt_sha256] = offset
+        ok = receipt.get("ok")
+        status_code = receipt.get("status_code")
+        status_code_valid = True
+        if not isinstance(ok, bool):
+            _blocker(
+                blockers,
+                status_mismatch_code,
+                f"{entry_label}.ok must be a boolean",
+                path,
+            )
+        if "status_code" not in receipt or (
+            status_code is not None
+            and (
+                type(status_code) is not int
+                or status_code < 100
+                or status_code > 599
+            )
+        ):
+            status_code_valid = False
+            _blocker(
+                blockers,
+                status_mismatch_code,
+                f"{entry_label}.status_code must be an HTTP status integer or null",
+                path,
+            )
+        if status_code_valid and isinstance(ok, bool):
+            status_success = type(status_code) is int and 200 <= status_code <= 299
+            if ok != status_success:
+                _blocker(
+                    blockers,
+                    status_mismatch_code,
+                    f"{entry_label}.ok does not match status_code success state",
+                    path,
+                )
+            elif not ok:
+                has_failed_receipt = True
+                _blocker(
+                    blockers,
+                    unsuccessful_receipt_code,
+                    f"{entry_label} did not succeed",
+                    path,
+                )
+        response_body_sha256 = receipt.get("response_body_sha256")
+        if status_code_valid and status_code is None:
+            if "response_body_sha256" not in receipt or response_body_sha256 is not None:
+                _blocker(
+                    blockers,
+                    metadata_code,
+                    f"{entry_label}.response_body_sha256 must be null without HTTP status_code",
+                    path,
+                )
+        elif "response_body_sha256" not in receipt or not _is_lower_sha256(
+            response_body_sha256
+        ):
+            _blocker(
+                blockers,
+                metadata_code,
+                f"{entry_label}.response_body_sha256 must be a canonical SHA-256",
+                path,
+            )
+        elif all(ch == "0" for ch in response_body_sha256):
+            _blocker(
+                blockers,
+                metadata_code,
+                f"{entry_label}.response_body_sha256 must not be all zero",
+                path,
+            )
+        endpoint_requires_insecure_http = receipt.get(
+            "endpoint_requires_insecure_http"
+        )
+        if not isinstance(endpoint_requires_insecure_http, bool):
+            _blocker(
+                blockers,
+                metadata_code,
+                f"{entry_label}.endpoint_requires_insecure_http must be a boolean",
+                path,
+            )
+        elif endpoint_requires_insecure_http and not allow_insecure_http:
+            _blocker(
+                blockers,
+                metadata_code,
+                (
+                    f"{entry_label}.endpoint_requires_insecure_http requires "
+                    "allow_insecure_http=true"
+                ),
+                path,
+            )
+        else:
+            has_insecure_receipt_endpoint = (
+                has_insecure_receipt_endpoint or endpoint_requires_insecure_http
+            )
+        _block_receipt_entry_metadata_errors(
+            receipt,
+            entry_label,
+            path,
+            blockers,
+            receipt_kind=receipt_kind,
+            allow_default_profile=allow_default_profile,
+            require_source_files=require_source_files,
+            metadata_code=metadata_code,
+        )
+        _block_receipt_digest_role_reuse(
+            receipt,
+            entry_label,
+            path,
+            blockers,
+            receipt_kind=receipt_kind,
+            digest_role_reuse_code=digest_role_reuse_code,
+        )
+        source_material_fields = RECEIPT_SOURCE_MATERIAL_FIELDS_BY_KIND.get(
+            receipt_kind,
+            (),
+        )
+        source_material_values = tuple(
+            (field, receipt.get(field)) for field in source_material_fields
+        )
+        string_source_material_values = tuple(
+            (field, value)
+            for field, value in source_material_values
+            if isinstance(value, str)
+        )
+        if string_source_material_values:
+            source_material_signature = (receipt_kind, string_source_material_values)
+            if source_material_signature in seen_source_material_signatures:
+                first_offset = seen_source_material_signatures[source_material_signature]
+                for field, _value in string_source_material_values:
+                    code = source_material_code_by_field.get(field)
+                    if code is None:
+                        continue
+                    _blocker(
+                        blockers,
+                        code,
+                        (
+                            f"{entry_label}.{field} duplicates "
+                            f"{label}.receipts[{first_offset}].{field}"
+                        ),
+                        path,
+                    )
+            else:
+                seen_source_material_signatures[source_material_signature] = offset
+            for field, value in string_source_material_values:
+                seen_for_field = seen_source_material_fields.setdefault(
+                    (receipt_kind, field),
+                    {},
+                )
+                first_offset = seen_for_field.get(value)
+                if first_offset is None:
+                    seen_for_field[value] = offset
+                    continue
+                code = source_material_code_by_field.get(field)
+                if code is None:
+                    continue
+                _blocker(
+                    blockers,
+                    code,
+                    (
+                        f"{entry_label}.{field} duplicates "
+                        f"{label}.receipts[{first_offset}].{field}"
+                    ),
+                    path,
+                )
+        if receipt_kind == "iso-rail-gateway":
+            if receipt.get("profile") is None:
+                has_default_profile_receipt = True
+        receipts.append(
+            _receipt_entry_for_readiness_output(
+                receipt,
+                receipt_kind=receipt_kind,
+            )
+        )
+        receipt_entry_kinds.add(receipt_kind)
+    if receipt_order_keys != sorted(receipt_order_keys):
+        _blocker(
+            blockers,
+            receipt_entry_order_code,
+            f"{label}.receipts must be sorted by receipt_kind, path, and receipt_sha256",
+            path,
+        )
+    if receipt_kind_set != receipt_entry_kinds:
+        _blocker(
+            blockers,
+            kind_entry_mismatch_code,
+            "receipt_kind does not match receipts[].receipt_kind",
+            path,
+        )
+    if allow_failed:
+        message = "receipt verifier evidence allowed failed receipts"
+        if not has_failed_receipt:
+            message += " but no failed receipt entry was recorded"
+        _blocker(blockers, allow_failed_code, message, path)
+    if allow_insecure_http:
+        message = "receipt verifier evidence allowed insecure HTTP endpoints"
+        if not has_insecure_receipt_endpoint:
+            message += " but no http:// or local/private receipt endpoint was recorded"
+        _blocker(blockers, allow_insecure_code, message, path)
+    if allow_default_profile:
+        message = "receipt verifier evidence allowed default rail profile fallback"
+        if not has_default_profile_receipt:
+            message += " but no default-profile receipt entry was recorded"
+        _blocker(blockers, allow_default_profile_code, message, path)
+    expected_ok = (
+        version == RECEIPT_SUMMARY_VERSION
+        and verified_receipts == len(receipts_raw)
+        and receipt_kind_set == REQUIRED_RECEIPT_KINDS
+        and receipt_entry_kinds == REQUIRED_RECEIPT_KINDS
+        and not allow_failed
+        and not allow_insecure_http
+        and not allow_default_profile
+        and require_source_files
+        and not has_failed_receipt
+        and not has_insecure_receipt_endpoint
+        and not has_default_profile_receipt
+    )
+    if not summary_ok:
+        _blocker(
+            blockers,
+            summary_not_ok_code,
+            "receipt verifier summary is not production-complete",
+            path,
+        )
+    if summary_ok != expected_ok:
+        _blocker(
+            blockers,
+            summary_ok_drift_code,
+            "receipt verifier summary ok does not match replayed production policy",
+            path,
+        )
+
+    return {
+        "version": _version_for_readiness_output(version, RECEIPT_SUMMARY_VERSION),
+        "ok": _required_flag_for_readiness_output(summary_ok),
+        "verified_receipts": verified_receipts,
+        "receipt_kind": sorted(receipt_kind_set & REQUIRED_RECEIPT_KINDS),
+        "allow_failed": _nonproduction_flag_for_readiness_output(allow_failed),
+        "allow_insecure_http": _nonproduction_flag_for_readiness_output(
+            allow_insecure_http,
+        ),
+        "allow_default_profile": _nonproduction_flag_for_readiness_output(
+            allow_default_profile,
+        ),
+        "require_source_files": _required_flag_for_readiness_output(
+            require_source_files,
+        ),
+        "receipts": receipts,
+        "summary_sha256": digest,
+    }
+
+
+def verify_xsd_summary(
+    path: Path,
+    *,
+    allow_reviewed_xsd_gaps: bool,
+    max_age_days: int,
+    blockers: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+    display_label: str | None = None,
+) -> dict[str, Any]:
+    """Verify one XSD preflight summary and append production blockers."""
+
+    label = display_label or "xsd summary"
+    summary = _require_object(_load_json(path, display_label=label), label)
+    digest = _require_summary_digest(summary, label)
+    _reject_unknown_keys(summary, XSD_SUMMARY_KEYS, label)
+    _check_no_secret_material(summary, label)
+    version = summary.get("version")
+    if type(version) is not int or version != XSD_SUMMARY_VERSION:
+        _blocker(
+            blockers,
+            "xsd.summary_version_unsupported",
+            f"XSD summary version must be {XSD_SUMMARY_VERSION}",
+            path,
+        )
+    ok = _require_bool(summary, "ok", str(path))
+    if _receipt_path_is_repository_fixture(str(path)):
+        _blocker(
+            blockers,
+            "xsd.repository_xsd_summary",
+            "XSD summary path points at checked-in ISO fixture artifacts",
+            path,
+        )
+    verified_at, verified_at_dt = _require_timestamp(summary, "verified_at", str(path))
+    _block_if_stale(
+        verified_at_dt,
+        max_age_days=max_age_days,
+        code="xsd.summary_stale",
+        label="XSD summary verified_at",
+        path=path,
+        blockers=blockers,
+    )
+    manifest = _require_string(summary, "manifest", str(path))
+    _reject_path_smuggling(manifest, f"{path}.manifest")
+    repository_fixture_manifest = _xsd_manifest_is_repository_fixture(manifest)
+    manifest_sha256 = _require_nonzero_sha256(summary, "manifest_sha256", str(path))
+    verified_schemas = _require_positive_int(summary, "verified_schemas", str(path))
+    verified_fixtures = _require_positive_int(summary, "verified_fixtures", str(path))
+    schema_backed_fixtures = summary.get("schema_backed_fixtures")
+    if type(schema_backed_fixtures) is not int or schema_backed_fixtures < 0:
+        raise ReadinessError(f"{path}.schema_backed_fixtures must be a non-negative integer")
+    schema_validated_fixtures = summary.get("schema_validated_fixtures")
+    if type(schema_validated_fixtures) is not int or schema_validated_fixtures < 0:
+        raise ReadinessError(
+            f"{path}.schema_validated_fixtures must be a non-negative integer"
+        )
+    profile_checked_versions = _require_nonnegative_int(
+        summary,
+        "profile_checked_versions",
+        str(path),
+    )
+    profile_schema_backed_versions = _require_nonnegative_int(
+        summary,
+        "profile_schema_backed_versions",
+        str(path),
+    )
+    blocked_schema_source_count = _require_nonnegative_int(
+        summary,
+        "blocked_schema_source_count",
+        str(path),
+    )
+    pending_schema_source_count = _require_nonnegative_int(
+        summary,
+        "pending_schema_source_count",
+        str(path),
+    )
+    missing_schema_fixtures = _require_list(
+        summary.get("missing_schema_fixtures"),
+        f"{path}.missing_schema_fixtures",
+    )
+    schema_only_entries = _require_list(
+        summary.get("schema_only_entries"),
+        f"{path}.schema_only_entries",
+    )
+    missing_profile_schema_versions = _require_list(
+        summary.get("missing_profile_schema_versions"),
+        f"{path}.missing_profile_schema_versions",
+    )
+    blocked_schema_sources = _require_list(
+        summary.get("blocked_schema_sources"),
+        f"{path}.blocked_schema_sources",
+    )
+    pending_schema_sources = _require_list(
+        summary.get("pending_schema_sources"),
+        f"{path}.pending_schema_sources",
+    )
+    strict = _require_object(summary.get("strict"), f"{path}.strict")
+    _reject_unknown_keys(strict, XSD_STRICT_KEYS, f"{path}.strict")
+    require_schema_backed = _require_bool(
+        strict,
+        "require_schema_backed_fixtures",
+        f"{path}.strict",
+    )
+    require_fixture_for_schema = _require_bool(
+        strict,
+        "require_fixture_for_schema",
+        f"{path}.strict",
+    )
+    require_profile_schema_backed = _require_bool(
+        strict,
+        "require_profile_schema_backed_versions",
+        f"{path}.strict",
+    )
+    validate_xml_schema = _require_bool(
+        strict,
+        "validate_xml_schema",
+        f"{path}.strict",
+    )
+    if schema_backed_fixtures > verified_fixtures:
+        raise ReadinessError(f"{path}.schema_backed_fixtures exceeds verified_fixtures")
+    if schema_validated_fixtures > schema_backed_fixtures:
+        raise ReadinessError(
+            f"{path}.schema_validated_fixtures exceeds schema_backed_fixtures"
+        )
+    if profile_schema_backed_versions > profile_checked_versions:
+        raise ReadinessError(
+            f"{path}.profile_schema_backed_versions exceeds profile_checked_versions"
+        )
+    _verify_xsd_summary_entries(
+        summary,
+        path,
+        verified_schemas=verified_schemas,
+        verified_fixtures=verified_fixtures,
+        schema_backed_fixtures=schema_backed_fixtures,
+        schema_validated_fixtures=schema_validated_fixtures,
+        missing_schema_fixtures=missing_schema_fixtures,
+        schema_only_entries=schema_only_entries,
+        blocked_schema_source_count=blocked_schema_source_count,
+        blocked_schema_sources=blocked_schema_sources,
+        pending_schema_source_count=pending_schema_source_count,
+        pending_schema_sources=pending_schema_sources,
+        blockers=blockers,
+    )
+    profile_catalog_summary = _verify_xsd_profile_catalog_entries(
+        summary,
+        path,
+        profile_checked_versions=profile_checked_versions,
+        profile_schema_backed_versions=profile_schema_backed_versions,
+        missing_profile_schema_versions=missing_profile_schema_versions,
+        schema_backed_message_ids=summary["_validated_schema_backed_message_ids"],
+        blockers=blockers,
+    )
+    if profile_catalog_summary is not None:
+        _block_xsd_profile_catalog_digest_role_confusion(
+            profile_catalog_summary,
+            summary,
+            path,
+            blockers,
+        )
+    _block_xsd_manifest_digest_role_confusion(
+        manifest_sha256,
+        profile_catalog_summary,
+        summary,
+        path,
+        blockers,
+    )
+    missing_schema_message_ids = {
+        _require_message_def_id(entry, "message_def_id", f"{path}.missing_schema_fixtures")
+        for entry in missing_schema_fixtures
+        if type(entry) is dict
+    }
+    schema_only_message_ids = {
+        _require_message_def_id(entry, "message_def_id", f"{path}.schema_only_entries")
+        for entry in schema_only_entries
+        if type(entry) is dict
+    }
+    current_xsd_gap_message_ids = missing_schema_message_ids | schema_only_message_ids
+    blocked_schema_message_ids = {
+        blocked["message_def_id"]
+        for blocked in summary["_validated_blocked_schema_sources"]
+    }
+    pending_schema_message_ids = {
+        pending["message_def_id"]
+        for pending in summary["_validated_pending_schema_sources"]
+    }
+    reviewed_xsd_gap_message_ids = (
+        current_xsd_gap_message_ids
+        | blocked_schema_message_ids
+        | pending_schema_message_ids
+    )
+    _verify_missing_profile_schema_message_ids(
+        summary,
+        path,
+        missing_profile_schema_versions=missing_profile_schema_versions,
+        missing_schema_message_ids=missing_schema_message_ids,
+        schema_only_message_ids=schema_only_message_ids,
+        blocked_schema_message_ids=blocked_schema_message_ids,
+        pending_schema_message_ids=pending_schema_message_ids,
+        blockers=blockers,
+    )
+    unreviewed_missing_profile_message_ids = (
+        _unreviewed_missing_profile_schema_message_ids(
+            path,
+            missing_profile_schema_versions=missing_profile_schema_versions,
+            reviewed_xsd_gap_message_ids=reviewed_xsd_gap_message_ids,
+        )
+    )
+    _verify_unreviewed_profile_schema_message_ids(
+        summary,
+        path,
+        expected_entries=unreviewed_missing_profile_message_ids,
+        blockers=blockers,
+    )
+    blocked_gap_message_ids = missing_schema_message_ids | {
+        _require_message_def_id(
+            entry,
+            "message_def_id",
+            f"{path}.missing_profile_schema_versions",
+        )
+        for entry in missing_profile_schema_versions
+        if type(entry) is dict
+    }
+    for blocked in summary["_validated_blocked_schema_sources"]:
+        message_def_id = blocked["message_def_id"]
+        if message_def_id not in blocked_gap_message_ids:
+            _blocker(
+                blockers,
+                "xsd.blocked_source_without_gap",
+                "XSD summary records blocked candidate without a current missing schema/profile gap",
+                path,
+            )
+    for pending in summary["_validated_pending_schema_sources"]:
+        message_def_id = pending["message_def_id"]
+        if message_def_id not in blocked_gap_message_ids:
+            _blocker(
+                blockers,
+                "xsd.pending_source_without_gap",
+                "XSD summary records pending source without a current missing schema/profile gap",
+                path,
+            )
+
+    has_reviewed_xsd_gap = (
+        bool(missing_schema_fixtures)
+        or bool(schema_only_entries)
+        or bool(blocked_schema_sources)
+        or bool(pending_schema_sources)
+    )
+
+    def reviewed_gap_target() -> list[dict[str, Any]]:
+        return warnings if allow_reviewed_xsd_gaps and has_reviewed_xsd_gap else blockers
+
+    if repository_fixture_manifest:
+        blockers.append(
+            {
+                "code": "xsd.repository_fixture_manifest",
+                "message": (
+                    "XSD summary was generated from the repository ISO fixture "
+                    "manifest; production evidence must use an operator-supplied "
+                    "official MDR/XSD package manifest"
+                ),
+                "path": str(path),
+            }
+        )
+    if not require_schema_backed:
+        reviewed_gap_target().append(
+            {
+                "code": "xsd.strict_schema_backed_not_proven",
+                "message": "XSD summary was not produced with --require-schema-backed-fixtures",
+                "path": str(path),
+            }
+        )
+    if not require_fixture_for_schema:
+        reviewed_gap_target().append(
+            {
+                "code": "xsd.strict_fixture_for_schema_not_proven",
+                "message": "XSD summary was not produced with --require-fixture-for-schema",
+                "path": str(path),
+            }
+        )
+    if not require_profile_schema_backed:
+        reviewed_gap_target().append(
+            {
+                "code": "xsd.profile_schema_backed_not_proven",
+                "message": (
+                    "XSD summary was not produced with "
+                    "--require-profile-schema-backed-versions"
+                ),
+                "path": str(path),
+            }
+        )
+    if not validate_xml_schema:
+        reviewed_gap_target().append(
+            {
+                "code": "xsd.xml_schema_validation_not_proven",
+                "message": "XSD summary was not produced with --validate-xml-schema",
+                "path": str(path),
+            }
+        )
+    if missing_schema_fixtures:
+        reviewed_gap_target().append(
+            {
+                "code": "xsd.missing_schema_fixtures",
+                "message": f"{len(missing_schema_fixtures)} XML fixtures are not schema-backed",
+                "path": str(path),
+                "entries": _xsd_gap_diagnostic_entries(missing_schema_fixtures),
+            }
+        )
+    if schema_only_entries:
+        reviewed_gap_target().append(
+            {
+                "code": "xsd.schema_only_entries",
+                "message": f"{len(schema_only_entries)} XSDs have no standalone XML fixture",
+                "path": str(path),
+                "entries": _xsd_gap_diagnostic_entries(schema_only_entries),
+            }
+        )
+    if require_profile_schema_backed and profile_checked_versions == 0:
+        _blocker(
+            blockers,
+            "xsd.profile_catalog_empty",
+            "XSD summary did not verify any profile catalog message versions",
+            path,
+        )
+    if unreviewed_missing_profile_message_ids:
+        blockers.append(
+            {
+                "code": "xsd.unreviewed_profile_schema_message_ids",
+                "message": (
+                    f"{len(unreviewed_missing_profile_message_ids)} unique profile "
+                    "message definitions are not schema-backed and have no reviewed "
+                    "missing-schema, schema-only, blocked-source, or pending-source "
+                    "evidence"
+                ),
+                "path": str(path),
+                "entries": unreviewed_missing_profile_message_ids,
+            }
+        )
+    if missing_profile_schema_versions:
+        reviewed_profile_versions: list[Any] = []
+        unreviewed_profile_versions: list[Any] = []
+        for raw_missing in missing_profile_schema_versions:
+            if type(raw_missing) is dict and raw_missing.get(
+                "message_def_id"
+            ) in reviewed_xsd_gap_message_ids:
+                reviewed_profile_versions.append(raw_missing)
+            else:
+                unreviewed_profile_versions.append(raw_missing)
+
+        def profile_gap_block(entries: list[Any]) -> dict[str, Any]:
+            return {
+                "code": "xsd.missing_profile_schema_versions",
+                "message": (
+                    f"{len(entries)} advertised profile message versions are "
+                    "not schema-backed"
+                ),
+                "path": str(path),
+                "entries": entries,
+            }
+
+        if allow_reviewed_xsd_gaps and has_reviewed_xsd_gap:
+            if reviewed_profile_versions:
+                warnings.append(profile_gap_block(reviewed_profile_versions))
+            if unreviewed_profile_versions:
+                blockers.append(profile_gap_block(unreviewed_profile_versions))
+        else:
+            blockers.append(profile_gap_block(missing_profile_schema_versions))
+    expected_ok = (
+        version == XSD_SUMMARY_VERSION
+        and not repository_fixture_manifest
+        and require_schema_backed
+        and require_fixture_for_schema
+        and require_profile_schema_backed
+        and validate_xml_schema
+        and verified_schemas > 0
+        and verified_fixtures > 0
+        and schema_backed_fixtures == verified_fixtures
+        and schema_validated_fixtures == verified_fixtures
+        and profile_checked_versions > 0
+        and profile_schema_backed_versions == profile_checked_versions
+        and not missing_schema_fixtures
+        and not schema_only_entries
+        and not missing_profile_schema_versions
+        and not blocked_schema_sources
+        and not pending_schema_sources
+        and not unreviewed_missing_profile_message_ids
+    )
+    if not ok:
+        _blocker(
+            blockers,
+            "xsd.summary_not_ok",
+            "XSD summary is not a production-complete schema verification",
+            path,
+        )
+    if ok != expected_ok:
+        _blocker(
+            blockers,
+            "xsd.summary_ok_drift",
+            "XSD summary ok does not match replayed production policy",
+            path,
+        )
+    return {
+        "version": _version_for_readiness_output(version, XSD_SUMMARY_VERSION),
+        "ok": _required_flag_for_readiness_output(ok),
+        "path": str(path),
+        "verified_at": verified_at,
+        "manifest": manifest,
+        "manifest_sha256": manifest_sha256,
+        "verified_schemas": verified_schemas,
+        "verified_fixtures": verified_fixtures,
+        "schema_backed_fixtures": schema_backed_fixtures,
+        "schema_validated_fixtures": schema_validated_fixtures,
+        "profile_checked_versions": profile_checked_versions,
+        "profile_schema_backed_versions": profile_schema_backed_versions,
+        "schema_sources": summary["_validated_schema_sources"],
+        "blocked_schema_source_count": blocked_schema_source_count,
+        "blocked_schema_sources": summary["_validated_blocked_schema_sources"],
+        "pending_schema_source_count": pending_schema_source_count,
+        "pending_schema_sources": summary["_validated_pending_schema_sources"],
+        "missing_schema_fixture_count": len(missing_schema_fixtures),
+        "schema_only_count": len(schema_only_entries),
+        "missing_profile_schema_version_count": len(missing_profile_schema_versions),
+        "unreviewed_profile_schema_message_id_count": len(
+            unreviewed_missing_profile_message_ids
+        ),
+        "unreviewed_profile_schema_message_ids": unreviewed_missing_profile_message_ids,
+        "profile_catalog": profile_catalog_summary,
+        "strict": {
+            "require_schema_backed_fixtures": require_schema_backed,
+            "require_fixture_for_schema": require_fixture_for_schema,
+            "require_profile_schema_backed_versions": require_profile_schema_backed,
+            "validate_xml_schema": validate_xml_schema,
+        },
+        "_schema_ids": summary["_validated_schema_ids"],
+        "_schema_paths": summary["_validated_schema_paths"],
+        "_schema_digests": summary["_validated_schema_digests"],
+        "_schema_source_refs": summary["_validated_schema_source_refs"],
+        "_validated_blocked_schema_source_message_ids": summary[
+            "_validated_blocked_schema_source_message_ids"
+        ],
+        "_validated_blocked_schema_source_refs": summary[
+            "_validated_blocked_schema_source_refs"
+        ],
+        "_validated_blocked_schema_source_digests": summary[
+            "_validated_blocked_schema_source_digests"
+        ],
+        "_validated_pending_schema_source_message_ids": summary[
+            "_validated_pending_schema_source_message_ids"
+        ],
+        "_validated_pending_schema_source_message_names": summary[
+            "_validated_pending_schema_source_message_names"
+        ],
+        "_validated_pending_schema_source_refs": summary[
+            "_validated_pending_schema_source_refs"
+        ],
+        "_validated_pending_schema_source_download_urls": summary[
+            "_validated_pending_schema_source_download_urls"
+        ],
+        "_fixture_message_ids": summary["_validated_fixture_message_ids"],
+        "_fixture_paths": summary["_validated_fixture_paths"],
+        "_fixture_digests": summary["_validated_fixture_digests"],
+        "summary_sha256": digest,
+    }
+
+
+def verify_pending_xsd_probe_summary(
+    path: Path,
+    *,
+    max_age_days: int,
+    blockers: list[dict[str, Any]],
+    display_label: str | None = None,
+) -> dict[str, Any]:
+    """Verify one bounded official pending-XSD source probe summary."""
+
+    label = display_label or "pending XSD probe summary"
+    summary = _require_object(_load_json(path, display_label=label), label)
+    digest = _require_summary_digest(summary, label)
+    _reject_unknown_keys(summary, PENDING_XSD_PROBE_SUMMARY_KEYS, label)
+    _check_no_secret_material(summary, label)
+    version = summary.get("version")
+    if type(version) is not int or version != PENDING_XSD_PROBE_SUMMARY_VERSION:
+        _blocker(
+            blockers,
+            "xsd.pending_probe_summary_version_unsupported",
+            (
+                "pending XSD source probe summary version must be "
+                f"{PENDING_XSD_PROBE_SUMMARY_VERSION}"
+            ),
+            path,
+        )
+    if _receipt_path_is_repository_fixture(str(path)):
+        _blocker(
+            blockers,
+            "xsd.repository_pending_probe_summary",
+            "pending XSD source probe summary path points at checked-in ISO fixture artifacts",
+            path,
+        )
+    probed_at, probed_at_dt = _require_timestamp(summary, "probed_at", str(path))
+    _block_if_stale(
+        probed_at_dt,
+        max_age_days=max_age_days,
+        code="xsd.pending_probe_summary_stale",
+        label="pending XSD source probe summary probed_at",
+        path=path,
+        blockers=blockers,
+    )
+    ok = _require_bool(summary, "ok", str(path))
+    probe_count = _require_positive_int(summary, "probe_count", str(path))
+    successful_probe_count = _require_nonnegative_int(
+        summary,
+        "successful_probe_count",
+        str(path),
+    )
+    timeout_secs = _require_positive_number(summary, "timeout_secs", str(path))
+    if timeout_secs > PENDING_XSD_PROBE_MAX_TIMEOUT_SECS:
+        raise ReadinessError(
+            f"{path}.timeout_secs must be no larger than "
+            f"{PENDING_XSD_PROBE_MAX_TIMEOUT_SECS:g}"
+        )
+    max_bytes = _require_positive_int(summary, "max_bytes", str(path))
+    if max_bytes > PENDING_XSD_PROBE_MAX_BYTES:
+        raise ReadinessError(
+            f"{path}.max_bytes must be no larger than {PENDING_XSD_PROBE_MAX_BYTES}"
+        )
+    probes_raw = _require_list(summary.get("probes"), f"{path}.probes")
+    if len(probes_raw) != probe_count:
+        _blocker(
+            blockers,
+            "xsd.pending_probe_count_mismatch",
+            "pending XSD source probe summary probe_count does not match probes[] length",
+            path,
+        )
+    probes = [
+        _verify_pending_xsd_probe(raw, f"{path}.probes[{offset}]")
+        for offset, raw in enumerate(probes_raw)
+    ]
+    for offset, probe in enumerate(probes):
+        probe_label = f"{path}.probes[{offset}]"
+        if probe["downloaded_bytes"] > max_bytes:
+            raise ReadinessError(
+                f"{probe_label}.downloaded_bytes must not exceed max_bytes"
+            )
+        if probe["truncated"] and probe["downloaded_bytes"] != max_bytes:
+            raise ReadinessError(
+                f"{probe_label}.truncated requires downloaded_bytes to equal max_bytes"
+            )
+    order_keys = [
+        (
+            probe["message_def_id"],
+            probe["catalogue_url"],
+            probe["download_url"],
+        )
+        for probe in probes
+    ]
+    if order_keys != sorted(order_keys):
+        _blocker(
+            blockers,
+            "xsd.pending_probes_not_canonical_order",
+            f"{path}.probes must be sorted by message_def_id and source URL",
+            path,
+        )
+    _block_duplicate_strings(
+        [probe["message_def_id"] for probe in probes],
+        label=f"{path}.probes.message_def_id",
+        code="xsd.pending_probe_message_id_duplicate",
+        message="pending XSD source probe summary repeats a message_def_id",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        [probe["download_url"] for probe in probes],
+        label=f"{path}.probes.download_url",
+        code="xsd.pending_probe_download_url_duplicate",
+        message="pending XSD source probe summary repeats a download URL",
+        path=path,
+        blockers=blockers,
+    )
+    computed_successful = sum(
+        1 for probe in probes if _pending_xsd_probe_is_successful(probe)
+    )
+    if successful_probe_count != computed_successful:
+        _blocker(
+            blockers,
+            "xsd.pending_probe_success_count_mismatch",
+            (
+                "pending XSD source probe summary successful_probe_count does not "
+                "match reachable XSD-looking probes"
+            ),
+            path,
+        )
+    if successful_probe_count > probe_count:
+        raise ReadinessError(f"{path}.successful_probe_count exceeds probe_count")
+    computed_ok = computed_successful == len(probes)
+    if ok != computed_ok:
+        _blocker(
+            blockers,
+            "xsd.pending_probe_ok_mismatch",
+            "pending XSD source probe summary ok does not match probe outcomes",
+            path,
+        )
+    if not ok:
+        _blocker(
+            blockers,
+            "xsd.pending_probe_summary_not_ok",
+            "pending XSD source probe summary did not reach all official XSD download URLs",
+            path,
+        )
+    return {
+        "version": _version_for_readiness_output(
+            version,
+            PENDING_XSD_PROBE_SUMMARY_VERSION,
+        ),
+        "path": str(path),
+        "probed_at": probed_at,
+        "ok": ok,
+        "probe_count": probe_count,
+        "successful_probe_count": successful_probe_count,
+        "timeout_secs": timeout_secs,
+        "max_bytes": max_bytes,
+        "probes": probes,
+        "_probe_message_ids": [probe["message_def_id"] for probe in probes],
+        "_successful_probe_message_ids": [
+            probe["message_def_id"]
+            for probe in probes
+            if _pending_xsd_probe_is_successful(probe)
+        ],
+        "summary_sha256": digest,
+    }
+
+
+def _pending_xsd_probe_for_readiness_output(probe: dict[str, Any]) -> dict[str, Any]:
+    output = dict(probe)
+    output["looks_like_xsd"] = _required_flag_for_readiness_output(
+        probe["looks_like_xsd"],
+    )
+    if not _pending_xsd_probe_response_metadata_is_publicly_supported(probe):
+        for key in (
+            "http_status",
+            "content_type",
+            "downloaded_bytes",
+            "sample_sha256",
+            "truncated",
+            "target_namespace",
+            "error_kind",
+        ):
+            if key in output:
+                output[key] = "unsupported"
+    return output
+
+
+def _pending_xsd_probe_response_metadata_is_publicly_supported(
+    probe: dict[str, Any],
+) -> bool:
+    if type(probe) is not dict:
+        return False
+    http_status = probe.get("http_status")
+    downloaded_bytes = probe.get("downloaded_bytes")
+    sample_sha256 = probe.get("sample_sha256")
+    message_def_id = probe.get("message_def_id")
+    target_namespace = probe.get("target_namespace")
+    return (
+        probe.get("status") == "reachable"
+        and probe.get("looks_like_xsd") is True
+        and isinstance(message_def_id, str)
+        and target_namespace == _expected_xsd_target_namespace(message_def_id)
+        and type(http_status) is int
+        and 200 <= http_status <= 299
+        and type(downloaded_bytes) is int
+        and downloaded_bytes > 0
+        and _is_lower_sha256(sample_sha256)
+        and any(ch != "0" for ch in sample_sha256)
+    )
+
+
+def _public_pending_xsd_probe_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    output = _public_json_object_without_private_fields(summary)
+    output["ok"] = _required_flag_for_readiness_output(output.get("ok"))
+    probes = output.get("probes")
+    if type(probes) is list:
+        output["probes"] = [
+            _pending_xsd_probe_for_readiness_output(probe)
+            if type(probe) is dict
+            else "unsupported"
+            for probe in probes
+        ]
+    elif probes is not None:
+        output["probes"] = "unsupported"
+    return output
+
+
+def _pending_xsd_coverage_entry(message_def_id: str) -> dict[str, Any]:
+    return {"message_def_id": message_def_id}
+
+
+def _pending_xsd_failed_probe_entry(probe: dict[str, Any]) -> dict[str, Any]:
+    output = _pending_xsd_probe_for_readiness_output(probe)
+    return {
+        "message_def_id": output["message_def_id"],
+        "status": output["status"],
+        "http_status": output["http_status"],
+        "target_namespace": output["target_namespace"],
+        "downloaded_bytes": output["downloaded_bytes"],
+        "sample_sha256": output["sample_sha256"],
+        "looks_like_xsd": output["looks_like_xsd"],
+    }
+
+
+def _block_pending_xsd_probe_coverage(
+    xsd_summaries: list[dict[str, Any]],
+    pending_xsd_probe_summaries: list[dict[str, Any]],
+    *,
+    require_coverage: bool,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Require probe summaries to cover pending official XSD sources."""
+
+    pending_ids = sorted(
+        {
+            pending["message_def_id"]
+            for summary in xsd_summaries
+            for pending in summary["pending_schema_sources"]
+        }
+    )
+    probe_by_message_id: dict[str, dict[str, Any]] = {}
+    probe_path_by_message_id: dict[str, str] = {}
+    for summary in pending_xsd_probe_summaries:
+        for probe in summary["probes"]:
+            message_def_id = probe["message_def_id"]
+            if message_def_id in probe_by_message_id:
+                _blocker(
+                    blockers,
+                    "xsd.pending_probe_message_id_reused",
+                    "pending XSD source probe message_def_id is repeated across summaries",
+                    Path(summary["path"]),
+                )
+            else:
+                probe_by_message_id[message_def_id] = probe
+                probe_path_by_message_id[message_def_id] = summary["path"]
+    if not pending_ids:
+        if pending_xsd_probe_summaries:
+            blockers.append(
+                {
+                    "code": "xsd.pending_probe_unreferenced",
+                    "message": (
+                        "pending official XSD probe evidence was supplied but no "
+                        "pending official XSD sources were recorded"
+                    ),
+                    "path": pending_xsd_probe_summaries[0]["path"],
+                    "entries": [
+                        _pending_xsd_coverage_entry(item)
+                        for item in sorted(probe_by_message_id)
+                    ],
+                }
+            )
+        return
+    unreferenced = [
+        message_def_id
+        for message_def_id in sorted(probe_by_message_id)
+        if message_def_id not in pending_ids
+    ]
+    if unreferenced:
+        blockers.append(
+            {
+                "code": "xsd.pending_probe_unreferenced",
+                "message": (
+                    "pending official XSD probe evidence has no matching "
+                    "pending source gap"
+                ),
+                "path": probe_path_by_message_id[unreferenced[0]],
+                "entries": [
+                    _pending_xsd_coverage_entry(item) for item in unreferenced
+                ],
+            }
+        )
+    if not require_coverage:
+        return
+    diagnostic_path = xsd_summaries[0]["path"] if xsd_summaries else ""
+    if not pending_xsd_probe_summaries:
+        blockers.append(
+            {
+                "code": "xsd.pending_probe_missing",
+                "message": (
+                    "pending official XSD sources require digest-bound probe "
+                    "evidence when reviewed XSD gaps are allowed"
+                ),
+                "path": diagnostic_path,
+                "entries": [_pending_xsd_coverage_entry(item) for item in pending_ids],
+            }
+        )
+        return
+    missing = [
+        message_def_id
+        for message_def_id in pending_ids
+        if message_def_id not in probe_by_message_id
+    ]
+    if missing:
+        blockers.append(
+            {
+                "code": "xsd.pending_probe_missing",
+                "message": "pending official XSD source lacks probe evidence",
+                "path": diagnostic_path,
+                "entries": [_pending_xsd_coverage_entry(item) for item in missing],
+            }
+        )
+    failed = [
+        probe_by_message_id[message_def_id]
+        for message_def_id in pending_ids
+        if message_def_id in probe_by_message_id
+        and not _pending_xsd_probe_is_successful(probe_by_message_id[message_def_id])
+    ]
+    if failed:
+        blockers.append(
+            {
+                "code": "xsd.pending_probe_unreachable",
+                "message": (
+                    "pending official XSD source probe did not fetch "
+                    "XSD-looking bytes"
+                ),
+                "path": diagnostic_path,
+                "entries": [_pending_xsd_failed_probe_entry(probe) for probe in failed],
+            }
+        )
+
+
+def _block_local_readiness_policy(
+    *,
+    args: argparse.Namespace,
+    xsd_paths: list[Path],
+    evidence_paths: list[Path],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Keep local diagnostic readiness overrides out of production verdicts."""
+
+    if args.allow_reviewed_xsd_gaps:
+        _blocker(
+            blockers,
+            "readiness.policy.allow_reviewed_xsd_gaps",
+            (
+                "Final readiness used local diagnostic policy "
+                "allow_reviewed_xsd_gaps=true"
+            ),
+            xsd_paths[0],
+        )
+    if args.allow_canary_stage_receipts_only:
+        _blocker(
+            blockers,
+            "readiness.policy.allow_canary_stage_receipts_only",
+            (
+                "Final readiness used local diagnostic policy "
+                "allow_canary_stage_receipts_only=true"
+            ),
+            evidence_paths[0],
+        )
+
+
+def _verify_policy(
+    summary: dict[str, Any],
+    path: Path,
+    args: argparse.Namespace,
+    blockers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    policy = _require_object(summary.get("policy"), f"{path}.policy")
+    _reject_unknown_keys(policy, EVIDENCE_POLICY_KEYS, f"{path}.policy")
+    provider = _require_context_string(policy, "provider", f"{path}.policy")
+    environment = _require_context_string(policy, "environment", f"{path}.policy")
+    default_rail_profile = _optional_profile_id(
+        policy,
+        "default_rail_profile",
+        f"{path}.policy",
+    )
+    if provider != args.provider:
+        _blocker(
+            blockers,
+            "evidence.policy_provider_mismatch",
+            "evidence policy provider does not match expected provider",
+            path,
+        )
+    if environment != args.environment:
+        _blocker(
+            blockers,
+            "evidence.policy_environment_mismatch",
+            "evidence policy environment does not match expected environment",
+            path,
+        )
+    policy_flags: dict[str, bool] = {}
+    for flag in sorted(PRODUCTION_FALSE_POLICY_FLAGS):
+        policy_flags[flag] = _require_bool(policy, flag, f"{path}.policy")
+        if policy_flags[flag]:
+            if flag == "allow_canary_stage_receipts_only" and args.allow_canary_stage_receipts_only:
+                continue
+            _blocker(
+                blockers,
+                f"evidence.policy.{flag}",
+                f"Evidence summary was produced with non-production policy {flag}=true",
+                path,
+            )
+    if default_rail_profile is not None and not policy_flags["allow_default_profile"]:
+        _blocker(
+            blockers,
+            "evidence.policy.default_rail_profile_without_override",
+            (
+                "Evidence summary recorded default_rail_profile without "
+                "allow_default_profile=true"
+            ),
+            path,
+        )
+    freshness: dict[str, int] = {}
+    for field in sorted(EVIDENCE_FRESHNESS_POLICY_FIELDS):
+        value = _require_positive_days(policy, field, f"{path}.policy")
+        freshness[field] = value
+        if value > getattr(args, field):
+            _blocker(
+                blockers,
+                f"evidence.policy.{field}_weaker_than_release",
+                f"Evidence summary freshness policy is weaker than release policy for {field}",
+                path,
+            )
+    return {
+        "provider": provider,
+        "environment": environment,
+        "default_rail_profile": default_rail_profile,
+        **policy_flags,
+        **freshness,
+    }
+
+
+def _verify_canary(
+    canary: dict[str, Any],
+    label: str,
+    path: Path,
+    args: argparse.Namespace,
+    blockers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    _reject_unknown_keys(canary, COMPACT_CANARY_KEYS, label)
+    canary_path = _validate_compact_summary_path(
+        _require_string(canary, "path", label),
+        f"{label}.path",
+    )
+    if _receipt_path_is_repository_fixture(canary_path):
+        _blocker(
+            blockers,
+            "evidence.repository_canary_summary",
+            "canary summary path points at checked-in ISO fixture artifacts",
+            path,
+        )
+    config_path = _validate_config_path(
+        _require_string(canary, "config_path", label),
+        f"{label}.config_path",
+    )
+    if _canary_config_path_is_repository_template(config_path):
+        _blocker(
+            blockers,
+            "evidence.repository_canary_config",
+            "canary summary references checked-in operator canary template config",
+            path,
+        )
+    summary_sha256 = _require_sha256(canary, SUMMARY_DIGEST_FIELD, label)
+    version = canary.get("version")
+    if type(version) is not int or version != CANARY_SUMMARY_VERSION:
+        _blocker(
+            blockers,
+            "evidence.canary_summary_version_unsupported",
+            f"{label}.version must be {CANARY_SUMMARY_VERSION}",
+            path,
+        )
+    started_at_raw, started_at = _require_timestamp(canary, "started_at", label)
+    finished_at_raw, finished_at = _require_timestamp(canary, "finished_at", label)
+    if finished_at < started_at:
+        raise ReadinessError(f"{label}.finished_at must not be before started_at")
+    _block_if_stale(
+        finished_at,
+        max_age_days=args.max_canary_age_days,
+        code="evidence.canary_stale",
+        label="canary finished_at",
+        path=path,
+        blockers=blockers,
+    )
+    provider = _require_context_string(canary, "provider", label)
+    environment = _require_context_string(canary, "environment", label)
+    canary_ok = _require_bool(canary, "ok", label)
+    plan_only = _require_bool(canary, "plan_only", label)
+    require_explicit_policy = _require_bool(canary, "require_explicit_policy", label)
+    if args.provider is not None and provider != args.provider:
+        _blocker(
+            blockers,
+            "evidence.provider_mismatch",
+            "canary provider does not match expected provider",
+            path,
+        )
+    if args.environment is not None and environment != args.environment:
+        _blocker(
+            blockers,
+            "evidence.environment_mismatch",
+            "canary environment does not match expected environment",
+            path,
+        )
+    if plan_only:
+        _blocker(blockers, "evidence.plan_only", "canary summary is plan-only", path)
+    if not require_explicit_policy:
+        _blocker(
+            blockers,
+            "evidence.canary_implicit_policy",
+            "canary summary does not prove --require-explicit-policy",
+            path,
+        )
+    stage_names_raw = _require_list(canary.get("stage_names"), f"{label}.stage_names")
+    stage_names_clean: list[str] = []
+    for offset, item in enumerate(stage_names_raw):
+        item_label = f"{label}.stage_names[{offset}]"
+        if not isinstance(item, str):
+            raise ReadinessError(f"{label}.stage_names must contain non-empty strings")
+        item = _plain_text(item, item_label)
+        if not item.strip():
+            raise ReadinessError(f"{label}.stage_names must contain non-empty strings")
+        if len(item) > MAX_CLEAN_STRING_CHARS:
+            raise ReadinessError(
+                f"{item_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+            )
+        if _contains_control_character(item):
+            raise ReadinessError(
+                f"{item_label} must not contain control characters"
+            )
+        if item != item.strip():
+            raise ReadinessError(
+                f"{item_label} must not have surrounding whitespace"
+            )
+        _reject_non_ascii_context(item, item_label)
+        _reject_secret_looking_identifier(item, item_label)
+        stage_names_clean.append(item)
+    stage_names_raw = stage_names_clean
+    stage_names = set(stage_names_raw)
+    if len(stage_names_raw) != len(stage_names):
+        raise ReadinessError(f"{label}.stage_names must not contain duplicates")
+    unsupported_stages = sorted(stage_names - REQUIRED_CANARY_STAGES)
+    if unsupported_stages:
+        raise ReadinessError(f"{label}.stage_names contains unsupported stages")
+    expected_stage_order = [
+        stage_name
+        for stage_name in EXPECTED_CANARY_STAGE_ORDER
+        if stage_name in stage_names
+    ]
+    if stage_names_raw != expected_stage_order:
+        raise ReadinessError(
+            f"{label}.stage_names must follow canary order: "
+            + ", ".join(EXPECTED_CANARY_STAGE_ORDER)
+        )
+    stage_dry_run_raw = _require_list(
+        canary.get("stage_dry_run"),
+        f"{label}.stage_dry_run",
+    )
+    if len(stage_dry_run_raw) != len(stage_names_raw):
+        raise ReadinessError(f"{label}.stage_dry_run must match stage_names length")
+    stage_dry_run: list[bool] = []
+    for offset, item in enumerate(stage_dry_run_raw):
+        if not isinstance(item, bool):
+            raise ReadinessError(f"{label}.stage_dry_run[{offset}] must be a boolean")
+        stage_dry_run.append(item)
+    dry_run_by_stage = dict(zip(stage_names_raw, stage_dry_run, strict=True))
+    stage_command_modes = _verify_stage_command_modes(
+        canary,
+        label,
+        stage_names_raw,
+        dry_run_by_stage,
+        plan_only,
+    )
+    stage_windows_raw = _require_list(canary.get("stage_windows"), f"{label}.stage_windows")
+    stage_windows: list[dict[str, str]] = []
+    if plan_only:
+        if stage_windows_raw:
+            raise ReadinessError(f"{label}.stage_windows must be empty for plan-only evidence")
+    else:
+        stage_window_names: list[str] = []
+        previous_window_finished: dt.datetime | None = None
+        for offset, raw_window in enumerate(stage_windows_raw):
+            window_label = f"{label}.stage_windows[{offset}]"
+            window = _require_object(raw_window, window_label)
+            _reject_unknown_keys(window, COMPACT_STAGE_WINDOW_KEYS, window_label)
+            stage_name = _require_stage_name(window, "name", window_label)
+            window_started_raw, window_started = _require_timestamp(
+                window,
+                "started_at",
+                window_label,
+            )
+            window_finished_raw, window_finished = _require_timestamp(
+                window,
+                "finished_at",
+                window_label,
+            )
+            if window_finished < window_started:
+                raise ReadinessError(f"{window_label}.finished_at must not be before started_at")
+            if window_started < started_at or window_finished > finished_at:
+                raise ReadinessError(f"{window_label} timestamp window must be inside canary window")
+            if (
+                previous_window_finished is not None
+                and window_started < previous_window_finished
+            ):
+                raise ReadinessError(
+                    f"{window_label}.started_at must not be before previous stage finished_at"
+                )
+            stage_windows.append(
+                {
+                    "name": stage_name,
+                    "started_at": window_started_raw,
+                    "finished_at": window_finished_raw,
+                }
+            )
+            stage_window_names.append(stage_name)
+            previous_window_finished = window_finished
+        if stage_window_names != stage_names_raw:
+            raise ReadinessError(f"{label}.stage_windows must match stage_names")
+    missing_stages = sorted(REQUIRED_CANARY_STAGES - stage_names)
+    if missing_stages:
+        _blocker(
+            blockers,
+            "evidence.missing_canary_stages",
+            "canary summary is missing stages: " + ", ".join(missing_stages),
+            path,
+        )
+    if "receipt_summary" not in canary:
+        raise ReadinessError(f"{label}.receipt_summary must be recorded")
+    receipt_summary_raw = canary["receipt_summary"]
+    if plan_only:
+        if receipt_summary_raw is not None:
+            raise ReadinessError(f"{label}.receipt_summary must be null for plan-only evidence")
+        receipt_summary = None
+    else:
+        receipt_summary = _verify_receipt_summary(
+            _require_object(receipt_summary_raw, f"{label}.receipt_summary"),
+            f"{label}.receipt_summary",
+            path,
+            blockers,
+            missing_kinds_code="evidence.missing_receipt_kinds",
+            allow_failed_code="evidence.receipts_allow_failed",
+            allow_insecure_code="evidence.receipts_allow_insecure_http",
+            allow_default_profile_code="evidence.receipts_allow_default_profile",
+            version_code="evidence.receipt_summary_version_unsupported",
+            source_files_code="evidence.receipts_source_files_not_required",
+            count_mismatch_code="evidence.receipt_count_mismatch",
+            digest_missing_code="evidence.receipt_digest_missing",
+            duplicate_path_code="evidence.receipt_path_duplicate",
+            duplicate_digest_code="evidence.receipt_digest_duplicate",
+            unsuccessful_receipt_code="evidence.receipt_not_successful",
+            status_mismatch_code="evidence.receipt_status_mismatch",
+            metadata_code="evidence.receipt_metadata_invalid",
+            digest_role_reuse_code="evidence.receipt_digest_role_reuse",
+            kind_entry_mismatch_code="evidence.receipt_kind_entry_mismatch",
+            receipt_entry_order_code="evidence.receipt_entries_not_canonical_order",
+            summary_not_ok_code="evidence.receipt_summary_not_ok",
+            summary_ok_drift_code="evidence.receipt_summary_ok_drift",
+            source_material_reuse_codes=CANARY_RECEIPT_SOURCE_MATERIAL_REUSE_CODES,
+        )
+        expected_receipt_kinds = {
+            STAGE_RECEIPT_KINDS[stage_name]
+            for stage_name in stage_names
+            if stage_name in STAGE_RECEIPT_KINDS and not dry_run_by_stage[stage_name]
+        }
+        receipt_kinds = set(receipt_summary["receipt_kind"])
+        missing_stage_receipt_kinds = sorted(expected_receipt_kinds - receipt_kinds)
+        if missing_stage_receipt_kinds:
+            _blocker(
+                blockers,
+                "evidence.stage_receipt_kind_missing",
+                "canary receipt summary is missing receipt kinds for executed stages: "
+                + ", ".join(missing_stage_receipt_kinds),
+                path,
+            )
+        unexecuted_receipt_kinds = sorted(receipt_kinds - expected_receipt_kinds)
+        if unexecuted_receipt_kinds:
+            _blocker(
+                blockers,
+                "evidence.stage_receipt_kind_unexecuted",
+                "canary receipt summary contains receipt kinds for stages not executed",
+                path,
+            )
+        _check_canary_command_mode_receipt_binding(
+            label,
+            path,
+            blockers,
+            stage_command_modes,
+            dry_run_by_stage,
+            receipt_summary,
+        )
+    expected_ok = (
+        not plan_only
+        and require_explicit_policy
+        and tuple(stage_names_raw) == EXPECTED_CANARY_STAGE_ORDER
+        and not any(stage_dry_run)
+        and receipt_summary is not None
+        and receipt_summary.get("ok") is True
+    )
+    if not canary_ok:
+        _blocker(
+            blockers,
+            "evidence.canary_summary_not_ok",
+            "canary summary is not production-complete",
+            path,
+        )
+    if canary_ok != expected_ok:
+        _blocker(
+            blockers,
+            "evidence.canary_summary_ok_drift",
+            "canary summary ok does not match replayed production policy",
+            path,
+        )
+    return {
+        "version": _version_for_readiness_output(version, CANARY_SUMMARY_VERSION),
+        "path": canary_path,
+        "config_path": config_path,
+        "started_at": started_at_raw,
+        "finished_at": finished_at_raw,
+        "provider": provider,
+        "environment": environment,
+        "ok": _required_flag_for_readiness_output(canary_ok),
+        "plan_only": plan_only,
+        "require_explicit_policy": require_explicit_policy,
+        "stage_names": list(stage_names_raw),
+        "stage_dry_run": stage_dry_run,
+        "stage_command_modes": stage_command_modes,
+        "stage_windows": stage_windows,
+        "verified_receipts": receipt_summary["verified_receipts"] if receipt_summary else 0,
+        "receipt_kind": receipt_summary["receipt_kind"] if receipt_summary else [],
+        "receipt_summary": receipt_summary,
+        "summary_sha256": summary_sha256,
+    }
+
+
+def _verify_trust_profile(
+    profile: dict[str, Any],
+    label: str,
+    path: Path,
+    args: argparse.Namespace,
+    blockers: list[dict[str, Any]],
+    *,
+    allow_insecure_source_url: bool,
+) -> dict[str, Any]:
+    _reject_unknown_keys(profile, TRUST_PROFILE_KEYS, label)
+    bundle_path = _validate_trust_bundle_path(
+        _require_string(profile, "path", label),
+        f"{label}.path",
+    )
+    if _trust_bundle_path_is_repository_template(bundle_path):
+        _blocker(
+            blockers,
+            "trust.repository_trust_bundle",
+            "trust profile references checked-in trust-bundle template",
+            path,
+        )
+    profile_id = _require_profile_id(profile, "profile_id", label)
+    rail = _require_rail(profile, "rail", label)
+    environment = _require_context_string(profile, "environment", label)
+    bundle_sha256 = _require_nonzero_sha256(profile, "bundle_sha256", label)
+    policy = _require_string(profile, "embedded_signature_policy", label)
+    _reject_overlong_trust_policy(policy, f"{label}.embedded_signature_policy")
+    _reject_non_ascii_context(policy, f"{label}.embedded_signature_policy")
+    _reject_secret_looking_identifier(policy, f"{label}.embedded_signature_policy")
+    signature_pin_count = _require_nonnegative_int(
+        profile,
+        "signature_public_key_pin_count",
+        label,
+    )
+    x509_pin_count = _require_nonnegative_int(
+        profile,
+        "x509_trust_anchor_pin_count",
+        label,
+    )
+    trust_anchor_der = _require_compact_der_entries(
+        profile,
+        "x509_trust_anchor_der",
+        label,
+    )
+    if len(trust_anchor_der) > x509_pin_count:
+        raise ReadinessError(
+            f"{label}.x509_trust_anchor_der length exceeds x509_trust_anchor_pin_count"
+        )
+    revoked_pin_count = _require_nonnegative_int(
+        profile,
+        "revoked_certificate_pin_count",
+        label,
+    )
+    revoked_der = _require_compact_der_entries(
+        profile,
+        "revoked_certificate_der",
+        label,
+    )
+    if len(revoked_der) > revoked_pin_count:
+        raise ReadinessError(
+            f"{label}.revoked_certificate_der length exceeds revoked_certificate_pin_count"
+        )
+    policy_oid_count = _require_nonnegative_int(
+        profile,
+        "x509_required_certificate_policy_oid_count",
+        label,
+    )
+    crl_required = _require_bool(profile, "x509_require_crl_revocation_check", label)
+    x509_crl_count = _require_nonnegative_int(profile, "x509_crl_count", label)
+    x509_crl_der = _require_compact_der_entries(profile, "x509_crl_der", label)
+    if len(x509_crl_der) != x509_crl_count:
+        raise ReadinessError(f"{label}.x509_crl_der length does not match x509_crl_count")
+    ocsp_required = _require_bool(profile, "x509_require_ocsp_revocation_check", label)
+    x509_ocsp_response_count = _require_nonnegative_int(
+        profile,
+        "x509_ocsp_response_count",
+        label,
+    )
+    x509_ocsp_response_der = _require_compact_der_entries(
+        profile,
+        "x509_ocsp_response_der",
+        label,
+    )
+    if len(x509_ocsp_response_der) != x509_ocsp_response_count:
+        raise ReadinessError(
+            f"{label}.x509_ocsp_response_der length does not match x509_ocsp_response_count"
+        )
+    _block_compact_der_role_reuse(
+        (
+            ("x509_trust_anchor_der", trust_anchor_der),
+            ("revoked_certificate_der", revoked_der),
+            ("x509_crl_der", x509_crl_der),
+            ("x509_ocsp_response_der", x509_ocsp_response_der),
+        ),
+        label,
+        path,
+        blockers,
+    )
+    for role, entries in (
+        ("x509_trust_anchor_der", trust_anchor_der),
+        ("revoked_certificate_der", revoked_der),
+        ("x509_crl_der", x509_crl_der),
+        ("x509_ocsp_response_der", x509_ocsp_response_der),
+    ):
+        order_keys = _compact_der_order_keys(entries)
+        if order_keys != sorted(order_keys):
+            _blocker(
+                blockers,
+                "trust.der_proof_not_canonical_order",
+                f"{label}.{role} must be sorted by sha256 and byte_len",
+                path,
+            )
+    if "source" not in profile:
+        raise ReadinessError(f"{label}.source must be a JSON object")
+    source_raw = profile["source"]
+    source_summary: dict[str, str] | None
+    if source_raw is None:
+        _blocker(
+            blockers,
+            "trust.source_missing",
+            "trust profile has no source provenance",
+            path,
+        )
+        source_summary = None
+    else:
+        source = _require_object(source_raw, f"{label}.source")
+        _reject_unknown_keys(source, TRUST_SOURCE_KEYS, f"{label}.source")
+        source_authority = _require_string(source, "authority", f"{label}.source")
+        source_version = _require_string(source, "version", f"{label}.source")
+        _reject_overlong_trust_source_text(source_authority, f"{label}.source.authority")
+        _reject_overlong_trust_source_text(source_version, f"{label}.source.version")
+        _reject_non_ascii_context(source_authority, f"{label}.source.authority")
+        _reject_non_ascii_context(source_version, f"{label}.source.version")
+        _reject_secret_looking_identifier(source_authority, f"{label}.source.authority")
+        _reject_secret_looking_identifier(source_version, f"{label}.source.version")
+        source_url = _validate_https_source_url(
+            _require_string(source, "url", f"{label}.source"),
+            f"{label}.source.url",
+            allow_insecure_source_url=allow_insecure_source_url,
+        )
+        source_retrieved_at_raw, source_retrieved_at = _require_timestamp(
+            source,
+            "retrieved_at",
+            f"{label}.source",
+        )
+        _block_if_stale(
+            source_retrieved_at,
+            max_age_days=args.max_trust_source_age_days,
+            code="trust.source_stale",
+            label="trust source retrieved_at",
+            path=path,
+            blockers=blockers,
+        )
+        for source_field, source_value in (
+            ("authority", source_authority),
+            ("version", source_version),
+        ):
+            if _trust_source_text_is_placeholder(source_value):
+                _blocker(
+                    blockers,
+                    "trust.source_placeholder",
+                    f"{label}.source.{source_field} still contains placeholder production metadata",
+                    path,
+                )
+        if _trust_source_url_uses_placeholder_host(source_url):
+            _blocker(
+                blockers,
+                "trust.source_placeholder",
+                f"{label}.source.url still points at reserved placeholder provenance",
+                path,
+            )
+        source_summary = {
+            "authority": source_authority,
+            "version": source_version,
+            "url": source_url,
+            "retrieved_at": source_retrieved_at_raw,
+        }
+    if signature_pin_count + x509_pin_count <= 0:
+        _blocker(
+            blockers,
+            "trust.no_signature_or_x509_pins",
+            "trust profile has no public-key or X.509 pins",
+            path,
+        )
+    if args.environment is not None and environment != args.environment:
+        _blocker(
+            blockers,
+            "trust.environment_mismatch",
+            "trust profile environment does not match expected environment",
+            path,
+        )
+    if policy not in TRUST_SIGNATURE_POLICIES:
+        _blocker(
+            blockers,
+            "trust.policy_unsupported",
+            "trust profile uses unsupported embedded signature policy",
+            path,
+        )
+    elif policy != REQUIRE_VERIFIED:
+        _blocker(
+            blockers,
+            "trust.policy_not_require_verified",
+            "trust profile does not require verified signatures",
+            path,
+        )
+    if not crl_required:
+        _blocker(
+            blockers,
+            "trust.crl_revocation_not_required",
+            "trust profile does not require CRL revocation checking",
+            path,
+        )
+    elif x509_crl_count <= 0:
+        _blocker(
+            blockers,
+            "trust.no_crl_revocation_material",
+            "trust profile requires CRL revocation checking but has no CRLs",
+            path,
+        )
+    if not ocsp_required:
+        _blocker(
+            blockers,
+            "trust.ocsp_revocation_not_required",
+            "trust profile does not require OCSP revocation checking",
+            path,
+        )
+    elif x509_ocsp_response_count <= 0:
+        _blocker(
+            blockers,
+            "trust.no_ocsp_revocation_material",
+            "trust profile requires OCSP revocation checking but has no OCSP responses",
+            path,
+        )
+    result = {
+        "path": bundle_path,
+        "profile_id": profile_id,
+        "rail": rail,
+        "environment": environment,
+        "bundle_sha256": bundle_sha256,
+        "source": source_summary,
+        "embedded_signature_policy": policy,
+        "signature_public_key_pin_count": signature_pin_count,
+        "x509_trust_anchor_pin_count": x509_pin_count,
+        "x509_trust_anchor_der": trust_anchor_der,
+        "revoked_certificate_pin_count": revoked_pin_count,
+        "revoked_certificate_der": revoked_der,
+        "x509_required_certificate_policy_oid_count": policy_oid_count,
+        "x509_require_crl_revocation_check": crl_required,
+        "x509_crl_count": x509_crl_count,
+        "x509_crl_der": x509_crl_der,
+        "x509_require_ocsp_revocation_check": ocsp_required,
+        "x509_ocsp_response_count": x509_ocsp_response_count,
+        "x509_ocsp_response_der": x509_ocsp_response_der,
+    }
+    return result
+
+
+def _trust_profile_for_readiness_output(
+    profile: dict[str, Any],
+    *,
+    expected_environment: str | None,
+    allow_insecure_source_url: bool,
+) -> dict[str, Any]:
+    output = dict(profile)
+    environment = output.get("environment")
+    if isinstance(environment, str):
+        output["environment"] = _context_for_readiness_output(
+            environment,
+            expected_environment,
+        )
+    if output.get("embedded_signature_policy") != REQUIRE_VERIFIED:
+        output["embedded_signature_policy"] = "unsupported"
+    source = output.get("source")
+    if type(source) is dict:
+        source_output = dict(source)
+        for key in ("authority", "version"):
+            value = source_output.get(key)
+            if isinstance(value, str) and _trust_source_text_is_placeholder(value):
+                source_output[key] = "unsupported"
+        url = source_output.get("url")
+        if isinstance(url, str):
+            if _trust_source_url_uses_placeholder_host(url) or (
+                allow_insecure_source_url
+                and _trust_profile_source_requires_insecure_override(source_output)
+            ):
+                source_output["url"] = "unsupported"
+        output["source"] = source_output
+    elif source is None:
+        output["source"] = "unsupported"
+    return output
+
+
+def _trust_summary_for_readiness_output(
+    summary: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    output = dict(summary)
+    output["max_source_age_days"] = _freshness_budget_for_readiness_output(
+        summary["max_source_age_days"],
+        args.max_trust_source_age_days,
+    )
+    if (
+        summary["profile_json_emittable"] is not True
+        and summary["max_source_age_days"] is None
+    ):
+        output["max_source_age_days"] = "unsupported"
+    output["profile_json_emitted"] = _required_flag_for_readiness_output(
+        summary["profile_json_emitted"],
+    )
+    output["profile_json_emittable"] = _required_flag_for_readiness_output(
+        summary["profile_json_emittable"],
+    )
+    output["profiles"] = [
+        _trust_profile_for_readiness_output(
+            profile,
+            expected_environment=args.environment,
+            allow_insecure_source_url=summary["allow_insecure_source_url"],
+        )
+        for profile in summary["profiles"]
+    ]
+    return output
+
+
+def _verify_archive_receipts(
+    summary: dict[str, Any],
+    path: Path,
+    args: argparse.Namespace,
+    blockers: list[dict[str, Any]],
+    *,
+    policy_allows_canary_stage_receipts_only: bool,
+) -> dict[str, Any] | None:
+    if "receipt_verification" not in summary:
+        raise ReadinessError(f"{path}.receipt_verification must be recorded")
+    receipt_summary = summary["receipt_verification"]
+    if receipt_summary is None:
+        if (
+            args.allow_canary_stage_receipts_only
+            and policy_allows_canary_stage_receipts_only
+        ):
+            return None
+        _blocker(
+            blockers,
+            "evidence.archive_receipts_not_reverified",
+            "evidence summary does not include direct receipt archive verification",
+            path,
+        )
+        return None
+    receipt_obj = _require_object(receipt_summary, f"{path}.receipt_verification")
+    return _verify_receipt_summary(
+        receipt_obj,
+        f"{path}.receipt_verification",
+        path,
+        blockers,
+        missing_kinds_code="evidence.archive_receipt_kinds_missing",
+        allow_failed_code="evidence.archive_receipts_allow_failed",
+        allow_insecure_code="evidence.archive_receipts_insecure_http",
+        allow_default_profile_code="evidence.archive_receipts_allow_default_profile",
+        version_code="evidence.archive_receipt_summary_version_unsupported",
+        source_files_code="evidence.archive_receipts_source_files_not_required",
+        count_mismatch_code="evidence.archive_receipt_count_mismatch",
+        digest_missing_code="evidence.archive_receipt_digest_missing",
+        duplicate_path_code="evidence.archive_receipt_path_duplicate",
+        duplicate_digest_code="evidence.archive_receipt_digest_duplicate",
+        unsuccessful_receipt_code="evidence.archive_receipt_not_successful",
+        status_mismatch_code="evidence.archive_receipt_status_mismatch",
+        metadata_code="evidence.archive_receipt_metadata_invalid",
+        digest_role_reuse_code="evidence.archive_receipt_digest_role_reuse",
+        kind_entry_mismatch_code="evidence.archive_receipt_kind_entry_mismatch",
+        receipt_entry_order_code="evidence.archive_receipt_entries_not_canonical_order",
+        summary_not_ok_code="evidence.archive_receipt_summary_not_ok",
+        summary_ok_drift_code="evidence.archive_receipt_summary_ok_drift",
+        source_material_reuse_codes=ARCHIVE_RECEIPT_SOURCE_MATERIAL_REUSE_CODES,
+    )
+
+
+def _block_if_archive_receipts_do_not_cover_canaries(
+    canaries: list[dict[str, Any]],
+    archive_receipts: dict[str, Any] | None,
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Require direct archive receipt verification to match canary receipt digests."""
+
+    if archive_receipts is None:
+        return
+    archive_receipts_by_digest = {
+        receipt["receipt_sha256"]: receipt
+        for receipt in archive_receipts["receipts"]
+        if _is_lower_sha256(receipt.get("receipt_sha256"))
+    }
+    canary_kinds_by_digest: dict[str, str] = {}
+    for canary_offset, canary in enumerate(canaries):
+        receipt_summary = canary.get("receipt_summary")
+        if receipt_summary is None:
+            continue
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+            receipt_sha256 = receipt.get("receipt_sha256")
+            if not _is_lower_sha256(receipt_sha256):
+                continue
+            canary_kinds_by_digest[receipt_sha256] = receipt.get("receipt_kind")
+            archive_receipt = archive_receipts_by_digest.get(receipt_sha256)
+            if archive_receipt is None:
+                _blocker(
+                    blockers,
+                    "evidence.archive_receipt_missing_canary_digest",
+                    (
+                        "direct receipt archive verification does not include "
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].receipt_sha256"
+                    ),
+                    path,
+                )
+                continue
+            archive_kind = archive_receipt.get("receipt_kind")
+            receipt_kind = receipt.get("receipt_kind")
+            if archive_kind != receipt_kind:
+                _blocker(
+                    blockers,
+                    "evidence.archive_receipt_canary_kind_mismatch",
+                    (
+                        "direct receipt archive verification binds "
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].receipt_sha256 to "
+                        "a receipt kind that does not match canary receipt kind"
+                    ),
+                    path,
+                )
+                continue
+            archive_path_name = Path(archive_receipt["path"]).name
+            canary_path_name = Path(receipt["path"]).name
+            if archive_path_name != canary_path_name:
+                _blocker(
+                    blockers,
+                    "evidence.archive_receipt_canary_path_mismatch",
+                    (
+                        "direct receipt archive verification binds "
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].receipt_sha256 to "
+                        "a receipt filename that does not match canary receipt filename"
+                    ),
+                    path,
+                )
+                continue
+            try:
+                archive_metadata = _receipt_entry_content_metadata(archive_receipt)
+                canary_metadata = _receipt_entry_content_metadata(receipt)
+            except ReadinessError as error:
+                _blocker(
+                    blockers,
+                    "evidence.archive_receipt_canary_metadata_mismatch",
+                    str(error),
+                    path,
+                )
+                continue
+            if archive_metadata != canary_metadata:
+                _blocker(
+                    blockers,
+                    "evidence.archive_receipt_canary_metadata_mismatch",
+                    (
+                        "direct receipt archive verification binds "
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].receipt_sha256 to "
+                        "metadata that does not match canary receipt metadata"
+                    ),
+                    path,
+                )
+    for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
+        receipt_sha256 = receipt.get("receipt_sha256")
+        if _is_lower_sha256(receipt_sha256) and receipt_sha256 not in canary_kinds_by_digest:
+            _blocker(
+                blockers,
+                "evidence.archive_receipt_unreferenced_digest",
+                (
+                    "direct receipt archive verification includes "
+                    f"receipt_verification.receipts[{receipt_offset}].receipt_sha256 "
+                    "that no canary receipt_summary references"
+                ),
+                path,
+            )
+
+
+def _block_cross_canary_receipt_reuse(
+    canaries: list[dict[str, Any]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block copied receipt evidence reused across distinct canary summaries."""
+
+    seen_paths: dict[str, tuple[int, int]] = {}
+    seen_digests: dict[str, tuple[int, int]] = {}
+    source_material_checks: tuple[tuple[str, str], ...] = (
+        ("source_path", "evidence.canary_receipt_source_path_reused"),
+        ("payload_sha256", "evidence.canary_receipt_payload_digest_reused"),
+        ("rail_message_id", "evidence.canary_receipt_rail_message_id_reused"),
+        ("anchor_path", "evidence.canary_receipt_anchor_path_reused"),
+        ("anchor_sha256", "evidence.canary_receipt_anchor_digest_reused"),
+        ("store_dir", "evidence.canary_receipt_store_dir_reused"),
+        ("index_path", "evidence.canary_receipt_index_path_reused"),
+        ("index_sha256", "evidence.canary_receipt_index_digest_reused"),
+    )
+    seen_source_material: dict[str, dict[str, tuple[int, int]]] = {
+        field: {} for field, _code in source_material_checks
+    }
+    for canary_offset, canary in enumerate(canaries):
+        receipt_summary = canary.get("receipt_summary")
+        if receipt_summary is None:
+            continue
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+            receipt_path = receipt.get("path")
+            if type(receipt_path) is str:
+                if receipt_path in seen_paths:
+                    first_canary, first_receipt = seen_paths[receipt_path]
+                    _blocker(
+                        blockers,
+                        "evidence.canary_receipt_path_reused",
+                        (
+                            f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                            f"[{receipt_offset}].path duplicates canary_summaries"
+                            f"[{first_canary}].receipt_summary.receipts"
+                            f"[{first_receipt}].path"
+                        ),
+                        path,
+                    )
+                else:
+                    seen_paths[receipt_path] = (canary_offset, receipt_offset)
+            receipt_sha256 = receipt.get("receipt_sha256")
+            if _is_lower_sha256(receipt_sha256):
+                if receipt_sha256 in seen_digests:
+                    first_canary, first_receipt = seen_digests[receipt_sha256]
+                    _blocker(
+                        blockers,
+                        "evidence.canary_receipt_digest_reused",
+                        (
+                            f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                            f"[{receipt_offset}].receipt_sha256 duplicates "
+                            f"canary_summaries[{first_canary}].receipt_summary.receipts"
+                            f"[{first_receipt}].receipt_sha256"
+                        ),
+                        path,
+                    )
+                else:
+                    seen_digests[receipt_sha256] = (canary_offset, receipt_offset)
+            for field, code in source_material_checks:
+                value = receipt.get(field)
+                if type(value) is not str:
+                    continue
+                seen_for_field = seen_source_material[field]
+                previous = seen_for_field.get(value)
+                if previous is None:
+                    seen_for_field[value] = (canary_offset, receipt_offset)
+                    continue
+                first_canary, first_receipt = previous
+                if first_canary == canary_offset:
+                    continue
+                _blocker(
+                    blockers,
+                    code,
+                    (
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].{field} duplicates canary_summaries"
+                        f"[{first_canary}].receipt_summary.receipts"
+                        f"[{first_receipt}].{field}"
+                    ),
+                    path,
+                )
+
+
+def _block_cross_trust_profile_reuse(
+    trusts: list[dict[str, Any]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block trust profile material reused across distinct trust summaries."""
+
+    seen_profile_json_digests: dict[str, int] = {}
+    seen_profile_ids: dict[str, tuple[int, int]] = {}
+    seen_bundle_paths: dict[str, tuple[int, int]] = {}
+    seen_bundle_digests: dict[str, tuple[int, int]] = {}
+    for trust_offset, trust in enumerate(trusts):
+        profile_json_sha256 = trust.get("profile_json_sha256")
+        if type(profile_json_sha256) is str:
+            if profile_json_sha256 in seen_profile_json_digests:
+                first_trust = seen_profile_json_digests[profile_json_sha256]
+                _blocker(
+                    blockers,
+                    "trust.profile_json_digest_reused",
+                    (
+                        f"trust_summaries[{trust_offset}].profile_json_sha256 "
+                        f"duplicates trust_summaries[{first_trust}]"
+                        ".profile_json_sha256"
+                    ),
+                    path,
+                )
+            else:
+                seen_profile_json_digests[profile_json_sha256] = trust_offset
+        for profile_offset, profile in enumerate(trust["profiles"]):
+            profile_id = profile["profile_id"]
+            if profile_id in seen_profile_ids:
+                first_trust, first_profile = seen_profile_ids[profile_id]
+                _blocker(
+                    blockers,
+                    "trust.profile_id_reused",
+                    (
+                        f"trust_summaries[{trust_offset}].profiles[{profile_offset}]"
+                        f".profile_id duplicates trust_summaries[{first_trust}]"
+                        f".profiles[{first_profile}].profile_id"
+                    ),
+                    path,
+                )
+            else:
+                seen_profile_ids[profile_id] = (trust_offset, profile_offset)
+            bundle_path = profile["path"]
+            if bundle_path in seen_bundle_paths:
+                first_trust, first_profile = seen_bundle_paths[bundle_path]
+                _blocker(
+                    blockers,
+                    "trust.bundle_path_reused",
+                    (
+                        f"trust_summaries[{trust_offset}].profiles[{profile_offset}]"
+                        f".path duplicates trust_summaries[{first_trust}]"
+                        f".profiles[{first_profile}].path"
+                    ),
+                    path,
+                )
+            else:
+                seen_bundle_paths[bundle_path] = (trust_offset, profile_offset)
+            bundle_sha256 = profile["bundle_sha256"]
+            if bundle_sha256 in seen_bundle_digests:
+                first_trust, first_profile = seen_bundle_digests[bundle_sha256]
+                _blocker(
+                    blockers,
+                    "trust.bundle_digest_reused",
+                    (
+                        f"trust_summaries[{trust_offset}].profiles[{profile_offset}]"
+                        f".bundle_sha256 duplicates trust_summaries[{first_trust}]"
+                        f".profiles[{first_profile}].bundle_sha256"
+                    ),
+                    path,
+                )
+            else:
+                seen_bundle_digests[bundle_sha256] = (trust_offset, profile_offset)
+
+
+def _block_compact_json_artifact_path_role_reuse(
+    canaries: list[dict[str, Any]],
+    trusts: list[dict[str, Any]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+    archive_receipts: dict[str, Any] | None = None,
+) -> None:
+    """Block compact summary paths replayed as config, receipt, or bundle paths."""
+
+    material_paths: dict[str, str] = {}
+    for canary_offset, canary in enumerate(canaries):
+        material_paths.setdefault(
+            canary["config_path"],
+            f"canary_summaries[{canary_offset}].config_path",
+        )
+        receipt_summary = canary.get("receipt_summary")
+        if type(receipt_summary) is dict:
+            for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+                receipt_path = receipt.get("path")
+                if type(receipt_path) is str:
+                    material_paths.setdefault(
+                        receipt_path,
+                        (
+                            f"canary_summaries[{canary_offset}].receipt_summary"
+                            f".receipts[{receipt_offset}].path"
+                        ),
+                    )
+    for trust_offset, trust in enumerate(trusts):
+        for profile_offset, profile in enumerate(trust["profiles"]):
+            material_paths.setdefault(
+                profile["path"],
+                f"trust_summaries[{trust_offset}].profiles[{profile_offset}].path",
+            )
+    if type(archive_receipts) is dict:
+        for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
+            receipt_path = receipt.get("path")
+            if type(receipt_path) is str:
+                material_paths.setdefault(
+                    receipt_path,
+                    f"receipt_verification.receipts[{receipt_offset}].path",
+                )
+
+    for canary_offset, canary in enumerate(canaries):
+        material_label = material_paths.get(canary["path"])
+        if material_label is not None:
+            _blocker(
+                blockers,
+                "evidence.compact_json_artifact_path_role_reused",
+                f"canary_summaries[{canary_offset}].path duplicates {material_label}",
+                path,
+            )
+    for trust_offset, trust in enumerate(trusts):
+        material_label = material_paths.get(trust["path"])
+        if material_label is not None:
+            _blocker(
+                blockers,
+                "evidence.compact_json_artifact_path_role_reused",
+                f"trust_summaries[{trust_offset}].path duplicates {material_label}",
+                path,
+            )
+
+
+def _block_canary_trust_summary_identity_reuse(
+    canaries: list[dict[str, Any]],
+    trusts: list[dict[str, Any]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block compact canary summary identities replayed as trust summaries."""
+
+    seen_canary_paths: dict[str, int] = {}
+    seen_canary_digests: dict[str, int] = {}
+    for canary_offset, canary in enumerate(canaries):
+        seen_canary_paths[canary["path"]] = canary_offset
+        seen_canary_digests[canary["summary_sha256"]] = canary_offset
+    for trust_offset, trust in enumerate(trusts):
+        trust_path = trust["path"]
+        if trust_path in seen_canary_paths:
+            canary_offset = seen_canary_paths[trust_path]
+            _blocker(
+                blockers,
+                "evidence.canary_trust_summary_path_reused",
+                (
+                    f"trust_summaries[{trust_offset}].path duplicates "
+                    f"canary_summaries[{canary_offset}].path"
+                ),
+                path,
+            )
+        digest = trust["summary_sha256"]
+        if digest not in seen_canary_digests:
+            continue
+        canary_offset = seen_canary_digests[digest]
+        _blocker(
+            blockers,
+            "evidence.canary_trust_summary_digest_reused",
+            (
+                f"trust_summaries[{trust_offset}].summary_sha256 duplicates "
+                f"canary_summaries[{canary_offset}].summary_sha256"
+            ),
+            path,
+        )
+
+
+def _block_compact_summary_digest_role_confusion(
+    canaries: list[dict[str, Any]],
+    trusts: list[dict[str, Any]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block compact source-summary digests reused as nested material digests."""
+
+    canary_summary_digests = [
+        (
+            canary["summary_sha256"],
+            f"canary_summaries[{canary_offset}].summary_sha256",
+        )
+        for canary_offset, canary in enumerate(canaries)
+    ]
+    receipt_digest_roles: list[tuple[str, str, str]] = []
+    for canary_offset, canary in enumerate(canaries):
+        receipt_summary = canary.get("receipt_summary")
+        if type(receipt_summary) is not dict:
+            continue
+        receipt_digest_roles.append(
+            (
+                receipt_summary["summary_sha256"],
+                "receipt_summary",
+                f"canary_summaries[{canary_offset}].receipt_summary.summary_sha256",
+            )
+        )
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+            receipt_digest = receipt.get("receipt_sha256")
+            if type(receipt_digest) is str:
+                receipt_digest_roles.append(
+                    (
+                        receipt_digest,
+                        "receipt",
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].receipt_sha256",
+                    )
+                )
+            for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
+                material_digest = receipt.get(field)
+                if type(material_digest) is str:
+                    receipt_digest_roles.append(
+                        (
+                            material_digest,
+                            "receipt_material",
+                            f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                            f"[{receipt_offset}].{field}",
+                        )
+                    )
+    for canary_digest, canary_path in canary_summary_digests:
+        for material_digest, role, material_path in receipt_digest_roles:
+            if canary_digest == material_digest:
+                _blocker(
+                    blockers,
+                    CANARY_SUMMARY_RECEIPT_ROLE_CODES[role],
+                    f"{canary_path} reuses {material_path}",
+                    path,
+                )
+
+    trust_summary_digests = [
+        (
+            trust["summary_sha256"],
+            f"trust_summaries[{trust_offset}].summary_sha256",
+        )
+        for trust_offset, trust in enumerate(trusts)
+    ]
+    trust_material_roles: list[tuple[str, str, str]] = []
+    for trust_offset, trust in enumerate(trusts):
+        profile_json_sha256 = trust.get("profile_json_sha256")
+        if type(profile_json_sha256) is str:
+            trust_material_roles.append(
+                (
+                    profile_json_sha256,
+                    "profile_json",
+                    f"trust_summaries[{trust_offset}].profile_json_sha256",
+                )
+            )
+        for profile_offset, profile in enumerate(trust["profiles"]):
+            trust_material_roles.append(
+                (
+                    profile["bundle_sha256"],
+                    "bundle",
+                    f"trust_summaries[{trust_offset}].profiles"
+                    f"[{profile_offset}].bundle_sha256",
+                )
+            )
+            for role in TRUST_DER_PROOF_FIELDS:
+                for der_offset, entry in enumerate(profile[role]):
+                    trust_material_roles.append(
+                        (
+                            entry["sha256"],
+                            "der_proof",
+                            f"trust_summaries[{trust_offset}].profiles"
+                            f"[{profile_offset}].{role}[{der_offset}].sha256",
+                        )
+                    )
+    for canary_digest, canary_path in canary_summary_digests:
+        for material_digest, role, material_path in trust_material_roles:
+            if canary_digest == material_digest:
+                _blocker(
+                    blockers,
+                    CANARY_SUMMARY_TRUST_ROLE_CODES[role],
+                    f"{canary_path} reuses {material_path}",
+                    path,
+                )
+    for trust_digest, trust_path in trust_summary_digests:
+        for material_digest, role, material_path in trust_material_roles:
+            if trust_digest == material_digest:
+                _blocker(
+                    blockers,
+                    TRUST_SUMMARY_TRUST_ROLE_CODES[role],
+                    f"{trust_path} reuses {material_path}",
+                    path,
+                )
+        for material_digest, role, material_path in receipt_digest_roles:
+            if trust_digest == material_digest:
+                _blocker(
+                    blockers,
+                    TRUST_SUMMARY_RECEIPT_ROLE_CODES[role],
+                    f"{trust_path} reuses {material_path}",
+                    path,
+                )
+
+
+def _trusted_profile_rails_by_environment(
+    trusts: list[dict[str, Any]],
+) -> dict[tuple[str, str], set[str]]:
+    trusted_profile_rails: dict[tuple[str, str], set[str]] = {}
+    for trust in trusts:
+        for profile in trust["profiles"]:
+            key = (profile["profile_id"], profile["environment"])
+            trusted_profile_rails.setdefault(key, set()).add(profile["rail"])
+    return trusted_profile_rails
+
+
+def _block_rail_receipt_without_trust(
+    receipt: dict[str, Any],
+    *,
+    label: str,
+    environment: str,
+    environment_label: str,
+    default_rail_profile: str | None,
+    trusted_profile_rails_by_environment: dict[tuple[str, str], set[str]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+    default_profile_code: str,
+    no_profile_code: str,
+    message_type_code: str,
+) -> None:
+    if receipt.get("receipt_kind") != "iso-rail-gateway":
+        return
+    profile_id = receipt.get("profile")
+    if profile_id is None:
+        profile_id = default_rail_profile
+        if profile_id is None:
+            _blocker(
+                blockers,
+                default_profile_code,
+                (
+                    f"{label}.profile uses default rail profile "
+                    "without evidence.policy.default_rail_profile"
+                ),
+                path,
+            )
+            return
+    if not isinstance(profile_id, str) or PROFILE_ID_RE.fullmatch(profile_id) is None:
+        return
+    candidate_rails = trusted_profile_rails_by_environment.get(
+        (profile_id, environment),
+        set(),
+    )
+    if profile_id in KNOWN_RAILS:
+        matching_rails = candidate_rails & {profile_id}
+    else:
+        matching_rails = candidate_rails
+    if not matching_rails:
+        _blocker(
+            blockers,
+            no_profile_code,
+            (
+                f"{label}.profile has no matching trust profile "
+                f"coverage for {environment_label}"
+            ),
+            path,
+        )
+        return
+    message_type = receipt.get("message_type")
+    if (
+        isinstance(message_type, str)
+        and MESSAGE_TYPE_RE.fullmatch(message_type) is not None
+        and not any(
+            message_type in RAIL_MESSAGE_TYPES.get(rail, set())
+            for rail in matching_rails
+        )
+    ):
+        _blocker(
+            blockers,
+            message_type_code,
+            (
+                f"{label}.message_type has no matching trust "
+                "profile rail coverage"
+            ),
+            path,
+        )
+
+
+def _block_canary_rail_receipts_without_trust(
+    canaries: list[dict[str, Any]],
+    trusts: list[dict[str, Any]],
+    evidence_policy: dict[str, Any],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Require every canary rail receipt to have matching trust material."""
+
+    trusted_profile_rails_by_environment = _trusted_profile_rails_by_environment(trusts)
+    for canary_offset, canary in enumerate(canaries):
+        canary_environment = canary["environment"]
+        receipt_summary = canary.get("receipt_summary")
+        if receipt_summary is None:
+            continue
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+            _block_rail_receipt_without_trust(
+                receipt,
+                label=(
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}]"
+                ),
+                environment=canary_environment,
+                environment_label="canary environment",
+                default_rail_profile=evidence_policy["default_rail_profile"],
+                trusted_profile_rails_by_environment=trusted_profile_rails_by_environment,
+                path=path,
+                blockers=blockers,
+                default_profile_code="trust.canary_rail_default_profile_unbound",
+                no_profile_code="trust.canary_rail_without_profile",
+                message_type_code="trust.canary_rail_message_type_without_profile",
+            )
+
+
+def _block_archive_rail_receipts_without_trust(
+    archive_receipts: dict[str, Any] | None,
+    trusts: list[dict[str, Any]],
+    evidence_policy: dict[str, Any],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Require every archive rail receipt to have matching trust material."""
+
+    if archive_receipts is None:
+        return
+    trusted_profile_rails_by_environment = _trusted_profile_rails_by_environment(trusts)
+    for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
+        _block_rail_receipt_without_trust(
+            receipt,
+            label=f"receipt_verification.receipts[{receipt_offset}]",
+            environment=evidence_policy["environment"],
+            environment_label="evidence environment",
+            default_rail_profile=evidence_policy["default_rail_profile"],
+            trusted_profile_rails_by_environment=trusted_profile_rails_by_environment,
+            path=path,
+            blockers=blockers,
+            default_profile_code="trust.archive_rail_default_profile_unbound",
+            no_profile_code="trust.archive_rail_without_profile",
+            message_type_code="trust.archive_rail_message_type_without_profile",
+        )
+
+
+def _block_cross_xsd_summary_reuse(
+    xsd_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block XSD package material replayed across distinct XSD summaries."""
+
+    scalar_checks = (
+        ("manifest", "manifest", "xsd.manifest_path_reused"),
+        ("manifest_sha256", "manifest_sha256", "xsd.manifest_digest_reused"),
+    )
+    for field, label, code in scalar_checks:
+        seen: dict[str, int] = {}
+        for summary_offset, summary in enumerate(xsd_summaries):
+            value = summary.get(field)
+            if value is None:
+                continue
+            if value in seen:
+                first_summary = seen[value]
+                _blocker(
+                    blockers,
+                    code,
+                    (
+                        f"xsd_summaries[{summary_offset}].{label} duplicates "
+                        f"xsd_summaries[{first_summary}].{label}"
+                    ),
+                    Path(summary["path"]),
+                )
+            else:
+                seen[value] = summary_offset
+
+    profile_catalog_checks = (
+        ("path", "profile_catalog.path", "xsd.profile_catalog_path_reused"),
+        ("sha256", "profile_catalog.sha256", "xsd.profile_catalog_digest_reused"),
+        (
+            "catalog_json_sha256",
+            "profile_catalog.catalog_json_sha256",
+            "xsd.profile_catalog_json_digest_reused",
+        ),
+    )
+    for field, label, code in profile_catalog_checks:
+        seen: dict[str, int] = {}
+        for summary_offset, summary in enumerate(xsd_summaries):
+            profile_catalog = summary.get("profile_catalog")
+            if type(profile_catalog) is not dict:
+                continue
+            value = profile_catalog.get(field)
+            if value is None:
+                continue
+            if value in seen:
+                first_summary = seen[value]
+                _blocker(
+                    blockers,
+                    code,
+                    (
+                        f"xsd_summaries[{summary_offset}].{label} duplicates "
+                        f"xsd_summaries[{first_summary}].{label}"
+                    ),
+                    Path(summary["path"]),
+                )
+            else:
+                seen[value] = summary_offset
+
+    checks = (
+        ("_schema_ids", "schemas.message_def_id", "xsd.schema_id_reused"),
+        ("_schema_paths", "schemas.path", "xsd.schema_path_reused"),
+        ("_schema_digests", "schemas.sha256", "xsd.schema_digest_reused"),
+        ("_schema_source_refs", "schemas.source", "xsd.schema_source_reused"),
+        (
+            "_validated_blocked_schema_source_message_ids",
+            "blocked_schema_sources.message_def_id",
+            "xsd.blocked_source_message_id_reused",
+        ),
+        (
+            "_validated_blocked_schema_source_refs",
+            "blocked_schema_sources.source",
+            "xsd.blocked_source_reused",
+        ),
+        (
+            "_validated_blocked_schema_source_digests",
+            "blocked_schema_sources.sha256",
+            "xsd.blocked_source_digest_reused",
+        ),
+        (
+            "_validated_pending_schema_source_message_ids",
+            "pending_schema_sources.message_def_id",
+            "xsd.pending_source_message_id_reused",
+        ),
+        (
+            "_validated_pending_schema_source_message_names",
+            "pending_schema_sources.source.message_name",
+            "xsd.pending_source_message_name_reused",
+        ),
+        (
+            "_validated_pending_schema_source_refs",
+            "pending_schema_sources.source",
+            "xsd.pending_source_reused",
+        ),
+        (
+            "_validated_pending_schema_source_download_urls",
+            "pending_schema_sources.source.download_url",
+            "xsd.pending_source_download_url_reused",
+        ),
+        (
+            "_fixture_message_ids",
+            "fixtures.message_def_id",
+            "xsd.fixture_message_id_reused",
+        ),
+        ("_fixture_paths", "fixtures.path", "xsd.fixture_path_reused"),
+        ("_fixture_digests", "fixtures.sha256", "xsd.fixture_digest_reused"),
+    )
+    for field, label, code in checks:
+        seen: dict[str, tuple[int, int]] = {}
+        for summary_offset, summary in enumerate(xsd_summaries):
+            for item_offset, value in enumerate(summary[field]):
+                if value in seen:
+                    first_summary, first_item = seen[value]
+                    _blocker(
+                        blockers,
+                        code,
+                        (
+                            f"xsd_summaries[{summary_offset}].{label}[{item_offset}] "
+                            f"duplicates xsd_summaries[{first_summary}].{label}"
+                            f"[{first_item}]"
+                        ),
+                        Path(summary["path"]),
+                    )
+                else:
+                    seen[value] = (summary_offset, item_offset)
+
+
+def _xsd_material_path_roles(
+    xsd_summaries: list[dict[str, Any]],
+) -> list[tuple[str, str, str, int]]:
+    """Return XSD material path roles with diagnostic labels."""
+    path_roles: list[tuple[str, str, str, int]] = []
+    for summary_offset, summary in enumerate(xsd_summaries):
+        path_roles.append(
+            (
+                summary["path"],
+                "summary",
+                f"xsd_summaries[{summary_offset}].path",
+                summary_offset,
+            )
+        )
+        path_roles.append(
+            (
+                summary["manifest"],
+                "manifest",
+                f"xsd_summaries[{summary_offset}].manifest",
+                summary_offset,
+            )
+        )
+        for schema_offset, schema_path in enumerate(summary["_schema_paths"]):
+            path_roles.append(
+                (
+                    schema_path,
+                    "schema",
+                    f"xsd_summaries[{summary_offset}].schemas[{schema_offset}].path",
+                    summary_offset,
+                )
+            )
+        for fixture_offset, fixture_path in enumerate(summary["_fixture_paths"]):
+            path_roles.append(
+                (
+                    fixture_path,
+                    "fixture",
+                    f"xsd_summaries[{summary_offset}].fixtures[{fixture_offset}].path",
+                    summary_offset,
+                )
+            )
+        for blocked_offset, blocked in enumerate(summary["blocked_schema_sources"]):
+            path_roles.append(
+                (
+                    blocked["source"]["path"],
+                    "blocked_source",
+                    (
+                        f"xsd_summaries[{summary_offset}].blocked_schema_sources"
+                        f"[{blocked_offset}].source.path"
+                    ),
+                    summary_offset,
+                )
+            )
+        profile_catalog = summary.get("profile_catalog")
+        if type(profile_catalog) is dict:
+            path_roles.append(
+                (
+                    profile_catalog["path"],
+                    "profile_catalog",
+                    f"xsd_summaries[{summary_offset}].profile_catalog.path",
+                    summary_offset,
+                )
+            )
+    return path_roles
+
+
+def _block_xsd_path_role_confusion(
+    xsd_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block XSD artifact paths replayed under a different material role."""
+
+    path_roles = _xsd_material_path_roles(xsd_summaries)
+    seen: dict[str, tuple[str, str, int]] = {}
+    for value, role, label, summary_offset in path_roles:
+        previous = seen.get(value)
+        if previous is None:
+            seen[value] = (role, label, summary_offset)
+            continue
+        previous_role, previous_label, _previous_summary = previous
+        if previous_role == role:
+            continue
+        _blocker(
+            blockers,
+            "xsd.material_path_role_reused",
+            f"{label} duplicates {previous_label}",
+            Path(xsd_summaries[summary_offset]["path"]),
+        )
+
+
+def _evidence_receipt_entries(
+    summary: dict[str, Any],
+    source: str,
+) -> list[tuple[int, int | None, dict[str, Any]]]:
+    entries: list[tuple[int, int | None, dict[str, Any]]] = []
+    if source == "canary":
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            receipt_summary = canary.get("receipt_summary")
+            if type(receipt_summary) is not dict:
+                continue
+            for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+                entries.append((receipt_offset, canary_offset, receipt))
+        return entries
+    if source == "archive":
+        archive_summary = summary["receipt_verification"]
+        if type(archive_summary) is dict:
+            for receipt_offset, receipt in enumerate(archive_summary["receipts"]):
+                entries.append((receipt_offset, None, receipt))
+        return entries
+    raise AssertionError(f"unsupported evidence receipt source {source!r}")
+
+
+def _evidence_receipt_field_path(
+    summary_offset: int,
+    source: str,
+    label: str,
+    receipt_offset: int,
+    parent_offset: int | None,
+    field: str,
+) -> str:
+    if source == "canary":
+        return (
+            f"evidence_summaries[{summary_offset}].canary_summaries"
+            f"[{parent_offset}].receipt_summary.receipts"
+            f"[{receipt_offset}].{field}"
+        )
+    if source == "archive":
+        return (
+            f"evidence_summaries[{summary_offset}].{label}.receipts"
+            f"[{receipt_offset}].{field}"
+        )
+    raise AssertionError(f"unsupported evidence receipt source {source!r}")
+
+
+def _block_cross_compact_summary_digest_role_confusion(
+    evidence_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block compact-summary digest roles replayed across evidence summaries."""
+
+    canary_summary_digests: list[tuple[str, int, str]] = []
+    canary_material_digests: list[tuple[str, int, str, str]] = []
+    trust_summary_digests: list[tuple[str, int, str]] = []
+    trust_material_digests: list[tuple[str, int, str, str]] = []
+
+    for summary_offset, summary in enumerate(evidence_summaries):
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            canary_summary_digests.append(
+                (
+                    canary["summary_sha256"],
+                    summary_offset,
+                    f"evidence_summaries[{summary_offset}].canary_summaries"
+                    f"[{canary_offset}].summary_sha256",
+                )
+            )
+            receipt_summary = canary.get("receipt_summary")
+            if type(receipt_summary) is not dict:
+                continue
+            canary_material_digests.append(
+                (
+                    receipt_summary["summary_sha256"],
+                    summary_offset,
+                    f"evidence_summaries[{summary_offset}].canary_summaries"
+                    f"[{canary_offset}].receipt_summary.summary_sha256",
+                    "receipt_summary",
+                )
+            )
+            for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+                receipt_digest = receipt.get("receipt_sha256")
+                if type(receipt_digest) is str:
+                    canary_material_digests.append(
+                        (
+                            receipt_digest,
+                            summary_offset,
+                            f"evidence_summaries[{summary_offset}].canary_summaries"
+                            f"[{canary_offset}].receipt_summary.receipts"
+                            f"[{receipt_offset}].receipt_sha256",
+                            "receipt",
+                        )
+                    )
+                for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
+                    material_digest = receipt.get(field)
+                    if type(material_digest) is str:
+                        canary_material_digests.append(
+                            (
+                                material_digest,
+                                summary_offset,
+                                f"evidence_summaries[{summary_offset}].canary_summaries"
+                                f"[{canary_offset}].receipt_summary.receipts"
+                                f"[{receipt_offset}].{field}",
+                                "receipt_material",
+                            )
+                        )
+
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            trust_summary_digests.append(
+                (
+                    trust["summary_sha256"],
+                    summary_offset,
+                    f"evidence_summaries[{summary_offset}].trust_summaries"
+                    f"[{trust_offset}].summary_sha256",
+                )
+            )
+            profile_json_sha256 = trust.get("profile_json_sha256")
+            if type(profile_json_sha256) is str:
+                trust_material_digests.append(
+                    (
+                        profile_json_sha256,
+                        summary_offset,
+                        f"evidence_summaries[{summary_offset}].trust_summaries"
+                        f"[{trust_offset}].profile_json_sha256",
+                        "profile_json",
+                    )
+                )
+            for profile_offset, profile in enumerate(trust["profiles"]):
+                trust_material_digests.append(
+                    (
+                        profile["bundle_sha256"],
+                        summary_offset,
+                        f"evidence_summaries[{summary_offset}].trust_summaries"
+                        f"[{trust_offset}].profiles[{profile_offset}].bundle_sha256",
+                        "bundle",
+                    )
+                )
+                for role in TRUST_DER_PROOF_FIELDS:
+                    for der_offset, entry in enumerate(profile[role]):
+                        trust_material_digests.append(
+                            (
+                                entry["sha256"],
+                                summary_offset,
+                                f"evidence_summaries[{summary_offset}].trust_summaries"
+                                f"[{trust_offset}].profiles[{profile_offset}].{role}"
+                                f"[{der_offset}].sha256",
+                                "der_proof",
+                            )
+                        )
+
+    cross_checks = (
+        (
+            canary_summary_digests,
+            canary_material_digests,
+            CANARY_SUMMARY_RECEIPT_ROLE_CODES,
+        ),
+        (
+            canary_summary_digests,
+            trust_material_digests,
+            CANARY_SUMMARY_TRUST_ROLE_CODES,
+        ),
+        (
+            trust_summary_digests,
+            trust_material_digests,
+            TRUST_SUMMARY_TRUST_ROLE_CODES,
+        ),
+        (
+            trust_summary_digests,
+            canary_material_digests,
+            TRUST_SUMMARY_RECEIPT_ROLE_CODES,
+        ),
+    )
+    for summary_digests, material_digests, code_by_role in cross_checks:
+        for digest, digest_summary_offset, digest_path in summary_digests:
+            for material_digest, material_summary_offset, material_path, role in (
+                material_digests
+            ):
+                if digest_summary_offset == material_summary_offset:
+                    continue
+                if digest != material_digest:
+                    continue
+                _blocker(
+                    blockers,
+                    code_by_role[role],
+                    f"{digest_path} reuses {material_path}",
+                    Path(evidence_summaries[digest_summary_offset]["path"]),
+                )
+
+
+def _block_cross_evidence_summary_reuse(
+    evidence_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Block nested evidence material replayed across distinct evidence summaries."""
+
+    checks: tuple[tuple[str, str, str], ...] = (
+        ("canary_summaries", "path", "evidence.canary_summary_path_reused"),
+        (
+            "canary_summaries",
+            "summary_sha256",
+            "evidence.canary_summary_digest_reused",
+        ),
+        ("trust_summaries", "path", "evidence.trust_summary_path_reused"),
+        (
+            "trust_summaries",
+            "summary_sha256",
+            "evidence.trust_summary_digest_reused",
+        ),
+    )
+    for collection, field, code in checks:
+        seen: dict[str, tuple[int, int]] = {}
+        for summary_offset, summary in enumerate(evidence_summaries):
+            for item_offset, item in enumerate(summary[collection]):
+                value = item[field]
+                if value in seen:
+                    first_summary, first_item = seen[value]
+                    _blocker(
+                        blockers,
+                        code,
+                        (
+                            f"evidence_summaries[{summary_offset}].{collection}"
+                            f"[{item_offset}].{field} duplicates "
+                            f"evidence_summaries[{first_summary}].{collection}"
+                            f"[{first_item}].{field}"
+                        ),
+                        Path(summary["path"]),
+                    )
+                else:
+                    seen[value] = (summary_offset, item_offset)
+
+    summary_paths: list[tuple[str, int, str]] = []
+    json_material_paths: list[tuple[str, int, str]] = []
+    for summary_offset, summary in enumerate(evidence_summaries):
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            summary_paths.append(
+                (
+                    canary["path"],
+                    summary_offset,
+                    (
+                        f"evidence_summaries[{summary_offset}].canary_summaries"
+                        f"[{canary_offset}].path"
+                    ),
+                )
+            )
+            json_material_paths.append(
+                (
+                    canary["config_path"],
+                    summary_offset,
+                    (
+                        f"evidence_summaries[{summary_offset}].canary_summaries"
+                        f"[{canary_offset}].config_path"
+                    ),
+                )
+            )
+            receipt_summary = canary.get("receipt_summary")
+            if type(receipt_summary) is dict:
+                for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+                    receipt_path = receipt.get("path")
+                    if type(receipt_path) is str:
+                        json_material_paths.append(
+                            (
+                                receipt_path,
+                                summary_offset,
+                                (
+                                    f"evidence_summaries[{summary_offset}]"
+                                    f".canary_summaries[{canary_offset}]"
+                                    f".receipt_summary.receipts[{receipt_offset}].path"
+                                ),
+                            )
+                        )
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            summary_paths.append(
+                (
+                    trust["path"],
+                    summary_offset,
+                    (
+                        f"evidence_summaries[{summary_offset}].trust_summaries"
+                        f"[{trust_offset}].path"
+                    ),
+                )
+            )
+            for profile_offset, profile in enumerate(trust["profiles"]):
+                json_material_paths.append(
+                    (
+                        profile["path"],
+                        summary_offset,
+                        (
+                            f"evidence_summaries[{summary_offset}].trust_summaries"
+                            f"[{trust_offset}].profiles[{profile_offset}].path"
+                        ),
+                    )
+            )
+        archive_receipts = summary.get("receipt_verification")
+        if type(archive_receipts) is dict:
+            for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
+                receipt_path = receipt.get("path")
+                if type(receipt_path) is str:
+                    json_material_paths.append(
+                        (
+                            receipt_path,
+                            summary_offset,
+                            (
+                                f"evidence_summaries[{summary_offset}]"
+                                f".receipt_verification.receipts[{receipt_offset}].path"
+                            ),
+                        )
+                    )
+    for summary_path, summary_offset, summary_label in summary_paths:
+        for material_path, material_summary_offset, material_label in json_material_paths:
+            if summary_offset == material_summary_offset:
+                continue
+            if summary_path != material_path:
+                continue
+            _blocker(
+                blockers,
+                "evidence.compact_json_artifact_path_role_reused",
+                f"{summary_label} duplicates {material_label}",
+                Path(evidence_summaries[summary_offset]["path"]),
+            )
+
+    seen_canary_summary_paths: dict[str, tuple[int, int]] = {}
+    seen_canary_summary_digests: dict[str, tuple[int, int]] = {}
+    for summary_offset, summary in enumerate(evidence_summaries):
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            seen_canary_summary_paths[canary["path"]] = (
+                summary_offset,
+                canary_offset,
+            )
+            seen_canary_summary_digests[canary["summary_sha256"]] = (
+                summary_offset,
+                canary_offset,
+            )
+    for summary_offset, summary in enumerate(evidence_summaries):
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            trust_path = trust["path"]
+            if trust_path in seen_canary_summary_paths:
+                first_summary, first_canary = seen_canary_summary_paths[trust_path]
+                if first_summary != summary_offset:
+                    _blocker(
+                        blockers,
+                        "evidence.canary_trust_summary_path_reused",
+                        (
+                            f"evidence_summaries[{summary_offset}].trust_summaries"
+                            f"[{trust_offset}].path duplicates "
+                            f"evidence_summaries[{first_summary}].canary_summaries"
+                            f"[{first_canary}].path"
+                        ),
+                        Path(summary["path"]),
+                    )
+            digest = trust["summary_sha256"]
+            if digest not in seen_canary_summary_digests:
+                continue
+            first_summary, first_canary = seen_canary_summary_digests[digest]
+            if first_summary == summary_offset:
+                continue
+            _blocker(
+                blockers,
+                "evidence.canary_trust_summary_digest_reused",
+                (
+                    f"evidence_summaries[{summary_offset}].trust_summaries"
+                    f"[{trust_offset}].summary_sha256 duplicates "
+                    f"evidence_summaries[{first_summary}].canary_summaries"
+                    f"[{first_canary}].summary_sha256"
+                ),
+                Path(summary["path"]),
+            )
+
+    receipt_checks: tuple[tuple[str, str, str, str], ...] = (
+        (
+            "canary",
+            "path",
+            "canary_summaries",
+            "evidence.canary_receipt_path_reused",
+        ),
+        (
+            "canary",
+            "receipt_sha256",
+            "canary_summaries",
+            "evidence.canary_receipt_digest_reused",
+        ),
+        (
+            "archive",
+            "path",
+            "receipt_verification",
+            "evidence.archive_receipt_path_reused",
+        ),
+        (
+            "archive",
+            "receipt_sha256",
+            "receipt_verification",
+            "evidence.archive_receipt_digest_reused",
+        ),
+    )
+    for source, field, label, code in receipt_checks:
+        seen_receipts: dict[str, tuple[int, int, int | None]] = {}
+        for summary_offset, summary in enumerate(evidence_summaries):
+            receipt_entries = _evidence_receipt_entries(summary, source)
+            for receipt_offset, parent_offset, receipt in receipt_entries:
+                value = receipt.get(field)
+                if not isinstance(value, str):
+                    continue
+                if value in seen_receipts:
+                    first_summary, first_receipt, first_parent = seen_receipts[value]
+                    current_path = _evidence_receipt_field_path(
+                        summary_offset,
+                        source,
+                        label,
+                        receipt_offset,
+                        parent_offset,
+                        field,
+                    )
+                    first_path = _evidence_receipt_field_path(
+                        first_summary,
+                        source,
+                        label,
+                        first_receipt,
+                        first_parent,
+                        field,
+                    )
+                    _blocker(
+                        blockers,
+                        code,
+                        f"{current_path} duplicates {first_path}",
+                        Path(summary["path"]),
+                    )
+                else:
+                    seen_receipts[value] = (summary_offset, receipt_offset, parent_offset)
+
+    source_material_checks: tuple[tuple[str, str, str, str], ...] = (
+        (
+            "canary",
+            "source_path",
+            "canary_summaries",
+            "evidence.canary_receipt_source_path_reused",
+        ),
+        (
+            "canary",
+            "payload_sha256",
+            "canary_summaries",
+            "evidence.canary_receipt_payload_digest_reused",
+        ),
+        (
+            "canary",
+            "rail_message_id",
+            "canary_summaries",
+            "evidence.canary_receipt_rail_message_id_reused",
+        ),
+        (
+            "canary",
+            "anchor_path",
+            "canary_summaries",
+            "evidence.canary_receipt_anchor_path_reused",
+        ),
+        (
+            "canary",
+            "anchor_sha256",
+            "canary_summaries",
+            "evidence.canary_receipt_anchor_digest_reused",
+        ),
+        (
+            "canary",
+            "store_dir",
+            "canary_summaries",
+            "evidence.canary_receipt_store_dir_reused",
+        ),
+        (
+            "canary",
+            "index_path",
+            "canary_summaries",
+            "evidence.canary_receipt_index_path_reused",
+        ),
+        (
+            "canary",
+            "index_sha256",
+            "canary_summaries",
+            "evidence.canary_receipt_index_digest_reused",
+        ),
+        (
+            "archive",
+            "source_path",
+            "receipt_verification",
+            "evidence.archive_receipt_source_path_reused",
+        ),
+        (
+            "archive",
+            "payload_sha256",
+            "receipt_verification",
+            "evidence.archive_receipt_payload_digest_reused",
+        ),
+        (
+            "archive",
+            "rail_message_id",
+            "receipt_verification",
+            "evidence.archive_receipt_rail_message_id_reused",
+        ),
+        (
+            "archive",
+            "anchor_path",
+            "receipt_verification",
+            "evidence.archive_receipt_anchor_path_reused",
+        ),
+        (
+            "archive",
+            "anchor_sha256",
+            "receipt_verification",
+            "evidence.archive_receipt_anchor_digest_reused",
+        ),
+        (
+            "archive",
+            "store_dir",
+            "receipt_verification",
+            "evidence.archive_receipt_store_dir_reused",
+        ),
+        (
+            "archive",
+            "index_path",
+            "receipt_verification",
+            "evidence.archive_receipt_index_path_reused",
+        ),
+        (
+            "archive",
+            "index_sha256",
+            "receipt_verification",
+            "evidence.archive_receipt_index_digest_reused",
+        ),
+    )
+    for source, field, label, code in source_material_checks:
+        seen_receipts: dict[str, tuple[int, int, int | None]] = {}
+        for summary_offset, summary in enumerate(evidence_summaries):
+            for receipt_offset, parent_offset, receipt in _evidence_receipt_entries(
+                summary,
+                source,
+            ):
+                value = receipt.get(field)
+                if not isinstance(value, str):
+                    continue
+                if value not in seen_receipts:
+                    seen_receipts[value] = (summary_offset, receipt_offset, parent_offset)
+                    continue
+                first_summary, first_receipt, first_parent = seen_receipts[value]
+                if first_summary == summary_offset:
+                    continue
+                current_path = _evidence_receipt_field_path(
+                    summary_offset,
+                    source,
+                    label,
+                    receipt_offset,
+                    parent_offset,
+                    field,
+                )
+                first_path = _evidence_receipt_field_path(
+                    first_summary,
+                    source,
+                    label,
+                    first_receipt,
+                    first_parent,
+                    field,
+                )
+                _blocker(
+                    blockers,
+                    code,
+                    f"{current_path} duplicates {first_path}",
+                    Path(summary["path"]),
+                )
+
+    seen_profile_json_digests: dict[str, tuple[int, int]] = {}
+    seen_profile_ids: dict[str, tuple[int, int, int]] = {}
+    seen_bundle_paths: dict[str, tuple[int, int, int]] = {}
+    seen_bundle_digests: dict[str, tuple[int, int, int]] = {}
+    for summary_offset, summary in enumerate(evidence_summaries):
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            profile_json_sha256 = trust.get("profile_json_sha256")
+            if isinstance(profile_json_sha256, str):
+                if profile_json_sha256 in seen_profile_json_digests:
+                    first_summary, first_trust = seen_profile_json_digests[
+                        profile_json_sha256
+                    ]
+                    _blocker(
+                        blockers,
+                        "trust.profile_json_digest_reused",
+                        (
+                            f"evidence_summaries[{summary_offset}].trust_summaries"
+                            f"[{trust_offset}].profile_json_sha256 duplicates "
+                            f"evidence_summaries[{first_summary}]"
+                            f".trust_summaries[{first_trust}].profile_json_sha256"
+                        ),
+                        Path(summary["path"]),
+                    )
+                else:
+                    seen_profile_json_digests[profile_json_sha256] = (
+                        summary_offset,
+                        trust_offset,
+                    )
+            for profile_offset, profile in enumerate(trust["profiles"]):
+                profile_id = profile["profile_id"]
+                if profile_id in seen_profile_ids:
+                    first_summary, first_trust, first_profile = seen_profile_ids[profile_id]
+                    _blocker(
+                        blockers,
+                        "trust.profile_id_reused",
+                        (
+                            f"evidence_summaries[{summary_offset}].trust_summaries"
+                            f"[{trust_offset}].profiles[{profile_offset}].profile_id "
+                            f"duplicates evidence_summaries[{first_summary}]"
+                            f".trust_summaries[{first_trust}].profiles"
+                            f"[{first_profile}].profile_id"
+                        ),
+                        Path(summary["path"]),
+                    )
+                else:
+                    seen_profile_ids[profile_id] = (
+                        summary_offset,
+                        trust_offset,
+                        profile_offset,
+                    )
+                bundle_sha256 = profile["bundle_sha256"]
+                bundle_path = profile["path"]
+                if bundle_path in seen_bundle_paths:
+                    first_summary, first_trust, first_profile = seen_bundle_paths[
+                        bundle_path
+                    ]
+                    if first_summary != summary_offset:
+                        _blocker(
+                            blockers,
+                            "trust.bundle_path_reused",
+                            (
+                                f"evidence_summaries[{summary_offset}].trust_summaries"
+                                f"[{trust_offset}].profiles[{profile_offset}].path "
+                                f"duplicates evidence_summaries[{first_summary}]"
+                                f".trust_summaries[{first_trust}].profiles"
+                                f"[{first_profile}].path"
+                            ),
+                            Path(summary["path"]),
+                        )
+                else:
+                    seen_bundle_paths[bundle_path] = (
+                        summary_offset,
+                        trust_offset,
+                        profile_offset,
+                    )
+                if bundle_sha256 in seen_bundle_digests:
+                    first_summary, first_trust, first_profile = seen_bundle_digests[
+                        bundle_sha256
+                    ]
+                    _blocker(
+                        blockers,
+                        "trust.bundle_digest_reused",
+                        (
+                            f"evidence_summaries[{summary_offset}].trust_summaries"
+                            f"[{trust_offset}].profiles[{profile_offset}].bundle_sha256 "
+                            f"duplicates evidence_summaries[{first_summary}]"
+                            f".trust_summaries[{first_trust}].profiles"
+                            f"[{first_profile}].bundle_sha256"
+                        ),
+                        Path(summary["path"]),
+                    )
+                else:
+                    seen_bundle_digests[bundle_sha256] = (
+                        summary_offset,
+                        trust_offset,
+                        profile_offset,
+                    )
+
+    _block_cross_compact_summary_digest_role_confusion(evidence_summaries, blockers)
+
+
+def _xsd_material_digest_roles(
+    xsd_summaries: list[dict[str, Any]],
+) -> list[tuple[str, str, str, int]]:
+    roles: list[tuple[str, str, str, int]] = []
+    for summary_offset, summary in enumerate(xsd_summaries):
+        roles.append(
+            (
+                summary["summary_sha256"],
+                "summary",
+                f"xsd_summaries[{summary_offset}].summary_sha256",
+                summary_offset,
+            )
+        )
+        roles.append(
+            (
+                summary["manifest_sha256"],
+                "manifest",
+                f"xsd_summaries[{summary_offset}].manifest_sha256",
+                summary_offset,
+            )
+        )
+        for digest_offset, digest in enumerate(summary["_schema_digests"]):
+            roles.append(
+                (
+                    digest,
+                    "schema",
+                    f"xsd_summaries[{summary_offset}].schemas[{digest_offset}].sha256",
+                    summary_offset,
+                )
+            )
+        for digest_offset, digest in enumerate(summary["_fixture_digests"]):
+            roles.append(
+                (
+                    digest,
+                    "fixture",
+                    f"xsd_summaries[{summary_offset}].fixtures[{digest_offset}].sha256",
+                    summary_offset,
+                )
+            )
+        for digest_offset, digest in enumerate(
+            summary["_validated_blocked_schema_source_digests"]
+        ):
+            roles.append(
+                (
+                    digest,
+                    "blocked_source",
+                    (
+                        f"xsd_summaries[{summary_offset}].blocked_schema_sources"
+                        f"[{digest_offset}].source.sha256"
+                    ),
+                    summary_offset,
+                )
+            )
+        profile_catalog = summary.get("profile_catalog")
+        if type(profile_catalog) is dict:
+            roles.append(
+                (
+                    profile_catalog["sha256"],
+                    "profile_catalog",
+                    f"xsd_summaries[{summary_offset}].profile_catalog.sha256",
+                    summary_offset,
+                )
+            )
+            roles.append(
+                (
+                    profile_catalog["catalog_json_sha256"],
+                    "profile_catalog_json",
+                    (
+                        f"xsd_summaries[{summary_offset}]"
+                        ".profile_catalog.catalog_json_sha256"
+                    ),
+                    summary_offset,
+                )
+            )
+    return roles
+
+
+def _evidence_material_digest_roles(
+    evidence_summaries: list[dict[str, Any]],
+) -> list[tuple[str, str]]:
+    roles: list[tuple[str, str]] = []
+    for summary_offset, summary in enumerate(evidence_summaries):
+        roles.append(
+            (
+                summary["summary_sha256"],
+                f"evidence_summaries[{summary_offset}].summary_sha256",
+            )
+        )
+        archive = summary["receipt_verification"]
+        if type(archive) is dict:
+            roles.append(
+                (
+                    archive["summary_sha256"],
+                    f"evidence_summaries[{summary_offset}].receipt_verification.summary_sha256",
+                )
+            )
+            for receipt_offset, receipt in enumerate(archive["receipts"]):
+                receipt_digest = receipt.get("receipt_sha256")
+                if type(receipt_digest) is str:
+                    roles.append(
+                        (
+                            receipt_digest,
+                            (
+                                f"evidence_summaries[{summary_offset}]"
+                                f".receipt_verification.receipts"
+                                f"[{receipt_offset}].receipt_sha256"
+                            ),
+                        )
+                    )
+                for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
+                    digest = receipt.get(field)
+                    if type(digest) is str:
+                        roles.append(
+                            (
+                                digest,
+                                (
+                                    f"evidence_summaries[{summary_offset}]"
+                                    f".receipt_verification.receipts"
+                                    f"[{receipt_offset}].{field}"
+                                ),
+                            )
+                        )
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            roles.append(
+                (
+                    canary["summary_sha256"],
+                    (
+                        f"evidence_summaries[{summary_offset}].canary_summaries"
+                        f"[{canary_offset}].summary_sha256"
+                    ),
+                )
+            )
+            receipt_summary = canary.get("receipt_summary")
+            if type(receipt_summary) is not dict:
+                continue
+            roles.append(
+                (
+                    receipt_summary["summary_sha256"],
+                    (
+                        f"evidence_summaries[{summary_offset}].canary_summaries"
+                        f"[{canary_offset}].receipt_summary.summary_sha256"
+                    ),
+                )
+            )
+            for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+                receipt_digest = receipt.get("receipt_sha256")
+                if type(receipt_digest) is str:
+                    roles.append(
+                        (
+                            receipt_digest,
+                            (
+                                f"evidence_summaries[{summary_offset}]"
+                                f".canary_summaries[{canary_offset}]"
+                                f".receipt_summary.receipts"
+                                f"[{receipt_offset}].receipt_sha256"
+                            ),
+                        )
+                    )
+                for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
+                    digest = receipt.get(field)
+                    if type(digest) is str:
+                        roles.append(
+                            (
+                                digest,
+                                (
+                                    f"evidence_summaries[{summary_offset}]"
+                                    f".canary_summaries[{canary_offset}]"
+                                    f".receipt_summary.receipts"
+                                    f"[{receipt_offset}].{field}"
+                                ),
+                            )
+                        )
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            roles.append(
+                (
+                    trust["summary_sha256"],
+                    (
+                        f"evidence_summaries[{summary_offset}].trust_summaries"
+                        f"[{trust_offset}].summary_sha256"
+                    ),
+                )
+            )
+            profile_json_sha256 = trust.get("profile_json_sha256")
+            if type(profile_json_sha256) is str:
+                roles.append(
+                    (
+                        profile_json_sha256,
+                        (
+                            f"evidence_summaries[{summary_offset}]"
+                            f".trust_summaries[{trust_offset}].profile_json_sha256"
+                        ),
+                    )
+                )
+            for profile_offset, profile in enumerate(trust["profiles"]):
+                roles.append(
+                    (
+                        profile["bundle_sha256"],
+                        (
+                            f"evidence_summaries[{summary_offset}]"
+                            f".trust_summaries[{trust_offset}].profiles"
+                            f"[{profile_offset}].bundle_sha256"
+                        ),
+                    )
+                )
+                for role in TRUST_DER_PROOF_FIELDS:
+                    for der_offset, entry in enumerate(profile[role]):
+                        roles.append(
+                            (
+                                entry["sha256"],
+                                (
+                                    f"evidence_summaries[{summary_offset}]"
+                                    f".trust_summaries[{trust_offset}].profiles"
+                                    f"[{profile_offset}].{role}"
+                                    f"[{der_offset}].sha256"
+                                ),
+                            )
+                        )
+    return roles
+
+
+def _receipt_path_material_roles(
+    receipts: list[dict[str, Any]],
+    label_prefix: str,
+) -> list[tuple[str, str]]:
+    roles: list[tuple[str, str]] = []
+    path_fields = ("path", "source_path", "anchor_path", "store_dir", "index_path")
+    for receipt_offset, receipt in enumerate(receipts):
+        for field in path_fields:
+            value = receipt.get(field)
+            if type(value) is str:
+                roles.append(
+                    (
+                        value,
+                        f"{label_prefix}.receipts[{receipt_offset}].{field}",
+                    )
+                )
+    return roles
+
+
+def _evidence_material_path_roles(
+    evidence_summaries: list[dict[str, Any]],
+) -> list[tuple[str, str]]:
+    """Return evidence material path roles with diagnostic labels."""
+
+    roles: list[tuple[str, str]] = []
+    for summary_offset, summary in enumerate(evidence_summaries):
+        roles.append((summary["path"], f"evidence_summaries[{summary_offset}].path"))
+        archive = summary["receipt_verification"]
+        if type(archive) is dict:
+            roles.extend(
+                _receipt_path_material_roles(
+                    archive["receipts"],
+                    f"evidence_summaries[{summary_offset}].receipt_verification",
+                )
+            )
+        for canary_offset, canary in enumerate(summary["canary_summaries"]):
+            canary_label = (
+                f"evidence_summaries[{summary_offset}].canary_summaries"
+                f"[{canary_offset}]"
+            )
+            roles.append((canary["path"], f"{canary_label}.path"))
+            roles.append((canary["config_path"], f"{canary_label}.config_path"))
+            receipt_summary = canary.get("receipt_summary")
+            if type(receipt_summary) is dict:
+                roles.extend(
+                    _receipt_path_material_roles(
+                        receipt_summary["receipts"],
+                        f"{canary_label}.receipt_summary",
+                    )
+                )
+        for trust_offset, trust in enumerate(summary["trust_summaries"]):
+            trust_label = (
+                f"evidence_summaries[{summary_offset}].trust_summaries"
+                f"[{trust_offset}]"
+            )
+            roles.append((trust["path"], f"{trust_label}.path"))
+            for profile_offset, profile in enumerate(trust["profiles"]):
+                roles.append(
+                    (
+                        profile["path"],
+                        f"{trust_label}.profiles[{profile_offset}].path",
+                    )
+                )
+    return roles
+
+
+def _block_cross_xsd_evidence_digest_role_confusion(
+    xsd_summaries: list[dict[str, Any]],
+    evidence_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Reject XSD material digests reused as evidence material digests."""
+
+    evidence_roles = _evidence_material_digest_roles(evidence_summaries)
+    for xsd_digest, role, xsd_path, summary_offset in _xsd_material_digest_roles(
+        xsd_summaries
+    ):
+        for evidence_digest, evidence_path in evidence_roles:
+            if xsd_digest != evidence_digest:
+                continue
+            _blocker(
+                blockers,
+                XSD_DIGEST_EVIDENCE_ROLE_CODES[role],
+                f"{xsd_path} reuses {evidence_path}",
+                Path(xsd_summaries[summary_offset]["path"]),
+            )
+
+
+def _block_cross_xsd_evidence_path_role_confusion(
+    xsd_summaries: list[dict[str, Any]],
+    evidence_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Reject XSD artifact paths reused as evidence material paths."""
+
+    evidence_roles = _evidence_material_path_roles(evidence_summaries)
+    for xsd_path, role, xsd_label, summary_offset in _xsd_material_path_roles(
+        xsd_summaries
+    ):
+        for evidence_path, evidence_label in evidence_roles:
+            if xsd_path != evidence_path:
+                continue
+            _blocker(
+                blockers,
+                XSD_PATH_EVIDENCE_ROLE_CODES[role],
+                f"{xsd_label} reuses {evidence_label}",
+                Path(xsd_summaries[summary_offset]["path"]),
+            )
+
+
+def _pending_xsd_probe_summary_digest_roles(
+    pending_xsd_probe_summaries: list[dict[str, Any]],
+) -> list[tuple[str, str, int]]:
+    return [
+        (
+            summary["summary_sha256"],
+            f"pending_xsd_probe_summaries[{summary_offset}].summary_sha256",
+            summary_offset,
+        )
+        for summary_offset, summary in enumerate(pending_xsd_probe_summaries)
+    ]
+
+
+def _pending_xsd_probe_summary_path_roles(
+    pending_xsd_probe_summaries: list[dict[str, Any]],
+) -> list[tuple[str, str, int]]:
+    return [
+        (
+            summary["path"],
+            f"pending_xsd_probe_summaries[{summary_offset}].path",
+            summary_offset,
+        )
+        for summary_offset, summary in enumerate(pending_xsd_probe_summaries)
+    ]
+
+
+def _block_cross_xsd_pending_probe_digest_role_confusion(
+    xsd_summaries: list[dict[str, Any]],
+    pending_xsd_probe_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Reject XSD material digests reused as pending probe summary digests."""
+
+    pending_roles = _pending_xsd_probe_summary_digest_roles(
+        pending_xsd_probe_summaries
+    )
+    for xsd_digest, role, xsd_label, summary_offset in _xsd_material_digest_roles(
+        xsd_summaries
+    ):
+        for probe_digest, probe_label, _probe_offset in pending_roles:
+            if xsd_digest != probe_digest:
+                continue
+            _blocker(
+                blockers,
+                XSD_DIGEST_PENDING_PROBE_ROLE_CODES[role],
+                f"{xsd_label} reuses {probe_label}",
+                Path(xsd_summaries[summary_offset]["path"]),
+            )
+
+
+def _block_cross_xsd_pending_probe_path_role_confusion(
+    xsd_summaries: list[dict[str, Any]],
+    pending_xsd_probe_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Reject XSD material paths reused as pending probe summary paths."""
+
+    pending_roles = _pending_xsd_probe_summary_path_roles(pending_xsd_probe_summaries)
+    for xsd_path, role, xsd_label, summary_offset in _xsd_material_path_roles(
+        xsd_summaries
+    ):
+        for probe_path, probe_label, _probe_offset in pending_roles:
+            if xsd_path != probe_path:
+                continue
+            _blocker(
+                blockers,
+                XSD_PATH_PENDING_PROBE_ROLE_CODES[role],
+                f"{xsd_label} reuses {probe_label}",
+                Path(xsd_summaries[summary_offset]["path"]),
+            )
+
+
+def _block_cross_evidence_pending_probe_digest_role_confusion(
+    evidence_summaries: list[dict[str, Any]],
+    pending_xsd_probe_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Reject evidence material digests reused as pending probe summary digests."""
+
+    pending_roles = _pending_xsd_probe_summary_digest_roles(
+        pending_xsd_probe_summaries
+    )
+    for evidence_digest, evidence_label in _evidence_material_digest_roles(
+        evidence_summaries
+    ):
+        for probe_digest, probe_label, probe_offset in pending_roles:
+            if evidence_digest != probe_digest:
+                continue
+            _blocker(
+                blockers,
+                EVIDENCE_DIGEST_PENDING_PROBE_CODE,
+                f"{evidence_label} reuses {probe_label}",
+                Path(pending_xsd_probe_summaries[probe_offset]["path"]),
+            )
+
+
+def _block_cross_evidence_pending_probe_path_role_confusion(
+    evidence_summaries: list[dict[str, Any]],
+    pending_xsd_probe_summaries: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Reject evidence material paths reused as pending probe summary paths."""
+
+    pending_roles = _pending_xsd_probe_summary_path_roles(pending_xsd_probe_summaries)
+    for evidence_path, evidence_label in _evidence_material_path_roles(
+        evidence_summaries
+    ):
+        for probe_path, probe_label, probe_offset in pending_roles:
+            if evidence_path != probe_path:
+                continue
+            _blocker(
+                blockers,
+                EVIDENCE_PATH_PENDING_PROBE_CODE,
+                f"{evidence_label} reuses {probe_label}",
+                Path(pending_xsd_probe_summaries[probe_offset]["path"]),
+            )
+
+
+def _public_xsd_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    output = _public_json_object_without_private_fields(summary)
+    strict = output.get("strict")
+    if type(strict) is dict:
+        output["strict"] = {
+            key: _required_flag_for_readiness_output(value)
+            for key, value in strict.items()
+        }
+    elif strict is not None:
+        output["strict"] = "unsupported"
+    return output
+
+
+def _receipt_response_metadata_is_publicly_supported(receipt: dict[str, Any]) -> bool:
+    if type(receipt) is not dict:
+        return False
+    status_code = receipt.get("status_code")
+    response_body_sha256 = receipt.get("response_body_sha256")
+    return (
+        receipt.get("ok") is True
+        and type(status_code) is int
+        and 200 <= status_code <= 299
+        and _is_lower_sha256(response_body_sha256)
+        and any(ch != "0" for ch in response_body_sha256)
+    )
+
+
+def _redact_public_receipt_entries(receipt_summary: dict[str, Any] | None) -> None:
+    if type(receipt_summary) is not dict:
+        return
+    receipts = receipt_summary.get("receipts")
+    if type(receipts) is not list:
+        return
+    for receipt in receipts:
+        if type(receipt) is not dict:
+            continue
+        if not _receipt_response_metadata_is_publicly_supported(receipt):
+            for key in ("ok", "status_code", "response_body_sha256"):
+                if key in receipt:
+                    receipt[key] = "unsupported"
+        if receipt.get("endpoint_requires_insecure_http") is True:
+            receipt["endpoint_requires_insecure_http"] = "unsupported"
+        if receipt.get("receipt_kind") != "iso-rail-gateway":
+            continue
+        if receipt.get("message_type") in RETIRED_RAIL_MESSAGE_TYPES:
+            receipt["message_type"] = "unsupported"
+        if "profile" in receipt and receipt["profile"] is None:
+            receipt["profile"] = "unsupported"
+
+
+def verify_evidence_summary(
+    path: Path,
+    *,
+    args: argparse.Namespace,
+    blockers: list[dict[str, Any]],
+    display_label: str | None = None,
+) -> dict[str, Any]:
+    """Verify one aggregate operator-evidence summary and append blockers."""
+
+    label = display_label or "evidence summary"
+    summary = _require_object(_load_json(path, display_label=label), label)
+    digest = _require_summary_digest(summary, label)
+    _reject_unknown_keys(summary, EVIDENCE_SUMMARY_KEYS, label)
+    _check_no_secret_material(summary, label)
+    verified_at, verified_at_dt = _require_timestamp(summary, "verified_at", str(path))
+    _block_if_stale(
+        verified_at_dt,
+        max_age_days=args.max_evidence_age_days,
+        code="evidence.summary_stale",
+        label="evidence summary verified_at",
+        path=path,
+        blockers=blockers,
+    )
+    version = summary.get("version")
+    if type(version) is not int or version != EVIDENCE_VERSION:
+        raise ReadinessError(f"{path}.version must be {EVIDENCE_VERSION}")
+    summary_ok = _require_bool(summary, "ok", str(path))
+    if not summary_ok:
+        _blocker(blockers, "evidence.summary_not_ok", "evidence summary is not ok", path)
+    if _receipt_path_is_repository_fixture(str(path)):
+        _blocker(
+            blockers,
+            "evidence.repository_evidence_summary",
+            "evidence summary path points at checked-in ISO fixture artifacts",
+            path,
+        )
+    evidence_policy = _verify_policy(summary, path, args, blockers)
+    expected_summary_ok = not any(
+        evidence_policy[flag] for flag in PRODUCTION_FALSE_POLICY_FLAGS
+    )
+    if summary_ok != expected_summary_ok:
+        _blocker(
+            blockers,
+            "evidence.summary_ok_drift",
+            "evidence summary ok field does not match archived production policy",
+            path,
+        )
+
+    canary_summaries = _require_list(summary.get("canary_summaries"), f"{path}.canary_summaries")
+    trust_summaries = _require_list(summary.get("trust_summaries"), f"{path}.trust_summaries")
+    if not canary_summaries:
+        _blocker(blockers, "evidence.no_canary_summaries", "no canary summaries recorded", path)
+    if not trust_summaries:
+        _blocker(blockers, "evidence.no_trust_summaries", "no trust summaries recorded", path)
+    archive_receipts = _verify_archive_receipts(
+        summary,
+        path,
+        args,
+        blockers,
+        policy_allows_canary_stage_receipts_only=summary["policy"][
+            "allow_canary_stage_receipts_only"
+        ],
+    )
+    if (
+        summary["policy"]["allow_canary_stage_receipts_only"]
+        and args.allow_canary_stage_receipts_only
+        and archive_receipts is not None
+    ):
+        _blocker(
+            blockers,
+            "evidence.policy.allow_canary_stage_receipts_only",
+            (
+                "Evidence summary was produced with non-production policy "
+                "allow_canary_stage_receipts_only=true despite direct receipt "
+                "archive verification"
+            ),
+            path,
+        )
+
+    canaries = [
+        _verify_canary(
+            _require_object(canary, f"{path}.canary_summaries[{offset}]"),
+            f"{path}.canary_summaries[{offset}]",
+            path,
+            args,
+            blockers,
+        )
+        for offset, canary in enumerate(canary_summaries)
+    ]
+    canary_order_keys = [_compact_summary_order_key(canary) for canary in canaries]
+    if canary_order_keys != sorted(canary_order_keys):
+        _blocker(
+            blockers,
+            "evidence.canary_summaries_not_canonical_order",
+            f"{path}.canary_summaries must be sorted by path and summary_sha256",
+            path,
+        )
+    _block_if_archive_receipts_do_not_cover_canaries(
+        canaries,
+        archive_receipts,
+        path,
+        blockers,
+    )
+    _block_cross_canary_receipt_reuse(canaries, path, blockers)
+    trust_outputs: list[dict[str, Any]] = []
+    for offset, trust in enumerate(trust_summaries):
+        label = f"{path}.trust_summaries[{offset}]"
+        trust_obj = _require_object(trust, label)
+        _reject_unknown_keys(trust_obj, TRUST_SUMMARY_KEYS, label)
+        trust_path = _validate_compact_summary_path(
+            _require_string(trust_obj, "path", label),
+            f"{label}.path",
+        )
+        if _receipt_path_is_repository_fixture(trust_path):
+            _blocker(
+                blockers,
+                "trust.repository_trust_summary",
+                "trust summary path points at checked-in ISO fixture artifacts",
+                path,
+            )
+        verified_at_raw, verified_at_dt = _require_timestamp(trust_obj, "verified_at", label)
+        _block_if_stale(
+            verified_at_dt,
+            max_age_days=args.max_trust_age_days,
+            code="trust.summary_stale",
+            label="trust summary verified_at",
+            path=path,
+            blockers=blockers,
+        )
+        summary_sha256 = _require_sha256(trust_obj, SUMMARY_DIGEST_FIELD, label)
+        version = trust_obj.get("version")
+        if type(version) is not int or version != TRUST_SUMMARY_VERSION:
+            _blocker(
+                blockers,
+                "trust.summary_version_unsupported",
+                f"{label}.version must be {TRUST_SUMMARY_VERSION}",
+                path,
+            )
+        ok = _require_bool(trust_obj, "ok", label)
+        verified_bundles = _require_positive_int(trust_obj, "verified_bundles", label)
+        if "max_source_age_days" not in trust_obj:
+            raise ReadinessError(f"{label}.max_source_age_days must be recorded")
+        if trust_obj["max_source_age_days"] is None:
+            max_source_age_days = None
+        else:
+            max_source_age_days = _require_positive_days(
+                trust_obj,
+                "max_source_age_days",
+                label,
+            )
+        allow_synthetic_der = _require_bool(trust_obj, "allow_synthetic_der", label)
+        allow_record_only = _require_bool(trust_obj, "allow_record_only", label)
+        allow_insecure_source_url = _require_bool(
+            trust_obj,
+            "allow_insecure_source_url",
+            label,
+        )
+        if allow_synthetic_der:
+            _blocker(
+                blockers,
+                "trust.allow_synthetic_der",
+                "trust summary was verified with --allow-synthetic-der",
+                path,
+            )
+        profile_json_emitted = _require_bool(trust_obj, "profile_json_emitted", label)
+        profile_json_emittable = _require_bool(trust_obj, "profile_json_emittable", label)
+        if profile_json_emitted:
+            profile_json_sha256 = _require_nonzero_sha256(
+                trust_obj,
+                "profile_json_sha256",
+                label,
+            )
+        else:
+            if "profile_json_sha256" not in trust_obj:
+                raise ReadinessError(
+                    f"{label}.profile_json_sha256 must be null when profile JSON was not emitted"
+                )
+            if trust_obj["profile_json_sha256"] is not None:
+                raise ReadinessError(
+                    f"{label}.profile_json_sha256 must be null when profile JSON was not emitted"
+                )
+            profile_json_sha256 = None
+        if not profile_json_emitted:
+            _blocker(
+                blockers,
+                "trust.profile_json_not_emitted",
+                "trust summary did not emit profile override JSON",
+                path,
+            )
+        if not profile_json_emittable:
+            _blocker(
+                blockers,
+                "trust.profile_json_not_emittable",
+                "trust summary cannot emit production profile override JSON",
+                path,
+            )
+        if profile_json_emittable:
+            if max_source_age_days is None:
+                raise ReadinessError(f"{label}.max_source_age_days must be a positive integer")
+            if max_source_age_days > evidence_policy["max_trust_source_age_days"]:
+                raise ReadinessError(
+                    f"{label}.max_source_age_days is weaker than evidence freshness policy"
+                )
+            if max_source_age_days > args.max_trust_source_age_days:
+                _blocker(
+                    blockers,
+                    "trust.source_freshness_budget_weaker_than_release",
+                    (
+                        f"{label}.max_source_age_days is weaker than "
+                        "--max-trust-source-age-days"
+                    ),
+                    path,
+                )
+        profiles_raw = _require_list(trust_obj.get("profiles"), f"{label}.profiles")
+        if not profiles_raw:
+            _blocker(blockers, "trust.no_profiles", "trust summary has no profiles", path)
+        if len(profiles_raw) != verified_bundles:
+            _blocker(
+                blockers,
+                "trust.profile_count_mismatch",
+                "trust profile count does not match verified_bundles",
+                path,
+            )
+        profiles = [
+            _verify_trust_profile(
+                _require_object(profile, f"{label}.profiles[{profile_offset}]"),
+                f"{label}.profiles[{profile_offset}]",
+                path,
+                args,
+                blockers,
+                allow_insecure_source_url=allow_insecure_source_url,
+            )
+            for profile_offset, profile in enumerate(profiles_raw)
+        ]
+        if allow_record_only:
+            message = "trust summary was verified with --allow-record-only"
+            if not any(
+                profile["embedded_signature_policy"] != REQUIRE_VERIFIED
+                for profile in profiles
+            ):
+                message += " but no non-production embedded_signature_policy was recorded"
+            _blocker(blockers, "trust.allow_record_only", message, path)
+        if allow_insecure_source_url:
+            message = "trust summary was verified with --allow-insecure-source-url"
+            if not any(
+                _trust_profile_source_requires_insecure_override(profile["source"])
+                for profile in profiles
+            ):
+                message += " but no http:// or local/private source URL was recorded"
+            _blocker(blockers, "trust.allow_insecure_source_url", message, path)
+        computed_profile_json_emittable = _computed_profile_json_emittable(
+            allow_synthetic_der=allow_synthetic_der,
+            allow_record_only=allow_record_only,
+            allow_insecure_source_url=allow_insecure_source_url,
+            max_source_age_days=max_source_age_days,
+            profiles=profiles,
+        )
+        if profile_json_emittable != computed_profile_json_emittable:
+            _blocker(
+                blockers,
+                "trust.profile_json_emittable_drift",
+                "trust summary profile_json_emittable does not match compact trust source policy",
+                path,
+            )
+        if profile_json_emitted and (
+            not profile_json_emittable or not computed_profile_json_emittable
+        ):
+            _blocker(
+                blockers,
+                "trust.profile_json_emitted_not_emittable",
+                "trust summary emitted profile JSON even though profile emission policy is not consistently emittable",
+                path,
+            )
+        expected_ok = (
+            profile_json_emitted
+            and profile_json_emittable
+            and not allow_synthetic_der
+            and not allow_record_only
+            and not allow_insecure_source_url
+        )
+        if not ok:
+            _blocker(
+                blockers,
+                "trust.summary_not_ok",
+                "trust summary is not production-ready",
+                path,
+            )
+        if ok != expected_ok:
+            _blocker(
+                blockers,
+                "trust.summary_ok_drift",
+                "trust summary ok field does not match compact trust production policy",
+                path,
+            )
+        profile_ids = [profile["profile_id"] for profile in profiles]
+        if profile_ids != sorted(profile_ids):
+            _blocker(
+                blockers,
+                "trust.profiles_not_canonical_order",
+                f"{label}.profiles must be sorted by profile_id in canonical order",
+                path,
+            )
+        seen_profile_ids: dict[str, int] = {}
+        seen_bundle_paths: dict[str, int] = {}
+        seen_bundle_digests: dict[str, int] = {}
+        for profile_offset, profile in enumerate(profiles):
+            profile_id = profile["profile_id"]
+            if profile_id in seen_profile_ids:
+                _blocker(
+                    blockers,
+                    "trust.profile_id_duplicate",
+                    (
+                        f"{label}.profiles[{profile_offset}].profile_id duplicates "
+                        f"{label}.profiles[{seen_profile_ids[profile_id]}].profile_id"
+                    ),
+                    path,
+                )
+            else:
+                seen_profile_ids[profile_id] = profile_offset
+            bundle_path = profile["path"]
+            if bundle_path in seen_bundle_paths:
+                _blocker(
+                    blockers,
+                    "trust.bundle_path_duplicate",
+                    (
+                        f"{label}.profiles[{profile_offset}].path duplicates "
+                        f"{label}.profiles[{seen_bundle_paths[bundle_path]}].path"
+                    ),
+                    path,
+                )
+            else:
+                seen_bundle_paths[bundle_path] = profile_offset
+            bundle_sha256 = profile["bundle_sha256"]
+            if bundle_sha256 in seen_bundle_digests:
+                _blocker(
+                    blockers,
+                    "trust.bundle_digest_duplicate",
+                    (
+                        f"{label}.profiles[{profile_offset}].bundle_sha256 duplicates "
+                        f"{label}.profiles[{seen_bundle_digests[bundle_sha256]}].bundle_sha256"
+                    ),
+                    path,
+                )
+            else:
+                seen_bundle_digests[bundle_sha256] = profile_offset
+        _block_trust_digest_role_confusion(
+            profile_json_sha256,
+            profiles,
+            label,
+            path,
+            blockers,
+        )
+        trust_outputs.append(
+            {
+                "version": _version_for_readiness_output(
+                    version,
+                    TRUST_SUMMARY_VERSION,
+                ),
+                "path": trust_path,
+                "verified_at": verified_at_raw,
+                "ok": _required_flag_for_readiness_output(ok),
+                "verified_bundles": verified_bundles,
+                "max_source_age_days": max_source_age_days,
+                "allow_synthetic_der": _nonproduction_flag_for_readiness_output(
+                    allow_synthetic_der,
+                ),
+                "allow_record_only": _nonproduction_flag_for_readiness_output(
+                    allow_record_only,
+                ),
+                "allow_insecure_source_url": _nonproduction_flag_for_readiness_output(
+                    allow_insecure_source_url,
+                ),
+                "profile_json_emitted": profile_json_emitted,
+                "profile_json_emittable": profile_json_emittable,
+                "profile_json_sha256": profile_json_sha256,
+                "profiles": profiles,
+                "summary_sha256": summary_sha256,
+            }
+        )
+    trust_order_keys = [_compact_summary_order_key(trust) for trust in trust_outputs]
+    if trust_order_keys != sorted(trust_order_keys):
+        _blocker(
+            blockers,
+            "evidence.trust_summaries_not_canonical_order",
+            f"{path}.trust_summaries must be sorted by path and summary_sha256",
+            path,
+        )
+    _reject_duplicate_compact_summaries(canaries, f"{path}.canary_summaries")
+    _reject_duplicate_compact_summaries(trust_outputs, f"{path}.trust_summaries")
+    _block_canary_trust_summary_identity_reuse(canaries, trust_outputs, path, blockers)
+    _block_compact_json_artifact_path_role_reuse(
+        canaries,
+        trust_outputs,
+        path,
+        blockers,
+        archive_receipts,
+    )
+    _block_cross_trust_profile_reuse(trust_outputs, path, blockers)
+    _block_compact_summary_digest_role_confusion(
+        canaries,
+        trust_outputs,
+        path,
+        blockers,
+    )
+    _block_canary_rail_receipts_without_trust(
+        canaries,
+        trust_outputs,
+        evidence_policy,
+        path,
+        blockers,
+    )
+    _block_archive_rail_receipts_without_trust(
+        archive_receipts,
+        trust_outputs,
+        evidence_policy,
+        path,
+        blockers,
+    )
+    return {
+        "path": str(path),
+        "verified_at": verified_at,
+        "ok": _required_flag_for_readiness_output(summary_ok),
+        "policy": _evidence_policy_for_readiness_output(evidence_policy, args),
+        "canary_summaries": [
+            _canary_for_readiness_output(canary, args) for canary in canaries
+        ],
+        "trust_summaries": [
+            _trust_summary_for_readiness_output(trust, args)
+            for trust in trust_outputs
+        ],
+        "receipt_verification": archive_receipts,
+        "_policy_allows_canary_stage_receipts_only": summary["policy"][
+            "allow_canary_stage_receipts_only"
+        ],
+        "_uses_canary_stage_receipts_only_policy": (
+            summary["policy"]["allow_canary_stage_receipts_only"]
+            and archive_receipts is None
+        ),
+        "summary_sha256": digest,
+    }
+
+
+def _public_evidence_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    output = _public_json_object_without_private_fields(summary)
+    canary_summaries = output.get("canary_summaries")
+    if type(canary_summaries) is list:
+        for offset, canary in enumerate(canary_summaries):
+            if type(canary) is not dict:
+                canary_summaries[offset] = "unsupported"
+                continue
+            receipt_summary = canary.get("receipt_summary")
+            if receipt_summary is not None and type(receipt_summary) is not dict:
+                canary["receipt_summary"] = "unsupported"
+                continue
+            _redact_public_receipt_entries(receipt_summary)
+    elif canary_summaries is not None:
+        output["canary_summaries"] = "unsupported"
+    archive_receipts = output.get("receipt_verification")
+    if archive_receipts is not None and type(archive_receipts) is not dict:
+        output["receipt_verification"] = "unsupported"
+    else:
+        _redact_public_receipt_entries(archive_receipts)
+    return output
+
+
+def _compact_summary_order_key(summary: dict[str, Any]) -> tuple[str, str]:
+    return (summary["path"], summary["summary_sha256"])
+
+
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr in (
+        "allow_reviewed_xsd_gaps",
+        "allow_canary_stage_receipts_only",
+    ):
+        flag = f"--{attr.replace('_', '-')}"
+        setattr(args, attr, _require_cli_bool(getattr(args, attr, None), flag))
+
+
+def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or type(value) not in (list, tuple):
+        raise ReadinessError(f"{label} must be a repeatable path list")
+    if len(value) > MAX_SUMMARY_INPUT_PATHS:
+        raise ReadinessError(f"{label} accepts at most {MAX_SUMMARY_INPUT_PATHS} paths")
+    paths: list[Path] = []
+    for offset, entry in enumerate(value):
+        if isinstance(entry, bytes):
+            raise ReadinessError(f"{label}[{offset}] must be a path")
+        if isinstance(entry, str):
+            paths.append(Path(_plain_text(entry, f"{label}[{offset}]")))
+        elif type(entry) is type(Path()):
+            paths.append(Path(entry))
+        else:
+            raise ReadinessError(f"{label}[{offset}] must be a path")
+    return paths
+
+
+def run(args: argparse.Namespace) -> int:
+    args = _require_plain_namespace(args)
+    args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
+    xsd_summary_paths = _required_cli_path_sequence(
+        getattr(args, "xsd_summary", None),
+        "--xsd-summary",
+    )
+    evidence_summary_paths = _required_cli_path_sequence(
+        getattr(args, "evidence_summary", None),
+        "--evidence-summary",
+    )
+    pending_xsd_probe_summary_paths = _required_cli_path_sequence(
+        getattr(args, "pending_xsd_probe_summary", None),
+        "--pending-xsd-probe-summary",
+    )
+    if args.summary_out is not None:
+        _reject_output_path_smuggling(args.summary_out, "summary_out")
+        _reject_repository_output_path(args.summary_out, "summary_out")
+    for offset, path in enumerate(xsd_summary_paths):
+        _reject_output_path_smuggling(path, f"--xsd-summary[{offset}]")
+    for offset, path in enumerate(evidence_summary_paths):
+        _reject_output_path_smuggling(path, f"--evidence-summary[{offset}]")
+    for offset, path in enumerate(pending_xsd_probe_summary_paths):
+        _reject_output_path_smuggling(path, f"--pending-xsd-probe-summary[{offset}]")
+    _require_policy_booleans(args)
+    if not xsd_summary_paths:
+        raise ReadinessError("provide at least one --xsd-summary")
+    if not evidence_summary_paths:
+        raise ReadinessError("provide at least one --evidence-summary")
+    _reject_summary_output_input_alias(
+        args.summary_out,
+        tuple(
+            (f"--xsd-summary[{offset}]", path)
+            for offset, path in enumerate(xsd_summary_paths)
+        )
+        + tuple(
+            (f"--evidence-summary[{offset}]", path)
+            for offset, path in enumerate(evidence_summary_paths)
+        )
+        + tuple(
+            (f"--pending-xsd-probe-summary[{offset}]", path)
+            for offset, path in enumerate(pending_xsd_probe_summary_paths)
+        ),
+    )
+    if args.summary_out is not None:
+        _ensure_text_output_target(
+            args.summary_out,
+            display_label="summary_out",
+            create_parent=False,
+        )
+    args.provider = _require_cli_string(getattr(args, "provider", None), "--provider")
+    args.environment = _require_cli_string(
+        getattr(args, "environment", None),
+        "--environment",
+    )
+    args.max_xsd_age_days = _require_positive_cli_int(
+        getattr(args, "max_xsd_age_days", None),
+        "--max-xsd-age-days",
+    )
+    args.max_evidence_age_days = _require_positive_cli_int(
+        getattr(args, "max_evidence_age_days", None),
+        "--max-evidence-age-days",
+    )
+    args.max_canary_age_days = _require_positive_cli_int(
+        getattr(args, "max_canary_age_days", None),
+        "--max-canary-age-days",
+    )
+    args.max_trust_age_days = _require_positive_cli_int(
+        getattr(args, "max_trust_age_days", None),
+        "--max-trust-age-days",
+    )
+    args.max_trust_source_age_days = _require_positive_cli_int(
+        getattr(args, "max_trust_source_age_days", None),
+        "--max-trust-source-age-days",
+    )
+
+    blockers: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    xsd_paths = xsd_summary_paths
+    evidence_paths = evidence_summary_paths
+    pending_xsd_probe_paths = pending_xsd_probe_summary_paths
+    _reject_duplicate_paths(xsd_paths, "--xsd-summary")
+    _reject_duplicate_paths(evidence_paths, "--evidence-summary")
+    _reject_duplicate_paths(pending_xsd_probe_paths, "--pending-xsd-probe-summary")
+    xsd_summaries = [
+        verify_xsd_summary(
+            path,
+            allow_reviewed_xsd_gaps=args.allow_reviewed_xsd_gaps,
+            max_age_days=args.max_xsd_age_days,
+            blockers=blockers,
+            warnings=warnings,
+            display_label=f"xsd_summaries[{offset}]",
+        )
+        for offset, path in enumerate(xsd_paths)
+    ]
+    evidence_summaries = [
+        verify_evidence_summary(
+            path,
+            args=args,
+            blockers=blockers,
+            display_label=f"evidence_summaries[{offset}]",
+        )
+        for offset, path in enumerate(evidence_paths)
+    ]
+    pending_xsd_probe_summaries = [
+        verify_pending_xsd_probe_summary(
+            path,
+            max_age_days=args.max_xsd_age_days,
+            blockers=blockers,
+            display_label=f"pending_xsd_probe_summaries[{offset}]",
+        )
+        for offset, path in enumerate(pending_xsd_probe_paths)
+    ]
+    if args.allow_reviewed_xsd_gaps and not warnings:
+        raise ReadinessError(
+            "--allow-reviewed-xsd-gaps requires at least one reviewed XSD gap warning"
+        )
+    if args.allow_canary_stage_receipts_only and not any(
+        summary["_uses_canary_stage_receipts_only_policy"]
+        for summary in evidence_summaries
+    ):
+        raise ReadinessError(
+            "--allow-canary-stage-receipts-only requires at least one evidence "
+            "summary with canary-stage-only receipt policy and missing direct "
+            "receipt archive verification"
+        )
+    _block_local_readiness_policy(
+        args=args,
+        xsd_paths=xsd_paths,
+        evidence_paths=evidence_paths,
+        blockers=blockers,
+    )
+    _reject_duplicate_compact_summaries(xsd_summaries, "xsd_summaries")
+    _reject_duplicate_compact_summaries(evidence_summaries, "evidence_summaries")
+    _reject_duplicate_compact_summaries(
+        pending_xsd_probe_summaries,
+        "pending_xsd_probe_summaries",
+    )
+    xsd_summaries = sorted(xsd_summaries, key=_compact_summary_order_key)
+    evidence_summaries = sorted(evidence_summaries, key=_compact_summary_order_key)
+    pending_xsd_probe_summaries = sorted(
+        pending_xsd_probe_summaries,
+        key=_compact_summary_order_key,
+    )
+    _block_pending_xsd_probe_coverage(
+        xsd_summaries,
+        pending_xsd_probe_summaries,
+        require_coverage=(
+            args.allow_reviewed_xsd_gaps or bool(pending_xsd_probe_summaries)
+        ),
+        blockers=blockers,
+    )
+    _block_cross_xsd_summary_reuse(xsd_summaries, blockers)
+    _block_xsd_path_role_confusion(xsd_summaries, blockers)
+    _block_cross_evidence_summary_reuse(evidence_summaries, blockers)
+    _block_cross_xsd_evidence_digest_role_confusion(
+        xsd_summaries,
+        evidence_summaries,
+        blockers,
+    )
+    _block_cross_xsd_evidence_path_role_confusion(
+        xsd_summaries,
+        evidence_summaries,
+        blockers,
+    )
+    _block_cross_xsd_pending_probe_digest_role_confusion(
+        xsd_summaries,
+        pending_xsd_probe_summaries,
+        blockers,
+    )
+    _block_cross_xsd_pending_probe_path_role_confusion(
+        xsd_summaries,
+        pending_xsd_probe_summaries,
+        blockers,
+    )
+    _block_cross_evidence_pending_probe_digest_role_confusion(
+        evidence_summaries,
+        pending_xsd_probe_summaries,
+        blockers,
+    )
+    _block_cross_evidence_pending_probe_path_role_confusion(
+        evidence_summaries,
+        pending_xsd_probe_summaries,
+        blockers,
+    )
+    canonical_blockers = _canonical_diagnostics(blockers)
+    canonical_warnings = _canonical_diagnostics(warnings)
+    canonical_xsd_summaries = sorted(xsd_summaries, key=_compact_summary_order_key)
+    canonical_evidence_summaries = sorted(
+        evidence_summaries,
+        key=_compact_summary_order_key,
+    )
+    canonical_pending_xsd_probe_summaries = sorted(
+        pending_xsd_probe_summaries,
+        key=_compact_summary_order_key,
+    )
+    output: dict[str, Any] = {
+        "version": READINESS_VERSION,
+        "checked_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
+        "ok": not canonical_blockers,
+        "blockers": canonical_blockers,
+        "warnings": canonical_warnings,
+        "xsd_summaries": [
+            _public_xsd_summary(summary) for summary in canonical_xsd_summaries
+        ],
+        "evidence_summaries": [
+            _public_evidence_summary(summary) for summary in canonical_evidence_summaries
+        ],
+        "pending_xsd_probe_summaries": [
+            _public_pending_xsd_probe_summary(summary)
+            for summary in canonical_pending_xsd_probe_summaries
+        ],
+        "policy": {
+            "provider": args.provider,
+            "environment": args.environment,
+            "allow_reviewed_xsd_gaps": args.allow_reviewed_xsd_gaps,
+            "allow_canary_stage_receipts_only": args.allow_canary_stage_receipts_only,
+            "max_xsd_age_days": args.max_xsd_age_days,
+            "max_evidence_age_days": args.max_evidence_age_days,
+            "max_canary_age_days": args.max_canary_age_days,
+            "max_trust_age_days": args.max_trust_age_days,
+            "max_trust_source_age_days": args.max_trust_source_age_days,
+        },
+    }
+    output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
+    text = json.dumps(output, allow_nan=False, indent=2, sort_keys=True) + "\n"
+    if args.summary_out is not None:
+        _write_text_output(args.summary_out, text, display_label="summary_out")
+    print(text, end="")
+    return 0 if output["ok"] else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=Path(__file__).name,
+        description="Aggregate ISO 20022 production-readiness evidence summaries.",
+        allow_abbrev=False,
+    )
+    parser.add_argument(
+        "--xsd-summary",
+        action="append",
+        default=[],
+        type=Path,
+        help="Digest-bound summary JSON from iso_xsd_fixture_verify.py; repeatable.",
+    )
+    parser.add_argument(
+        "--evidence-summary",
+        action="append",
+        default=[],
+        type=Path,
+        help="Digest-bound summary JSON from iso_operator_evidence_verify.py; repeatable.",
+    )
+    parser.add_argument(
+        "--pending-xsd-probe-summary",
+        action="append",
+        default=[],
+        type=Path,
+        help="Digest-bound summary JSON from iso_pending_xsd_source_probe.py; repeatable.",
+    )
+    parser.add_argument(
+        "--provider",
+        help="Expected canary provider value.",
+    )
+    parser.add_argument(
+        "--environment",
+        help="Expected canary and trust environment value.",
+    )
+    parser.add_argument(
+        "--summary-out",
+        type=Path,
+        help="Optional path to write the production-readiness summary JSON.",
+    )
+    parser.add_argument(
+        "--max-xsd-age-days",
+        type=int,
+        help="Maximum age in days for XSD fixture summaries.",
+    )
+    parser.add_argument(
+        "--max-evidence-age-days",
+        type=int,
+        help="Maximum age in days for aggregate operator evidence summaries.",
+    )
+    parser.add_argument(
+        "--max-canary-age-days",
+        type=int,
+        help="Maximum age in days for compact canary finished_at timestamps.",
+    )
+    parser.add_argument(
+        "--max-trust-age-days",
+        type=int,
+        help="Maximum age in days for compact trust-summary verified_at timestamps.",
+    )
+    parser.add_argument(
+        "--max-trust-source-age-days",
+        type=int,
+        help="Maximum age in days for trust source retrieved_at timestamps recorded by the evidence gate.",
+    )
+    parser.add_argument(
+        "--allow-reviewed-xsd-gaps",
+        action="store_true",
+        help="Downgrade reviewed XSD missing-schema/schema-only gaps to warnings for local audits.",
+    )
+    parser.add_argument(
+        "--allow-canary-stage-receipts-only",
+        action="store_true",
+        help="Do not require final evidence summaries to include direct receipt archive verification.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        normalised_argv = _normalise_cli_argv(argv)
+        parser = build_parser()
+        _preflight_raw_cli_secrets(
+            normalised_argv,
+            {
+                "--evidence-summary",
+                "--environment",
+                "--max-canary-age-days",
+                "--max-evidence-age-days",
+                "--max-trust-age-days",
+                "--max-trust-source-age-days",
+                "--max-xsd-age-days",
+                "--pending-xsd-probe-summary",
+                "--provider",
+                "--summary-out",
+                "--xsd-summary",
+            },
+        )
+        _preflight_boolean_cli_flags(
+            normalised_argv,
+            {
+                "--allow-canary-stage-receipts-only",
+                "--allow-reviewed-xsd-gaps",
+            },
+        )
+        _preflight_required_cli_values(
+            normalised_argv,
+            {"--environment", "--provider"},
+            "context",
+        )
+        _preflight_numeric_cli_values(
+            normalised_argv,
+            integer_flags={
+                "--max-canary-age-days",
+                "--max-evidence-age-days",
+                "--max-trust-age-days",
+                "--max-trust-source-age-days",
+                "--max-xsd-age-days",
+            },
+            number_flags=set(),
+        )
+        _preflight_output_cli_paths(
+            normalised_argv,
+            {
+                "--evidence-summary",
+                "--pending-xsd-probe-summary",
+                "--summary-out",
+                "--xsd-summary",
+            },
+        )
+        args = parser.parse_args(normalised_argv)
+        return run(args)
+    except ReadinessError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

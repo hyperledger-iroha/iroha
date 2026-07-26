@@ -1,0 +1,29 @@
+use iroha_version_derive::{declare_versioned, version};
+use norito::{Decode as NoritoDecode, Encode as NoritoEncode};
+
+declare_versioned!(VersionedMessage 1..3, Debug, Clone, iroha_macro::FromVariant);
+
+#[version(version = 1, versioned_alias = "VersionedMessage")]
+#[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
+pub struct Message;
+
+impl Message {
+    pub fn handle(&self) {}
+}
+
+#[version(version = 2, versioned_alias = "VersionedMessage")]
+#[derive(Debug, Clone, NoritoDecode, NoritoEncode)]
+pub struct Message2;
+
+impl Message2 {
+    pub fn handle(&self) {
+        panic!("Should have been message version 1.")
+    }
+}
+
+pub fn main() {
+    match Message.into() {
+        VersionedMessage::V1(message) => message.handle(),
+        VersionedMessage::V2(message) => message.handle(),
+    }
+}

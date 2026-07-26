@@ -1,0 +1,26 @@
+{
+  "version.label": {
+    "message": "最新版",
+    "description": "The label for version current"
+  },
+  "sidebar.docs.category.Norito": {
+    "message": "Norito",
+    "description": "The label for category Norito in sidebar docs"
+  },
+  "sidebar.docs.category.SoraFS": {
+    "message": "SoraFS",
+    "description": "The label for category SoraFS in sidebar docs"
+  },
+  "sidebar.docs.category.SDK guides": {
+    "message": "SDK ガイド",
+    "description": "The label for category SDK guides in sidebar docs"
+  },
+  "sidebar.docs.category.Developer portal": {
+    "message": "開発者ポータル",
+    "description": "The label for category Developer portal in sidebar docs"
+  },
+  "sidebar.docs.category.Reference": {
+    "message": "リファレンス",
+    "description": "The label for category Reference in sidebar docs"
+  }
+}

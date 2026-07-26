@@ -1,0 +1,32 @@
+rule_files:
+  - ../nexus_lane_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'nexus_lane_finality_lag_slots{lane="core",dataspace="0"}'
+        values: '0 0 5 13 13 13 13'
+    alert_rule_test:
+      - alertname: NexusLaneFinalityLagExceeded
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              lane: core
+              dataspace: "0"
+            exp_annotations:
+              summary: "Lane finality lag above policy"
+  - interval: 1m
+    input_series:
+      - series: 'nexus_lane_settlement_backlog_xor{lane="ops",dataspace="1"}'
+        values: '0 200 500 1200 1200 1200 1200'
+    alert_rule_test:
+      - alertname: NexusLaneBacklogHigh
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              lane: ops
+              dataspace: "1"
+            exp_annotations:
+              summary: "Lane settlement backlog high"

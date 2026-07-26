@@ -1,0 +1,16 @@
+{
+  "scenario": "multi_observer",
+  "torii_build": "mock-2026-05-15",
+  "sid_base64url": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
+  "description": "Two observers pull frames while backpressure pushes queue depth past the warning watermark, then drains cleanly.",
+  "frames": [
+    { "direction": "AppToWallet", "sequence": 5, "payload_hex": "06" },
+    { "direction": "WalletToApp", "sequence": 9, "payload_hex": "07" },
+    { "direction": "WalletToApp", "sequence": 10, "payload_hex": "08" }
+  ],
+  "events": [
+    { "timestamp_ms": 1778000005200, "state": "open", "note": "observer A attached; queues below warning watermark" },
+    { "timestamp_ms": 1778000005600, "state": "backpressure", "note": "observer B attached; queue depth exceeds warning watermark" },
+    { "timestamp_ms": 1778000005900, "state": "drained", "note": "both observers drained backlog; counters returned to steady-state" }
+  ]
+}

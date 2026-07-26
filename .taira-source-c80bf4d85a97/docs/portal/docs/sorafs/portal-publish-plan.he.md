@@ -1,0 +1,20 @@
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/portal-publish-plan.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: 5aa96b73003186870ee9f97e8e2c39047e455f548fc9f826ff94713462edf896
+source_last_modified: "2026-07-24T01:25:44.063979+00:00"
+translation_last_reviewed: null
+---
+
+# בתהליך תרגום
+
+<div dir="rtl">
+קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+
+לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
+</div>

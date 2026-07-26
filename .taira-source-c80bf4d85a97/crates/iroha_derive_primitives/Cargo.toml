@@ -1,0 +1,20 @@
+[package]
+name = "iroha_derive_primitives"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+darling = { workspace = true }
+drop_bomb = { workspace = true }
+manyhow = { workspace = true }
+proc-macro2 = { workspace = true }
+syn = { workspace = true, features = ["full"] }
+strum = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+quote = { workspace = true }

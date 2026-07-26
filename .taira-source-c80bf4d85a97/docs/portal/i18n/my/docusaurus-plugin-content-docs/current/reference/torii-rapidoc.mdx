@@ -1,0 +1,32 @@
+---
+lang: my
+direction: ltr
+source: docs/portal/docs/reference/torii-rapidoc.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+'@site/src/components/RapiDocPanel.jsx' မှ RapiDocPanel ကို တင်သွင်းပါ။
+
+# Torii API (RapiDoc)
+
+`RapiDoc` သည် တူညီသော Torii ၏ ကျစ်ကျစ်လျစ်လျစ်သော၊ မှတ်တမ်းပြုစုခြင်း- ပထမဆုံး rendering ကို ပေးသည်
+OpenAPI စာရွက်စာတမ်း။ ပိုမိုသိပ်သည်းသော ခြုံငုံသုံးသပ်ချက် သို့မဟုတ် ဖတ်သာသုံးသပ်ချက် လိုအပ်သည့်အခါ ၎င်းကို အသုံးပြုပါ။
+တောင်းဆိုမှု/တုံ့ပြန်မှုပုံစံများ။
+
+## အသုံးပြုပုံ အကြံပြုချက်
+
+- အပြန်အလှန်အကျိုးသက်ရောက်သောခေါ်ဆိုမှုများကိုဖွင့်ရန် bearer token ကိုထည့်ပါ။ တန်ဖိုးကို တစ်ခုအနေနဲ့ ထပ်ဆင့်ပို့ပါတယ်။
+  `X-TryIt-Auth` ခေါင်းစီးကို ပရောက်စီဖြင့် ပုံမှန်ပြုလုပ်ထားသည်။
+- ပေါ်တယ်ကို ဝန်ဆောင်မှုပေးသည့်အခါ အပြန်အလှန်အကျိုးသက်ရောက်မှုရှိစေရန် `TRYIT_PROXY_PUBLIC_URL` ကို စီစဉ်သတ်မှတ်ပါ
+  တောင်းဆိုချက်များကို အဆင့်သတ်မှတ်ထားသော ပရောက်စီမှတဆင့် လမ်းကြောင်းပြောင်းသည်။ ပရောက်စီကို ဝစ်ဂျက်က သတိပေးသည်။
+  URL ပျောက်နေသည်။
+- ထုတ်ဝေခဲ့သော သမိုင်းဆိုင်ရာ အသေးစိတ်အချက်အလက်များကို ရယူရန် “OpenAPI လျှပ်တစ်ပြက်ရိုက်ချက်” ကို သုံးပါ။
+  `npm run sync-openapi`; `Latest (tracked)` option သည် အမြဲတမ်း ဖြေရှင်းပေးသည်။
+  `/openapi/torii.json`။
+- “[စမ်းသုံးကြည့်ပါ](/api/overview#try-it-sandbox-docs-3)” ကွန်ဆိုးလ်နှင့် ပေါင်းစပ်သည့်အခါ
+  proxy လိုအပ်သော staged gateway များကို ဆန့်ကျင်သည်။
+
+<RapiDocPanel />

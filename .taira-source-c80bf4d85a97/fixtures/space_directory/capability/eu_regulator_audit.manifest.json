@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "uaid": "uaid:86e8ee39a3908460a0f4ee257bb25f340cd5b5de72735e9adefe07d5ef4bb0df",
+  "dataspace": 31,
+  "issued_ms": 1765238400000,
+  "activation_epoch": 5120,
+  "expiry_epoch": 5900,
+  "entries": [
+    {
+      "scope": {
+        "dataspace": 31,
+        "program": "compliance.audit",
+        "method": "stream_reports"
+      },
+      "effect": {
+        "Allow": {
+          "window": "PerDay"
+        }
+      },
+      "notes": "Read-only stream for ESMA/ESRB MiCA evidence pulls."
+    },
+    {
+      "scope": {
+        "dataspace": 31,
+        "program": "compliance.audit",
+        "method": "request_snapshot"
+      },
+      "effect": {
+        "Allow": {
+          "window": "PerMinute"
+        }
+      },
+      "notes": "Allows hourly signed snapshots for EU investigations."
+    },
+    {
+      "scope": {
+        "dataspace": 31,
+        "program": "retail.payments",
+        "method": "transfer"
+      },
+      "effect": {
+        "Deny": {
+          "reason": "Regulator UAIDs remain read-only."
+        }
+      },
+      "notes": "Deny-wins guard to prevent inadvertent customer transfers."
+    }
+  ]
+}

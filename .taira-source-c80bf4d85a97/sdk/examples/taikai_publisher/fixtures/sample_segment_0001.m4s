@@ -1,0 +1,15 @@
+Taikai Example Segment
+======================
+
+This is a deterministic placeholder payload that mimics a CMAF fragment for the
+Taikai publisher sample. The bytes are intentionally small so the example can
+run on developer laptops without dedicated media assets.
+
+Frame Index,PTS(us),Duration(us),Notes
+0,3600000,200000,"synthetic frame"
+1,3800000,200000,"synthetic frame"
+2,4000000,200000,"synthetic frame"
+3,4200000,200000,"synthetic frame"
+
+End of sample payload.
+

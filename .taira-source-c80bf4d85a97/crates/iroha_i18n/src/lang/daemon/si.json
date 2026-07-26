@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha වෙත සාදරයෙන් පිළිගනිමු!",
+  "error.trace_config_setup": "වින්‍යාස ට්‍රේස් සැකසීමට නොහැකි විය",
+  "error.config": "වින්‍යාස දෝෂයක්",
+  "error.logger": "ලොගර් ආරම්භ කිරීමට නොහැකි විය",
+  "error.start": "Iroha ආරම්භ කිරීමට අසාර්ථක විය",
+  "error.run": "Iroha ක්‍රියාත්මක කිරීමේදී දෝෂයක් මතුවිය",
+  "error.start_p2p": "P2P ජාලය ආරම්භ කළ නොහැකි විය",
+  "error.init_kura": "Kura (බ්ලොක් ගබඩාව) ආරම්භ කළ නොහැකි විය",
+  "error.start_dev_telemetry": "සංවර්ධන ටෙලිමෙට්‍රි සේවාව ආරම්භ කළ නොහැකි විය",
+  "error.start_telemetry": "ටෙලිමෙට්‍රි සේවාව ආරම්භ කළ නොහැකි විය",
+  "error.listen_os_signal": "OS සංඥා සවන් දීමට සැකසීමට නොහැකි විය",
+  "error.start_torii": "Torii (Iroha HTTP API ද්වාරය) ආරම්භ කළ නොහැකි විය"
+}

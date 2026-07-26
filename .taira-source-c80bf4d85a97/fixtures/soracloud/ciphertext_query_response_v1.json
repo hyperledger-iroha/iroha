@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "query_hash": "hash:939495969798999A9B9C9D9E9FA0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B3#F239",
+  "service_name": "web_portal",
+  "binding_name": "patient_records",
+  "metadata_level": {
+    "metadata_level": "Minimal",
+    "value": null
+  },
+  "served_sequence": 19,
+  "result_count": 1,
+  "truncated": false,
+  "results": [
+    {
+      "binding_name": "patient_records",
+      "state_key": null,
+      "state_key_digest": "hash:9495969798999A9B9C9D9E9FA0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3#D031",
+      "payload_bytes": 2112,
+      "ciphertext_commitment": "hash:95969798999A9B9C9D9E9FA0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B5#1D73",
+      "encryption": {
+        "encryption": "FheCiphertext",
+        "value": null
+      },
+      "last_update_sequence": 17,
+      "governance_tx_hash": "hash:969798999A9B9C9D9E9FA0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5#5A7E",
+      "proof": {
+        "schema_version": 1,
+        "proof_scheme": "soracloud.audit_anchor.v1",
+        "leaf_hash": "hash:9798999A9B9C9D9E9FA0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B7#812F",
+        "anchor_hash": "hash:98999A9B9C9D9E9FA0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7#4DA5",
+        "anchor_sequence": 19,
+        "event_sequence": 17
+      }
+    }
+  ]
+}

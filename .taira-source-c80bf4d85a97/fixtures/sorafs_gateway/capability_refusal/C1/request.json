@@ -1,0 +1,13 @@
+{
+  "method": "GET",
+  "path": "/car/{manifest_cid}",
+  "headers": {
+    "Accept": "application/vnd.ipld.car",
+    "Sora-Manifest-Handle": "sorafs.sf1@1.0.0"
+  },
+  "manifest_reference": "../1.0.0/manifest_v1.json",
+  "notes": [
+    "Simulate a CAR fetch against a gateway that does not enable the `sorafs.sf1@1.0.0` chunker profile.",
+    "Use the canonical fixture in `../1.0.0` as the base payload when replaying this scenario."
+  ]
+}

@@ -1,0 +1,275 @@
+---
+id: preview-feedback-log
+lang: am
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback-log.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Preview feedback logging
+sidebar_label: Feedback logging
+description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+ቅድመ እይታFeedback ማጠቃለያ ከ'@site/src/data/previewFeedbackSummary.json';
+
+ተግባር ግብረ መልስ ማጠቃለያ ሠንጠረዥ() {
+  const waves = ቅድመ እይታ ግብረመልስ ማጠቃለያ?.waves ?? [];
+  ከሆነ (ሞገዶች. ርዝመት === 0) {
+    መመለስ (
+      <p>
+        ምንም የቅድመ እይታ ግብረመልስ ግቤቶች አልተመዘገቡም።
+        {''}
+        <code>{የግብረ መልስ ማጠቃለያ ቅድመ እይታ?.ምንጭ ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
+        .
+      </p>
+    );
+  }
+  መመለስ (
+    <ጠረጴዛ>
+      <ርዕስ>
+        <tr>
+          <th>ሞገድ</th>
+          <th>ሁኔታ</th>
+          <th>ጠቅላላ ክስተቶች</th>
+          <th>ግብዣዎች</th>
+          <th>ግብዣዎችን ክፈት</th>
+          <th>ተመሰከረ</th>
+          <th>ተሽሯል</th>
+          <th>ግብረመልስ</th>
+          <th>ጉዳዮች</th>
+          <th>ማጠናቀቅ %</th>
+          <th>አክ %</th>
+          <th>የምላሽ መጠን</th>
+          <th>አክ መዘግየት (አማካኝ ሰ) </th>
+          <th>የመልስ መዘግየት (አማካኝ ሰ) </th>
+          <th>የመጨረሻው ክስተት</th>
+          <th>ከመጨረሻው ክስተት ጀምሮ ባሉት ቀናት</th>
+        </tr>
+      </ thead>
+      <tbody>
+        {waves.map((ሞገድ) => {
+          const ግብረ መልስ = wave.feedbackCount ?? wave.eventCounts?.['ግብረመልስ ገብቷል'] ?? 0;
+          const ጉዳዮች = wave.issuesCount ?? wave.eventCounts?.['ጉዳይ-ተከፈተ'] ?? 0;
+          const ምስጋናዎች =
+            ሞገድ. ምስጋናዎች ?? wave.eventcounts?.ተመሰከረ ?? 0;
+          const ስረዛዎች =
+            ሞገድ.መሻሪያዎች ?? wave.eventCounts?.['መዳረሻ ተሽሯል'] ?? 0;
+          const ምላሽ ተመን =
+            wave.responseRatePercent == ባዶ ? '-': `${wave.responseRatePercent}%`;
+          const completion በመቶ =
+            wave.invite ማጠናቀቅያ በመቶኛ == ባዶ
+              ? '-
+              : `${wave.inviteCompletionPercent}%`;
+          const ackPercent =
+            wave.ackRatePercent == ባዶ ? '-': `${wave.ackRatePercent}%`;
+          const ackLatency =
+            wave.ackLatencyHoursAvg == ባዶ ? '-'፡ wave.ackLatencyHoursAvg;
+          const feedbackLatency =
+            wave.feedbackLatencyHoursAvg == ባዶ ? '-'፡ wave.feedbackLatencyHoursAvg;
+          መመለስ (
+            <tr key={wave.wave}>
+              <td>{wave.wave}</td>
+              <td>{wave.status ?? 'በመጠባበቅ ላይ'}</td>
+              <td>{wave.totalEvents}</td>
+              <td>{ሞገድ. ይጋብዛል?.ጠቅላላ ?? 0}</td>
+              <td>{ሞገድ. ይጋብዛል?. ክፍት ነው ?? 0}</td>
+              <td>{ምስጋናዎች}</td>
+              <td>{መሻሮች}</td>
+              <td>{ግብረመልስ}</td>
+              <td>{ጉዳዮች}</td>
+              <td>{ማጠናቀቂያ መቶኛ}</td>
+              <td>{ackPercent}</td>
+              <td>{responseRate}</td>
+              <td title={wave.ackLatencyHoursP95 == ባዶ ነው? ያልተገለጸ፡ I18NI0000018X}>
+                {ackLatency}
+              </td>
+              <td
+                ርዕስ={
+                  wave.feedbackLatencyHoursP95 == ባዶ
+                    ? ያልተገለጸ
+                    : `p95 ${wave.feedbackLatencyHoursP95}h`
+                }
+              >
+                {ግብረ መልስLatency}
+              </td>
+              <td>{wave.lastEventTimestamp ?? '—'}</td>
+              <td>{wave.daysከመጨረሻው ክስተት ጀምሮ ?? '—'}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </ ሠንጠረዥ>
+  );
+}
+
+ፍኖተ ካርታው ገምጋሚዎችን በጋበዝን ቁጥር ሊረጋገጥ የሚችል ማስረጃን ይጠይቃል
+docs ፖርታል ቅድመ እይታ። ይህ ማስታወሻ ያንን ማስረጃ እንዴት መያዝ እንዳለበት ያብራራል።
+`preview-feedback-log` አጋዥ፣ የተገኙትን ቅርሶች እንዴት ማጋራት እንደሚቻል
+አስተዳደር, እና አንድ ጊዜ ማዕበል ከተዘጋ የምግብ መፍጫውን የት እንደሚያስገቡ.
+
+## ለምን ግብረ መልስ እንመዘግባለን።
+
+- ** ተገዢነት: *** እያንዳንዱ ግብዣ ማን ቅድመ እይታውን እንደደረሰ መመዝገብ አለበት።
+  ተቀባይነት ያለው የአጠቃቀም ፖሊሲን አምነዋል፣ እና መዳረሻቸው ሲሰረዝ።
+- **የቴሌሜትሪ ትስስር፡** መዝገቡ የፖርታል ቴሌሜትሪ ሹልፎችን እንድናገናኝ ያስችለናል።
+  ወይም ከተወሰኑ የግብዣ ቡድኖች ጋር ትራፊክ ይሞክሩት።
+- ** የመንግስት ማስረጃዎች: *** እያንዳንዱ DOCS-SORA የፍተሻ ነጥብ በማሽን የሚነበብ ያስፈልገዋል.
+  የግብዣ ብዛትን፣ ክፍት ገምጋሚዎችን እና የላቀ ሁኔታን የሚያሳይ ማጠቃለያ
+  ጉዳዮች
+
+ሁሉም ማስረጃዎች በI18NI0000021X ስር ይኖራሉ ስለዚህ ማያያዝ ይችላል።
+የ CI ምዝግብ ማስታወሻዎችን ሳይቧጭ ወደ ግብዣው ሞገድ ቲኬት ወይም የአስተዳደር ግምገማ።
+
+## የቀጥታ ግብዣ ማጠቃለያ
+
+`docs/portal/scripts/preview-feedback-summary.mjs` የተጋራውን ምዝግብ እና
+በ I18NI0000024X ጊዜ `src/data/previewFeedbackSummary.json` ይጽፋል። ጠረጴዛው
+ከዚህ በታች JSON ገምጋሚዎች የአሁኑን የግብዣ አሻራ ማየት እንዲችሉ ያሳያል
+የ CLI ረዳትን ሳያስኬዱ.
+
+<የመልስ ማጠቃለያ ሰንጠረዥ />
+
+ከግብዣው ድምር በተጨማሪ፣ ማጠቃለያው አሁን እውቅናን ይሰጣል
+መሻር ይቆጥራል፣ የተገኘው የምላሽ መጠን (የግብረመልስ ግቤቶች የተከፋፈለው።
+ጠቅላላ ግብዣዎች)፣ እና አማካይ መዘግየት (በሚያንዣብብ p95) መካከል
+መጋበዝ እና የገምጋሚው እውቅና ወይም አስተያየት ማስገባት። አዲሱ
+** ማጠናቀቅ %** አምድ ምን ያህል ግብዣዎች እንደተዘጉ ያሳያል (እውቅና የተሰጠው ወይም
+ተሽሯል)፣ **Ack %** ምን ያህል ተቀባዮች በግልፅ እንደተረጋገጡ ያደምቃል
+ተቀባይነት ያለው-የአጠቃቀም ደረጃዎች. እነዚህ የተገኙ መቶኛዎች - ከJSON-ብቻ ጋር
+የመሻር/የፍቺ መጠን—ገምጋሚዎች እንዲያረጋግጡ የአስተዳደር ዳሽቦርዶችን ይመግቡ
+ሁለቱም የተሳትፎ ደረጃዎች እና የ CLI ረዳትን ሳያደርጉ የመመለሻ ጊዜ.
+የ **ሁኔታ** አምድ ማዕበል አሁንም እንዳለ ያሳያል
+ንቁ (`active`)፣ ተዘግቷል ነገር ግን በ14-ቀን የክትትል መስኮት (`closed`)፣ ወይም
+ለማህደር ዝግጁ (I18NI0000027X)። **ከመጨረሻው ክስተት ወዲህ ያሉት ቀናት** መለኪያው እንዴት እንደሆነ ያሳያል
+ምክር ቤቶች እንዲታዩ ከመጨረሻው የግብዣ/የመልስ እርምጃ ጀምሮ ረጅም ጊዜ ቆይቷል
+መጠቅለል የሚያስፈልጋቸው ሞገዶች ወይም የቆዩ ተቀባዮችን እንደገና ማሳተፍ.
+
+### ሞገድ I18NI0000028X ድጋሚ
+
+- ** ወሰን፡** የፋይናንስ ቅድመ-ይሁንታ፣ ታዛቢነት ኦፕስ፣ የኤስዲኬ አጋር እና የስነምህዳር ጠበቃ ገምጋሚዎች በ*2026-02-18** ተጋብዘዋል ከሚቀጥለው DOCS-I18NT0000003X የፍተሻ ነጥብ በፊት።
+- ** መለኪያዎች፡** 4 ግብዣዎች፣ 4 እውቅናዎች፣ 4 መሻሮች እና 4 የግብረመልስ ግቤቶች (`responseRatePercent = 100`) ከአንድ የክትትል እትም (`DOCS-SORA-Preview-20260218`) ጋር በታዛቢነት ስብስብ የቀረበ።
+- ** ማስረጃ:** `artifacts/docs_portal_preview/feedback_log.json` አሁን ለዚህ ሞገድ ዝርዝር የክስተት ጊዜን ያካትታል እና `artifacts/docs_portal_preview/preview-20260218-summary.json` ከአስተዳደር እሽጎች ጋር የምናያይዛቸውን የተለመዱ መለኪያዎችን ይይዛል። በ`npm run --prefix docs/portal preview:log -- --summary --summary-json` በኩል የፖርታል መረጃን እንደገና ማመንጨት ተመሳሳይ ቁጥሮችን ወደ `src/data/previewFeedbackSummary.json` ይጎትታል።
+- **የማዕበል አጋዥ፡** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` የየማዕበል ማጠቃለያ፣ መፍጨት እና የታደሰ የፖርታል ዳታ በአንድ እርምጃ ይለቃል።
+- ** ተከታታዮች: *** የታዛቢነት ግብረመልስ ተጨማሪ የሲኤስፒ ምሳሌዎችን ለጥያቄዎች ይሞክሩ; የሚቀጥለው የግብዣ ሞገድ ጥገናውን ማረጋገጥ እንዲችል ሰነዶች/ዴቭሬል በ`docs/portal/docs/sorafs/observability-plan.md` (§4.2) ስር መፃፍን እየተከታተሉ ነው። ሙሉ ማጠቃለያው በ[`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) ውስጥ ከተያዘው የጊዜ መስመር ጋር በ[`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md) ውስጥ ይኖራል።
+
+## የክስተት ታክሶኖሚ
+
+| ክስተት | መቼ እንደሚቀዳ | ማስታወሻ |
+| --- | --- | --- |
+| `invite-sent` | የግብዣ ኢሜይል ከላኩ በኋላ ወዲያውኑ። | የግብዣ ብዛት ትክክል ሆኖ እንዲቆይ በአንድ ተቀባይ አንድ ግቤት ጨምር። |
+| `acknowledged` | ገምጋሚው ሲያረጋግጥ የደህንነት/የታዛቢነት ሰነዶችን አንብበው የቼክ ሰሙን በር ሮጡ። | አማራጭ ነገር ግን ለባልደረባ ስብስቦች ይመከራል። |
+| `feedback-submitted` | ገምጋሚ በተስማማው መከታተያ በኩል ግኝቱን ሲያቀርብ። | በ`--notes` መስክ ውስጥ ጉዳዩን/አገናኙን ያካትቱ። |
+| `issue-opened` | DOCS-I18NT0000005X ከአስተያየት የመነጨ የክትትል ችግር ሲፈጥር። | አስተያየቶችን አስቀድሞ ለማየት አስተዳደር የመንገድ ካርታ ንጥሎችን ለማዛመድ ያግዛል። |
+| `access-revoked` | አንዴ የገምጋሚው ቅድመ እይታ መስኮት ካለቀ ወይም መድረሻው ቀደም ብሎ ከተሻረ። | የ«ክፍት ተቀባዮች» ቆጠራ ትክክል ሆኖ እንዲቆይ ያስፈልጋል። |
+
+ተጨማሪ ክስተት ከፈለጉ ያክሉት።
+`VALID_EVENTS` በ`docs/portal/scripts/preview-feedback-log.mjs` ውስጥ እና አዘምን
+ይህ ሰንጠረዥ በተመሳሳይ ለውጥ.
+
+## የምዝግብ ማስታወሻ የስራ ሂደት
+
+ከ I18NI0000047X በስተጀርባ ያለው ረዳት አንድ ነጠላ የ JSON ሎግ ይጽፋል
+ሁሉም ክስተቶች. እያንዳንዱ ግቤት የሞገድ መለያ፣ ተቀባይ፣ ክስተት፣ የጊዜ ማህተም እና ይዟል
+አማራጭ ማስታወሻዎች. ምሳሌ፡-
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-02-04T18:20:15.321Z",
+  "entries": [
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "invite-sent",
+      "timestamp": "2026-02-04T18:05:02.114Z",
+      "notes": "seed reviewer"
+    },
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "feedback-submitted",
+      "timestamp": "2026-02-05T09:14:43.009Z",
+      "notes": "docs-preview/42"
+    }
+  ]
+}
+```
+
+ትዕዛዞች፡-
+
+```bash
+# Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
+npm run --prefix docs/portal preview:log -- \
+  --wave preview-20260204 \
+  --recipient alice@example.com \
+  --event invite-sent \
+  --notes "seed reviewer"
+
+# Produce a text summary for the current repo
+npm run --prefix docs/portal preview:log -- --summary
+
+# Emit machine-readable summary for a specific wave
+npm run --prefix docs/portal preview:log -- \
+  --summary --summary-json --filter-wave preview-20260204 \
+  > artifacts/docs_portal_preview/preview-20260204-summary.json
+
+# Regenerate the portal summary data file
+npm run --prefix docs/portal generate:preview-summary
+
+# Generate a Markdown digest skeleton for a wave
+npm run --prefix docs/portal preview:digest -- \
+  --wave preview-20260204 \
+  --invite-start 2026-02-04T00:00:00Z \
+  --invite-end 2026-02-18T00:00:00Z \
+  --dashboard "https://grafana.example/d/docs-preview?var-wave=preview-20260204" \
+  --out artifacts/docs_portal_preview/preview-20260204-digest.md
+```
+
+ጠቃሚ ምክሮች
+
+- በባህሪ ቅርንጫፍ ውስጥ ሲሰሩ ምዝግብ ማስታወሻውን በስሪት ቁጥጥር ስር ያድርጉት
+  ጠባቂዎች ለውጦችን መገምገም ይችላሉ. ለረጅም ጊዜ ሞገዶች ምዝግብ ማስታወሻውን በ ውስጥ ያከማቹ
+  የአስተዳደር ትኬት እና የመጨረሻውን እትም ከተለቀቁት ቅርሶች ጋር ያያይዙ።
+- በቀጥታ ወደ ውስጥ ለመግባት ሲፈልጉ `preview:log` `--log <path>` ይቀበላል
+  SoraFS ጥቅል ወይም CI የስራ ቦታ።
+- ሁልጊዜ የI18NI0000050X ፍንጭ (የችግር አገናኝ ፣ GitHub እጀታ ፣ የቡድን መታወቂያ) ያካትቱ
+  ማጠቃለያ በኋለኛው እይታ ወቅት ጠቃሚ ነው።
+- የሚወስን ማጠቃለያ የጊዜ ማህተሞች ሲፈልጉ (ለ CI ወይም ለዶክመንቶች ቅጽበተ-ፎቶዎች)
+  ማጠቃለያውን ከማሄድዎ በፊት `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` ያዘጋጁ
+  ረዳት ። ይህ የ`generatedAt`፣ ሁኔታ እና የቀን መቁጠሪያዎች ወጥነት ያለው እንዲሆን ያደርጋል
+  በመልሶ ግንባታዎች ላይ።
+
+## ማጠቃለያዎች፣ መፍጨት እና ማህደሮች1. **በየማዕበል ማጠቃለያ፡** የJSON ማጠቃለያ አምጡና ከግብዣው ጋር ያያይዙት።
+   ትኬት ከጥሬ ምዝግብ ማስታወሻ ጋር. ማጠቃለያው ጠቅላላ ግብዣዎችን ይዘረዝራል፣ ክፍት ነው።
+   አስተዳደር እያንዳንዱን መያዙን ማረጋገጥ እንዲችል ተቀባዮች እና ግብረመልስ ይቆጠራሉ።
+   ገምጋሚ። የፖርታል ግንባታው አጠቃላይ ማጠቃለያ በ ላይ ያትማል
+   ባለድርሻ አካላት የአሁኑን ማየት እንዲችሉ `src/data/previewFeedbackSummary.json`
+   CLI ን ሳያስኬዱ ቅጽበተ-ፎቶ።
+2. ** ሳምንታዊ መፈጨት: ** አሂድ `npm run --prefix docs/portal preview:digest -- --wave <label>`
+   የማርክዳውን መለኪያዎችን በቅድሚያ ለመሙላት፣ ከዚያም የቦታ ያዥ ክፍሎችን ብጁ ያድርጉ
+   ውስጥ አብነት በመጠቀም
+   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
+   ከባለድርሻ አካላት ጋር ከመጋራቱ በፊት. ቢያንስ ያካትቱ፡ የሞገድ መለያ፣ ክፍት
+   ገምጋሚዎች፣ ታዋቂ ግኝቶች እና ቀጣይ እርምጃዎች።
+3. ** መዝገብ ቤት፡** የተዘጉ ሞገዶችን ወደ ውስጥ ያንቀሳቅሱ
+   `artifacts/docs_portal_preview/archive/<wave>/` እና በጣም የቅርብ ጊዜውን ብቻ ያስቀምጡ
+   በስሩ ላይ ንቁ ሞገድ. ይህ CI ቅርሶችን በመጠበቅ ላይ ትንሽ ያደርገዋል
+   የኦዲት መንገድ.
+
+## ከፍኖተ ካርታው ጋር ማገናኘት።
+
+- በጠየቁት ጊዜ ይህንን ሰነድ ከመጋበዝ እና ከመሳፈሪያ መጫወቻ መጽሐፍት ይመልከቱ
+  አስተያየት ለመስጠት ገምጋሚዎች (ተመልከት
+  [`preview-invite-flow`](./preview-invite-flow.md)፣
+  [`reviewer-onboarding`](./reviewer-onboarding.md)፣ እና
+  [`public-preview-invite`](./public-preview-invite.md))።
+- በ DOCS-SORA ማዕበል ሲዘጋ የተፈጠረውን ማጠቃለያ በI18NI00000060 ጥቀስ።
+  የፍኖተ ካርታ እቃዎች (ለምሳሌ፡ DOCS-1b/2b/3c) የጥበብ ስራውን ሊጠቅሱ ይችላሉ።
+- ወደ SoraFS ሲሰቅሉ ከማጠቃለያው ጎን ለጎን የሃሽ መፍጫውን ያከማቹ በጣም ውጫዊ
+  ገምጋሚዎች የማስረጃ ጥቅሉን ማረጋገጥ ይችላሉ።
+
+የምዝግብ ማስታወሻውን የስራ ፍሰት እዚህ ተቀድቶ ማቆየት የፍኖተ ካርታ መስፈርቱን ይከለክላል
+"ለአስተዳደር ግብረ-መልስ/ቴሌሜትሪ ይያዙ" እና የሚጠፋውን ጊዜ ይቀንሳል
+በእያንዳንዱ ምዕራፍ ላይ የግብዣ ታሪክን እንደገና መገንባት።

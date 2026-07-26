@@ -1,0 +1,1214 @@
+#!/usr/bin/env python3
+"""Validate SoraFS orderbook and streaming-settlement rollout evidence artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from sorafs_checker_preflight import (  # noqa: E402
+    emit_checker_error_block,
+    emit_checker_error_lines,
+    emit_checker_exception,
+    emit_checker_notice,
+    render_and_write_checker_summary,
+    validate_checker_preflight,
+)
+from sorafs_evidence_paths import (  # noqa: E402
+    discover_evidence_files,
+    evidence_path_identities,
+)
+from sorafs_evidence_json import (  # noqa: E402
+    load_evidence_json_with_sha256_or_record_error,
+)
+from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
+    forbidden_non_production_markers,
+    build_evidence_artifact,
+    count_evidence_artifacts,
+    recognized_evidence_artifacts,
+    count_evidence_files,
+    evidence_gate_status,
+    evidence_artifact_is_valid,
+    evidence_artifact_fingerprint,
+    evidence_schema_by_kind,
+    hashable_evidence_values,
+    init_evidence_artifact_buckets,
+    build_required_evidence_summary,
+    record_explicit_evidence_validation_errors,
+    record_evidence_artifact,
+    record_evidence_validation_errors,
+    record_observed_evidence_value,
+    validate_bound_evidence_digest_references,
+    require_2xx_status,
+    require_bool_true,
+    require_count_equal,
+    require_count_length_match,
+    require_false,
+    require_hex,
+    require_config_backed_governance_approval,
+    validate_standard_evidence_payload,
+    require_maximum_int,
+    require_minimum_int,
+    require_non_negative_int,
+    require_object,
+    require_object_array,
+    required_evidence_kind_names,
+    require_passed_status,
+    require_policy_digest,
+    require_positive_int,
+    require_recent_timestamp,
+    require_string,
+    require_string_coverage,
+    require_string_equal,
+    require_string_inventory_count_match,
+    require_zero_count,
+)
+from sorafs_required_kinds import (  # noqa: E402
+    parse_required_kinds as parse_required_evidence_kinds,
+)
+from sorafs_response_args import (  # noqa: E402
+    EvidenceArgumentParser,
+    expand_response_args,
+    non_negative_int_arg,
+    positive_int_arg,
+)
+
+
+SUMMARY_SCHEMA = "sorafs.orderbook.rollout_evidence_gate.v1"
+MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
+DEFAULT_MAX_EVIDENCE_AGE_SECS = 7 * 24 * 60 * 60
+DEFAULT_MAX_ROUTE_LATENCY_MS = 1_500
+DEFAULT_MAX_STREAM_LAG_MS = 2_000
+DEFAULT_MAX_MATCHER_LAG_MS = 1_000
+DEFAULT_MAX_METRICS_SCRAPE_AGE_SECS = 120
+DEFAULT_MIN_RECONCILIATION_PEERS = 4
+HEX64_LEN = 64
+ORDER_REF_PATTERN = re.compile(r"^orderbook-order-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+CHANNEL_REF_PATTERN = re.compile(r"^orderbook-channel-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+RECEIPT_REF_PATTERN = re.compile(r"^orderbook-receipt-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+PEER_LABEL_PATTERN = re.compile(r"^orderbook-peer-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+ORDER_REF_ERROR = "{path} must match canonical lowercase `orderbook-order-*`"
+CHANNEL_REF_ERROR = "{path} must match canonical lowercase `orderbook-channel-*`"
+RECEIPT_REF_ERROR = "{path} must match canonical lowercase `orderbook-receipt-*`"
+PEER_LABEL_ERROR = "{path} must match canonical lowercase `orderbook-peer-*`"
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "private",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+
+REQUIRED_API_ROUTES = (
+    "orders_post",
+    "cancel_post",
+    "receipts_post",
+    "book_get",
+    "trades_get",
+    "channels_get",
+    "receipts_get",
+    "events_get",
+)
+REQUIRED_STREAMS = ("sse_orderbook_events", "websocket_orderbook_events")
+REQUIRED_METRICS = (
+    "torii_sorafs_orderbook_finalized_events_total",
+    "torii_sorafs_orderbook_open_depth_gib",
+    "torii_sorafs_orderbook_matcher_lag_seconds",
+    "torii_sorafs_orderbook_settlement_backlog",
+    "torii_sorafs_orderbook_oldest_settlement_age_seconds",
+    "torii_sorafs_orderbook_escrow_runway_seconds",
+    "torii_sorafs_orderbook_finalized_projection_ready",
+    "torii_sorafs_orderbook_finalized_projection_height",
+    "torii_sorafs_orderbook_finalized_projection_timestamp_seconds",
+    "torii_sorafs_orderbook_finalized_projection_failures_total",
+    "torii_sorafs_orderbook_book_revision",
+    "torii_sorafs_orderbook_matcher_scan_book_revision",
+    "torii_sorafs_orderbook_api_requests_total",
+)
+REQUIRED_RECONCILIATION_SOURCES = (
+    "finalized-ledger",
+    "matcher-worker",
+    "torii-finalized-projection",
+    "settlement-worker",
+    "governance-dag",
+)
+REQUIRED_SDK_LANGUAGES = (
+    "rust",
+    "javascript",
+    "python",
+    "kotlin-jvm",
+    "java-android",
+    "swift",
+)
+SDK_ARTIFACT_LANGUAGE_PREFIXES = tuple(
+    (language, f"{language}-") for language in REQUIRED_SDK_LANGUAGES
+)
+CONTRACT_BOUND_KINDS = (
+    "matcher_service",
+    "settlement_service",
+    "api_gateway",
+    "event_streams",
+    "sdk_release",
+    "observability",
+    "reconciliation",
+    "governance_approval",
+)
+POLICY_BOUND_KINDS = ("governance_approval",)
+
+SENSITIVE_KEYS = {
+    "authorization",
+    "bearer_token",
+    "body",
+    "ledger",
+    "mnemonic",
+    "norito_bytes",
+    "order_payload",
+    "payload",
+    "payload_b64",
+    "payload_body",
+    "payload_bytes",
+    "private_key",
+    "raw_channels",
+    "raw_contract_state",
+    "raw_ledger",
+    "raw_order",
+    "raw_orderbook",
+    "raw_receipt",
+    "raw_receipts",
+    "raw_request",
+    "raw_response",
+    "raw_snapshot",
+    "raw_trades",
+    "receipt_payload",
+    "request_body",
+    "response_body",
+    "secret",
+    "seed",
+    "signed_transaction",
+    "token",
+}
+
+
+@dataclass(frozen=True)
+class EvidenceKind:
+    """One SFM-2 rollout evidence class."""
+
+    name: str
+    schema: str
+
+
+EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
+    EvidenceKind("contract_surface", "sorafs.orderbook.contract_surface_canary.v1"),
+    EvidenceKind("matcher_service", "sorafs.orderbook.matcher_service_canary.v1"),
+    EvidenceKind("settlement_service", "sorafs.orderbook.settlement_service_canary.v1"),
+    EvidenceKind("api_gateway", "sorafs.orderbook.api_gateway_canary.v1"),
+    EvidenceKind("event_streams", "sorafs.orderbook.event_streams_canary.v1"),
+    EvidenceKind("sdk_release", "sorafs.orderbook.sdk_release_canary.v1"),
+    EvidenceKind("observability", "sorafs.orderbook.observability_canary.v1"),
+    EvidenceKind("reconciliation", "sorafs.orderbook.reconciliation_canary.v1"),
+    EvidenceKind("governance_approval", "sorafs.orderbook.governance_approval.v1"),
+)
+
+SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
+KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
+DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "contract_surface": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "contract_deployed",
+        "deterministic_matching_verified",
+        "escrow_enforced",
+        "pause_control_configured",
+        "fee_policy_config_bound",
+        "capability_policy_configured",
+        "contract_state_source",
+        "contract_digest_hex",
+        "policy_digest_hex",
+        "raw_contract_state_included",
+    ),
+    "matcher_service": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "daemonized",
+        "contract_forwarding_enabled",
+        "price_time_priority_verified",
+        "finalized_cursor_replay_verified",
+        "committed_state_reconciliation_verified",
+        "local_book_authority_absent",
+        "durable_checkpoint_verified",
+        "contract_digest_hex",
+        "matcher_lag_ms",
+        "accepted_order_count",
+        "accepted_orders",
+        "matched_order_count",
+        "matched_orders",
+        "rejected_invalid_order_count",
+        "rejected_invalid_orders",
+        "raw_ledger_included",
+    ),
+    "settlement_service": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "daemonized",
+        "contract_digest_hex",
+        "escrow_custody_mutation_verified",
+        "receipt_authorization_verified",
+        "non_overlapping_ranges_enforced",
+        "governance_receipts_published",
+        "open_channel_count",
+        "open_channels",
+        "settled_receipt_count",
+        "settled_receipts",
+        "settlement_backlog_count",
+        "settlement_backlog_channels",
+        "raw_receipts_included",
+    ),
+    "api_gateway": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "contract_digest_hex",
+        "routes",
+        "canonical_request_auth_enforced",
+        "owner_account_binding_verified",
+        "provider_role_binding_verified",
+        "capability_policy_enforced",
+        "response_bodies_included",
+    ),
+    "event_streams": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "contract_digest_hex",
+        "stream_count",
+        "streams",
+        "response_bodies_included",
+    ),
+    "sdk_release": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "artifact_hashes_verified",
+        "contract_digest_hex",
+        "live_smoke_passed",
+        "submitter_helpers_verified",
+        "language_count",
+        "languages",
+        "artifact_count",
+        "artifacts",
+    ),
+    "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "metrics_scrape_success",
+        "metrics_scraped_at_unix",
+        "contract_digest_hex",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "live_dashboard_wired",
+        "critical_alerts_firing",
+        "finalized_projection_ready",
+        "finalized_projection_height",
+        "finalized_projection_timestamp_seconds",
+        "finalized_projection_failure_delta",
+        "metrics",
+        "metric_count",
+        "response_bodies_included",
+    ),
+    "reconciliation": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "peer_count",
+        "peers",
+        "contract_digest_hex",
+        "source_count",
+        "sources",
+        "finalized_projection_reconciliation_passed",
+        "replica_finalized_state_equal",
+        "evidence_dag_published",
+        "mismatch_count",
+        "unreconciled_event_count",
+        "raw_ledger_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "orderbook_activation_governed",
+        "emergency_pause_tested",
+        "capability_policy_bound",
+        "treasury_policy_bound",
+        "contract_digest_hex",
+        "config_source",
+        "policy_digest_hex",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class ValidationOptions:
+    """Thresholds for the SFM-2 orderbook rollout gate."""
+
+    now_unix: int
+    max_evidence_age_secs: int
+    max_route_latency_ms: int
+    max_stream_lag_ms: int
+    max_matcher_lag_ms: int
+    min_reconciliation_peers: int
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
+def require_inventory_label(
+    value: Any,
+    *,
+    path: str,
+    pattern: re.Pattern[str],
+    label_error: str,
+    errors: list[str],
+) -> str:
+    """Require a reviewed production inventory label."""
+
+    if not isinstance(value, str):
+        return ""
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error.format(path=path))
+        return value
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_INVENTORY_LABEL_MARKERS)
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+    return value
+
+
+def require_scalar_inventory_labels(
+    payload: dict[str, Any],
+    array_field: str,
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+    errors: list[str],
+) -> None:
+    """Require reviewed production labels for scalar inventory entries."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    for value in values:
+        require_inventory_label(
+            value,
+            path=f"{array_field}[]",
+            pattern=pattern,
+            label_error=label_error,
+            errors=errors,
+        )
+
+
+def sdk_artifact_language(artifact_id: Any) -> str | None:
+    """Return the reviewed SDK language prefix for an artifact id."""
+
+    if not isinstance(artifact_id, str):
+        return None
+    for language, prefix in SDK_ARTIFACT_LANGUAGE_PREFIXES:
+        if artifact_id.startswith(prefix):
+            return language
+    return None
+
+
+def validate_sdk_artifact_language_coverage(
+    artifact_records: list[tuple[int, dict[str, Any]]],
+    errors: list[str],
+) -> None:
+    """Require SDK release artifacts to cover every reviewed language."""
+
+    covered_languages: set[str] = set()
+    found_unknown_artifact_family = False
+    for _index, record in artifact_records:
+        artifact_id = record.get("id")
+        language = sdk_artifact_language(artifact_id)
+        if language is None:
+            if isinstance(artifact_id, str) and artifact_id:
+                found_unknown_artifact_family = True
+            continue
+        covered_languages.add(language)
+
+    if found_unknown_artifact_family:
+        errors.append("artifacts[].id must start with a reviewed SDK language prefix")
+    if set(REQUIRED_SDK_LANGUAGES) - covered_languages:
+        errors.append(
+            "artifacts must include at least one SDK release artifact for every "
+            "reviewed language"
+        )
+
+
+FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "schema",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+    "contract_digest_hex",
+    "policy_digest_hex",
+    "metric_count",
+    "metrics",
+    "metrics_scraped_at_unix",
+    "finalized_projection_ready",
+    "finalized_projection_height",
+    "finalized_projection_timestamp_seconds",
+    "finalized_projection_failure_delta",
+    "finalized_projection_reconciliation_passed",
+    "replica_finalized_state_equal",
+)
+
+
+def validate_route_records(
+    payload: dict[str, Any], errors: list[str], options: ValidationOptions
+) -> None:
+    for index, record in require_object_array(payload, "routes", errors):
+        require_bool_true(record, "passed", errors, path=f"routes[{index}].passed")
+        require_2xx_status(
+            record,
+            "status_code",
+            errors,
+            path=f"routes[{index}].status_code",
+        )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_maximum_int(
+            record,
+            "latency_ms",
+            options.max_route_latency_ms,
+            errors,
+            path=f"routes[{index}].latency_ms",
+        )
+        for field in ("authz_enforced", "signature_verified"):
+            require_bool_true(record, field, errors, path=f"routes[{index}].{field}")
+
+
+def validate_contract_surface(payload: dict[str, Any], errors: list[str]) -> None:
+    require_bool_true(payload, "contract_deployed", errors)
+    require_bool_true(payload, "deterministic_matching_verified", errors)
+    require_bool_true(payload, "escrow_enforced", errors)
+    require_bool_true(payload, "pause_control_configured", errors)
+    require_bool_true(payload, "fee_policy_config_bound", errors)
+    require_bool_true(payload, "capability_policy_configured", errors)
+    require_string_equal(payload, "contract_state_source", "on-chain", errors)
+    require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
+    require_false(payload, "raw_contract_state_included", errors)
+
+
+def validate_matcher_service(
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> None:
+    require_bool_true(payload, "daemonized", errors)
+    require_bool_true(payload, "contract_forwarding_enabled", errors)
+    require_bool_true(payload, "price_time_priority_verified", errors)
+    require_bool_true(payload, "finalized_cursor_replay_verified", errors)
+    require_bool_true(payload, "committed_state_reconciliation_verified", errors)
+    require_bool_true(payload, "local_book_authority_absent", errors)
+    require_bool_true(payload, "durable_checkpoint_verified", errors)
+    require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
+    require_maximum_int(payload, "matcher_lag_ms", options.max_matcher_lag_ms, errors)
+    require_positive_int(payload, "accepted_order_count", errors)
+    require_positive_int(payload, "matched_order_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "accepted_orders",
+        "accepted_order_count",
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "matched_orders",
+        "matched_order_count",
+        errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "accepted_orders",
+        pattern=ORDER_REF_PATTERN,
+        label_error=ORDER_REF_ERROR,
+        errors=errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "matched_orders",
+        pattern=ORDER_REF_PATTERN,
+        label_error=ORDER_REF_ERROR,
+        errors=errors,
+    )
+    accepted_orders = payload.get("accepted_orders")
+    matched_orders = payload.get("matched_orders")
+    if isinstance(accepted_orders, list) and isinstance(matched_orders, list):
+        accepted_set = {order for order in accepted_orders if isinstance(order, str)}
+        for order in matched_orders:
+            if isinstance(order, str) and order not in accepted_set:
+                errors.append("matched_orders must be a subset of accepted_orders")
+                break
+    require_non_negative_int(payload, "rejected_invalid_order_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "rejected_invalid_orders",
+        "rejected_invalid_order_count",
+        errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "rejected_invalid_orders",
+        pattern=ORDER_REF_PATTERN,
+        label_error=ORDER_REF_ERROR,
+        errors=errors,
+    )
+    require_false(payload, "raw_ledger_included", errors)
+
+
+def validate_settlement_service(payload: dict[str, Any], errors: list[str]) -> None:
+    require_bool_true(payload, "daemonized", errors)
+    require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
+    require_bool_true(payload, "escrow_custody_mutation_verified", errors)
+    require_bool_true(payload, "receipt_authorization_verified", errors)
+    require_bool_true(payload, "non_overlapping_ranges_enforced", errors)
+    require_bool_true(payload, "governance_receipts_published", errors)
+    require_positive_int(payload, "open_channel_count", errors)
+    require_positive_int(payload, "settled_receipt_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "open_channels",
+        "open_channel_count",
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "settled_receipts",
+        "settled_receipt_count",
+        errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "open_channels",
+        pattern=CHANNEL_REF_PATTERN,
+        label_error=CHANNEL_REF_ERROR,
+        errors=errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "settled_receipts",
+        pattern=RECEIPT_REF_PATTERN,
+        label_error=RECEIPT_REF_ERROR,
+        errors=errors,
+    )
+    require_non_negative_int(payload, "settlement_backlog_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "settlement_backlog_channels",
+        "settlement_backlog_count",
+        errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "settlement_backlog_channels",
+        pattern=CHANNEL_REF_PATTERN,
+        label_error=CHANNEL_REF_ERROR,
+        errors=errors,
+    )
+    require_false(payload, "raw_receipts_included", errors)
+
+
+def validate_api_gateway(
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> None:
+    require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
+    require_string_coverage(payload, "routes", "name", REQUIRED_API_ROUTES, errors)
+    require_only_required_values(payload, "routes", "name", REQUIRED_API_ROUTES, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    require_bool_true(payload, "canonical_request_auth_enforced", errors)
+    require_bool_true(payload, "owner_account_binding_verified", errors)
+    require_bool_true(payload, "provider_role_binding_verified", errors)
+    require_bool_true(payload, "capability_policy_enforced", errors)
+    require_false(payload, "response_bodies_included", errors)
+    validate_route_records(payload, errors, options)
+
+
+def validate_event_streams(
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> None:
+    require_positive_int(payload, "stream_count", errors)
+    require_string_coverage(payload, "streams", "name", REQUIRED_STREAMS, errors)
+    require_only_required_values(payload, "streams", "name", REQUIRED_STREAMS, errors)
+    require_string_inventory_count_match(
+        payload,
+        "streams",
+        "stream_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
+    stream_records = require_object_array(payload, "streams", errors)
+    if not stream_records:
+        return
+    for index, record in stream_records:
+        require_bool_true(record, "passed", errors, path=f"streams[{index}].passed")
+        for field in ("backlog_replay_verified", "live_delivery_verified", "contract_backed"):
+            require_bool_true(record, field, errors, path=f"streams[{index}].{field}")
+        require_maximum_int(
+            record,
+            "lag_ms",
+            options.max_stream_lag_ms,
+            errors,
+            path=f"streams[{index}].lag_ms",
+        )
+    require_false(payload, "response_bodies_included", errors)
+
+
+def validate_sdk_release(payload: dict[str, Any], errors: list[str]) -> None:
+    require_bool_true(payload, "artifact_hashes_verified", errors)
+    require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
+    require_bool_true(payload, "live_smoke_passed", errors)
+    require_bool_true(payload, "submitter_helpers_verified", errors)
+    require_false(payload, "debug_artifacts", errors)
+    require_string_coverage(payload, "languages", "name", REQUIRED_SDK_LANGUAGES, errors)
+    require_only_required_values(
+        payload, "languages", "name", REQUIRED_SDK_LANGUAGES, errors
+    )
+    require_minimum_int(
+        payload,
+        "language_count",
+        len(REQUIRED_SDK_LANGUAGES),
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "languages",
+        "language_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    artifact_count = require_positive_int(payload, "artifact_count", errors)
+    require_minimum_int(
+        payload,
+        "artifact_count",
+        len(REQUIRED_SDK_LANGUAGES),
+        errors,
+    )
+    artifact_records = require_object_array(payload, "artifacts", errors)
+    if not artifact_records:
+        return
+    require_string_inventory_count_match(
+        payload,
+        "artifacts",
+        "artifact_count",
+        errors,
+        field="id",
+        allow_scalar_items=False,
+    )
+    require_count_length_match(
+        artifact_count,
+        artifact_records,
+        "artifact_count",
+        "artifacts",
+        errors,
+    )
+    for _index, record in artifact_records:
+        require_string(record, "id", errors)
+        require_hex(record, "sha256", HEX64_LEN, errors)
+    validate_sdk_artifact_language_coverage(artifact_records, errors)
+
+
+def validate_observability(
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> None:
+    require_bool_true(payload, "metrics_scrape_success", errors)
+    metrics_scraped_at_unix = require_recent_timestamp(
+        payload,
+        "metrics_scraped_at_unix",
+        errors,
+        now_unix=options.now_unix,
+        max_age_secs=DEFAULT_MAX_METRICS_SCRAPE_AGE_SECS,
+    )
+    require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
+    require_bool_true(payload, "dashboard_provisioned", errors)
+    require_bool_true(payload, "alert_rules_installed", errors)
+    require_bool_true(payload, "live_dashboard_wired", errors)
+    require_false(payload, "critical_alerts_firing", errors)
+    require_bool_true(payload, "finalized_projection_ready", errors)
+    require_positive_int(payload, "finalized_projection_height", errors)
+    finalized_projection_timestamp_seconds = require_recent_timestamp(
+        payload,
+        "finalized_projection_timestamp_seconds",
+        errors,
+        now_unix=options.now_unix,
+        max_age_secs=DEFAULT_MAX_METRICS_SCRAPE_AGE_SECS,
+    )
+    require_zero_count(payload, "finalized_projection_failure_delta", errors)
+    generated_at_unix = payload.get("generated_at_unix")
+    if (
+        isinstance(generated_at_unix, int)
+        and not isinstance(generated_at_unix, bool)
+        and metrics_scraped_at_unix > generated_at_unix
+    ):
+        errors.append("metrics_scraped_at_unix must not be after generated_at_unix")
+    if (
+        metrics_scraped_at_unix > 0
+        and finalized_projection_timestamp_seconds > metrics_scraped_at_unix
+    ):
+        errors.append(
+            "finalized_projection_timestamp_seconds must not be after metrics_scraped_at_unix"
+        )
+    elif (
+        metrics_scraped_at_unix > 0
+        and finalized_projection_timestamp_seconds > 0
+        and metrics_scraped_at_unix - finalized_projection_timestamp_seconds
+        > DEFAULT_MAX_METRICS_SCRAPE_AGE_SECS
+    ):
+        errors.append(
+            "finalized_projection_timestamp_seconds is stale at metrics_scraped_at_unix"
+        )
+    require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
+    require_false(payload, "response_bodies_included", errors)
+
+
+def validate_reconciliation(
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> None:
+    require_minimum_int(payload, "peer_count", options.min_reconciliation_peers, errors)
+    require_string_inventory_count_match(
+        payload,
+        "peers",
+        "peer_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "peers", errors):
+        peer = require_string(record, "name", errors)
+        require_inventory_label(
+            peer,
+            path="peers[].name",
+            pattern=PEER_LABEL_PATTERN,
+            label_error=PEER_LABEL_ERROR,
+            errors=errors,
+        )
+    require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
+    require_positive_int(payload, "source_count", errors)
+    require_string_coverage(payload, "sources", "name", REQUIRED_RECONCILIATION_SOURCES, errors)
+    require_only_required_values(
+        payload, "sources", "name", REQUIRED_RECONCILIATION_SOURCES, errors
+    )
+    require_string_inventory_count_match(
+        payload,
+        "sources",
+        "source_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    require_bool_true(payload, "finalized_projection_reconciliation_passed", errors)
+    require_bool_true(payload, "replica_finalized_state_equal", errors)
+    require_bool_true(payload, "evidence_dag_published", errors)
+    require_zero_count(payload, "mismatch_count", errors)
+    require_zero_count(payload, "unreconciled_event_count", errors)
+    require_false(payload, "raw_ledger_included", errors)
+
+
+def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> None:
+    require_config_backed_governance_approval(payload, errors)
+    require_bool_true(payload, "orderbook_activation_governed", errors)
+    require_bool_true(payload, "emergency_pause_tested", errors)
+    require_bool_true(payload, "capability_policy_bound", errors)
+    require_bool_true(payload, "treasury_policy_bound", errors)
+    require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
+
+
+def validate_kind_specific(
+    kind: EvidenceKind,
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> None:
+    require_passed_status(payload, errors)
+    require_recent_timestamp(
+        payload,
+        "generated_at_unix",
+        errors,
+        now_unix=options.now_unix,
+        max_age_secs=options.max_evidence_age_secs,
+    )
+
+    if kind.name == "contract_surface":
+        validate_contract_surface(payload, errors)
+    elif kind.name == "matcher_service":
+        validate_matcher_service(payload, errors, options)
+    elif kind.name == "settlement_service":
+        validate_settlement_service(payload, errors)
+    elif kind.name == "api_gateway":
+        validate_api_gateway(payload, errors, options)
+    elif kind.name == "event_streams":
+        validate_event_streams(payload, errors, options)
+    elif kind.name == "sdk_release":
+        validate_sdk_release(payload, errors)
+    elif kind.name == "observability":
+        validate_observability(payload, errors, options)
+    elif kind.name == "reconciliation":
+        validate_reconciliation(payload, errors, options)
+    elif kind.name == "governance_approval":
+        validate_governance_approval(payload, errors)
+
+
+def validate_evidence_payload(
+    payload: dict[str, Any],
+    options: ValidationOptions,
+) -> tuple[str | None, list[str]]:
+    return validate_standard_evidence_payload(
+        payload,
+        SCHEMA_TO_KIND,
+        "SoraFS SFM-2 rollout artifact",
+        SENSITIVE_KEYS,
+        "rollout evidence",
+        lambda kind, checked_payload, errors: validate_kind_specific(
+            kind, checked_payload, errors, options
+        ),
+        require_reviewed_deployment_context=True,
+    )
+
+
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
+
+def build_summary(
+    evidence_dirs: list[Path],
+    evidence_files: list[Path],
+    required_kinds: tuple[str, ...],
+    options: ValidationOptions,
+    summary_out: Path | None,
+) -> tuple[dict[str, Any], list[str]]:
+    errors: list[str] = []
+
+
+    artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
+    valid_contract_digests: set[str] = set()
+    valid_policy_digests: set[str] = set()
+    valid_contract_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
+    files = discover_evidence_files(
+        evidence_dirs,
+        evidence_files,
+        errors,
+        reserved_output_paths=() if summary_out is None else (summary_out,),
+    )
+    explicit = evidence_path_identities(evidence_files, errors)
+
+    for path in files:
+        loaded = load_evidence_json_with_sha256_or_record_error(
+            path, MAX_EVIDENCE_BYTES, errors
+        )
+        if loaded is None:
+            continue
+        payload, digest = loaded
+        kind_name, validation_errors = validate_evidence_payload(payload, options)
+        if kind_name is None:
+            record_explicit_evidence_validation_errors(
+                path, explicit, validation_errors, errors
+            )
+            continue
+        artifact = build_evidence_artifact(
+            archive_artifact_path_label(path, evidence_dirs),
+            digest,
+            payload,
+            validation_errors,
+            FINGERPRINT_FIELDS,
+        )
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
+        if evidence_artifact_is_valid(artifact):
+            fingerprint = evidence_artifact_fingerprint(artifact)
+            digest = fingerprint.get("contract_digest_hex")
+            if kind_name == "contract_surface":
+                if isinstance(digest, str):
+                    valid_contract_digests.add(digest)
+                policy_digest = fingerprint.get("policy_digest_hex")
+                if isinstance(policy_digest, str):
+                    valid_policy_digests.add(policy_digest)
+            if kind_name == "observability":
+                record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+                metric_names.update(hashable_evidence_values(payload.get("metrics")))
+            if kind_name in CONTRACT_BOUND_KINDS:
+                valid_contract_bound_artifacts.append((kind_name, artifact))
+            if kind_name in POLICY_BOUND_KINDS:
+                valid_policy_bound_artifacts.append((kind_name, artifact))
+        record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_contract_digests = require_single_active_digest(
+        valid_contract_digests,
+        errors,
+        label="valid_contract_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
+
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("contract_surface",) + CONTRACT_BOUND_KINDS,
+        bound_artifacts=valid_contract_bound_artifacts,
+        valid_anchor_digests=valid_contract_digests,
+        digest_field="contract_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} contract_digest_hex must reference a valid "
+            "contract_surface contract_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} contract_digest_hex requires a valid contract_surface "
+            "contract_digest_hex"
+        ),
+    )
+
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("contract_surface",) + POLICY_BOUND_KINDS,
+        bound_artifacts=valid_policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "contract_surface policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid contract_surface "
+            "policy_digest_hex"
+        ),
+    )
+
+    required = build_required_evidence_summary(
+        required_kinds,
+        artifacts_by_kind,
+        evidence_schema_by_kind(KIND_BY_NAME),
+        errors,
+        evidence_label="rollout",
+    )
+
+    summary = {
+        "schema": SUMMARY_SCHEMA,
+        "status": evidence_gate_status(errors),
+        "required_kinds": required_evidence_kind_names(required_kinds),
+        "thresholds": {
+            "max_evidence_age_secs": options.max_evidence_age_secs,
+            "max_route_latency_ms": options.max_route_latency_ms,
+            "max_stream_lag_ms": options.max_stream_lag_ms,
+            "max_matcher_lag_ms": options.max_matcher_lag_ms,
+            "min_reconciliation_peers": options.min_reconciliation_peers,
+        },
+        "evidence_file_count": count_evidence_files(files),
+        "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
+        "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
+        "valid_contract_digests": sorted(valid_contract_digests),
+        "valid_policy_digests": sorted(valid_policy_digests),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
+        "required": required,
+        "errors": errors,
+    }
+    return summary, errors
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = EvidenceArgumentParser(
+        description="Validate SoraFS SFM-2 orderbook and settlement rollout evidence artifacts."
+    )
+    parser.add_argument(
+        "--evidence-dir",
+        action="append",
+        type=Path,
+        default=[],
+        help="Directory containing rollout evidence JSON artifacts.",
+    )
+    parser.add_argument(
+        "--evidence",
+        action="append",
+        type=Path,
+        default=[],
+        help="Explicit rollout evidence JSON artifact.",
+    )
+    parser.add_argument(
+        "--require-kind",
+        action="append",
+        default=[],
+        help="Required evidence kind, or comma-separated kinds. Defaults to all SFM-2 kinds.",
+    )
+    parser.add_argument("--summary-out", type=Path, help="Optional summary JSON output path.")
+    parser.add_argument(
+        "--now-unix",
+        type=positive_int_arg,
+        required=True,
+        help="Required reviewed validator clock used for age checks.",
+    )
+    parser.add_argument(
+        "--max-evidence-age-secs",
+        type=non_negative_int_arg,
+        default=DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    )
+    parser.add_argument(
+        "--max-route-latency-ms",
+        type=positive_int_arg,
+        default=DEFAULT_MAX_ROUTE_LATENCY_MS,
+    )
+    parser.add_argument(
+        "--max-stream-lag-ms",
+        type=positive_int_arg,
+        default=DEFAULT_MAX_STREAM_LAG_MS,
+    )
+    parser.add_argument(
+        "--max-matcher-lag-ms",
+        type=positive_int_arg,
+        default=DEFAULT_MAX_MATCHER_LAG_MS,
+    )
+    parser.add_argument(
+        "--min-reconciliation-peers",
+        type=positive_int_arg,
+        default=DEFAULT_MIN_RECONCILIATION_PEERS,
+    )
+    raw_args = sys.argv[1:] if argv is None else argv
+    try:
+        expanded_args = expand_response_args(raw_args, parser)
+    except ValueError as error:
+        emit_checker_exception(error)
+        return 2
+    try:
+        args = parser.parse_args(expanded_args)
+    except SystemExit as error:
+        return error.code if isinstance(error.code, int) else 1
+
+    try:
+        required_kinds = parse_required_evidence_kinds(
+            args.require_kind,
+            allowed_kinds=KIND_BY_NAME,
+            default_required=DEFAULT_REQUIRED_KINDS,
+        )
+    except ValueError as error:
+        emit_checker_exception(error)
+        return 2
+
+    options = ValidationOptions(
+        now_unix=args.now_unix,
+        max_evidence_age_secs=args.max_evidence_age_secs,
+        max_route_latency_ms=args.max_route_latency_ms,
+        max_stream_lag_ms=args.max_stream_lag_ms,
+        max_matcher_lag_ms=args.max_matcher_lag_ms,
+        min_reconciliation_peers=args.min_reconciliation_peers,
+    )
+    preflight_errors = validate_checker_preflight(args)
+    if preflight_errors:
+        emit_checker_error_lines(preflight_errors)
+        return 2
+
+    summary, errors = build_summary(
+        args.evidence_dir, args.evidence, required_kinds, options, args.summary_out
+    )
+    rendered_summary, summary_errors = render_and_write_checker_summary(
+        args.summary_out, summary
+    )
+    if summary_errors:
+        emit_checker_error_lines(summary_errors)
+        return 2
+
+    if errors:
+        emit_checker_error_block("ERROR: SoraFS orderbook rollout evidence is incomplete:", errors)
+        return 1
+
+    emit_checker_notice(
+        "SoraFS orderbook rollout evidence is ready: "
+        f"{summary['recognized_artifact_count']} recognized artifact(s) cover "
+        f"{len(required_kinds)} required kind(s).",
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

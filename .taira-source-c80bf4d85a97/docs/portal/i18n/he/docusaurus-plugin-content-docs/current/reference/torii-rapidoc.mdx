@@ -1,0 +1,32 @@
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/reference/torii-rapidoc.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+לייבא את RapiDocPanel מ-'@site/src/components/RapiDocPanel.jsx';
+
+# Torii API (RapiDoc)
+
+`RapiDoc` מציע עיבוד קומפקטי ותיעוד ראשון של אותו Torii
+מסמך OpenAPI. השתמש בו כאשר אתה צריך סקירה צפופה יותר או סקירה לקריאה בלבד של
+מודלים של בקשה/תגובה.
+
+## טיפים לשימוש
+
+- הזן אסימון נושא כדי לאפשר שיחות אינטראקטיביות. הערך מועבר כ-an
+  כותרת `X-TryIt-Auth` ומנורמלת על ידי ה-proxy.
+- הגדר את `TRYIT_PROXY_PUBLIC_URL` בעת שירות הפורטל כל כך אינטראקטיבי
+  בקשות מנותבות דרך ה-Staging proxy. הווידג'ט מזהיר כאשר ה-proxy
+  חסרה כתובת URL.
+- השתמש בתפריט הנפתח "OpenAPI תמונת מצב" כדי לטעון מפרטים היסטוריים שפורסמו על ידי
+  `npm run sync-openapi`; האפשרות `Latest (tracked)` תמיד פותרת את זה
+  `/openapi/torii.json`.
+- שלב עם קונסולת "[נסה את זה](/api/overview#try-it-sandbox-docs-3)" כאשר
+  עבודה נגד שערים מבוימים הדורשים את ה-proxy.
+
+<RapiDocPanel />

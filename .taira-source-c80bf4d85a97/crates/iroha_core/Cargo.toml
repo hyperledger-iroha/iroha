@@ -1,0 +1,346 @@
+[package]
+name = "iroha_core"
+autotests = false
+autobins = false
+build = "build.rs"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "fastpq_fixture_capture"
+path = "src/bin/fastpq_fixture_capture.rs"
+
+[[bin]]
+name = "kagemusha_recursive_spend_v4_bundle"
+path = "src/bin/kagemusha_recursive_spend_v4_bundle.rs"
+required-features = ["zk-halo2-ipa"]
+
+[[bin]]
+name = "kagemusha_recursive_spend_v4_memory_benchmark"
+path = "src/bin/kagemusha_recursive_spend_v4_memory_benchmark.rs"
+required-features = ["zk-halo2-ipa", "kagemusha-generation-memory-lab"]
+
+[[bin]]
+name = "pk2_bridge_finality_verify"
+path = "src/bin/pk2_bridge_finality_verify.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Default to transparent Halo2 (IPA over Pasta)
+default = [
+    "json",
+    "bls",
+    "sumeragi-permissioned",
+    "fast_dsl",
+    "zk-halo2",
+    "zk-halo2-ipa",
+    "zk-ipa-native",
+    "circuit-params",
+]
+# Enable QUIC transport helpers for Norito Streaming.
+quic = ["iroha_p2p/quic"]
+# Enable Norito-backed JSON helpers throughout the core crate.
+json = [
+    "iroha_data_model/json",
+    "iroha_crypto/json",
+    "iroha_primitives/json",
+]
+# Enable Chinese SM algorithm family plumbing in dependent crates.
+sm = [
+    "ivm/sm",
+    "iroha_config/sm",
+    "iroha_crypto/sm",
+    "iroha_data_model/sm",
+    "iroha_p2p/sm",
+]
+# Enable app-facing convenience helpers (testing utilities shared with Torii).
+app_api = []
+# Support lightweight telemetry, including diagnostics
+telemetry = []
+# Support Prometheus metrics. See https://prometheus.io/.
+expensive-telemetry = ["telemetry", "iroha_telemetry/metric-instrumentation"]
+# Enable portable SIMD acceleration for small-set helpers.
+simd = []
+profiling = []
+# Enable FASTPQ GPU helper paths used by the daemon feature of the same name.
+fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
+# Compatibility marker for older benchmark commands; Criterion is a dev-dependency.
+bench = []
+# Enable IDs-only query projections
+ids_projection = ["iroha_data_model/ids_projection"]
+# Enable fast DSL payload support when encoding iterable queries.
+fast_dsl = ["iroha_data_model/fast_dsl"]
+# Enable deterministic mock verifier for Kaigi privacy-mode tests.
+kaigi_privacy_mocks = []
+# ZK verifier feature flags ship enabled by default.
+zk-halo2 = ["dep:kaigi_zk"]
+zk-groth16 = []
+zk-stark = []
+# Transparent Halo2 (IPA over Pasta). Default-on.
+zk-halo2-ipa = ["zk-ipa-native"]
+# Native IPA polynomial-opening verifier (no external halo2 libs). Default-on.
+zk-ipa-native = []
+# Note: feature gating for Poseidon path is no longer used; runtime backend
+# selection is supported via backend tags. Kept as a no-op to avoid breaking
+# dependent tooling.
+zk-halo2-ipa-poseidon = ["zk-halo2-ipa"]
+# Temporary helper to match halo2's default circuit-params toggle.
+circuit-params = ["halo2_proofs/circuit-params"]
+# Enable stateless pre-verify + dedup wiring (mock via metadata)
+zk-preverify = []
+# Gate zk-heavy tests; enable with `--features zk-tests` when needed
+zk-tests = ["iroha-core-tests"]
+# Enable developer Halo2 test vectors (heavy tooling, opt-in only).
+halo2-dev-tests = []
+# Non-shipping, opt-in path for collecting physical-device evidence from a
+# clean ABI-21 candidate before release promotion. This never enables the
+# production proof-backend availability gate.
+kagemusha-candidate-evidence-lab = []
+# Non-shipping, opt-in full compact-generation memory diagnostic. It emits no
+# candidate or release artifacts and never enables the production backend.
+kagemusha-generation-memory-lab = []
+# Bind the candidate generator binary to an exact clean full-source-tree seal.
+# Production candidate builds use the dedicated build helper; ordinary
+# developer and workspace builds intentionally leave this disabled.
+kagemusha-candidate-source-seal = []
+# Compile the large private Sumeragi main-loop unit-test harness. This remains
+# opt-in so plain `cargo test` does not require a ~10 GiB rustc test-harness
+# compile on WSL and memory-constrained developer machines.
+sumeragi-main-loop-tests = []
+cuda = ["ivm/cuda"]
+
+# Prototype: index ZK1 TLV tags per ProofId in WSV for future proof list/count filters.
+zk-proof-tags = []
+
+# Test/developer helper: scale Sumeragi timers inside tests to accelerate timeouts
+dev-tests = []
+
+# Enable internal test helpers (e.g., Topology fixtures) when building core tests.
+iroha-core-tests = []
+# Permit dependent-crate finality-ledger fixtures. Requiring this in addition to
+# `iroha-core-tests` keeps raw finality mutation out of broad tooling builds.
+finality-test-fixtures = []
+
+# Allow offline balance proof verification bypass + dummy backend in dev builds.
+
+# Enable BLS admission-time micro-batching (deterministic grouping + bisection path in block validation).
+# This forwards to `iroha_crypto/bls` and compiles the non-SCCP BLS paths in
+# `block.rs` guarded by `#[cfg(feature = "bls")]`. SCCP verification itself is
+# mandatory in every `iroha_sccp` build and is deliberately not feature-gated.
+bls = ["iroha_crypto/bls", "iroha_data_model/bls"]
+bls-multi-pairing = ["iroha_crypto/bls-multi-pairing"]
+# Compatibility flag kept for downstream feature sets. `halo2-ecc` is no
+# longer linked by `iroha_core`.
+zk-halo2-jemallocator = []
+goldilocks_backend = ["iroha_zkp_halo2/goldilocks_backend", "ivm/goldilocks_backend"]
+
+# Consensus mode (compile-time). Exactly one should be enabled in a given build.
+# Permissioned is the default if none is specified explicitly.
+sumeragi-permissioned = []
+sumeragi-npos = []
+
+[badges]
+is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }
+is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-iroha/iroha" }
+maintenance = { status = "actively-developed" }
+
+[dependencies]
+norito = {workspace = true}
+iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "json", "bridge", "governance"] }
+iroha_macro = { workspace = true }
+iroha_p2p = { workspace = true }
+iroha_logger = { workspace = true }
+iroha_crypto = { workspace = true }
+iroha_version = { workspace = true }
+iroha_config = { workspace = true }
+iroha_futures = { workspace = true }
+iroha_telemetry = { workspace = true }
+time = { workspace = true }
+iroha_primitives = { workspace = true }
+iroha_genesis = { workspace = true }
+iroha_torii_shared = { workspace = true }
+iroha_executor_data_model = { workspace = true }
+ivm = { workspace = true, features = ["halo2-params"] }
+fastpq_prover = { path = "../fastpq_prover" }
+mv = { workspace = true }
+iroha_schema = { workspace = true }
+sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
+settlement_router = { path = "../settlement_router" }
+iroha_sccp = { path = "../iroha_sccp" }
+tracing = { workspace = true }
+sha2 = { version = "0.10.9", default-features = false }
+sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
+rayon = { workspace = true }
+base64 = { workspace = true }
+rust_decimal = { workspace = true }
+regex = "1.11.0"
+http = "1.3.1"
+halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
+ff = "0.13.1"
+# Kagemusha's ABI-21 Pasta-cycle backend uses the Axiom Poseidon transcript
+# and IPA verifier in production. These revisions are already pinned by the
+# workspace lockfile and the Pasta field adapter is source-scoped in the root
+# manifest; keep them here so consensus verification never depends on a
+# test-only feature surface.
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5.3", default-features = false, features = ["halo2-axiom"] }
+halo2-ecc = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5.3", default-features = false, features = ["halo2-axiom"] }
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
+iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
+kaigi_zk = { path = "../kaigi_zk", optional = true }
+
+dashmap = { workspace = true }
+eyre = { workspace = true }
+futures = { workspace = true, features = ["std", "async-await"] }
+rand = { workspace = true }
+rand_core_06 = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "rt", "io-util", "rt-multi-thread", "macros", "fs"] }
+crossbeam-queue = { workspace = true }
+thiserror = { workspace = true }
+displaydoc = { workspace = true }
+parking_lot = { workspace = true, features = ["deadlock_detection"] }
+derive_more = { workspace = true }
+nonzero_ext = { workspace = true }
+hex = { workspace = true }
+tempfile = { workspace = true }
+blake3 = "1.8.2"
+zstd = { workspace = true }
+curve25519-dalek = "4.1.3"
+blake2 = { workspace = true }
+iroha_file_mmap = { path = "../iroha_file_mmap" }
+ciborium = { version = "0.2.2", default-features = false, features = ["std"] }
+x509-parser = { version = "0.18.0", default-features = false, features = ["verify"] }
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8", "hash2curve"] }
+der-parser = "10.0.0"
+signature = { version = "2.2.0", default-features = false, features = ["std"] }
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
+once_cell = { workspace = true }
+yasna = "0.5.2"
+indexmap = "2.12.0"
+arc-swap = "1.7.1"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process"] }
+
+[dev-dependencies]
+criterion = { workspace = true }
+iroha_p2p = { workspace = true, features = ["test-fixtures"] }
+iroha_test_samples = { workspace = true }
+iroha_config_base = { workspace = true }
+iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
+hex = { workspace = true }
+expect-test = { workspace = true }
+rcgen = "0.14.5"
+
+[[bench]]
+name = "validation"
+harness = false
+
+[[bench]]
+name = "kura"
+harness = false
+
+[[bench]]
+name = "state"
+harness = false
+
+[[bench]]
+name = "apply_blocks"
+harness = false
+path = "benches/blocks/apply_blocks_benchmark.rs"
+
+[[bench]]
+name = "validate_blocks"
+harness = false
+path = "benches/blocks/validate_blocks_benchmark.rs"
+
+[[bench]]
+name = "zk_poseidon"
+harness = false
+required-features = ["zk-halo2", "zk-halo2-ipa", "zk-halo2-ipa-poseidon"]
+
+[[bench]]
+name = "crypto_hotpaths"
+harness = false
+required-features = ["zk-halo2", "zk-halo2-ipa"]
+
+[[bench]]
+name = "isi_gas_calibration"
+path = "benches/isi_gas_calibration.rs"
+harness = false
+
+[[bench]]
+name = "queries"
+harness = false
+
+[[bench]]
+name = "queries_client"
+harness = false
+
+[[bench]]
+name = "kotodama_runtime_cache"
+harness = false
+
+[[example]]
+name = "apply_blocks"
+harness = false
+path = "benches/blocks/apply_blocks_oneshot.rs"
+
+[[example]]
+name = "validate_blocks"
+harness = false
+path = "benches/blocks/validate_blocks_oneshot.rs"
+
+[package.metadata.cargo-all-features]
+denylist = [
+    "schema-endpoint",
+    "telemetry",
+]
+skip_optional_dependencies = true
+
+[[test]]
+name = "kaigi_privacy"
+path = "tests/kaigi_privacy.rs"
+required-features = ["zk-tests"]
+
+[[test]]
+name = "swift_confidential_unshield_redeem"
+path = "tests/swift_confidential_unshield_redeem.rs"
+
+[[test]]
+name = "kagemusha_artifact_v4_streaming"
+path = "tests/kagemusha_artifact_v4_streaming.rs"
+
+# Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
+
+[[test]]
+name = "iroha_core_group_01"
+path = "tests/grouped/group_01.rs"
+
+[[test]]
+name = "iroha_core_group_02"
+path = "tests/grouped/group_02.rs"
+
+[[test]]
+name = "iroha_core_group_03"
+path = "tests/grouped/group_03.rs"
+
+[[test]]
+name = "iroha_core_group_04"
+path = "tests/grouped/group_04.rs"
+
+[[test]]
+name = "iroha_core_group_05"
+path = "tests/grouped/group_05.rs"

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2155
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${repo_root}"
+
+if ! command -v swift >/dev/null 2>&1; then
+  echo "[swift-parity] swift command not found; ensure Xcode command-line tools are installed" >&2
+  exit 1
+fi
+
+if ! command -v make >/dev/null 2>&1; then
+  echo "[swift-parity] make command not found" >&2
+  exit 1
+fi
+
+results_dir="${SWIFT_PARITY_ARTIFACT_DIR:-artifacts/swift_parity}"
+mkdir -p "${results_dir}"
+
+swift_log="${SWIFT_PARITY_SWIFT_TEST_LOG:-${results_dir}/swift-test.log}"
+ci_log="${SWIFT_PARITY_MAKE_LOG:-${results_dir}/swift-ci.log}"
+status_log="${SWIFT_PARITY_STATUS_LOG:-${results_dir}/swift-status-export.log}"
+
+swift_package_path="${SWIFT_PARITY_PACKAGE_PATH:-IrohaSwift}"
+swift_configuration="${SWIFT_PARITY_TEST_CONFIGURATION:-release}"
+swift_cmd=(swift test "--configuration" "${swift_configuration}" "--package-path" "${swift_package_path}")
+
+if [[ -n "${SWIFT_PARITY_TEST_FILTER:-}" ]]; then
+  swift_cmd+=("--filter" "${SWIFT_PARITY_TEST_FILTER}")
+fi
+
+if [[ "${SWIFT_PARITY_ENABLE_TEST_PARALLELISM:-1}" != "0" ]]; then
+  swift_cmd+=("--parallel")
+fi
+
+if [[ -n "${SWIFT_PARITY_TEST_ARGS:-}" ]]; then
+  # shellcheck disable=SC2206
+  extra_swift_args=(${SWIFT_PARITY_TEST_ARGS})
+  swift_cmd+=("${extra_swift_args[@]}")
+fi
+
+if [[ "${SWIFT_PARITY_SKIP_SWIFT_TEST:-0}" != "1" ]]; then
+  echo "[swift-parity] running swift tests: ${swift_cmd[*]}"
+  {
+    "${swift_cmd[@]}"
+  } 2>&1 | tee "${swift_log}"
+  if [[ -s "${swift_log}" ]] && command -v buildkite-agent >/dev/null 2>&1; then
+    buildkite-agent artifact upload "${swift_log}" >/dev/null 2>&1 || true
+  fi
+else
+  echo "[swift-parity] SWIFT_PARITY_SKIP_SWIFT_TEST=1; skipping swift test"
+fi
+
+make_cmd=(make)
+if [[ -n "${SWIFT_PARITY_MAKE_ARGS:-}" ]]; then
+  # shellcheck disable=SC2206
+  extra_make_args=(${SWIFT_PARITY_MAKE_ARGS})
+  make_cmd+=("${extra_make_args[@]}")
+fi
+make_cmd+=("swift-ci")
+
+if [[ "${SWIFT_PARITY_SKIP_SWIFT_CI:-0}" != "1" ]]; then
+  echo "[swift-parity] running make swift-ci: ${make_cmd[*]}"
+  {
+    "${make_cmd[@]}"
+  } 2>&1 | tee "${ci_log}"
+  if [[ -s "${ci_log}" ]] && command -v buildkite-agent >/dev/null 2>&1; then
+    buildkite-agent artifact upload "${ci_log}" >/dev/null 2>&1 || true
+  fi
+else
+  echo "[swift-parity] SWIFT_PARITY_SKIP_SWIFT_CI=1; skipping make swift-ci"
+fi
+
+if [[ "${SWIFT_PARITY_RUN_STATUS_EXPORT:-0}" == "1" ]]; then
+  echo "[swift-parity] exporting Swift status metrics via ci/swift_status_export.sh"
+  {
+    bash ci/swift_status_export.sh
+  } 2>&1 | tee "${status_log}"
+  if [[ -s "${status_log}" ]] && command -v buildkite-agent >/dev/null 2>&1; then
+    buildkite-agent artifact upload "${status_log}" >/dev/null 2>&1 || true
+  fi
+fi
+
+echo "[swift-parity] completed successfully; logs stored in ${results_dir}"

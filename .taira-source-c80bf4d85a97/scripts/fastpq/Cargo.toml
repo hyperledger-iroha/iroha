@@ -1,0 +1,13 @@
+[package]
+name = "fastpq_poseidon_tools"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.51", features = ["derive"] }
+fastpq_isi = { path = "../../crates/fastpq_isi" }
+norito = { path = "../../crates/norito", features = ["json"] }
+
+[workspace]

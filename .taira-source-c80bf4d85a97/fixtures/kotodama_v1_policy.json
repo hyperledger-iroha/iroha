@@ -1,0 +1,171 @@
+{
+  "format": "iroha.kotodama.v1.policy",
+  "schema": 1,
+  "lexical_grammar": "crates/kotodama_lang/grammar/v1.lex",
+  "active_source_types": [
+    "int",
+    "decimal",
+    "quantity",
+    "bool",
+    "string",
+    "bytes",
+    "Json",
+    "AccountId",
+    "AssetDefinitionId",
+    "AssetId",
+    "DomainId",
+    "Name",
+    "NftId",
+    "DataSpaceId",
+    "Option",
+    "Result",
+    "List",
+    "StateMap",
+    "Secret",
+    "AccountView",
+    "AssetView",
+    "AssetDefinitionView",
+    "DomainView",
+    "NftView",
+    "QueryPage"
+  ],
+  "retired_numeric_type_spellings": [
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "isize",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "usize",
+    "num",
+    "Int",
+    "Integer",
+    "float",
+    "f32",
+    "f64",
+    "Decimal",
+    "Fixed",
+    "FixedPoint",
+    "Amount",
+    "amount",
+    "money",
+    "Quantity",
+    "number"
+  ],
+  "ordinary_value_identifiers": [
+    "amount"
+  ],
+  "declaration_reserved_extras": [
+    "AxtDescriptor",
+    "AssetHandle",
+    "ProofBlob",
+    "SoracloudRequest",
+    "SoracloudResponse",
+    "state_map_get",
+    "__kotodama_list_len",
+    "__kotodama_list_get",
+    "__kotodama_list_try_set",
+    "__kotodama_list_try_push",
+    "__kotodama_list_pop",
+    "__kotodama_list_contains",
+    "__kotodama_list_take",
+    "__kotodama_list_enumerate",
+    "__kotodama_decimal_div_round",
+    "__kotodama_quantity_div_round",
+    "__kotodama_quantity_ratio_round",
+    "__kotodama_decimal_to_int_trunc",
+    "__kotodama_decimal_to_int_round"
+  ],
+  "numeric_suffix_fixits": {
+    "amt": "strip",
+    "qty": "strip"
+  },
+  "sum_paths": [
+    "Option::some",
+    "Option::none",
+    "Result::ok",
+    "Result::err"
+  ],
+  "rounding_paths": [
+    "Rounding::toward_zero",
+    "Rounding::away_from_zero",
+    "Rounding::floor",
+    "Rounding::ceil",
+    "Rounding::nearest_even",
+    "Rounding::nearest_away",
+    "Rounding::nearest_toward_zero"
+  ],
+  "list_member_names": [
+    "len",
+    "get",
+    "try_set",
+    "try_push",
+    "pop",
+    "contains",
+    "take",
+    "enumerate"
+  ],
+  "editor_member_calls": [
+    "len",
+    "get",
+    "try_set",
+    "try_push",
+    "pop",
+    "contains",
+    "take",
+    "enumerate",
+    "div_round",
+    "ratio_round",
+    "get_or_default",
+    "get_or",
+    "ensure",
+    "remove",
+    "get_int",
+    "get_decimal",
+    "get_quantity",
+    "get_json",
+    "get_name",
+    "get_account_id",
+    "get_asset_definition_id",
+    "get_nft_id",
+    "get_blob_hex"
+  ],
+  "numeric_schemas": [
+    {
+      "source_type": "int",
+      "rust_type": "Int",
+      "schema_name": "iroha.numeric.IntValueV1",
+      "schema_hash": "07c039457363b9e1d36bbd31d93dec4a",
+      "pointer_id": "0x0011",
+      "scaled": false
+    },
+    {
+      "source_type": "decimal",
+      "rust_type": "Decimal",
+      "schema_name": "iroha.numeric.DecimalValueV1",
+      "schema_hash": "ba2ffed52e4d8ee16f17efefe1828524",
+      "pointer_id": "0x0012",
+      "scaled": true
+    },
+    {
+      "source_type": "quantity",
+      "rust_type": "Quantity",
+      "schema_name": "iroha.numeric.QuantityValueV1",
+      "schema_hash": "e4769984c81ce0e8b678f2eb06274ee3",
+      "pointer_id": "0x0010",
+      "scaled": true
+    }
+  ],
+  "pointer_policy": {
+    "first_known": "0x0001",
+    "last_assigned": "0x0012",
+    "unassigned": [
+      "0x0013"
+    ]
+  }
+}

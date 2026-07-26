@@ -1,0 +1,84 @@
+---
+lang: am
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+TryItConsole ከ'@site/src/components/TryItConsole.jsx' አስመጣ፤
+
+# Torii ኤፒአይ አጠቃላይ እይታ
+
+የTorii መግቢያ በር ከIroha ጋር ለመግባባት REST + WebSocket ገጽን ያጋልጣል
+አንጓዎች. ቀኖናዊው I18NT0000001X ሰነድ የመነጨው በ፡
+
+```bash
+cargo xtask openapi
+```
+
+ከላይ ያለውን ትዕዛዝ ማስኬድ `docs/portal/static/openapi/torii.json` እና ይጽፋል
+ይህ ክፍል እንዲዘምን የ`docusaurus-plugin-openapi-docs` ውህደትን ይመገባል።
+በራስ-ሰር. ጀነሬተሩ የማህደረ ትውስታ Torii ራውተር ያሽከረክራል እና ለመሞከር ይሞክራል።
+የእሱን OpenAPI የመጨረሻ ነጥብ ይጠይቁ; ይህ ካልተሳካ (ለምሳሌ ፣ ራውተር ማስጀመር)
+ስህተቶች) በምትኩ የሚወስን የቦታ ያዥ ዝርዝር ተለቀቀ።
+
+## ወቅታዊ ሁኔታ
+
+- ** Spec ምንጭ: ** `cargo xtask openapi` የ Torii ራውተርን በቀጥታ ይጠይቃል; የ
+  የኋሊት ስቶብ የሚለቀቀው ራውተር I18NT0000003X ማጋለጥ ሲያቅተው ብቻ ነው።
+  ሰነድ.
+- ** ቆራጥነት፡** JSON ውፅዓት በCI ውስጥ የተረጋጋ ልዩነት እንዲኖር ቀኖናዊ ነው።
+- **ማረጋገጫ፡** የ"ሞክሩት" ማጠሪያ አሁን ጥያቄዎችን በ ሀ
+  የተገደበ የዝግጅት ፕሮክሲ። ኦፕሬተሮች Torii የመጨረሻ ነጥብ እና ተሸካሚ ማቅረብ አለባቸው
+  ጥሪዎችን ከማውጣትዎ በፊት ማስመሰያ።
+- **ስሪት መራጭ፡** Swagger UI፣ RapiDoc፣ እና ሙሉው Torii OpenAPI ገጽ
+  ማወዳደር እንዲችሉ `openapi/versions.json` የሚያነብ ተቆልቋይ ያጋልጡ
+  ታሪካዊ ቅጽበተ-ፎቶዎች. የ `Latest (tracked)` አማራጭ ይጠቁማል
+  `/openapi/torii.json`፣ ሁሉም ሌሎች ግቤቶች ተጓዳኝ ሲጫኑ
+  `openapi/versions/<version>/torii.json` ቅርስ።
+- ** ቅጽበታዊ የስራ ፍሰት:** `npm run docs:version -- <label>` ን ከሮጡ በኋላ ያድሱ
+  ተዛማጅ OpenAPI ፋይል ከ I18NI0000026X ጋር
+  ስለዚህ ተቆልቋዩ ሁለቱንም የቀዘቀዘውን ቅጽበታዊ ገጽ እይታ እና ተንከባላይ "የቅርብ ጊዜ" ግንባታን መጫን ይችላል።
+
+በራውተር የተደገፈ ኤክስትራክተር አሁን ሙሉውን Torii ወለል ያመነጫል። ካዩ
+ቦታ ያዥ ገለባ፣ እንደ የግንባታ ጊዜ ውድቀት አድርገው ይያዙት እና Toriiን ይፈትሹ
+ራውተር ማስጀመሪያ ምዝግብ ማስታወሻዎች.
+
+## ማጠሪያ ይሞክሩት (DOCS-3)
+
+የገንቢ ፖርታል የREST ጥያቄዎችን በ ሀ በኩል የሚያስተላልፍ ትንሽ ኮንሶል አካቷል።
+በመስቀለኛ መንገድ ላይ የተመሰረተ ተኪ። ተኪው CORSን፣ የተመጣጠነ ገደቦችን እና አማራጭ ተሸካሚን ያስፈጽማል
+ቶከኖች ስለዚህ መግብር ምስክርነቶችን ሳያጋልጥ ከማስተናገጃ መግቢያ መንገዶች ጋር መነጋገር ይችላል።
+ለሙሉ ኦፕሬተር ማረጋገጫ ዝርዝር `docs/devportal/try-it.md` ይመልከቱ።
+
+ፕሮክሲውን ከDocusaurus ዴቭ አገልጋይ ጎን ያስጀምሩ፡-
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- ተኪው በI18NI0000028X (ነባሪው `127.0.0.1:8787`) ላይ ያዳምጣል እና
+  ማንኛውንም የ`/proxy/...` ጥያቄዎችን ወደ I18NI0000031X ያስተላልፋል።
+- ለስታቲክ ተሸካሚ ቶከኖች `TRYIT_PROXY_BEARER` ያቅርቡ ወይም ደዋዮች እንዲያቀርቡ ያድርጉ
+  በ "Bearer token" መስክ በኩል በጥያቄ አንድ.
+- ደረጃ በደቂቃ ወደ 60 ጥያቄዎች ነባሪ ይገድባል እና ሊስተካከል ይችላል።
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+
+> ⚠️ ፕሮክሲው ለዝግጅት/ማሳያ መዳረሻ የታሰበ ነው። የምርት ማሰማራት
+> ከጠንካራ ግቤት ጀርባ መሮጥ እና ተመሳሳዩን የዋጋ ገደብ ፖሊሲ እንደገና መጠቀም አለበት።
+> ከ Torii ፊት ለፊት።
+
+<TryItConsole />

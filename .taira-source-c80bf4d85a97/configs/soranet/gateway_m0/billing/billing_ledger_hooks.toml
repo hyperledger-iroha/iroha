@@ -1,0 +1,46 @@
+version = 2
+billing_period = "2026-11"
+currency = "XOR"
+
+[accounts]
+receivable = "sora.cdn.receivable"
+revenue = "sora.cdn.revenue"
+escrow = "sora.cdn.dispute.v1"
+refunds = "sora.cdn.refund_pool"
+treasury = "sora.treasury"
+
+[posting_rules.invoice]
+debit = "customer"
+credit = "sora.cdn.receivable"
+memo = "usage invoice"
+
+[posting_rules.payment]
+debit = "sora.cdn.receivable"
+credit = "sora.cdn.revenue"
+memo = "payment applied"
+
+[posting_rules.dispute_hold]
+debit = "sora.cdn.receivable"
+credit = "sora.cdn.dispute.v1"
+memo = "dispute hold until resolved"
+
+[posting_rules.dispute_release]
+debit = "sora.cdn.dispute.v1"
+credit = "sora.cdn.revenue"
+memo = "dispute resolved"
+
+[posting_rules.refund]
+debit = "sora.cdn.revenue"
+credit = "sora.cdn.refund_pool"
+memo = "approved refund"
+
+[posting_rules.treasury]
+debit = "sora.cdn.receivable"
+credit = "sora.treasury"
+memo = "treasury skim"
+
+[guardrails]
+dispute_hold_percent_bps = 2000
+max_credit_memos_per_period = 2
+prepay_required_bps = 250
+treasury_cut_bps = 500

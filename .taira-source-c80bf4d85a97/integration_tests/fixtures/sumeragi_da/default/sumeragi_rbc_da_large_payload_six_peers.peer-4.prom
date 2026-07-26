@@ -1,0 +1,6 @@
+sumeragi_rbc_payload_bytes_delivered_total 11010048
+sumeragi_rbc_deliver_broadcasts_total 1
+sumeragi_rbc_ready_broadcasts_total 1
+sumeragi_bg_post_queue_depth 20
+sumeragi_bg_post_queue_depth_by_peer{peer="4"} 24
+p2p_queue_dropped_total{kind="tx"} 0

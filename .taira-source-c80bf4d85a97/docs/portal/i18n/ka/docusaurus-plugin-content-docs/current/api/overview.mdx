@@ -1,0 +1,84 @@
+---
+lang: ka
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+იმპორტი TryItConsole-დან '@site/src/components/TryItConsole.jsx'-დან;
+
+# Torii API მიმოხილვა
+
+Torii კარიბჭე ავლენს REST + WebSocket ზედაპირს Iroha-თან ურთიერთობისთვის
+კვანძები. კანონიკური OpenAPI დოკუმენტი გენერირებულია:
+
+```bash
+cargo xtask openapi
+```
+
+ზემოთ ბრძანების გაშვებისას იწერება `docs/portal/static/openapi/torii.json` და
+კვებავს `docusaurus-plugin-openapi-docs` ინტეგრაციას, ამიტომ ეს განყოფილება განახლდება
+ავტომატურად. გენერატორი ატრიალებს მეხსიერების Torii როუტერს და ცდილობს
+მოითხოვეთ მისი OpenAPI საბოლოო წერტილი; თუ ეს ვერ მოხერხდა (მაგალითად, როუტერის ინიციალიზაცია
+შეცდომები) სანაცვლოდ ემიტირებულია განმსაზღვრელი ჩანაცვლების სპეციფიკაცია.
+
+## ამჟამინდელი მდგომარეობა
+
+- **სპეციფიკური წყარო:** `cargo xtask openapi` უშუალოდ ითხოვს Torii როუტერს; The
+  სარეზერვო პუნქტი გამოიცემა მხოლოდ მაშინ, როდესაც როუტერი ვერ ახერხებს OpenAPI-ის გამოვლენას
+  დოკუმენტი.
+- **დეტერმინიზმი:** JSON გამომავალი კანონიზირებულია CI-ში სტაბილური განსხვავების უზრუნველსაყოფად.
+- **ავთენტიფიკაცია:** „სცადე“ საცდელი ყუთი ახლა აგზავნის მოთხოვნებს ა
+  შეზღუდული დადგმის პროქსი. ოპერატორებმა უნდა მიაწოდონ Torii საბოლოო წერტილი და მატარებელი
+  ჟეტონი ზარების გაცემამდე.
+- **ვერსიის ამომრჩევი:** Swagger UI, RapiDoc და სრული Torii OpenAPI გვერდი
+  გამოაჩინეთ ჩამოსაშლელი სია, რომელიც იკითხება `openapi/versions.json`, რათა შეადაროთ
+  ისტორიული კადრები. `Latest (tracked)` ვარიანტი მიუთითებს
+  `/openapi/torii.json`, ხოლო ყველა სხვა ჩანაწერი იტვირთება შესაბამისი
+  `openapi/versions/<version>/torii.json` არტეფაქტი.
+- **Snapshot workflow:** `npm run docs:version -- <label>` გაშვების შემდეგ განაახლეთ
+  შესაბამისი OpenAPI ფაილი `npm run sync-openapi -- --version=<label> --latest`-თან
+  ასე რომ, ჩამოსაშლელ მენიუს შეუძლია ჩატვირთოს როგორც გაყინული სნეპშოტი, ასევე მოძრავი „უახლესი“ build.
+
+როუტერზე დამყარებული ექსტრაქტორი ახლა ასხივებს სრულ Torii ზედაპირს. თუ ხედავთ
+ჩანაცვლების ბლოკი, მიხედეთ მას, როგორც აწყობის დროში ჩავარდნას და შეამოწმეთ Torii
+როუტერის გაშვების ჟურნალი.
+
+## სცადეთ sandbox (DOCS-3)
+
+დეველოპერის პორტალი ათავსებს პატარა კონსოლს, რომელიც გადასცემს REST მოთხოვნებს ა
+კვანძზე დაფუძნებული პროქსი. პროქსი ახორციელებს CORS-ს, განაკვეთის ლიმიტებს და არჩევით მატარებელს
+ჟეტონები, რათა ვიჯეტმა შეძლოს ესაუბროს დადგმის კარიბჭეებს რწმუნებათა სიგელების გამოვლენის გარეშე.
+იხილეთ `docs/devportal/try-it.md` ოპერატორის სრული სიის სანახავად.
+
+გაუშვით პროქსი Docusaurus დეველ სერვერთან ერთად:
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- პროქსი უსმენს `TRYIT_PROXY_LISTEN` (ნაგულისხმევი `127.0.0.1:8787`) და
+  აგზავნის ნებისმიერ `/proxy/...` მოთხოვნას `TRYIT_PROXY_TARGET`-ზე.
+- მიაწოდეთ `TRYIT_PROXY_BEARER` სტატიკური მატარებლის ნიშნებისთვის ან მიეცით აბონენტებს საშუალება მიაწოდონ
+  ერთი თითო მოთხოვნაზე "Bearer token" ველის მეშვეობით.
+- განაკვეთი ნაგულისხმევად ზღუდავს 60 მოთხოვნას წუთში და შესაძლებელია მისი რეგულირება
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+
+> ⚠️ პროქსი განკუთვნილია დადგმისთვის/დემო წვდომისთვის. წარმოების განლაგება
+> უნდა იყოს გამაგრებული შეღწევის უკან და ხელახლა გამოიყენოს იგივე განაკვეთის შეზღუდვის პოლიტიკა
+> Torii-ის წინა.
+
+<TryItConsole />

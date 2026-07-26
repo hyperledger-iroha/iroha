@@ -1,0 +1,34 @@
+extends = ["minimal_with_trusted_peers.toml"]
+
+[network]
+# The explicit small Sumeragi queues below reserve one exact three-class
+# fanout for this authenticated-source geometry.
+max_total_connections = 32
+
+[kura]
+block_sync_roster_retention = 8192
+
+[sumeragi]
+role = "observer"
+
+[sumeragi.block]
+max_transactions = 333
+max_payload_bytes = 8388608
+proposal_queue_scan_multiplier = 3
+
+[sumeragi.queues]
+commands = 512
+authenticated_non_validator_sources = 2
+bodies = 96
+body_bytes = 71303168
+body_source_bytes = 17825792
+chunks = 768
+ready_bodies = 48
+
+[sumeragi.keys]
+activation_lead_blocks = 2
+overlap_grace_blocks = 12
+expiry_grace_blocks = 3
+require_hsm = true
+allowed_algorithms = ["bls_normal"]
+allowed_hsm_providers = ["pkcs11", "pkcs11", "yubihsm"]

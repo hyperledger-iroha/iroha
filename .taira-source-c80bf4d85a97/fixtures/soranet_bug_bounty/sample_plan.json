@@ -1,0 +1,88 @@
+{
+  "program": "SoraGlobal Gateway Bug Bounty",
+  "slug": "snnet-15h1-kit",
+  "owners": ["Security", "SRE", "Platform"],
+  "contact": {
+    "intake_email": "security@soranet.test",
+    "pagerduty": "pd://soranet-security",
+    "tracker": "https://tracker.local/bug-bounty",
+    "disclosure_url": "https://docs.soranet.test/bug-bounty"
+  },
+  "partners": [
+    {
+      "name": "Vector Labs",
+      "contact": "vector@example.org",
+      "contract_id": "VEC-2027-01",
+      "renewal": "2027-04-01",
+      "coverage": ["edge", "control-plane"]
+    },
+    {
+      "name": "Blue Delta",
+      "contact": "delta@example.org",
+      "contract_id": "BDL-2027-02",
+      "renewal": "2027-07-15",
+      "coverage": ["billing"]
+    }
+  ],
+  "scope": [
+    {
+      "area": "edge",
+      "cadence": "quarterly",
+      "targets": ["gateway-h3", "waf"],
+      "exclusions": ["http1"],
+      "notes": "Cover TLS/ECH rotation and cache-version binding."
+    },
+    {
+      "area": "control-plane",
+      "cadence": "quarterly",
+      "targets": ["control-plane-api", "rbac"],
+      "exclusions": [],
+      "notes": "Exercise tenant headers and GAR propagation."
+    },
+    {
+      "area": "billing",
+      "cadence": "semiannual",
+      "targets": ["billing-api", "metering"],
+      "exclusions": ["sandbox tenants"],
+      "notes": "Include ledger projection reconciliation."
+    }
+  ],
+  "severity_sla": {
+    "critical": {"ack_hours": 4, "contain_hours": 24, "fix_days": 7},
+    "high": {"ack_hours": 8, "contain_hours": 48, "fix_days": 14},
+    "medium": {"ack_hours": 24, "contain_hours": 96, "fix_days": 30},
+    "low": {"ack_hours": 48, "contain_hours": 168, "fix_days": 60}
+  },
+  "triage": {
+    "intake_channels": [
+      "security@soranet.test",
+      "https://hackerone.com/hyperledger"
+    ],
+    "playbook": [
+      "Acknowledge reporter and assign handler",
+      "Validate scope + severity with cache version and manifest id",
+      "Request PoC, affected provider ids, and header captures",
+      "Log tracker ticket with reproduction artefacts",
+      "Schedule fix plus cache re-roll and attach evidence bundle"
+    ],
+    "duplication_policy": "Cache version + manifest id + target host tuple",
+    "evidence_requirements": [
+      "PoC with deterministic steps",
+      "Affected provider ids",
+      "Cache version/header capture",
+      "Timestamped logs"
+    ]
+  },
+  "reward_table": [
+    {"severity": "critical", "min": 4000, "max": 6500, "currency": "USD"},
+    {"severity": "high", "min": 2500, "max": 4000, "currency": "USD"},
+    {"severity": "medium", "min": 1000, "max": 2000, "currency": "USD"},
+    {"severity": "low", "min": 250, "max": 750, "currency": "USD"}
+  ],
+  "reporting": {
+    "disclosure_window_days": 90,
+    "remediation_template_version": "v1",
+    "sla_dashboard": "dashboards/grafana/soranet_bug_bounty.json",
+    "audit_bucket": "artifacts/soranet/gateway/bug_bounty/logs/"
+  }
+}

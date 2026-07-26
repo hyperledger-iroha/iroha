@@ -563,15 +563,25 @@ impl ValidationFeeFinalizationEvidenceV1 {
         if self.approval_threshold_denominator == 0 {
             return false;
         }
-        let turnout = self
+        let Some(turnout) = self
             .approve
-            .saturating_add(self.reject)
-            .saturating_add(self.abstain);
-        turnout >= self.min_turnout
-            && self
-                .approve
-                .saturating_mul(u128::from(self.approval_threshold_denominator))
-                >= turnout.saturating_mul(u128::from(self.approval_threshold_numerator))
+            .checked_add(self.reject)
+            .and_then(|value| value.checked_add(self.abstain))
+        else {
+            return false;
+        };
+        let Some(approve) = self
+            .approve
+            .checked_mul(u128::from(self.approval_threshold_denominator))
+        else {
+            return false;
+        };
+        let Some(required) =
+            turnout.checked_mul(u128::from(self.approval_threshold_numerator))
+        else {
+            return false;
+        };
+        turnout >= self.min_turnout && approve >= required
     }
 }
 
@@ -618,10 +628,10 @@ impl ValidationFeeParliamentAuthorizationV1 {
         if self.finalization.referendum_id != self.proposal_id {
             return Some("validation-fee finalization referendum id differs from the proposal id");
         }
-        if self.finalization.finalized_at_height < self.referendum_window.lower
-            || self.finalization.finalized_at_height > self.referendum_window.upper
-        {
-            return Some("validation-fee finalization height is outside the referendum window");
+        if self.finalization.finalized_at_height != self.referendum_window.upper {
+            return Some(
+                "validation-fee finalization height must equal the inclusive referendum end",
+            );
         }
         if self.enacted_at_height <= self.finalization.finalized_at_height {
             return Some("validation-fee enactment height must be after referendum finalization");
@@ -1195,12 +1205,28 @@ fn validate_registry_entry_authorization(
             ValidationFeePolicyRegistryError::InvalidParliamentAuthorization { policy_version },
         );
     }
+    if !validation_fee_authorization_matches_plain_rules(
+        &entry.parliament_authorization,
+        &entry.plain_electorate_rules,
+    )
+    {
+        return Err(
+            ValidationFeePolicyRegistryError::InvalidParliamentAuthorization { policy_version },
+        );
+    }
     let payout_lifecycle_proposal_id = match (
         entry.policy.treasury_payout_binding.as_ref(),
         entry.payout_lifecycle.as_ref(),
     ) {
         (Some(binding), Some(reference))
             if reference.invariant_error().is_none()
+                && reference.plain_electorate_rules == entry.plain_electorate_rules
+                && validation_fee_authorization_matches_plain_rules(
+                    &reference.parliament_authorization,
+                    &reference.plain_electorate_rules,
+                )
+                && reference.parliament_authorization.enacted_at_height
+                    <= entry.parliament_authorization.enacted_at_height
                 && binding.lifecycle_seal().ok() == Some(reference.lifecycle_seal) =>
         {
             let fingerprint = validation_fee_payout_lifecycle_proposal_fingerprint(
@@ -1227,6 +1253,16 @@ fn validate_registry_entry_authorization(
             );
         }
     };
+    if entry
+        .parliament_authorization
+        .enacted_at_height
+        .checked_add(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
+        != Some(entry.policy.effective_from_height)
+    {
+        return Err(
+            ValidationFeePolicyRegistryError::InvalidParliamentAuthorization { policy_version },
+        );
+    }
     let fingerprint = validation_fee_policy_proposal_fingerprint(
         &entry.policy,
         payout_lifecycle_proposal_id,
@@ -1240,6 +1276,28 @@ fn validate_registry_entry_authorization(
         );
     }
     Ok(())
+}
+
+fn validation_fee_authorization_matches_plain_rules(
+    authorization: &ValidationFeeParliamentAuthorizationV1,
+    rules: &ValidationFeePlainElectorateRulesV1,
+) -> bool {
+    let Some(span) = authorization
+        .referendum_window
+        .upper
+        .checked_sub(authorization.referendum_window.lower)
+        .and_then(|distance| distance.checked_add(1))
+    else {
+        return false;
+    };
+    span == rules.ballot_duration_blocks
+        && authorization.finalization.finalized_at_height
+            == authorization.referendum_window.upper
+        && authorization.finalization.min_turnout == rules.min_turnout
+        && authorization.finalization.approval_threshold_numerator
+            == rules.approval_threshold_numerator
+        && authorization.finalization.approval_threshold_denominator
+            == rules.approval_threshold_denominator
 }
 
 /// One exact recipient and share in the atomic treasury-payout effect plan.
@@ -1600,6 +1658,8 @@ mod parliament_tests {
     };
     use crate::{domain::DomainId, name::Name};
 
+    const TEST_AUTHORIZATION_STRIDE: u64 = 10_000;
+
     fn account(seed: u8) -> AccountId {
         let key_pair =
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair");
@@ -1665,17 +1725,18 @@ mod parliament_tests {
     }
 
     fn authorization(proposal_id: [u8; 32], marker: u8) -> ValidationFeeParliamentAuthorizationV1 {
+        let lower = u64::from(marker).saturating_mul(TEST_AUTHORIZATION_STRIDE);
+        let upper = lower
+            .checked_add(plain_electorate_rules().ballot_duration_blocks - 1)
+            .expect("test referendum end");
         ValidationFeeParliamentAuthorizationV1 {
             proposal_id,
             proposal_fingerprint: proposal_id,
             proposal_time_roster_root: [marker.wrapping_add(1); 32],
-            referendum_window: ValidationFeeGovernanceWindowV1 {
-                lower: 1,
-                upper: 100,
-            },
+            referendum_window: ValidationFeeGovernanceWindowV1 { lower, upper },
             finalization: ValidationFeeFinalizationEvidenceV1 {
                 referendum_id: proposal_id,
-                finalized_at_height: u64::from(marker),
+                finalized_at_height: upper,
                 mode: ValidationFeeGovernanceVotingModeV1::Plain,
                 approve: 1,
                 reject: 0,
@@ -1685,8 +1746,18 @@ mod parliament_tests {
                 approval_threshold_denominator: 2,
                 approved: true,
             },
-            enacted_at_height: u64::from(marker).saturating_add(1),
+            enacted_at_height: upper.checked_add(1).expect("test enactment height"),
         }
+    }
+
+    fn policy_effective_height(version: u64) -> u64 {
+        version
+            .checked_mul(TEST_AUTHORIZATION_STRIDE)
+            .and_then(|lower| lower.checked_add(plain_electorate_rules().ballot_duration_blocks))
+            .and_then(|enacted| {
+                enacted.checked_add(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
+            })
+            .expect("test policy effective height")
     }
 
     fn policy(version: u64, previous_policy_hash: Option<[u8; 32]>) -> ValidationFeePolicyV1 {
@@ -1701,7 +1772,7 @@ mod parliament_tests {
             fee: initial_validation_fee_amount(),
             treasury_account_id: account(1),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-            effective_from_height: 10 * version,
+            effective_from_height: policy_effective_height(version),
             expires_after_height: None,
             exemption_classes: Vec::new(),
             treasury_payout_binding: None,
@@ -1902,15 +1973,21 @@ mod parliament_tests {
         let first = policy(1, None);
         let first_entry = entry(first, 1);
         let second = policy(2, Some(first_entry.policy_hash));
+        let first_effective_height = first_entry.policy.effective_from_height;
+        let second_effective_height = second.effective_from_height;
         let registry = ValidationFeePolicyRegistryV1 {
             registered_policies: vec![first_entry, entry(second, 2)],
         };
 
         registry.validate().expect("valid policy chain");
-        assert!(registry.scheduled_entry_at_height(9).is_none());
+        assert!(
+            registry
+                .scheduled_entry_at_height(first_effective_height - 1)
+                .is_none()
+        );
         assert_eq!(
             registry
-                .effective_entry_at_height(10)
+                .effective_entry_at_height(first_effective_height)
                 .expect("first policy")
                 .policy
                 .policy_version,
@@ -1918,7 +1995,7 @@ mod parliament_tests {
         );
         assert_eq!(
             registry
-                .effective_entry_at_height(20)
+                .effective_entry_at_height(second_effective_height)
                 .expect("successor policy")
                 .policy
                 .policy_version,
@@ -2064,6 +2141,10 @@ mod parliament_tests {
         let plain_electorate_rules = plain_electorate_rules();
         let seal = binding.lifecycle_seal().expect("lifecycle seal");
         let mut payout_policy = policy(1, None);
+        payout_policy.effective_from_height = authorization([1; 32], 10)
+            .enacted_at_height
+            .checked_add(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
+            .expect("payout policy effective height");
         payout_policy.exemption_classes =
             vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()];
         payout_policy.treasury_account_id = binding.treasury_account_id.clone();

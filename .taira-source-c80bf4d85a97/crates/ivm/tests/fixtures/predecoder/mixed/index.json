@@ -1,0 +1,32 @@
+{
+  "artifacts": [
+    {
+      "artifact_sha256": "1fa34638f57a7580ba735892e028f687078cad2eee6278b2df9aea88a0bd66bd",
+      "file": "artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
+      "meta": {
+        "abi_version": 1,
+        "max_cycles": 0,
+        "mode": 0,
+        "vector_length": 0,
+        "version_major": 1,
+        "version_minor": 1
+      }
+    },
+    {
+      "artifact_sha256": "5150ee59c91a6f1583255ffde408cf009b20ad0a724bec4cc74a4da372be5a58",
+      "file": "artifact_v1_1_mode03_vlen8_cycles1000_abi1.to",
+      "meta": {
+        "abi_version": 1,
+        "max_cycles": 1000,
+        "mode": 3,
+        "vector_length": 8,
+        "version_major": 1,
+        "version_minor": 1
+      }
+    }
+  ],
+  "artifacts_dir": "artifacts",
+  "code_file": "code.bin",
+  "decoded_file": "decoded.json",
+  "format": "ivm.predecoder.v1/index"
+}

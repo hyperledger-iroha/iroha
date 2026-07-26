@@ -5502,7 +5502,14 @@ pub mod isi {
                 "validation-fee proposal is missing its PLAIN electorate rules".into(),
             )
         })?;
-        validate_validation_fee_plain_electorate_rules(rules, state_transaction)?;
+        if let Some(reason) = rules.invariant_error() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "validation-fee proposal retained invalid PLAIN electorate rules: {reason}"
+                )
+                .into(),
+            ));
+        }
         if ballot.amount != rules.ballot_amount
             || ballot.duration_blocks != rules.ballot_duration_blocks
         {
@@ -6340,6 +6347,22 @@ pub mod isi {
                     "validation-fee proposal has no retained referendum".into(),
                 )
             })?;
+        let rules = validation_fee_plain_electorate_rules(&proposal.kind).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal is missing its retained PLAIN electorate rules".into(),
+            )
+        })?;
+        if evidence.mode != gov::VotingMode::Plain
+            || evidence.finalized_at_height != referendum.h_end
+            || evidence.min_turnout != rules.min_turnout
+            || evidence.approval_threshold_numerator != rules.approval_threshold_numerator
+            || evidence.approval_threshold_denominator != rules.approval_threshold_denominator
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee finalization evidence differs from its retained PLAIN electorate rules"
+                    .into(),
+            ));
+        }
         let approvals = state_transaction
             .world
             .governance_stage_approvals
@@ -6448,6 +6471,12 @@ pub mod isi {
         if &lifecycle_payload.payout_binding != payout_binding {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle does not authorize the exact policy binding"
+                    .into(),
+            ));
+        }
+        if lifecycle_payload.plain_electorate_rules != payload.plain_electorate_rules {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee policy and payout lifecycle bind different PLAIN electorate rules"
                     .into(),
             ));
         }
@@ -6959,12 +6988,6 @@ pub mod isi {
                     "validation-fee payout lifecycle requires the bound subject to be the sole direct holder of {selector_label}"
                 )
                 .into(),
-            ));
-        }
-        if lifecycle_payload.plain_electorate_rules != payload.plain_electorate_rules {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee policy and payout lifecycle bind different PLAIN electorate rules"
-                    .into(),
             ));
         }
         if state_transaction
@@ -8744,7 +8767,18 @@ pub mod isi {
                             ),
                             |rules| (rules.conviction_step_blocks, rules.max_conviction),
                         );
-                        for rec in locks.locks.values() {
+                        for (owner, rec) in &locks.locks {
+                            if let Some(rules) = validation_fee_rules.as_ref()
+                                && (&rec.owner != owner
+                                    || rec.amount != rules.ballot_amount
+                                    || rec.duration_blocks != rules.ballot_duration_blocks
+                                    || rec.direction > 2)
+                            {
+                                return Err(InstructionExecutionError::InvariantViolation(
+                                    "validation-fee citizen lock differs from retained PLAIN electorate rules"
+                                        .into(),
+                                ));
+                            }
                             if rec.expiry_height < tally_height {
                                 continue;
                             }

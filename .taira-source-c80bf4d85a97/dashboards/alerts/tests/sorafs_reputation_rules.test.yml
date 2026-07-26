@@ -1,0 +1,62 @@
+rule_files:
+  - ../sorafs_reputation_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_reputation_ingest_lag_seconds'
+        values: '901 901 901 901 901 901 901'
+    alert_rule_test:
+      - alertname: SoraFSReputationIngestLagHigh
+        eval_time: 4m
+        exp_alerts: []
+      - alertname: SoraFSReputationIngestLagHigh
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS reputation ingest lag is high"
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_reputation_snapshot_generated_at_unix'
+        values: '0+0x12000'
+    alert_rule_test:
+      - alertname: SoraFSReputationSnapshotStale
+        eval_time: 7d20m
+        exp_alerts: []
+      - alertname: SoraFSReputationSnapshotStale
+        eval_time: 7d45m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS reputation snapshot is stale"
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_reputation_low_score_providers'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - alertname: SoraFSReputationLowScoreProviders
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: SoraFSReputationLowScoreProviders
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS reputation low-score providers present"
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_reputation_threshold_crossings_total{level="low_score"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - alertname: SoraFSReputationLowScoreCrossing
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels:
+              level: low_score
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS reputation provider crossed into low score"

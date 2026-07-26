@@ -1,0 +1,30 @@
+---
+lang: uz
+direction: ltr
+source: docs/source/connect_architecture_followups.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 476331772efe169a7a073b561fa9935e314ff89d6bfff440f7246606c1c02669
+source_last_modified: "2025-12-29T18:16:35.934525+00:00"
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
+---
+
+# Arxitekturani kuzatish amallarini ulang
+
+Ushbu eslatma o'zaro SDK dan paydo bo'lgan muhandislik kuzatuvlarini qamrab oladi
+Arxitektura tekshiruvini ulash. Har bir qator muammoga mos kelishi kerak (Jira chiptasi yoki PR)
+ish rejalashtirilganidan keyin. Jadvalni yangilang, chunki egalari kuzatuv chiptalarini yaratadilar.| Element | Tavsif | Ega(lar)i | Kuzatuv | Holati |
+|------|-------------|----------|----------|--------|
+| Birgalikda orqa o'chirish konstantalari | Eksponensial orqaga qaytish + jitter yordamchilarini (`connect_retry::policy`) amalga oshiring va ularni Swift/Android/JS SDK-lariga o'tkazing. | Swift SDK, Android Networking TL, JS Lead | [IOS-CONNECT-001](project_tracker/connect_architecture_followups_ios.md#ios-connect-001) | Bajarildi - `connect_retry::policy` deterministik splitmix64 namunasi bilan qo'ndi; Swift (`ConnectRetryPolicy`), Android va JS SDK'lari aks ettirilgan yordamchilarni va oltin testlarni yuboradi. |
+| Ping/pong ijrosi | Kelishilgan 30-lar kadansi va brauzerning minimal qisqichi bilan sozlanishi mumkin bo'lgan yurak urishini qo'shing; sirt ko'rsatkichlari (`connect.ping_miss_total`). | Swift SDK, Android Networking TL, JS Lead | [IOS-CONNECT-002](project_tracker/connect_architecture_followups_ios.md#ios-connect-002) | Bajarildi — Torii endi sozlanishi mumkin boʻlgan yurak urishi intervallarini (`ping_interval_ms`, `ping_miss_tolerance`, `ping_min_interval_ms`) qoʻllaydi, `connect.ping_miss_total` yurak urishi oʻlchovini ochib beradi va qoʻllarni qayta tekshirishni qamrab oladi. SDK funksiyasining oniy suratlari mijozlar uchun yangi tugmalarni yuzaga keltiradi. |
+| Oflayn navbat barqarorligi | Ulanish navbatlari (Swift `FileManager`, Android shifrlangan saqlash, JS IndexedDB) uchun `.to` jurnal mualliflari/o'quvchilarini umumiy sxemadan foydalanib amalga oshiring. | Swift SDK, Android Data Model TL, JS Lead | [IOS-CONNECT-003](project_tracker/connect_architecture_followups_ios.md#ios-connect-003) | Bajarildi — Swift, Android va JS endi birgalikda `ConnectQueueJournal` + diagnostika yordamchilarini saqlash/to‘ldirish testlari bilan jo‘natadi, shuning uchun dalillar to‘plamlari deterministik bo‘lib qoladi. SDK.【IrohaSwift/Sources/IrohaSwift/ConnectQueueJournal.swift:1】【java/iroha_android/src/main/java/org/hype rledger/iroha/android/connect/ConnectQueueJournal.java:1】【javascript/iroha_js/src/connectQueueJournal.js:1】 |
+| StrongBox attestatsiya yuki | Hamyonni tasdiqlash orqali `{platform,evidence_b64,statement_hash}` ni o'tkazing va dApp SDK-lariga tasdiqlashni qo'shing. | Android Crypto TL, JS Lead | [IOS-CONNECT-004](project_tracker/connect_architecture_followups_ios.md#ios-connect-004) | Kutilmoqda |
+| Aylanishni boshqarish ramkasi | `Control::RotateKeys` + `RotateKeysAck` ni amalga oshiring va barcha SDKlarda `cancelRequest(hash)` / aylanish API larini oching. | Swift SDK, Android Networking TL, JS Lead | [IOS-CONNECT-005](project_tracker/connect_architecture_followups_ios.md#ios-connect-005) | Kutilmoqda |
+| Telemetriya eksportchilari | `connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms` chiqaring va mavjud telemetriya quvurlariga (OpenTelemetry) hisoblagichlarni takrorlang. | Telemetriya WG, SDK egalari | [IOS-CONNECT-006](project_tracker/connect_architecture_followups_ios.md#ios-connect-006) | Kutilmoqda |
+| Swift CI gating | Connect bilan bog‘liq quvurlar `make swift-ci` ni ishga tushirganiga ishonch hosil qiling, shunda armatura pariteti, asboblar paneli tasmasi va Buildkite `ci/xcframework-smoke:<lane>:device_tag` metama’lumotlari SDK’lar bo‘ylab bir xilda qoladi. | Swift SDK yetakchisi, Infra Build | [IOS-CONNECT-007](project_tracker/connect_architecture_followups_ios.md#ios-connect-007) | Kutilmoqda |
+| Qayta hodisa haqida hisobot | Umumiy koʻrinish uchun XCFramework tutun simi hodisalarini (`xcframework_smoke_fallback`, `xcframework_smoke_strongbox_unavailable`) Connect asboblar paneliga ulang. | Swift QA yetakchisi, Infra Build | [IOS-CONNECT-008](project_tracker/connect_architecture_followups_ios.md#ios-connect-008) | Kutilmoqda || Muvofiqlik qo'shimchalari o'tish orqali | SDKlar ixtiyoriy `attachments[]` + `compliance_manifest_id` maydonlarini tasdiqlash foydali yuklarini yo'qotmasdan qabul qilishini va yo'naltirishini ta'minlang. | Swift SDK, Android Data Model TL, JS Lead | [IOS-CONNECT-009](project_tracker/connect_architecture_followups_ios.md#ios-connect-009) | Kutilmoqda |
+| Taksonomiyani moslashtirishda xatolik | Umumiy raqamni (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`) platformaga xos xatoliklar bilan xaritalash. | Swift SDK, Android Networking TL, JS Lead | [IOS-CONNECT-010](project_tracker/connect_architecture_followups_ios.md#ios-connect-010) | Bajarildi — Swift, Android va JS SDK’lar umumiy `ConnectError` o‘rami + telemetriya yordamchilarini README/TypeScript/Java hujjatlari va TLS/timeout/HTTP/kodek/navbatni qamrab oluvchi regressiya testlari bilan jo‘natadi. holatlar.【docs/source/connect_error_taxonomy.md:1】【IrohaSwift/Sources/IrohaSwift/ConnectError.swift:1】【java/iroha_android/src /test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java:1】【javascript/iroha_js/test/connectError.test.js:1】 |
+| Seminar qarorlari jurnali | Kengash arxiviga qabul qilingan qarorlarni umumlashtiruvchi izohli pastki/eslatmalarni nashr eting. | SDK dasturi rahbari | [IOS-CONNECT-011](project_tracker/connect_architecture_followups_ios.md#ios-connect-011) | Kutilmoqda |
+
+> Kuzatuv identifikatorlari egalari ochiq chiptalar sifatida to'ldiriladi; muammoning borishi bilan birga `Status` ustunini yangilang.

@@ -1,0 +1,26 @@
+{
+  "payload": "fixtures/sample_segment_0001_720p.m4s",
+  "event_id": "global-keynote",
+  "stream_id": "stage-a",
+  "rendition_id": "720p",
+  "track": {
+    "kind": "video",
+    "codec": "av1-main",
+    "bitrate_kbps": 4500,
+    "resolution": "1280x720"
+  },
+  "segment": {
+    "sequence": 43,
+    "start_pts": 3602000,
+    "duration": 2000000,
+    "wallclock_unix_ms": 1702560000500
+  },
+  "ingest": {
+    "manifest_hash": "1ea5e80e03a3a0d4d9c4f12dd76ed1d73428ef9f000a1e2f487e45a6c0e4beef",
+    "storage_ticket": "10f1d2c3b4a5968778695a4b3c2d1e0f1234567890abcdefedcba09876543210",
+    "ingest_latency_ms": 198,
+    "live_edge_drift_ms": -27,
+    "ingest_node_id": "ingest-node-02"
+  },
+  "extra_metadata": "fixtures/sample_metadata.json"
+}

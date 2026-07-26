@@ -1,0 +1,7 @@
+error: Spaces are not allowed. Use underscores '_'
+ --> tests/ui_fail/metric_name_with_space.rs:3:1
+  |
+3 | #[metrics("metric with space")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `metrics` (in Nightly builds, run with -Z macro-backtrace for more info)

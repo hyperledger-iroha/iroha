@@ -1,0 +1,15 @@
+[package]
+name = "gpuzstd_metal"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zstd.workspace = true
+
+[build-dependencies]
+cc = "1.2.45"

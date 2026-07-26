@@ -1,0 +1,100 @@
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/getting-started.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 3754b8549f90a4f325bb58a6b4e24bc052ec65d46a6352995c13555a8d5544bf
+source_last_modified: "2026-04-08T09:18:21.504260+00:00"
+translation_last_reviewed: 2026-04-08
+---
+
+# תחילת עבודה עם Norito
+
+המדריך הקצר הזה מציג את הזרימה המינימלית לקומפילציה של חוזה Kotodama, בדיקת הבייטקוד Norito שנוצר, הרצה מקומית ופריסה לצומת Iroha.
+
+## דרישות מקדימות
+
+1. התקינו את שרשרת הכלים של Rust (1.76 ומעלה) ובצעו checkout לריפו הזה.
+2. בנו או הורידו את הבינארים התומכים:
+   - `koto build` - קומפיילר Kotodama שמפיק בייטקוד IVM/Norito
+   - `ivm_run` ו-`ivm_tool` - כלי הרצה מקומית ובדיקה
+   - `iroha` - משמש לפריסת חוזים דרך Torii
+
+   ה-Makefile של הריפו מצפה שהבינארים יהיו על `PATH`. אפשר להוריד ארטיפקטים מוכנים או לבנות מהמקור. אם אתם מקמפלים את ה-toolchain מקומית, הפנו את עזרי ה-Makefile לבינארים:
+
+   ```sh
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
+   ```
+
+3. ודאו שצומת Iroha פועל כשאתם מגיעים לשלב הפריסה. הדוגמאות למטה מניחות ש-Torii נגיש ב-URL שמוגדר בפרופיל `iroha` שלכם (`~/.config/iroha/cli.toml`).
+
+## 1. קומפילציה של חוזה Kotodama
+
+הריפו כולל חוזה מינימלי "hello world" ב-`examples/hello/hello.ko`. קומפלו אותו לבייטקוד Norito/IVM (`.to`):
+
+```sh
+mkdir -p target/examples
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
+```
+
+דגלים חשובים:
+
+- `ABI V1` נועל את החוזה לגרסת ABI 1 (הגרסה היחידה הנתמכת בזמן הכתיבה).
+- `--max-cycles 1000000` מבקש הרצה ללא הגבלה; הגדירו מספר חיובי כדי להגביל padding של מחזורים עבור הוכחות zero-knowledge.
+
+## 2. בדיקת ארטיפקט Norito (רשות)
+
+השתמשו ב-`ivm_tool` כדי לבדוק את הכותרת והמטא-דאטה המוטמעים:
+
+```sh
+ivm_tool inspect target/examples/hello.to
+```
+
+אתם אמורים לראות את גרסת ה-ABI, הדגלים הפעילים ונקודות הכניסה שיוצאו. זו בדיקת sanity מהירה לפני פריסה.
+
+## 3. הרצת החוזה מקומית
+
+הריצו את הבייטקוד עם `ivm_run` כדי לאשר את ההתנהגות בלי לגעת בצומת:
+
+```sh
+ivm_run target/examples/hello.to --args '{}'
+```
+
+דוגמת `hello` רושמת ברכה ומבצעת syscall בשם `SET_ACCOUNT_DETAIL`. הרצה מקומית שימושית בזמן שאתם משפרים את לוגיקת החוזה לפני פרסום on-chain.
+
+## 4. פריסה דרך `iroha`
+
+כשאתם מרוצים מהחוזה, פרסו אותו לצומת באמצעות CLI. ספקו חשבון סמכות, מפתח החתימה שלו, וקובץ `.to` או payload ב-Base64:
+
+```sh
+iroha contract deploy \
+  --authority <i105-account-id> \
+  --private-key <hex-encoded-private-key> \
+  --code-file target/examples/hello.to
+```
+
+הפקודה שולחת bundle של manifest Norito + בייטקוד דרך Torii ומדפיסה את סטטוס העסקה. לאחר שהעסקה נחתמת בבלוק, ניתן להשתמש ב-hash הקוד שמופיע בתגובה כדי לשלוף manifests או להציג רשימת instances:
+
+```sh
+iroha contract manifest get --code-hash 0x<hash>
+```
+
+## 5. הרצה מול Torii
+
+לאחר רישום הבייטקוד, אפשר לקרוא לו על ידי שליחת instruction שמפנה לקוד המאוחסן (למשל דרך `iroha contract call --contract-address <contract-address> --entrypoint main --wait` או הלקוח האפליקטיבי שלכם). ודאו שהרשאות החשבון מאפשרות את ה-syscalls הרצויים (`set_account_detail`, `transfer_asset`, וכו').
+
+## טיפים ופתרון תקלות
+
+- השתמשו ב-`make examples-run` כדי לקמפל ולהריץ את הדוגמאות במכה אחת. דרסו את משתני הסביבה `KOTO`/`IVM` אם הבינארים אינם ב-`PATH`.
+- אם `koto build` דוחה את גרסת ה-ABI, בדקו שהקומפיילר והצומת מכוונים ל-ABI v1 (הריצו `koto build --help` ללא ארגומנטים כדי לראות תמיכה).
+- ה-CLI מקבל מפתחות חתימה ב-hex או Base64. לצורך בדיקות אפשר להשתמש במפתחות שמופקים ב-`kagami keys --json`.
+- בעת ניפוי תקלות ב-payloads של Norito, תת-פקודת `ivm_tool disassemble` מסייעת לקשור את ההוראות לקוד המקור של Kotodama.
+
+הזרימה הזו משקפת את השלבים שמשמשים ב-CI ובבדיקות אינטגרציה. להעמקה בדקדוק Kotodama, מיפוי syscalls ופרטי Norito, ראו:
+
+- `docs/source/kotodama_grammar.md`
+- `docs/source/kotodama_examples.md`
+- `norito.md`

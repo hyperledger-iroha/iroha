@@ -1,0 +1,16 @@
+name: Pull Request Labeler
+
+on:
+  # Do not use `pull_request_target` here; GitHub disabled the old workflow
+  # because that event is a security risk under active exploitation.
+  pull_request:
+
+jobs:
+  labeler:
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      # NOTE: uses `.github/labeler.yml` config
+      - uses: actions/labeler@8558fd74291d67161a8a78ce36a881fa63b766a9

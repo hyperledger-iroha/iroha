@@ -1,0 +1,772 @@
+openapi: 3.1.0
+info:
+  title: SoraNet Control Plane API (SNNet-15D seed)
+  version: 0.1.0
+  description: >
+    Seed OpenAPI surface for the SoraNet CDN control plane covering domains, DNS,
+    cache, WAF, analytics, billing, moderation, and audit events. All payloads
+    use Norito JSON; binary artefacts (CAR receipts, certificates) are carried
+    via signed URLs or opaque blobs referenced from identifiers in this schema.
+servers:
+  - url: https://control.soranet.dev/api
+    description: Production control plane (subject to region-aware routing).
+  - url: https://control.soranet.stg/api
+    description: Staging control plane for SDK/CLI integration tests.
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: jwt
+      description: >
+        JWT access token minted by the control plane. Service accounts use the
+        same format but carry the `service=true` claim and a constrained scope
+        list from the RBAC registry.
+  parameters:
+    OrgHeader:
+      name: X-SN-Org
+      in: header
+      required: true
+      description: Organisation identifier used for multi-tenant isolation.
+      schema:
+        type: string
+        maxLength: 64
+    ProjectHeader:
+      name: X-SN-Project
+      in: header
+      required: false
+      description: Optional project/workspace id for per-app routing and billing.
+      schema:
+        type: string
+        maxLength: 64
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Caller-generated key that deduplicates POST/PUT mutations.
+      schema:
+        type: string
+  schemas:
+    RBACScope:
+      type: string
+      description: Scope identifiers bound to roles in `control_plane_rbac.yaml`.
+      enum:
+        - org:admin
+        - org:billing
+        - org:audit
+        - org:reader
+        - domain:write
+        - domain:read
+        - dns:write
+        - dns:read
+        - cache:write
+        - cache:read
+        - waf:write
+        - waf:read
+        - analytics:query
+        - analytics:export
+        - billing:read
+        - moderation:write
+        - moderation:read
+    Org:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        contact_email:
+          type: string
+          format: email
+        created_at:
+          type: string
+          format: date-time
+        default_region:
+          type: string
+          description: Primary home region for billing and default PoP selection.
+        audit_horizon_days:
+          type: integer
+          minimum: 7
+    Project:
+      type: object
+      required: [id, org_id, name, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Domain:
+      type: object
+      required: [id, org_id, hostname, status, cache_profile]
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        hostname:
+          type: string
+        status:
+          type: string
+          enum: [pending_validation, active, paused, deleted]
+        tls_profile:
+          $ref: "#/components/schemas/TlsProfile"
+        cache_profile:
+          $ref: "#/components/schemas/CacheProfile"
+        waf_policy_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+    DnsZone:
+      type: object
+      required: [id, name, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+          enum: [draft, published, locked]
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/DnsRecordSet"
+    DnsRecordSet:
+      type: object
+      required: [name, type, ttl, rdata]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        ttl:
+          type: integer
+          minimum: 30
+        rdata:
+          type: array
+          items:
+            type: string
+    CacheProfile:
+      type: object
+      required: [id, name, default_ttl_seconds]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        default_ttl_seconds:
+          type: integer
+        negative_ttl_seconds:
+          type: integer
+        bypass_paths:
+          type: array
+          items:
+            type: string
+        serve_stale_seconds:
+          type: integer
+        compression:
+          type: boolean
+        constant_rate_class:
+          type: string
+          description: >
+            Optional SNNet-17A/B constant-rate class label advertised to PoPs.
+    PurgeRequest:
+      type: object
+      required: [kind, entries]
+      properties:
+        kind:
+          type: string
+          enum: [path, tag, cid]
+        entries:
+          type: array
+          items:
+            type: string
+        reason:
+          type: string
+        request_id:
+          type: string
+        dry_run:
+          type: boolean
+    RateLimitRule:
+      type: object
+      required: [id, scope, ceiling_per_minute]
+      properties:
+        id:
+          type: string
+          format: uuid
+        scope:
+          type: string
+          enum: [origin, path, country, ip, token]
+        ceiling_per_minute:
+          type: integer
+        burst:
+          type: integer
+        action:
+          type: string
+          enum: [block, challenge, log_only]
+        ttl_seconds:
+          type: integer
+    WafRuleSet:
+      type: object
+      required: [id, name, mode]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        mode:
+          type: string
+          enum: [off, monitor, enforce]
+        rules:
+          type: array
+          items:
+            type: object
+            required: [id, action]
+            properties:
+              id:
+                type: string
+              action:
+                type: string
+                enum: [allow, block, challenge]
+              tags:
+                type: array
+                items:
+                  type: string
+    AnalyticsQuery:
+      type: object
+      required: [query, window]
+      properties:
+        query:
+          type: string
+          description: Norito JSON selector for metrics/labels.
+        window:
+          type: string
+          enum: [5m, 1h, 1d]
+        sampling:
+          type: string
+          enum: [full, sampled]
+        cursor:
+          type: string
+    AnalyticsResult:
+      type: object
+      required: [series]
+      properties:
+        series:
+          type: array
+          items:
+            type: object
+            properties:
+              metric:
+                type: string
+              points:
+                type: array
+                items:
+                  type: object
+                  required: [ts, value]
+                  properties:
+                    ts:
+                      type: string
+                      format: date-time
+                    value:
+                      type: number
+        next_cursor:
+          type: string
+    MeterSample:
+      type: object
+      required: [timestamp, meter, value, region]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        meter:
+          type: string
+          enum: [requests, egress_bytes, doh_qps, waf_decisions, car_verifications]
+        value:
+          type: number
+        region:
+          type: string
+    BillingStatement:
+      type: object
+      required: [period_start, period_end, total_credits]
+      properties:
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        total_credits:
+          type: number
+        line_items:
+          type: array
+          items:
+            type: object
+            properties:
+              meter:
+                type: string
+              region:
+                type: string
+              usage:
+                type: number
+              unit_price:
+                type: number
+    AuditEvent:
+      type: object
+      required: [id, ts, actor, scope, action, target]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ts:
+          type: string
+          format: date-time
+        actor:
+          type: string
+        scope:
+          $ref: "#/components/schemas/RBACScope"
+        action:
+          type: string
+        target:
+          type: string
+        request_id:
+          type: string
+        result:
+          type: string
+          enum: [accepted, rejected]
+    TlsProfile:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [managed, bring_your_own]
+        ech_enabled:
+          type: boolean
+        alpn:
+          type: array
+          items:
+            type: string
+    Pagination:
+      type: object
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+        cursor:
+          type: string
+paths:
+  /v1/auth/token:
+    post:
+      summary: Exchange credentials for an org-scoped token
+      operationId: issueToken
+      x-rbac-scopes:
+        - org:reader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grant_type, subject]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [client_credentials, device, refresh_token]
+                subject:
+                  type: string
+                scopes:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/RBACScope"
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [access_token, expires_in]
+                properties:
+                  access_token:
+                    type: string
+                  expires_in:
+                    type: integer
+                  refresh_token:
+                    type: string
+  /v1/orgs:
+    get:
+      summary: List organisations available to the caller
+      operationId: listOrgs
+      x-rbac-scopes: [org:reader]
+      responses:
+        "200":
+          description: Organisations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Org"
+    post:
+      summary: Create an organisation
+      operationId: createOrg
+      x-rbac-scopes: [org:admin]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Org"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Org"
+  /v1/projects:
+    get:
+      summary: List projects under the active org
+      operationId: listProjects
+      x-rbac-scopes: [org:reader]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+    post:
+      summary: Create a project/workspace
+      operationId: createProject
+      x-rbac-scopes: [org:admin]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Project"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+  /v1/domains:
+    get:
+      summary: List domains
+      operationId: listDomains
+      x-rbac-scopes: [domain:read]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ProjectHeader"
+      responses:
+        "200":
+          description: Domains
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Domain"
+    post:
+      summary: Register a domain
+      operationId: createDomain
+      x-rbac-scopes: [domain:write]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ProjectHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Domain"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domain"
+  /v1/domains/{domainId}/purge:
+    post:
+      summary: Purge cache content for a domain
+      operationId: purgeDomain
+      x-rbac-scopes: [cache:write]
+      parameters:
+        - name: domainId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ProjectHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurgeRequest"
+      responses:
+        "202":
+          description: Purge accepted
+  /v1/dns/zones:
+    get:
+      summary: List DNS zones for the org
+      operationId: listZones
+      x-rbac-scopes: [dns:read]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Zones
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DnsZone"
+    post:
+      summary: Create or import a DNS zone
+      operationId: createZone
+      x-rbac-scopes: [dns:write]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DnsZone"
+      responses:
+        "201":
+          description: Created
+  /v1/dns/zones/{zoneId}/records:upsert:
+    post:
+      summary: Upsert record sets
+      operationId: upsertRecords
+      x-rbac-scopes: [dns:write]
+      parameters:
+        - name: zoneId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [records]
+              properties:
+                records:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/DnsRecordSet"
+      responses:
+        "202":
+          description: Change accepted
+  /v1/waf/policies:
+    get:
+      summary: List WAF rule sets
+      operationId: listWafPolicies
+      x-rbac-scopes: [waf:read]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Policies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WafRuleSet"
+    post:
+      summary: Create or update WAF rule sets
+      operationId: upsertWafPolicy
+      x-rbac-scopes: [waf:write]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WafRuleSet"
+      responses:
+        "201":
+          description: Created
+        "200":
+          description: Updated
+  /v1/cache/rate-limits:
+    post:
+      summary: Configure rate limits
+      operationId: setRateLimit
+      x-rbac-scopes: [cache:write]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ProjectHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RateLimitRule"
+      responses:
+        "200":
+          description: Applied
+  /v1/analytics/query:
+    post:
+      summary: Execute an analytics query
+      operationId: queryAnalytics
+      x-rbac-scopes: [analytics:query]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ProjectHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyticsQuery"
+      responses:
+        "200":
+          description: Results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsResult"
+  /v1/billing/meters:
+    get:
+      summary: Retrieve metering samples
+      operationId: readMeters
+      x-rbac-scopes: [billing:read]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Meter samples
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MeterSample"
+  /v1/billing/statements/{period}:
+    get:
+      summary: Retrieve billing statement
+      operationId: readStatement
+      x-rbac-scopes: [billing:read]
+      parameters:
+        - name: period
+          in: path
+          required: true
+          description: Billing period in YYYY-MM format.
+          schema:
+            type: string
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Statement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingStatement"
+  /v1/moderation/proofs:
+    post:
+      summary: Attach moderation proofs for GAR/denylist enforcement
+      operationId: attachModerationProof
+      x-rbac-scopes: [moderation:write]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ProjectHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, cache_version]
+              properties:
+                token:
+                  type: string
+                cache_version:
+                  type: string
+                manifest_digest:
+                  type: string
+      responses:
+        "202":
+          description: Proof accepted
+  /v1/audit/events:
+    get:
+      summary: Stream audit events
+      operationId: getAuditEvents
+      x-rbac-scopes: [org:audit]
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Audit events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditEvent"

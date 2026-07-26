@@ -1,0 +1,13 @@
+{
+  "provider_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "epoch_start": 1700600000,
+  "epoch_end": 1700600360,
+  "declared_capacity_gib": 480,
+  "effective_capacity_gib": 460,
+  "utilised_capacity_gib": 420,
+  "successful_replications": 14,
+  "failed_replications": 0,
+  "uptime_percent_milli": 99800,
+  "por_success_percent_milli": 99600,
+  "notes": "Primary window before simulated outage"
+}

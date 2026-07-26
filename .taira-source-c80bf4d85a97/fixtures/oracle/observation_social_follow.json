@@ -1,0 +1,24 @@
+{
+  "body": {
+    "connector_id": "twitter-follow",
+    "connector_version": 1,
+    "feed_config_version": [
+      1
+    ],
+    "feed_id": [
+      "social_follow_twitter"
+    ],
+    "outcome": {
+      "kind": "Value",
+      "value": {
+        "mantissa": "170052220750163104028821061988450963712",
+        "scale": 0
+      }
+    },
+    "provider_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+    "request_hash": "hash:E574D26AFD742A3F3AE7CB2923CFE3A4F5B65CB3AD19004EAA8B05A20889E72D#81B7",
+    "slot": 15,
+    "timestamp_ms": 1700000111000
+  },
+  "signature": "2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+}

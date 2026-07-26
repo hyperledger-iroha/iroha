@@ -1,0 +1,6 @@
+// Canonical 改善 hook; authorization is runtime-defined.
+誓約 KaizenDemo {
+    改善(int _new_impl) {
+        debug::info("kaizen requested");
+    }
+}

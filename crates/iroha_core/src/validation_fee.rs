@@ -1858,12 +1858,15 @@ fn validate_parliament_authorization(
                 "authorized Parliament approval records are missing".to_owned(),
             )
         })?;
-    if REQUIRED_BODIES.iter().copied().any(|body| {
+    if approvals.approval_gate_height.is_none()
+        || REQUIRED_BODIES.iter().copied().any(|body| {
         !approvals.quorum_met(body, snapshot.selection_epoch)
             || approvals.rejection_quorum_met(body, snapshot.selection_epoch)
-    }) {
+    })
+    {
         return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
-            "all seven Parliament bodies do not retain affirmative quorum".to_owned(),
+            "all seven Parliament bodies and their immutable approval gate are not retained"
+                .to_owned(),
         ));
     }
     let finalized = proposal.finalization_evidence.as_ref().ok_or_else(|| {
@@ -1895,6 +1898,30 @@ fn validate_parliament_authorization(
     {
         return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
             "finalized referendum evidence differs from the typed registry authorization"
+                .to_owned(),
+        ));
+    }
+    let rules = match exact_kind {
+        iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) => {
+            &payload.plain_electorate_rules
+        }
+        iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
+            payload,
+        ) => &payload.plain_electorate_rules,
+        _ => {
+            return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+                "validation-fee authorization references a non-validation-fee proposal".to_owned(),
+            ));
+        }
+    };
+    if finalized.mode != iroha_data_model::isi::governance::VotingMode::Plain
+        || finalized.finalized_at_height != referendum.h_end
+        || finalized.min_turnout != rules.min_turnout
+        || finalized.approval_threshold_numerator != rules.approval_threshold_numerator
+        || finalized.approval_threshold_denominator != rules.approval_threshold_denominator
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "finalized referendum evidence differs from the proposal-bound PLAIN electorate rules"
                 .to_owned(),
         ));
     }
@@ -4020,6 +4047,7 @@ mod tests {
                 .ensure_stage(body, 1, 1, 10_000)
                 .record(account(250));
         }
+        approvals.approval_gate_height = Some(1);
         state_tx
             .world
             .governance_stage_approvals

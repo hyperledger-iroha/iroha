@@ -1,0 +1,17 @@
+{
+  "chunk_digest_sha3_256": "d7e0445a621df04e14a1bdd90d9247ab1416c453e4c95a57bdd3bb208bdb47f7",
+  "manifest": "manifest_blake3.json",
+  "manifest_blake3": "a4044f3f86b9f000a82475b1354ec09bc7d1b7a6dcb5b51937d21e9c1bbb3373",
+  "profile": "sorafs.sf1@1.0.0",
+  "profile_aliases": [
+    "sorafs.sf1@1.0.0"
+  ],
+  "signatures": [
+    {
+      "algorithm": "ed25519",
+      "signature": "f26d3d59824b44579fd7f631df8e44b7938eafb69870c3c9e019cd38b7e7310c4a120e4255040facf8f5c49a55db2f5df59afcaf30658e874eab7db9e9252d09",
+      "signer": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+      "signer_multihash": "ed012003A107BFF3CE10BE1D70DD18E74BC09967E4D6309BA50D5F1DDC8664125531B8"
+    }
+  ]
+}

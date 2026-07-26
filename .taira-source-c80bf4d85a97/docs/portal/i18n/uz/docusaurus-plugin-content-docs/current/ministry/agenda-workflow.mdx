@@ -1,0 +1,177 @@
+---
+lang: uz
+direction: ltr
+source: docs/portal/docs/ministry/agenda-workflow.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Agenda Council Workflow
+description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+CodeBlock-ni '@theme/CodeBlock' dan import qiling;
+import sortitionSummary from '@site/docs/examples/ministry/agenda_sortition_summary_example.json';
+
+const summary = sortitionSummary;
+
+Funktsiya SortitionSummaryTable({satr}) {
+  qaytish (
+    
+      
+        
+          Slot
+          A'zo
+          Rol
+          Tashkilot
+          Og'irligi
+          Entropiya (kesilgan)
+        
+      
+      
+        {rows.map((satr, indeks) => (
+          
+            {indeks + 1}
+            {row.member_id}
+            {row.role}
+            {row.organization}
+            {row.weight}
+            {row.draw_entropy_hex.slice(0, 16)}…
+          
+        ))}
+      
+    
+  );
+}
+
+## Umumiy ko'rinish
+
+“Yoʻl xaritasi” bandi **MINFO-2** taklifdan tortib togacha aniq yoʻlni talab qiladi
+ommaviy saralash dalillari, shuning uchun har kim ishning kun tartibiga qanday etib kelganini tasdiqlashi mumkin
+kengash. Bu sahifa avval qo'yilgan CLI yordamchilarini to'g'ridan-to'g'ri tarmoqqa ulaydi
+ishlab chiquvchilar portali, shuning uchun taklifchilar, auditorlar va platforma guruhlari xuddi shunday amal qilishi mumkin
+mono-repo haqida gapirmasdan nazorat ro'yxati.
+
+Ish jarayoni uchta takrorlanadigan bosqichni o'z ichiga oladi:
+
+1. `AgendaProposalV1` foydali yuklarini mahalliy sifatida tekshiring va takroriy xeshlarni rad qiling
+   topshirish moderatsiya navbatiga yetguncha.
+2. Kengash xodimlari uchun taklif bilan birga dublikat-reestr xitlarini e'lon qiling.
+   determinizmni yo'qotmasdan oldingi holatlarni kuzatib boring.
+3. Saralash yordamchisini ishga tushiring, Merkle proof to'plamini oling va sirtini o'rnating
+   fuqarolar qur'a tashlashni takrorlashi uchun portal ichida tanlangan ro'yxat.
+
+Barcha yordamchilar `cargo xtask ministry-agenda` da yashaydi; Norito sxemasi
+`docs/source/ministry/agenda_council_proposal.md` ostida hujjatlashtirilgan.
+
+## 1. Takliflarni mahalliy darajada tasdiqlash
+
+JSON foydali yuklarini to'ldirish va kerakli dalillarni tasdiqlash uchun CLI dan foydalaning (xesh
+oilalar, dayjest uzunligi, til yorlig'i, yuboruvchi kontakti) mavjud. The
+validator kodni Torii qabul qilish yoʻli bilan baham koʻradi, shuning uchun taklif oʻtadi
+bu erda ham portal orqali yuklanganda o'tadi.
+
+{`yuk xtask vazirligi-kun tartibini tasdiqlash \\
+  --proposal docs/examples/ministry/agenda_proposal_example.json \\
+  --registry docs/examples/ministry/agenda_duplicate_registry.json`}
+
+- Tarixiy foydali yuklarni trianglashda `--allow-registry-conflicts` qo'shing; yangi
+  Agar barmoq izi allaqachon mavjud bo'lsa, arizalar tezda muvaffaqiyatsiz bo'lishi kerak.
+- Misollar katalogi ma'lumotnoma taklifi va registrni SDK'lar uchun yuboradi
+  qattiq kodlashsiz shaxsiy yuklamalarsiz formatni qabul qiling.
+
+## 2. Ikki nusxadagi registr kontekstini nashr qilish
+
+Qabul qilingan har bir taklif avval maslahat qilingan reestr dayjestini o'z ichiga oladi
+yutish. Ushbu registr uchun SoraFS CID yoki Torii manifest yo'lini oling va qo'shing
+Kengash ko'rib chiquvchilari bir xil JSONni tekshirishlari uchun uni taqdim etgan metama'lumotlaringizga kiriting.
+
+```json title="Duplicate registry (excerpt)"
+{
+  "entries": [
+    {
+      "hash_family": "blake3-256",
+      "hash_hex": "0d714bed4b7c63c23a2cf8ee9ce6c3cde1007907c427b4a0754e8ad31c91338d",
+      "proposal_id": "AC-2025-014",
+      "note": "Already handled in 2025-08 incident"
+    }
+  ]
+}
+```CLI to'qnashuv haqida xabar berganida, portal bog'langan taklif identifikatorlarini ko'rsatadi
+operatorlar qat'iy ravishda qayta yuborishni birlashtirishi yoki rad etishi mumkin.
+
+## 3. Saralash xulosasini ishga tushiring va chop eting
+
+Docket tayyor bo'lgach, deterministik tartiblash yordamchisini ishga tushiring. ni iste'mol qiladi
+roster JSON, urug 'va maqsadli uyalar soni, keyin Merkle-dalil-qo'llab-quvvatlanadigan chiqaradi
+xulosa. Xulosa JSON - bu portal **Kengash o'yinida** ko'rsatadigan narsa
+paneli.
+
+{`yuk xtask vazirligi-kun tartibini tartiblash \\
+  --roster docs/examples/ministry/agenda_council_roster.json \\
+  --slotlar 3 \\
+  --seed 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
+  --output artefacts/ministry/sortition/2026-03-12.json`}
+
+Olingan JSONni SoraFS da (yoki imzolangan kun tartibi paketi yonida) saqlang va
+taklif kuzatuvchisida CID-ni bog'lang. Ishlab chiquvchi portali ham xuddi shunday iste'mol qiladi
+JSON tuzilishi; quyidagi misol to'plamni ko'rsatadi
+`agenda_sortition_summary_example.json`.
+
+### Kengash o'yini namunasi
+
+
+  
+    
+      Maydon
+      Qiymat
+    
+  
+  
+    
+      Algoritm
+      {summary.algorithm}
+    
+    
+      Roster dayjesti (BLAKE3)
+      {summary.roster_digest.blake3_hex}
+    
+    
+      Roster dayjesti (SHA-256)
+      {summary.roster_digest.sha256_hex}
+    
+    
+      Urug'
+      {summary.seed_hex}
+    
+    
+      Slotlar
+      {summary.slots}
+    
+    
+      Maqbul a'zolar
+      {summary.eligible_members}
+    
+    
+      Merkle root
+      {summary.merkle_root_hex}
+    
+  
+
+
+
+
+Har bir tanlangan a'zo quyidagilarni o'z ichiga oladi:
+
+- `draw_entropy_hex` (32 BLAKE3 bayt), shuning uchun har kim RNG chiqishini qayta hisoblashi mumkin.
+- `eligible_index` va `original_index`, shuning uchun auditorlar rad etishlar bekor qilinganligini isbotlashlari mumkin.
+  sharaflangan.
+- Ro'yxat bargini qoplaydigan Merkle isboti; daraxtni ko'paytirish buni tasdiqlaydi
+  paket ichida chop etilgan ro'yxat qur'a tashlashga mos keladi.
+
+### Qarorlar jurnali
+
+Kengash taklif bo'yicha ovoz berganda, qaror eslatmasini va uni ilova qiling
+saralash xulosasi CID boshqaruv harakatiga (Torii `/v1/gov/*` yozuvi). Portal
+sahifalar eslatma, ovozlar soni va yuqorida ko'rsatilgan JSON bilan bog'lanadi, shuning uchun har bir harakat
+**MINFO-2** talab qiladigan to'liq dalillar zanjirini o'z ichiga oladi.

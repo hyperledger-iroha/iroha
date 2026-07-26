@@ -1,0 +1,39 @@
+{
+  "items": [
+    {
+      "key": "taikai.encoder_profile",
+      "value": "ZmZtcGVnLWF2MS1tYWlu",
+      "visibility": {
+        "visibility": "Public"
+      }
+    },
+    {
+      "key": "taikai.pipeline_version",
+      "value": "c2FtcGxlLTIwMjYwMzI0",
+      "visibility": {
+        "visibility": "Public"
+      }
+    },
+    {
+      "key": "taikai.rendition.notes",
+      "value": "U3ludGhldGljIHBheWxvYWQgZm9yIFNOMTMtRiBzYW1wbGU=",
+      "visibility": {
+        "visibility": "Public"
+      }
+    },
+    {
+      "key": "taikai.telemetry.region",
+      "value": "Z2NwLXVzLXdlc3Qy",
+      "visibility": {
+        "visibility": "Public"
+      }
+    },
+    {
+      "key": "taikai.operator.contact",
+      "value": "bWVkaWEtb3BzQGV4YW1wbGUub3Jn",
+      "visibility": {
+        "visibility": "Public"
+      }
+    }
+  ]
+}

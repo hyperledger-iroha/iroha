@@ -1,0 +1,46 @@
+{
+  "seiyaku_name": "AuthorityProbe",
+  "code_hash": "hash:4C36D573697A44152670B2B59427B405FF97138428E8A5AAA78B4B9E8FDC41E7#553D",
+  "abi_hash": "hash:DCBB03608ED9D87B4A8D942C0D7045D3044DE8D4D8413347C87143386F56AEC1#AABE",
+  "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
+  "features_bitmap": 0,
+  "access_set_hints": {
+    "read_keys": [
+      "account.detail:$authority:authority_probe",
+      "account:$authority"
+    ],
+    "write_keys": [
+      "account.detail:$authority:authority_probe"
+    ],
+    "dynamic_reads": [],
+    "dynamic_writes": []
+  },
+  "entrypoints": [
+    {
+      "name": "main",
+      "kind": {
+        "kind": "Kotoage",
+        "value": null
+      },
+      "params": [],
+      "argument_schema": null,
+      "return_type": null,
+      "return_schema": null,
+      "permission": "Admin",
+      "read_keys": [
+        "account:$authority",
+        "account.detail:$authority:authority_probe"
+      ],
+      "write_keys": [
+        "account.detail:$authority:authority_probe"
+      ],
+      "access_hints_complete": true,
+      "access_hints_skipped": [],
+      "triggers": []
+    }
+  ],
+  "states": [],
+  "error_codes": null,
+  "kotoba": null,
+  "provenance": null
+}

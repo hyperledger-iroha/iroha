@@ -1,0 +1,48 @@
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/norito/examples/transfer-asset.ar.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+---
+slug: /norito/ejemplos/transfer-asset
+título: نقل أصل بين الحسابات
+descripción: سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
+fuente: ejemplos/transfer/transfer.ko
+---
+
+Para obtener más información, consulte el SDK y los archivos adjuntos.
+
+## جولة دفتر الأستاذ
+
+- Mi nombre es Alice (hay un archivo `register and mint` que contiene el SDK).
+- نفّذ نقطة الدخول `do_transfer` لنقل 10 وحدات من Alice إلى Bob مع استيفاء إذن `AssetTransferRole`.
+- استعلم عن الأرصدة (`FindAccountAssets`, `iroha_cli ledger assets list`) أو اشترك في أحداث خط الأنابيب لملاحظة نتيجة النقل.
+
+## أدلة SDK ذات صلة
+
+- [البدء السريع لـ Rust SDK](/sdks/rust)
+- [Aplicación del SDK de Python](/sdks/python)
+- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+
+[Actualización Kotodama](/norito-snippets/transfer-asset.ko)
+
+```kotodama
+// Transfer example: uses typed pointer constructors and transfer_asset syscall
+seiyaku TransferDemo {
+    // Public kotoage declaration to transfer 10 units of the canonical Base58 asset definition between canonical I105 accounts
+    kotoage fn do_transfer() authorize("AssetTransferRole") {
+        ledger::asset::transfer(
+            source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", ),
+            destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", ),
+            asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            amount: 10,
+            dataspace: DataSpaceId::parse("0"),
+        );
+    }
+}
+```

@@ -1,0 +1,84 @@
+---
+lang: hy
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+ներմուծել TryItConsole-ը '@site/src/components/TryItConsole.jsx'-ից;
+
+# Torii API ակնարկ
+
+Torii դարպասը բացահայտում է REST + WebSocket մակերեսը Iroha-ի հետ փոխազդելու համար
+հանգույցներ. Կանոնական OpenAPI փաստաթուղթը ստեղծվում է հետևյալի միջոցով.
+
+```bash
+cargo xtask openapi
+```
+
+Վերևի հրամանը գործարկելիս գրում է `docs/portal/static/openapi/torii.json` և
+կերակրում է `docusaurus-plugin-openapi-docs` ինտեգրումը, որպեսզի այս բաժինը թարմացվի
+ինքնաբերաբար։ Գեներատորը պտտում է հիշողության մեջ գտնվող Torii երթուղիչը և փորձում է
+հարցում իր OpenAPI վերջնակետին; եթե դա ձախողվի (օրինակ, երթուղիչի սկզբնավորում
+սխալներ) փոխարենը թողարկվում է դետերմինիստական տեղապահի հատկանիշ:
+
+## Ընթացիկ կարգավիճակ
+
+- **Հատուկ աղբյուր.** `cargo xtask openapi`-ը ուղղակիորեն հարցում է անում Torii երթուղիչին; որ
+  Հետադարձ կոճակը թողարկվում է միայն այն դեպքում, երբ երթուղիչը չի կարողանում բացահայտել OpenAPI
+  փաստաթուղթ։
+- **Դետերմինիզմ.** JSON ելքը կանոնականացված է CI-ում կայուն տարբերություն ապահովելու համար:
+- **Իսկորոշում.** «Փորձեք» ավազարկղն այժմ ուղարկում է հարցումները a
+  սահմանափակված բեմադրման վստահված անձ: Օպերատորները պետք է մատակարարեն Torii վերջնակետ և կրող
+  նշան՝ զանգեր տալուց առաջ:
+- **Տարբերակի ընտրիչ.** Swagger UI, RapiDoc և ամբողջական Torii OpenAPI էջը
+  բացեք բացվող ցանկը, որը կարդում է `openapi/versions.json`, որպեսզի կարողանաք համեմատել
+  պատմական պատկերներ. `Latest (tracked)` տարբերակը մատնանշում է
+  `/openapi/torii.json`, մինչդեռ մյուս բոլոր գրառումները բեռնում են համապատասխանը
+  `openapi/versions/<version>/torii.json` արտեֆակտ:
+- **Պատկերի աշխատանքային հոսք.** `npm run docs:version -- <label>`-ը գործարկելուց հետո թարմացրեք
+  համապատասխանող OpenAPI ֆայլը `npm run sync-openapi -- --version=<label> --latest`-ի հետ
+  այնպես որ բացվող ցանկը կարող է բեռնել ինչպես սառեցված լուսանկարը, այնպես էլ շարժվող «Վերջին» կառուցվածքը:
+
+Երթուղիչով ապահովված արդյունահանողն այժմ արտանետում է Torii ամբողջ մակերեսը: Եթե տեսնում եք
+տեղապահի անավարտ, համարեք այն որպես կառուցման ժամանակի ձախողում և ստուգեք Torii-ը
+երթուղիչի գործարկման տեղեկամատյաններ.
+
+## Փորձեք այն Sandbox (DOCS-3)
+
+Մշակողների պորտալը տեղադրում է փոքր վահանակ, որը փոխանցում է REST հարցումները a
+Հանգույցի վրա հիմնված վստահված անձ: Վստահված անձը պարտադրում է CORS-ը, տոկոսադրույքի սահմանաչափերը և կամընտիր կրողը
+նշաններ, որպեսզի վիջեթը կարողանա խոսել բեմական դարպասների հետ՝ առանց հավատարմագրերը բացահայտելու:
+Օպերատորի ամբողջական ստուգաթերթի համար տե՛ս `docs/devportal/try-it.md`:
+
+Գործարկեք վստահված անձը Docusaurus մշակողի սերվերի կողքին.
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- Վստահված անձը լսում է `TRYIT_PROXY_LISTEN` (կանխադրված `127.0.0.1:8787`) և
+  փոխանցում է `/proxy/...` ցանկացած հարցում `TRYIT_PROXY_TARGET`:
+- Տրամադրեք `TRYIT_PROXY_BEARER` ստատիկ կրիչի նշանների համար կամ թույլ տվեք զանգահարողներին տրամադրել
+  մեկ խնդրանքով «Կրող նշան» դաշտի միջոցով:
+- Գնահատումը սահմանում է լռելյայն մինչև 60 հարցում րոպեում և կարող է կարգավորվել
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+
+> ⚠️ Պրոքսիը նախատեսված է բեմադրման/դեմո մուտքի համար: Արտադրության տեղակայումներ
+> պետք է գործի կոշտ ներթափանցման հետևում և նորից օգտագործի նույն տոկոսադրույքը սահմանափակող քաղաքականությունը
+> Torii-ի դիմաց:
+
+<TryItConsole />

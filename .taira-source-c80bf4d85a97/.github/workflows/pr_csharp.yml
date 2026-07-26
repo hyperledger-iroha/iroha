@@ -1,0 +1,80 @@
+name: pr_csharp
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pr_csharp.yml"
+      - "ci/check_csharp_sdk_package_consumer.sh"
+      - "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
+      - "csharp/**"
+      - "crates/connect_norito_bridge/**"
+      - "crates/sorafs_manifest/**"
+      - "fixtures/account/address_vectors.json"
+      - "fixtures/sorafs_manifest/governance/**"
+      - "fixtures/kagemusha_recursive_spend_abi6/**"
+      - "fixtures/kagemusha_recursive_spend_abi7/**"
+      - "scripts/tests/check_sorafs_release_automation_test.py"
+  workflow_dispatch:
+
+jobs:
+  build-test-pack:
+    runs-on: ubuntu-latest
+    env:
+      IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
+      LD_LIBRARY_PATH: ${{ github.workspace }}/target/debug
+    defaults:
+      run:
+        working-directory: csharp
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: csharp-sorafs-reference-native
+
+      - name: Build SoraFS reference native bridge
+        working-directory: ${{ github.workspace }}
+        run: cargo build --locked -p connect_norito_bridge
+
+      - name: Restore
+        run: dotnet restore Hyperledger.Iroha.Sdk.sln
+
+      - name: Build
+        run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build
+
+      - name: Pack
+        run: dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --output artifacts/packages
+
+      - name: Package consumer smoke
+        run: ../ci/check_csharp_sdk_package_consumer.sh
+
+  kagemusha-native-bridge-sdk:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Kagemusha recursive spend C# SDK tests
+        shell: bash
+        run: ci/check_kagemusha_recursive_spend_csharp_sdk.sh

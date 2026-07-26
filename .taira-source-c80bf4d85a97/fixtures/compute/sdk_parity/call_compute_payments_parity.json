@@ -1,0 +1,32 @@
+{
+  "auth": {
+    "mode": "Authenticated",
+    "value": {
+      "session_hash": "hash:214A4C8F95074B216BE2F72EB93166506DAE0B1026ED01EF5A760632CD93ABAB#50FA",
+      "uaid": [
+        "hash:E2EC25C138748C00C98229823A991373BA2798BAF31C8E5B8BBB93513E524D4D#B714"
+      ]
+    }
+  },
+  "codec": {
+    "codec": "NoritoJson",
+    "value": null
+  },
+  "gas_limit": 1000000,
+  "max_response_bytes": 65536,
+  "namespace": "compute",
+  "price_family": "default",
+  "request": {
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "req-42"
+    },
+    "payload_hash": "hash:F97970CCAB76F3DA2037586B35E14842A278C6013EC8C0384397FD1AE8172375#0220"
+  },
+  "resource_profile": "cpu-small",
+  "route": {
+    "method": "quote",
+    "service": "payments"
+  },
+  "ttl_slots": 32
+}

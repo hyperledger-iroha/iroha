@@ -1,0 +1,326 @@
+{
+  "title": "SoraFS Gateway Conformance",
+  "uid": "sorafs-gateway-conformance",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": [
+    "sorafs",
+    "gateway",
+    "conformance"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "profile",
+        "label": "Profile",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(torii_sorafs_gateway_refusals_total, profile)",
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      },
+      {
+        "name": "provider",
+        "label": "Provider",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(torii_sorafs_gateway_refusals_total{profile=~\"$profile\"}, provider_id)",
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      },
+      {
+        "name": "scenario",
+        "label": "Scenario",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(sorafs_gateway_latency_ms_bucket, scenario)",
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": ".*"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Fixture Release Timestamp",
+      "id": 1,
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "max(torii_sorafs_gateway_fixture_info{profile=~\"$profile\"}) * 1000",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "description": "Release timestamp published by torii_sorafs_gateway_fixture_info for the selected conformance profile."
+    },
+    {
+      "type": "stat",
+      "title": "Refusals (15m)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(torii_sorafs_gateway_refusals_total{profile=~\"$profile\",provider_id=~\"$provider\"}[15m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "description": "Recent deterministic gateway refusals emitted by Torii policy checks."
+    },
+    {
+      "type": "stat",
+      "title": "Active Concurrency",
+      "id": 3,
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(sorafs_gateway_concurrency_active)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "description": "Concurrent range streams observed during conformance or load profiles."
+    },
+    {
+      "type": "timeseries",
+      "title": "Replay / Load Latency P95",
+      "id": 4,
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (scenario, le) (rate(sorafs_gateway_latency_ms_bucket{scenario=~\"$scenario\"}[5m])))",
+          "legendFormat": "{{scenario}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        },
+        "showPoints": "never"
+      },
+      "description": "Per-scenario request latency from the deterministic replay and load harnesses."
+    },
+    {
+      "type": "timeseries",
+      "title": "Served Bytes Rate",
+      "id": 5,
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(sorafs_gateway_bytes_total[5m]))",
+          "legendFormat": "bytes/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(sorafs_gateway_range_bytes_total[5m]))",
+          "legendFormat": "range bytes/s",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        },
+        "showPoints": "never"
+      },
+      "description": "Gateway throughput recorded by the load harness and deployed range endpoints."
+    },
+    {
+      "type": "table",
+      "title": "Refusals by Reason",
+      "id": 6,
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason, profile, provider_id, scope) (increase(torii_sorafs_gateway_refusals_total{profile=~\"$profile\",provider_id=~\"$provider\"}[15m]))",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "description": "Deterministic policy refusals grouped by reason, profile, provider, and scope."
+    },
+    {
+      "type": "table",
+      "title": "Fixture Metadata",
+      "id": 7,
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "targets": [
+        {
+          "expr": "torii_sorafs_gateway_fixture_info{profile=~\"$profile\"}",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "description": "Published conformance fixture version, profile, digest, and release timestamp."
+    }
+  ]
+}

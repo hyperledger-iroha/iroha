@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "service_name": "web_portal",
+  "binding_name": "patient_records",
+  "state_key_prefix": "/state/health",
+  "max_results": 32,
+  "metadata_level": {
+    "metadata_level": "Minimal",
+    "value": null
+  },
+  "include_proof": true
+}

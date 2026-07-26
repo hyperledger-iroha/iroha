@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Sugeng rawuh dhateng Hyperledger Iroha!",
+  "error.trace_config_setup": "Konfigurasi panglacak boten saged disetel",
+  "error.config": "Kasalahan konfigurasi!",
+  "error.logger": "Sistem log boten saged dipunwiwiti",
+  "error.start": "Iroha boten saged dipunwiwiti",
+  "error.run": "Kasalahan kedados nalika Iroha mlampah",
+  "error.start_p2p": "Jaringan P2P boten saged dipunwiwiti",
+  "error.init_kura": "Kura (panyimpen blok) boten saged dipunwiwiti",
+  "error.start_dev_telemetry": "Layanan telemetri pangembang boten saged dipunwiwiti",
+  "error.start_telemetry": "Layanan telemetri boten saged dipunwiwiti",
+  "error.listen_os_signal": "Boten saged nyetel ngrungokake sinyal sistem operasi",
+  "error.start_torii": "Torii (gerbang Iroha HTTP API) boten saged dipunwiwiti"
+}

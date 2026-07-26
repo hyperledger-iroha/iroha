@@ -1,0 +1,13 @@
+groups:
+  - name: nexus-audit-trace
+    interval: 1m
+    rules:
+      - alert: NexusAuditOutcomeFailure
+        expr: sum by (trace_id, status) (increase(nexus_audit_outcome_total{status=~"fail|mitigated"}[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Routed-trace audit failed"
+          description: |
+            Routed-trace {{ $labels.trace_id }} reported status {{ $labels.status }} within the last five minutes. Review the corresponding nexus.audit.outcome payload and execute the mitigation checklist.

@@ -1,0 +1,44 @@
+---
+lang: uz
+direction: ltr
+source: docs/portal/docs/ministry/volunteer-briefs.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Volunteer Briefs
+description: Submit, lint, and publish citizen briefs for Ministry blacklist reviews.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+VolunteerLintStatusTable ni '@site/src/components/VolunteerLintStatusTable' dan import qiling;
+
+## Umumiy ko'rinish
+
+Ko'ngillilar brifinglari qora ro'yxat yoki siyosatga o'zgartirishlar taklif qilinganda Axborot vazirligi ko'rib chiqadigan qo'llab-quvvatlash/qarshilik/kontekst nuqtai nazarlarini qamrab oladi. Har bir taqdimot `iroha_data_model::ministry::VolunteerBriefV1` (`1` versiyasi) tomonidan amalga oshirilgan kanonik sxemaga amal qilishi kerak, shunda:
+
+1. Boshqaruv panellari faktlar jadvallarini deterministik tarzda solishtirishi mumkin.
+2. Manfaatlar to'qnashuvi to'g'risidagi ma'lumotlar e'lon qilinishidan oldin amalga oshiriladi.
+3. Mavzudan tashqari yoki astroturflangan taqdimotlar audit izidan olib tashlanmasdan bostiriladi.
+
+Foydali yuk yaratish uchun `docs/source/ministry/volunteer_brief_template.md` shablonini yoki `cargo xtask ministry-transparency ingest` yordamchisidan foydalaning. CLI Norito strukturasini tasdiqlaydi, moderatsiya teglarini siljitadi va qancha fakt qatorlari, iqtiboslar va oshkor qilishlar qabul qilinganligini ko'rsatadigan xulosa chiqaradi.
+
+## Nashr quvuri va SLA
+
+| Bosqich | Oyna | Tafsilotlar |
+|-------|--------|---------|
+| Qabul qilish va tekshirish | T+0 dan 6 soatgacha | Foydali yuklar ixtiyoriy forma yoki CLI orqali yuklanadi. `VolunteerBriefV1::validate` sxemani (versiya, RFC3339 vaqt tamg'asi, oshkor qilish siyosati, dayjest formati) amalga oshiradi. Muvaffaqiyatsizliklar amaldagi xato kodlari bilan darhol rad etiladi. |
+| Tarjima va moderatsiya | T+6 dan 24 soatgacha | Sharhlovchilar moderatsiya teglarini qo'llaydilar (`needs-translation`, `duplicate`, `policy-escalation` va boshqalar), kontaktlarni o'zgartiradilar va mavzudan tashqari yozuvlarni belgilaydilar. Teglar Norito foydali yukida saqlanadi, shuning uchun quyi oqimdagi avtomatlashtirish yozuvlarni bostirishi yoki ta'kidlashi mumkin. |
+| Portal nashri | T+24 dan 48 soatgacha | Yaroqli qisqacha ma'lumotlar **Ko'ngillilar fikri** ostida tegishli taklif sahifasi bilan birga e'lon qilinadi. Mavzudan tashqari yozuvlar xom arxivda qoladi, lekin umumiy pozitsiyalar sonidan chiqarib tashlanadi. |
+
+Tezlashtirilgan ishlov berish (≤12 soat) `policy-escalation` yoki `astroturf` teglari mavjud bo'lganda avtomatik ravishda ishga tushadi. Operatorlar `submitted_at` va portal nashri o'rtasidagi vaqtni kuzatuvchi Grafana paneli orqali muvofiqlikni tekshirishlari mumkin.
+
+## Etkazib beriladigan narsalar
+
+- **Sxema va hujjatlar:** `VolunteerBriefV1` umumiy maʼlumotlar modelida yashaydi va batafsil maydon qoʻllanmasi va foydali yuk misoli `docs/source/ministry/volunteer_brief_template.md` va `docs/examples/ministry/volunteer_brief_template.json` da joylashgan.
+- **Tasdiqlash vositalari:** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` portal qurilishida ishlatiladigan bir xil lintlarni ishga tushiradi; `ingest --volunteer <file>` to‘liq to‘plamni nashr qilish uchun tayyorlamoqchi bo‘lganingizda mavjud bo‘lib qoladi.
+- **Portalni ko'rsatish:** Har bir taklif sahifasi dekodlangan qo'llab-quvvatlash/qarshilik/kontekst qisqacha ma'lumotlariga havola bo'lib, fuqarolarning fikrlarini raw JSON-ni yuklab olmasdan ko'rish imkonini beradi. Moderatsiya meta-ma'lumotlari brif bilan birga taqdim etiladi, shuning uchun hakamlar a'zolari ariza nima uchun kechiktirilgan yoki olib tashlanganligini tushunishlari uchun.
+
+Qo‘shimcha avtomatlashtirish (masalan, ommaviy import API’lari yoki kengaytirilgan tahlillar) zarur bo‘lsa, yo‘l xaritasining **MINFO-3 — Ko‘ngillilar manfaati paneli infratuzilmasi** bandiga qarang.
+
+## Lint holati boshqaruv paneliPortal qurilishi hozirda `npm run generate:volunteer-lint` ishlaydi, bu esa har bir roʻyxatdan oʻtgan koʻngilli briefida `cargo xtask ministry-transparency volunteer-validate --json-output …` ni chaqiradi. Natijadagi manifest quyida keltirilgan, shuning uchun sharhlovchilar nashr qilishdan oldin har bir taklifning lint holatini tasdiqlashlari mumkin.
+

@@ -1,0 +1,25 @@
+error[E0277]: the trait bound `std::string::String: BuiltInInstruction` is not satisfied
+ --> tests/ui/fail/submit_requires_instruction.rs:8:31
+  |
+8 |     let _result = host.submit(&value);
+  |                        ------ ^^^^^^ the trait `data_model::seal::Instruction` is not implemented for `std::string::String`
+  |                        |
+  |                        required by a bound introduced by this call
+  |
+  = help: the following other types implement trait `data_model::seal::Instruction`:
+            AcceptAnonymousAssetEscrow
+            AcceptAssetEscrow
+            AcceptSorafsModerationJurorAssignment
+            AcknowledgeSoracloudAgentMessage
+            ActivateContractInstance
+            ActivateFeeSponsorProgramRevision
+            ActivateIdentifierPolicy
+            ActivateKagemushaRecursiveReleaseV4
+          and $N others
+  = note: required for `std::string::String` to implement `Instruction`
+  = note: required for `std::string::String` to implement `BuiltInInstruction`
+note: required by a bound in `Iroha::submit`
+ --> src/lib.rs
+  |
+  |     pub fn submit<I: BuiltInInstruction + NoritoSerialize>(
+  |                      ^^^^^^^^^^^^^^^^^^ required by this bound in `Iroha::submit`

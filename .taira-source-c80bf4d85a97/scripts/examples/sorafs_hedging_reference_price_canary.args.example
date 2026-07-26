@@ -1,0 +1,17 @@
+# Reviewed reference-price canary inputs for the SFM-5 hedging/billing gate.
+--kind reference_price
+--out artifacts/sorafs/hedging-billing/staged/reference-price-canary.json
+--deployment-id sorafs-hedging-prod-20260701
+--environment production
+--generated-at-unix 1800100000
+--now-unix 1800100000
+--decision-id-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--reference-price-micro-usd 4200000
+--feed-count 3
+--feed feed-primary
+--feed feed-secondary
+--feed feed-tertiary
+--divergence-bps 50
+--decision-lag-seconds 60
+--verified-claim feed_quorum_met
+--verified-claim signed_payload_verified

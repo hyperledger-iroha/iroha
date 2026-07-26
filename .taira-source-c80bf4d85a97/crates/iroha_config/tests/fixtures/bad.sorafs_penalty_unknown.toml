@@ -1,0 +1,12 @@
+extends = ["sorafs_penalty_and_telemetry.toml"]
+
+[gov.sorafs_penalty]
+utilisation_floor_bps = 7600
+uptime_floor_bps = 9650
+por_success_floor_bps = 9800
+strike_threshold = 4
+penalty_bond_bps = 1800
+cooldown_windows = 3
+max_pdp_failures = 1
+max_potr_breaches = 2
+unexpected_penalty_knob = 99

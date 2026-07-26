@@ -1,0 +1,31 @@
+groups:
+  - name: sns-arbitration
+    interval: 1m
+    rules:
+      - alert: SnsArbitrationUrgentAckOverdue
+        expr: sum(increase(sns_arbitration_sla_breach_total{phase="ack",priority="urgent"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Urgent arbitration case missed the acknowledgement SLA"
+          description: "At least one urgent dispute exceeded the 2h acknowledgement budget; engage the on-call council liaison immediately."
+      - alert: SnsArbitrationQueueSwell
+        expr: sum(sns_arbitration_cases_open_total{priority=~"urgent|high"}) > 2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Multiple urgent/high arbitration cases are waiting"
+          description: "More than two urgent/high priority disputes are open simultaneously. Review staffing and guardian overrides before SLAs breach."
+      - alert: SnsArbitrationSlaBreachRatio
+        expr: (
+            increase(sns_arbitration_sla_breach_total[7d])
+          / clamp_min(increase(sns_arbitration_cases_closed_total[7d]), 1)
+        ) > 0.05
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Arbitration SLA breach ratio above 5%"
+          description: "More than 5% of closed arbitration cases breached their SLA in the past 7 days. Investigate backlog, staffing, or tooling regressions."

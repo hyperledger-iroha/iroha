@@ -1,0 +1,16 @@
+{
+  "pop": "soranet-pop-m0",
+  "otel_config_path": "otel_collector.yaml",
+  "dashboard_path": "grafana_dashboard.json",
+  "alert_rules_path": "alert_rules.yml",
+  "gameday_plan_path": "gameday_plan.md",
+  "chaos_plan_path": "chaos_plan.md",
+  "chaos_scenarios_path": "chaos_scenarios.json",
+  "chaos_runbook_path": "chaos_runbook.md",
+  "gameday_schedule_path": "gameday_schedule.json",
+  "chaos_metrics_path": "chaos_metrics.json",
+  "chaos_injector_path": "chaos_injector.sh",
+  "compliance_outline_path": "gar_compliance_outline.md",
+  "security_baseline_path": "security_baseline.md",
+  "pq_checklist_path": "pq_readiness_checklist.json"
+}

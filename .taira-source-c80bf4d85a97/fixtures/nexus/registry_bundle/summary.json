@@ -1,0 +1,42 @@
+{
+  "output_dir": ".",
+  "manifests": [
+    {
+      "alias": "governance",
+      "slug": "governance",
+      "source": "manifests/governance.manifest.json",
+      "path": "manifests/governance.manifest.json",
+      "sha256": "b9e4e8dd1132d8cd10c01d45a2f91be8dfbfb8acf568664d4178551125216de3",
+      "blake2b": "97006863c4efbf21e716832c9b2934f9cfb348eed68f14f16fcc11f716a07bb0",
+      "privacy_commitments": []
+    },
+    {
+      "alias": "payments",
+      "slug": "payments",
+      "source": "manifests/payments.manifest.json",
+      "path": "manifests/payments.manifest.json",
+      "sha256": "1d41032e7c66aa00a374c54d180a582d1678cf438620f87562509c260f593a77",
+      "blake2b": "b9acda7f871a4313b03e7459628a5fc1aeb721cadf000676070aa46ecd92faa0",
+      "privacy_commitments": []
+    }
+  ],
+  "governance_overlay": {
+    "path": "cache/governance_catalog.json",
+    "default_module": "parliament",
+    "modules": {
+      "parliament": {
+        "module_type": "parliament",
+        "params": {
+          "epoch_length_slots": "1024"
+        }
+      },
+      "council": {
+        "module_type": "council_multisig",
+        "params": {
+          "quorum": "2"
+        }
+      }
+    }
+  },
+  "bundle_path": null
+}

@@ -1,0 +1,25 @@
+[package]
+name = "iroha_smart_contract_utils"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+debug = []
+
+[dependencies]
+iroha_data_model.workspace = true
+iroha_smart_contract_codec.workspace = true
+
+getrandom = { version = "0.3.4" }
+norito.workspace = true
+
+[dev-dependencies]
+# Removed `webassembly-test` due to outdated dependency chain causing
+# compilation failures in transitive crates.

@@ -1,0 +1,22 @@
+{
+  "timestamp_utc": "2026-03-28T17:30:00Z",
+  "metrics": {
+    "soranet_salt_publish_latency_seconds": {
+      "p50": 0.41,
+      "p95": 0.47
+    },
+    "soranet_salt_client_catchup_seconds": {
+      "p50": 2.9,
+      "p95": 4.6
+    },
+    "relay_cache_convergence_seconds": {
+      "p50": 3.1,
+      "p95": 4.2
+    }
+  },
+  "alert_status": {
+    "salt_publication_sla": "clear",
+    "salt_skew": "clear"
+  },
+  "redaction_notice": "Metric values retained; raw logs live in internal governance storage."
+}

@@ -1,0 +1,16 @@
+{
+  "entries": [
+    {
+      "provider_id": "alpha",
+      "normalised_weight": 0.7844840580971632,
+      "raw_score": 1.3064736,
+      "eligibility": "eligible"
+    },
+    {
+      "provider_id": "beta",
+      "normalised_weight": 0.21551594190283685,
+      "raw_score": 0.35891856,
+      "eligibility": "eligible"
+    }
+  ]
+}

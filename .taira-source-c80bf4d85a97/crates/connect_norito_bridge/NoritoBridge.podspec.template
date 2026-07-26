@@ -1,0 +1,16 @@
+Pod::Spec.new do |s|
+  s.name             = 'NoritoBridge'
+  s.version          = '0.1.0'
+  s.summary          = 'Norito binary framing for Iroha Connect (Rust FFI).'
+  s.homepage         = 'https://github.com/iroha/NoritoBridge'
+  s.license          = { :type => 'Apache-2.0' }
+  s.author           = { 'Iroha' => 'dev@iroha.org' }
+  s.source           = { :http => '<ZIP_URL>' }
+  s.vendored_frameworks = 'NoritoBridge.xcframework'
+  # The XCFramework must contain:
+  # - Headers/connect_norito_bridge.h (from crates/connect_norito_bridge/include)
+  # - Modules/module.modulemap (see module.modulemap.template). The module name should be 'NoritoBridge'.
+  s.public_header_files = 'NoritoBridge.xcframework/**/Headers/*.h'
+  s.platform         = :ios, '13.0'
+  s.swift_versions   = ['5.9']
+end

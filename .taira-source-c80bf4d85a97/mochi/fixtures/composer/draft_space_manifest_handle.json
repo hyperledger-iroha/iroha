@@ -1,0 +1,28 @@
+{
+  "kind": "publish_space_directory_manifest",
+  "manifest": {
+    "version": 1,
+    "uaid": "uaid:62af083a61d42ca6c269585b9a33c563f4e0a5c0726614f7a98b6aab6b98f70b",
+    "dataspace": 12,
+    "issued_ms": 1710000000000,
+    "activation_epoch": 500,
+    "expiry_epoch": 550,
+    "entries": [
+      {
+        "scope": {
+          "dataspace": 12,
+          "program": "retail.payments",
+          "method": "request_handle",
+          "role": "Participant"
+        },
+        "effect": {
+          "Allow": {
+            "max_amount": "1000000",
+            "window": "PerMinute"
+          }
+        },
+        "notes": "Sample AMX handle allowance."
+      }
+    ]
+  }
+}

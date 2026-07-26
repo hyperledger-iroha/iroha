@@ -1,0 +1,139 @@
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/sdks/recipes/javascript-connect-preview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /sdks/recipes/javascript-connect-preview
+title: Receta de vista previa de Connect en JavaScript
+description: Prepara sesiones de vista previa de Connect, emite telemetría de cola y abre el socket `/v1/connect/ws` con `@iroha/iroha-js`.
+---
+
+import SampleDownload from '@site/src/components/SampleDownload';
+
+Esta receta muestra cómo combinar `bootstrapConnectPreviewSession` con el marcador WebSocket expuesto por `ToriiClient.openConnectWebSocket()`. El script refleja la sección Connect del roadmap del SDK JS: acuña URIs de vista previa deterministas, registra telemetría de profundidad de cola y abre el endpoint canónico `/v1/connect/ws` usando el paquete `ws` para que las apps Node.js ejerciten el mismo flujo que los navegadores.
+
+<SampleDownload
+  href="/sdk-recipes/javascript/connect-preview.mjs"
+  filename="connect-preview.mjs"
+  description="Descarga el script ejecutable referenciado en esta receta."
+/>
+
+## Prerequisitos
+
+```bash
+npm install @iroha/iroha-js ws
+export TORII_URL="https://torii.nexus.example"
+export CHAIN_ID="sora-mainnet"
+# optional when the node requires auth/API tokens
+export IROHA_TORII_AUTH_TOKEN="Bearer …"
+export IROHA_TORII_API_TOKEN="sandbox-token"
+# optional override when the registration node differs from the WebSocket node
+export CONNECT_REGISTRATION_NODE="https://torii.backup.example"
+```
+
+Configura `CONNECT_ROLE` en `app` cuando necesites abrir la parte de aplicación del handshake. El rol por defecto es `wallet`.
+
+## Script de ejemplo
+
+```ts title="connect-preview.mjs"
+#!/usr/bin/env node
+
+import WebSocket from "ws";
+import {
+  ToriiClient,
+  bootstrapConnectPreviewSession,
+  ConnectQueueError,
+} from "@iroha/iroha-js";
+
+const TORII_URL = process.env.TORII_URL ?? process.env.IROHA_TORII_URL ?? "http://127.0.0.1:8080";
+const CHAIN_ID =
+  process.env.CHAIN_ID ??
+  process.env.IROHA_CHAIN_ID ??
+  "00000000-0000-0000-0000-000000000000";
+const AUTH_TOKEN = process.env.IROHA_TORII_AUTH_TOKEN ?? process.env.AUTH_TOKEN ?? null;
+const API_TOKEN = process.env.IROHA_TORII_API_TOKEN ?? process.env.API_TOKEN ?? null;
+const REGISTRATION_NODE =
+  process.env.CONNECT_REGISTRATION_NODE ?? process.env.REGISTRATION_NODE ?? TORII_URL;
+const CONNECT_ROLE = process.env.CONNECT_ROLE ?? "wallet";
+const SESSION_METADATA = {
+  suite: "js-connect-recipe",
+  run_id: new Date().toISOString(),
+};
+
+async function main() {
+  const client = new ToriiClient(TORII_URL, {
+    authToken: AUTH_TOKEN ?? undefined,
+    apiToken: API_TOKEN ?? undefined,
+  });
+
+  const { preview, session, tokens } = await bootstrapConnectPreviewSession(client, {
+    chainId: CHAIN_ID,
+    node: REGISTRATION_NODE,
+    metadata: SESSION_METADATA,
+  });
+
+  console.log("[connect] sid", session.sid);
+  console.log("[connect] wallet URI", preview.walletUri);
+  console.log("[connect] deeplink", preview.walletDeeplink);
+  console.log("[connect] queue depth", session.queue_depth ?? "unknown");
+
+  const socket = client.openConnectWebSocket({
+    sid: session.sid,
+    role: CONNECT_ROLE,
+    token:
+      CONNECT_ROLE === "wallet"
+        ? tokens?.wallet ?? session.token_wallet
+        : tokens?.app ?? session.token_app,
+    WebSocketImpl: WebSocket,
+    protocols: ["iroha-connect"],
+  });
+
+  socket.addEventListener("open", () => {
+    console.log("[ws] connected");
+  });
+
+  socket.addEventListener("message", (event) => {
+    console.log("[ws] payload", event.data);
+  });
+
+  socket.addEventListener("close", (event) => {
+    console.log("[ws] closed", { code: event.code, reason: event.reason });
+  });
+
+  socket.addEventListener("error", (error) => {
+    console.error("[ws] error", error?.message ?? error);
+  });
+
+  const shutdownTimer = setTimeout(() => {
+    console.log("[ws] closing after 5s demo window");
+    socket.close(1000, "connect-preview-demo");
+  }, 5_000);
+
+  socket.addEventListener("close", () => {
+    clearTimeout(shutdownTimer);
+  });
+}
+
+main().catch((error) => {
+  if (error instanceof ConnectQueueError) {
+    if (error.kind === "overflow") {
+      console.error("[queue] overflow", { limit: error.limit });
+    } else if (error.kind === "expired") {
+      console.error("[queue] expired", { ttlMs: error.ttlMs });
+    }
+  } else {
+    console.error("[connect] error", error);
+  }
+  process.exit(1);
+});
+```
+
+## Ejecuta y monitorea
+
+- Ejecuta el script con `node --env-file=.env connect-preview.mjs` (o exporta las variables manualmente). El script registra la URI de la wallet de vista previa, el deeplink y la profundidad de cola antes de abrir el WebSocket.
+- Alimenta los dashboards de telemetría recolectando las métricas de cola que imprime el script en casos de overflow/expiry (`connect.queue_depth`, `connect.queue_overflow_total`, `connect.queue_expired_total`). Los helpers de `ConnectQueueError` emiten la taxonomía del roadmap (`queueOverflow`, `timeout`) para mantener consistencia con clientes Android/Swift.
+- Cambia el rol a `app` para inspeccionar la rama de aplicación del handshake. El marcador elige automáticamente el token correcto (`token_app` vs. `token_wallet`) y actualiza `http→ws`/`https→wss` para que ambos roles compartan el mismo fragmento.
+
+Esta receta cierra el hueco restante de documentación JS5 para la vista previa de Connect mencionado en `roadmap.md`: el portal ahora incluye una muestra lista para usar y guía de telemetría de colas, cumpliendo el requisito del roadmap de documentar el walkthrough de WebSocket junto a los helpers de sesión Connect.
+

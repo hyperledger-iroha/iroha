@@ -1,0 +1,213 @@
+[package]
+name = "norito"
+autotests = false
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+byteorder = "1.5"
+thiserror.workspace = true
+norito_derive = { path = "../norito_derive" }
+crc64fast = "1.1"
+iroha_schema.workspace = true
+simdutf8 = { version = "0.1.5", optional = true }
+rayon = { version = "1.11.0", optional = true }
+url.workspace = true
+sha3 = "0.10.8"
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+toml.workspace = true
+hkdf = "0.12.4"
+chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
+blake3 = "1.8.2"
+iroha_audio = { path = "../iroha_audio" }
+rkyv = { version = "0.8.16", default-features = false, features = ["alloc", "std", "pointer_width_64"] }
+ryu = "1.0.20"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+zstd.workspace = true
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+gpuzstd_metal = { path = "../gpuzstd_metal", optional = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+rand = "0.9.3"
+regex = { version = "1.12.2", default-features = false, features = ["std"] }
+iroha_schema = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1.0"
+
+[[bench]]
+name = "codec"
+harness = false
+
+[[bench]]
+name = "iroha_tx"
+harness = false
+
+[[bench]]
+name = "ncb_vs_aos"
+harness = false
+
+[[bench]]
+name = "enum_ncb"
+harness = false
+
+[[bench]]
+name = "enum_packed_bench"
+harness = false
+
+[[bench]]
+name = "adaptive_small_aos_ncb"
+harness = false
+
+
+[[bench]]
+name = "crc64_compressed"
+harness = false
+
+[[bench]]
+name = "crc64"
+harness = false
+
+[[bench]]
+name = "crc64_simd"
+harness = false
+
+[[bench]]
+name = "enum_indexed"
+harness = false
+
+[[bench]]
+name = "stream_maps"
+harness = false
+
+[[bench]]
+name = "stream_seq"
+harness = false
+
+[[bench]]
+name = "json"
+harness = false
+
+[[bench]]
+name = "json_stage1"
+harness = false
+
+[[bench]]
+name = "json_auto"
+harness = false
+
+[[bench]]
+name = "json_skip"
+harness = false
+
+[[bench]]
+name = "json_stream"
+harness = false
+
+[[bench]]
+name = "typed_vs_serde"
+harness = false
+
+[[bench]]
+name = "adaptive_telemetry"
+harness = false
+
+[[bench]]
+name = "streaming_rans"
+harness = false
+
+[[bench]]
+name = "ncb_combo"
+harness = false
+
+[[bench]]
+name = "ncb_sink_vs_vec"
+harness = false
+
+[[bench]]
+name = "quick_json"
+harness = false
+
+[[bench]]
+name = "view_iter"
+harness = false
+
+[[bench]]
+name = "view_vs_materialize"
+harness = false
+
+[[bench]]
+name = "view_vs_materialize_bytes_u32"
+harness = false
+
+[[example]]
+name = "dump_tape"
+
+[[bin]]
+name = "norito_regen_goldens"
+path = "src/bin/norito_regen_goldens.rs"
+[features]
+default = ["derive", "compression", "columnar", "json", "json-std-io", "strict-safe"]
+simd-accel = []
+strict-safe = []
+derive = []
+compression = []
+compact-len = []
+gpu-compression = ["compression"]
+std = []
+schema-structural = ["iroha_audio/schema-structural"]
+json = []
+json-raw-value = []
+json-std-io = []
+bench-internal = []
+bench = []
+metal-stage1 = []
+cuda-stage1 = []
+metal-crc64 = []
+cuda-crc64 = []
+streaming-neural-filter = []
+streaming-fixed-point-dct = []
+codec-gpu = ["codec-gpu-metal", "codec-gpu-cuda"]
+codec-gpu-metal = ["metal-stage1", "metal-crc64"]
+codec-gpu-cuda = ["cuda-stage1", "cuda-crc64"]
+packed-seq = []
+packed-struct = []
+simdutf8-validate = ["simdutf8"]
+columnar = []
+stage1-validate = []
+crc-key-hash = []
+parallel-stage1 = []
+parallel-stage1-rayon = ["rayon", "parallel-stage1"]
+parallel-decode = ["rayon"]
+adaptive-telemetry = []
+adaptive-telemetry-log = ["adaptive-telemetry"]
+
+# Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
+
+[[test]]
+name = "norito_group_01"
+path = "tests/grouped/group_01.rs"
+
+[[test]]
+name = "norito_group_02"
+path = "tests/grouped/group_02.rs"
+
+[[test]]
+name = "norito_group_03"
+path = "tests/grouped/group_03.rs"
+
+[[test]]
+name = "norito_group_04"
+path = "tests/grouped/group_04.rs"
+
+[[test]]
+name = "norito_group_05"
+path = "tests/grouped/group_05.rs"
+
+[[test]]
+name = "norito_group_06"
+path = "tests/grouped/group_06.rs"

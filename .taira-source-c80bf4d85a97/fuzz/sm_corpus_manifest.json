@@ -1,0 +1,32 @@
+[
+  {
+    "path": "attachments/sm/sm3_known_hashes.json",
+    "kind": "sm3",
+    "provenance": "Derived from crates/iroha_crypto/tests/sm3_sm4_vectors.rs cases",
+    "fingerprint": "01fe825ee5c77bce05c403d9d77dd993507ecf12f057136fd9f962c7978456fd"
+  },
+  {
+    "path": "attachments/sm/sm4_gcm_roundtrip.json",
+    "kind": "sm4_gcm",
+    "provenance": "Derived from crates/iroha_crypto/tests/sm3_sm4_vectors.rs round-trip case",
+    "fingerprint": "708368f18014a7435a1aac52857ad01d432d6d89d7ccc43d4857208d1e7aa384"
+  },
+  {
+    "path": "attachments/sm/sm4_ccm_roundtrip.json",
+    "kind": "sm4_ccm",
+    "provenance": "Derived from crates/iroha_crypto/tests/sm3_sm4_vectors.rs CCM round-trip case",
+    "fingerprint": "0add018e715c591549526827ca75be6aad71497c457f6ed47153db585490044c"
+  },
+  {
+    "path": "attachments/sm/sm4_gcm_invalid.json",
+    "kind": "sm4_gcm_invalid",
+    "provenance": "Wycheproof SM4-GCM invalid test vectors (case 1)",
+    "fingerprint": "cd3bd194e00793ff81977a26bd306ddb05775da720a7c6d627887d837ee57d98"
+  },
+  {
+    "path": "attachments/sm/sm4_ccm_invalid.json",
+    "kind": "sm4_ccm_invalid",
+    "provenance": "Wycheproof SM4-CCM invalid test vectors (case 17)",
+    "fingerprint": "90f80958e507aaa3d10a8427e796ebc5f482f5a85e8c82d5402e3fd52a02ea02"
+  }
+]

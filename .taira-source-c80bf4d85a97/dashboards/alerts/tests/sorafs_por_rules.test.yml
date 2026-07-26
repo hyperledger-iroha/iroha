@@ -1,0 +1,80 @@
+rule_files:
+  - ../sorafs_por_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_por_challenges_total{result="failed"}'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_por_forced_challenges_total'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_por_ingest_backlog{provider="provider-a",manifest="manifest-a"}'
+        values: '4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4'
+      - series: 'torii_sorafs_por_sampling_duplicates_total'
+        values: '0 0 0 25 50 75 101 101 101 101 101 101 101 101 101 101'
+    alert_rule_test:
+      - alertname: SoraFSPoRSchedulerFailures
+        eval_time: 1m
+        exp_alerts: []
+      - alertname: SoraFSPoRSchedulerFailures
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS PoR scheduler ticks are failing"
+      - alertname: SoraFSPoRForcedChallenges
+        eval_time: 2m
+        exp_alerts: []
+      - alertname: SoraFSPoRForcedChallenges
+        eval_time: 5m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS PoR forced challenges emitted"
+      - alertname: SoraFSPoRIngestBacklogHigh
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: SoraFSPoRIngestBacklogHigh
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              provider: provider-a
+              manifest: manifest-a
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS PoR ingestion backlog above threshold"
+      - alertname: SoraFSPoRDuplicateSamplesHigh
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: SoraFSPoRDuplicateSamplesHigh
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS PoR duplicate sample count is high"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_por_challenges_total{result="failed"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_por_forced_challenges_total'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_por_ingest_backlog{provider="provider-b",manifest="manifest-b"}'
+        values: '0 1 1 2 2 3 3 2 2 1 0 0'
+      - series: 'torii_sorafs_por_sampling_duplicates_total'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11'
+    alert_rule_test:
+      - alertname: SoraFSPoRSchedulerFailures
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: SoraFSPoRForcedChallenges
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: SoraFSPoRIngestBacklogHigh
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: SoraFSPoRDuplicateSamplesHigh
+        eval_time: 11m
+        exp_alerts: []

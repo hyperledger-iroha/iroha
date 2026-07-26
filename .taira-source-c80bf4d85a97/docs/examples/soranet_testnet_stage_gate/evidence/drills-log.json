@@ -1,0 +1,18 @@
+[
+  {
+    "timestamp": "2026-11-05T03:17:00Z",
+    "region": "NRT",
+    "event": "brownout",
+    "alert_id": "alert://soranet/brownout/1234",
+    "restore_secs": 192,
+    "notes": "Switched to anon-guard-pq within 3m12s"
+  },
+  {
+    "timestamp": "2026-11-09T18:04:00Z",
+    "region": "AMS",
+    "event": "downgrade-drill",
+    "alert_id": "alert://soranet/downgrade/9801",
+    "restore_secs": 145,
+    "notes": "Forced PQ downgrade to anon-majority; recovered after guard drain"
+  }
+]

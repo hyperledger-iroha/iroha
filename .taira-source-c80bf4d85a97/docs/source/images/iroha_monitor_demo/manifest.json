@@ -1,0 +1,64 @@
+{
+  "allow_fallback": true,
+  "assets": {
+    "iroha_monitor_demo_overview.ans": {
+      "path": "iroha_monitor_demo_overview.ans",
+      "sha256": "737c9127a4eb30719acc5e174617879d4b2710f3fec83fafc7b93d231f654772",
+      "size": 7217
+    },
+    "iroha_monitor_demo_overview.svg": {
+      "path": "iroha_monitor_demo_overview.svg",
+      "sha256": "a16eb87e40160b75e576377ee588e2d1d900166d8becb070a94ef4dbab686431",
+      "size": 9036
+    },
+    "iroha_monitor_demo_pipeline.ans": {
+      "path": "iroha_monitor_demo_pipeline.ans",
+      "sha256": "03d804bf03fb0322ecfb9da6622798fba70e7b0aca9a53dec855563d353f6e56",
+      "size": 8238
+    },
+    "iroha_monitor_demo_pipeline.svg": {
+      "path": "iroha_monitor_demo_pipeline.svg",
+      "sha256": "8cf813e81d07eae09de7a9f8f9f02cc2f46e0f25bb554e926dcaeed463adba2a",
+      "size": 9015
+    }
+  },
+  "binary": {
+    "path": "iroha_monitor",
+    "sha256": "73f9adc3db432e01b5266533cc6aa33a19e058622f6b28a4e6b30a39a6226659",
+    "size": 9983696
+  },
+  "cols": 120,
+  "deterministic": true,
+  "duration_s": 4.0,
+  "env": {
+    "IROHA_MONITOR_DEMO_SEED": "iroha-monitor-demo",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "RUST_LOG": "warn",
+    "TERM": "dumb"
+  },
+  "generator_sha256": {
+    "scripts/iroha_monitor_demo.sh": "dca5fe81c67e10a1b9e28079dd6a50e85870082d23eb9c6846688ec5eaefc8e8",
+    "scripts/run_iroha_monitor_demo.py": "f47c6dbe0a964cf4a581e1e3d9e28ec60579a3543f808420cd1e0e824bbef533"
+  },
+  "interval_ms": 500,
+  "mode": "spawn-lite",
+  "monitor_args": [
+    "--no-theme",
+    "--no-audio",
+    "--art-theme",
+    "dawn",
+    "--art-speed",
+    "1",
+    "--headless-max-frames",
+    "24",
+    "--spawn-lite",
+    "--peers",
+    "3",
+    "--interval",
+    "500"
+  ],
+  "peers": 3,
+  "rows": 48,
+  "seed": "iroha-monitor-demo"
+}

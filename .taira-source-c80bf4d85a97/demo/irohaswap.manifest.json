@@ -1,0 +1,567 @@
+{
+  "seiyaku_name": "IrohaSwap",
+  "code_hash": "hash:4912EE84F2B54CF86F17AACC40F9BD72C659BE80B22663719F829990AAEA52CB#B047",
+  "abi_hash": "hash:DCBB03608ED9D87B4A8D942C0D7045D3044DE8D4D8413347C87143386F56AEC1#AABE",
+  "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
+  "features_bitmap": 0,
+  "access_set_hints": {
+    "read_keys": [
+      "account:*",
+      "asset:*",
+      "asset_def:*",
+      "state:*"
+    ],
+    "write_keys": [
+      "asset:*",
+      "asset_def:*",
+      "state:*"
+    ],
+    "dynamic_reads": [],
+    "dynamic_writes": []
+  },
+  "entrypoints": [
+    {
+      "name": "init_pool",
+      "kind": {
+        "kind": "Kotoage",
+        "value": null
+      },
+      "params": [
+        {
+          "name": "pool",
+          "type_name": "Name"
+        },
+        {
+          "name": "asset_a",
+          "type_name": "AssetDefinitionId"
+        },
+        {
+          "name": "asset_b",
+          "type_name": "AssetDefinitionId"
+        },
+        {
+          "name": "pool_account",
+          "type_name": "AccountId"
+        },
+        {
+          "name": "lp_asset",
+          "type_name": "AssetDefinitionId"
+        }
+      ],
+      "argument_schema": {
+        "fields": [
+          {
+            "name": "pool",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Name",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "asset_a",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AssetDefinitionId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "asset_b",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AssetDefinitionId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "pool_account",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AccountId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "lp_asset",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AssetDefinitionId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "return_type": null,
+      "return_schema": null,
+      "permission": "Admin",
+      "read_keys": [
+        "state:*"
+      ],
+      "write_keys": [
+        "state:*"
+      ],
+      "access_hints_complete": false,
+      "access_hints_skipped": [
+        "dynamic state path is not compiler-resolved"
+      ],
+      "triggers": []
+    },
+    {
+      "name": "deposit_liquidity",
+      "kind": {
+        "kind": "Kotoage",
+        "value": null
+      },
+      "params": [
+        {
+          "name": "provider",
+          "type_name": "AccountId"
+        },
+        {
+          "name": "pool",
+          "type_name": "Name"
+        },
+        {
+          "name": "amount_a",
+          "type_name": "quantity"
+        },
+        {
+          "name": "amount_b",
+          "type_name": "quantity"
+        }
+      ],
+      "argument_schema": {
+        "fields": [
+          {
+            "name": "provider",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AccountId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "pool",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Name",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "amount_a",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Quantity",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "amount_b",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Quantity",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "return_type": null,
+      "return_schema": null,
+      "permission": "Admin",
+      "read_keys": [
+        "state:*",
+        "asset:*",
+        "asset_def:*",
+        "account:*"
+      ],
+      "write_keys": [
+        "state:*",
+        "asset:*",
+        "asset_def:*"
+      ],
+      "access_hints_complete": false,
+      "access_hints_skipped": [
+        "dynamic state path is not compiler-resolved"
+      ],
+      "triggers": []
+    },
+    {
+      "name": "withdraw_liquidity",
+      "kind": {
+        "kind": "Kotoage",
+        "value": null
+      },
+      "params": [
+        {
+          "name": "provider",
+          "type_name": "AccountId"
+        },
+        {
+          "name": "pool",
+          "type_name": "Name"
+        },
+        {
+          "name": "lp_amount",
+          "type_name": "quantity"
+        }
+      ],
+      "argument_schema": {
+        "fields": [
+          {
+            "name": "provider",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AccountId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "pool",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Name",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "lp_amount",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Quantity",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "return_type": null,
+      "return_schema": null,
+      "permission": "Admin",
+      "read_keys": [
+        "state:*",
+        "asset:*",
+        "asset_def:*",
+        "account:*"
+      ],
+      "write_keys": [
+        "state:*",
+        "asset:*",
+        "asset_def:*"
+      ],
+      "access_hints_complete": false,
+      "access_hints_skipped": [
+        "dynamic state path is not compiler-resolved"
+      ],
+      "triggers": []
+    },
+    {
+      "name": "swap",
+      "kind": {
+        "kind": "Kotoage",
+        "value": null
+      },
+      "params": [
+        {
+          "name": "trader",
+          "type_name": "AccountId"
+        },
+        {
+          "name": "pool",
+          "type_name": "Name"
+        },
+        {
+          "name": "input_asset",
+          "type_name": "AssetDefinitionId"
+        },
+        {
+          "name": "amount_in",
+          "type_name": "quantity"
+        },
+        {
+          "name": "min_output",
+          "type_name": "quantity"
+        }
+      ],
+      "argument_schema": {
+        "fields": [
+          {
+            "name": "trader",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AccountId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "pool",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Name",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "input_asset",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "AssetDefinitionId",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "amount_in",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Quantity",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "min_output",
+            "ty": {
+              "nodes": [
+                {
+                  "kind": "Leaf",
+                  "value": {
+                    "kind": "Quantity",
+                    "value": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "return_type": "quantity",
+      "return_schema": {
+        "nodes": [
+          {
+            "kind": "Leaf",
+            "value": {
+              "kind": "Quantity",
+              "value": null
+            }
+          }
+        ]
+      },
+      "permission": "Admin",
+      "read_keys": [
+        "state:*",
+        "asset:*",
+        "asset_def:*",
+        "account:*"
+      ],
+      "write_keys": [
+        "state:*",
+        "asset:*",
+        "asset_def:*"
+      ],
+      "access_hints_complete": false,
+      "access_hints_skipped": [
+        "dynamic state path is not compiler-resolved"
+      ],
+      "triggers": []
+    }
+  ],
+  "states": [
+    {
+      "name": "PoolAssetA",
+      "type_name": "StateMap<Name, AssetDefinitionId>"
+    },
+    {
+      "name": "PoolAssetB",
+      "type_name": "StateMap<Name, AssetDefinitionId>"
+    },
+    {
+      "name": "PoolAccount",
+      "type_name": "StateMap<Name, AccountId>"
+    },
+    {
+      "name": "PoolLpAsset",
+      "type_name": "StateMap<Name, AssetDefinitionId>"
+    },
+    {
+      "name": "ReserveA",
+      "type_name": "StateMap<Name, quantity>"
+    },
+    {
+      "name": "ReserveB",
+      "type_name": "StateMap<Name, quantity>"
+    },
+    {
+      "name": "LpSupply",
+      "type_name": "StateMap<Name, quantity>"
+    }
+  ],
+  "error_codes": [
+    {
+      "namespace": "PoolError",
+      "name": "UnknownPool",
+      "code": 1
+    },
+    {
+      "namespace": "PoolError",
+      "name": "IdenticalAssets",
+      "code": 2
+    },
+    {
+      "namespace": "PoolError",
+      "name": "PoolAlreadyExists",
+      "code": 3
+    },
+    {
+      "namespace": "PoolError",
+      "name": "InvalidAssetAAmount",
+      "code": 4
+    },
+    {
+      "namespace": "PoolError",
+      "name": "InvalidAssetBAmount",
+      "code": 5
+    },
+    {
+      "namespace": "PoolError",
+      "name": "ZeroLiquidityMinted",
+      "code": 6
+    },
+    {
+      "namespace": "PoolError",
+      "name": "InvalidLiquidityAmount",
+      "code": 7
+    },
+    {
+      "namespace": "PoolError",
+      "name": "EmptyPool",
+      "code": 8
+    },
+    {
+      "namespace": "PoolError",
+      "name": "ZeroAssetAOutput",
+      "code": 9
+    },
+    {
+      "namespace": "PoolError",
+      "name": "ZeroAssetBOutput",
+      "code": 10
+    },
+    {
+      "namespace": "PoolError",
+      "name": "InvalidSwapAmount",
+      "code": 11
+    },
+    {
+      "namespace": "PoolError",
+      "name": "AssetNotInPool",
+      "code": 12
+    },
+    {
+      "namespace": "PoolError",
+      "name": "SlippageExceeded",
+      "code": 13
+    },
+    {
+      "namespace": "PoolError",
+      "name": "InsufficientOutput",
+      "code": 14
+    }
+  ],
+  "kotoba": null,
+  "provenance": null
+}

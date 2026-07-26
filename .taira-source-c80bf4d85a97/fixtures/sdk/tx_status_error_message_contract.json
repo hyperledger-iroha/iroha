@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "direct_message_with_reject",
+      "status_code": 400,
+      "content_type": "application/json",
+      "body_json": {
+        "message": "missing build claim for transaction status"
+      },
+      "reject_code_header": "build_claim_missing",
+      "expected_message": "missing build claim for transaction status",
+      "expected_reject_code": "build_claim_missing"
+    },
+    {
+      "id": "nested_error_detail",
+      "status_code": 422,
+      "content_type": "application/json",
+      "body_json": {
+        "error": {
+          "detail": "upstream status pipeline unavailable"
+        }
+      },
+      "expected_message": "upstream status pipeline unavailable"
+    },
+    {
+      "id": "errors_array_first_message",
+      "status_code": 422,
+      "content_type": "application/json",
+      "body_json": {
+        "errors": [
+          {
+            "message": "status query validation failed"
+          },
+          {
+            "message": "hash malformed"
+          }
+        ]
+      },
+      "expected_message": "status query validation failed"
+    },
+    {
+      "id": "case_insensitive_nested_keys_and_header_name",
+      "status_code": 409,
+      "content_type": "application/json",
+      "body_json": {
+        "Error": {
+          "Detail": "case-insensitive nested detail"
+        }
+      },
+      "reject_code_header_name": "X-IrOhA-ReJeCt-CoDe",
+      "reject_code_header": "build_claim_missing",
+      "expected_message": "case-insensitive nested detail",
+      "expected_reject_code": "build_claim_missing"
+    },
+    {
+      "id": "compact_json_fallback_sorted_keys",
+      "status_code": 422,
+      "content_type": "application/json",
+      "body_json": {
+        "status": "invalid",
+        "code": "E123"
+      },
+      "expected_message": "{\"code\":\"E123\",\"status\":\"invalid\"}"
+    },
+    {
+      "id": "plain_text_truncation_ascii_ellipsis",
+      "status_code": 422,
+      "content_type": "text/plain",
+      "body_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expected_message_length": 515,
+      "expected_message_suffix": "..."
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+seiyaku ContractFlowExample {
+    error enum ExampleError {
+        Rejected = 1,
+    }
+
+    state int counter;
+    state AccountId last_actor;
+    hajimari() {
+        counter = 1;
+        last_actor = context::authority();
+    }
+
+    kotoage fn increment() authorize("Entry") {
+        counter = counter + 4;
+    }
+
+    kotoage fn remember_caller() authorize("Entry") {
+        last_actor = context::authority();
+    }
+
+    kotoage fn reject_me() authorize("Entry") {
+        require(false, ExampleError::Rejected);
+    }
+}

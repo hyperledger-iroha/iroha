@@ -13,6 +13,7 @@ use iroha_data_model::{
         VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION, ValidationFeeChargingMode,
         ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
         ValidationFeeGovernanceWindowV1, ValidationFeeParliamentAuthorizationV1,
+        ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateRulesV1,
         ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryError,
         ValidationFeePolicyRegistryV1, ValidationFeePolicyV1, initial_validation_fee_amount,
     },
@@ -72,11 +73,31 @@ fn typed_validation_fee_registry_fails_closed_without_governance() {
         enacted_at_height: 13,
     };
     assert_eq!(authorization.invariant_error(), None);
+    let plain_electorate_rules = ValidationFeePlainElectorateRulesV1 {
+        voting_asset_id: AssetDefinitionId::new(
+            DomainId::try_new("governance", "validation").expect("governance domain id"),
+            Name::from_str("vote").expect("voting asset name"),
+        ),
+        ballot_amount: 150_u64.into(),
+        ballot_duration_blocks: 3_600,
+        citizenship_amount: 10_000_u64.into(),
+        max_members: 256,
+        conviction_step_blocks: 100,
+        max_conviction: 6,
+        min_turnout: 1,
+        approval_threshold_numerator: 1,
+        approval_threshold_denominator: 2,
+        eligibility_rule:
+            ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
+    };
     let registry = ValidationFeePolicyRegistryV1 {
-        registered_policies: vec![
-            ValidationFeePolicyRegistryEntryV1::from_enactment(policy, authorization, None)
-                .expect("policy hash"),
-        ],
+        registered_policies: vec![ValidationFeePolicyRegistryEntryV1::from_enactment(
+            policy,
+            plain_electorate_rules,
+            authorization,
+            None,
+        )
+        .expect("policy hash")],
     };
     let encoded = norito::to_bytes(&registry).expect("encode typed registry");
     let decoded: ValidationFeePolicyRegistryV1 =

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://grafana.com/schemas/json/dashboard/v1.json",
+  "title": "Iroha Torii ZK Prover",
+  "editable": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Prover Queue Depth",
+      "description": "Live queue depth and active workers.",
+      "targets": [
+        { "expr": "torii_zk_prover_pending", "legendFormat": "pending" },
+        { "expr": "torii_zk_prover_inflight", "legendFormat": "inflight" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Attachment Size (p50/p95)",
+      "description": "Histogram quantiles per content type.",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(torii_zk_prover_attachment_bytes_bucket[5m])) by (le, content_type))",
+          "legendFormat": "p50 {{content_type}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(torii_zk_prover_attachment_bytes_bucket[5m])) by (le, content_type))",
+          "legendFormat": "p95 {{content_type}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Worker Latency (p95/p99)",
+      "description": "Attachment processing latency quantiles.",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(torii_zk_prover_latency_ms_bucket[5m])) by (le))",
+          "legendFormat": "p95 latency"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(torii_zk_prover_latency_ms_bucket[5m])) by (le))",
+          "legendFormat": "p99 latency"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Budget Exhaustion Rate",
+      "description": "Per-reason budget hits over 15 minutes.",
+      "targets": [
+        {
+          "expr": "increase(torii_zk_prover_budget_exhausted_total[15m])",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ledger vs Prover Latency",
+      "description": "Overlay ledger zk_verify latency with prover latency to spot systemic issues.",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(zk_verify_latency_ms_bucket[5m])) by (le, backend))",
+          "legendFormat": "ledger p95 {{backend}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(torii_zk_prover_latency_ms_bucket[5m])) by (le))",
+          "legendFormat": "prover p95"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 }
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  }
+}

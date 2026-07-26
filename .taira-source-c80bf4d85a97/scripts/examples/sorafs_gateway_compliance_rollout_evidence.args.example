@@ -1,0 +1,30 @@
+# Example:
+#   python3 scripts/check_sorafs_gateway_compliance_rollout_evidence.py \
+#     @scripts/examples/sorafs_gateway_compliance_rollout_evidence.args.example
+#
+# Keep source documents, raw probe responses, response bodies, accepted-appeal
+# records, tokens, and signing material out of these evidence files. The checker
+# accepts only bounded, payload-free catalog and probe summaries.
+
+--evidence-dir
+dist/sorafs-gateway-compliance-rollout-evidence
+--summary-out
+dist/sorafs-gateway-compliance-rollout-evidence/rollout-summary.json
+--require-kind
+catalog_promotion,controller_runtime,moderation_toggle,gateway_reload,enforcement_probe,honey_audit,precedence,transparency_publication,observability,governance_approval
+--now-unix
+1800009000
+--max-evidence-age-secs
+86400
+--max-route-latency-ms
+1500
+--max-reload-latency-ms
+300000
+--min-gateways
+2
+--min-catalog-entries
+4
+--min-catalog-changes
+1
+--min-honey-probes
+4

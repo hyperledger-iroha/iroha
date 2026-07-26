@@ -1,0 +1,4 @@
+running 1 test
+nexus::lane_registry::lane_manifest_registry_loads_fixture_manifests ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored

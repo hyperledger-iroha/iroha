@@ -1,0 +1,30 @@
+{
+  "title": {
+    "message": "SORA Nexus 開発者ポータル",
+    "description": "The title in the navbar"
+  },
+  "logo.alt": {
+    "message": "SORA Nexus emblem",
+    "description": "The alt text of navbar logo"
+  },
+  "item.label.Overview": {
+    "message": "概要",
+    "description": "Navbar item with label Overview"
+  },
+  "item.label.Norito": {
+    "message": "Norito",
+    "description": "Navbar item with label Norito"
+  },
+  "item.label.SDKs": {
+    "message": "SDK",
+    "description": "Navbar item with label SDKs"
+  },
+  "item.label.Reference": {
+    "message": "リファレンス",
+    "description": "Navbar item with label Reference"
+  },
+  "item.label.GitHub": {
+    "message": "GitHub",
+    "description": "Navbar item with label GitHub"
+  }
+}

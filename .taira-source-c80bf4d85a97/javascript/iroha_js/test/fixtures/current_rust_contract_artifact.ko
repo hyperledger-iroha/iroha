@@ -1,0 +1,10 @@
+seiyaku BrowserArtifactParity {
+    state int counter;
+    hajimari() {
+        counter = 0;
+    }
+
+    kotoage fn run() authorize("CanRunBrowserArtifactParity") {
+        debug::info("browser artifact parity");
+    }
+}

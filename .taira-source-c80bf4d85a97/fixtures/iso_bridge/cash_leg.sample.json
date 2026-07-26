@@ -1,0 +1,11 @@
+{
+  "version": "2024-05-01",
+  "source": "sample",
+  "entries": [
+    {
+      "currency": "USD",
+      "payment_type": "APMT",
+      "asset_definition_id": "usd#securities"
+    }
+  ]
+}

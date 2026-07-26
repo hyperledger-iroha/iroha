@@ -1,0 +1,52 @@
+{
+  "codec": "EntrypointArgumentRecordV1",
+  "contract": {
+    "entrypoint": "quote",
+    "parameters": [
+      {
+        "name": "count",
+        "type": "int"
+      },
+      {
+        "name": "active",
+        "type": "bool"
+      },
+      {
+        "name": "memo",
+        "type": "string"
+      },
+      {
+        "name": "digest",
+        "type": "bytes"
+      }
+    ],
+    "source": "seiyaku ArgumentRecordFixture {\n  view fn quote(int count, bool active, string memo, bytes digest) -> int {\n    let _active = active;\n    let _memo = memo;\n    let _digest = digest;\n    return count;\n  }\n}\n"
+  },
+  "entrypoint_argument_record_v1": {
+    "norito_hex": "4e525430000087eabd05a0dae4719e421ca815f34449000e01000000000000c0131ea1f7278c10022000180cabfa57fc09c28b20cb49a61fab7d6a79e23384846ab1a6238e6a69770beb01040000000000000061020000005c54000000000000000011010000002d4e525430000007c039457363b9e1d36bbd31d93dec4a0005000000000000005a012fee1ff130f80001000000f9a93abfea057d279e41451c69d729d81e8882979bb8a7cdf2b60d516c4102cda1060100000001013f020000003a32000000000000000006010000000b6b6f746f64616d612d7631e032c5b18bd0bb200040b1ecbf5ca3005f6d3f8beb7717a87fb438ec98c245cf3902000000342c0000000000000000060100000005000102fefff2733f12c373409d35b7ef4c923b256bc81efcf9f56fbc41510feed97ec9f4c7"
+  },
+  "entrypoint_argument_schema_v1": {
+    "norito_hex": "4e5254300000c87966a4103ad5d1ce81ead2de65b1ed007a00000000000000aae5092dd0dfa624027904000000000000001b0605636f756e7413120100000000000000090500000004000000001c070661637469766513120100000000000000090500000004030000001a05046d656d6f13120100000000000000090500000004040000001c0706646967657374131201000000000000000905000000040d000000",
+    "schema_hash_hex": "00180cabfa57fc09c28b20cb49a61fab7d6a79e23384846ab1a6238e6a69770b"
+  },
+  "fixture_version": 1,
+  "generator": "ivm::encode_argument_record_from_json",
+  "torii_boundary": {
+    "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+    "contract_alias": "argument-record-fixture::universal",
+    "entrypoint": "quote",
+    "fee_payment": {
+      "payer": "authority",
+      "value": {
+        "charge_limits": [],
+        "gas_limit": 1500000
+      }
+    },
+    "payload": {
+      "active": true,
+      "count": "-7",
+      "digest": "0x000102feff",
+      "memo": "kotodama-v1"
+    }
+  }
+}

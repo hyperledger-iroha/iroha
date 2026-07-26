@@ -20,6 +20,13 @@ constitution are not active until implemented and separately enacted.
   inclusive; close/tally executes at `h_end + 1`, evidence is anchored to
   `h_end`, and ballot locks must remain active through that height. Other
   governance paths may retain ZK behavior where explicitly configured.
+- Every validation-fee proposal fingerprints and retains its exact
+  `plain_electorate_rules`. Ballots use the retained asset, amount, duration,
+  conviction, turnout, approval threshold, member cap, and citizen gate even
+  if live governance configuration later changes. The typed
+  `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft` route derives
+  these immutable fields and rejects duplicate effective ballots; clients
+  supply only the owner and closed AYE/NAY/ABSTAIN direction.
 - Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
 - Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
 

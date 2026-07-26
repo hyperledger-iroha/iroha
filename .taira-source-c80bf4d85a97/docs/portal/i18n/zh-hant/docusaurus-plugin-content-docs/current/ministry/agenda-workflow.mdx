@@ -1,0 +1,177 @@
+---
+lang: zh-hant
+direction: ltr
+source: docs/portal/docs/ministry/agenda-workflow.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Agenda Council Workflow
+description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+從“@theme/CodeBlock”導入CodeBlock；
+從“@site/docs/examples/ministry/agenda_sortition_summary_example.json”導入 sortitionSummary；
+
+const 摘要 = sortitionSummary;
+
+函數 SortitionSummaryTable({行}) {
+  返回（
+    
+      
+        
+          槽
+          會員
+          角色
+          組織
+          重量
+          熵（截斷）
+        
+      
+      
+        {rows.map((行，索引) => (
+          
+            {索引 + 1}
+            {row.member_id}
+            {行.角色}
+            {行.組織}
+            {行重}
+            {row.draw_entropy_hex.slice(0, 16)}…
+          
+        ))}
+      
+    
+  ）；
+}
+
+## 概述
+
+路線圖項目 **MINFO-2** 需要從提案 linting 到
+公開抽籤證據，以便任何人都可以確認案件如何進入議程
+理事會。此頁面將先前登陸的 CLI 幫助程序直接連接到
+開發者門戶，以便提案者、審計員和平台團隊可以遵循相同的要求
+清單，無需深入探究單一存儲庫。
+
+該工作流程涵蓋三個可重複的步驟：
+
+1. 在本地驗證 `AgendaProposalV1` 有效負載並拒絕重複的哈希值
+   在提交到達審核隊列之前。
+2. 與提案一起發布重複註冊點擊，以便理事會工作人員可以
+   在不失去決定論的情況下追溯早期案例。
+3. 運行抽籤助手，捕獲 Merkle 證明包，並顯示
+   在門戶內選擇名冊，以便公民可以重播抽籤。
+
+所有助手住在`cargo xtask ministry-agenda`； Norito 架構是
+記錄在 `docs/source/ministry/agenda_council_proposal.md` 下。
+
+## 1. 在本地驗證提案
+
+使用 CLI 來檢查 JSON 有效負載並斷言所需的證據（哈希
+家庭、摘要長度、語言標籤、提交者聯繫方式）存在。的
+驗證器與 Torii 攝取路徑共享代碼，因此提案通過
+通過門戶上傳時這裡也會通過。
+
+{`cargo xtask Ministry-agenda validate \\
+  --proposal docs/examples/ministry/agenda_proposal_example.json \\
+  --registry docs/examples/ministry/agenda_duplicate_registry.json`}
+
+- 在對歷史有效負載進行分類時添加 `--allow-registry-conflicts`；新的
+  當指紋已經存在時，提交應該會快速失敗。
+- 示例目錄包含參考提案和註冊表，以便 SDK 可以
+  採用沒有硬編碼私有有效負載的格式。
+
+## 2. 發布重複註冊表上下文
+
+每個接受的提案都包含之前諮詢過的註冊表摘要
+攝入。捕獲該註冊表的 SoraFS CID 或 Torii 清單路徑並添加
+將其添加到您提交的元數據中，以便委員會審閱者可以驗證相同的 JSON。
+
+```json title="Duplicate registry (excerpt)"
+{
+  "entries": [
+    {
+      "hash_family": "blake3-256",
+      "hash_hex": "0d714bed4b7c63c23a2cf8ee9ce6c3cde1007907c427b4a0754e8ad31c91338d",
+      "proposal_id": "AC-2025-014",
+      "note": "Already handled in 2025-08 incident"
+    }
+  ]
+}
+```當 CLI 報告衝突時，門戶會顯示鏈接的提案 ID，以便
+操作員可以確定性地合併或拒絕重新提交。
+
+## 3. 運行並發布抽籤摘要
+
+待辦事項準備就緒後，運行確定性抽籤助手。它消耗
+名冊 JSON、種子和目標槽計數，然後發出 Merkle-proof-backed
+總結。摘要 JSON 是門戶在 **理事會抽籤** 中呈現的內容
+面板。
+
+{`cargo xtask Ministry-agenda sortition \\
+  --roster docs/examples/ministry/agenda_council_roster.json \\
+  --插槽 3 \\
+  --種子0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
+  --output artifacts/ministry/sortition/2026-03-12.json`}
+
+將生成的 JSON 存儲在 SoraFS 上（或與簽名的議程數據包一起）並
+鏈接提案跟踪器中的 CID。開發者門戶消耗相同的
+JSON結構；下面的示例呈現了捆綁的
+`agenda_sortition_summary_example.json`。
+
+### 理事會抽籤示例
+
+
+  
+    
+      字段
+      值
+    
+  
+  
+    
+      算法
+      {summary.algorithm}
+    
+    
+      名冊摘要（BLAKE3）
+      {summary.roster_digest.blake3_hex}
+    
+    
+      名冊摘要（SHA-256）
+      {summary.roster_digest.sha256_hex}
+    
+    
+      種子
+      {summary.seed_hex}
+    
+    
+      老虎機
+      {summary.slots}
+    
+    
+      符合資格的會員
+      {summary.eligible_members}
+    
+    
+      默克爾根
+      {summary.merkle_root_hex}
+    
+  
+
+
+
+
+每個選定的成員包括：
+
+- `draw_entropy_hex`（32 BLAKE3 字節），因此任何人都可以重新計算 RNG 輸出。
+- `eligible_index` 和 `original_index`，以便審核員可以證明選擇退出是
+  很榮幸。
+- 覆蓋名冊頁的 Merkle 證明；複製樹證實了
+  數據包內公佈的名單與抽籤相符。
+
+### 決策日誌
+
+當理事會對提案進行表決時，請附上決定備忘錄和
+治理操作的抽籤摘要 CID（Torii `/v1/gov/*` 條目）。門戶網站
+頁面鏈接了備忘錄、投票統計和上面顯示的 JSON，以便每個操作
+包含 **MINFO-2** 所需的完整證據鏈。

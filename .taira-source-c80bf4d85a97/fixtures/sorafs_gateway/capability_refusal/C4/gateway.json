@@ -1,0 +1,9 @@
+{
+  "base_fixture": "../1.0.0",
+  "mutations": {
+    "provider_advert.allow_unknown_capabilities": false
+  },
+  "notes": [
+    "Keep the canonical provider advert and require strict capability TLVs so the vendor reserved entry triggers a refusal."
+  ]
+}

@@ -1,0 +1,20 @@
+<colr:Document xmlns:colr="urn:iso:std:iso:20022:tech:xsd:colr.007.001.08">
+  <colr:CollSbstitnConf>
+    <colr:TxId>COLR-FIXTURE-1</colr:TxId>
+    <colr:OblgtnId>REPO-123</colr:OblgtnId>
+    <colr:CollSbstitn>
+      <colr:OrgnlColl>
+        <colr:SctiesId><colr:ISIN>US0378331005</colr:ISIN></colr:SctiesId>
+        <colr:Amt Ccy="USD">1000000</colr:Amt>
+      </colr:OrgnlColl>
+      <colr:SubstnColl>
+        <colr:SctiesId><colr:ISIN>US5949181045</colr:ISIN></colr:SctiesId>
+        <colr:Amt Ccy="USD">1002000</colr:Amt>
+      </colr:SubstnColl>
+      <colr:EffctvDt>2024-04-05</colr:EffctvDt>
+      <colr:Tp>PARTIAL</colr:Tp>
+      <colr:Rsn><colr:Cd>MARGIN</colr:Cd></colr:Rsn>
+      <colr:Hrct>50</colr:Hrct>
+    </colr:CollSbstitn>
+  </colr:CollSbstitnConf>
+</colr:Document>

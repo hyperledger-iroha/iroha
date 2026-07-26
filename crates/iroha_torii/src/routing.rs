@@ -53867,7 +53867,9 @@ mod validation_fee_torii_ingress_tests {
             ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
             ValidationFeeGovernanceWindowV1, ValidationFeeMultisigMarkerV1,
             ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
-            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+            ValidationFeePlainElectorateEligibilityRuleV1,
+            ValidationFeePlainElectorateRulesV1, ValidationFeePolicyRegistryV1,
+            ValidationFeePolicyV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
@@ -54094,9 +54096,24 @@ mod validation_fee_torii_ingress_tests {
         );
         let mut roster_root = [0; 32];
         roster_root.copy_from_slice(&roster_digest[..32]);
+        let plain_electorate_rules = ValidationFeePlainElectorateRulesV1 {
+            voting_asset_id: policy.ds_asset_id.clone(),
+            ballot_amount: 150_u64.into(),
+            ballot_duration_blocks: 1,
+            citizenship_amount: 10_000_u64.into(),
+            max_members: 256,
+            conviction_step_blocks: 1,
+            max_conviction: 6,
+            min_turnout: 1,
+            approval_threshold_numerator: 1,
+            approval_threshold_denominator: 2,
+            eligibility_rule:
+                ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
+        };
         let kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
             policy: policy.clone(),
             payout_lifecycle_proposal_id: None,
+            plain_electorate_rules: plain_electorate_rules.clone(),
         });
         let proposal_id = kind.fingerprint();
         let authorization = ValidationFeeParliamentAuthorizationV1 {
@@ -54105,11 +54122,11 @@ mod validation_fee_torii_ingress_tests {
             proposal_time_roster_root: roster_root,
             referendum_window: ValidationFeeGovernanceWindowV1 {
                 lower: 1,
-                upper: 100,
+                upper: 1,
             },
             finalization: ValidationFeeFinalizationEvidenceV1 {
                 referendum_id: proposal_id,
-                finalized_at_height: 2,
+                finalized_at_height: 1,
                 mode: ValidationFeeGovernanceVotingModeV1::Plain,
                 approve: 1,
                 reject: 0,
@@ -54121,8 +54138,13 @@ mod validation_fee_torii_ingress_tests {
             },
             enacted_at_height: 2,
         };
-        let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(policy, authorization, None)
-            .expect("validation-fee registry entry");
+        let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
+            policy,
+            plain_electorate_rules,
+            authorization,
+            None,
+        )
+        .expect("validation-fee registry entry");
         let registry = ValidationFeePolicyRegistryV1 {
             registered_policies: vec![entry],
         };
@@ -54145,7 +54167,7 @@ mod validation_fee_torii_ingress_tests {
                 finalization_evidence: Some(GovernanceFinalizationEvidence {
                     proposal_id,
                     referendum_id: proposal_id,
-                    finalized_at_height: 2,
+                    finalized_at_height: 1,
                     mode: VotingMode::Plain,
                     approve: 1,
                     reject: 0,
@@ -54163,7 +54185,7 @@ mod validation_fee_torii_ingress_tests {
             referendum_id.clone(),
             iroha_core::state::GovernanceReferendumRecord {
                 h_start: 1,
-                h_end: 100,
+                h_end: 1,
                 status: iroha_core::state::GovernanceReferendumStatus::Closed,
                 mode: iroha_core::state::GovernanceReferendumMode::Plain,
             },
@@ -54182,6 +54204,7 @@ mod validation_fee_torii_ingress_tests {
                 .ensure_stage(body, 1, 1, 10_000)
                 .record(authority.clone());
         }
+        approvals.approval_gate_height = Some(1);
         stx.world
             .governance_stage_approvals_mut()
             .insert(referendum_id, approvals);

@@ -1,0 +1,626 @@
+---
+title: Moderation Appeal Pricing Engine
+summary: SFM-4b2 implementation status for deterministic appeal pricing, durable finalized-ledger deposit and settlement forwarding, runtime HSM signer bindings, moderation handoff, and remaining validation/deployment gates.
+---
+
+# Moderation Appeal Pricing Engine
+
+## Current Status
+
+SFM-4b2 has shipped deterministic appeal finance foundations in
+`crates/sorafs_orchestrator/src/appeals.rs` and the `sorafs_cli appeal`
+operator commands. The production mutation path is now the native ledger plus
+`sorafs_node::appeal_finance_transaction_forwarder`: authenticated deposit and
+settlement POSTs persist bounded semantic work before signing, bind it to one
+finalized cursor and exact pre-operation `AssetEscrowRecord`, and reconcile
+`OpenAssetLock`, `DrawdownAssetLock`, and `CancelAssetLock` effects from
+committed state. Torii starts the supervised worker with its normal lifecycle.
+Every drawdown and cancellation carries the exact committed
+`expected_remaining_amount`; native execution rejects a stale independently
+submitted drawdown or cancel before custody moves, so two peers cannot both
+apply the same observed partition or race a refund against a drawdown. Completed
+operation tombstones are never evicted merely to satisfy a local bound:
+capacity exhaustion fails closed until a committed idempotency record makes
+compaction safe.
+The worker persists exact signed bytes before strict durable routing, handles
+ambiguous submission through the finalized transaction index and Kura result,
+uses bounded retry/dead-letter state, and persists the refund follow-up before
+tombstoning a finalized drawdown.
+
+No appeal-finance private key is accepted by `iroha_config`. Configuration
+contains only bounded opaque provider handles, exact Ed25519 public keys,
+authorities, and finalized-height activation/revocation windows. Deployment
+code may inject `SoraFsAppealFinanceRuntimeSignersV1`; Torii validates the
+provider handle, configured key, derived authority, returned payload, authority,
+and signature. A missing, substituted, not-yet-active, or revoked provider
+fails closed. Standard `irohad` forwards only explicitly injected providers and
+does not manufacture one from the node key.
+
+Settlement planning APIs remain read-only and no longer return transaction wire
+payloads as an alternative production path. Governance settlement receipts are
+derived only after committed reconciliation and use the exact signed
+transaction hash and creation time. Finalized moderation outcomes produce typed
+payload-free terminal settlement handoffs through a durable idempotent runtime
+boundary; process-local ballot state is not an appeal-finance input.
+
+`sorafs_manifest` aggregates validated finance reports into deterministic
+`SoraFsAppealFinanceWeeklyRollupV1` records, while `sorafs_node` publishes
+reports, rollups, and post-finality settlement receipts through the configured
+Governance DAG path. Torii exposes bounded authenticated status, confirmation,
+reconciliation, report, rollup, and receipt views.
+The repository also ships a Grafana/Prometheus appeal-finance dashboard and
+alert pack over those Governance DAG publication metrics for rollout monitoring.
+`scripts/check_sorafs_appeal_finance_rollout_evidence.py` now provides the
+fail-closed SFM-4b2 rollout evidence gate for deployed appeal finance promotion
+packets, including cross-artifact `config_digest_hex` binding from quote,
+deposit, settlement, submitter, worker, Governance DAG, dashboard,
+reconciliation, and governance approval evidence back to a valid pricing-config
+artifact in the same bundle. Pricing-config artifacts also carry
+`policy_digest_hex`, valid pricing policy digests are published as
+`valid_policy_digests`, and governance approval evidence must bind its
+`policy_digest_hex` to one of those valid pricing-config policy digests.
+Config- and policy-digest mismatches are recorded on the offending artifact in
+the JSON summary before required-kind validity is reported. The aggregate
+production-readiness gate rechecks those lane-proven relationships before final
+promotion: config-bound artifact fingerprints must match `valid_config_digests`,
+policy-bound artifact fingerprints must match `valid_policy_digests`, and
+multi-peer reconciliation run config digests must stay inside
+`valid_config_digests`. Pricing-config
+`config_version` values must use a canonical lowercase
+`appeal-finance-config-name-vN` label without non-production markers, so
+generic non-prefixed version labels, `latest`, `dev`, placeholder, or
+zero-version labels cannot enter promotion packets. Quote API, deposit
+lifecycle, and settlement execution artifacts also bind `route_count` to the
+unique canonical `routes[].name` inventory and reject duplicate or unknown
+route entries before promotion can report ready, and require every route
+response to carry a lowercase `body_blake3_hex` digest. Deposit-lifecycle artifacts also bind
+`deposit_probe_count` to the unique canonical `deposit_probes[].name` inventory,
+require `confirmed_deposit_count` to match the `deposit_probes[].confirmed`
+partition, and reject duplicate deposit-probe entries before promotion can
+report ready. Quote API artifacts also bind `quote_count` and
+`passed_quote_count` to the product of unique `classes` and `urgencies`
+inventories and reject duplicate or unknown quote dimension entries before promotion can
+report ready. Route `latency_ms` samples must be non-negative integer-unit
+evidence, and quote/deposit `max_route_latency_ms` summaries must be positive
+integer-unit evidence before satisfying the route-latency ceiling. Settlement
+submitter and moderation-worker `max_settlement_lag_seconds` values must be
+non-negative integer-unit evidence before satisfying the settlement-lag
+ceiling. Settlement execution artifacts also bind `settlement_probe_count`
+to the unique `outcomes` inventory and reject duplicate or unknown outcome,
+instruction-step, or reconciliation-status entries before promotion can report ready.
+Settlement-submitter artifacts also bind `configured_signer_count` to the unique
+canonical `signers[].name` inventory, bind `queued_step_count` to the unique
+canonical `steps[].name` inventory, require `submitted_step_count` to match the
+`steps[].submitted` partition, and reject duplicate signer or submitter-step
+entries before promotion can report ready. Moderation-worker artifacts also bind `ballot_replay_count` to the unique canonical `ballots[].name` inventory, require reviewed `appeal-finance-worker-ballot-*` labels without non-production markers, and reject duplicate worker-ballot entries before promotion can report ready. The checker also
+exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and
+`scripts/run_sorafs_appeal_finance_rollout_evidence.py` provides the matching
+reviewed evidence collection planner/runner with a dry-run
+`evidence_contract` map for the selected required kinds.
+The source implementation is not itself production evidence. Closure still
+requires focused Rust validation, four-validator duplicate/race/restart/fork
+tests, a real independently administered PKCS#11/HSM/KMS provider bundle,
+alert-routing validation, and signed evidence from the reviewed reference
+deployment. No file key, environment key, software test signer, request-only
+one-step path, or pre-commit local receipt can satisfy that evidence gate.
+Treat this page as the production-readiness ledger for the
+implemented helpers and the remaining service gates.
+
+## Shipped Foundations
+
+- `AppealPricingConfig::baseline_v1()` implements the congestion-aware deposit
+  formula for `content`, `access`, `fraud`, and `other` appeal classes.
+- `AppealPricingConfig::from_manifest_value` loads JSON fixtures such as
+  `docs/examples/ministry/appeal_pricing_config_baseline.json` for offline
+  calculator, fixture-regeneration, and evidence workflows only. It is not a
+  production policy loader.
+- `AppealSettlementConfig::baseline_v1()` and
+  `AppealSettlementConfig::from_manifest_value` calculate refund, treasury,
+  escrow holdback, panel reward, and no-show forfeiture amounts from the offline
+  fixture `docs/examples/ministry/appeal_settlement_config_baseline.json`.
+  Production pricing, settlement rules, asset identity, and signer bindings
+  come exclusively from `[sorafs.appeal_finance_settlement]` in
+  `iroha_config`; JSON and CLI `--config` inputs cannot override them.
+- `AppealSettlementConfig::disburse` emits account-aware payout plans with
+  refund, treasury, escrow, and per-juror reward lines.
+- `sorafs_cli appeal quote`, `sorafs_cli appeal settle`, and
+  `sorafs_cli appeal disburse` expose the deterministic calculator for
+  moderation, treasury, QA, and governance evidence workflows.
+- `SoraFsAppealFinanceReportV1` records account-aware refund, treasury,
+  held-escrow, juror payout, and no-show lines for Governance DAG publication.
+- `NodeHandle::publish_appeal_finance_report` validates and publishes those
+  reports through the configured signed Governance DAG outbox as canonical
+  `.to` payloads, JSON mirrors, BLAKE3
+  sidecars, `publish-index.json` entries, local CAR queue segments, and optional
+  signed runtime DAG blocks.
+- `SoraFsAppealFinanceWeeklyRollupV1::from_reports` validates source reports,
+  rejects duplicate report ids, and emits deterministic weekly totals by
+  outcome, case count, config version, juror payout count, no-show count,
+  refund, treasury, held escrow, rewards paid, and forfeited rewards.
+- `NodeHandle::publish_appeal_finance_weekly_rollup` publishes weekly rollups
+  through the configured signed Governance DAG outbox as canonical `.to`
+  payloads, JSON mirrors, BLAKE3 sidecars, `publish-index.json` entries, local
+  CAR queue segments, and signed runtime DAG blocks.
+- `SoraFsAppealFinanceSettlementReceiptV1` records finalized server-submitted
+  settlement steps with the exact committed transaction hash, required authority,
+  reconciliation digest, observed ledger state, and settlement amounts.
+- `NodeHandle::publish_appeal_finance_settlement_receipt` publishes settlement
+  receipts through the configured signed Governance DAG outbox as canonical
+  `.to` payloads, JSON mirrors, BLAKE3 sidecars, `publish-index.json` entries,
+  local CAR queue segments, and signed runtime DAG blocks under
+  `appeal_finance_settlement_receipt`.
+- `GET /v1/sorafs/appeals/finance/settlement-receipts` summarizes locally
+  published settlement receipts from the Governance DAG publish-index for
+  operator dashboards, including submitted-step counts, reconciliation-status
+  counts, distinct case counts, and settlement totals. Aggregate totals are
+  computed over the full local index, and the returned `entries` array is
+  bounded by `limit` with a default of 50 and max of 500.
+- `GET /v1/sorafs/appeals/finance/weekly-rollups` summarizes locally published
+  weekly rollups from the Governance DAG publish-index for operator dashboards.
+  Aggregate totals are computed over the full local index, and the returned
+  `entries` array is bounded by `limit` with a default of 50 and max of 500.
+- `GET /v1/sorafs/appeals/finance/reports` summarizes locally published
+  appeal finance reports from the Governance DAG publish-index for operator
+  dashboards, including outcome counts, distinct case counts, payout/no-show
+  counts, finance totals, and source entries. Aggregate totals are computed over
+  the full local index, and the returned `entries` array is bounded by `limit`
+  with a default of 50 and max of 500.
+- `dashboards/grafana/sorafs_appeal_finance.json` and
+  `dashboards/alerts/sorafs_appeal_finance_rules.yml` track appeal-finance
+  report/weekly-rollup/settlement-receipt publication freshness, publication
+  failures, payload throughput, rollup lag, receipt/report lag, and Governance
+  DAG backlog.
+- `POST /v1/sorafs/appeals/finance/reports` and
+  `POST /v1/sorafs/appeals/finance/weekly-rollups` require canonical
+  `X-Iroha-*` request authentication and publish validated report/rollup JSON
+  into the configured local Governance DAG publisher.
+- `POST /v1/sorafs/appeals/finance/deposits` requires canonical `X-Iroha-*`
+  request authentication, verifies that `payer_account` matches the
+  authenticated account, derives a stable appeal escrow id from the case,
+  payer, destination, optional release authority, amount, asset, optional
+  expiry, evidence hashes, and idempotency key, then durably enqueues the exact
+  native `OpenAssetLock` operation against one finalized cursor. Replays return
+  the same semantic operation id; conflicting reuse fails closed.
+- `GET /v1/sorafs/appeals/finance/deposits/{escrow_id_hex}` requires canonical
+  `X-Iroha-*` request authentication and returns the native runtime lock record
+  only when the authenticated account is the lock opener, destination, or
+  release authority.
+- `POST /v1/sorafs/appeals/finance/deposits/confirm` requires canonical
+  `X-Iroha-*` request authentication, re-derives the expected appeal deposit
+  escrow id from normalized request parameters, checks the runtime
+  `AssetEscrowRecord`, and confirms only locked `OpenAssetLock` custody whose
+  payer, destination, release authority, asset, amount, expiry, and evidence
+  hashes still match the submitted appeal deposit.
+- `POST /v1/sorafs/appeals/finance/deposits/settle` requires canonical
+  `X-Iroha-*` request authentication, confirms the same runtime deposit lock,
+  computes the baseline settlement breakdown for the requested outcome, and
+  returns a non-mutating ordered plan without transaction wire payloads.
+- `POST /v1/sorafs/appeals/finance/deposits/submit-settlement` requires
+  canonical `X-Iroha-*` request authentication, recomputes the same settlement
+  expectation, selects the next pending native settlement step, and persists it
+  to the durable outbox before any runtime signer is called. Without an active
+  exact-key runtime provider it returns `submitter_not_configured` or
+  `missing_required_signer` alongside reconciliation evidence. Signing,
+  strict routing, authoritative transaction-result inspection, reconciliation,
+  refund follow-up, and post-finality receipt publication run in the supervised
+  worker rather than the HTTP handler.
+- The finalized-chain moderation orchestrator reads one internally consistent
+  committed snapshot, emits a typed terminal settlement handoff only after the
+  case outcome is final, and retries its stable handoff identity through a
+  runtime-injected durable boundary. The boundary must atomically retain the
+  handoff id, canonical-byte digest, and downstream outbox effect; byte-changing
+  replays fail permanently. Torii fails startup when the orchestrator is enabled
+  without that boundary.
+- `POST /v1/sorafs/appeals/finance/deposits/reconcile` requires canonical
+  `X-Iroha-*` request authentication, recomputes the same baseline settlement
+  expectation, reads the current native asset-lock ledger record, and reports
+  whether settlement is still pending durable forwarding, waiting for the
+  refund cancellation step, fully reconciled, or mismatched. Each response includes
+  `reconciliation_digest_hex`, a BLAKE3 digest over the config version,
+  requested settlement inputs, expected result, observed ledger state, and
+  ordered mismatch list.
+- Appeal intake is an exact caller-signed
+  `SubmitSorafsModerationAppeal` transaction whose handoff-bound deposit
+  evidence is validated against committed custody; no local announcement API
+  or independently authoritative finance copy is retained.
+- Finalized outcomes expose the deterministic case/round/outcome digest,
+  finalized cursor, and stable handoff id needed by the durable settlement
+  boundary. Finance report derivation and Governance DAG publication must
+  reconcile that handoff with committed custody and remain exactly-once.
+- `SorafsReconciliationReportV1` can embed an appeal-finance reconciliation
+  summary derived from local weekly rollup publish-index entries and JSON
+  sidecars, including source report count, case count, treasury-bound XOR, and
+  forfeited reward XOR.
+
+## Pricing Model
+
+The shipped quote helper applies the roadmap formula:
+
+```text
+base = class_base_rate[class]
+backlog_factor = min(backlog / backlog_target[class], backlog_cap[class])
+size_multiplier = 1 + min(evidence_size_mb / size_divisor[class], size_cap[class])
+urgency_multiplier = { normal: 1.0, high: 1.2 }
+panel_multiplier = panel_size / default_panel_size
+deposit = base * (1 + backlog_factor) * size_multiplier * urgency_multiplier * panel_multiplier * surge_multiplier
+deposit = clamp(deposit, min_deposit[class], max_deposit[class])
+```
+
+Default baseline parameters are content 150 XOR, access 200 XOR, fraud 500 XOR,
+and other 120 XOR, with class-specific backlog targets, size divisors, and
+deposit caps encoded in `AppealPricingConfig::baseline_v1()`. Offline
+calculator and evidence runs may load an explicit JSON fixture without changing
+the CLI or library. Production Torii does not load that JSON: the active policy
+is the validated `[sorafs.appeal_finance_settlement]` value supplied by
+`iroha_config`.
+Dimensionless ratios are evaluated with 28 decimal digits, but the aggregate
+monetary result is rounded exactly once, using nearest-even, to XOR's governed
+nano-unit precision of at most nine fractional digits before clamping. Every
+configured or submitted `_xor` amount must already be a canonical nano-XOR
+quantity; sub-nano values and surrounding whitespace are rejected.
+
+Settlement preserves custody at the same precision boundary. Refund and
+treasury partitions round toward zero independently, and the exact residual
+remains in `held_xor`, so `refund + treasury + held == deposit` for every
+verdict. Juror case-bonus shares also round toward zero at nano-XOR precision;
+the undistributed residual is routed to the treasury remainder. No
+floating-point arithmetic or implicit unit conversion is used.
+
+## Torii API
+
+The app API publishes the deterministic baseline through JSON endpoints:
+
+- `GET /v1/sorafs/appeals/pricing/config` returns the active baseline config,
+  quote TTL, default panel size, and class parameters.
+- `GET /v1/sorafs/appeals/pricing/status` reports that config and quote APIs are
+  enabled, the authenticated durable deposit/status/confirmation APIs,
+  plan-only settlement calculation, post-submission reconciliation with
+  deterministic audit digests, runtime-signer durable next-step forwarding,
+  post-finality Governance DAG receipt publication, the retry/dead-letter worker,
+  and the local receipt dashboard. Stateless
+  settlement/disbursement plan APIs are enabled, local Governance DAG
+  report/weekly rollup publication plus the local report and weekly rollup
+  dashboard APIs and authenticated report/rollup publish APIs are enabled.
+- `POST /v1/sorafs/appeals/pricing/quote` accepts `class`, `backlog`,
+  `evidence_size_mb`, optional `urgency`, and optional `panel_size`, then returns
+  the deposit and multiplier breakdown.
+- `POST /v1/sorafs/appeals/finance/settle` accepts `deposit_xor`, `outcome`, and
+  optional `panel_size`, then returns the refund, treasury, held-escrow, and
+  panel-reward breakdown for the active baseline settlement config.
+- `POST /v1/sorafs/appeals/finance/disburse` accepts the same settlement inputs
+  plus canonical refund, treasury, escrow, juror, and optional no-show account
+  ids, then returns the deterministic per-account payout plan. This endpoint is
+  a calculator/reporting surface only; it does not mutate escrow or ledger
+  state.
+- `POST /v1/sorafs/appeals/finance/deposits` accepts `case_id`, optional
+  `round_id`, canonical `payer_account`, canonical `destination_account`,
+  optional `release_authority_account`, canonical `asset_definition_id`,
+  `deposit_xor`, optional `expires_at_ms`, an `idempotency_key`, and optional
+  `evidence_hashes_hex`. The payer-authenticated request durably records the
+  canonical `OpenAssetLock` operation and returns its semantic
+  `operation_id_hex`; it does not return a client-signing payload.
+- `GET /v1/sorafs/appeals/finance/deposits/{escrow_id_hex}` checks the runtime
+  native asset-lock ledger and returns lifecycle status, opener/destination,
+  release authority, asset, amount, remaining custody, evidence hashes, custody
+  account, timestamps, and optional resolution. The request must be signed by
+  the lock opener, destination, or release authority.
+- `POST /v1/sorafs/appeals/finance/deposits/confirm` accepts the same normalized
+  deposit parameters as the builder plus `escrow_id_hex`, requires canonical app
+  authentication, verifies that the supplied escrow id matches the derived id,
+  and confirms that the visible runtime `AssetEscrowRecord` is still a locked
+  native asset lock with full remaining custody for the expected appeal deposit.
+  A visible but mismatched ledger record returns a conflict response with the
+  mismatch list.
+- `POST /v1/sorafs/appeals/finance/deposits/settle` accepts a
+  `deposit_confirmation`, `outcome`, and optional `panel_size`, confirms the
+  visible runtime deposit lock, and returns an ordered non-mutating settlement
+  plan. Non-refunded custody maps to a `DrawdownAssetLock` and refundable
+  custody maps to `CancelAssetLock`; both are bound to the exact current
+  remaining amount. Each step identifies the required authority and amount, but
+  no wire payload is exposed.
+- `POST /v1/sorafs/appeals/finance/deposits/submit-settlement` accepts the same
+  `deposit_confirmation`, `outcome`, and optional `panel_size`, then durably
+  enqueues exactly one next pending settlement step when the finalized-height
+  signer binding resolves to an injected provider with the exact configured key
+  and authority. It returns `durably_enqueued` with `operation_id_hex`; the
+  transaction hash remains unavailable until signing. A settlement receipt is
+  published only after committed-state reconciliation and is derived from the
+  exact signed transaction.
+- `GET /v1/sorafs/appeals/finance/settlement-receipts` returns the local
+  settlement receipt publication summary from `publish-index.json`, with totals
+  by submitted settlement step and reconciliation status plus source entries for
+  dashboard drill-downs. The response includes published/returned counts,
+  applied `limit`, and a truncation flag for the bounded `entries` array.
+- `POST /v1/sorafs/appeals/finance/deposits/reconcile` accepts the same
+  `deposit_confirmation`, `outcome`, and optional `panel_size`, then compares
+  the current runtime asset-lock ledger record with the expected settlement
+  result. It returns `pending_forwarder_submission`, `awaiting_refund_cancel`,
+  `settled`, or `mismatch` with expected and observed lifecycle/remaining
+  amounts, mismatch details, and `reconciliation_digest_hex` for deterministic
+  audit comparison across operators or peers.
+- `POST /v1/sorafs/appeals/finance/reports` accepts a
+  `SoraFsAppealFinanceReportV1` JSON payload and publishes it to the configured
+  local Governance DAG filesystem/runtime publication pipeline. The request must
+  be signed with canonical app authentication.
+- `GET /v1/sorafs/appeals/finance/reports` returns the local published report
+  count, outcome summaries, distinct case count, juror payout and no-show
+  counts, finance totals, latest publication timestamp, and matching
+  publish-index entries. The response includes published/returned counts,
+  applied `limit`, and a truncation flag for the bounded `entries` array.
+- `GET /v1/sorafs/appeals/finance/weekly-rollups` returns the local published
+  weekly rollup count, cycle summaries, source-report totals, latest publication
+  timestamp, and matching publish-index entries. The response includes
+  published/returned counts, applied `limit`, and a truncation flag for the
+  bounded `entries` array.
+- `POST /v1/sorafs/appeals/finance/weekly-rollups` accepts a
+  `SoraFsAppealFinanceWeeklyRollupV1` JSON payload and publishes it through the
+  same authenticated local Governance DAG pipeline.
+
+Example quote request:
+
+```sh
+curl -sS http://127.0.0.1:8080/v1/sorafs/appeals/pricing/quote \
+  -H 'content-type: application/json' \
+  -d '{"class":"content","backlog":28,"evidence_size_mb":45,"urgency":"normal","panel_size":7}'
+```
+
+Example stateless settlement request:
+
+```sh
+curl -sS http://127.0.0.1:8080/v1/sorafs/appeals/finance/settle \
+  -H 'content-type: application/json' \
+  -d '{"deposit_xor":"250","outcome":"overturn","panel_size":7}'
+```
+
+## Operator Commands
+
+Quote a deposit from the baseline config:
+
+```sh
+cargo run --locked -p sorafs_orchestrator --bin sorafs_cli -- \
+  appeal quote \
+  --class=content \
+  --backlog=28 \
+  --evidence-mb=45 \
+  --urgency=normal \
+  --panel-size=7 \
+  --format=json
+```
+
+Quote using an offline calculator/evidence fixture (never a production policy
+override):
+
+```sh
+cargo run --locked -p sorafs_orchestrator --bin sorafs_cli -- \
+  appeal quote \
+  --class=fraud \
+  --backlog=9 \
+  --evidence-mb=12 \
+  --panel-size=7 \
+  --format=json \
+  --config=docs/examples/ministry/appeal_pricing_config_baseline.json
+```
+
+Settle a resolved deposit:
+
+```sh
+cargo run --locked -p sorafs_orchestrator --bin sorafs_cli -- \
+  appeal settle \
+  --deposit=250 \
+  --outcome=overturn \
+  --panel-size=7 \
+  --format=json \
+  --config=docs/examples/ministry/appeal_settlement_config_baseline.json
+```
+
+Generate a full payout plan:
+
+```sh
+cargo run --locked -p sorafs_orchestrator --bin sorafs_cli -- \
+  appeal disburse \
+  --deposit=250 \
+  --outcome=overturn \
+  --refund-account=appellant \
+  --treasury-account=treasury \
+  --escrow-account=appeal_escrow \
+  --juror=juror_a \
+  --juror=juror_b \
+  --juror=juror_c \
+  --juror=juror_d \
+  --juror=juror_e \
+  --juror=juror_f \
+  --juror=juror_g \
+  --panel-size=7 \
+  --format=json \
+  --config=docs/examples/ministry/appeal_settlement_config_baseline.json
+```
+
+Use `--config=-` when automation streams the governance manifest over stdin.
+Archive the JSON output next to the appeal evidence bundle so later audits can
+replay the exact parameters used for the quote or payout.
+
+## Rollout Evidence Gate
+
+Use the rollout gate after the deployed pricing/config routes, quote/settle/
+disburse routes, native deposit lifecycle routes, settlement execution,
+configured-signer submitter, finalized-moderation durable handoff consumer,
+Governance DAG publication path, hosted public dashboard, multi-peer ledger
+reconciliation, and governance packet have produced reviewed, payload-free JSON
+evidence:
+
+```sh
+python3 scripts/check_sorafs_appeal_finance_rollout_evidence.py \
+  @scripts/examples/sorafs_appeal_finance_rollout_evidence.args.example
+```
+
+For staged collections with reviewed evidence paths, prefer the planner so the
+verifier command and summary path are reproducible:
+
+```sh
+python3 scripts/run_sorafs_appeal_finance_rollout_evidence.py \
+  @scripts/examples/sorafs_appeal_finance_rollout_collection.args.example \
+  --dry-run
+```
+
+When operators have reviewed the deployed production facts, use
+`scripts/build_sorafs_appeal_finance_canary.py` as the payload-free SFM-4b2 appeal finance canary builder
+for the individual evidence artifacts consumed by the gate. The builder covers
+every current evidence kind, requires explicit `--verified-claim` input for
+positive safety claims, complete pricing-config class, quote, deposit,
+settlement, urgency, settlement instruction-step, outcome,
+reconciliation-status, payload-kind, and metric coverage where applicable,
+pricing-config `--class-count` binding to the reviewed class inventory,
+quote-API `--quote-count` binding to the reviewed class/urgency product,
+shared `config_digest_hex` binding, and integer threshold-bounded
+route/settlement facts, including explicit `--route-body-blake3-hex` evidence
+for quote, deposit, and settlement route responses. It rejects malformed, generic-family, or non-production
+`--config-version` values,
+duplicate or unknown `--verified-claim`, `--appeal-class`,
+route, `--urgency`, `--outcome`, `--instruction-step`,
+`--reconciliation-status`, `--payload-kind`, and `--metric` inputs before any
+canary JSON is written. Deposit-lifecycle canaries also require reviewed
+`appeal-finance-deposit-probe-*` `--confirmed-deposit-probe` and
+`--unconfirmed-deposit-probe` labels whose unique inventories match
+`--deposit-probe-count` and `--confirmed-deposit-count`, without
+non-production markers. Settlement-submitter canaries also require reviewed
+`appeal-finance-submitter-signer-*` `--signer` labels and
+`appeal-finance-submitter-step-*` `--submitted-step`/`--queued-only-step`
+labels whose unique inventories match the submitter signer and step counts,
+without non-production markers. Governance-DAG publication canaries also
+require reviewed `appeal-finance-report-*`, `appeal-finance-weekly-rollup-*`,
+and `appeal-finance-settlement-receipt-*` labels whose unique inventories match
+the report, weekly rollup, and settlement receipt counts, without
+non-production markers. Governance-DAG publication and dashboard metrics
+canaries derive `payload_kind_count` from the reviewed complete
+`--payload-kind` inventory before prevalidation. Multi-peer
+reconciliation canaries also require reviewed peer, validator, and
+reconciliation-case labels whose unique inventories match `--peer-count`,
+`--validator-count`, and `--case-count`. Pricing-config and governance-approval
+canaries both require reviewed `--policy-digest-hex` input so the gate can prove
+governance approval was issued for the staged pricing policy. It forces raw
+instructions, signed transactions, response bodies, private signer material, deposit
+confirmations, raw reports/rollups/receipts, and raw ledger payload inclusion
+flags to `false`, prevalidates the generated artifact with
+`check_sorafs_appeal_finance_rollout_evidence.py`, and writes the JSON
+atomically without following output symlinks. Example argfiles are checked in
+for the pricing-config anchor and multi-peer reconciliation evidence:
+Appeal-finance payload-safety artifacts must explicitly set
+`config_payload_included`, `payloads_included`, `raw_instruction_included`,
+`deposit_payloads_included`, `signed_transaction_included`,
+`raw_receipt_included`, `raw_ballot_included`,
+`deposit_confirmation_payload_included`, `raw_report_included`,
+`raw_rollup_included`, `critical_alerts_firing`, `response_bodies_included`,
+and `raw_ledger_included` to `false` before promotion can report ready.
+
+```sh
+python3 scripts/build_sorafs_appeal_finance_canary.py \
+  @scripts/examples/sorafs_appeal_finance_pricing_config_canary.args.example
+
+python3 scripts/build_sorafs_appeal_finance_canary.py \
+  @scripts/examples/sorafs_appeal_finance_quote_api_canary.args.example
+
+python3 scripts/build_sorafs_appeal_finance_canary.py \
+  @scripts/examples/sorafs_appeal_finance_multi_peer_reconciliation_canary.args.example
+```
+
+The checker recognizes `sorafs.appeal_finance.*` SFM-4b2 rollout schemas for
+pricing config, quote APIs, deposit lifecycle, settlement execution, settlement
+submitter, moderation worker, Governance DAG publication, dashboard metrics,
+multi-peer reconciliation, and governance approval. It reports `ready` only when
+every required kind is present, every recognized artifact is valid, raw
+instructions, signed transactions, response bodies, private signer material,
+raw reports/rollups/receipts, and raw ledgers are absent, route latency and
+settlement lag are integer-unit evidence under configured thresholds, hosted dashboard evidence is
+fresh, quote/deposit/settlement/submitter/worker/Governance DAG/dashboard/
+reconciliation/governance artifacts carry a `config_digest_hex` matching a
+valid pricing-config artifact in the same bundle, config-bound mismatches are
+attached to the offending artifact in the emitted summary, and aggregate promotion
+rechecks config-bound artifact fingerprints against `valid_config_digests`,
+policy-bound governance approval fingerprints against `valid_policy_digests`,
+and every `valid_multi_peer_runs.config_digest_hex` value against
+`valid_config_digests`. Pricing-config
+artifacts publish valid staged `policy_digest_hex` values and bind
+`class_count` to the reviewed canonical `classes` inventory, governance approval
+evidence carries a matching `policy_digest_hex`, quote API artifacts bind
+`quote_count`/`passed_quote_count` to unique class and urgency inventories,
+deposit lifecycle artifacts bind `deposit_probe_count` and
+`confirmed_deposit_count` to reviewed `appeal-finance-deposit-probe-*`
+inventories without non-production markers, and the settlement execution
+artifacts bind `settlement_probe_count` to unique outcome coverage.
+Settlement-submitter artifacts bind configured signer and queued/submitted step
+counts to reviewed `appeal-finance-submitter-signer-*` and
+`appeal-finance-submitter-step-*` inventories without non-production markers.
+Pricing-config artifacts also bind `class_count` to the reviewed canonical
+`classes` inventory and reject duplicate or unknown class entries before
+promotion can report ready.
+Settlement execution artifacts also bind `instruction_step_count` to the unique
+`instruction_steps` inventory and reject duplicate or unknown instruction-step
+entries before promotion can report ready.
+Governance-DAG publication artifacts also bind `report_count`,
+`weekly_rollup_count`, and `settlement_receipt_count` to the unique canonical
+`reports[].name`, `weekly_rollups[].name`, and `settlement_receipts[].name`
+inventories, require reviewed `appeal-finance-report-*`,
+`appeal-finance-weekly-rollup-*`, and
+`appeal-finance-settlement-receipt-*` labels without non-production markers,
+and reject duplicate publication entries before promotion can report ready.
+Governance-DAG publication and dashboard metrics artifacts also
+require `payload_kind_count`, bind it to the unique canonical `payload_kinds`
+inventory, and reject missing, inflated, duplicate, or unknown payload-kind
+evidence before promotion can report ready. Dashboard metrics artifacts also
+bind `metric_count` to the unique canonical `metrics` inventory and reject
+duplicate or unknown metric entries before promotion can report ready. The
+summary exports the sorted reviewed `metrics` inventory plus
+`metric_count_values`, and the aggregate production-readiness gate requires
+those fields to match the dashboard metrics artifact fingerprint before final
+promotion can report ready. The appeal-finance gate fail-closes when more than
+one valid config or policy anchor appears, and clears the mixed
+`valid_config_digests` or `valid_policy_digests` set before aggregate promotion
+can report ready. Multi-peer
+reconciliation artifacts also bind `peer_count`, `validator_count`, and
+`case_count` to the unique canonical `peers[].name`, `validators[].name`, and
+`cases[].name` inventories, require those names to use reviewed
+`appeal-finance-peer-*`, `appeal-finance-validator-*`, and
+`appeal-finance-case-*` labels without non-production markers, require
+`case_count` to match the `cases[].reconciled` partition, and reject duplicate
+peer, validator, or case entries before promotion can report ready. The
+multi-peer reconciliation run covers at least four peers, and the
+governance approval is bound to
+`iroha_config`. The collection planner includes the checker-backed
+`evidence_contract` map in `--dry-run` output so operators can review the exact
+SFM-4b2 artifact contract before promoting staged evidence. The shared runner
+plan guard rejects non-canonical nested required-kind, threshold,
+external-evidence, evidence-contract, and command-step shapes before dry-run
+output or verifier execution.
+
+## Remaining Production Gates
+
+- Capture hosted live/public dashboard and alert evidence that passes the SFM-4b2
+  rollout gate once the public Governance DAG and ledger reconciliation paths
+  are deployed.
+- Capture end-to-end evidence that covers quote creation, deposit posting,
+  decision ingestion, settlement submission, disbursement, and treasury
+  reconciliation against a multi-peer runtime ledger with at least four peers,
+  then attach it to the gate summary.
+
+## Validation
+
+Focused Rust coverage lives with the helper implementations and the
+`sorafs_cli` tests. For this page, the minimum refresh check is:
+
+```sh
+cargo test -p sorafs_orchestrator appeal
+CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-dashboard-limit cargo test -j 1 -p iroha_torii appeal_finance_dashboards_limit --lib --features app_api -- --nocapture
+```
+
+Run broader SoraFS CLI tests when changing command arguments, manifest parsing,
+or JSON/table output.
+
+The rollout evidence scripts have focused Python coverage in:
+
+- `scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py`
+- `scripts/tests/run_sorafs_appeal_finance_rollout_evidence_test.py`
+
+The runner validates the schema-closed collection-plan envelope before printing
+dry-run JSON or executing the verifier. The shared runner plan guard rejects
+non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes.

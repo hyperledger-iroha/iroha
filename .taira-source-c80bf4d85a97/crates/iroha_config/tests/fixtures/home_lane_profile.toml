@@ -1,0 +1,4 @@
+extends = "minimal_with_trusted_peers.toml"
+
+[network]
+lane_profile = "home"

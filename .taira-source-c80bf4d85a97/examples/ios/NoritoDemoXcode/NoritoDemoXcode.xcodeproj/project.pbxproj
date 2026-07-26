@@ -1,0 +1,251 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		3F1C3A922C7F000600C1C001 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3A912C7F000600C1C001 /* App.swift */; };
+		3F1C3A942C7F000600C1C001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3A932C7F000600C1C001 /* ContentView.swift */; };
+		3F1C3AA02C7F05AA00C1C001 /* NoritoBridgeKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3A9F2C7F05AA00C1C001 /* NoritoBridgeKit.swift */; };
+		3F1C3AAE2C7F11B500C1C001 /* ConnectViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3AAD2C7F11B500C1C001 /* ConnectViewModelTests.swift */; };
+		3F1C3AC52C7F4F7A00C1C001 /* AccelerationConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3AC42C7F4F7A00C1C001 /* AccelerationConfig.swift */; };
+		3F1C3AC72C7F4F7A00C1C001 /* AccelerationConfigLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C3AC62C7F4F7A00C1C001 /* AccelerationConfigLoaderTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		3F1C3A8C2C7EFFD900C1C001 /* NoritoDemoXcode.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NoritoDemoXcode.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3F1C3A912C7F000600C1C001 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+		3F1C3A932C7F000600C1C001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		3F1C3A952C7F003800C1C001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		3F1C3A9F2C7F05AA00C1C001 /* NoritoBridgeKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoritoBridgeKit.swift; sourceTree = "<group>"; };
+		3F1C3AAF2C7F11B500C1C001 /* NoritoDemoXcodeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NoritoDemoXcodeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		3F1C3AAD2C7F11B500C1C001 /* ConnectViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectViewModelTests.swift; sourceTree = "<group>"; };
+		3F1C3AB02C7F11B500C1C001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		3F1C3AC42C7F4F7A00C1C001 /* AccelerationConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccelerationConfig.swift; sourceTree = "<group>"; };
+		3F1C3AC62C7F4F7A00C1C001 /* AccelerationConfigLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccelerationConfigLoaderTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		3F1C3A872C7EFFD900C1C001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+		3F1C3AB32C7F11B500C1C001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		3F1C3A812C7EFFD900C1C001 = {isa = PBXGroup; children = (
+			3F1C3A8D2C7EFFD900C1C001 /* Products */,
+			3F1C3A962C7F004200C1C001 /* NoritoDemoXcode */,
+			3F1C3AB12C7F11B500C1C001 /* NoritoDemoXcodeTests */,
+		); sourceTree = "<group>"; };
+		3F1C3A8D2C7EFFD900C1C001 /* Products */ = {isa = PBXGroup; children = (
+			3F1C3A8C2C7EFFD900C1C001 /* NoritoDemoXcode.app */,
+			3F1C3AAF2C7F11B500C1C001 /* NoritoDemoXcodeTests.xctest */,
+		); name = Products; sourceTree = "<group>"; };
+		3F1C3A962C7F004200C1C001 /* NoritoDemoXcode */ = {isa = PBXGroup; children = (
+			3F1C3A912C7F000600C1C001 /* App.swift */,
+			3F1C3A932C7F000600C1C001 /* ContentView.swift */,
+			3F1C3A9F2C7F05AA00C1C001 /* NoritoBridgeKit.swift */,
+			3F1C3AC42C7F4F7A00C1C001 /* AccelerationConfig.swift */,
+			3F1C3A952C7F003800C1C001 /* Info.plist */,
+		); path = NoritoDemoXcode; sourceTree = "<group>"; };
+		3F1C3AB12C7F11B500C1C001 /* NoritoDemoXcodeTests */ = {isa = PBXGroup; children = (
+			3F1C3AAD2C7F11B500C1C001 /* ConnectViewModelTests.swift */,
+			3F1C3AC62C7F4F7A00C1C001 /* AccelerationConfigLoaderTests.swift */,
+			3F1C3AB02C7F11B500C1C001 /* Info.plist */,
+		); path = NoritoDemoXcodeTests; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		3F1C3A8B2C7EFFD900C1C001 /* NoritoDemoXcode */ = {isa = PBXNativeTarget; buildConfigurationList = 3F1C3A902C7EFFD900C1C001 /* Build configuration list for PBXNativeTarget "NoritoDemoXcode" */; buildPhases = (
+			3F1C3A862C7EFFD900C1C001 /* Sources */,
+			3F1C3A872C7EFFD900C1C001 /* Frameworks */,
+			3F1C3A882C7EFFD900C1C001 /* Resources */,
+		); buildRules = ( ); dependencies = ( ); name = NoritoDemoXcode; productName = NoritoDemoXcode; productReference = 3F1C3A8C2C7EFFD900C1C001 /* NoritoDemoXcode.app */; productType = "com.apple.product-type.application"; };
+		3F1C3AB52C7F11B500C1C001 /* NoritoDemoXcodeTests */ = {isa = PBXNativeTarget; buildConfigurationList = 3F1C3AB92C7F11B500C1C001 /* Build configuration list for PBXNativeTarget "NoritoDemoXcodeTests" */; buildPhases = (
+			3F1C3AB22C7F11B500C1C001 /* Sources */,
+			3F1C3AB32C7F11B500C1C001 /* Frameworks */,
+			3F1C3AB42C7F11B500C1C001 /* Resources */,
+		); buildRules = ( ); dependencies = (
+			3F1C3AB82C7F11B500C1C001 /* PBXTargetDependency */,
+		); name = NoritoDemoXcodeTests; productName = NoritoDemoXcodeTests; productReference = 3F1C3AAF2C7F11B500C1C001 /* NoritoDemoXcodeTests.xctest */; productType = "com.apple.product-type.bundle.unit-test"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		3F1C3A822C7EFFD900C1C001 /* Project object */ = {isa = PBXProject; attributes = { LastSwiftUpdateCheck = 1530; LastUpgradeCheck = 1530; ORGANIZATIONNAME = "Iroha"; TargetAttributes = { 3F1C3A8B2C7EFFD900C1C001 = { CreatedOnToolsVersion = 15.3; }; 3F1C3AB52C7F11B500C1C001 = { CreatedOnToolsVersion = 15.3; }; }; }; buildConfigurationList = 3F1C3A852C7EFFD900C1C001 /* Build configuration list for PBXProject "NoritoDemoXcode" */; compatibilityVersion = "Xcode 15.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = ( en ); mainGroup = 3F1C3A812C7EFFD900C1C001; productRefGroup = 3F1C3A8D2C7EFFD900C1C001 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (
+			3F1C3A8B2C7EFFD900C1C001 /* NoritoDemoXcode */,
+			3F1C3AB52C7F11B500C1C001 /* NoritoDemoXcodeTests */,
+		); };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		3F1C3A882C7EFFD900C1C001 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+		3F1C3AB42C7F11B500C1C001 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ( ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		3F1C3A862C7EFFD900C1C001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+			3F1C3A942C7F000600C1C001 /* ContentView.swift in Sources */,
+			3F1C3A922C7F000600C1C001 /* App.swift in Sources */,
+			3F1C3AA02C7F05AA00C1C001 /* NoritoBridgeKit.swift in Sources */,
+			3F1C3AC52C7F4F7A00C1C001 /* AccelerationConfig.swift in Sources */,
+		); runOnlyForDeploymentPostprocessing = 0; };
+		3F1C3AB22C7F11B500C1C001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+			3F1C3AAE2C7F11B500C1C001 /* ConnectViewModelTests.swift in Sources */,
+			3F1C3AC72C7F4F7A00C1C001 /* AccelerationConfigLoaderTests.swift in Sources */,
+		); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXContainerItemProxy section */
+	3F1C3AB72C7F11B500C1C001 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = 3F1C3A822C7EFFD900C1C001 /* Project object */; proxyType = 1; remoteGlobalIDString = 3F1C3A8B2C7EFFD900C1C001; remoteInfo = NoritoDemoXcode; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+	3F1C3AB82C7F11B500C1C001 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = 3F1C3A8B2C7EFFD900C1C001 /* NoritoDemoXcode */; targetProxy = 3F1C3AB72C7F11B500C1C001 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		3F1C3A892C7EFFD900C1C001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+			ALWAYS_SEARCH_USER_PATHS = NO;
+			CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+			CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+			CODE_SIGN_STYLE = Automatic;
+			DEVELOPMENT_TEAM = "";
+			ENABLE_TESTABILITY = YES;
+			GCC_C_LANGUAGE_STANDARD = gnu11;
+			GENERATE_INFOPLIST_FILE = NO;
+			INFOPLIST_FILE = NoritoDemoXcode/Info.plist;
+			IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+			LD_RUNPATH_SEARCH_PATHS = (
+				"$(inherited)",
+				"@executable_path/Frameworks",
+			);
+			PRODUCT_BUNDLE_IDENTIFIER = tech.iroha.NoritoDemoXcode;
+			PRODUCT_NAME = "$(TARGET_NAME)";
+			SDKROOT = iphoneos;
+			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+			SWIFT_EMIT_LOC_STRINGS = NO;
+			SWIFT_VERSION = 5.9;
+			TARGETED_DEVICE_FAMILY = "1";
+		}; name = Debug; };
+		3F1C3A8A2C7EFFD900C1C001 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+			ALWAYS_SEARCH_USER_PATHS = NO;
+			CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+			CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+			CODE_SIGN_STYLE = Automatic;
+			DEVELOPMENT_TEAM = "";
+			GCC_C_LANGUAGE_STANDARD = gnu11;
+			GENERATE_INFOPLIST_FILE = NO;
+			INFOPLIST_FILE = NoritoDemoXcode/Info.plist;
+			IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+			LD_RUNPATH_SEARCH_PATHS = (
+				"$(inherited)",
+				"@executable_path/Frameworks",
+			);
+			PRODUCT_BUNDLE_IDENTIFIER = tech.iroha.NoritoDemoXcode;
+			PRODUCT_NAME = "$(TARGET_NAME)";
+			SDKROOT = iphoneos;
+			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+			SWIFT_EMIT_LOC_STRINGS = NO;
+			SWIFT_VERSION = 5.9;
+			TARGETED_DEVICE_FAMILY = "1";
+		}; name = Release; };
+		3F1C3A912C7EFFD900C1C001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+			ALWAYS_SEARCH_USER_PATHS = NO;
+			CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+			CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+			CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+			COPY_PHASE_STRIP = NO;
+			ENABLE_NS_ASSERTIONS = YES;
+			GCC_C_LANGUAGE_STANDARD = gnu11;
+			GCC_DYNAMIC_NO_PIC = NO;
+			GCC_NO_COMMON_BLOCKS = YES;
+			GCC_OPTIMIZATION_LEVEL = 0;
+			GCC_PREPROCESSOR_DEFINITIONS = (
+				"DEBUG=1",
+				"$(inherited)",
+			);
+			GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+			GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+			GCC_WARN_UNDECLARED_SELECTOR = YES;
+			GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+			GCC_WARN_UNUSED_FUNCTION = YES;
+			GCC_WARN_UNUSED_VARIABLE = YES;
+
+			SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+			SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+		}; name = Debug; };
+		3F1C3A922C7EFFD900C1C001 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+			ALWAYS_SEARCH_USER_PATHS = NO;
+			CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+			CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+			CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+			COPY_PHASE_STRIP = NO;
+			GCC_C_LANGUAGE_STANDARD = gnu11;
+			GCC_NO_COMMON_BLOCKS = YES;
+			GCC_OPTIMIZATION_LEVEL = s;
+			GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+			GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+			GCC_WARN_UNDECLARED_SELECTOR = YES;
+			GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+			GCC_WARN_UNUSED_FUNCTION = YES;
+			GCC_WARN_UNUSED_VARIABLE = YES;
+		}; name = Release; };
+		3F1C3ABA2C7F11B500C1C001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+			BUNDLE_LOADER = "$(TEST_HOST)";
+			CODE_SIGN_STYLE = Automatic;
+			DEVELOPMENT_TEAM = "";
+			INFOPLIST_FILE = NoritoDemoXcodeTests/Info.plist;
+			IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+			LD_RUNPATH_SEARCH_PATHS = (
+				"$(inherited)",
+				"@executable_path/Frameworks",
+				"@loader_path/Frameworks",
+			);
+			PRODUCT_BUNDLE_IDENTIFIER = tech.iroha.NoritoDemoXcodeTests;
+			PRODUCT_NAME = "$(TARGET_NAME)";
+			SDKROOT = iphoneos;
+			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+			SWIFT_VERSION = 5.9;
+			TARGETED_DEVICE_FAMILY = "1";
+			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoritoDemoXcode.app/NoritoDemoXcode";
+		}; name = Debug; };
+		3F1C3ABB2C7F11B500C1C001 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+			BUNDLE_LOADER = "$(TEST_HOST)";
+			CODE_SIGN_STYLE = Automatic;
+			DEVELOPMENT_TEAM = "";
+			INFOPLIST_FILE = NoritoDemoXcodeTests/Info.plist;
+			IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+			LD_RUNPATH_SEARCH_PATHS = (
+				"$(inherited)",
+				"@executable_path/Frameworks",
+				"@loader_path/Frameworks",
+			);
+			PRODUCT_BUNDLE_IDENTIFIER = tech.iroha.NoritoDemoXcodeTests;
+			PRODUCT_NAME = "$(TARGET_NAME)";
+			SDKROOT = iphoneos;
+			SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+			SWIFT_VERSION = 5.9;
+			TARGETED_DEVICE_FAMILY = "1";
+			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NoritoDemoXcode.app/NoritoDemoXcode";
+		}; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3F1C3A852C7EFFD900C1C001 /* Build configuration list for PBXProject "NoritoDemoXcode" */ = {isa = XCConfigurationList; buildConfigurations = (
+			3F1C3A912C7EFFD900C1C001 /* Debug */,
+			3F1C3A922C7EFFD900C1C001 /* Release */,
+		); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		3F1C3A902C7EFFD900C1C001 /* Build configuration list for PBXNativeTarget "NoritoDemoXcode" */ = {isa = XCConfigurationList; buildConfigurations = (
+			3F1C3A892C7EFFD900C1C001 /* Debug */,
+			3F1C3A8A2C7EFFD900C1C001 /* Release */,
+		); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		3F1C3AB92C7F11B500C1C001 /* Build configuration list for PBXNativeTarget "NoritoDemoXcodeTests" */ = {isa = XCConfigurationList; buildConfigurations = (
+			3F1C3ABA2C7F11B500C1C001 /* Debug */,
+			3F1C3ABB2C7F11B500C1C001 /* Release */,
+		); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+
+	};
+	rootObject = 3F1C3A822C7EFFD900C1C001 /* Project object */;
+}

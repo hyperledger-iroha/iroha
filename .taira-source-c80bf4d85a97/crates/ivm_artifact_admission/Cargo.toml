@@ -1,0 +1,33 @@
+[package]
+name = "ivm_artifact_admission"
+version.workspace = true
+edition = "2024"
+authors = ["Iroha Contributors"]
+description = "Host-independent admission for deployable IVM contract artifacts"
+license = "Apache-2.0"
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+hex = { workspace = true, features = ["alloc"] }
+iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["std", "json"] }
+iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance"] }
+ivm_abi = { path = "../ivm_abi" }
+kotodama_lang = { path = "../kotodama_lang" }
+norito = { path = "../norito" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# `ivm_abi` reaches getrandom 0.2 through the data-model crypto surface. The
+# admission path itself never samples randomness, but wasm32-unknown-unknown
+# still needs the browser backend selected for that transitive crate to link.
+getrandom = { version = "0.2.17", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "0.4.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+base64 = { workspace = true, features = ["alloc"] }
+
+[lints]
+workspace = true

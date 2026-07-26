@@ -1,0 +1,18 @@
+{
+  "account": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+  "instructions": [
+    {
+      "asset": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi#sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+      "kind": "mint_asset",
+      "quantity": "5"
+    },
+    {
+      "asset": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi#sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+      "destination": "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+      "kind": "transfer_asset",
+      "quantity": "1"
+    }
+  ],
+  "kind": "multisig_propose",
+  "transaction_ttl_ms": 3600000
+}

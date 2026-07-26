@@ -1,0 +1,8 @@
+# Stage C / Default rollout configuration
+[sorafs]
+rollout_phase = "default"
+# anonymity_policy = "anon-strict-pq"
+
+[sorafs.gateway]
+rollout_phase = "default"
+# anonymity_policy = "anon-strict-pq"

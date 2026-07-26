@@ -1029,18 +1029,7 @@ pub struct ValidationFeeProposalDraftResponseV1 {
 }
 
 /// Closed direction accepted by the typed validation-fee PLAIN ballot draft.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-)]
-#[norito(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
 pub enum ValidationFeePlainBallotDirectionV1 {
     /// Vote in favor of the proposal.
     Aye,
@@ -1059,6 +1048,33 @@ impl ValidationFeePlainBallotDirectionV1 {
             Self::Aye => 0,
             Self::Nay => 1,
             Self::Abstain => 2,
+        }
+    }
+}
+
+impl norito::json::JsonSerialize for ValidationFeePlainBallotDirectionV1 {
+    fn json_serialize(&self, out: &mut String) {
+        let value = match self {
+            Self::Aye => "AYE",
+            Self::Nay => "NAY",
+            Self::Abstain => "ABSTAIN",
+        };
+        norito::json::write_json_string(value, out);
+    }
+}
+
+impl norito::json::JsonDeserialize for ValidationFeePlainBallotDirectionV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        match value.as_str() {
+            "AYE" => Ok(Self::Aye),
+            "NAY" => Ok(Self::Nay),
+            "ABSTAIN" => Ok(Self::Abstain),
+            other => Err(norito::json::Error::UnknownField {
+                field: other.to_owned(),
+            }),
         }
     }
 }

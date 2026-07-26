@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "brief_id": "VB-2026-04-EN-01",
+  "proposal_id": "BLACKLIST-2026-04-12",
+  "language": "en",
+  "stance": "support",
+  "submitted_at": "2026-04-15T11:24:00Z",
+  "author": {
+    "name": "Makoto K.",
+    "organization": "Sora Commons Guild",
+    "contact": "makoto@example.org",
+    "no_conflicts_certified": false
+  },
+  "summary": {
+    "title": "Support delisting stale phishing domain",
+    "abstract": "The phishing domain flagged in docket BLACKLIST-2026-04-12 has been inactive for eight weeks and the operator forfeited all deposits. This brief summarises the investigation log, affected wallet IDs, and telemetry confirming the threat window has closed.",
+    "requested_action": "Approve delisting provided replicas confirm zero unresolved appeals."
+  },
+  "fact_table": [
+    {
+      "claim_id": "VB-2026-04-F1",
+      "claim": "Torii case TR-2219 concluded with a verified restitution payment on 2026-03-02.",
+      "status": "corroborated",
+      "impact": [
+        "governance",
+        "compliance"
+      ],
+      "citations": [
+        "torii://case/TR-2219",
+        "https://sora.explorer/tx/0xabc123"
+      ],
+      "evidence_digest": "d7d1c1f0e8a6f8c7d2b49392dd4ddc4076aef9b1403fab8a9d53d2d3b029f3ad"
+    },
+    {
+      "claim_id": "VB-2026-04-F2",
+      "claim": "SoraNet telemetry shows zero traffic to the domain over the 30-day cooling window.",
+      "status": "corroborated",
+      "impact": [
+        "technical"
+      ],
+      "citations": [
+        "https://dashboards.sora.net/render/d/telemetry-phishing?orgId=1&from=20260315&to=20260414"
+      ],
+      "evidence_digest": "f125aa2e6d62ad6a39da98f3467b7d35d6f8f0a6d44c2f0d39a14cdea3a4a449"
+    },
+    {
+      "claim_id": "VB-2026-04-F3",
+      "claim": "One affected wallet still holds restitution funds because the operator has not completed KYC.",
+      "status": "context-only",
+      "impact": [
+        "community"
+      ],
+      "citations": []
+    }
+  ],
+  "disclosures": [
+    {
+      "type": "employment",
+      "entity": "Sora Commons Guild",
+      "relationship": "Incident response contractor",
+      "details": "I am paid an hourly retainer to manage phishing takedown reports.",
+      "evidence": "https://sora.commons/contracts/contract-2025-11.pdf"
+    }
+  ],
+  "moderation": {
+    "off_topic": false,
+    "tags": [
+      "needs-follow-up"
+    ],
+    "notes": "Awaiting KYC completion for remaining restitution; otherwise ready for publication."
+  }
+}

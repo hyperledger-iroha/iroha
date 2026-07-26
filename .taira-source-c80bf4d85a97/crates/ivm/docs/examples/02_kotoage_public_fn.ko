@@ -1,0 +1,7 @@
+// Canonical authorized 言挙げ declaration.
+誓約 PublicIncrement {
+    言挙げ fn inc(int n) -> int authorize("Entry") {
+        let one = 1;
+        return n + one;
+    }
+}

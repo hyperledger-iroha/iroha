@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Laipni lūdzam Hyperledger Iroha!",
+  "error.trace_config_setup": "Nevarēja iestatīt konfigurācijas izsekošanu",
+  "error.config": "Konfigurācija kļūda",
+  "error.logger": "Nevarēja inicializēt reģistrētāju",
+  "error.start": "Neizdevās startēt Iroha",
+  "error.run": "Palaižot Iroha, radās kļūda",
+  "error.start_p2p": "Nevar startēt vienādranga tīklu",
+  "error.init_kura": "Nevar inicializēt Kura (bloku krātuve)",
+  "error.start_dev_telemetry": "Nevar palaist dev telemetrijas pakalpojumu",
+  "error.start_telemetry": "Nevar startēt telemetrijas pakalpojumu",
+  "error.listen_os_signal": "Nevar iestatīt OS signālu klausīšanos",
+  "error.start_torii": "Nevar startēt Torii (Iroha http API vārteju)"
+}

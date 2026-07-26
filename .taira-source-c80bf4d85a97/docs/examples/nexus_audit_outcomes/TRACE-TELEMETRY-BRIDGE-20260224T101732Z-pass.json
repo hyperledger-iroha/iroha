@@ -1,0 +1,27 @@
+{
+  "trace_id": "TRACE-TELEMETRY-BRIDGE",
+  "captured_at": "2026-02-24T10:17:32Z",
+  "payload": {
+    "trace_id": "TRACE-TELEMETRY-BRIDGE",
+    "slot_height": 184467,
+    "status": "pass",
+    "reviewer": "sdk-observability",
+    "notes": "OTLP replay matched baseline lanes 1-3; Torii diff bot produced zero deltas.",
+    "mitigation_url": null
+  },
+  "log": {
+    "timestamp": "2026-02-24T10:17:32Z",
+    "level": "info",
+    "fields": {
+      "msg": "nexus.audit.outcome",
+      "event": {
+        "trace_id": "TRACE-TELEMETRY-BRIDGE",
+        "slot_height": 184467,
+        "status": "pass",
+        "reviewer": "sdk-observability",
+        "notes": "OTLP replay matched baseline lanes 1-3; Torii diff bot produced zero deltas.",
+        "mitigation_url": null
+      }
+    }
+  }
+}

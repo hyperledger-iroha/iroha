@@ -1,0 +1,378 @@
+{
+  "title": "Nexus Lane Finality & Oracles",
+  "uid": "nexus-lanes",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "refresh": "30s",
+  "tags": ["nexus", "lanes", "nx-18"],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Slot Duration Quantiles (5m)",
+      "description": "NX-18 requirement — prove the 1 s budget via histogram_quantile on iroha_slot_duration_ms.",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(iroha_slot_duration_ms_bucket[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(iroha_slot_duration_ms_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(iroha_slot_duration_ms_bucket[5m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Latest Slot Duration",
+      "description": "Gauge wired to iroha_slot_duration_ms_latest so on-call can see the last observed slot without waiting for the histogram window.",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "iroha_slot_duration_ms_latest",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DA Quorum Ratio",
+      "description": "Rolling fraction of slots that satisfied the DA quorum (iroha_da_quorum_ratio). Alert when < 0.95.",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "iroha_da_quorum_ratio",
+          "legendFormat": "ratio",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DA Reschedules (5m)",
+      "description": "Increase of sumeragi_rbc_da_reschedule_total — should stay near zero outside drills.",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "increase(sumeragi_rbc_da_reschedule_total[5m])",
+          "legendFormat": "reschedules/5m",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Oracle Price (local per XOR)",
+      "id": 5,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "iroha_oracle_price_local_per_xor",
+          "legendFormat": "price",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ratio",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Oracle Staleness (seconds)",
+      "id": 6,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "iroha_oracle_staleness_seconds",
+          "legendFormat": "staleness",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Oracle TWAP Window",
+      "id": 7,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "iroha_oracle_twap_window_seconds",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Oracle Haircut (bps)",
+      "id": 8,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "iroha_oracle_haircut_basis_points",
+          "legendFormat": "haircut",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Settlement Buffer Health",
+      "description": "Tracks iroha_settlement_buffer_xor for every lane/dataspace pair so operators can confirm buffer headroom before changing router policy.",
+      "id": 9,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "iroha_settlement_buffer_xor",
+          "legendFormat": "buffer %",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Space Directory Active Manifests",
+      "description": "nexus_space_directory_active_manifests grouped by dataspace/profile so operators can confirm which UAID manifests are live.",
+      "id": 10,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "nexus_space_directory_active_manifests",
+          "legendFormat": "{{dataspace}} ({{profile}})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Manifest Revision Counter",
+      "description": "Absolute value of nexus_space_directory_revision_total per dataspace; capture before/after snapshots when activating new manifests.",
+      "id": 11,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "nexus_space_directory_revision_total",
+          "legendFormat": "{{dataspace}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Manifest Revocations (rate)",
+      "description": "rate(nexus_space_directory_revocations_total[5m]) grouped by dataspace/reason to highlight deny-wins activity.",
+      "id": 12,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(nexus_space_directory_revocations_total[5m])",
+          "legendFormat": "{{dataspace}}/{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Lane Block Height",
+      "description": "Latest block height observed per lane/dataspace pair via nexus_lane_block_height.",
+      "id": 13,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "nexus_lane_block_height",
+          "legendFormat": "{{lane}}/{{dataspace}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Finality Lag (slots)",
+      "description": "nexus_lane_finality_lag_slots highlights how far each lane trails the global head height.",
+      "id": 14,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "nexus_lane_finality_lag_slots",
+          "legendFormat": "{{lane}}/{{dataspace}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Settlement Backlog (XOR)",
+      "description": "Tracks nexus_lane_settlement_backlog_xor so regulators can confirm per-lane backlog is within policy.",
+      "id": 15,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "nexus_lane_settlement_backlog_xor",
+          "legendFormat": "{{lane}}/{{dataspace}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Lane Relay Validation Errors (5m)",
+      "description": "increase(lane_relay_invalid_total[5m]) grouped by error kind; should stay at zero outside chaos/adversarial runs.",
+      "id": 16,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (error) (increase(lane_relay_invalid_total[5m]))",
+          "legendFormat": "{{error}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    }
+  ]
+}

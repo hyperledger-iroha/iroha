@@ -1,0 +1,28 @@
+groups:
+  - name: torii-norito-rpc
+    interval: 1m
+    rules:
+      - alert: ToriiNoritoRpcErrorSpike
+        expr: increase(torii_request_failures_total{scheme="norito_rpc",code=~"5.."}[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Torii Norito RPC experiencing sustained 5xx errors"
+          description: "More than five 5xx responses observed in the past five minutes."
+      - alert: ToriiNoritoRpcLatencyDegraded
+        expr: histogram_quantile(0.95, sum(rate(torii_request_duration_seconds_bucket{scheme="norito_rpc"}[5m])) by (le)) > 0.75
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Torii Norito RPC latency above SLO"
+          description: "P95 latency exceeded 750ms over a rolling 5 minute window."
+      - alert: ToriiNoritoRpcSilentTraffic
+        expr: increase(torii_request_duration_seconds_count{scheme="norito_rpc"}[30m]) == 0
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No Norito RPC traffic observed"
+          description: "Norito RPC request counters have not increased for 30 minutes."

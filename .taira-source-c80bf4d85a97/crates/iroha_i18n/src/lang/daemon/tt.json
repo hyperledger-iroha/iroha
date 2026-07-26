@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Hyperledger Iroha-га хуш килдегез!",
+  "error.trace_config_setup": "Конфигурацияне күзәтүне көйләп булмады",
+  "error.config": "Конфигурация хата!",
+  "error.logger": "Журнал системасын эшләтеп булмады",
+  "error.start": "Iroha-ны эшләтеп булмады",
+  "error.run": "Iroha үтәгәндә хата килеп чыкты",
+  "error.start_p2p": "P2P челтәрен эшләтеп булмады",
+  "error.init_kura": "Kura (блок саклагыч) эшләтеп булмады",
+  "error.start_dev_telemetry": "Үсеш телеметриясе хезмәтен эшләтеп булмады",
+  "error.start_telemetry": "Телеметрия хезмәтен эшләтеп булмады",
+  "error.listen_os_signal": "ОС сигналларын тыңлауны көйләп булмады",
+  "error.start_torii": "Torii (Iroha HTTP API шлюзы) эшләтеп булмады"
+}

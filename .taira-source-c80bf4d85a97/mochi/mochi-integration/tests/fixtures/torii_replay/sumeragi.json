@@ -1,0 +1,36 @@
+{
+  "protocol_version": 3,
+  "node_fingerprint": "hash:22F8CF5BC02BDDA9887C4A9773EB84B75C444FBDD6FF187B097ADC10FE6E3173#C135",
+  "build_fingerprint": "hash:1455B744B3F34DBC54E131B415B56A67AED43C1A15C7C01C656C3E35B9C426EF#5521",
+  "config_fingerprint": "hash:80A1497D1673B6661521F948A4D6E379D44CB93FFBE6CB63C6FB234BF7272E45#4770",
+  "restart_required": false,
+  "height_context_id": [
+    "hash:4C0BB496C44F2518451ACD56AB704B3665CD3F86E76A1480C78A0A25CBC0A6BB#6499"
+  ],
+  "height": 10,
+  "view": 4,
+  "phase": {
+    "phase": "prepare",
+    "details": null
+  },
+  "leader": 0,
+  "body_state": {
+    "state": "validated",
+    "details": null
+  },
+  "last_committed_height": 9,
+  "height_context": {
+    "epoch": 1,
+    "epoch_end_height": 100,
+    "mode": {
+      "mode": "permissioned",
+      "details": null
+    },
+    "epoch_seed": "A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5",
+    "validator_count": 4,
+    "quorum": {
+      "min_signers": 3,
+      "total_power": 4
+    }
+  }
+}

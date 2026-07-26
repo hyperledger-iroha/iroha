@@ -1,0 +1,92 @@
+{
+  "billing_period": "2026-11",
+  "currency": "XOR",
+  "usage": [
+    {
+      "meter_id": "http.request",
+      "region": "NA",
+      "units": 1000000,
+      "effective_rate_micros": 5,
+      "discount_bps": 500,
+      "amount_micros": 5000000
+    },
+    {
+      "meter_id": "http.egress_gib",
+      "region": "EU",
+      "units": 420,
+      "effective_rate_micros": 193800,
+      "discount_bps": 1000,
+      "amount_micros": 81396000
+    },
+    {
+      "meter_id": "dns.doh_query",
+      "region": "APAC",
+      "units": 2600000,
+      "effective_rate_micros": 4,
+      "discount_bps": 1000,
+      "amount_micros": 10400000
+    },
+    {
+      "meter_id": "waf.decision",
+      "region": "GLOBAL",
+      "units": 2000,
+      "effective_rate_micros": 20,
+      "discount_bps": 0,
+      "amount_micros": 40000
+    },
+    {
+      "meter_id": "car.verification_ms",
+      "region": "GLOBAL",
+      "units": 460000,
+      "effective_rate_micros": 10,
+      "discount_bps": 0,
+      "amount_micros": 4600000
+    },
+    {
+      "meter_id": "storage.gib_month",
+      "region": "NA",
+      "units": 65,
+      "effective_rate_micros": 171000,
+      "discount_bps": 500,
+      "amount_micros": 11115000
+    }
+  ],
+  "totals": {
+    "gross_micros": 112551000,
+    "discounts_micros": 11817855,
+    "dispute_hold_micros": 20146629,
+    "treasury_cut_micros": 5036658,
+    "net_micros": 100733145
+  },
+  "transfers": [
+    {
+      "from": "customer",
+      "to": "sora.cdn.receivable",
+      "amount_micros": 112551000,
+      "memo": "invoice capture"
+    },
+    {
+      "from": "sora.cdn.receivable",
+      "to": "sora.cdn.revenue",
+      "amount_micros": 75549858,
+      "memo": "net after discounts/holds"
+    },
+    {
+      "from": "sora.cdn.receivable",
+      "to": "sora.cdn.dispute.v1",
+      "amount_micros": 20146629,
+      "memo": "escrow hold until dispute closure"
+    },
+    {
+      "from": "sora.cdn.receivable",
+      "to": "sora.treasury",
+      "amount_micros": 5036658,
+      "memo": "treasury skim (ops reserve)"
+    }
+  ],
+  "notes": [
+    "Discounts include commit (12mo) and prepay credit; meter-level discounts are already baked into usage lines.",
+    "Dispute holds use the net total after discounts, matching billing_ledger_hooks.toml.",
+    "Treasury skim is separated so governance packets can reconcile receivable vs reserve movement."
+  ]
+}

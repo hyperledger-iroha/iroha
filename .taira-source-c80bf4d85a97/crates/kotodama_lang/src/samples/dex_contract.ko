@@ -1,0 +1,41 @@
+// Minimal DEX helpers using supported syntax.
+seiyaku DexContract {
+    fn quote_sell(quantity reserve_in, quantity reserve_out, quantity amount_in) -> quantity {
+        let decimal fee_numerator = 997;
+        let decimal fee_denominator = 1000;
+        let effective = (amount_in * fee_numerator) / fee_denominator;
+        let share = effective / (reserve_in + effective);
+        return reserve_out * share;
+    }
+
+    kotoage fn swap(
+        AccountId trader,
+        AccountId pool,
+        AssetDefinitionId input_asset,
+        AssetDefinitionId output_asset,
+        quantity amount_in,
+        quantity reserve_in,
+        quantity reserve_out,
+    ) -> quantity authorize("Admin") {
+        let out = quote_sell(
+            reserve_in: reserve_in,
+            reserve_out: reserve_out,
+            amount_in: amount_in,
+        );
+        ledger::asset::transfer(
+            source: trader,
+            destination: pool,
+            asset_definition: input_asset,
+            amount: amount_in,
+            dataspace: DataSpaceId::parse("0"),
+        );
+        ledger::asset::transfer(
+            source: pool,
+            destination: trader,
+            asset_definition: output_asset,
+            amount: out,
+            dataspace: DataSpaceId::parse("0"),
+        );
+        return out;
+    }
+}

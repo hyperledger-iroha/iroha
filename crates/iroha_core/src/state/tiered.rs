@@ -3942,6 +3942,9 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             size_of::<ValidationFeePolicyProposal>()
                 .saturating_add(norito::codec::Encode::encode(&self.policy).len())
+                .saturating_add(
+                    norito::codec::Encode::encode(&self.plain_electorate_rules).len(),
+                )
         }
     }
 
@@ -3949,6 +3952,9 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             size_of::<ValidationFeePayoutLifecycleProposal>()
                 .saturating_add(norito::codec::Encode::encode(&self.payout_binding).len())
+                .saturating_add(
+                    norito::codec::Encode::encode(&self.plain_electorate_rules).len(),
+                )
         }
     }
 

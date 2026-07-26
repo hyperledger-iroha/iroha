@@ -1,0 +1,23 @@
+[package]
+name = "iroha_schema"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+iroha_schema_derive = { path = "../iroha_schema_derive" }
+
+[dev-dependencies]
+norito = {workspace = true}
+impls = { workspace = true }
+
+[features]
+default = []
+# Silence norito derive unexpected-cfg checks in tests referencing packed layout
+packed-struct = []

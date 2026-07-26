@@ -1,0 +1,89 @@
+# OTEL collector profile for soranet-pop-m0 (SN15-M0-10)
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: gateway
+          scrape_interval: 10s
+          static_configs:
+            - targets: ["127.0.0.1:19092"]
+              labels:
+                pop: soranet-pop-m0
+                role: gateway
+        - job_name: resolver
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["127.0.0.1:9100"]
+              labels:
+                pop: soranet-pop-m0
+                role: resolver
+  filelog:
+    include:
+      - /var/log/soranet/*.log
+    operators:
+      - type: add
+        field: attributes.pop
+        value: soranet-pop-m0
+      - type: move
+        from: attributes["http.request.header.x-forwarded-for"]
+        to: attributes.scrubbed_xff
+      - type: omit
+        field: attributes["http.request.header.authorization"]
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+  resourcedetection:
+    detectors: [system]
+  attributes/drop_pii:
+    actions:
+      - key: client.ip
+        action: delete
+      - key: http.request.header.cookie
+        action: delete
+  tailsampling:
+    decision_wait: 5s
+    num_traces: 50000
+    policies:
+      - name: error-budget
+        type: probabilistic
+        configuration:
+          sampling_percentage: 15
+      - name: cache-miss
+        type: string_attribute
+        configuration:
+          key: sorafs.cache.result
+          values: ["miss", "stale"]
+exporters:
+  kafka:
+    brokers: ["redpanda:9092"]
+    topic: otel-soranet-pop-m0
+  prometheusremotewrite:
+    endpoint: http://mimir:9009/api/v1/push
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+  clickhouse:
+    endpoint: tcp://clickhouse:9000
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resourcedetection, tailsampling, batch]
+      exporters: [kafka]
+    metrics:
+      receivers: [prometheus]
+      processors: [batch]
+      exporters: [prometheusremotewrite]
+    logs:
+      receivers: [filelog]
+      processors: [attributes/drop_pii, batch]
+      exporters: [loki, clickhouse]

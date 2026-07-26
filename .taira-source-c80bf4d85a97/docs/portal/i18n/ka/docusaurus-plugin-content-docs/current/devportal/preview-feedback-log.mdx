@@ -1,0 +1,273 @@
+---
+id: preview-feedback-log
+lang: ka
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback-log.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Preview feedback logging
+sidebar_label: Feedback logging
+description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+იმპორტი previewFeedbackSummary-დან '@site/src/data/previewFeedbackSummary.json';
+
+ფუნქცია FeedbackSummaryTable() {
+  const waves = previewFeedbackSummary?.waves ?? [];
+  თუ (ტალღები.სიგრძე === 0) {
+    დაბრუნება (
+      <p>
+        გადახედვისას გამოხმაურების ჩანაწერები არ დაფიქსირებულა
+        {''}
+        <code>{previewFeedbackSummary?.წყარო ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
+        .
+      </p>
+    );
+  }
+  დაბრუნება (
+    <მაგიდა>
+      <თავი>
+        <tr>
+          <th>ტალღა</th>
+          <th>სტატუსები</th>
+          <th>მოვლენების საერთო რაოდენობა</th>
+          <th>მიწვევები</th>
+          <th>გახსენით მოსაწვევები</th>
+          <th>დადასტურებულია</th>
+          <th>გაუქმებულია</th>
+          <th>გამოხმაურება</th>
+          <th>პრობლემები</th>
+          <th>დასრულების %</th>
+          <th>% დადასტურება</th>
+          <th>პასუხის მაჩვენებელი</th>
+          <th>დაყოვნება (საშ. სთ)</th>
+          <th>გამოხმაურების შეყოვნება (საშ. სთ)</th>
+          <th>ბოლო ღონისძიება</th>
+          <th>დღეები ბოლო მოვლენიდან</th>
+        </tr>
+      </thead>
+      <tbody>
+        {waves.map((ტალღა) => {
+          const კავშირი = wave.feedbackCount ?? wave.event Counts?.['feedback-submitted'] ?? 0;
+          const საკითხები = wave.issuesCount ?? wave.event Counts?.['issue-opened'] ?? 0;
+          const აღიარება =
+            ტალღა.მადლობა ?? ტალღა.მოვლენა ითვლის?.აღიარებულია ?? 0;
+          const revocations =
+            ტალღა.გაუქმება ?? wave.event Counts?.['access-revoked'] ?? 0;
+          const პასუხის მაჩვენებელი =
+            wave.responseRatePercent == null? '—' : `${wave.responseRatePercent}%`;
+          const completionPercent =
+            wave.inviteCompletionPercent == null
+              ? '-'
+              : `${wave.inviteCompletionPercent}%`;
+          const ackPercent =
+            wave.ackRatePercent == null? '—' : `${wave.ackRatePercent}%`;
+          const ckLatency =
+            wave.ackLatencyHoursAvg == null? '—' : wave.ackLatencyHoursAvg;
+          const feedbackLatency =
+            wave.feedbackLatencyHoursAvg == null? '—' : wave.feedbackLatencyHoursAvg;
+          დაბრუნება (
+            <tr key={wave.wave}>
+              <td>{wave.wave}</td>
+              <td>{wave.status ?? 'მოლოდინში'}</td>
+              <td>{wave.totalEvents}</td>
+              <td>{wave.invites?.total ?? 0}</td>
+              <td>{wave.invites?.open ?? 0}</td>
+              <td>{მადლობა</td>
+              <td>{გაუქმება</td>
+              <td>{გამოხმაურება}</td>
+              <td>{საკითხები}</td>
+              <td>{completionPercent}</td>
+              <td>{ackPercent}</td>
+              <td>{responseRate}</td>
+              <td title={wave.ackLatencyHoursP95 == null ? განუსაზღვრელი: `p95 ${wave.ackLatencyHoursP95}h`}>
+                {ackLatency}
+              </td>
+              <td
+                სათაური={
+                  wave.feedbackLatencyHoursP95 == null
+                    ? განუსაზღვრელი
+                    : `p95 ${wave.feedbackLatencyHoursP95}h`
+                }
+              >
+                {feedbackLatency}
+              </td>
+              <td>{wave.lastEventTimestamp ?? '—'}</td>
+              <td>{wave.daysSinceLastEvent ?? '—'}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+საგზაო რუკა მოითხოვს გადამოწმებად მტკიცებულებებს, როდესაც ჩვენ ვიწვევთ რეცენზენტებს
+Docs პორტალის გადახედვა. ეს ჩანაწერი განმარტავს, თუ როგორ უნდა დაიჭიროთ ეს მტკიცებულება
+`preview-feedback-log` დამხმარე, როგორ გავაზიაროთ მიღებული არტეფაქტები
+მმართველობა და სად შეიტანოს დაიჯესტები ტალღის დახურვის შემდეგ.
+
+## რატომ ვწერთ გამოხმაურებას
+
+- ** შესაბამისობა:** ყველა მოწვევამ უნდა ჩაიწეროს, თუ ვინ იყო წვდომა წინასწარ გადახედვაზე, როდის
+  აღიარა მისაღები გამოყენების პოლიტიკა და როდის გაუქმდა მათი წვდომა.
+- **ტელემეტრიის კორელაცია:** ჟურნალი საშუალებას გვაძლევს დავაკავშიროთ პორტალის ტელემეტრიის მწვერვალები
+  ან სცადეთ ტრაფიკი კონკრეტული მოწვევის კოჰორტებით.
+- **მმართველობის მტკიცებულება:** თითოეულ DOCS-SORA გამშვებ პუნქტს სჭირდება მანქანით წაკითხვადი
+  შეჯამება, რომელიც აჩვენებს მოწვევის რაოდენობას, ღია რეცენზენტებს და გამორჩეულთა მდგომარეობას
+  საკითხები.
+
+ყველა მტკიცებულება მოქმედებს `artifacts/docs_portal_preview/`-ის ქვეშ, ასე რომ შეიძლება დაერთოს
+მოწვევის ტალღის ბილეთზე ან მმართველობის მიმოხილვაზე CI ჟურნალების გაფუჭების გარეშე.
+
+## პირდაპირი მოწვევის შეჯამება
+
+`docs/portal/scripts/preview-feedback-summary.mjs` შთანთქავს გაზიარებულ ჟურნალს და
+წერს `src/data/previewFeedbackSummary.json` `npm run build`-ის დროს. მაგიდა
+ქვემოთ მოცემულია, რომ JSON, რათა მიმომხილველებმა ნახონ მოწვევის მიმდინარე კვალი
+CLI დამხმარე გაშვების გარეშე.
+
+<FeedbackSummaryTable />მოწვევის ჯამების გარდა, რეზიუმე ახლა გამოჩნდება აღიარება და
+გაუქმების რაოდენობა, მიღებული პასუხის კოეფიციენტი (გამოხმაურება დაყოფილი
+ჯამური მოწვევები) და საშუალო შეყოვნება (ჰვერადი p95) შორის
+მოწვევა და მიმომხილველის აღიარება ან გამოხმაურება. ახალი
+**შესრულების %** სვეტი აჩვენებს რამდენი მოწვევა დაიხურა (დადასტურებული ან
+გაუქმებულია), ხოლო **Ack %** ხაზს უსვამს, რამდენმა მიმღებმა დაადასტურა პირდაპირ
+მისაღები გამოყენების ნაბიჯები. ეს მიღებული პროცენტები - პლუს მხოლოდ JSON
+გაუქმების/გამოცემის ტარიფები — მიაწოდეთ მართვის საინფორმაციო დაფები, რათა მიმომხილველებმა დაადასტურონ
+როგორც მონაწილეობის დონე, ასევე დაბრუნების დრო CLI დამხმარე პროგრამის გარეშე.
+**სტატუსის** სვეტი ხაზს უსვამს, არის თუ არა ტალღა უძრავი
+აქტიური (`active`), დახურულია, მაგრამ 14-დღიანი მონიტორინგის ფანჯარაში (`closed`), ან
+მზად არის არქივირებისთვის (`archived`). ** დღეების ბოლო მოვლენიდან ** მეტრიკა გვიჩვენებს, თუ როგორ
+დიდი ხანია გავიდა საბოლოო მოწვევის/გამოხმაურების მოქმედებიდან, ასე რომ საკრებულოებმა შენიშნეს
+ტალღები, რომლებიც საჭიროებს შეფუთვას ან ხელახლა ჩაერთოს გრძელვადიან მიმღებებს.
+
+### ტალღა `preview-20260218` შეჯამება
+
+- **ფარგლები:** ფინანსური ბეტა, დაკვირვებადობის ოპერაციები, SDK პარტნიორი და ეკოსისტემის დამცველი მიმომხილველები მოწვეული **2026-02-18** მომდევნო DOCS-SORA გამშვები პუნქტის წინ.
+- **მეტრიკა:** 4 მოწვევა, 4 აღიარება, 4 გაუქმება და 4 გამოხმაურება (`responseRatePercent = 100`) ერთი შემდგომი საკითხით (`DOCS-SORA-Preview-20260218`) შეტანილი დაკვირვებადობის კოჰორტის მიერ.
+- **მტკიცებულება:** `artifacts/docs_portal_preview/feedback_log.json` ახლა მოიცავს ამ ტალღის მოვლენის დეტალურ ვადებს და `artifacts/docs_portal_preview/preview-20260218-summary.json` აღწერს ნორმალიზებულ მეტრიკას, რომელსაც ჩვენ ვამაგრებთ მართვის პაკეტებს. პორტალის მონაცემების რეგენერაცია `npm run --prefix docs/portal preview:log -- --summary --summary-json`-ის საშუალებით იზიდავს იგივე ნომრებს `src/data/previewFeedbackSummary.json`-ში.
+- **ტალღის დამხმარე:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` ასხივებს თითო ტალღის შეჯამებას, დაიჯესტს და განახლებულ პორტალის მონაცემებს ერთი ნაბიჯით.
+- ** შემდგომი დაკვირვებები: ** დაკვირვებადობის გამოხმაურება მოიცავდა დამატებით CSP მაგალითებს Try it მოთხოვნებისთვის; Docs/DevRel თვალს ადევნებს ჩაწერას `docs/portal/docs/sorafs/observability-plan.md` (§4.2) ქვეშ, ასე რომ, მოწვევის შემდეგ ტალღას შეუძლია დაადასტუროს შესწორება. სრული მიმოხილვა ცხოვრობს [`preview-feedback/w3/summary.md`]-ში (./preview-feedback/w3/summary.md) ქრონოლოგიით აღბეჭდილი [`preview-feedback/w3/log.md`] (./preview-feedback/w3/log.md).
+
+## მოვლენის ტაქსონომია
+
+| ღონისძიება | როდის ჩაიწეროს | შენიშვნები |
+| --- | --- | --- |
+| `invite-sent` | მოწვევის ელ.ფოსტის გაგზავნისთანავე. | მიამაგრეთ ერთი ჩანაწერი თითო მიმღებზე, რათა მოწვევის რაოდენობა ზუსტი დარჩეს. |
+| `acknowledged` | როდესაც მიმომხილველი ადასტურებს, მან წაიკითხა უსაფრთხოების/დაკვირვებადობის დოკუმენტები და გაუშვა საკონტროლო ჯამის კარიბჭე. | სურვილისამებრ, მაგრამ რეკომენდებულია პარტნიორების კოჰორტებისთვის. |
+| `feedback-submitted` | როდესაც მიმომხილველი წარადგენს დასკვნას შეთანხმებული ტრეკერის მეშვეობით. | ჩადეთ საკითხი/ბმული `--notes` ველში. |
+| `issue-opened` | როდესაც DOCS-SORA წარადგენს შემდგომ საკითხს, რომელიც გამომდინარეობს გამოხმაურებიდან. | ეხმარება მმართველობას საგზაო რუქის ელემენტების კორელაციაში გამოხმაურების წინასწარი გადახედვის მიზნით. |
+| `access-revoked` | მას შემდეგ, რაც მიმომხილველის გადახედვის ფანჯარა დასრულდება ან წვდომა ადრე გაუქმდება. | საჭიროა, რათა „ღია მიმღებთა“ რაოდენობა ზუსტი დარჩეს. |
+
+თუ გჭირდებათ დამატებითი ღონისძიება, დაამატეთ იგი
+`VALID_EVENTS` შიგნით `docs/portal/scripts/preview-feedback-log.mjs` და განახლება
+ეს ცხრილი იმავე ცვლილებაშია.
+
+## სამუშაო ნაკადის აღრიცხვა
+
+დამხმარე `npm run preview:log`-ის უკან წერს ერთ JSON ჟურნალს, რომელიც იჭერს
+ყველა მოვლენა. თითოეული ჩანაწერი შეიცავს ტალღის ეტიკეტს, მიმღებს, მოვლენას, დროის ნიშანს და
+სურვილისამებრ შენიშვნები. მაგალითი:
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-02-04T18:20:15.321Z",
+  "entries": [
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "invite-sent",
+      "timestamp": "2026-02-04T18:05:02.114Z",
+      "notes": "seed reviewer"
+    },
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "feedback-submitted",
+      "timestamp": "2026-02-05T09:14:43.009Z",
+      "notes": "docs-preview/42"
+    }
+  ]
+}
+```
+
+ბრძანებები:
+
+```bash
+# Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
+npm run --prefix docs/portal preview:log -- \
+  --wave preview-20260204 \
+  --recipient alice@example.com \
+  --event invite-sent \
+  --notes "seed reviewer"
+
+# Produce a text summary for the current repo
+npm run --prefix docs/portal preview:log -- --summary
+
+# Emit machine-readable summary for a specific wave
+npm run --prefix docs/portal preview:log -- \
+  --summary --summary-json --filter-wave preview-20260204 \
+  > artifacts/docs_portal_preview/preview-20260204-summary.json
+
+# Regenerate the portal summary data file
+npm run --prefix docs/portal generate:preview-summary
+
+# Generate a Markdown digest skeleton for a wave
+npm run --prefix docs/portal preview:digest -- \
+  --wave preview-20260204 \
+  --invite-start 2026-02-04T00:00:00Z \
+  --invite-end 2026-02-18T00:00:00Z \
+  --dashboard "https://grafana.example/d/docs-preview?var-wave=preview-20260204" \
+  --out artifacts/docs_portal_preview/preview-20260204-digest.md
+```
+
+რჩევები:
+
+- მოათავსეთ ჟურნალი ვერსიის კონტროლის ქვეშ ფუნქციების ფილიალში მუშაობისას სხვა
+  შემსრულებლებს შეუძლიათ ცვლილებების გადახედვა. ხანგრძლივი ტალღებისთვის შეინახეთ ჟურნალი
+  მმართველობის ბილეთი და დაურთოს საბოლოო ვერსია გამოშვების არტეფაქტებს.
+- `preview:log` იღებს `--log <path>`-ს, როდესაც თქვენ გჭირდებათ პირდაპირ სისტემაში შესვლა
+  SoraFS პაკეტი ან CI სამუშაო სივრცე.
+- ყოველთვის ჩართეთ `--notes` მინიშნება (გამოცემის ბმული, GitHub სახელური, კოჰორტის ID) ასე რომ
+  შეჯამება სასარგებლოა რეტროსპექტივის დროს.
+- როდესაც გჭირდებათ განმსაზღვრელი შემაჯამებელი დროის ანაბეჭდები (CI ან დოკუმენტების სნეპშოტებისთვის),
+  დააყენეთ `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` შეჯამების გაშვებამდე
+  დამხმარე. ეს ინარჩუნებს `generatedAt`-ს, სტატუსს და დღის მრიცხველებს თანმიმდევრულად
+  აღდგენის მასშტაბით.
+
+## შეჯამებები, დაიჯესტები და არქივები1. **თითო ტალღის შეჯამება:** შექმენით JSON შეჯამება და მიამაგრეთ იგი მოწვევას
+   ბილეთი ნედლეულ ჟურნალთან ერთად. რეზიუმე ითვლის სულ მოწვევებს, ღია
+   მიმღებები და გამოხმაურება ითვლის, რათა მმართველობამ დაადასტუროს, რომ ჩვენ ყველა ავიღეთ
+   რეცენზენტი. პორტალის build ასევე აქვეყნებს საერთო რეზიუმეს მისამართზე
+   `src/data/previewFeedbackSummary.json`, რათა დაინტერესებულ მხარეებს ნახონ მიმდინარეობა
+   სნეპშოტი CLI-ის გაშვების გარეშე.
+2. **კვირეული დაიჯესტი:** გაშვება `npm run --prefix docs/portal preview:digest -- --wave <label>`
+   წინასწარ შეავსოთ Markdown მეტრიკა, შემდეგ მოარგოთ ჩანაცვლების სექციები
+   შაბლონის გამოყენებით
+   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
+   დაინტერესებულ მხარეებთან გაზიარებამდე. ჩართეთ მინიმუმ: ტალღის ეტიკეტი, ღია
+   მიმომხილველები, მნიშვნელოვანი აღმოჩენები და შემდეგი ქმედებები.
+3. **არქივი:** გადაიტანეთ დახურული ტალღის ჟურნალები
+   `artifacts/docs_portal_preview/archive/<wave>/` და შეინახეთ მხოლოდ უახლესი
+   აქტიური ტალღა ფესვზე. ეს ინარჩუნებს CI არტეფაქტებს მცირე ზომის შენარჩუნებისას
+   აუდიტის ბილიკი.
+
+## საგზაო რუკასთან დაკავშირება
+
+- მიმართეთ ამ დოკუმენტს მოწვევისა და ჩართვის სათამაშო წიგნებიდან, როცა ითხოვთ
+  რეცენზენტებმა გამოაქვეყნონ გამოხმაურება (იხ
+  [`preview-invite-flow`](./preview-invite-flow.md),
+  [`reviewer-onboarding`](./reviewer-onboarding.md) და
+  [`public-preview-invite`](./public-preview-invite.md)).
+- აღნიშნეთ გენერირებული შეჯამება `status.md`-ში ტალღის დახურვისას ასე DOCS-SORA
+  საგზაო რუქის ელემენტებს (მაგ. DOCS-1b/2b/3c) შეუძლიათ არტეფაქტის ციტირება.
+- ი18NT00000001X-ზე ატვირთვისას ი18NT00000001X-ზე შენახვა
+  რეცენზენტებს შეუძლიათ გადაამოწმონ მტკიცებულებათა ნაკრები.
+
+ხე-ტყის სამუშაო ნაკადის კოდირებული აქ შენახვა ბლოკავს საგზაო რუქის მოთხოვნას
+„გადაიღეთ უკუკავშირი/ტელემეტრია მმართველობისთვის“ და ამცირებს დახარჯულ დროს
+მოწვევის ისტორიის რეკონსტრუქცია ყოველ ეტაპზე.

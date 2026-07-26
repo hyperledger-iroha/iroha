@@ -1,0 +1,1424 @@
+package org.hyperledger.iroha.android.privacy;
+
+import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.TypeAdapter;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+public final class PrivacyNativeBridgeTest {
+
+  private PrivacyNativeBridgeTest() {}
+
+  public static void main(final String[] args) {
+    exposesStableFailClosedErrorCodes();
+    reportsFailClosedPrivacyCapabilities();
+    productionReadyCapabilitiesRequireExactNativeGateEvidence();
+    forgedProductionReadyCapabilityRowsFailClosed();
+    rejectsEmptyRequestsBeforeNativeDispatch();
+    rejectsInvalidProofRequestComponentsBeforeNativeDispatch();
+    typedConfidentialWitnessBuildersEncodeNativeReadyRequests();
+    typedConfidentialWitnessBuildersRejectAmbiguousShapes();
+    nativeAvailabilityProbeArchiveIsStableAndDefensive();
+    nativeProbeRequiresAbiAndAllPrivacySymbols();
+    rejectsNullAndEmptyNativeOutputs();
+    rejectsInvalidNoritoNativeOutputs();
+    rejectsWrongOperationSchemaNativeOutputs();
+    privacySchemaMatcherRequiresExplicitExpectedSchema();
+    rejectsUnknownOperationSchemaNativeOutputs();
+    rejectsInvalidNoritoRequestsBeforeNativeDispatch();
+    rejectsWrongSchemaRequestsBeforeNativeDispatch();
+    nativeDispatchReturnsDefensiveOutputCopy();
+    acceptsCompleteFieldBitsetNoritoFlags();
+    nativeExceptionsAreSanitizedBeforeExposingRequestBytes();
+    nativeDispatchClearsTemporaryRequestCopyWithoutMutatingCallerArchive();
+    hostileNativeRequestMutationCannotMutateCallerArchive();
+    System.out.println("[IrohaAndroid] PrivacyNativeBridgeTest passed.");
+  }
+
+  private static void exposesStableFailClosedErrorCodes() {
+    assert PrivacyNativeBridge.REQUIRED_BRIDGE_ABI_VERSION == 7;
+    assert PrivacyNativeBridge.PRIVACY_FFI_VERSION_V1 == 1;
+    assert PrivacyNativeBridge.STATUS_OK == 0;
+    assert PrivacyNativeBridge.STATUS_ERROR == 1;
+    assert PrivacyNativeBridge.ERROR_NULL_POINTER == 1;
+    assert PrivacyNativeBridge.ERROR_MALFORMED_NORITO == 2;
+    assert PrivacyNativeBridge.ERROR_UNSUPPORTED_ALGORITHM == 3;
+    assert PrivacyNativeBridge.ERROR_PRODUCTION_DISABLED == 4;
+    assert PrivacyNativeBridge.ERROR_INVALID_REQUEST == 5;
+    assert PrivacyNativeBridge.ERROR_PROVING_FAILED == 6;
+    assert PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES == 64 * 1024 * 1024;
+  }
+
+  private static void reportsFailClosedPrivacyCapabilities() {
+    final PrivacyNativeBridge.PrivacyCapabilities current =
+        PrivacyNativeBridge.privacyCapabilities();
+    assert current.isAndroidSdkAvailable();
+    assert current.isBridgeAvailable() == PrivacyNativeBridge.isNativeAvailable();
+    assertFailClosedProductionGate(current);
+
+    final PrivacyNativeBridge.PrivacyCapabilities bridgeAvailable =
+        PrivacyNativeBridge.privacyCapabilities(true);
+    assert bridgeAvailable.isAndroidSdkAvailable();
+    assert bridgeAvailable.isBridgeAvailable();
+    assertFailClosedProductionGate(bridgeAvailable);
+
+    final PrivacyNativeBridge.PrivacyCapabilities bridgeUnavailable =
+        PrivacyNativeBridge.privacyCapabilities(false);
+    assert bridgeUnavailable.isAndroidSdkAvailable();
+    assert !bridgeUnavailable.isBridgeAvailable();
+    assertFailClosedProductionGate(bridgeUnavailable);
+
+    final PrivacyNativeBridge.PrivacyCapabilities fresh =
+        PrivacyNativeBridge.privacyCapabilities(true);
+    assert !fresh.missingProductionGates().contains("tampered");
+    assert !fresh.requiredProductionGates().contains("tampered");
+    assert !fresh.auditReferences().contains("https://audit.example/forged-signoff");
+    assert fresh.missingProductionGates().equals(bridgeAvailable.missingProductionGates());
+    assert fresh.requiredProductionGates().equals(bridgeAvailable.requiredProductionGates());
+    assert fresh.auditReferences().equals(bridgeAvailable.auditReferences());
+  }
+
+  private static void productionReadyCapabilitiesRequireExactNativeGateEvidence() {
+    final PrivacyNativeBridge.PrivacyCapabilities capabilities =
+        PrivacyNativeBridge.privacyCapabilitiesFromArchive(
+            nativeCapabilitiesArchive(
+                nativeCapability("confidential-transfer-v2", true),
+                nativeCapability("unshield", true)),
+            true);
+
+    assert capabilities.isProductionReady();
+    assert capabilities.hasRealProving();
+    assert capabilities.hasExternalAudit();
+    assert capabilities.missingProductionGates().isEmpty();
+    assert capabilities.auditReferences().size() == 19;
+  }
+
+  private static void forgedProductionReadyCapabilityRowsFailClosed() {
+    assertForgedReadyRowFailsClosed("empty required gates", row -> {
+      productionGate(row).put("required_gates", Collections.emptyList());
+    });
+    assertForgedReadyRowFailsClosed("missing gate status", row -> {
+      final List<Map<String, Object>> gates = gateStatuses(row);
+      productionGate(row).put("gates", gates.subList(0, gates.size() - 1));
+    });
+    assertForgedReadyRowFailsClosed("unpassed gate status", row -> {
+      gateStatuses(row).get(0).put("passed", false);
+    });
+    assertForgedReadyRowFailsClosed("nonempty missing reasons", row -> {
+      productionGate(row).put("missing", Collections.singletonList("external audit omitted"));
+    });
+    assertForgedReadyRowFailsClosed("missing audit references", row -> {
+      productionGate(row).put("audit_references", Collections.emptyList());
+    });
+    assertForgedReadyRowFailsClosed("single audit reference", row -> {
+      productionGate(row).put(
+          "audit_references",
+          Collections.singletonList("chain_id:boi-privacy-4peer-chain"));
+    });
+    assertForgedReadyRowFailsClosed("duplicate audit reference", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(18, refs.get(17));
+      productionGate(row).put("audit_references", refs);
+    });
+    assertForgedReadyRowFailsClosed("reused audit hash", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(14, "localnet_lifecycle_recursive_init_verify_hash:" + productionHash(10));
+      productionGate(row).put("audit_references", refs);
+    });
+    assertForgedReadyRowFailsClosed("bad audit hash", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(2, "review_artifact_hash:sha256:not-a-hex-digest");
+      productionGate(row).put("audit_references", refs);
+    });
+    assertForgedReadyRowFailsClosed("uppercase audit signature", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(3, "review_artifact_signature:ed25519:" + repeatedChar('B', 128));
+      productionGate(row).put("audit_references", refs);
+    });
+    assertForgedReadyRowFailsClosed("mock localnet marker", row -> {
+      final List<String> refs = new ArrayList<>(productionAuditReferences());
+      refs.set(6, "localnet_run_id:mock-privacy-4peer-localnet-2026-06-13");
+      productionGate(row).put("audit_references", refs);
+    });
+    assertForgedReadyRowFailsClosed("planned entrypoint", row -> {
+      row.put("planned_entrypoints", Collections.singletonList("buildFuturePrivacyProofV2"));
+    });
+    assertForgedReadyRowFailsClosed("production ready mismatch", row -> {
+      row.put("production_ready", false);
+    });
+  }
+
+  private static void assertFailClosedProductionGate(
+      final PrivacyNativeBridge.PrivacyCapabilities capabilities) {
+    assert PrivacyNativeBridge.PRODUCTION_GATE_VERSION.equals(
+        capabilities.productionGateVersion());
+    assert !capabilities.isProductionReady();
+    assert !capabilities.hasRealProving();
+    assert !capabilities.hasRealVerification();
+    assert !capabilities.hasChainAdmission();
+    assert !capabilities.hasSdkParity();
+    assert !capabilities.hasWalletState();
+    assert !capabilities.hasWitnessPrivacyChecks();
+    assert !capabilities.hasDeterministicTests();
+    assert !capabilities.hasNegativeAdversarialTests();
+    assert !capabilities.hasReplayNullifierTests();
+    assert !capabilities.hasFuzzing();
+    assert !capabilities.hasParserFuzzing();
+    assert !capabilities.hasVerifierFuzzing();
+    assert !capabilities.hasPerformanceGates();
+    assert !capabilities.hasExternalAudit();
+    assert capabilities.auditReferences().isEmpty();
+    assert capabilities.requiredProductionGates().equals(expectedProductionGateRequiredKeys());
+    assert capabilities.missingProductionGates().equals(expectedProductionGateMissingReasons());
+    assert capabilities.missingProductionGates().contains(
+        "real proving engine is not registered");
+    assert capabilities.missingProductionGates().contains(
+        "chain admission path is not enabled");
+    assert capabilities.missingProductionGates().contains(
+        "witness privacy checks are incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "negative/adversarial tests are incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "replay/nullifier rejection tests are incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "parser fuzzing gate is incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "verifier fuzzing gate is incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "internal cryptographic review signoff is missing");
+    assert capabilities.missingProductionGates().contains(
+        "implementation stage is not production-hardened");
+    assert capabilities.missingProductionGates().contains(
+        "planned SDK entrypoints remain");
+    assert capabilities.missingProductionGates().contains(
+        "dev fixture entrypoints are not production entrypoints");
+    assert capabilities.missingProductionGates().contains(
+        "Iroha production allowlist is not enabled for this audited row");
+    assertUnsupportedOperation(
+        () -> capabilities.missingProductionGates().add("tampered"));
+    assertUnsupportedOperation(
+        () -> capabilities.requiredProductionGates().add("tampered"));
+    assertUnsupportedOperation(
+        () -> capabilities.auditReferences().add("https://audit.example/forged-signoff"));
+  }
+
+  private static List<String> expectedProductionGateRequiredKeys() {
+    return Arrays.asList(
+        "real_proving",
+        "real_verification",
+        "chain_admission",
+        "sdk_parity",
+        "wallet_state",
+        "witness_privacy_checks",
+        "deterministic_tests",
+        "negative_adversarial_tests",
+        "replay_nullifier_tests",
+        "fuzzing",
+        "parser_fuzzing",
+        "verifier_fuzzing",
+        "performance_gates",
+        "external_audit");
+  }
+
+  private static List<String> expectedProductionGateMissingReasons() {
+    return Arrays.asList(
+        "real proving engine is not registered",
+        "real verifier is not registered",
+        "chain admission path is not enabled",
+        "cross-SDK parity is incomplete",
+        "wallet/state support is incomplete",
+        "witness privacy checks are incomplete",
+        "deterministic tests are incomplete",
+        "negative/adversarial tests are incomplete",
+        "replay/nullifier rejection tests are incomplete",
+        "fuzzing gate is incomplete",
+        "parser fuzzing gate is incomplete",
+        "verifier fuzzing gate is incomplete",
+        "performance gate is incomplete",
+        "internal cryptographic review signoff is missing",
+        "implementation stage is not production-hardened",
+        "planned SDK entrypoints remain",
+        "dev fixture entrypoints are not production entrypoints",
+        "Iroha production allowlist is not enabled for this audited row");
+  }
+
+  private static void rejectsEmptyRequestsBeforeNativeDispatch() {
+    final PrivacyNativeBridge.NativeCall[] helpers = new PrivacyNativeBridge.NativeCall[] {
+      PrivacyNativeBridge::buildProof,
+      PrivacyNativeBridge::buildConfidentialTransferProofV2,
+      PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
+      PrivacyNativeBridge::buildZkAceAuthorizationProofV1,
+      PrivacyNativeBridge::buildJindoLatticeProofV0,
+      PrivacyNativeBridge::buildSisHintsAnonymousCredentialProofV0,
+      PrivacyNativeBridge::buildSilentThresholdCredentialShowingProofV0,
+      PrivacyNativeBridge::buildVegaCredentialPredicateProofV0,
+      PrivacyNativeBridge::buildZkAmsAdmissionBatchProofV0,
+      PrivacyNativeBridge::buildZkAtPolicyProofV1,
+      PrivacyNativeBridge::verifyJindoPolynomialCommitmentV0,
+      PrivacyNativeBridge::verifySisHintsAnonymousCredentialProofV0,
+      PrivacyNativeBridge::verifySilentThresholdCredentialShowingProofV0,
+      PrivacyNativeBridge::verifyVegaCredentialPredicateProofV0,
+      PrivacyNativeBridge::verifyZkAmsAdmissionBatchProofV0,
+      PrivacyNativeBridge::verifyZkAtPolicyProofV1,
+      PrivacyNativeBridge::verifyProof
+    };
+    for (final PrivacyNativeBridge.NativeCall helper : helpers) {
+      assertIllegalArgument(
+          () -> helper.run(new byte[0]), "requestArchive must not be empty");
+      assertIllegalArgument(
+          () -> helper.run(null), "requestArchive must not be empty");
+    }
+    final byte[] oversized = new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1];
+    for (final PrivacyNativeBridge.NativeCall helper : helpers) {
+      assertIllegalArgument(
+          () -> helper.run(oversized), "requestArchive must not exceed 67108864 bytes");
+      assertIllegalArgument(
+          () -> helper.run(privacyNoritoFrame(0x52)),
+          "requestArchive must contain a non-empty privacy request payload");
+    }
+  }
+
+  private static void rejectsInvalidProofRequestComponentsBeforeNativeDispatch() {
+    assertIllegalArgument(
+        () -> PrivacyNativeBridge.privacyProofRequestV1(
+            null,
+            "buildZkAceAuthorizationProofV1",
+            "stark-fri:zk_ace_pq_authorization_v0",
+            "public-inputs".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+        "algorithmId must not be null");
+    assertIllegalArgument(
+        () -> PrivacyNativeBridge.privacyProofRequestV1(
+            "zk-ace-pq-authorization-v0",
+            "buildZkAceAuthorizationProofV1",
+            "stark-fri:zk_ace_pq_authorization_v0",
+            new byte[0]),
+        "publicInputs must not be empty");
+    assertIllegalArgument(
+        () -> PrivacyNativeBridge.privacyProofRequestV1(
+            "zk-ace-pq-authorization-v0",
+            "buildZkAceAuthorizationProofV1",
+            "stark-fri:zk_ace_pq_authorization_v0",
+            "public-inputs".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+            new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2 + 1],
+            new byte[0]),
+        "witness must not exceed 33554432 bytes");
+  }
+
+  private static void typedConfidentialWitnessBuildersEncodeNativeReadyRequests() {
+    final PrivacyConfidentialWitness.WitnessV1 transferWitness = sampleTransferWitness();
+    final byte[] transferWitnessArchive =
+        PrivacyConfidentialWitness.encodeTransferWitness(transferWitness);
+    assert PrivacyNativeBridge.isValidPrivacyNoritoArchive(transferWitnessArchive);
+    assert !PrivacyNativeBridge.hasPrivacyNoritoSchema(transferWitnessArchive, 0x52);
+
+    final byte[] transferRequest =
+        PrivacyConfidentialWitness.buildConfidentialTransferProofRequestV1(transferWitness);
+    assert PrivacyNativeBridge.isValidPrivacyNoritoArchive(transferRequest);
+    assert PrivacyNativeBridge.hasPrivacyNoritoSchema(transferRequest, 0x52);
+    assert PrivacyNativeBridge.hasNonEmptyPrivacyNoritoPayload(transferRequest);
+    final byte[] transferOutput =
+        PrivacyNativeBridge.call(
+            "build proof",
+            transferRequest,
+            request -> {
+              assert Arrays.equals(request, transferRequest);
+              return privacyNoritoFrameWithPayload(0x42);
+            },
+            true);
+    assert Arrays.equals(transferOutput, privacyNoritoFrameWithPayload(0x42));
+
+    final byte[] verifyRequest =
+        PrivacyConfidentialWitness.buildConfidentialTransferVerifyRequestV1(new byte[] {1, 2, 3});
+    assert PrivacyNativeBridge.hasPrivacyNoritoSchema(verifyRequest, 0x52);
+    final byte[] verifyOutput =
+        PrivacyNativeBridge.call(
+            "verify proof",
+            verifyRequest,
+            request -> {
+              assert Arrays.equals(request, verifyRequest);
+              return privacyNoritoFrameWithPayload(0x56);
+            },
+            true);
+    assert Arrays.equals(verifyOutput, privacyNoritoFrameWithPayload(0x56));
+
+    final PrivacyConfidentialWitness.WitnessV1 unshieldWitness = sampleUnshieldWitness();
+    final byte[] unshieldRequest =
+        PrivacyConfidentialWitness.buildConfidentialUnshieldProofRequestV1(unshieldWitness);
+    assert PrivacyNativeBridge.isValidPrivacyNoritoArchive(unshieldRequest);
+    assert PrivacyNativeBridge.hasPrivacyNoritoSchema(unshieldRequest, 0x52);
+    assert PrivacyNativeBridge.hasNonEmptyPrivacyNoritoPayload(unshieldRequest);
+    assert "5".equals(unshieldWitness.publicAmount());
+    assert unshieldWitness.unshieldChange().size() == 1;
+
+    final byte[] unshieldVerifyRequest =
+        PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(new byte[] {4, 5, 6});
+    assert PrivacyNativeBridge.hasPrivacyNoritoSchema(unshieldVerifyRequest, 0x52);
+    final byte[] unshieldVerifyOutput =
+        PrivacyNativeBridge.call(
+            "verify proof",
+            unshieldVerifyRequest,
+            request -> {
+              assert Arrays.equals(request, unshieldVerifyRequest);
+              return privacyNoritoFrameWithPayload(0x56);
+            },
+            true);
+    assert Arrays.equals(unshieldVerifyOutput, privacyNoritoFrameWithPayload(0x56));
+  }
+
+  private static void typedConfidentialWitnessBuildersRejectAmbiguousShapes() {
+    final PrivacyConfidentialWitness.WitnessV1 transferWitness = sampleTransferWitness();
+    final PrivacyConfidentialWitness.WitnessV1 unshieldWitness = sampleUnshieldWitness();
+
+    assertIllegalArgument(
+        () ->
+            PrivacyConfidentialWitness.buildConfidentialTransferProofRequestV1(
+                transferWitness, "halo2-ipa-pasta:confidential_unshield_v3"),
+        "vkRef must be halo2-ipa-pasta:confidential_transfer_v2");
+    assertIllegalArgument(
+        () ->
+            PrivacyConfidentialWitness.buildConfidentialUnshieldProofRequestV1(
+                unshieldWitness, "halo2-ipa-pasta:confidential_transfer_v2"),
+        "vkRef must be halo2-ipa-pasta:confidential_unshield_v3");
+    assertIllegalArgument(
+        () -> PrivacyConfidentialWitness.buildConfidentialTransferVerifyRequestV1(new byte[0]),
+        "proof must not be empty");
+    assertIllegalArgument(
+        () -> PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(new byte[0]),
+        "proof must not be empty");
+    final byte[] oversizedProof =
+        new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2 + 1];
+    assertIllegalArgument(
+        () -> PrivacyConfidentialWitness.buildConfidentialTransferVerifyRequestV1(oversizedProof),
+        "proof must not exceed 33554432 bytes");
+    assertIllegalArgument(
+        () -> PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(oversizedProof),
+        "proof must not exceed 33554432 bytes");
+    assertIllegalArgument(
+        () ->
+            PrivacyConfidentialWitness.encodeTransferWitness(
+                new PrivacyConfidentialWitness.WitnessV1(
+                    transferWitness.chainId(),
+                    transferWitness.assetDefinitionId(),
+                    transferWitness.spendKey(),
+                    transferWitness.treeCommitments(),
+                    transferWitness.inputs(),
+                    Collections.emptyList(),
+                    Collections.emptyList(),
+                    "0",
+                    transferWitness.rootHint())),
+        "confidential transfer witness must include one or two transferOutputs");
+    assertIllegalArgument(
+        () ->
+            PrivacyConfidentialWitness.encodeUnshieldWitness(
+                new PrivacyConfidentialWitness.WitnessV1(
+                    unshieldWitness.chainId(),
+                    unshieldWitness.assetDefinitionId(),
+                    unshieldWitness.spendKey(),
+                    unshieldWitness.treeCommitments(),
+                    unshieldWitness.inputs(),
+                    transferWitness.transferOutputs(),
+                    Collections.emptyList(),
+                    "0",
+                    unshieldWitness.rootHint())),
+        "confidential unshield witness must not include transferOutputs");
+    assertIllegalArgument(
+        () ->
+            new PrivacyConfidentialWitness.WitnessV1(
+                transferWitness.chainId(),
+                transferWitness.assetDefinitionId(),
+                transferWitness.spendKey(),
+                transferWitness.treeCommitments(),
+                Arrays.asList(transferWitness.inputs().get(0), transferWitness.inputs().get(0)),
+                transferWitness.transferOutputs(),
+                Collections.emptyList(),
+                "0",
+                transferWitness.rootHint()),
+        "inputs[1].leafIndex duplicates inputs[0]");
+    assertIllegalArgument(
+        () ->
+            new PrivacyConfidentialWitness.WitnessV1(
+                transferWitness.chainId(),
+                transferWitness.assetDefinitionId(),
+                transferWitness.spendKey(),
+                transferWitness.treeCommitments(),
+                Collections.singletonList(
+                    new PrivacyConfidentialWitness.NoteWitnessV1(
+                        "7", repeated(0x22, 32), repeated(0x33, 32), 1L)),
+                transferWitness.transferOutputs(),
+                Collections.emptyList(),
+                "0",
+                transferWitness.rootHint()),
+        "inputs[0].leafIndex must reference treeCommitments");
+  }
+
+  private static void nativeAvailabilityProbeArchiveIsStableAndDefensive() {
+    final byte[] first = PrivacyNativeBridge.privacyNativeAvailabilityProbeArchive();
+    final byte[] second = PrivacyNativeBridge.privacyNativeAvailabilityProbeArchive();
+
+    assert first != second;
+    assert Arrays.equals(first, privacyNoritoFrame(0x52));
+    assert PrivacyNativeBridge.isValidPrivacyNoritoArchive(first);
+    assert !Arrays.equals(
+        first,
+        "iroha-privacy-native-availability-probe-v1"
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    first[0] = 0x7f;
+    assert Arrays.equals(second, privacyNoritoFrame(0x52));
+  }
+
+  private static void nativeProbeRequiresAbiAndAllPrivacySymbols() {
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrame(0x50));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrameWithPayload(0x51));
+    assert PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrameWithPadding(0x50, 64));
+    final byte[] validProbeOutput = privacyNoritoFrameWithPayload(0x42);
+    assert PrivacyNativeBridge.returnsOutputProbe(0x42, () -> validProbeOutput);
+    assertAllZero(validProbeOutput);
+    final byte[] invalidProbeOutput = invalidPrivacyNoritoPayloadTamper();
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidProbeOutput);
+    assertAllZero(invalidProbeOutput);
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrame(0x50));
+    assert PrivacyNativeBridge.returnsOutputProbe(0x42, () -> privacyNoritoFrameWithPayload(0x42));
+    assert PrivacyNativeBridge.returnsOutputProbe(0x56, () -> privacyNoritoFrameWithPayload(0x56));
+    assert PrivacyNativeBridge.returnsOutputProbe(0x42, () -> privacyNoritoFrameWithFlags(0x42, 0x26));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrameWithPayload(0x42));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x42, () -> privacyNoritoFrameWithPayload(0x56));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x56, () -> privacyNoritoFrameWithPayload(0x50));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> new byte[] {1});
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(0, 'X'));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(4, 1));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(5, 1));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(22, 1));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoDeclaredPayloadLength(0x50));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoOversizedPayloadLength(0x50));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(39, 0x40));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(39, 0x20));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoWithNonzeroPadding());
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoWithExcessivePadding());
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(31, 1));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoPayloadTamper());
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> new byte[0]);
+    assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50, () -> new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1]);
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> null);
+    assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50,
+        () -> {
+          throw new UnsatisfiedLinkError("missing symbol");
+        });
+    assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50,
+        () -> {
+          throw new IllegalArgumentException("bad probe");
+        });
+    assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50,
+        () -> {
+          throw new SecurityException("blocked probe");
+        });
+    assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50,
+        () -> {
+          throw new RuntimeException("unexpected probe failure");
+        });
+    assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50,
+        () -> {
+          throw new LinkageError("bad linked bridge");
+        });
+
+    assert PrivacyNativeBridge.detectNativeAvailability(() -> {}, () -> 7, () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(() -> {}, () -> 6, () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(() -> {}, () -> 7, () -> false);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {
+          throw new UnsatisfiedLinkError("missing bridge");
+        },
+        () -> 7,
+        () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {
+          throw new IllegalArgumentException("bad library name");
+        },
+        () -> 7,
+        () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {
+          throw new SecurityException("blocked library");
+        },
+        () -> 7,
+        () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {
+          throw new RuntimeException("unexpected library failure");
+        },
+        () -> 7,
+        () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {
+          throw new LinkageError("bad linked bridge");
+        },
+        () -> 7,
+        () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {},
+        () -> {
+          throw new UnsatisfiedLinkError("missing ABI symbol");
+        },
+        () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {},
+        () -> {
+          throw new IllegalArgumentException("bad ABI");
+        },
+        () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {},
+        () -> {
+          throw new SecurityException("blocked ABI");
+        },
+        () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {},
+        () -> {
+          throw new RuntimeException("unexpected ABI failure");
+        },
+        () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {},
+        () -> {
+          throw new LinkageError("bad ABI bridge");
+        },
+        () -> true);
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {},
+        () -> 7,
+        () -> {
+          throw new UnsatisfiedLinkError("missing privacy symbol");
+        });
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {},
+        () -> 7,
+        () -> {
+          throw new IllegalArgumentException("bad privacy probe");
+        });
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {},
+        () -> 7,
+        () -> {
+          throw new SecurityException("blocked privacy probe");
+        });
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {},
+        () -> 7,
+        () -> {
+          throw new RuntimeException("unexpected privacy probe");
+        });
+    assert !PrivacyNativeBridge.detectNativeAvailability(
+        () -> {},
+        () -> 7,
+        () -> {
+          throw new LinkageError("bad privacy bridge");
+        });
+  }
+
+  private static void rejectsNullAndEmptyNativeOutputs() {
+    assertIllegalState(
+        () -> PrivacyNativeBridge.requireNativeOutput(null, "privacy build proof"),
+        "returned no output");
+    assertIllegalState(
+        () -> PrivacyNativeBridge.requireNativeOutput(new byte[0], "privacy verify proof"),
+        "returned empty output");
+    assertIllegalState(
+        () -> PrivacyNativeBridge.requireNativeOutput(privacyNoritoFrame(0x50), "privacy capabilities"),
+        "empty privacy result payload");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1],
+                "privacy capabilities"),
+        "returned oversized output");
+    final byte[] output = privacyNoritoFrameWithPayload(0x50);
+    final byte[] expectedOutput = privacyNoritoFrameWithPayload(0x50);
+    final byte[] archive = PrivacyNativeBridge.requireNativeOutput(output, "privacy capabilities");
+    assert archive != output;
+    assert Arrays.equals(expectedOutput, archive);
+    assertAllZero(output);
+    archive[0] = 9;
+    assert expectedOutput[0] == 'N';
+  }
+
+  private static void rejectsInvalidNoritoNativeOutputs() {
+    assertIllegalState(
+        () -> PrivacyNativeBridge.requireNativeOutput(new byte[] {1}, "privacy capabilities"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrame(0x50),
+                "privacy capabilities"),
+        "empty privacy result payload");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrame(0x42),
+                "privacy build proof"),
+        "empty privacy result payload");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrame(0x56),
+                "privacy verify proof"),
+        "empty privacy result payload");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoFrame(0, 'X'),
+                "privacy build proof"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoFrame(4, 1),
+                "privacy build proof"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoFrame(5, 1),
+                "privacy build proof"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoFrame(22, 1),
+                "privacy build proof"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoDeclaredPayloadLength(0x42),
+                "privacy build proof"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoOversizedPayloadLength(0x42),
+                "privacy build proof"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoFrame(39, 0x40),
+                "privacy verify proof"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoFrame(39, 0x20),
+                "privacy verify proof"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoWithNonzeroPadding(),
+                "privacy verify proof"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoWithExcessivePadding(),
+                "privacy verify proof"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoFrame(31, 1),
+                "privacy capabilities"),
+        "invalid Norito V1 archive");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                invalidPrivacyNoritoPayloadTamper(),
+                "privacy capabilities"),
+        "invalid Norito V1 archive");
+  }
+
+  private static void rejectsWrongOperationSchemaNativeOutputs() {
+    assertAcceptsOnlySchema("privacy capabilities", 0x50, new int[] {0x42, 0x56, 0x52});
+    assertAcceptsOnlySchema("privacy build proof", 0x42, new int[] {0x50, 0x56, 0x52});
+    assertAcceptsOnlySchema("privacy verify proof", 0x56, new int[] {0x50, 0x42, 0x52});
+  }
+
+  private static void privacySchemaMatcherRequiresExplicitExpectedSchema() {
+    final byte[] capabilities = privacyNoritoFrameWithPayload(0x50);
+
+    assert !PrivacyNativeBridge.hasPrivacyNoritoSchema(capabilities, -1);
+    assert !PrivacyNativeBridge.hasPrivacyNoritoSchema(capabilities, 0x42);
+    assert PrivacyNativeBridge.hasPrivacyNoritoSchema(capabilities, 0x50);
+  }
+
+  private static void rejectsUnknownOperationSchemaNativeOutputs() {
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrameWithPayload(0x50),
+                "privacy forged operation"),
+        "not a supported privacy native operation");
+
+    final boolean[] invoked = {false};
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.call(
+                "forged proof",
+                privacyNoritoFrameWithPayload(0x52),
+                request -> {
+                  invoked[0] = true;
+                  return privacyNoritoFrameWithPayload(0x42);
+                },
+                true),
+        "not a supported privacy native operation");
+    assert !invoked[0] : "unsupported privacy operations must not reach native dispatch";
+  }
+
+  private static void assertAcceptsOnlySchema(
+      final String label, final int expectedSchema, final int[] wrongSchemas) {
+    assert Arrays.equals(
+        PrivacyNativeBridge.requireNativeOutput(
+            privacyNoritoFrameWithPayload(expectedSchema),
+            label),
+        privacyNoritoFrameWithPayload(expectedSchema));
+    for (final byte[] mixedSchema :
+        new byte[][] {
+          privacyNoritoFrameWithSchemaOverride(expectedSchema, 6, wrongSchemas[0]),
+          privacyNoritoFrameWithSchemaOverride(expectedSchema, 21, wrongSchemas[0])
+        }) {
+      assertIllegalState(
+          () -> PrivacyNativeBridge.requireNativeOutput(mixedSchema, label),
+          "unexpected privacy result schema");
+    }
+
+    for (final int wrongSchema : wrongSchemas) {
+      assertIllegalState(
+          () ->
+              PrivacyNativeBridge.requireNativeOutput(
+                  privacyNoritoFrameWithPayload(wrongSchema),
+                  label),
+          "unexpected privacy result schema");
+    }
+  }
+
+  private static void nativeDispatchReturnsDefensiveOutputCopy() {
+    final byte[] nativeOutput = privacyNoritoFrameWithPayload(0x42);
+    final byte[] expectedOutput = privacyNoritoFrameWithPayload(0x42);
+
+    final byte[] archive =
+        PrivacyNativeBridge.call(
+            "build proof",
+            privacyNoritoFrameWithPadding(0x52, 64),
+            request -> nativeOutput,
+            true);
+
+    assert archive != nativeOutput;
+    assert Arrays.equals(archive, expectedOutput);
+    assertAllZero(nativeOutput);
+
+    archive[0] = 0x7f;
+    assert expectedOutput[0] == 'N';
+  }
+
+  private static void acceptsCompleteFieldBitsetNoritoFlags() {
+    final byte[] requestArchive = privacyNoritoFrameWithFlags(0x52, 0x26);
+    final byte[] nativeOutput = privacyNoritoFrameWithFlags(0x42, 0x26);
+    final byte[] expectedOutput = privacyNoritoFrameWithFlags(0x42, 0x26);
+
+    final byte[] archive =
+        PrivacyNativeBridge.call(
+            "build proof",
+            requestArchive,
+            request -> {
+              assert Arrays.equals(request, requestArchive);
+              return nativeOutput;
+            },
+            true);
+
+    assert Arrays.equals(archive, expectedOutput);
+    assertAllZero(nativeOutput);
+  }
+
+  private static void nativeExceptionsAreSanitizedBeforeExposingRequestBytes() {
+    final String witness = "android-sdk-private-witness-never-echo-921b";
+    final byte[] requestArchive = privacyNoritoFrameWithPayload(0x52);
+    final byte[][] capturedRequests = new byte[2][];
+
+    final IllegalStateException capabilitiesError =
+        assertIllegalState(
+            () ->
+                PrivacyNativeBridge.invokeNativeOutput(
+                    "privacy capabilities",
+                    () -> {
+                      throw new RuntimeException("native panic included " + witness);
+                    }),
+            "privacy capabilities failed");
+    assertSanitized(capabilitiesError, witness);
+
+    final IllegalStateException buildError =
+        assertIllegalState(
+            () ->
+                PrivacyNativeBridge.call(
+                    "build proof",
+                    requestArchive,
+                    request -> {
+                      capturedRequests[0] = request;
+                      assert request != requestArchive;
+                      assert Arrays.equals(request, requestArchive);
+                      throw new RuntimeException("native panic included " + witness);
+                    },
+                    true),
+            "privacy build proof failed");
+    assertSanitized(buildError, witness);
+
+    final IllegalStateException verifyError =
+        assertIllegalState(
+            () ->
+                PrivacyNativeBridge.call(
+                    "verify proof",
+                    requestArchive,
+                    request -> {
+                      capturedRequests[1] = request;
+                      assert request != requestArchive;
+                      assert Arrays.equals(request, requestArchive);
+                      throw new UnsatisfiedLinkError("native panic included " + witness);
+                    },
+                    true),
+            "privacy verify proof failed");
+    assertSanitized(verifyError, witness);
+    assertAllZero(capturedRequests[0]);
+    assertAllZero(capturedRequests[1]);
+    assert Arrays.equals(requestArchive, privacyNoritoFrameWithPayload(0x52));
+  }
+
+  private static void nativeDispatchClearsTemporaryRequestCopyWithoutMutatingCallerArchive() {
+    final byte[] requestArchive = privacyNoritoFrameWithPayload(0x52);
+    final byte[] originalArchive = Arrays.copyOf(requestArchive, requestArchive.length);
+    final byte[][] capturedRequests = new byte[2][];
+
+    final byte[] buildOutput =
+        PrivacyNativeBridge.call(
+            "build proof",
+            requestArchive,
+            request -> {
+              capturedRequests[0] = request;
+              assert request != requestArchive;
+              assert Arrays.equals(originalArchive, request);
+              return privacyNoritoFrameWithPayload(0x42);
+            },
+            true);
+    assert Arrays.equals(buildOutput, privacyNoritoFrameWithPayload(0x42));
+
+    final byte[] verifyOutput =
+        PrivacyNativeBridge.call(
+            "verify proof",
+            requestArchive,
+            request -> {
+              capturedRequests[1] = request;
+              assert request != requestArchive;
+              assert Arrays.equals(originalArchive, request);
+              return privacyNoritoFrameWithPayload(0x56);
+            },
+            true);
+    assert Arrays.equals(verifyOutput, privacyNoritoFrameWithPayload(0x56));
+
+    assert Arrays.equals(requestArchive, originalArchive);
+    assertAllZero(capturedRequests[0]);
+    assertAllZero(capturedRequests[1]);
+  }
+
+  private static void hostileNativeRequestMutationCannotMutateCallerArchive() {
+    final byte[] requestArchive = privacyNoritoFrameWithPayload(0x52);
+    final byte[] originalArchive = Arrays.copyOf(requestArchive, requestArchive.length);
+    final byte[][] capturedRequests = new byte[2][];
+
+    final byte[] buildOutput =
+        PrivacyNativeBridge.call(
+            "build proof",
+            requestArchive,
+            request -> {
+              capturedRequests[0] = request;
+              request[0] = 0x00;
+              request[6] = 0x7f;
+              return privacyNoritoFrameWithPayload(0x42);
+            },
+            true);
+    assert Arrays.equals(buildOutput, privacyNoritoFrameWithPayload(0x42));
+
+    final byte[] verifyOutput =
+        PrivacyNativeBridge.call(
+            "verify proof",
+            requestArchive,
+            request -> {
+              capturedRequests[1] = request;
+              request[0] = 0x00;
+              request[6] = 0x7f;
+              return privacyNoritoFrameWithPayload(0x56);
+            },
+            true);
+    assert Arrays.equals(verifyOutput, privacyNoritoFrameWithPayload(0x56));
+
+    assert Arrays.equals(requestArchive, originalArchive);
+    assertAllZero(capturedRequests[0]);
+    assertAllZero(capturedRequests[1]);
+  }
+
+  private static void rejectsInvalidNoritoRequestsBeforeNativeDispatch() {
+    assertIllegalArgument(
+        () ->
+            PrivacyNativeBridge.call(
+                "build proof",
+                privacyNoritoFrame(0x52),
+                request -> {
+                  throw new AssertionError("empty-payload build request must not reach native dispatch");
+                },
+                true),
+        "requestArchive must contain a non-empty privacy request payload");
+    assertIllegalArgument(
+        () ->
+            PrivacyNativeBridge.call(
+                "verify proof",
+                privacyNoritoFrame(0x52),
+                request -> {
+                  throw new AssertionError("empty-payload verify request must not reach native dispatch");
+                },
+                true),
+        "requestArchive must contain a non-empty privacy request payload");
+    for (final byte[] malformedArchive : invalidPrivacyRequestArchives()) {
+      assertIllegalArgument(
+          () ->
+              PrivacyNativeBridge.call(
+                  "build proof",
+                  Arrays.copyOf(malformedArchive, malformedArchive.length),
+                  request -> {
+                    throw new AssertionError("invalid build request must not reach native dispatch");
+                  },
+                  true),
+          "requestArchive must be a valid Norito V1 archive");
+      assertIllegalArgument(
+          () ->
+              PrivacyNativeBridge.call(
+                  "verify proof",
+                  Arrays.copyOf(malformedArchive, malformedArchive.length),
+                  request -> {
+                    throw new AssertionError("invalid verify request must not reach native dispatch");
+                  },
+                  true),
+          "requestArchive must be a valid Norito V1 archive");
+    }
+  }
+
+  private static void rejectsWrongSchemaRequestsBeforeNativeDispatch() {
+    for (final byte[] forgedRequest : wrongSchemaPrivacyRequestArchives()) {
+      assertIllegalArgument(
+          () ->
+              PrivacyNativeBridge.call(
+                  "build proof",
+                  Arrays.copyOf(forgedRequest, forgedRequest.length),
+                  request -> {
+                    throw new AssertionError("wrong-schema build request must not reach native dispatch");
+                  },
+                  true),
+          "requestArchive must use the privacy request schema");
+      assertIllegalArgument(
+          () ->
+              PrivacyNativeBridge.call(
+                  "verify proof",
+                  Arrays.copyOf(forgedRequest, forgedRequest.length),
+                  request -> {
+                    throw new AssertionError("wrong-schema verify request must not reach native dispatch");
+                  },
+                  true),
+          "requestArchive must use the privacy request schema");
+    }
+  }
+
+  private static void assertThrows(final Runnable runnable) {
+    try {
+      runnable.run();
+      throw new AssertionError("expected IllegalArgumentException");
+    } catch (final IllegalArgumentException expected) {
+      // Expected.
+    }
+  }
+
+  private static IllegalStateException assertIllegalState(
+      final Runnable runnable, final String message) {
+    try {
+      runnable.run();
+      throw new AssertionError("expected IllegalStateException");
+    } catch (final IllegalStateException expected) {
+      assert expected.getMessage().contains(message);
+      return expected;
+    }
+  }
+
+  private static IllegalArgumentException assertIllegalArgument(
+      final Runnable runnable, final String message) {
+    try {
+      runnable.run();
+      throw new AssertionError("expected IllegalArgumentException");
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains(message);
+      return expected;
+    }
+  }
+
+  private static void assertSanitized(final IllegalStateException error, final String witness) {
+    assert error.getCause() == null;
+    assert !error.getMessage().contains(witness);
+    assert !error.toString().contains(witness);
+  }
+
+  private static void assertAllZero(final byte[] bytes) {
+    assert bytes != null;
+    for (final byte value : bytes) {
+      assert value == 0;
+    }
+  }
+
+  private static void assertUnsupportedOperation(final Runnable runnable) {
+    try {
+      runnable.run();
+      throw new AssertionError("expected UnsupportedOperationException");
+    } catch (final UnsupportedOperationException expected) {
+      // Expected.
+    }
+  }
+
+  private static byte[] privacyNoritoFrame(final int schemaByte) {
+    final byte[] frame = new byte[40];
+    frame[0] = 'N';
+    frame[1] = 'R';
+    frame[2] = 'T';
+    frame[3] = '0';
+    Arrays.fill(frame, 6, 22, (byte) schemaByte);
+    return frame;
+  }
+
+  private static byte[] privacyNoritoFrameWithPayload(final int schemaByte) {
+    final byte[] frame = Arrays.copyOf(privacyNoritoFrame(schemaByte), 45);
+    frame[23] = 3;
+    final byte[] checksum =
+        new byte[] {
+          (byte) 0xb9,
+          (byte) 0xd3,
+          (byte) 0xa8,
+          0x0c,
+          (byte) 0xcd,
+          0x5d,
+          0x13,
+          0x24
+        };
+    System.arraycopy(checksum, 0, frame, 31, checksum.length);
+    frame[42] = (byte) 0xa5;
+    frame[43] = 0x5a;
+    frame[44] = 0x11;
+    return frame;
+  }
+
+  private static byte[] privacyNoritoFrameWithPadding(
+      final int schemaByte, final int paddingLength) {
+    final byte[] frame = Arrays.copyOf(privacyNoritoFrame(schemaByte), 43 + paddingLength);
+    frame[23] = 3;
+    final byte[] checksum =
+        new byte[] {
+          (byte) 0xb9,
+          (byte) 0xd3,
+          (byte) 0xa8,
+          0x0c,
+          (byte) 0xcd,
+          0x5d,
+          0x13,
+          0x24
+        };
+    System.arraycopy(checksum, 0, frame, 31, checksum.length);
+    frame[40 + paddingLength] = (byte) 0xa5;
+    frame[41 + paddingLength] = 0x5a;
+    frame[42 + paddingLength] = 0x11;
+    return frame;
+  }
+
+  private static byte[] privacyNoritoFrameWithSchemaOverride(
+      final int schemaByte, final int offset, final int value) {
+    final byte[] frame = privacyNoritoFrameWithPayload(schemaByte);
+    frame[offset] = (byte) value;
+    return frame;
+  }
+
+  private static byte[] privacyNoritoFrameWithDeclaredPayloadLength(
+      final int schemaByte, final long payloadLength) {
+    final byte[] frame = privacyNoritoFrameWithPayload(schemaByte);
+    for (int index = 0; index < 8; index++) {
+      frame[23 + index] = (byte) ((payloadLength >>> (8 * index)) & 0xffL);
+    }
+    return frame;
+  }
+
+  private static byte[] privacyNoritoFrameWithFlags(final int schemaByte, final int flags) {
+    final byte[] frame = privacyNoritoFrameWithPayload(schemaByte);
+    frame[39] = (byte) flags;
+    return frame;
+  }
+
+  private static byte[] invalidPrivacyNoritoFrame(final int offset, final int value) {
+    final byte[] frame = privacyNoritoFrame(0x50);
+    frame[offset] = (byte) value;
+    return frame;
+  }
+
+  private static byte[] invalidPrivacyNoritoDeclaredPayloadLength(final int schemaByte) {
+    return privacyNoritoFrameWithDeclaredPayloadLength(schemaByte, 6L);
+  }
+
+  private static byte[] invalidPrivacyNoritoOversizedPayloadLength(final int schemaByte) {
+    return privacyNoritoFrameWithDeclaredPayloadLength(schemaByte, Long.MIN_VALUE);
+  }
+
+  private static byte[] invalidPrivacyNoritoWithNonzeroPadding() {
+    final byte[] frame = Arrays.copyOf(privacyNoritoFrame(0x50), 41);
+    frame[40] = 1;
+    return frame;
+  }
+
+  private static byte[] invalidPrivacyNoritoWithExcessivePadding() {
+    return privacyNoritoFrameWithPadding(0x50, 65);
+  }
+
+  private static byte[] invalidPrivacyNoritoPayloadTamper() {
+    final byte[] frame = privacyNoritoFrameWithPayload(0x50);
+    frame[44] ^= 0x7f;
+    return frame;
+  }
+
+  private static byte[][] invalidPrivacyRequestArchives() {
+    return new byte[][] {
+      new byte[] {1},
+      invalidPrivacyNoritoFrame(0, 'X'),
+      invalidPrivacyNoritoFrame(4, 1),
+      invalidPrivacyNoritoFrame(5, 1),
+      invalidPrivacyNoritoFrame(22, 1),
+      invalidPrivacyNoritoDeclaredPayloadLength(0x52),
+      invalidPrivacyNoritoOversizedPayloadLength(0x52),
+      invalidPrivacyNoritoFrame(39, 0x40),
+      invalidPrivacyNoritoFrame(39, 0x20),
+      invalidPrivacyNoritoWithNonzeroPadding(),
+      invalidPrivacyNoritoWithExcessivePadding(),
+      invalidPrivacyNoritoFrame(31, 1),
+      invalidPrivacyNoritoPayloadTamper()
+    };
+  }
+
+  private static byte[][] wrongSchemaPrivacyRequestArchives() {
+    return new byte[][] {
+      privacyNoritoFrameWithPayload(0x50),
+      privacyNoritoFrameWithPayload(0x42),
+      privacyNoritoFrameWithPayload(0x56),
+      privacyNoritoFrameWithSchemaOverride(0x52, 6, 0x42),
+      privacyNoritoFrameWithSchemaOverride(0x52, 21, 0x56)
+    };
+  }
+
+  private interface RowMutation {
+    void apply(Map<String, Object> row);
+  }
+
+  private static void assertForgedReadyRowFailsClosed(
+      final String label, final RowMutation mutation) {
+    final Map<String, Object> row = nativeCapability("confidential-transfer-v2", true);
+    mutation.apply(row);
+    final PrivacyNativeBridge.PrivacyCapabilities capabilities =
+        PrivacyNativeBridge.privacyCapabilitiesFromArchive(
+            nativeCapabilitiesArchive(row, nativeCapability("unshield", true)),
+            true);
+    assertFailClosedProductionGate(capabilities);
+    assert !capabilities.isProductionReady() : label;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> productionGate(final Map<String, Object> row) {
+    return (Map<String, Object>) row.get("production_gate");
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<Map<String, Object>> gateStatuses(final Map<String, Object> row) {
+    return (List<Map<String, Object>>) productionGate(row).get("gates");
+  }
+
+  @SafeVarargs
+  private static byte[] nativeCapabilitiesArchive(final Map<String, Object>... rows) {
+    final Map<String, Object> capabilities = new LinkedHashMap<>();
+    capabilities.put("version", (long) PrivacyNativeBridge.PRIVACY_FFI_VERSION_V1);
+    capabilities.put("gate_version", PrivacyNativeBridge.PRODUCTION_GATE_VERSION);
+    capabilities.put("algorithms", Arrays.asList(rows));
+    final byte[] archive = NoritoCodec.encode(
+        capabilities,
+        "connect_norito_bridge::PrivacyCapabilitiesV1",
+        nativeCapabilitiesAdapter());
+    Arrays.fill(archive, 6, 22, (byte) 0x50);
+    return archive;
+  }
+
+  private static Map<String, Object> nativeCapability(
+      final String algorithmId, final boolean ready) {
+    final Map<String, Object> row = new LinkedHashMap<>();
+    row.put("algorithm_id", algorithmId);
+    row.put("proof_family", "halo2-ipa");
+    row.put("backend_family", "halo2-ipa");
+    row.put("sdk_entrypoints", Collections.singletonList("buildConfidentialTransferProofV2"));
+    row.put("planned_entrypoints", Collections.emptyList());
+    row.put("production_ready", ready);
+    row.put("production_gate", nativeProductionGate(ready));
+    return row;
+  }
+
+  private static Map<String, Object> nativeProductionGate(final boolean ready) {
+    final Map<String, Object> gate = new LinkedHashMap<>();
+    gate.put("version", PrivacyNativeBridge.PRODUCTION_GATE_VERSION);
+    gate.put("ready", ready);
+    gate.put("gates", nativeGateStatuses(ready));
+    gate.put("required_gates", expectedProductionGateRequiredKeys());
+    gate.put("missing", ready ? Collections.emptyList() : expectedProductionGateMissingReasons());
+    gate.put("audit_references", ready ? productionAuditReferences() : Collections.emptyList());
+    return gate;
+  }
+
+  private static List<Map<String, Object>> nativeGateStatuses(final boolean ready) {
+    final List<Map<String, Object>> statuses = new ArrayList<>();
+    for (final String key : expectedProductionGateRequiredKeys()) {
+      final Map<String, Object> status = new LinkedHashMap<>();
+      status.put("key", key);
+      status.put("passed", ready);
+      statuses.add(status);
+    }
+    return statuses;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static TypeAdapter<Object> nativeCapabilitiesAdapter() {
+    final TypeAdapter<Object> gateStatusAdapter =
+        NoritoAdapters.struct(
+            Arrays.asList(
+                NoritoAdapters.field("key", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field("passed", NoritoAdapters.boolAdapter())));
+    final TypeAdapter<Object> gateAdapter =
+        NoritoAdapters.struct(
+            Arrays.asList(
+                NoritoAdapters.field("version", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field("ready", NoritoAdapters.boolAdapter()),
+                NoritoAdapters.field("gates", NoritoAdapters.sequence(gateStatusAdapter)),
+                NoritoAdapters.field(
+                    "required_gates",
+                    NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                NoritoAdapters.field(
+                    "missing",
+                    NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                NoritoAdapters.field(
+                    "audit_references",
+                    NoritoAdapters.sequence(NoritoAdapters.stringAdapter()))));
+    final TypeAdapter<Object> capabilityAdapter =
+        NoritoAdapters.struct(
+            Arrays.asList(
+                NoritoAdapters.field("algorithm_id", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field("proof_family", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field("backend_family", NoritoAdapters.stringAdapter()),
+                NoritoAdapters.field(
+                    "sdk_entrypoints",
+                    NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                NoritoAdapters.field(
+                    "planned_entrypoints",
+                    NoritoAdapters.sequence(NoritoAdapters.stringAdapter())),
+                NoritoAdapters.field("production_ready", NoritoAdapters.boolAdapter()),
+                NoritoAdapters.field("production_gate", gateAdapter)));
+    return NoritoAdapters.struct(
+        Arrays.asList(
+            NoritoAdapters.field("version", NoritoAdapters.uint(32)),
+            NoritoAdapters.field("gate_version", NoritoAdapters.stringAdapter()),
+            NoritoAdapters.field("algorithms", NoritoAdapters.sequence(capabilityAdapter))));
+  }
+
+  private static List<String> productionAuditReferences() {
+    return Arrays.asList(
+        "chain_id:boi-privacy-4peer-chain",
+        "reviewer:security-reviewer",
+        "review_artifact_hash:" + productionHash(1),
+        "review_artifact_signature:ed25519:" + repeatedChar('b', 128),
+        "fuzz_artifact_hash:" + productionHash(2),
+        "performance_artifact_hash:" + productionHash(3),
+        "localnet_run_id:boi-privacy-4peer-localnet-2026-06-13",
+        "localnet_smoke_tx_hash:" + productionHash(4),
+        "localnet_replay_rejection_hash:" + productionHash(5),
+        "localnet_restart_replay_rejection_hash:" + productionHash(6),
+        "localnet_state_recovery_hash:" + productionHash(7),
+        "localnet_lifecycle_shield_tx_hash:" + productionHash(8),
+        "localnet_lifecycle_hop_proof_hash:" + productionHash(9),
+        "localnet_lifecycle_recursive_init_hash:" + productionHash(10),
+        "localnet_lifecycle_recursive_init_verify_hash:" + productionHash(11),
+        "localnet_lifecycle_recursive_append_hash:" + productionHash(12),
+        "localnet_lifecycle_recursive_append_verify_hash:" + productionHash(13),
+        "localnet_lifecycle_unshield_proof_hash:" + productionHash(14),
+        "localnet_lifecycle_redeem_tx_hash:" + productionHash(15));
+  }
+
+  private static String productionHash(final int value) {
+    final String hex = Integer.toHexString(value);
+    return "sha256:" + repeatedChar('0', 64 - hex.length()) + hex;
+  }
+
+  private static String repeatedChar(final char value, final int count) {
+    final char[] chars = new char[count];
+    Arrays.fill(chars, value);
+    return new String(chars);
+  }
+
+  private static PrivacyConfidentialWitness.WitnessV1 sampleTransferWitness() {
+    return new PrivacyConfidentialWitness.WitnessV1(
+        "fc56984b-2be7-431d-840e-21514d1883f0",
+        "xor#universal",
+        repeated(0x11, 32),
+        Collections.singletonList(repeated(0x10, 32)),
+        Collections.singletonList(
+            new PrivacyConfidentialWitness.NoteWitnessV1(
+                "7", repeated(0x22, 32), repeated(0x33, 32), 0L)),
+        Collections.singletonList(
+            new PrivacyConfidentialWitness.TransferOutputWitnessV1(
+                "7", repeated(0x44, 32), repeated(0x55, 32))),
+        Collections.emptyList(),
+        "0",
+        repeated(0x66, 32));
+  }
+
+  private static PrivacyConfidentialWitness.WitnessV1 sampleUnshieldWitness() {
+    return new PrivacyConfidentialWitness.WitnessV1(
+        "fc56984b-2be7-431d-840e-21514d1883f0",
+        "xor#universal",
+        repeated(0x71, 32),
+        Collections.singletonList(repeated(0x72, 32)),
+        Collections.singletonList(
+            new PrivacyConfidentialWitness.NoteWitnessV1(
+                "9", repeated(0x73, 32), repeated(0x74, 32), 0L)),
+        Collections.emptyList(),
+        Collections.singletonList(
+            new PrivacyConfidentialWitness.UnshieldChangeWitnessV1("4", repeated(0x75, 32))),
+        "5",
+        repeated(0x76, 32));
+  }
+
+  private static byte[] repeated(final int value, final int count) {
+    final byte[] out = new byte[count];
+    Arrays.fill(out, (byte) value);
+    return out;
+  }
+}

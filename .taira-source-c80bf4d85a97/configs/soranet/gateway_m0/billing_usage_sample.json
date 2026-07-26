@@ -1,0 +1,12 @@
+{
+  "window": "2026-10-01T00:00:00Z/2026-10-31T23:59:59Z",
+  "tenant": "demo-tenant",
+  "entries": [
+    { "meter_id": "http.request", "quantity": 1500000, "region": "NA" },
+    { "meter_id": "http.egress_gib", "quantity": 420, "region": "EU" },
+    { "meter_id": "dns.doh_query", "quantity": 2800000, "region": "APAC" },
+    { "meter_id": "waf.decision", "quantity": 12000, "region": "NA" },
+    { "meter_id": "car.verification_ms", "quantity": 540000, "region": "GLOBAL" },
+    { "meter_id": "storage.gib_month", "quantity": 85, "region": "NA" }
+  ]
+}

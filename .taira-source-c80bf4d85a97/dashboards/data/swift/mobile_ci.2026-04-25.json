@@ -1,0 +1,70 @@
+{
+  "generated_at": "2026-04-25T09:05:00Z",
+  "buildkite": {
+    "lanes": [
+      {
+        "name": "ci/xcode-swift-parity",
+        "success_rate_14_runs": 0.97,
+        "last_failure": "2026-04-24T12:18:00Z",
+        "flake_count": 1,
+        "mttr_hours": 6.2,
+        "device_tag": "parity"
+      },
+      {
+        "name": "ci/xcframework-smoke:iphone-sim",
+        "success_rate_14_runs": 0.96,
+        "last_failure": "2026-04-23T19:02:00Z",
+        "flake_count": 1,
+        "mttr_hours": 5.0,
+        "device_tag": "iphone-sim"
+      },
+      {
+        "name": "ci/xcframework-smoke:ipad-sim",
+        "success_rate_14_runs": 1.0,
+        "last_failure": null,
+        "flake_count": 0,
+        "mttr_hours": 0.0,
+        "device_tag": "ipad-sim"
+      },
+      {
+        "name": "ci/xcframework-smoke:strongbox",
+        "success_rate_14_runs": 0.95,
+        "last_failure": "2026-04-21T02:10:00Z",
+        "flake_count": 1,
+        "mttr_hours": 7.5,
+        "device_tag": "strongbox"
+      },
+      {
+        "name": "ci/xcframework-smoke:macos-fallback",
+        "success_rate_14_runs": 1.0,
+        "last_failure": null,
+        "flake_count": 0,
+        "mttr_hours": 0.0,
+        "device_tag": "mac-fallback"
+      }
+    ],
+    "queue_depth": 1,
+    "average_runtime_minutes": 33.0
+  },
+  "devices": {
+    "emulators": {
+      "passes": 16,
+      "failures": 0
+    },
+    "strongbox_capable": {
+      "passes": 4,
+      "failures": 0
+    }
+  },
+  "acceleration_bench": {
+    "metal_vs_cpu_merkle_ms": {
+      "cpu": 8.3,
+      "metal": 3.5
+    },
+    "neon_crc64_throughput_mb_s": 924.7
+  },
+  "alert_state": {
+    "consecutive_failures": 0,
+    "open_incidents": []
+  }
+}

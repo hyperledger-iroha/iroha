@@ -1,0 +1,15 @@
+error: Executor entrypoint name must be one of: ["execute_transaction", "execute_instruction", "validate_query"]
+ --> tests/ui/fail/entrypoint_wrong_name.rs:5:1
+  |
+5 | #[iroha_executor::entrypoint]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `iroha_executor::entrypoint` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `iroha_executor::prelude::*`
+ --> tests/ui/fail/entrypoint_wrong_name.rs:3:5
+  |
+3 | use iroha_executor::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

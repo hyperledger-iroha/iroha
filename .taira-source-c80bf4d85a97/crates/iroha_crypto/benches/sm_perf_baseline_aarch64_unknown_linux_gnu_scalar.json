@@ -1,0 +1,34 @@
+{
+  "benchmarks": {
+    "sm2_vs_ed25519_sign/ed25519_sign": 33.23625503448276,
+    "sm2_vs_ed25519_sign/sm2_sign": 302.1227334407909,
+    "sm2_vs_ed25519_verify/verify/ed25519": 41.3567309758772,
+    "sm2_vs_ed25519_verify/verify/sm2": 271.42526875000004,
+    "sm3_vs_sha256_hash/sha256_hash": 11.640484795548655,
+    "sm3_vs_sha256_hash/sm3_hash": 11.260154921162847,
+    "sm4_vs_chacha20poly1305_decrypt/chacha20poly1305_decrypt": 1.9025138284297276,
+    "sm4_vs_chacha20poly1305_decrypt/sm4_gcm_decrypt": 16.105347845994586,
+    "sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt": 1.830428713440624,
+    "sm4_vs_chacha20poly1305_encrypt/sm4_gcm_encrypt": 16.0226787861356
+  },
+  "tolerances": {
+    "sm2_vs_ed25519_sign/sm2_sign": 0.15,
+    "sm2_vs_ed25519_sign/ed25519_sign": 0.12,
+    "sm2_vs_ed25519_verify/verify/sm2": 0.15,
+    "sm2_vs_ed25519_verify/verify/ed25519": 0.12,
+    "sm3_vs_sha256_hash/sm3_hash": 0.12,
+    "sm3_vs_sha256_hash/sha256_hash": 0.08,
+    "sm4_vs_chacha20poly1305_encrypt/sm4_gcm_encrypt": 0.12,
+    "sm4_vs_chacha20poly1305_encrypt/chacha20poly1305_encrypt": 0.1,
+    "sm4_vs_chacha20poly1305_decrypt/sm4_gcm_decrypt": 0.12,
+    "sm4_vs_chacha20poly1305_decrypt/chacha20poly1305_decrypt": 0.1
+  },
+  "compare_tolerances": {
+    "sm3_vs_sha256_hash/sm3_hash": 0.70
+  },
+  "metadata": {
+    "target_arch": "aarch64",
+    "target_os": "unknown_linux_gnu",
+    "cpu": "neoverse-proxy-macos"
+  }
+}

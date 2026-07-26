@@ -1,0 +1,70 @@
+rule_files:
+  - ../address_ingest_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'torii_address_collision_total{kind="local12_digest",context="/v1/accounts"}'
+        values: '0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - alertname: AddressLocal12Collision
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              context: /v1/accounts
+              severity: page
+            exp_annotations:
+              summary: "Local-12 selector collision detected"
+  - interval: 1m
+    input_series:
+      - series: 'torii_address_collision_total{kind="local12_digest",context="/v1/accounts"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - alertname: AddressLocal12Collision
+        eval_time: 16m
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'torii_address_domain_total{domain_kind="local12",context="/v1/accounts"}'
+        values: '0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - alertname: AddressLocal12Traffic
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              context: /v1/accounts
+              severity: page
+            exp_annotations:
+              summary: "Local-12 selectors observed in production"
+  - interval: 1m
+    input_series:
+      - series: 'torii_address_domain_total{domain_kind="local12",context="/v1/accounts"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - alertname: AddressLocal12Traffic
+        eval_time: 16m
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'torii_address_invalid_total{reason="ERR_CHECKSUM_MISMATCH",context="/v1/accounts"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16'
+      - series: 'torii_http_requests_total{method="POST",status="200",content_type="application/json"}'
+        values: '0 100 200 300 400 500 600 700 800 900 1000 1100 1200 1300 1400 1500 1600'
+    alert_rule_test:
+      - alertname: AddressInvalidRatioSlo
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Address ingest invalid ratio exceeds 0.1% SLO"
+  - interval: 1m
+    input_series:
+      - series: 'torii_address_invalid_total{reason="ERR_CHECKSUM_MISMATCH",context="/v1/accounts"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_http_requests_total{method="POST",status="200",content_type="application/json"}'
+        values: '0 100 200 300 400 500 600 700 800 900 1000 1100 1200 1300 1400 1500 1600'
+    alert_rule_test:
+      - alertname: AddressInvalidRatioSlo
+        eval_time: 16m
+        exp_alerts: []

@@ -1,0 +1,47 @@
+{
+  "version": "baseline-v1",
+  "quote_ttl_secs": 900,
+  "default_panel_size": 7,
+  "urgency_multipliers": {
+    "normal": "1.0",
+    "high": "1.2"
+  },
+  "classes": {
+    "content": {
+      "base_rate_xor": "150",
+      "backlog_target": 50,
+      "backlog_cap": "1.0",
+      "size_divisor_mb": "100",
+      "size_cap": "2.0",
+      "min_deposit_xor": "100",
+      "max_deposit_xor": "2500"
+    },
+    "access": {
+      "base_rate_xor": "200",
+      "backlog_target": 30,
+      "backlog_cap": "1.0",
+      "size_divisor_mb": "50",
+      "size_cap": "2.0",
+      "min_deposit_xor": "100",
+      "max_deposit_xor": "2500"
+    },
+    "fraud": {
+      "base_rate_xor": "500",
+      "backlog_target": 20,
+      "backlog_cap": "1.0",
+      "size_divisor_mb": "50",
+      "size_cap": "2.0",
+      "min_deposit_xor": "100",
+      "max_deposit_xor": "5000"
+    },
+    "other": {
+      "base_rate_xor": "120",
+      "backlog_target": 40,
+      "backlog_cap": "1.0",
+      "size_divisor_mb": "100",
+      "size_cap": "2.0",
+      "min_deposit_xor": "100",
+      "max_deposit_xor": "2500"
+    }
+  }
+}

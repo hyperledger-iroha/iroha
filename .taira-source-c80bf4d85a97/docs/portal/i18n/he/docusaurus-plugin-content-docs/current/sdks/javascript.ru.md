@@ -1,0 +1,572 @@
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sdks/javascript.ru.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+---
+כותרת: התחלה מהירה של JavaScript SDK
+תיאור: בנה עסקאות, הזרם אירועים והגבר תצוגות מקדימות של Connect עם `@iroha/iroha-js`.
+slug: /sdks/javascript
+---
+
+`@iroha/iroha-js` היא חבילת Node.js הקנונית לאינטראקציה עם Torii. זה
+חבילות בוני Norito, עוזרי Ed25519, כלי עזר לעימוד וחומר עמיד
+לקוח HTTP/WebSocket כך שתוכל לשקף את זרימות ה-CLI מ-TypeScript.
+
+## התקנה
+
+```bash
+npm install @iroha/iroha-js
+# Required once after install so the native bindings are compiled
+npm run build:native
+```
+
+שלב הבנייה עוטף את `cargo build -p iroha_js_host`. ודא שרשרת הכלים מ
+`rust-toolchain.toml` זמין באופן מקומי לפני הפעלת `npm run build:native`.
+
+## ניהול מפתחות
+
+```ts
+import {
+  generateKeyPair,
+  publicKeyFromPrivate,
+  signEd25519,
+  verifyEd25519,
+} from "@iroha/iroha-js";
+
+const { publicKey, privateKey } = generateKeyPair();
+
+const message = Buffer.from("hello iroha");
+const signature = signEd25519(message, privateKey);
+
+console.assert(verifyEd25519(message, signature, publicKey));
+
+const derived = publicKeyFromPrivate(privateKey);
+console.assert(Buffer.compare(derived, publicKey) === 0);
+```
+
+## בניית עסקאות
+
+בוני הוראות Norito מנרמל מזהים, מטא נתונים וכמויות כך
+עסקאות מקודדות תואמות למטעני Rust/CLI.
+
+```ts
+import {
+  buildMintAssetInstruction,
+  buildTransferAssetInstruction,
+  buildMintAndTransferTransaction,
+} from "@iroha/iroha-js";
+
+const mint = buildMintAssetInstruction({
+  assetId: "norito:4e52543000000001",
+  quantity: "10",
+});
+
+const transfer = buildTransferAssetInstruction({
+  sourceAssetId: "norito:4e52543000000001",
+  destinationAccountId: "<i105-account-id>",
+  quantity: "5",
+});
+
+const { signedTransaction } = buildMintAndTransferTransaction({
+  chainId: "test-chain",
+  authority: "<i105-account-id>",
+  mint: { assetId: "norito:4e52543000000001", quantity: "10" },
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
+  privateKey: Buffer.alloc(32, 0x42),
+});
+```
+
+## תצורת לקוח Torii
+
+`ToriiClient` מקבל כפתורי ניסיון חוזר/פסק זמן המשקפים את `iroha_config`. השתמש
+`resolveToriiClientConfig` למיזוג אובייקט תצורה של camelCase (לנרמל
+`iroha_config` תחילה), עקיפות סביבה ואפשרויות מוטבעות.
+
+```ts
+import { ToriiClient, resolveToriiClientConfig } from "@iroha/iroha-js";
+import fs from "node:fs";
+
+const rawConfig = JSON.parse(fs.readFileSync("./iroha_config.json", "utf8"));
+const config = rawConfig?.torii
+  ? {
+      ...rawConfig,
+      torii: {
+        ...rawConfig.torii,
+        apiTokens: rawConfig.torii.api_tokens ?? rawConfig.torii.apiTokens,
+      },
+    }
+  : rawConfig;
+const clientConfig = resolveToriiClientConfig({
+  config,
+  overrides: { timeoutMs: 2_000, maxRetries: 5 },
+});
+
+const torii = new ToriiClient(
+  config?.torii?.address ?? "http://localhost:8080",
+  {
+    config,
+    timeoutMs: clientConfig.timeoutMs,
+    maxRetries: clientConfig.maxRetries,
+  },
+);
+```
+
+משתני סביבה עבור פיתוח מקומי:
+
+| משתנה | מטרה |
+|--------|--------|
+| `IROHA_TORII_TIMEOUT_MS` | בקש פסק זמן (מילישניות). |
+| `IROHA_TORII_MAX_RETRIES` | מקסימום ניסיונות ניסיון חוזר. |
+| `IROHA_TORII_BACKOFF_INITIAL_MS` | נסיגה ראשונית חוזרת. |
+| `IROHA_TORII_BACKOFF_MULTIPLIER` | מכפיל גיבוי אקספוננציאלי. |
+| `IROHA_TORII_MAX_BACKOFF_MS` | עיכוב מקסימלי של ניסיון חוזר. |
+| `IROHA_TORII_RETRY_STATUSES` | קודי מצב HTTP מופרדים בפסיקים כדי לנסות שוב. |
+| `IROHA_TORII_RETRY_METHODS` | שיטות HTTP מופרדות בפסיק כדי לנסות שוב. |
+| `IROHA_TORII_API_TOKEN` | מוסיף `X-API-Token`. |
+| `IROHA_TORII_AUTH_TOKEN` | מוסיף כותרת `Authorization: Bearer …`. |
+
+פרופילי ניסיון חוזר משקפים את ברירת המחדל של Android ומיוצאים לבדיקות זוגיות:
+`DEFAULT_TORII_CLIENT_CONFIG`, `DEFAULT_RETRY_PROFILE_PIPELINE`,
+`DEFAULT_RETRY_PROFILE_STREAMING`. ראה `docs/source/sdk/js/torii_retry_policy.md`
+עבור מיפוי נקודת קצה לפרופיל ופרמטרים ביקורת ממשל במהלך
+JS4/JS7.
+
+## רשימות ניתנות לחזרה ועימוד
+
+עוזרי עימוד משקפים את ארגונומיה של Python SDK עבור `/v1/accounts`,
+`/v1/domains`, `/v1/assets/definitions`, NFTs, יתרות, מחזיקי נכסים, וה
+היסטוריית עסקאות בחשבון.
+
+```ts
+const { items, total } = await torii.listDomains({
+  limit: 25,
+  sort: [{ key: "id", order: "asc" }],
+});
+console.log(`first page out of ${total}`, items);
+
+for await (const account of torii.iterateAccounts({
+  pageSize: 50,
+  maxItems: 200,
+})) {
+  console.log(account.id);
+}
+
+const defs = await torii.queryAssetDefinitions({
+  filter: { Eq: ["metadata.display_name", "Ticket"] },
+  sort: [{ key: "metadata.display_name", order: "desc" }],
+  fetchSize: 64,
+});
+console.log("filtered definitions", defs.items);
+
+const assetId = "norito:4e52543000000001";
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
+  limit: 10,
+  assetId,
+});
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
+  limit: 5,
+  assetId,
+});
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
+  limit: 5,
+  assetId,
+});
+console.log(balances.items, txs.items, holders.items);
+```
+
+## Kagemusha offline cash
+
+The first-release JavaScript package does not expose Kagemusha readiness, top-up, redemption, or operation polling. Those flows require canonical Norito archives and device-bound mobile custody; use IrohaSwift or the JVM SDK instead of hand-encoding requests in JavaScript.
+
+## Torii שאילתות וסטרימינג (WebSockets)
+
+עוזרי שאילתות חושפים סטטוס, מדדי Prometheus, צילומי מצב של טלמטריה ואירוע
+זרמים באמצעות דקדוק המסנן Norito. סטרימינג משתדרג אוטומטית ל
+WebSockets וקורות חיים כאשר תקציב הניסיון מחדש מאפשר.
+
+```ts
+const status = await torii.getSumeragiStatus();
+console.log(status?.leader_index);
+
+const metrics = await torii.getMetrics({ asText: true });
+console.log(metrics.split("\n").slice(0, 5));
+
+const abort = new AbortController();
+for await (const event of torii.streamEvents({
+  filter: { Pipeline: { Block: {} } },
+  signal: abort.signal,
+})) {
+  console.log(event.id, event.data);
+  break;
+}
+abort.abort(); // closes the underlying WebSocket cleanly
+```
+
+השתמש ב-`streamBlocks`, `streamTransactions`, או `streamTelemetry` עבור השני
+נקודות קצה של WebSocket. כל עוזרי הסטרימינג מעלים ניסיונות ניסיון חוזר, אז חבר את
+`onReconnect` התקשרות חוזרת ללוחות מחוונים של הזנה והתראה.
+
+## צילומי מצב של Explorer ומטעני QR
+
+טלמטריית Explorer מספקת עוזרים מוקלדים עבור `/v1/explorer/metrics` ו
+`/v1/explorer/accounts/{account_id}/qr` נקודות קצה כך שמרכזי המחוונים יכולים להפעיל מחדש את
+אותן צילומי מצב שמניעים את הפורטל. `getExplorerMetrics()` מנרמל את
+עומס ומחזיר `null` כאשר המסלול מושבת. חבר אותו עם
+`getExplorerAccountQr()` בכל פעם שתזדקק ל-i105 (מועדף)/סורה (השני בטובו) ליטרלים בתוספת מובנה
+SVG עבור כפתורי שיתוף.
+
+```ts
+import { promises as fs } from "node:fs";
+
+const snapshot = await torii.getExplorerMetrics();
+if (!snapshot) {
+  console.warn("explorer metrics unavailable");
+} else {
+  console.log("peers:", snapshot.peers);
+  console.log("last block:", snapshot.blockHeight, snapshot.blockCreatedAt);
+  console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
+}
+
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
+console.log("explorer literal", qr.literal);
+await fs.writeFile("alice.svg", qr.svg, "utf8");
+console.log(
+  `qr metadata v${qr.qrVersion} ec=${qr.errorCorrection} prefix=${qr.networkPrefix}`,
+);
+```
+
+מעבר `i105` משקף את ברירת המחדל של Explorer דחוסה
+בוררים; השמט את העקיפה עבור פלט i105 המועדף או בקש `i105_qr`
+כאשר אתה צריך את הגרסה בטוחה ל-QR. הליטרלי הדחוס הוא השני הטוב ביותר
+אפשרות לסורה בלבד עבור UX. המסייע תמיד מחזיר את המזהה הקנוני,
+המילולי שנבחר, והמטא נתונים (קידומת רשת, גרסת QR/מודולים, שגיאה
+שכבת תיקון, ו-SVG מוטבע), כך ש-CI/CD יכולים לפרסם את אותם מטענים
+האקספלורר צץ מבלי לקרוא לממירים מותאמים אישית.
+
+## חיבור הפעלות ותורים
+
+המראה של Connect helpers `docs/source/connect_architecture_strawman.md`. ה
+הנתיב המהיר ביותר להפעלה מוכנה לתצוגה מקדימה הוא `bootstrapConnectPreviewSession`,
+שתופר יחד את יצירת SID/URI דטרמיניסטית ואת Torii
+שיחת הרשמה.
+
+```ts
+import {
+  ToriiClient,
+  bootstrapConnectPreviewSession,
+  ConnectQueueError,
+} from "@iroha/iroha-js";
+
+const torii = new ToriiClient("https://torii.nexus.example");
+const { preview, session, tokens } = await bootstrapConnectPreviewSession(
+  torii,
+  {
+    chainId: "sora-mainnet",
+    node: "https://torii.nexus.example",
+    sessionOptions: { node: "https://torii.backup.example" },
+  },
+);
+
+console.log("wallet QR", preview.walletUri);
+console.log("Connect tokens", tokens?.wallet, tokens?.app);
+```
+
+- עברו את `register: false` כאשר אתם צריכים רק URI דטרמיניסטיים עבור QR/קישור עמוק
+  תצוגות מקדימות.
+- `generateConnectSid` נשאר זמין כאשר אתה צריך לגזור מזהי הפעלה
+  ללא הטבעת URIs.
+- מפתחות הכוונה ומעטפות טקסט צופן מגיעים מהגשר המקומי; מתי
+  לא זמין ה-SDK נופל בחזרה ל-codec JSON וזורק
+  `ConnectQueueError.bridgeUnavailable`.
+- מאגרים לא מקוונים מאוחסנים כ-Norito `.to` בלובים ב-IndexedDB. תור לפקח
+  מצב דרך `ConnectQueueError.overflow(limit)` הנפלט /
+  שגיאות `.expired(ttlMs)` וטלמטריית הזנה `connect.queue_depth` כמתואר
+  במפת הדרכים.
+
+### חבר תמונות מצב של רישום ומדיניותמפעילי פלטפורמה יכולים לבחון פנימה ולעדכן את הרישום של Connect בלי
+עוזב את Node.js. `iterateConnectApps()` דפים ברישום, בעוד
+`getConnectStatus()` ו-`getConnectAppPolicy()` חושפים את מוני זמן הריצה
+מעטפת המדיניות הנוכחית. `updateConnectAppPolicy()` מקבל שדות camelCase,
+כך שתוכל לשלב את אותו מטען JSON ש-Torii מצפה לו.
+
+```ts
+const status = await torii.getConnectStatus();
+console.log("connect enabled:", status?.enabled ?? false);
+console.log("active sessions:", status?.sessionsActive ?? 0);
+console.log("buffered bytes:", status?.totalBufferBytes ?? 0);
+
+for await (const app of torii.iterateConnectApps({ limit: 100 })) {
+  console.log(app.appId, app.namespaces, app.policy?.relayEnabled ? "relay" : "wallet-only");
+}
+
+const policy = await torii.getConnectAppPolicy();
+if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
+  await torii.updateConnectAppPolicy({
+    wsPerIpMaxSessions: 5,
+    pingIntervalMs: policy.pingIntervalMs ?? 30_000,
+    pingMissTolerance: policy.pingMissTolerance ?? 3,
+  });
+}
+```
+
+צלם תמיד את תמונת המצב העדכנית ביותר של `getConnectStatus()` לפני היישום
+מוטציות - רשימת המשימות לממשל דורשת הוכחות לכך שמתחילים עדכוני מדיניות
+מהמגבלות הנוכחיות של הצי.
+
+### חיבור WebSocket חיוג
+
+`ToriiClient.openConnectWebSocket()` מרכיב את הקנוני
+`/v1/connect/ws` כתובת אתר (כולל `sid`, `role` ופרמטרים אסימון), שדרוגים
+`http→ws` / `https→wss`, ומעביר את כתובת האתר הסופית לכל WebSocket
+יישום שאתה מספק. דפדפנים משתמשים מחדש באופן אוטומטי בגלובלי
+`WebSocket`. מתקשרי Node.js צריכים לעבור בנאי כגון `ws`:
+
+```ts
+import WebSocket from "ws";
+import { ToriiClient } from "@iroha/iroha-js";
+
+const torii = new ToriiClient(process.env.IROHA_TORII_URL ?? "https://torii.nexus.example");
+const preview = await torii.createConnectSessionPreview({ chainId: "sora-mainnet" });
+const session = await torii.createConnectSession({ sid: preview.sidBase64Url });
+
+const socket = torii.openConnectWebSocket({
+  sid: session.sid,
+  role: "wallet",
+  token: session.token_wallet,
+  WebSocketImpl: WebSocket,
+  protocols: ["iroha-connect"],
+});
+
+socket.addEventListener("message", (event) => {
+  console.log("Connect payload", event.data);
+});
+socket.addEventListener("close", () => {
+  console.log("Connect socket closed");
+});
+
+socket.binaryType = "arraybuffer";
+socket.addEventListener("message", (event) => {
+  if (typeof event.data === "string") {
+    const control = JSON.parse(event.data);
+    console.log("[ws] control", control.kind);
+    return;
+  }
+  pendingFrames.enqueue(new Uint8Array(event.data));
+});
+```
+
+כאשר אתה צריך רק את כתובת האתר, התקשר ל-`torii.buildConnectWebSocketUrl(params)` או ל-
+העוזר `buildConnectWebSocketUrl(baseUrl, params)` ברמה העליונה והשתמש מחדש ב
+מחרוזת שהתקבלה בהובלה/תור מותאם אישית.
+
+מחפש מדגם מלא מכוון CLI? ה
+[מתכון תצוגה מקדימה לחבר](./recipes/javascript-connect-preview.md) כולל א
+סקריפט שניתן להרצה בתוספת הנחיית טלמטריה המשקפת את מפת הדרכים שניתן לספק עבור
+תיעוד זרימת תור ה- Connect + WebSocket.
+
+### תור טלמטריה והתראה
+
+העבר מדדי תור ישירות למשטחי העזר כדי שלוחות המחוונים יוכלו לשקף
+מדדי ה-KPI של מפת הדרכים.
+
+```ts
+import { bootstrapConnectPreviewSession, ConnectQueueError } from "@iroha/iroha-js";
+
+async function dialWithTelemetry(client: ToriiClient) {
+  try {
+    const { session } = await bootstrapConnectPreviewSession(client, { chainId: "sora-mainnet" });
+    queueDepthGauge.record(session.queue_depth ?? 0);
+    // …open the WebSocket here…
+  } catch (error) {
+    if (error instanceof ConnectQueueError) {
+      if (error.kind === ConnectQueueError.KIND.OVERFLOW) {
+        queueOverflowCounter.add(1, { limit: error.limit ?? 0 });
+      } else if (error.kind === ConnectQueueError.KIND.EXPIRED) {
+        queueExpiryCounter.add(1, { ttlMs: error.ttlMs ?? 0 });
+      }
+      return;
+    }
+    throw error;
+  }
+}
+```
+
+`ConnectQueueError#toConnectError()` ממיר כשלים בתור לגנרי
+טקסונומיה `ConnectError` כך שמיירטי HTTP/WebSocket משותפים יכולים לפלוט את
+תקן `connect.queue_depth`, `connect.queue_overflow_total`, ו
+מדדי `connect.queue_expired_total` המוזכרים בכל מפת הדרכים.
+
+## Live event streams
+
+`ToriiClient.streamEvents()` exposes `/v1/events/sse` as a live-only async
+iterator. Torii retains no replay log for this route, so the helper has no
+`lastEventId` option and reconnecting can leave a gap. A terminal
+`event: stream_error` is yielded before the iterator ends; handle it explicitly
+instead of treating closure as a lossless continuation point.
+
+```js
+import { ToriiClient, extractPipelineStatusKind } from "@iroha/iroha-js";
+
+const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080");
+const controller = new AbortController();
+
+process.once("SIGINT", () => controller.abort());
+process.once("SIGTERM", () => controller.abort());
+
+for await (const event of torii.streamEvents({
+  filter: { Pipeline: { Transaction: { status: "Committed" } } },
+  signal: controller.signal,
+})) {
+  if (event.event === "stream_error") {
+    console.error("terminal stream error", event.data);
+    break;
+  }
+  const status = event.data ? extractPipelineStatusKind(event.data) : null;
+  console.log(`[${event.event}] status=${status ?? "n/a"}`);
+}
+```
+
+- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
+  `STREAM_FILTER_JSON` to use the same filters the CLI accepts.
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
+  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
+  for a smoke test.
+- `ToriiClient.streamSumeragiStatus()` exposes the separate
+  `/v1/sumeragi/status/sse` consensus telemetry feed.
+- See `javascript/iroha_js/recipes/streaming.mjs` for a live-only turnkey CLI with
+  environment-driven filters and explicit terminal-error handling.
+
+## תיקי UAID ומדריך החלל
+
+ממשקי ה-API של Space Directory מציגים את מחזור החיים של מזהה חשבון אוניברסלי (UAID). ה
+עוזרים מקבלים `uaid:<hex>` ליטרלים או תקצירים גולמיים של 64 hex (LSB=1) ו
+הפוך אותם לקנוניז לפני הגשת בקשות:- `getUaidPortfolio(uaid, { assetId })` צובר יתרות לכל מרחב נתונים,
+  קיבוץ החזקות נכסים לפי מזהי חשבון קנוני; העבר את `assetId` כדי לסנן את
+  תיק עד למקרה של נכס בודד.
+- `getUaidBindings(uaid)` מונה כל חשבון מרחב נתונים ↔
+  מחייב (`i105` מחזירה את ה-`i105` המילולי).
+- `getUaidManifests(uaid, { dataspaceId })` מחזיר כל מניפסט יכולת,
+  מצב מחזור החיים, וחשבונות קשורים לביקורת.
+
+עבור חבילות ראיות למפעיל, זרימות פרסום/ביטול של מניפסט, והגירת SDK
+הנחיות, עקוב אחר מדריך החשבונות האוניברסלי (`docs/source/universal_accounts_guide.md`)
+לצד עוזרי לקוחות אלה, כך שהפורטל ותיעוד המקור יישארו מסונכרנים.
+
+```ts
+import { promises as fs } from "node:fs";
+
+const uaid = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
+
+const portfolio = await torii.getUaidPortfolio(uaid, {
+  assetId: "norito:4e52543000000002",
+});
+portfolio.dataspaces.forEach((entry) => {
+  console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);
+});
+
+const bindings = await torii.getUaidBindings(uaid, {} );
+console.log("bindings", bindings.dataspaces);
+
+const manifests = await torii.getUaidManifests(uaid, { dataspaceId: 11 });
+console.log("manifests", manifests.manifests[0].manifest.entries.length);
+```
+
+מפעילים יכולים גם לסובב מניפסטים או לבצע זרימות חירום של הכחשת זכיות ללא
+ירידה ל-CLI. שני העוזרים מקבלים אובייקט `{ signal }` אופציונלי כך
+ניתן לבטל הגשות ארוכות עם `AbortController`; ללא אובייקט
+אפשרויות או כניסות שאינן `AbortSignal` מעלות `TypeError` סינכרוני לפני
+תוצאות הבקשה Torii:
+
+```ts
+import { promises as fs } from "node:fs";
+import { Buffer } from "node:buffer";
+
+const manifest = JSON.parse(
+  await fs.readFile("fixtures/space_directory/capability/cbdc.manifest.json", "utf8"),
+);
+
+const controller = new AbortController();
+
+await torii.publishSpaceDirectoryManifest(
+  {
+    authority: "<i105-account-id>",
+    manifest,
+    privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
+    reason: "Attester v2 rollout",
+  },
+  { signal: controller.signal },
+);
+
+await torii.revokeSpaceDirectoryManifest(
+  {
+    authority: "<i105-account-id>",
+    privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
+    uaid,
+    dataspaceId: 11,
+    revokedEpoch: 9216,
+    reason: "Emergency deny-wins",
+  },
+  { signal: controller.signal },
+);
+```
+
+`publishSpaceDirectoryManifest()` מקבל את ה-JSON המניפסט הגולמי (תואם את
+מתקנים תחת `fixtures/space_directory/`) או כל אובייקט שמגיע בסידרה ל-
+אותו מבנה. `privateKey`, `privateKeyHex`, או `privateKeyMultihash` מפה ל
+שדה `ExposedPrivateKey` Torii מצפה וברירת המחדל ל-`ed25519`
+אלגוריתם כאשר לא מסופקת קידומת. שתי הבקשות חוזרות פעם אחת בתור Torii
+ההוראה (`202 Accepted`), שבשלב זה ספר החשבונות יפלוט את
+תואם `SpaceDirectoryEvent`.
+
+## ממשל וגשר ISO
+
+`ToriiClient` חושף את ממשקי ה-API של ממשל לבדיקת חוזים, הבמה
+הצעות, הגשת פתקי הצבעה (פשוטים או צ"ק), החלפת מועצה וקריאה
+`governanceFinalizeReferendumTyped` /
+`governanceEnactProposalTyped` ללא DTOs בכתב יד. עוזרי ISO 20022
+עקוב אחר אותו דפוס דרך `buildPacs008Message`/`buildPacs009Message` וה-
+שלישיית `submitIso*`/`waitForIsoMessageStatus`.
+
+ראה [מתכון גשר ניהול ו-ISO](./recipes/javascript-governance-iso.md)
+לדוגמאות מוכנות ל-CLI בתוספת מצביעים חזרה למדריך השטח המלא ב
+`docs/source/sdk/js/governance_iso_examples.md`.
+
+## Sumeragi availability telemetry
+
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
+
+```js
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
+```
+
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
+
+## בדיקות ו-CI
+
+1. מטמון מטען וחפצי npm.
+2. הפעל את `npm run build:native`.
+3. בצע את `npm test` (או `node --test` עבור עבודות עשן).
+
+זרימת העבודה של GitHub Actions נמצאת בהפניה
+`docs/source/examples/iroha_js_ci.md`.
+
+## השלבים הבאים
+
+- סקור את הסוגים שנוצרו ב-`javascript/iroha_js/index.d.ts`.
+- חקור את המתכונים תחת `javascript/iroha_js/recipes/`.
+- חבר את `ToriiClient` עם ההתחלה המהירה Norito כדי לבדוק מטענים לצד
+  שיחות SDK.

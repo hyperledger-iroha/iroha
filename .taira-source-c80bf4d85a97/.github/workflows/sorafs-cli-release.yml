@@ -1,0 +1,677 @@
+name: SoraFS CLI release candidate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/sorafs-cli-release.yml"
+      - ".github/workflows/sorafs-fixtures-nightly.yml"
+      - ".github/workflows/sorafs-orchestrator-sdk.yml"
+      - "ci/check_sorafs_cli_release.sh"
+      - "ci/check_nexus_lane_smoke.sh"
+      - "scripts/telemetry/run_privacy_dp_notebook.sh"
+      - "scripts/telemetry/run_privacy_dp.py"
+      - "scripts/telemetry/normalize_executed_notebook.py"
+      - "notebooks/soranet_privacy_dp.ipynb"
+      - "scripts/check_sorafs_release_automation.py"
+      - "scripts/check_sorafs_release_version_map.py"
+      - "scripts/check_sorafs_reference_sdk_release_evidence.py"
+      - "scripts/build_sorafs_reference_sdk_release_canary.py"
+      - "scripts/run_sorafs_reference_sdk_release_evidence.py"
+      - "scripts/check_workflow_action_pins.py"
+      - "Dockerfile"
+      - "scripts/build_release_bundle.sh"
+      - "scripts/build_release_image.sh"
+      - "scripts/build_release_oci_archive.py"
+      - "scripts/build_release_tar_gz.py"
+      - "scripts/build_release_tar_zst.py"
+      - "scripts/capture_release_command.py"
+      - "scripts/copy_release_file.py"
+      - "scripts/copy_release_tree.py"
+      - "scripts/generate_release_manifest.py"
+      - "scripts/generate_sorafs_cli_release_manifest.py"
+      - "scripts/release_artifact_contract.py"
+      - "scripts/release_manifest_signing.py"
+      - "scripts/publish_plan.py"
+      - "scripts/run_release_pipeline.py"
+      - "scripts/write_release_checksum.py"
+      - "scripts/write_release_sha256sums.py"
+      - "scripts/validate_release_image_bases.py"
+      - "scripts/examples/sorafs_reference_sdk_release_*.args.example"
+      - "scripts/requirements.txt"
+      - "scripts/package_sorafs_cli_candidate.py"
+      - "scripts/package_sorafs_validate_release.sh"
+      - "scripts/release_sorafs_cli.sh"
+      - "scripts/tests/check_sorafs_release_version_map_test.py"
+      - "scripts/tests/check_sorafs_release_automation_test.py"
+      - "scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py"
+      - "scripts/tests/build_sorafs_reference_sdk_release_canary_test.py"
+      - "scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py"
+      - "scripts/tests/package_sorafs_cli_candidate_test.py"
+      - "scripts/tests/package_sorafs_validate_release_test.py"
+      - "scripts/tests/build_release_bundle_test.py"
+      - "scripts/tests/build_release_image_test.py"
+      - "scripts/tests/capture_release_command_test.py"
+      - "scripts/tests/release_artifact_contract_test.py"
+      - "scripts/tests/validate_release_image_bases_test.py"
+      - "scripts/tests/release_sorafs_cli_test.py"
+      - "scripts/tests/check_sorafs_rollout_gate_contract_test.py"
+      - "scripts/tests/check_workflow_action_pins_test.py"
+      - "scripts/tests/release_profile_validation_test.py"
+      - "scripts/tests/release_manifest_signing_test.py"
+      - "scripts/tests/release_manifest_signing_test.sh"
+      - "scripts/tests/generate_release_manifest_test.py"
+      - "scripts/tests/generate_sorafs_cli_release_manifest_test.py"
+      - "scripts/tests/publish_plan_test.py"
+      - "python/iroha_python/scripts/release_smoke.sh"
+      - "python/iroha_python/README.md"
+      - "docs/source/sdk/python/release_automation*.md"
+      - "docs/source/sdk/python/support_playbook*.md"
+      - "release/version-map.toml"
+      - "docs/portal/docs/sorafs/release-rollback-yank.md"
+      - "docs/portal/docs/sorafs/developer-releases.md"
+      - "docs/portal/docs/sorafs/runbooks-index.md"
+      - "docs/portal/sidebars.js"
+      - "docs/examples/sorafs_release_notes.md"
+      - "docs/source/sorafs_release_pipeline_plan*.md"
+      - "docs/source/release_dual_track_automation_plan*.md"
+      - "docs/source/release_dual_track_runbook*.md"
+      - "docs/source/release_artifact_selection*.md"
+      - "docs/source/sora_nexus_operator_onboarding*.md"
+      - "docs/portal/docs/nexus/nexus-operator-onboarding*.md"
+      - "CHANGELOG.md"
+      - "LICENSE"
+      - "crates/sorafs_car/**"
+      - "crates/sorafs_chunker/**"
+      - "crates/sorafs_manifest/**"
+      - "crates/sorafs_orchestrator/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+  push:
+    tags:
+      - "sorafs-cli-v*"
+  workflow_dispatch:
+    inputs:
+      sign_artifacts:
+        description: Attach GitHub OIDC provenance after protected Ed25519 manifest authentication
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CARGO_NET_OFFLINE: "false"
+      CARGO_TERM_COLOR: never
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: sorafs-cli-release
+      - name: Install script test dependencies
+        run: python3 -m pip install -r scripts/requirements.txt
+      - name: Validate cross-package version map
+        id: version
+        run: |
+          python3 scripts/check_sorafs_release_automation.py | tee release-automation-summary.json
+          python3 scripts/check_sorafs_release_version_map.py | tee version-map-summary.json
+          python3 scripts/check_workflow_action_pins.py
+          release_version="$(python3 -c 'from scripts.check_sorafs_release_version_map import validate_version_map; from pathlib import Path; print(validate_version_map(Path.cwd())["release_version"])')"
+          echo "version=${release_version}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "sorafs-cli-v${release_version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match version-map release ${release_version}" >&2
+            exit 1
+          fi
+      - name: Run strict CLI release gate
+        run: bash ci/check_sorafs_cli_release.sh
+      - name: Prepare release evidence directory
+        run: mkdir -p artifacts/sorafs-release
+      - name: Generate release dependency SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: artifacts/sorafs-release/sorafs-release.spdx.json
+          syft-version: v1.44.0
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Reject high or critical known vulnerabilities
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          grype-version: v0.112.0
+          sbom: artifacts/sorafs-release/sorafs-release.spdx.json
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+          output-file: artifacts/sorafs-release/sorafs-release-vulnerabilities.sarif
+          cache-db: true
+      - name: Upload gate summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sorafs-cli-release-gate-${{ github.run_id }}
+          path: |
+            release-automation-summary.json
+            version-map-summary.json
+            artifacts/sorafs-release/sorafs-release.spdx.json
+            artifacts/sorafs-release/sorafs-release-vulnerabilities.sarif
+          if-no-files-found: error
+          retention-days: 30
+
+  package:
+    needs: release-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            binary_suffix: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary_suffix: ""
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            binary_suffix: ""
+          - os: macos-14
+            target: aarch64-apple-darwin
+            binary_suffix: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_suffix: ".exe"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      CARGO_NET_OFFLINE: "false"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          target: ${{ matrix.target }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: sorafs-cli-package-${{ matrix.target }}
+      - name: Download validated release evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sorafs-cli-release-gate-${{ github.run_id }}
+          path: artifacts/release-gate
+      - name: Build CLI release binaries
+        shell: bash
+        run: |
+          target="${{ matrix.target }}"
+          host_target="$(rustc -vV | sed -n 's/^host: //p')"
+          if [[ "$host_target" != "$target" ]]; then
+            echo "release runner host ${host_target} does not match required native target ${target}" >&2
+            exit 1
+          fi
+          cargo build --locked --release -p sorafs_orchestrator --bin sorafs_cli --target "$target"
+          cargo build --locked --release -p sorafs_car --features cli --bin sorafs_fetch --target "$target"
+          cargo build --locked --release -p sorafs_manifest --bin sorafs-validate --target "$target"
+          mkdir -p artifacts/sorafs-cli
+          suffix="${{ matrix.binary_suffix }}"
+          cp "target/${target}/release/sorafs_cli${suffix}" "artifacts/sorafs-cli/sorafs_cli${suffix}"
+          cp "target/${target}/release/sorafs_fetch${suffix}" "artifacts/sorafs-cli/sorafs_fetch${suffix}"
+          cp "target/${target}/release/sorafs-validate${suffix}" "artifacts/sorafs-cli/sorafs-validate${suffix}"
+          "artifacts/sorafs-cli/sorafs_cli${suffix}" --help > artifacts/sorafs-cli/sorafs_cli.help.txt
+          "artifacts/sorafs-cli/sorafs_fetch${suffix}" --help > artifacts/sorafs-cli/sorafs_fetch.help.txt
+          "artifacts/sorafs-cli/sorafs-validate${suffix}" --help > artifacts/sorafs-cli/sorafs-validate.help.txt
+          cp release/version-map.toml artifacts/sorafs-cli/version-map.toml
+          cp docs/portal/docs/sorafs/release-rollback-yank.md artifacts/sorafs-cli/ROLLBACK-YANK.md
+          cp CHANGELOG.md LICENSE artifacts/sorafs-cli/
+
+      - name: Package reference validator and FFI header reproducibly
+        shell: bash
+        run: |
+          version="${{ needs.release-gate.outputs.version }}"
+          target="${{ matrix.target }}"
+          suffix="${{ matrix.binary_suffix }}"
+          source_commit="${GITHUB_SHA}"
+          source_date_epoch="$(git show -s --format=%ct "$source_commit")"
+          first_out="$(mktemp -d "${RUNNER_TEMP}/sorafs-validate-first.XXXXXX")"
+          replay_out="$(mktemp -d "${RUNNER_TEMP}/sorafs-validate-replay.XXXXXX")"
+          bash scripts/package_sorafs_validate_release.sh \
+            --version "$version" \
+            --target "${{ matrix.target }}" \
+            --source-commit "$source_commit" \
+            --source-date-epoch "$source_date_epoch" \
+            --binary "artifacts/sorafs-cli/sorafs-validate${suffix}" \
+            --out-dir "$first_out"
+          bash scripts/package_sorafs_validate_release.sh \
+            --version "$version" \
+            --target "$target" \
+            --source-commit "$source_commit" \
+            --source-date-epoch "$source_date_epoch" \
+            --binary "artifacts/sorafs-cli/sorafs-validate${suffix}" \
+            --out-dir "$replay_out"
+          package_name="sorafs-validate-${version}-${target}"
+          for relative in \
+            "${package_name}.tar.gz" \
+            "${package_name}.tar.gz.sha256" \
+            "${package_name}.manifest.json" \
+            "${package_name}.manifest.json.sha256" \
+            "${package_name}.sha256"; do
+            cmp "${first_out}/${relative}" "${replay_out}/${relative}"
+          done
+          mkdir -p artifacts/sorafs-cli/reference-validator
+          cp -R "${first_out}/." artifacts/sorafs-cli/reference-validator/
+      - name: Rebuild deterministic platform archive and run clean-consumer smoke
+        shell: bash
+        run: |
+          version="${{ needs.release-gate.outputs.version }}"
+          target="${{ matrix.target }}"
+          first_out="$(mktemp -d "${RUNNER_TEMP}/sorafs-cli-candidate-first.XXXXXX")"
+          replay_out="$(mktemp -d "${RUNNER_TEMP}/sorafs-cli-candidate-replay.XXXXXX")"
+          python3 scripts/package_sorafs_cli_candidate.py \
+            --input-dir artifacts/sorafs-cli \
+            --out-dir "$first_out" \
+            --version "$version" \
+            --target "$target" \
+            | tee candidate-package-first.json
+          python3 scripts/package_sorafs_cli_candidate.py \
+            --input-dir artifacts/sorafs-cli \
+            --out-dir "$replay_out" \
+            --version "$version" \
+            --target "$target" \
+            | tee candidate-package-replay.json
+          package_name="sorafs-cli-${version}-${target}"
+          cmp \
+            "${first_out}/${package_name}.tar.gz" \
+            "${replay_out}/${package_name}.tar.gz"
+          cmp \
+            "${first_out}/${package_name}.manifest.json" \
+            "${replay_out}/${package_name}.manifest.json"
+          for suffix in .tar.gz.sha256 .manifest.json.sha256; do
+            cmp \
+              "${first_out}/${package_name}${suffix}" \
+              "${replay_out}/${package_name}${suffix}"
+          done
+          cmp candidate-package-first.json candidate-package-replay.json
+          mkdir -p artifacts/sorafs-cli/platform-archive
+          cp \
+            "${first_out}/${package_name}.tar.gz" \
+            "${first_out}/${package_name}.tar.gz.sha256" \
+            "${first_out}/${package_name}.manifest.json" \
+            "${first_out}/${package_name}.manifest.json.sha256" \
+            artifacts/sorafs-cli/platform-archive/
+          cp candidate-package-first.json candidate-package-replay.json \
+            artifacts/sorafs-cli/platform-archive/
+      - name: Stage source release scan evidence
+        shell: bash
+        run: |
+          cp artifacts/release-gate/artifacts/sorafs-release/sorafs-release.spdx.json artifacts/sorafs-cli/
+          cp artifacts/release-gate/artifacts/sorafs-release/sorafs-release-vulnerabilities.sarif artifacts/sorafs-cli/
+      - name: Generate platform binary SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: artifacts/sorafs-cli
+          format: spdx-json
+          output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}.spdx.json
+          syft-version: v1.44.0
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Scan platform binary SBOM
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          grype-version: v0.112.0
+          sbom: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}.spdx.json
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+          output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}-vulnerabilities.sarif
+          cache-db: true
+      - name: Finalize platform checksums
+        shell: bash
+        run: |
+          cd artifacts/sorafs-cli
+          find . -type f ! -name SHA256SUMS -print | LC_ALL=C sort | while IFS= read -r file; do
+            file="${file#./}"
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$file"
+            else
+              shasum -a 256 "$file"
+            fi
+          done > SHA256SUMS
+      - name: Upload unsigned release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sorafs-cli-${{ needs.release-gate.outputs.version }}-${{ matrix.target }}
+          path: artifacts/sorafs-cli/
+          if-no-files-found: error
+          retention-days: 30
+
+  prepare-release-manifest:
+    if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') || inputs.sign_artifacts }}
+    needs: [release-gate, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Download the exact five unsigned candidates
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sorafs-cli-${{ needs.release-gate.outputs.version }}-*
+          path: release-candidates
+          merge-multiple: false
+      - name: Build the canonical foundational manifest twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-manifest
+          common_args=(
+            --artifacts-dir release-candidates
+            --version "${{ needs.release-gate.outputs.version }}"
+            --commit "${GITHUB_SHA}"
+            --repository "${GITHUB_REPOSITORY}"
+            --ref "${GITHUB_REF}"
+          )
+          python3 scripts/generate_sorafs_cli_release_manifest.py create \
+            "${common_args[@]}" \
+            --output release-manifest/release_manifest.json \
+            | tee release-manifest/create-summary.json
+          python3 scripts/generate_sorafs_cli_release_manifest.py create \
+            "${common_args[@]}" \
+            --output release-manifest/release_manifest.replay.json \
+            | tee release-manifest/replay-summary.json
+          cmp \
+            release-manifest/release_manifest.json \
+            release-manifest/release_manifest.replay.json
+          (
+            cd release-manifest
+            sha256sum release_manifest.json > release_manifest.json.sha256
+          )
+          rm release-manifest/release_manifest.replay.json
+      - name: Upload unsigned foundational manifest for external HSM signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sorafs-release-foundational-manifest-${{ github.run_id }}
+          path: release-manifest/
+          if-no-files-found: error
+          retention-days: 7
+
+  verify-release-auth:
+    if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') || inputs.sign_artifacts }}
+    needs: [release-gate, prepare-release-manifest]
+    environment: sorafs-release-authentication
+    runs-on: [self-hosted, linux, x64, sorafs-release-auth]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      SORAFS_RELEASE_SIGNATURE_PATH: ${{ vars.SORAFS_RELEASE_SIGNATURE_PATH }}
+      SORAFS_RELEASE_PUBLIC_KEY_PATH: ${{ vars.SORAFS_RELEASE_PUBLIC_KEY_PATH }}
+      SORAFS_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.SORAFS_RELEASE_MANIFEST_VERIFIER_PATH }}
+      SORAFS_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.SORAFS_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}
+      SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - name: Download the canonical foundational manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sorafs-release-foundational-manifest-${{ github.run_id }}
+          path: release-auth-input
+      - name: Download the exact five candidates for binding verification
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sorafs-cli-${{ needs.release-gate.outputs.version }}-*
+          path: release-candidates
+          merge-multiple: false
+      - name: Reconcile the foundational manifest with the immutable candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/generate_sorafs_cli_release_manifest.py check \
+            --artifacts-dir release-candidates \
+            --version "${{ needs.release-gate.outputs.version }}" \
+            --commit "${GITHUB_SHA}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --ref "${GITHUB_REF}" \
+            --manifest release-auth-input/release_manifest.json
+      - name: Verify the protected external Ed25519 manifest tuple
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          require_external_file() {
+            local label="$1"
+            local path="$2"
+            if [[ -z "$path" || "$path" != /* ]]; then
+              echo "${label} must be an explicit absolute path" >&2
+              exit 1
+            fi
+            if [[ "$path" == "$GITHUB_WORKSPACE" || "$path" == "$GITHUB_WORKSPACE/"* ]]; then
+              echo "${label} must be provisioned outside the GitHub workspace" >&2
+              exit 1
+            fi
+            if [[ ! -f "$path" || -L "$path" ]]; then
+              echo "${label} must be a non-symlink regular file" >&2
+              exit 1
+            fi
+          }
+          require_external_file \
+            "release-manifest signature" \
+            "$SORAFS_RELEASE_SIGNATURE_PATH"
+          require_external_file \
+            "release-manifest raw public key" \
+            "$SORAFS_RELEASE_PUBLIC_KEY_PATH"
+          require_external_file \
+            "pinned native release-manifest verifier" \
+            "$SORAFS_RELEASE_MANIFEST_VERIFIER_PATH"
+          if [[ ! "$SORAFS_TRUSTED_RELEASE_SIGNING_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "trusted Ed25519 signing fingerprint must be lowercase SHA-256" >&2
+            exit 1
+          fi
+          if [[ ! "$SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "trusted native verifier digest must be lowercase SHA-256" >&2
+            exit 1
+          fi
+
+          direct_receipt="$(
+            python3 scripts/release_manifest_signing.py verify \
+              --manifest release-auth-input/release_manifest.json \
+              --signature "$SORAFS_RELEASE_SIGNATURE_PATH" \
+              --public-key "$SORAFS_RELEASE_PUBLIC_KEY_PATH" \
+              --trusted-signing-fingerprint \
+                "$SORAFS_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
+              --release-manifest-verifier \
+                "$SORAFS_RELEASE_MANIFEST_VERIFIER_PATH" \
+              --trusted-release-manifest-verifier-sha256 \
+                "$SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
+          )"
+
+          evidence_dir="$(mktemp -d "${RUNNER_TEMP}/sorafs-release-auth.XXXXXX")"
+          install -m 0600 -- \
+            release-auth-input/release_manifest.json \
+            "$evidence_dir/release_manifest.json"
+          install -m 0600 -- \
+            "$SORAFS_RELEASE_SIGNATURE_PATH" \
+            "$evidence_dir/release_manifest.json.sig"
+          install -m 0600 -- \
+            "$SORAFS_RELEASE_PUBLIC_KEY_PATH" \
+            "$evidence_dir/release_manifest.json.pub"
+          staged_receipt="$(
+            python3 scripts/release_manifest_signing.py verify \
+              --manifest "$evidence_dir/release_manifest.json" \
+              --signature "$evidence_dir/release_manifest.json.sig" \
+              --public-key "$evidence_dir/release_manifest.json.pub" \
+              --trusted-signing-fingerprint \
+                "$SORAFS_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
+              --release-manifest-verifier \
+                "$SORAFS_RELEASE_MANIFEST_VERIFIER_PATH" \
+              --trusted-release-manifest-verifier-sha256 \
+                "$SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
+          )"
+          printf '%s\n' "$direct_receipt" \
+            > "$evidence_dir/release_manifest.external.verify.json"
+          printf '%s\n' "$staged_receipt" \
+            > "$evidence_dir/release_manifest.verify.json"
+          cmp \
+            "$evidence_dir/release_manifest.external.verify.json" \
+            "$evidence_dir/release_manifest.verify.json"
+          echo "evidence_dir=${evidence_dir}" >> "$GITHUB_OUTPUT"
+      - name: Upload authenticated foundational manifest tuple
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sorafs-release-authentication-${{ github.run_id }}
+          path: ${{ steps.verify.outputs.evidence_dir }}/
+          if-no-files-found: error
+          retention-days: 90
+
+  sign:
+    if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') || inputs.sign_artifacts }}
+    needs: [release-gate, package, verify-release-auth]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Download authenticated release candidates
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sorafs-cli-${{ needs.release-gate.outputs.version }}-*
+          path: signed-input/release-candidates
+          merge-multiple: false
+      - name: Download authenticated foundational manifest tuple
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sorafs-release-authentication-${{ github.run_id }}
+          path: signed-input/release-authentication
+      - uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0
+      - name: Verify authenticated release-manifest candidate binding before provenance
+        run: |
+          python3 scripts/generate_sorafs_cli_release_manifest.py check \
+            --artifacts-dir signed-input/release-candidates \
+            --version "${{ needs.release-gate.outputs.version }}" \
+            --commit "${GITHUB_SHA}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --ref "${GITHUB_REF}" \
+            --manifest signed-input/release-authentication/release_manifest.json
+      - name: Verify platform package checksums before signing
+        run: |
+          mapfile -d '' checksum_files < <(find signed-input -type f -name SHA256SUMS -print0)
+          if [[ "${#checksum_files[@]}" -ne 5 ]]; then
+            echo "expected exactly five target-triple SHA256SUMS files" >&2
+            exit 1
+          fi
+          required_targets=(
+            x86_64-unknown-linux-gnu
+            aarch64-unknown-linux-gnu
+            x86_64-apple-darwin
+            aarch64-apple-darwin
+            x86_64-pc-windows-msvc
+          )
+          for target in "${required_targets[@]}"; do
+            matching=0
+            for checksum_file in "${checksum_files[@]}"; do
+              if [[ "$(basename "$(dirname "$checksum_file")")" == *-"${target}" ]]; then
+                matching=$((matching + 1))
+              fi
+            done
+            if [[ "$matching" -ne 1 ]]; then
+              echo "expected exactly one release candidate for target ${target}, found ${matching}" >&2
+              exit 1
+            fi
+          done
+          for checksum_file in "${checksum_files[@]}"; do
+            checksum_dir="$(dirname "$checksum_file")"
+            (
+              cd "$checksum_dir"
+              sha256sum --check SHA256SUMS
+              actual_files="$(mktemp)"
+              listed_files="$(mktemp)"
+              unique_listed_files="$(mktemp)"
+              find . -type f ! -name SHA256SUMS -printf '%P\n' | LC_ALL=C sort > "$actual_files"
+              sed -E 's/^[0-9a-f]{64} [ *]//' SHA256SUMS | LC_ALL=C sort > "$listed_files"
+              LC_ALL=C sort -u "$listed_files" > "$unique_listed_files"
+              if ! cmp -s "$listed_files" "$unique_listed_files"; then
+                echo "SHA256SUMS contains duplicate file entries" >&2
+                exit 1
+              fi
+              if ! cmp -s "$actual_files" "$listed_files"; then
+                echo "SHA256SUMS does not cover the exact platform candidate file set" >&2
+                exit 1
+              fi
+            )
+          done
+      - name: Attest release-candidate build provenance
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: signed-input/**/*
+      - name: Stage offline provenance bundles
+        run: |
+          attestation_list="${RUNNER_TEMP}/created_attestation_paths.txt"
+          if [[ ! -f "$attestation_list" || -L "$attestation_list" ]]; then
+            echo "GitHub attestation action did not emit a regular bundle list" >&2
+            exit 1
+          fi
+          mkdir -p signed-input/github-attestations
+          count=0
+          while IFS= read -r attestation_path; do
+            [[ -n "$attestation_path" ]] || continue
+            if [[ "$attestation_path" != "${RUNNER_TEMP}/"* || ! -f "$attestation_path" || -L "$attestation_path" ]]; then
+              echo "attestation bundle path escaped the runner temporary directory" >&2
+              exit 1
+            fi
+            count=$((count + 1))
+            if [[ "$count" -gt 16 ]]; then
+              echo "attestation bundle count exceeds the release ceiling" >&2
+              exit 1
+            fi
+            cp -- "$attestation_path" "signed-input/github-attestations/provenance-${count}.json"
+          done < "$attestation_list"
+          if [[ "$count" -lt 1 ]]; then
+            echo "no offline provenance bundle was generated" >&2
+            exit 1
+          fi
+      - name: Keyless-sign every release-candidate file
+        run: |
+          find signed-input -type f ! -name '*.sigstore.json' -print0 | while IFS= read -r -d '' file; do
+            bundle="${file}.sigstore.json"
+            cosign sign-blob --yes --bundle "$bundle" "$file"
+            cosign verify-blob \
+              --bundle "$bundle" \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/sorafs-cli-release.yml@${GITHUB_REF}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$file"
+          done
+      - name: Upload signed release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sorafs-cli-${{ needs.release-gate.outputs.version }}-signed
+          path: signed-input/
+          if-no-files-found: error
+          retention-days: 90

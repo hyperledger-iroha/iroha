@@ -1,0 +1,150 @@
+{
+  "status": "Error",
+  "code": "SFS-PDP-003",
+  "category": "validation",
+  "message": "PDP exhaustive witness verification failed: PDP segment 0 does not match the segment root",
+  "action": "Reject the payload set and regenerate the commitment, challenge, or proof; active governed admission must still be evaluated separately after witness verification succeeds.",
+  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "telemetry_tags": [
+    "sorafs.reference.pdp",
+    "sorafs.reference.code.SFS-PDP-003"
+  ],
+  "context": [
+    {
+      "key": "schema",
+      "value": "PdpCommitmentV1"
+    },
+    {
+      "key": "version",
+      "value": "1"
+    },
+    {
+      "key": "manifest_digest_hex",
+      "value": "4242424242424242424242424242424242424242424242424242424242424242"
+    },
+    {
+      "key": "chunk_profile",
+      "value": "sorafs.sf1@1.0.0"
+    },
+    {
+      "key": "commitment_root_hot_hex",
+      "value": "2a46b0ab4799aa953be4d6fc3b13e09ca3c34b91aa8ce6dbbf5aa753d821becc"
+    },
+    {
+      "key": "commitment_root_segment_hex",
+      "value": "a3d055cfb249be369a6ff8728994f6a656c349c89aa59bed2b6c988279a4ed90"
+    },
+    {
+      "key": "hash_algorithm",
+      "value": "blake3-256"
+    },
+    {
+      "key": "hot_tree_height",
+      "value": "8"
+    },
+    {
+      "key": "segment_tree_height",
+      "value": "2"
+    },
+    {
+      "key": "sample_window",
+      "value": "4"
+    },
+    {
+      "key": "sealed_at",
+      "value": "1700000000"
+    },
+    {
+      "key": "challenge_id_hex",
+      "value": "cf0fcb348631bfcd6f4c3cdf128ca59faa20d7b899baa2822b6dc968a6a4dab8"
+    },
+    {
+      "key": "provider_id_hex",
+      "value": "1010101010101010101010101010101010101010101010101010101010101010"
+    },
+    {
+      "key": "challenge_manifest_digest_hex",
+      "value": "4242424242424242424242424242424242424242424242424242424242424242"
+    },
+    {
+      "key": "challenge_chunk_profile",
+      "value": "sorafs.sf1@1.0.0"
+    },
+    {
+      "key": "challenge_epoch_id",
+      "value": "1700000"
+    },
+    {
+      "key": "challenge_sample_count",
+      "value": "2"
+    },
+    {
+      "key": "schema",
+      "value": "PdpProofV1"
+    },
+    {
+      "key": "version",
+      "value": "1"
+    },
+    {
+      "key": "challenge_id_hex",
+      "value": "cf0fcb348631bfcd6f4c3cdf128ca59faa20d7b899baa2822b6dc968a6a4dab8"
+    },
+    {
+      "key": "manifest_digest_hex",
+      "value": "4242424242424242424242424242424242424242424242424242424242424242"
+    },
+    {
+      "key": "provider_id_hex",
+      "value": "1010101010101010101010101010101010101010101010101010101010101010"
+    },
+    {
+      "key": "epoch_id",
+      "value": "1700000"
+    },
+    {
+      "key": "proof_leaf_count",
+      "value": "2"
+    },
+    {
+      "key": "hot_leaf_proof_count",
+      "value": "5"
+    },
+    {
+      "key": "signature_len",
+      "value": "64"
+    },
+    {
+      "key": "issued_at_unix",
+      "value": "1700000050"
+    },
+    {
+      "key": "witness_verification",
+      "value": "sampled_bytes_signature_and_both_merkle_roots"
+    },
+    {
+      "key": "verification_error",
+      "value": "PDP segment 0 does not match the segment root"
+    },
+    {
+      "key": "production_acceptance",
+      "value": "false"
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "pdp_commitment",
+      "path": "commitment_v1.to"
+    },
+    {
+      "kind": "pdp_challenge",
+      "path": "challenge_v1.to"
+    },
+    {
+      "kind": "pdp_proof",
+      "path": "wrong_path_proof_v1.to"
+    }
+  ],
+  "version": 1,
+  "generated_at": 123
+}

@@ -1,0 +1,167 @@
+version = 2
+billing_period = "2026-11"
+currency = "XOR"
+period_days = 30
+grace_days = 7
+
+[contract]
+commit_12mo_discount_bps = 800
+prepay_credit_bps = 250
+dispute_hold_bps = 2000
+treasury_cut_bps = 500
+surge_surcharge_bps = 500
+
+[[meters]]
+id = "http.request"
+category = "edge"
+unit = "request"
+price_micros = 5
+included_units = 500000
+burst_cap = 2500000
+
+[[meters.tiers]]
+label = "base"
+rate_micros = 5
+
+[[meters.discounts]]
+threshold = 1000000
+discount_bps = 500
+
+[[meters.discounts]]
+threshold = 5000000
+discount_bps = 900
+
+[meters.region_multiplier_bps]
+APAC = 11000
+EU = 9500
+LATAM = 10250
+NA = 10000
+
+[[meters]]
+id = "http.egress_gib"
+category = "egress"
+unit = "gibibyte"
+price_micros = 250000
+included_units = 0
+burst_cap = 520
+
+[[meters.tiers]]
+label = "first_100_gib"
+upto = 100
+rate_micros = 250000
+
+[[meters.tiers]]
+label = "next_200_gib"
+upto = 300
+rate_micros = 225000
+
+[[meters.tiers]]
+label = "over_300_gib"
+rate_micros = 210000
+
+[[meters.discounts]]
+threshold = 100
+discount_bps = 300
+
+[[meters.discounts]]
+threshold = 300
+discount_bps = 1000
+
+[meters.region_multiplier_bps]
+APAC = 11000
+EU = 9500
+LATAM = 10250
+NA = 10000
+
+[[meters]]
+id = "dns.doh_query"
+category = "dns"
+unit = "request"
+price_micros = 3
+included_units = 200000
+burst_cap = 1000000
+
+[[meters.tiers]]
+label = "base"
+rate_micros = 3
+
+[[meters.discounts]]
+threshold = 2000000
+discount_bps = 1000
+
+[meters.region_multiplier_bps]
+APAC = 10500
+EU = 9800
+LATAM = 10000
+NA = 10000
+
+[[meters]]
+id = "waf.decision"
+category = "security"
+unit = "decision"
+price_micros = 20
+included_units = 10000
+burst_cap = 240000
+discounts = []
+
+[[meters.tiers]]
+label = "base"
+rate_micros = 20
+
+[meters.region_multiplier_bps]
+GLOBAL = 10000
+
+[[meters]]
+id = "car.verification_ms"
+category = "trustless"
+unit = "ms"
+price_micros = 10
+included_units = 80000
+burst_cap = 1200000
+quantum = 10
+
+[[meters.tiers]]
+label = "base"
+rate_micros = 10
+
+[[meters.discounts]]
+threshold = 500000
+discount_bps = 1500
+
+[meters.region_multiplier_bps]
+GLOBAL = 10000
+
+[[meters]]
+id = "storage.gib_month"
+category = "storage"
+unit = "gib-month"
+price_micros = 180000
+included_units = 20
+burst_cap = 600
+
+[[meters.tiers]]
+label = "base"
+rate_micros = 180000
+
+[[meters.discounts]]
+threshold = 50
+discount_bps = 500
+
+[[meters.discounts]]
+threshold = 200
+discount_bps = 1000
+
+[meters.region_multiplier_bps]
+APAC = 11000
+EU = 9500
+LATAM = 10250
+NA = 10000
+
+[guardrails]
+warn_utilization_bps = 8500
+critical_utilization_bps = 9500
+alert_routes = [
+    "pager:soranet-edge",
+    "email:billing@sora.net",
+]
+ledger_currency = "xor.sora"

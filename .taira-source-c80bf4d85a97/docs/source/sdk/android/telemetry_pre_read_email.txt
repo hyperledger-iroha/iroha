@@ -1,0 +1,35 @@
+Subject: Pre-read — Android Telemetry Redaction Review (SRE Governance, 2026-02-12)
+
+Hi everyone,
+
+Ahead of the February SRE governance session, please review the Android telemetry redaction package:
+
+- Summary & agenda: `docs/source/sdk/android/telemetry_redaction_pre_read.md`
+- Policy draft: `docs/source/sdk/android/telemetry_redaction.md`
+- Schema diff summary: `docs/source/sdk/android/telemetry_schema_diff.md` (updated 2026-02-24)
+- Support runbook updates: `docs/source/android_support_playbook.md` (Section 8)
+- Operational runbook: `docs/source/android_runbook.md` (refreshed 2026-02-15 with telemetry pipeline + override matrix updates)
+- Readiness outline: `docs/source/sdk/android/telemetry_readiness_outline.md`
+- Enablement deck: `docs/source/sdk/android/readiness/deck/telemetry_redaction_v1.md`
+- Quick-reference card: `docs/source/sdk/android/readiness/cards/telemetry_redaction_qrc.md`
+  (localized mirrors under `..._qrc.<ar|es|fr|he|ja|pt|ru|ur>.md`, PDF exports
+  generated on demand and stored in the enablement archive)
+- Lab guide & report template: `docs/source/sdk/android/readiness/labs/`
+- Chaos rehearsal checklist: `docs/source/sdk/android/telemetry_chaos_checklist.md`
+
+We will use the 25-minute slot on **Thursday, 2026-02-12 at 14:00 UTC** to confirm:
+1. Final redaction policy approvals (hashed authority, device profile buckets, no carrier data).
+2. Validation coverage (schema diff tooling, chaos rehearsals, exporter monitoring).
+3. Enablement and documentation rollout (recorded session on 2026-02-18).
+4. Override governance and audit expectations.
+
+Requested actions before the meeting:
+
+- Review the documents above and leave comments inline or in the shared notes doc.
+- Flag any additional telemetry consumers that need consideration (incident tooling, external dashboards, etc.).
+- Let us know if you cannot attend; we will share the recording and follow up asynchronously.
+
+Dial-in: https://meet.sora.dev/sre-governance (calendar invite already sent).
+
+Thanks,
+LLM (AND7 owner) & Haruka Yamamoto (Android Observability TL)

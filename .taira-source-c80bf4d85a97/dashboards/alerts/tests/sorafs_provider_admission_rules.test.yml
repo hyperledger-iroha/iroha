@@ -1,0 +1,66 @@
+rule_files:
+  - ../sorafs_provider_admission_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_admission_total{result="rejected",reason="admission_missing"}'
+        values: '0 0 1 2 3 4 5 6 7 8'
+      - series: 'torii_sorafs_admission_total{result="rejected",reason="stale"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_admission_total{result="rejected",reason="digest_error"}'
+        values: '0 0 1 2 3 4 5 6 7 8'
+      - series: 'torii_sorafs_admission_total{result="warn",reason="missing_stream_budget"}'
+        values: '0 1 2 3 4 5 6 7 8 9'
+    alert_rule_test:
+      - alertname: SoraFSProviderAdmissionMissingEnvelope
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS provider advert missing admission envelope"
+      - alertname: SoraFSProviderAdmissionEnvelopeExpired
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS provider advert or admission envelope expired"
+      - alertname: SoraFSProviderAdmissionPolicyRejectSpike
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              reason: digest_error
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS provider admission policy rejects elevated"
+      - alertname: SoraFSProviderAdmissionDowngradeWarnings
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              reason: missing_stream_budget
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS provider advert downgrade warnings elevated"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_admission_total{result="accepted",reason="stored"}'
+        values: '0 1 2 3 4 5 6 7 8 9'
+      - series: 'torii_sorafs_admission_total{result="rejected",reason="digest_error"}'
+        values: '0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_admission_total{result="warn",reason="missing_stream_budget"}'
+        values: '0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - alertname: SoraFSProviderAdmissionMissingEnvelope
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: SoraFSProviderAdmissionEnvelopeExpired
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: SoraFSProviderAdmissionPolicyRejectSpike
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: SoraFSProviderAdmissionDowngradeWarnings
+        eval_time: 9m
+        exp_alerts: []

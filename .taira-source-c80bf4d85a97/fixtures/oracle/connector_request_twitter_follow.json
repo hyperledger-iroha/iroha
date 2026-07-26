@@ -1,0 +1,38 @@
+{
+  "feed_id": [
+    "twitter_follow_binding"
+  ],
+  "feed_config_version": [
+    1
+  ],
+  "slot": 24,
+  "connector_id": "twitter-follow",
+  "connector_version": 1,
+  "method": {
+    "method": "Get",
+    "value": null
+  },
+  "endpoint": "/v1/twitter/follow",
+  "query": {
+    "user_keyed_hash": "hash:A6CDD4DBEACE50D7CBB394D76A94CD1B7332251245B3D85D3C08947E405CD947#E0DF"
+  },
+  "headers": {
+    "user-agent": {
+      "kind": "Plain",
+      "value": "soracles/1.0"
+    },
+    "x-api-key": {
+      "kind": "Hashed",
+      "value": "hash:2FFDA7FA66B39CF28F3CF288E437CA48E98AC55A3C353751ACDC6BDDA353BA6F#E9D5"
+    },
+    "x-challenge-sig": {
+      "kind": "Hashed",
+      "value": "hash:A4D8C10699E0327F5832B6E291CCF23E686342E0D7BBA3FC812B65B30A648109#973F"
+    },
+    "x-pepper-id": {
+      "kind": "Plain",
+      "value": "pepper-social-v1"
+    }
+  },
+  "body_hash": "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22"
+}

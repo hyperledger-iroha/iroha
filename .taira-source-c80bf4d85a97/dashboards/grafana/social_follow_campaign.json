@@ -1,0 +1,101 @@
+{
+  "uid": "social-follow-campaign",
+  "title": "Social Follow Promo",
+  "schemaVersion": 39,
+  "version": 1,
+  "description": "Viral follow promotion health: campaign spend, promo window state, and halt flag.",
+  "editable": true,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Campaign Spend vs Cap",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "iroha_social_campaign_spent",
+          "legendFormat": "spent"
+        },
+        {
+          "expr": "iroha_social_campaign_cap",
+          "legendFormat": "cap"
+        },
+        {
+          "expr": "iroha_social_campaign_remaining",
+          "legendFormat": "remaining"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Promo / Halt Flags",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROMETHEUS"
+      },
+      "targets": [
+        {
+          "expr": "iroha_social_promo_active",
+          "legendFormat": "promo_active"
+        },
+        {
+          "expr": "iroha_social_halted",
+          "legendFormat": "halted"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  }
+}

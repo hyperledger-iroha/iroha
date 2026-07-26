@@ -28482,7 +28482,7 @@ impl State {
                             })
                             .is_some_and(|proposal| {
                                 matches!(
-                                    proposal.kind,
+                                    &proposal.kind,
                                     iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
                                         | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
                                 )

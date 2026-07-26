@@ -1,0 +1,1071 @@
+//! Incentive and treasury data structures surfaced by the `SoraNet` anonymity layer.
+//!
+//! The types defined here capture the artefacts required by SNNet-7 to design a staking and
+//! reward programme for relays. They provide Norito-serialisable policy descriptors, bandwidth
+//! proofs produced by blinded measurement clients, epoch-level performance summaries, and payout
+//! instructions targeting the XOR ledger (Sora Credits). Runtime components populate these
+//! payloads so the treasury can remunerate reliable relays deterministically while exposing the
+//! necessary observability hooks.
+
+use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
+use iroha_primitives::numeric::Quantity;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+#[cfg(feature = "json")]
+use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
+
+use super::{Digest32, RelayId};
+#[cfg(feature = "json")]
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use crate::{
+    account::AccountId,
+    asset::{AssetDefinitionId, AssetId},
+    isi::{InstructionBox, Transfer},
+    metadata::Metadata,
+};
+
+/// Identifier assigned to blinded measurement clients.
+pub type MeasurementId = Digest32;
+
+/// Canonical payload signed by a blinded measurement client for relay bandwidth proofs.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct RelayBandwidthProofPayloadV1 {
+    /// Relay fingerprint for which the bandwidth was measured.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
+    /// Identifier of the blinded measurement flow.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub measurement_id: MeasurementId,
+    /// Epoch against which the measurement is recorded.
+    pub epoch: u32,
+    /// Total verified bytes relayed during the measurement window.
+    pub verified_bytes: u128,
+    /// Account authorised to operate the measurement client.
+    pub verifier_id: AccountId,
+    /// Timestamp (seconds since UNIX epoch) when the proof was sealed.
+    pub issued_at_unix: u64,
+    /// Confidence metadata associated with the measurement window.
+    pub confidence: BandwidthConfidenceV1,
+    /// Optional metadata surfaced to treasury/observability dashboards.
+    #[norito(default)]
+    pub metadata: Metadata,
+}
+
+/// Errors raised during relay bandwidth proof signature verification.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RelayBandwidthProofSignatureError {
+    /// The verifier account is not single-signatory, so the embedded signature has no verifier.
+    #[error("relay bandwidth proof verifier account has no single signatory")]
+    MissingVerifierSignatory,
+    /// The verifier signature is malformed or does not verify.
+    #[error("relay bandwidth proof signature verification failed: {0}")]
+    Signature(#[from] iroha_crypto::Error),
+}
+
+/// Configuration knobs controlling relay bonding and slashing policy.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub struct RelayBondPolicyV1 {
+    /// Minimum bond (denominated in XOR) required for relays that expose an exit hop.
+    pub minimum_exit_bond: Quantity,
+    /// XOR asset definition used for bonding and payouts.
+    pub bond_asset_id: AssetDefinitionId,
+    /// Minimum uptime ratio (per mille) required to avoid slashing in a given epoch.
+    pub uptime_floor_per_mille: u16,
+    /// Slash penalty applied when uptime drops below the configured floor, measured in basis points.
+    pub slash_penalty_basis_points: u16,
+    /// Optional grace window (epochs) before a newly admitted relay is subject to slashing.
+    #[norito(default)]
+    pub activation_grace_epochs: u16,
+}
+
+impl RelayBondPolicyV1 {
+    /// Returns `true` when the configured uptime floor exceeds 100%.
+    #[must_use]
+    pub const fn uptime_floor_is_strict(&self) -> bool {
+        self.uptime_floor_per_mille > 1_000
+    }
+}
+
+/// Ledger entry recording the bond posted by a `SoraNet` relay.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub struct RelayBondLedgerEntryV1 {
+    /// Relay fingerprint as advertised in the directory.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
+    /// Total bond locked for the relay.
+    pub bonded_amount: Quantity,
+    /// Asset used for the bond (must match [`RelayBondPolicyV1::bond_asset_id`]).
+    pub bond_asset_id: AssetDefinitionId,
+    /// UNIX timestamp when the bond became active.
+    pub bonded_since_unix: u64,
+    /// Indicates whether the relay currently advertises exit capability.
+    pub exit_capable: bool,
+}
+
+impl RelayBondLedgerEntryV1 {
+    /// Returns `true` when an exit-capable relay satisfies the policy-defined minimum bond.
+    #[must_use]
+    pub fn meets_exit_minimum(&self, policy: &RelayBondPolicyV1) -> bool {
+        if !self.exit_capable {
+            return true;
+        }
+
+        if self.bond_asset_id != policy.bond_asset_id {
+            return false;
+        }
+
+        self.bonded_amount >= policy.minimum_exit_bond
+    }
+}
+
+/// Confidence metadata attached to a bandwidth proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(tag = "status", content = "details"))]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub struct BandwidthConfidenceV1 {
+    /// Number of path samples collected for the measurement window.
+    pub sample_count: u16,
+    /// 95th percentile jitter observed during sampling (milliseconds).
+    pub jitter_p95_ms: u16,
+    /// Statistical confidence expressed as per-mille (`1_000` == 100%).
+    pub confidence_per_mille: u16,
+}
+
+impl BandwidthConfidenceV1 {
+    /// Returns `true` when the confidence has reached full certainty (100%).
+    #[must_use]
+    pub const fn is_fully_confident(&self) -> bool {
+        self.confidence_per_mille >= 1_000
+    }
+}
+
+/// Proof emitted by a blinded measurement client verifying relay bandwidth contribution.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub struct RelayBandwidthProofV1 {
+    /// Relay fingerprint for which the bandwidth was measured.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
+    /// Identifier of the blinded measurement flow.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub measurement_id: MeasurementId,
+    /// Epoch against which the measurement is recorded.
+    pub epoch: u32,
+    /// Total verified bytes relayed during the measurement window.
+    pub verified_bytes: u128,
+    /// Account authorised to operate the measurement client.
+    pub verifier_id: AccountId,
+    /// Timestamp (seconds since UNIX epoch) when the proof was sealed.
+    pub issued_at_unix: u64,
+    /// Confidence metadata associated with the measurement window.
+    pub confidence: BandwidthConfidenceV1,
+    /// Signature covering the Norito payload to prevent tampering.
+    pub signature: Signature,
+    /// Optional metadata surfaced to treasury/observability dashboards.
+    #[norito(default)]
+    pub metadata: Metadata,
+}
+
+impl RelayBandwidthProofV1 {
+    /// Build and sign a relay bandwidth proof from its canonical payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`iroha_crypto::Error::Other`] when the payload verifier does not match the signing
+    /// key, or a signing error when the cryptographic backend rejects the private key.
+    pub fn try_sign(
+        payload: RelayBandwidthProofPayloadV1,
+        private_key: &PrivateKey,
+    ) -> Result<Self, iroha_crypto::Error> {
+        let verifier_public_key = PublicKey::from(private_key.clone());
+        if payload.verifier_id.try_signatory() != Some(&verifier_public_key) {
+            return Err(iroha_crypto::Error::Other(
+                "relay bandwidth proof verifier_id does not match signing private key".to_owned(),
+            ));
+        }
+        let signature = SignatureOf::try_new(private_key, &payload)?.into();
+        Ok(Self {
+            relay_id: payload.relay_id,
+            measurement_id: payload.measurement_id,
+            epoch: payload.epoch,
+            verified_bytes: payload.verified_bytes,
+            verifier_id: payload.verifier_id,
+            issued_at_unix: payload.issued_at_unix,
+            confidence: payload.confidence,
+            signature,
+            metadata: payload.metadata,
+        })
+    }
+
+    /// Return the canonical signed payload view of this proof.
+    #[must_use]
+    pub fn payload(&self) -> RelayBandwidthProofPayloadV1 {
+        RelayBandwidthProofPayloadV1 {
+            relay_id: self.relay_id,
+            measurement_id: self.measurement_id,
+            epoch: self.epoch,
+            verified_bytes: self.verified_bytes,
+            verifier_id: self.verifier_id.clone(),
+            issued_at_unix: self.issued_at_unix,
+            confidence: self.confidence,
+            metadata: self.metadata.clone(),
+        }
+    }
+
+    /// Verify the blinded measurement client signature over the canonical proof payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayBandwidthProofSignatureError`] when the verifier account is not
+    /// single-signatory, the signature payload is malformed, or signature verification fails.
+    pub fn verify_signature(&self) -> Result<(), RelayBandwidthProofSignatureError> {
+        let verifier_public_key = self
+            .verifier_id
+            .try_signatory()
+            .ok_or(RelayBandwidthProofSignatureError::MissingVerifierSignatory)?;
+        let signature =
+            super::signature_for_public_key_algorithm(verifier_public_key, &self.signature)?;
+        SignatureOf::<RelayBandwidthProofPayloadV1>::from_signature(signature)
+            .verify(verifier_public_key, &self.payload())
+            .map_err(RelayBandwidthProofSignatureError::Signature)
+    }
+
+    /// Returns `true` when the proof falls within the supplied epoch window.
+    #[must_use]
+    pub fn matches_epoch(&self, epoch: u32) -> bool {
+        self.epoch == epoch
+    }
+}
+
+/// Relay compliance status used when calculating rewards or penalties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+#[allow(clippy::exhaustive_enums)]
+pub enum RelayComplianceStatusV1 {
+    /// Relay is in good standing with no outstanding incidents.
+    Clean,
+    /// Relay has minor incidents recorded but remains eligible for rewards.
+    Warning,
+    /// Relay is suspended or under investigation and should not be rewarded.
+    Suspended,
+}
+
+impl RelayComplianceStatusV1 {
+    /// Returns `true` when the relay may receive rewards.
+    #[must_use]
+    pub const fn is_reward_eligible(&self) -> bool {
+        match self {
+            Self::Clean | Self::Warning => true,
+            Self::Suspended => false,
+        }
+    }
+
+    #[must_use]
+    fn label(self) -> &'static str {
+        match self {
+            Self::Clean => "clean",
+            Self::Warning => "warning",
+            Self::Suspended => "suspended",
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonSerialize for RelayComplianceStatusV1 {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(self.label(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for RelayComplianceStatusV1 {
+    fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
+        let parsed = String::json_deserialize(parser)?;
+        match parsed.to_ascii_lowercase().as_str() {
+            "clean" => Ok(Self::Clean),
+            "warning" => Ok(Self::Warning),
+            "suspended" => Ok(Self::Suspended),
+            other => Err(json::Error::Message(format!(
+                "invalid relay compliance status: {other}"
+            ))),
+        }
+    }
+}
+
+/// Aggregated metrics for a relay within a specific epoch window.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub struct RelayEpochMetricsV1 {
+    /// Relay fingerprint as advertised in the directory consensus.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
+    /// Epoch identifier associated with this metrics record.
+    pub epoch: u32,
+    /// Number of seconds the relay was observed online during the epoch.
+    pub uptime_seconds: u64,
+    /// Expected uptime window (seconds) for the epoch (used as denominator).
+    pub scheduled_uptime_seconds: u64,
+    /// Sum of verified bytes across all accepted bandwidth proofs.
+    pub verified_bandwidth_bytes: u128,
+    /// Compliance status recorded for the epoch.
+    pub compliance: RelayComplianceStatusV1,
+    /// Reward score calculated by the treasury pipeline.
+    pub reward_score: u64,
+    /// Minimum confidence observed across accepted bandwidth proofs (per-mille).
+    pub confidence_floor_per_mille: u16,
+    /// Blinded measurement identifiers attached to the record for auditability.
+    #[norito(default)]
+    pub measurement_ids: Vec<MeasurementId>,
+    /// Optional metadata (region, rack deployment, operator hints).
+    #[norito(default)]
+    pub metadata: Metadata,
+}
+
+impl RelayEpochMetricsV1 {
+    /// Compute the uptime ratio expressed in per-mille (0‒1000).
+    #[must_use]
+    pub fn uptime_ratio_per_mille(&self) -> u16 {
+        if self.scheduled_uptime_seconds == 0 {
+            return 0;
+        }
+        let ratio = u128::from(self.uptime_seconds)
+            .saturating_mul(1_000)
+            .checked_div(u128::from(self.scheduled_uptime_seconds))
+            .unwrap_or(0);
+        u16::try_from(ratio.min(1_000)).unwrap_or(1_000)
+    }
+
+    /// Returns `true` when the relay meets the uptime floor defined by the policy.
+    #[must_use]
+    pub fn meets_uptime_floor(&self, policy: &RelayBondPolicyV1) -> bool {
+        self.uptime_ratio_per_mille() >= policy.uptime_floor_per_mille.min(1_000)
+    }
+}
+
+/// Instruction surfaced to the XOR treasury for rewarding a relay.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub struct RelayRewardInstructionV1 {
+    /// Relay fingerprint for which the payout is being issued.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
+    /// Epoch for which the payout applies.
+    pub epoch: u32,
+    /// Account that will receive the XOR payout.
+    pub beneficiary: AccountId,
+    /// XOR asset definition (typically the same as [`RelayBondPolicyV1::bond_asset_id`]).
+    pub payout_asset_id: AssetDefinitionId,
+    /// Amount of XOR awarded to the relay for the epoch.
+    pub payout_amount: Quantity,
+    /// Reward score used to derive the payout (mirrors [`RelayEpochMetricsV1::reward_score`]).
+    pub reward_score: u64,
+    /// Governance approval artefact emitted by the Sora Parliament budgeting flow.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    #[norito(default)]
+    pub budget_approval_id: Option<Digest32>,
+    /// Optional metadata (treasury notes, distribution batch ID, audit flags).
+    #[norito(default)]
+    pub metadata: Metadata,
+}
+
+impl RelayRewardInstructionV1 {
+    /// Returns `true` when the payout amount is zero.
+    #[must_use]
+    pub fn is_zero_amount(&self) -> bool {
+        self.payout_amount.is_zero()
+    }
+
+    /// Convert the reward instruction into a [`Transfer`] instruction from the provided treasury account.
+    #[must_use]
+    pub fn to_transfer_instruction(&self, treasury_account: &AccountId) -> InstructionBox {
+        let asset = AssetId::new(self.payout_asset_id.clone(), treasury_account.clone());
+        Transfer::asset_quantity(asset, self.payout_amount.clone(), self.beneficiary.clone()).into()
+    }
+}
+
+/// Status of a relay reward dispute raised against a payout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub enum RelayRewardDisputeStatusV1 {
+    /// Dispute has been recorded and awaits treasury review.
+    Pending,
+    /// Dispute was accepted and the payout will be adjusted.
+    Accepted,
+    /// Dispute was rejected (payout remains unchanged).
+    Rejected,
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for RelayRewardDisputeStatusV1 {
+    fn default() -> Self {
+        Self::Pending
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonSerialize for RelayRewardDisputeStatusV1 {
+    fn json_serialize(&self, out: &mut String) {
+        let variant = match self {
+            Self::Pending => "Pending",
+            Self::Accepted => "Accepted",
+            Self::Rejected => "Rejected",
+        };
+        JsonSerialize::json_serialize(&variant, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for RelayRewardDisputeStatusV1 {
+    fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
+        let variant = String::json_deserialize(parser)?;
+        match variant.as_str() {
+            "Pending" => Ok(Self::Pending),
+            "Accepted" => Ok(Self::Accepted),
+            "Rejected" => Ok(Self::Rejected),
+            other => Err(json::Error::Message(format!(
+                "invalid dispute status `{other}`"
+            ))),
+        }
+    }
+}
+
+/// Record describing a relay reward dispute submitted to the treasury.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    derive(iroha_ffi::FfiType)
+)]
+#[cfg_attr(
+    all(feature = "ffi_export", not(feature = "ffi_import")),
+    ffi_type(opaque)
+)]
+pub struct RelayRewardDisputeV1 {
+    /// Relay fingerprint associated with the disputed payout.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
+    /// Epoch identifier for which the payout was calculated.
+    pub epoch: u32,
+    /// Account identifier of the operator submitting the dispute.
+    pub submitted_by: AccountId,
+    /// UNIX timestamp when the dispute was filed.
+    pub submitted_at_unix: u64,
+    /// Original payout instruction that triggered the dispute.
+    pub original_instruction: RelayRewardInstructionV1,
+    /// Requested amount (in XOR) the operator believes should have been paid out.
+    pub requested_amount: Quantity,
+    /// Free-form textual reason supplied by the operator.
+    pub reason: String,
+    /// Current status of the dispute.
+    #[norito(default)]
+    pub status: RelayRewardDisputeStatusV1,
+    /// Optional metadata captured during review/resolution.
+    #[norito(default)]
+    pub resolution_metadata: Metadata,
+}
+
+impl RelayRewardDisputeV1 {
+    /// Construct a new dispute using the original reward instruction and requested amount.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new(
+        relay_id: RelayId,
+        epoch: u32,
+        submitted_by: AccountId,
+        submitted_at_unix: u64,
+        original_instruction: RelayRewardInstructionV1,
+        requested_amount: Quantity,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            relay_id,
+            epoch,
+            submitted_by,
+            submitted_at_unix,
+            original_instruction,
+            requested_amount,
+            reason: reason.into(),
+            status: RelayRewardDisputeStatusV1::Pending,
+            resolution_metadata: Metadata::default(),
+        }
+    }
+
+    /// Mark the dispute resolved with the supplied status and attach resolution metadata.
+    pub fn resolve(&mut self, status: RelayRewardDisputeStatusV1, metadata: Metadata) {
+        self.status = status;
+        self.resolution_metadata = metadata;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::{json::Json, numeric::Numeric};
+
+    use super::*;
+    use crate::{domain::DomainId, isi::TransferBox, name::Name};
+
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn quantity(value: u64) -> Quantity {
+        Quantity::from(value)
+    }
+
+    fn sample_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked Soranet incentives fixture account keypair")
+    }
+
+    fn sample_account(seed: u8) -> AccountId {
+        let _domain = DomainId::try_new("sora", "universal").expect("domain id");
+        AccountId::new(sample_keypair(seed).public_key().clone())
+    }
+
+    fn xor_asset_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("sora", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        )
+    }
+
+    #[derive(Encode)]
+    struct ForgedRelayBondPolicyV1 {
+        minimum_exit_bond: Numeric,
+        bond_asset_id: AssetDefinitionId,
+        uptime_floor_per_mille: u16,
+        slash_penalty_basis_points: u16,
+        activation_grace_epochs: u16,
+    }
+
+    #[derive(Encode)]
+    struct ForgedRelayBondLedgerEntryV1 {
+        relay_id: RelayId,
+        bonded_amount: Numeric,
+        bond_asset_id: AssetDefinitionId,
+        bonded_since_unix: u64,
+        exit_capable: bool,
+    }
+
+    #[derive(Encode)]
+    struct ForgedRelayRewardInstructionV1 {
+        relay_id: RelayId,
+        epoch: u32,
+        beneficiary: AccountId,
+        payout_asset_id: AssetDefinitionId,
+        payout_amount: Numeric,
+        reward_score: u64,
+        budget_approval_id: Option<Digest32>,
+        metadata: Metadata,
+    }
+
+    #[derive(Encode)]
+    struct ForgedRelayRewardDisputeV1 {
+        relay_id: RelayId,
+        epoch: u32,
+        submitted_by: AccountId,
+        submitted_at_unix: u64,
+        original_instruction: RelayRewardInstructionV1,
+        requested_amount: Numeric,
+        reason: String,
+        status: RelayRewardDisputeStatusV1,
+        resolution_metadata: Metadata,
+    }
+
+    #[test]
+    fn relay_bond_policy_rejects_forged_negative_quantity() {
+        let forged = ForgedRelayBondPolicyV1 {
+            minimum_exit_bond: Numeric::new(-1_i32, 0),
+            bond_asset_id: xor_asset_id(),
+            uptime_floor_per_mille: 900,
+            slash_penalty_basis_points: 250,
+            activation_grace_epochs: 0,
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <RelayBondPolicyV1 as Decode>::decode(&mut input).is_err(),
+            "relay bond policy must reject a forged negative minimum bond"
+        );
+    }
+
+    #[test]
+    fn relay_reward_instruction_rejects_forged_negative_quantity() {
+        let forged = ForgedRelayRewardInstructionV1 {
+            relay_id: [0xA5; 32],
+            epoch: 1,
+            beneficiary: sample_account(7),
+            payout_asset_id: xor_asset_id(),
+            payout_amount: Numeric::new(-1_i32, 0),
+            reward_score: 1_000,
+            budget_approval_id: None,
+            metadata: Metadata::default(),
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <RelayRewardInstructionV1 as Decode>::decode(&mut input).is_err(),
+            "relay payout decoding must reject a forged negative quantity"
+        );
+    }
+
+    #[test]
+    fn relay_bond_ledger_rejects_forged_negative_quantity() {
+        let forged = ForgedRelayBondLedgerEntryV1 {
+            relay_id: [0xA4; 32],
+            bonded_amount: Numeric::new(-1_i32, 0),
+            bond_asset_id: xor_asset_id(),
+            bonded_since_unix: 1,
+            exit_capable: true,
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <RelayBondLedgerEntryV1 as Decode>::decode(&mut input).is_err(),
+            "relay bond ledger must reject a forged negative bonded quantity"
+        );
+    }
+
+    #[test]
+    fn relay_reward_dispute_rejects_forged_negative_quantity() {
+        let instruction = RelayRewardInstructionV1 {
+            relay_id: [0xA5; 32],
+            epoch: 1,
+            beneficiary: sample_account(7),
+            payout_asset_id: xor_asset_id(),
+            payout_amount: Quantity::from(1_u32),
+            reward_score: 1_000,
+            budget_approval_id: None,
+            metadata: Metadata::default(),
+        };
+        let forged = ForgedRelayRewardDisputeV1 {
+            relay_id: instruction.relay_id,
+            epoch: instruction.epoch,
+            submitted_by: sample_account(8),
+            submitted_at_unix: 1,
+            original_instruction: instruction,
+            requested_amount: Numeric::new(-1_i32, 0),
+            reason: "forged".to_owned(),
+            status: RelayRewardDisputeStatusV1::Pending,
+            resolution_metadata: Metadata::default(),
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+
+        assert!(
+            <RelayRewardDisputeV1 as Decode>::decode(&mut input).is_err(),
+            "relay reward dispute must reject a forged negative requested quantity"
+        );
+    }
+
+    fn sample_bandwidth_payload() -> RelayBandwidthProofPayloadV1 {
+        RelayBandwidthProofPayloadV1 {
+            relay_id: [0_u8; 32],
+            measurement_id: [1_u8; 32],
+            epoch: 42,
+            verified_bytes: 1_024,
+            verifier_id: sample_account(1),
+            issued_at_unix: 5,
+            confidence: BandwidthConfidenceV1 {
+                sample_count: 16,
+                jitter_p95_ms: 20,
+                confidence_per_mille: 800,
+            },
+            metadata: Metadata::default(),
+        }
+    }
+
+    fn signed_bandwidth_proof() -> RelayBandwidthProofV1 {
+        let verifier = sample_keypair(1);
+        RelayBandwidthProofV1::try_sign(sample_bandwidth_payload(), verifier.private_key())
+            .expect("sign checked SoraNet bandwidth proof")
+    }
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &Signature,
+        replacement_r: &[u8; 32],
+    ) -> Signature {
+        let mut payload = signature.payload().to_vec();
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
+        Signature::from_bytes(&payload)
+    }
+
+    #[test]
+    fn exit_minimum_passes_when_bond_sufficient() {
+        let policy = RelayBondPolicyV1 {
+            minimum_exit_bond: quantity(1_000),
+            bond_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
+            uptime_floor_per_mille: 950,
+            slash_penalty_basis_points: 250,
+            activation_grace_epochs: 2,
+        };
+        let entry = RelayBondLedgerEntryV1 {
+            relay_id: [0_u8; 32],
+            bonded_amount: quantity(5_000),
+            bond_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
+            bonded_since_unix: 1_000,
+            exit_capable: true,
+        };
+        assert!(entry.meets_exit_minimum(&policy));
+    }
+
+    #[test]
+    fn exit_minimum_fails_when_asset_mismatch() {
+        let policy = RelayBondPolicyV1 {
+            minimum_exit_bond: quantity(1_000),
+            bond_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
+            uptime_floor_per_mille: 950,
+            slash_penalty_basis_points: 250,
+            activation_grace_epochs: 0,
+        };
+        let entry = RelayBondLedgerEntryV1 {
+            relay_id: [0_u8; 32],
+            bonded_amount: quantity(5_000),
+            bond_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            ),
+            bonded_since_unix: 1_000,
+            exit_capable: true,
+        };
+        assert!(!entry.meets_exit_minimum(&policy));
+    }
+
+    #[test]
+    fn uptime_floor_detects_strict_threshold() {
+        let policy = RelayBondPolicyV1 {
+            minimum_exit_bond: quantity(500),
+            bond_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
+            uptime_floor_per_mille: 1_250,
+            slash_penalty_basis_points: 100,
+            activation_grace_epochs: 0,
+        };
+        assert!(policy.uptime_floor_is_strict());
+    }
+
+    #[test]
+    fn bandwidth_confidence_detects_full_confidence() {
+        let confidence = BandwidthConfidenceV1 {
+            sample_count: 128,
+            jitter_p95_ms: 12,
+            confidence_per_mille: 1_000,
+        };
+        assert!(confidence.is_fully_confident());
+    }
+
+    #[test]
+    fn bandwidth_proof_epoch_matching() {
+        let proof = signed_bandwidth_proof();
+        assert!(proof.matches_epoch(42));
+        assert!(!proof.matches_epoch(41));
+    }
+
+    #[test]
+    fn bandwidth_proof_signature_verifies_payload() {
+        signed_bandwidth_proof()
+            .verify_signature()
+            .expect("checked bandwidth proof signature verifies");
+    }
+
+    #[test]
+    fn bandwidth_proof_try_sign_rejects_verifier_private_key_mismatch() {
+        let wrong_key = sample_keypair(2);
+        let err =
+            RelayBandwidthProofV1::try_sign(sample_bandwidth_payload(), wrong_key.private_key())
+                .expect_err("verifier mismatch must reject before signing");
+
+        assert!(matches!(err, iroha_crypto::Error::Other(_)));
+    }
+
+    #[test]
+    fn bandwidth_proof_signature_rejects_tampered_payload() {
+        let mut proof = signed_bandwidth_proof();
+        proof.verified_bytes += 1;
+
+        assert!(matches!(
+            proof.verify_signature(),
+            Err(RelayBandwidthProofSignatureError::Signature(
+                iroha_crypto::Error::BadSignature
+            ))
+        ));
+    }
+
+    #[test]
+    fn bandwidth_proof_signature_rejects_all_zero_signature_material() {
+        let mut proof = signed_bandwidth_proof();
+        proof.signature = Signature::from_bytes(&[0u8; 64]);
+
+        assert!(matches!(
+            proof.verify_signature(),
+            Err(RelayBandwidthProofSignatureError::Signature(
+                iroha_crypto::Error::BadSignature
+            ))
+        ));
+    }
+
+    #[test]
+    fn bandwidth_proof_signature_rejects_malformed_ed25519_signature_r() {
+        let valid_signature = signed_bandwidth_proof().signature;
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut proof = signed_bandwidth_proof();
+            proof.signature = signature_with_malformed_ed25519_r(&valid_signature, &replacement_r);
+
+            assert!(
+                matches!(
+                    proof.verify_signature(),
+                    Err(RelayBandwidthProofSignatureError::Signature(
+                        iroha_crypto::Error::BadSignature
+                    ))
+                ),
+                "{label} bandwidth proof signature R must fail Ed25519 admission"
+            );
+        }
+    }
+
+    #[test]
+    fn compliance_status_reward_eligibility_flags() {
+        assert!(RelayComplianceStatusV1::Clean.is_reward_eligible());
+        assert!(RelayComplianceStatusV1::Warning.is_reward_eligible());
+        assert!(!RelayComplianceStatusV1::Suspended.is_reward_eligible());
+    }
+
+    #[test]
+    fn uptime_ratio_handles_zero_schedule() {
+        let metrics = RelayEpochMetricsV1 {
+            relay_id: [0_u8; 32],
+            epoch: 7,
+            uptime_seconds: 10,
+            scheduled_uptime_seconds: 0,
+            verified_bandwidth_bytes: 0,
+            compliance: RelayComplianceStatusV1::Clean,
+            reward_score: 0,
+            confidence_floor_per_mille: 0,
+            measurement_ids: Vec::new(),
+            metadata: Metadata::default(),
+        };
+        assert_eq!(metrics.uptime_ratio_per_mille(), 0);
+    }
+
+    #[test]
+    fn uptime_ratio_caps_at_one_thousand() {
+        let metrics = RelayEpochMetricsV1 {
+            relay_id: [0_u8; 32],
+            epoch: 7,
+            uptime_seconds: 2,
+            scheduled_uptime_seconds: 1,
+            verified_bandwidth_bytes: 0,
+            compliance: RelayComplianceStatusV1::Clean,
+            reward_score: 0,
+            confidence_floor_per_mille: 0,
+            measurement_ids: Vec::new(),
+            metadata: Metadata::default(),
+        };
+        assert_eq!(metrics.uptime_ratio_per_mille(), 1_000);
+    }
+
+    #[test]
+    fn meets_uptime_floor_tracks_policy() {
+        let policy = RelayBondPolicyV1 {
+            minimum_exit_bond: quantity(1_000),
+            bond_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
+            uptime_floor_per_mille: 900,
+            slash_penalty_basis_points: 250,
+            activation_grace_epochs: 0,
+        };
+        let metrics = RelayEpochMetricsV1 {
+            relay_id: [0_u8; 32],
+            epoch: 7,
+            uptime_seconds: 9,
+            scheduled_uptime_seconds: 10,
+            verified_bandwidth_bytes: 0,
+            compliance: RelayComplianceStatusV1::Clean,
+            reward_score: 0,
+            confidence_floor_per_mille: 0,
+            measurement_ids: Vec::new(),
+            metadata: Metadata::default(),
+        };
+        assert!(metrics.meets_uptime_floor(&policy));
+    }
+
+    #[test]
+    fn reward_instruction_reports_zero_amount() {
+        let instruction = RelayRewardInstructionV1 {
+            relay_id: [0_u8; 32],
+            epoch: 7,
+            beneficiary: sample_account(2),
+            payout_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
+            payout_amount: Quantity::zero(),
+            reward_score: 42,
+            budget_approval_id: Some([0xA1; 32]),
+            metadata: Metadata::default(),
+        };
+        assert!(instruction.is_zero_amount());
+    }
+
+    #[test]
+    fn reward_instruction_produces_transfer() {
+        let instruction = RelayRewardInstructionV1 {
+            relay_id: [0xAB; 32],
+            epoch: 5,
+            beneficiary: sample_account(3),
+            payout_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
+            payout_amount: Quantity::from(50_u32),
+            reward_score: 875,
+            budget_approval_id: Some([0xCD; 32]),
+            metadata: Metadata::default(),
+        };
+        let treasury = sample_account(4);
+        let instruction_box = instruction.to_transfer_instruction(&treasury);
+        let transfer_box = instruction_box
+            .as_any()
+            .downcast_ref::<TransferBox>()
+            .expect("transfer instruction");
+        let TransferBox::Asset(transfer) = transfer_box else {
+            panic!("expected asset transfer");
+        };
+        assert_eq!(transfer.source.definition(), &instruction.payout_asset_id);
+        assert_eq!(transfer.source.account(), &treasury);
+        assert_eq!(transfer.destination, instruction.beneficiary);
+        assert_eq!(transfer.object, instruction.payout_amount);
+    }
+
+    #[test]
+    fn reward_dispute_defaults_to_pending() {
+        let instruction = RelayRewardInstructionV1 {
+            relay_id: [0x01; 32],
+            epoch: 12,
+            beneficiary: sample_account(1),
+            payout_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
+            payout_amount: Quantity::from(15_u32),
+            reward_score: 800,
+            budget_approval_id: Some([0xD1; 32]),
+            metadata: Metadata::default(),
+        };
+        let mut dispute = RelayRewardDisputeV1::new(
+            instruction.relay_id,
+            instruction.epoch,
+            sample_account(9),
+            1_700_000_000,
+            instruction.clone(),
+            Quantity::from(16_u32),
+            "bandwidth weighting mismatch",
+        );
+        assert_eq!(dispute.status, RelayRewardDisputeStatusV1::Pending);
+        assert_eq!(dispute.original_instruction, instruction);
+
+        let mut resolution = Metadata::default();
+        let key = Name::from_str("decision").expect("name");
+        resolution.insert(key, Json::new("adjusted"));
+        dispute.resolve(RelayRewardDisputeStatusV1::Accepted, resolution.clone());
+        assert_eq!(dispute.status, RelayRewardDisputeStatusV1::Accepted);
+        assert_eq!(dispute.resolution_metadata, resolution);
+    }
+}

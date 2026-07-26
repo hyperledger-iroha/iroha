@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "iroha-taira": {
+      "type": "http",
+      "url": "https://taira.sora.org/v1/mcp",
+      "note": "Current primary public Taira MCP endpoint. If your deployment or operator gives you a different public Torii root, override it in local Codex config instead of editing the repo copy."
+    }
+  }
+}

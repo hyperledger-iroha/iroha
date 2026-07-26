@@ -1,0 +1,16 @@
+{
+  "auditor_account": "auditor@sora",
+  "manifest_digest_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+  "por_history_id": 5432101,
+  "provider_id_hex": "1010101010101010101010101010101010101010101010101010101010101010",
+  "scheduler_notes": "waiting for worker claim",
+  "sla_deadline_unix": 1700086400,
+  "slash_proposal_digest_hex": null,
+  "state": {
+    "queued_at_unix": 1700000060,
+    "sla_deadline_unix": 1700086400,
+    "state": "queued"
+  },
+  "ticket_id": "REP-900",
+  "version": 1
+}

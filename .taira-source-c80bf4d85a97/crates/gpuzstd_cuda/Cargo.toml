@@ -1,0 +1,21 @@
+[package]
+name = "gpuzstd_cuda"
+version.workspace = true
+edition = "2024"
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["cuda-kernel"]
+cuda-kernel = []
+
+[dependencies]
+zstd.workspace = true
+
+[build-dependencies]
+cc = "1.2.45"
+
+[dev-dependencies]
+zstd.workspace = true

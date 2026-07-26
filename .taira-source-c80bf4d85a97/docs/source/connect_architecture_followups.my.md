@@ -1,0 +1,30 @@
+---
+lang: my
+direction: ltr
+source: docs/source/connect_architecture_followups.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 476331772efe169a7a073b561fa9935e314ff89d6bfff440f7246606c1c02669
+source_last_modified: "2025-12-29T18:16:35.934525+00:00"
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
+---
+
+# ဗိသုကာဆိုင်ရာ နောက်ဆက်တွဲလုပ်ဆောင်ချက်များကို ချိတ်ဆက်ပါ။
+
+ဤမှတ်စုသည် SDK ဖြတ်ကျော်မှုမှ ထွက်ပေါ်လာသော အင်ဂျင်နီယာဆိုင်ရာ နောက်ဆက်တွဲများကို ဖမ်းယူပါသည်။
+ဗိသုကာပညာသုံးသပ်ချက်ကို ချိတ်ဆက်ပါ။ အတန်းတစ်ခုစီသည် ပြဿနာတစ်ခု (Jira လက်မှတ် သို့မဟုတ် PR) ကို မြေပုံဆွဲသင့်သည်
+အလုပ်ချိန်ပြီးတာနဲ့။ Update the table as owners create tracking tickets.| ပစ္စည်း | ဖော်ပြချက် | ပိုင်ရှင်(များ) | ခြေရာခံ | အဆင့်အတန်း |
+|--------|----------------|----------------|----------------|--------|
+| မျှဝေထားသော back-off ကိန်းသေများ | exponential back-off + jitter helpers (`connect_retry::policy`) ကို အကောင်အထည်ဖော်ပြီး ၎င်းတို့ကို Swift/Android/JS SDKs များသို့ ဖော်ထုတ်ပါ။ | Swift SDK၊ Android Networking TL၊ JS Lead | [IOS-CONNECT-001](project_tracker/connect_architecture_followups_ios.md#ios-connect-001) | ပြီးမြောက်သည် — `connect_retry::policy` သည် အဆုံးအဖြတ်ပိုင်းခြားမှု 64 နမူနာဖြင့် ဆင်းသက်လာသည် ။ Swift (`ConnectRetryPolicy`)၊ Android နှင့် JS SDKs သည် ကြေးမုံပြင်ထောက်ကူများနှင့် ရွှေရောင်စမ်းသပ်မှုများကို ပို့ဆောင်ပေးပါသည်။ |
+| ပင်း/ပေါင် ပြဋ္ဌာန်း | သဘောတူညီထားသော 30s cadence နှင့် ဘရောင်ဇာအနိမ့်ဆုံးကုပ်ဖြင့် ပြင်ဆင်သတ်မှတ်နိုင်သော နှလုံးခုန်နှုန်းကို ပေါင်းထည့်ပါ။ မျက်နှာပြင်တိုင်းတာမှုများ (`connect.ping_miss_total`)။ | Swift SDK၊ Android Networking TL၊ JS Lead | [IOS-CONNECT-002](project_tracker/connect_architecture_followups_ios.md#ios-connect-002) | ပြီးပါပြီ — Torii သည် ယခုသတ်မှတ်ထားသော နှလုံးခုန်မှုကြားကာလများ (`ping_interval_ms`၊ `ping_miss_tolerance`၊ `ping_min_interval_ms`)၊ `connect.ping_miss_total` နှလုံးခုန်နှုန်းဆိုင်ရာ မက်ထရစ်နှင့် ပြန်လည်ချိတ်ဆက်မှုများကို ထုတ်ဖော်ပြသပါသည်။ SDK လုပ်ဆောင်ချက်သည် သုံးစွဲသူများအတွက် အဖုများအသစ်ကို ပေါ်လွင်စေပါသည်။ |
+| အော့ဖ်လိုင်းတန်းစီ စွဲမြဲစွာ | မျှဝေထားသော အစီအစဉ်များကို အသုံးပြု၍ ချိတ်ဆက်မှုအစီအစဉ်များအတွက် Norito `.to` ဂျာနယ်စာရေးသူများ/စာဖတ်သူများကို အကောင်အထည်ဖော်ပါ။ | Swift SDK၊ Android Data Model TL၊ JS Lead | [IOS-CONNECT-003](project_tracker/connect_architecture_followups_ios.md#ios-connect-003) | ပြီးသွားပါပြီ — Swift၊ Android နှင့် JS တို့သည် မျှဝေထားသော `ConnectQueueJournal` + ရောဂါရှာဖွေရေးအထောက်အကူများကို ထိန်းထား/အလျှံပယ်စမ်းသပ်မှုများဖြင့် သက်သေအစုအဝေးများကို အဆုံးအဖြတ်ပေးသည့်အတွက် ယခုပေးပို့လိုက်ပါသည်။ SDKs
+| StrongBox သက်သေအထောက်အထားပေးဆောင်မှု | ပိုက်ဆံအိတ်အတည်ပြုချက်များမှတစ်ဆင့် Thread `{platform,evidence_b64,statement_hash}` နှင့် dApp SDKs သို့ အတည်ပြုချက်ထည့်ပါ။ | Android Crypto TL, JS Lead | [IOS-CONNECT-004](project_tracker/connect_architecture_followups_ios.md#ios-connect-004) | ဆိုင်းငံ့ |
+| လှည့်ထိန်းချုပ်မှုဘောင် | `Control::RotateKeys` + `RotateKeysAck` ကို အကောင်အထည်ဖော်ပြီး SDK များအားလုံးတွင် `cancelRequest(hash)`/rotation API များကို ဖော်ထုတ်ပါ။ | Swift SDK၊ Android Networking TL၊ JS Lead | [IOS-CONNECT-005](project_tracker/connect_architecture_followups_ios.md#ios-connect-005) | ဆိုင်းငံ့ |
+| Telemetry တင်ပို့သူများ | `connect.queue_depth`၊ `connect.reconnects_total`၊ `connect.latency_ms` တို့ကို ထုတ်လွှတ်ပြီး ကောင်တာများကို လက်ရှိ တယ်လီမီတာ ပိုက်လိုင်းများ (OpenTelemetry) သို့ ပြန်ဖွင့်ပါ။ | Telemetry WG, SDK ပိုင်ရှင်များ | [IOS-CONNECT-006](project_tracker/connect_architecture_followups_ios.md#ios-connect-006) | ဆိုင်းငံ့ |
+| လျင်မြန်သော CI ဂိတ်ပေါက် | Connect-related pipelines များသည် `make swift-ci` ကို ခေါ်ဆိုကြောင်း သေချာစေရန်အတွက် fixture parity၊ dashboard feeds နှင့် Buildkite `ci/xcframework-smoke:<lane>:device_tag` မက်တာဒေတာများသည် SDKs တစ်လျှောက်တွင် ချိန်ညှိနေမည်ဖြစ်သည်။ | Swift SDK ဦးဆောင်မှု၊ Build Infra | [IOS-CONNECT-007](project_tracker/connect_architecture_followups_ios.md#ios-connect-007) | ဆိုင်းငံ့ |
+| နောက်ကြောင်းပြန်အစီရင်ခံခြင်း | XCFramework မီးခိုးကြိုး ဖြစ်ရပ်များ (`xcframework_smoke_fallback`, `xcframework_smoke_strongbox_unavailable`) ကို မျှဝေမြင်နိုင်စွမ်းအတွက် Connect dashboards သို့ ကြိုးတပ်ပါ။ | Swift QA ဦးဆောင်မှု၊ Infra တည်ဆောက် | [IOS-CONNECT-008](project_tracker/connect_architecture_followups_ios.md#ios-connect-008) | ဆိုင်းငံ့ || ပူးတွဲပါဖိုင်များကို လိုက်နာမှု | SDKs များသည် အရှုံးမရှိဘဲ အတည်ပြုထားသော payloads များတွင် ရွေးချယ်နိုင်သော `attachments[]` + `compliance_manifest_id` ကို လက်ခံပြီး ထပ်ဆင့်ကြောင်း သေချာပါစေ။ | Swift SDK၊ Android Data Model TL၊ JS Lead | [IOS-CONNECT-009](project_tracker/connect_architecture_followups_ios.md#ios-connect-009) | ဆိုင်းငံ့ |
+| စည်းမျဥ်းခွဲခြားသတ်မှတ်မှု အမှားအယွင်း | မျှဝေထားသော enum (`Transport`၊ `Codec`၊ `Authorization`၊ `Timeout`၊ `QueueOverflow`၊ `Internal`) ကို ပလပ်ဖောင်း အထူးပြုလုပ်ထားသော dot များဖြင့် မြေပုံဆွဲပါ။ | Swift SDK၊ Android Networking TL၊ JS Lead | [IOS-CONNECT-010](project_tracker/connect_architecture_followups_ios.md#ios-connect-010) | ပြီးပါပြီ — Swift၊ Android နှင့် JS SDKs သည် README/TypeScript/Java docs နှင့် regression tests TLS/timeout/HTTP/codec/queue ဖြင့် မျှဝေထားသော `ConnectError` wrapper + telemetry helpers ကို ပေးပို့သည် ကိစ္စများ။【docs/source/connect_error_taxonomy.md:1】【IrohaSwift/Sources/IrohaSwift/ConnectError.swift:1】【java/iroha_android/src /test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java:1】【javascript/iroha_js/test/connectError.test.js:1】 |
+| အလုပ်ရုံ ဆုံးဖြတ်ချက်မှတ်တမ်း | လက်ခံထားသောဆုံးဖြတ်ချက်များကို ကောင်စီမှတ်တမ်းတွင် အကျဉ်းချုပ်ဖော်ပြသည့် အမှတ်အသား/မှတ်စုများကို ထုတ်ဝေပါ။ | SDK ပရိုဂရမ် ဦးဆောင် | [IOS-CONNECT-011](project_tracker/connect_architecture_followups_ios.md#ios-connect-011) | ဆိုင်းငံ့ |
+
+> ပိုင်ရှင်များဖွင့်ထားသော လက်မှတ်များအတိုင်း ခြေရာခံခြင်း identifiers များကို ဖြည့်ပေးပါမည်။ ပြဿနာတိုးတက်မှုနှင့်အတူ `Status` ကော်လံကို အပ်ဒိတ်လုပ်ပါ။

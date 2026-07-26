@@ -1,0 +1,4 @@
+extends = ["base.toml", "base_trusted_peers.toml"]
+
+[ivm]
+memory_budget_profile = "cpu-balanced"

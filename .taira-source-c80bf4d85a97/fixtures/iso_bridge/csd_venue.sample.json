@@ -1,0 +1,11 @@
+{
+  "version": "2024-05-01",
+  "source": "sample",
+  "entries": [
+    {
+      "mic": "XNAS",
+      "csd_id": "DTC",
+      "ledger_domain_id": "securities"
+    }
+  ]
+}

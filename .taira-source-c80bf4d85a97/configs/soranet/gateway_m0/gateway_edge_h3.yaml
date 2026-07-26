@@ -1,0 +1,31 @@
+# Gateway edge baseline for soranet-edge-m0
+gateway:
+  name: soranet-edge-m0
+  listen:
+    address: 0.0.0.0
+    port: 443
+    protocol: h3
+    tls:
+      cert_ref: "vault://soranet/soranet-edge-m0/tls"
+      ech_key_ref: "vault://soranet/soranet-edge-m0/ech"
+  cache:
+    tiers:
+      - name: ram
+        max_entries: 12000
+      - name: nvme
+        size_gib: 256
+    serve_stale_seconds: 90
+  origins:
+    - name: sorafs-gateway
+      scheme: sorafs
+      trustless_verifier: "../gateway_trustless_verifier.toml"
+      rate_limits:
+        burst_rps: 400
+        sustained_rps: 200
+      waf_policy: "../gateway_waf_policy.yaml"
+  observability:
+    prometheus_listener: 0.0.0.0:19092
+    trace_sample: 0.10
+  rollout_notes:
+    - "Use `gateway_m0_summary.json` in governance packets for evidence links."
+    - "Update cert/ECH refs to match the staged vault entries before canaries."

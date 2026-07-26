@@ -1,0 +1,10 @@
+{
+  "status": 406,
+  "body": {
+    "error": "unsupported_encoding",
+    "reason": "gzip compression is not allowed for sorafs.sf1@1.0.0",
+    "details": {
+      "encoding": "gzip"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "iphone_sim": "platform=iOS Simulator,name=iPhone 15",
+  "ipad_sim": "platform=iOS Simulator,name=iPad (10th generation)",
+  "strongbox": "platform=iOS,name=iPhone 14 Pro,udid=$IPHONE_14P_UDID",
+  "mac_fallback": "platform=macOS,arch=arm64,variant=Designed for iPad"
+}

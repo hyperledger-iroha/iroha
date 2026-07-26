@@ -1,0 +1,339 @@
+package org.hyperledger.iroha.sdk.client
+
+import java.nio.charset.StandardCharsets
+import java.util.Base64
+import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
+import org.hyperledger.iroha.sdk.nexus.UaidLiteral
+
+/** Minimal JSON parser for identifier-policy and identifier-resolution payloads. */
+object IdentifierJsonParser {
+
+    @JvmStatic
+    fun parsePolicyList(payload: ByteArray): IdentifierPolicyListResponse {
+        val root = expectObject(parse(payload, "identifier policy list"), "identifier policy list")
+        val itemValues = asArrayOrEmpty(root["items"], "identifier policy list.items")
+        val items = ArrayList<IdentifierPolicySummary>(itemValues.size)
+        for (i in itemValues.indices) {
+            val item = expectObject(itemValues[i], "identifier policy list.items[$i]")
+            items.add(
+                IdentifierPolicySummary(
+                    requiredExactString(item["policy_id"], "identifier policy list.items[$i].policy_id"),
+                    requiredExactString(item["owner"], "identifier policy list.items[$i].owner"),
+                    asBoolean(item["active"], "identifier policy list.items[$i].active"),
+                    IdentifierNormalization.fromWireValue(
+                        requiredExactLowercaseString(item["normalization"], "identifier policy list.items[$i].normalization")
+                    ),
+                    requiredPublicKeyLiteral(item["resolver_public_key"], "identifier policy list.items[$i].resolver_public_key"),
+                    requiredExactLowercaseString(item["backend"], "identifier policy list.items[$i].backend"),
+                    optionalExactLowercaseString(item["input_encryption"], "identifier policy list.items[$i].input_encryption"),
+                    optionalExactHexString(item["input_encryption_public_parameters"], "identifier policy list.items[$i].input_encryption_public_parameters"),
+                    if (item["input_encryption_public_parameters_decoded"] == null) null
+                    else parseBfvPublicParameters(
+                        expectObject(item["input_encryption_public_parameters_decoded"],
+                            "identifier policy list.items[$i].input_encryption_public_parameters_decoded"),
+                        "identifier policy list.items[$i].input_encryption_public_parameters_decoded"
+                    ),
+                    optionalExactString(item["note"], "identifier policy list.items[$i].note"),
+                    if (item["proof_verifier"] == null) null
+                    else parseProofVerifier(
+                        expectObject(item["proof_verifier"], "identifier policy list.items[$i].proof_verifier"),
+                        "identifier policy list.items[$i].proof_verifier"
+                    ),
+                    outputOpeningPublicKey = if (!item.containsKey("output_opening_public_key"))
+                        requiredPublicKeyLiteral(item["resolver_public_key"], "identifier policy list.items[$i].resolver_public_key")
+                    else
+                        requiredPublicKeyLiteral(
+                            item["output_opening_public_key"],
+                            "identifier policy list.items[$i].output_opening_public_key",
+                        ),
+                )
+            )
+        }
+        val total = if (root.containsKey("total"))
+            asLong(root["total"], "identifier policy list.total")
+        else items.size.toLong()
+        return IdentifierPolicyListResponse(total, items)
+    }
+
+    @JvmStatic
+    fun parseResolutionReceipt(payload: ByteArray): IdentifierResolutionReceipt {
+        val root = expectObject(parse(payload, "identifier resolution receipt"), "identifier resolution receipt")
+        val receiptPayload = parseResolutionPayload(
+            expectObject(root["payload"], "identifier resolution receipt.payload"),
+            "identifier resolution receipt.payload"
+        )
+        val attestation = parseReceiptAttestation(
+            expectObject(root["attestation"], "identifier resolution receipt.attestation"),
+            "identifier resolution receipt.attestation"
+        )
+        return IdentifierResolutionReceipt(
+            receiptPayload,
+            attestation
+        )
+    }
+
+    @JvmStatic
+    fun parseClaimRecord(payload: ByteArray): IdentifierClaimRecord {
+        val root = expectObject(parse(payload, "identifier claim record"), "identifier claim record")
+        return IdentifierClaimRecord(
+            requiredExactString(root["policy_id"], "identifier claim record.policy_id"),
+            canonicalizeOpaque(requiredExactString(root["opaque_id"], "identifier claim record.opaque_id"), "identifier claim record.opaque_id"),
+            canonicalizeHex32(requiredExactString(root["receipt_hash"], "identifier claim record.receipt_hash"), "identifier claim record.receipt_hash"),
+            UaidLiteral.canonicalize(requiredExactString(root["uaid"], "identifier claim record.uaid"), "identifier claim record.uaid"),
+            requiredExactString(root["account_id"], "identifier claim record.account_id"),
+            asLong(root["verified_at_ms"], "identifier claim record.verified_at_ms"),
+            if (root.containsKey("expires_at_ms")) asOptionalLong(root["expires_at_ms"], "identifier claim record.expires_at_ms") else null
+        )
+    }
+
+    private fun parse(payload: ByteArray?, context: String): Any? {
+        check(payload != null && payload.isNotEmpty()) { "$context returned an empty payload" }
+        val json = String(payload, StandardCharsets.UTF_8).trim()
+        check(json.isNotEmpty()) { "$context returned a blank payload" }
+        return JsonParser.parse(json)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun expectObject(value: Any?, path: String): Map<String, Any?> {
+        check(value is Map<*, *>) { "$path must be a JSON object" }
+        return value as Map<String, Any?>
+    }
+
+    private fun asArrayOrEmpty(value: Any?, path: String): List<Any?> {
+        if (value == null) return emptyList()
+        check(value is List<*>) { "$path must be a JSON array" }
+        return value
+    }
+
+    private fun requiredString(value: Any?, path: String): String {
+        val string = optionalString(value, path)
+        check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
+        return string.trim()
+    }
+
+    private fun requiredExactString(value: Any?, path: String): String {
+        val string = optionalString(value, path)
+        check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
+        check(string.trim() == string) { "$path must not contain surrounding whitespace" }
+        return string
+    }
+
+    private fun requiredExactLowercaseString(value: Any?, path: String): String {
+        val string = requiredExactString(value, path)
+        check(string == string.lowercase()) { "$path must be an exact lowercase wire value" }
+        return string
+    }
+
+    private fun requiredPublicKeyLiteral(value: Any?, path: String): String {
+        val string = requiredExactString(value, path)
+        check(decodePublicKeyLiteral(string) != null) { "$path must be a valid public key literal" }
+        return string
+    }
+
+    private fun optionalExactString(value: Any?, path: String): String? {
+        if (value == null) return null
+        return requiredExactString(value, path)
+    }
+
+    private fun optionalExactLowercaseString(value: Any?, path: String): String? {
+        val string = optionalExactString(value, path) ?: return null
+        check(string == string.lowercase()) { "$path must be an exact lowercase wire value" }
+        return string
+    }
+
+    private fun optionalExactHexString(value: Any?, path: String): String? {
+        var hex = optionalExactString(value, path) ?: return null
+        if (hex.startsWith("0x") || hex.startsWith("0X")) {
+            hex = hex.substring(2)
+        }
+        check(hex.isNotEmpty() && hex.length % 2 == 0 && hex.matches(Regex("(?i)[0-9a-f]+"))) {
+            "$path must contain an even number of hex characters"
+        }
+        return hex
+    }
+
+    private fun optionalString(value: Any?, path: String): String? {
+        if (value == null) return null
+        check(value is String) { "$path must be a string" }
+        return value
+    }
+
+    private fun asLong(value: Any?, path: String): Long {
+        if (value is String) return value.toLongOrNull() ?: error("$path must be an integer string")
+        return JsonNumbers.asLong(value, path)
+    }
+
+    private fun asOptionalLong(value: Any?, path: String): Long? {
+        if (value == null) return null
+        return asLong(value, path)
+    }
+
+    private fun asBoolean(value: Any?, path: String): Boolean {
+        check(value is Boolean) { "$path must be a boolean" }
+        return value
+    }
+
+    private fun asUnsignedLong(value: Any?, path: String): Long {
+        val parsed = asLong(value, path)
+        check(parsed >= 0L) { "$path must be a non-negative u64" }
+        return parsed
+    }
+
+    private fun asOptionalUnsignedLong(value: Any?, path: String): Long? {
+        if (value == null) return null
+        return asUnsignedLong(value, path)
+    }
+
+    private fun canonicalizeOpaque(value: String, context: String): String {
+        val literal = value
+        check(literal.isNotEmpty()) { "$context must not be blank" }
+        val hexPortion = if (literal.lowercase().startsWith("opaque:")) literal.substring("opaque:".length) else literal
+        check(hexPortion.length == 64 && hexPortion.matches(Regex("(?i)[0-9a-f]{64}"))) {
+            "$context must contain 64 hex characters"
+        }
+        return "opaque:${hexPortion.lowercase()}"
+    }
+
+    private fun canonicalizeHex32(value: String, context: String): String {
+        var body = value
+        check(body.isNotEmpty()) { "$context must not be blank" }
+        if (body.lowercase().startsWith("hash:")) {
+            body = body.substring("hash:".length)
+        }
+        val suffixIndex = body.indexOf('#')
+        if (suffixIndex >= 0) {
+            body = body.substring(0, suffixIndex)
+        }
+        if (body.startsWith("0x") || body.startsWith("0X")) {
+            body = body.substring(2)
+        }
+        check(body.length == 64 && body.matches(Regex("(?i)[0-9a-f]{64}"))) {
+            "$context must contain 64 hex characters"
+        }
+        return body.lowercase()
+    }
+
+    private fun canonicalizeHex(value: String, context: String): String {
+        var trimmed = value.trim()
+        check(trimmed.isNotEmpty()) { "$context must not be blank" }
+        if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+            trimmed = trimmed.substring(2)
+        }
+        check(trimmed.length % 2 == 0 && trimmed.matches(Regex("(?i)[0-9a-f]+"))) {
+            "$context must contain an even number of hex characters"
+        }
+        return trimmed.lowercase()
+    }
+
+    private fun parseBfvPublicParameters(root: Map<String, Any?>, context: String): IdentifierBfvPublicParameters {
+        val parameters = expectObject(root["parameters"], "$context.parameters")
+        val publicKey = expectObject(root["public_key"], "$context.public_key")
+        return IdentifierBfvPublicParameters(
+            IdentifierBfvPublicParameters.Parameters(
+                asLong(parameters["polynomial_degree"], "$context.parameters.polynomial_degree"),
+                asLong(parameters["plaintext_modulus"], "$context.parameters.plaintext_modulus"),
+                asLong(parameters["ciphertext_modulus"], "$context.parameters.ciphertext_modulus"),
+                JsonNumbers.asInt(parameters["decomposition_base_log"], "$context.parameters.decomposition_base_log")
+            ),
+            IdentifierBfvPublicParameters.PublicKey(
+                asLongList(publicKey["b"], "$context.public_key.b"),
+                asLongList(publicKey["a"], "$context.public_key.a")
+            ),
+            JsonNumbers.asInt(root["max_input_bytes"], "$context.max_input_bytes"),
+            optionalExactString(root["norito_length_encoding"], "$context.norito_length_encoding")
+        )
+    }
+
+    private fun parseProofVerifier(root: Map<String, Any?>, context: String): RamLfeProofVerifierMetadata =
+        RamLfeProofVerifierMetadata(
+            requiredExactString(root["proof_backend"], "$context.proof_backend"),
+            requiredExactString(root["circuit_id"], "$context.circuit_id"),
+            canonicalizeHex32(requiredExactString(root["public_inputs_schema_hash"], "$context.public_inputs_schema_hash"), "$context.public_inputs_schema_hash"),
+            requiredExactString(root["verifying_key_bytes_b64"], "$context.verifying_key_bytes_b64")
+        )
+
+    private fun parseResolutionPayload(root: Map<String, Any?>, context: String): IdentifierResolutionPayload {
+        val execution = parseResolutionExecutionPayload(
+            expectObject(root["execution"], "$context.execution"),
+            "$context.execution"
+        )
+        val opening = parseOutputOpening(
+            expectObject(root["opening"], "$context.opening"),
+            "$context.opening"
+        )
+        return IdentifierResolutionPayload(
+            requiredExactString(root["policy_id"], "$context.policy_id"),
+            execution,
+            opening,
+            canonicalizeOpaque(requiredExactString(root["opaque_id"], "$context.opaque_id"), "$context.opaque_id"),
+            canonicalizeHex32(requiredExactString(root["receipt_hash"], "$context.receipt_hash"), "$context.receipt_hash"),
+            UaidLiteral.canonicalize(requiredExactString(root["uaid"], "$context.uaid"), "$context.uaid"),
+            requiredExactString(root["account_id"], "$context.account_id")
+        )
+    }
+
+    private fun parseResolutionExecutionPayload(root: Map<String, Any?>, context: String): IdentifierResolutionExecutionPayload =
+        IdentifierResolutionExecutionPayload(
+            requiredExactString(root["program_id"], "$context.program_id"),
+            canonicalizeHex32(requiredExactString(root["program_digest"], "$context.program_digest"), "$context.program_digest"),
+            requiredExactLowercaseString(root["backend"], "$context.backend"),
+            requiredExactLowercaseString(root["verification_mode"], "$context.verification_mode"),
+            canonicalizeHex32(requiredExactString(root["input_ciphertext_hash"], "$context.input_ciphertext_hash"), "$context.input_ciphertext_hash"),
+            canonicalizeHex32(requiredExactString(root["output_ciphertext_hash"], "$context.output_ciphertext_hash"), "$context.output_ciphertext_hash"),
+            canonicalizeHex32(requiredExactString(root["parameter_digest"], "$context.parameter_digest"), "$context.parameter_digest"),
+            canonicalizeHex32(requiredExactString(root["evaluation_key_digest"], "$context.evaluation_key_digest"), "$context.evaluation_key_digest"),
+            canonicalizeHex32(requiredExactString(root["output_hash"], "$context.output_hash"), "$context.output_hash"),
+            canonicalizeHex32(requiredExactString(root["associated_data_hash"], "$context.associated_data_hash"), "$context.associated_data_hash"),
+            asUnsignedLong(root["executed_at_ms"], "$context.executed_at_ms"),
+            if (root.containsKey("expires_at_ms")) asOptionalUnsignedLong(root["expires_at_ms"], "$context.expires_at_ms") else null
+        )
+
+    private fun parseOutputOpening(root: Map<String, Any?>, context: String): RamLfeOutputOpening {
+        val payload = expectObject(root["payload"], "$context.payload")
+        return RamLfeOutputOpening(
+            RamLfeOutputOpeningPayload(
+                requiredExactString(payload["program_id"], "$context.payload.program_id"),
+                canonicalizeHex32(requiredExactString(payload["input_ciphertext_hash"], "$context.payload.input_ciphertext_hash"), "$context.payload.input_ciphertext_hash"),
+                canonicalizeHex32(requiredExactString(payload["output_ciphertext_hash"], "$context.payload.output_ciphertext_hash"), "$context.payload.output_ciphertext_hash"),
+                canonicalizeHex32(requiredExactString(payload["parameter_digest"], "$context.payload.parameter_digest"), "$context.payload.parameter_digest"),
+                canonicalizeHex32(requiredExactString(payload["evaluation_key_digest"], "$context.payload.evaluation_key_digest"), "$context.payload.evaluation_key_digest"),
+                canonicalizeHex32(requiredExactString(payload["opened_output_hash"], "$context.payload.opened_output_hash"), "$context.payload.opened_output_hash"),
+                asUnsignedLong(payload["opened_at_ms"], "$context.payload.opened_at_ms"),
+                if (payload.containsKey("expires_at_ms")) asOptionalUnsignedLong(payload["expires_at_ms"], "$context.payload.expires_at_ms") else null
+            ),
+            canonicalizeHex(requiredExactString(root["signature"], "$context.signature"), "$context.signature")
+        )
+    }
+
+    private fun parseReceiptAttestation(root: Map<String, Any?>, context: String): IdentifierReceiptAttestation {
+        val kind = requiredExactString(root["kind"], "$context.kind")
+        return when (kind) {
+            "signed" -> {
+                val signature = canonicalizeHex(requiredExactString(root["signature"], "$context.signature"), "$context.signature")
+                check(root["proof_backend"] == null && root["proof_b64"] == null) {
+                    "$context signed attestation must not include proof fields"
+                }
+                IdentifierReceiptAttestation(kind, signature, null, null)
+            }
+            "proof" -> {
+                val backend = requiredExactString(root["proof_backend"], "$context.proof_backend")
+                val proofB64 = requiredExactString(root["proof_b64"], "$context.proof_b64")
+                try {
+                    Base64.getDecoder().decode(proofB64)
+                } catch (ex: IllegalArgumentException) {
+                    throw IllegalStateException("$context.proof_b64 must be valid base64", ex)
+                }
+                check(root["signature"] == null) {
+                    "$context proof attestation must not include signature"
+                }
+                IdentifierReceiptAttestation(kind, null, backend, proofB64)
+            }
+            else -> error("$context.kind must be signed or proof")
+        }
+    }
+
+    private fun asLongList(value: Any?, path: String): List<Long> {
+        val values = asArrayOrEmpty(value, path)
+        return values.mapIndexed { index, v -> asLong(v, "$path[$index]") }
+    }
+}

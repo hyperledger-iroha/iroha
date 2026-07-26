@@ -1,0 +1,177 @@
+---
+lang: kk
+direction: ltr
+source: docs/portal/docs/ministry/agenda-workflow.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Agenda Council Workflow
+description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+CodeBlock файлын '@theme/CodeBlock' ішінен импорттау;
+'@site/docs/examples/ministry/agenda_sortition_summary_example.json' ішінен сұрыптау жиынын импорттау;
+
+const summary = sortitionSummary;
+
+функциясы SortitionSummaryTable({жолдар}) {
+  қайтару (
+    <кесте>
+      <thead>
+        <tr>
+          <th>Слот</th>
+          <th>мүше</th>
+          <th>Рөл</th>
+          <th>Org</th>
+          <th>Салмақ</th>
+          <th>Энтропия (қысқартылған)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((жол, индекс) => (
+          <tr пернесі={`${row.member_id}-${row.draw_position}`}>
+            <td>{индекс + 1}</td>
+            <td><code>{row.member_id}</code></td>
+            <td>{row.role}</td>
+            <td>{row.organization}</td>
+            <td>{row.weight}</td>
+            <td><code>{row.draw_entropy_hex.slice(0, 16)}…</code></td>
+          </tr>
+        ))}
+      </tbody>
+    </кесте>
+  );
+}
+
+## Шолу
+
+Жол картасының **MINFO-2** тармағы ұсыныс сызығынан бастап детерминирленген жолды талап етеді
+кез келген адам істің күн тәртібіне қалай жеткенін растай алатын қоғамдық сұрыптау дәлелдері
+кеңес. Бұл бет бұрын орнатылған CLI көмекшілерін тікелей желіге қосады
+әзірлеушілер порталы, осылайша ұсыныстар берушілер, аудиторлар және платформа топтары бірдей әрекет ете алады
+бақылау парағы моно-репо туралы айтпай-ақ.
+
+Жұмыс процесі үш қайталанатын қадамды қамтиды:
+
+1. `AgendaProposalV1` пайдалы жүктемелерін жергілікті түрде растаңыз және қайталанатын хэштерді қабылдаңыз
+   жіберу модерация кезегіне жеткенге дейін.
+2. Кеңес қызметкерлерінің мүмкіндігінше ұсыныспен бірге тізілімнің қайталанатын хиттерін жариялаңыз.
+   детерминизмді жоғалтпай бұрынғы жағдайларды қадағалаңыз.
+3. Сұрыптау көмекшісін іске қосыңыз, Merkle дәлелі дестесін түсіріңіз және бетін шығарыңыз
+   азаматтар ұтыс ойынын қайталай алатындай етіп порталдың ішінен таңдалған тізім.
+
+Барлық көмекшілер `cargo xtask ministry-agenda` ішінде тұрады; Norito схемасы
+`docs/source/ministry/agenda_council_proposal.md` астында құжатталған.
+
+## 1. Жергілікті жерде ұсыныстарды растаңыз
+
+JSON пайдалы жүктемелерін сызу және талап етілетін дәлелдерді растау үшін CLI пайдаланыңыз (хэш
+отбасылар, дайджест ұзындықтары, тіл тегі, жіберуші контакт) бар. The
+валидатор кодты Torii қабылдау жолымен бөліседі, сондықтан ұсыныс жіберіледі
+мұнда да портал арқылы жүктеп салған кезде өтеді.
+
+<CodeBlock language="bash">{`жүк xtask министрлігі-күн тәртібін тексеру \\
+  --proposal docs/examples/ministry/agenda_proposal_example.json \\
+  --registry docs/examples/ministry/agenda_duplicate_registry.json`}</CodeBlock>
+
+- Тарихи пайдалы жүктемелерді тексеру кезінде `--allow-registry-conflicts` қосыңыз; жаңа
+  саусақ ізі бұрыннан бар болса, жіберулер тез орындалмауы керек.
+- Мысалдар каталогы анықтамалық ұсынысты және тізілімді SDK файлдарына жібереді
+  пішімді қатаң кодталмаған жеке пайдалы жүктемелерсіз қабылдаңыз.
+
+## 2. Қайталанатын тізілім контекстін жариялау
+
+Әрбір қабылданған ұсыныс бұрын кеңескен тізілім дайджестін қамтиды
+жұту. Осы тізбе үшін SoraFS CID немесе Torii манифест жолын түсіріп, қосыңыз
+оны сіздің жіберу метадеректеріңіз үшін кеңес шолушылары бірдей JSON тексере алады.
+
+```json title="Duplicate registry (excerpt)"
+{
+  "entries": [
+    {
+      "hash_family": "blake3-256",
+      "hash_hex": "0d714bed4b7c63c23a2cf8ee9ce6c3cde1007907c427b4a0754e8ad31c91338d",
+      "proposal_id": "AC-2025-014",
+      "note": "Already handled in 2025-08 incident"
+    }
+  ]
+}
+```
+
+CLI соқтығысу туралы хабарлағанда, портал байланыстырылған ұсыныс идентификаторларын көрсетеді
+операторлар қайта жіберулерді анықтау арқылы біріктіре алады немесе қабылдамайды.
+
+## 3. Сұрыптау қорытындысын іске қосыңыз және жариялаңыз
+
+Докет дайын болғаннан кейін детерминирленген сұрыптау көмекшісін іске қосыңыз. Ол тұтынады
+тізімі JSON, тұқым және мақсатты ұяшықтар саны, содан кейін Merkle-профессионалды қолдауды шығарады
+түйіндеме. JSON қорытындысы - бұл портал **Кеңес ұтысында** көрсететін нәрсе.
+панель.
+
+<CodeBlock language="bash">{`жүк xtask министрлігі-күн тәртібін сұрыптау \\
+  --roster docs/examples/ministry/agenda_council_roster.json \\
+  --слоттар 3 \\
+  --seed 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
+  --output artefacts/ministry/sortition/2026-03-12.json`}</CodeBlock>
+
+Алынған JSON файлын SoraFS (немесе қол қойылған күн тәртібі пакетінің жанында) сақтаңыз және
+ұсыныс трекерінде CID кодын байланыстырыңыз. Әзірлеуші порталы бірдей пайдаланады
+JSON құрылымы; төмендегі мысал жинақты көрсетеді
+`agenda_sortition_summary_example.json`.
+
+### Кеңес ұтысының үлгісі<кесте>
+  <thead>
+    <tr>
+      <th>Өріс</th>
+      <th>Мән</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Алгоритм</td>
+      <td><code>{summary.algorithm}</code></td>
+    </tr>
+    <tr>
+      <td>Тізімдер дайджесті (BLAKE3)</td>
+      <td><code>{summary.roster_digest.blake3_hex}</code></td>
+    </tr>
+    <tr>
+      <td>Рестер дайджесті (SHA-256)</td>
+      <td><code>{summary.roster_digest.sha256_hex}</code></td>
+    </tr>
+    <tr>
+      <td>Тұқым</td>
+      <td><code>{summary.seed_hex}</code></td>
+    </tr>
+    <tr>
+      <td>Слоттар</td>
+      <td>{summary.slots}</td>
+    </tr>
+    <tr>
+      <td>Жарамды мүшелер</td>
+      <td>{summary.eligible_members}</td>
+    </tr>
+    <tr>
+      <td>Merkle түбірі</td>
+      <td><code>{summary.merkle_root_hex}</code></td>
+    </tr>
+  </tbody>
+</кесте>
+
+<SortitionSummaryTable rows={summary.selected} />
+
+Әрбір таңдалған мүше кіреді:
+
+- `draw_entropy_hex` (32 BLAKE3 байт), сондықтан кез келген адам RNG шығысын қайта есептей алады.
+- `eligible_index` және `original_index`, осылайша аудиторлар бас тартудың болғанын дәлелдей алады.
+  құрметті.
+- тізім парағын қамтитын Merkle дәлелі; ағашты көбейту растайды
+  пакеттің ішінде жарияланған тізім ұтыс ойынына сәйкес келеді.
+
+### Шешім қабылдау журналы
+
+Кеңес ұсыныс бойынша дауыс бергенде, шешім хаттамасын және хаттаманы қоса беріңіз
+сұрыптау жиынтық CID басқару әрекетіне (Torii `/v1/gov/*` жазба). Портал
+беттер жазбаны, дауыс санын және жоғарыда көрсетілген JSON әр әрекетті байланыстырады
+**MINFO-2** талап ететін толық дәлелдер тізбегін қамтиды.

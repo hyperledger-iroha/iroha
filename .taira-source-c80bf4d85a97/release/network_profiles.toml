@@ -1,0 +1,18 @@
+# Release profile classification manifest.
+#
+# This file maps network aliases (and optional chain IDs) to the
+# packaging profile that should be delivered by release automation.
+#
+# Current policy:
+# - Deliver `iroha3` binaries to the Sora Nexus global lane.
+# - All other networks remain on the single-lane `iroha2` track until
+#   multi-lane rollout expands.
+
+default_profile = "iroha2"
+
+[[profiles]]
+profile = "iroha3"
+networks = ["sora-nexus", "sora_nexus", "nexus"]
+aliases = ["sora-global-lane", "sora-global", "global-lane", "global_lane"]
+chain_ids = ["sora:nexus:global"]
+description = "Sora Nexus single global lane (Iroha 3 deployment)."

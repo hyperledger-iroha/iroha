@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mochi Local Sandbox"
+  short_description: "Start and use a local Mochi Torii MCP sandbox"
+  default_prompt: "Use $mochi-local-sandbox to bring up or inspect a local Mochi sandbox and its Torii MCP endpoint."

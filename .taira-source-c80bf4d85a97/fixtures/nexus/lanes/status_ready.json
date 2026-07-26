@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "nexus_enabled": true,
+  "lane_count": 3,
+  "lanes": [
+    {
+      "id": 0,
+      "dataspace_id": 0,
+      "alias": "core",
+      "description": "Core settlement lane",
+      "visibility": "Public",
+      "lane_type": "default_public",
+      "governance": "core-governance",
+      "settlement": "xor",
+      "storage": "FullReplica",
+      "proof_scheme": { "type": "MerkleSha256", "value": null },
+      "metadata": {}
+    },
+    {
+      "id": 1,
+      "dataspace_id": 1,
+      "alias": "payments",
+      "description": "Payments lane",
+      "visibility": "Public",
+      "lane_type": "default_public",
+      "governance": "payments-governance",
+      "settlement": "xor",
+      "storage": "FullReplica",
+      "proof_scheme": { "type": "MerkleSha256", "value": null },
+      "metadata": {}
+    },
+    {
+      "id": 2,
+      "dataspace_id": 2,
+      "alias": "zk",
+      "description": "Zero-knowledge workload lane",
+      "visibility": "Restricted",
+      "lane_type": "zk_private",
+      "governance": "zk-governance",
+      "settlement": "xor",
+      "storage": "CommitmentOnly",
+      "proof_scheme": { "type": "KzgBls12_381", "value": null },
+      "metadata": {}
+    }
+  ],
+  "catalog_hash": "hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "incarnations": [
+    {
+      "lane_id": 0,
+      "incarnation": "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    },
+    {
+      "lane_id": 1,
+      "incarnation": "hash:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    {
+      "lane_id": 2,
+      "incarnation": "hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    }
+  ],
+  "incarnation_root": "hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"
+}

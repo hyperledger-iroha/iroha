@@ -1,0 +1,47 @@
+---
+lang: am
+direction: ltr
+source: docs/portal/docs/ministry/volunteer-briefs.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Volunteer Briefs
+description: Submit, lint, and publish citizen briefs for Ministry blacklist reviews.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+VolunteerLintStatusTable ከ'@site/src/components/VolunteerLintStatusTable' አስመጣ፤
+
+## አጠቃላይ እይታ
+
+የበጎ ፈቃደኞች አጭር መግለጫዎች የማስታወቂያ ሚኒስቴር የተከለከሉ መዝገብ ወይም የፖሊሲ ለውጦች በቀረቡ ቁጥር የሚገመግማቸውን የድጋፍ/ተቃዋሚ/የአውድ አመለካከቶችን ይይዛሉ። እያንዳንዱ ማቅረቢያ በ`iroha_data_model::ministry::VolunteerBriefV1` (ስሪት `1`) የተተገበረውን ቀኖናዊ ንድፍ መከተል አለበት፡
+
+1. የአስተዳደር ዳሽቦርዶች የእውነታ ሰንጠረዦችን በቆራጥነት ማወዳደር ይችላሉ።
+2. የግጭት-ፍላጎት መግለጫዎች ከመታተማቸው በፊት ተፈጻሚ ይሆናሉ።
+3. ከርዕስ ውጪ ወይም በከዋክብት የተደገፉ ማቅረቢያዎች ከኦዲት ዱካ ሳያስወግዷቸው ይታገዳሉ።
+
+ጭነትን ለመገንባት አብነቱን በI18NI0000005X ወይም I18NI0000006X አጋዥ ይጠቀሙ። CLI የI18NT0000001X መዋቅርን ያጸድቃል፣የመስተካከል መለያዎችን ያዘጋጃል እና ምን ያህል የእውነታ ረድፎች፣ ጥቅሶች እና ይፋ መግለጫዎች እንደተቀበሉ የሚያሳይ ማጠቃለያ ያወጣል።
+
+## የህትመት ቧንቧ መስመር እና SLA
+
+| መድረክ | መስኮት | ዝርዝሮች |
+|-------|--------|-----|
+| ቅበላ እና ማረጋገጫ | T+0 እስከ 6ሰአታት | ክፍያዎች የሚጫኑት በፈቃደኝነት ፎርም ወይም በCLI በኩል ነው። `VolunteerBriefV1::validate` እቅዱን ያስፈጽማል (ስሪት፣ RFC3339 የጊዜ ማህተም፣ ይፋ ማውጣት ፖሊሲ፣ የምግብ መፍጨት ሂደት)። አለመሳካቶች ሊተገበሩ በሚችሉ የስህተት ኮዶች ወዲያውኑ ውድቅ ይደረጋሉ። |
+| ትርጉም እና አወያይ | T+6 እስከ 24ሰአት | ገምጋሚዎች የሽምግልና መለያዎችን (`needs-translation`፣ `duplicate`፣ `policy-escalation`፣ ወዘተ) ይተገብራሉ፣ እውቂያዎችን ያስተካክላሉ እና ከርዕስ ውጪ ግቤቶችን ይጠቁሙ። መለያዎች በI18NT0000002X ጭነት ውስጥ ይከማቻሉ ስለዚህ የታችኛው ጅረት አውቶማቲክ ግቤቶችን ማፈን ወይም ማድመቅ ይችላል። |
+| ፖርታል ሕትመት | T+24 እስከ 48ሰአት | ትክክለኛ አጭር መግለጫዎች በ ** የበጎ ፈቃደኞች አስተያየቶች** ስር ካለው ተዛማጅ የፕሮፖዛል ገጽ ጋር ታትመዋል። ከርዕስ ውጪ ያሉ ግቤቶች በጥሬው መዝገብ ቤት ውስጥ ይቀራሉ ነገር ግን ከአጠቃላይ አቋም ቆጠራዎች የተገለሉ ናቸው። |
+
+የተፋጠነ አያያዝ (≤12ሰአታት) የ `policy-escalation` ወይም `astroturf` መለያዎች በሚገኙበት ጊዜ በራስ-ሰር ይነሳሳል። ኦፕሬተሮች በ`submitted_at` እና በፖርታል ኅትመት መካከል ያለውን ጊዜ በሚከታተለው የበጎ ፈቃደኞች አጭር መግለጫ I18NT0000000X ፓኔል በኩል ተገዢነትን ኦዲት ማድረግ ይችላሉ።
+
+## የሚደርስ
+
+- ** መርሐግብር እና ሰነዶች፡** `VolunteerBriefV1` የሚኖረው በተጋራው የውሂብ ሞዴል ውስጥ ነው፣ እና ዝርዝር የመስክ መመሪያው እና ምሳሌ ክፍያ ጭነት በ`docs/source/ministry/volunteer_brief_template.md` እና I18NI0000016X ውስጥ ይኖራል።
+- ** የማረጋገጫ መሳሪያ: ** `cargo xtask ministry-transparency volunteer-validate --input <file> [--json-output artifacts/ministry/volunteer-lint.json]` በፖርታል ግንባታ ጥቅም ላይ የሚውለውን ተመሳሳይ ሊንዶችን ይሰራል; አንድ ሙሉ ጥቅል ለህትመት ለማዘጋጀት ሲፈልጉ `ingest --volunteer <file>` እንዳለ ይቆያል።
+- **የፖርታል ወለል:** እያንዳንዱ የፕሮፖዛል ገጽ ከዲኮድ የተደረገው የድጋፍ/የተቃውሞ/የአውድ አጭር መግለጫዎች ጋር ያገናኛል፣የዜጎችን አስተያየት ጥሬ JSON ሳያወርዱ እንዲታዩ ያደርጋል። ጁሮዎች ግቤት ለምን እንደዘገየ ወይም እንደተገለለ እንዲረዱ የአወያይ ዲበ ዳታ ከአጭሩ ጋር ተሰርቷል።
+
+የፍኖተ ካርታ ንጥሉን ይመልከቱ **MINFO-3 — የበጎ ፈቃደኞች ፍላጐት ፓነል መሠረተ ልማት** ተጨማሪ አውቶማቲክ (ለምሳሌ፡ የጅምላ አስመጪ ኤ ፒ አይዎች ወይም የተራዘመ ትንታኔ) የሚያስፈልግ ከሆነ።
+
+## የሊንት ሁኔታ ዳሽቦርድ
+
+የፖርታሉ ግንባታ አሁን `npm run generate:volunteer-lint`ን ይሰራል፣ይህም `cargo xtask ministry-transparency volunteer-validate --json-output …`ን በሁሉም ተመዝግቦ በገባ የበጎ ፈቃደኝነት አጭር መግለጫ ላይ ይጠራል። የተገኘው አንጸባራቂ ከዚህ በታች ቀርቧል ስለዚህ ገምጋሚዎች ከማተምዎ በፊት የእያንዳንዱን ፕሮፖዛል ሁኔታ ማረጋገጥ ይችላሉ።
+
+<VolunteerLintStatusTable />

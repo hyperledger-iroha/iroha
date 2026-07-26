@@ -1,0 +1,50 @@
+{
+  "ChunkerProfileProposalV1": {
+    "namespace": "sorafs",
+    "name": "sf1",
+    "semver": "1.0.0",
+    "reserved_profile_id": 1,
+    "profile": {
+      "min_size": 65536,
+      "target_size": 262144,
+      "max_size": 524288,
+      "break_mask": "0x0000ffff",
+      "polynomial": "0x3da3358b4dc173",
+      "gear_seed": "sorafs-v1-gear"
+    },
+    "profile_aliases": [
+      "sorafs.sf1@1.0.0"
+    ],
+    "chunk_multihash": {
+      "code": 31,
+      "digest": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
+    },
+    "fixtures_root": "fixtures/sorafs_chunker/",
+    "por_seed": "0x0000000000dec0ded",
+    "artifacts": {
+      "chunk_boundaries": [
+        "fixtures/sorafs_chunker/sf1_profile_v1.json",
+        "fixtures/sorafs_chunker/sf1_profile_v1.rs",
+        "fixtures/sorafs_chunker/sf1_profile_v1.ts",
+        "fixtures/sorafs_chunker/sf1_profile_v1.go"
+      ],
+      "fuzz_corpora": [
+        "fuzz/sorafs_chunker/sf1_profile_v1_backpressure.json"
+      ],
+      "por_witnesses": [],
+      "manifests": [
+        "fixtures/sorafs_chunker/manifest_blake3.json",
+        "fixtures/sorafs_chunker/manifest_signatures.json"
+      ]
+    },
+    "determinism_report": "docs/source/sorafs/reports/sf1_determinism.md",
+    "validation": {
+      "commands": [
+        "cargo test -p sorafs_chunker",
+        "ci/check_sorafs_fixtures.sh",
+        "cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles"
+      ],
+      "notes": "See determinism report for digests and parity results."
+    }
+  }
+}

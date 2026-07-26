@@ -1,0 +1,34 @@
+{
+  "bundle": "fastpq_metal_bench_debug.json",
+  "generated_at": null,
+  "host": null,
+  "labels": null,
+  "execution_mode": "gpu",
+  "gpu_backend": "metal",
+  "capture_timestamp": "2025-11-09T06:11:01Z",
+  "poseidon_microbench": {
+    "default": {
+      "columns": 64,
+      "iterations": 5,
+      "max_ms": 2358.614,
+      "mean_ms": 2167.663,
+      "min_ms": 2006.197,
+      "mode": "default",
+      "states": 262144,
+      "trace_log2": 12,
+      "warmups": 1
+    },
+    "scalar_lane": {
+      "columns": 64,
+      "iterations": 5,
+      "max_ms": 2361.586,
+      "mean_ms": 2152.176,
+      "min_ms": 2033.686,
+      "mode": "scalar",
+      "states": 262144,
+      "trace_log2": 12,
+      "warmups": 1
+    },
+    "speedup_vs_scalar": 0.993
+  }
+}

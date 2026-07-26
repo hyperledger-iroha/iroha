@@ -1,0 +1,90 @@
+{
+  "status": "Error",
+  "code": "SFS-BND-001",
+  "category": "validation",
+  "message": "fixture bundle payload validation failed",
+  "action": "Fix the invalid payload named in the bundle outcome before rerunning cross-link validation.",
+  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "telemetry_tags": [
+    "sorafs.reference.bundle",
+    "sorafs.reference.code.SFS-BND-001"
+  ],
+  "context": [
+    {
+      "key": "schema",
+      "value": "PdpChallengeV1"
+    },
+    {
+      "key": "version",
+      "value": "1"
+    },
+    {
+      "key": "challenge_id_hex",
+      "value": "cf0fcb348631bfcd6f4c3cdf128ca59faa20d7b899baa2822b6dc968a6a4dab8"
+    },
+    {
+      "key": "manifest_digest_hex",
+      "value": "4242424242424242424242424242424242424242424242424242424242424242"
+    },
+    {
+      "key": "provider_id_hex",
+      "value": "1010101010101010101010101010101010101010101010101010101010101010"
+    },
+    {
+      "key": "chunk_profile",
+      "value": "sorafs.sf1@1.0.0"
+    },
+    {
+      "key": "seed_hex",
+      "value": "a3487fa8661d763237bba19ad08c6a42d90118bd980f86d5df297ab3b7aa497e"
+    },
+    {
+      "key": "epoch_id",
+      "value": "1700000"
+    },
+    {
+      "key": "drand_round",
+      "value": "5432101"
+    },
+    {
+      "key": "response_deadline_unix",
+      "value": "1700000360"
+    },
+    {
+      "key": "sample_count",
+      "value": "2"
+    },
+    {
+      "key": "hot_leaf_count",
+      "value": "4"
+    },
+    {
+      "key": "challenge_error",
+      "value": "segment 0 hot leaf indices must be strictly increasing"
+    },
+    {
+      "key": "payload_code",
+      "value": "SFS-PDP-001"
+    },
+    {
+      "key": "payload_message",
+      "value": "PDP challenge validation failed: segment 0 hot leaf indices must be strictly increasing"
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "replication_order",
+      "path": "replication_order/order_v1.to"
+    },
+    {
+      "kind": "pdp_commitment",
+      "path": "pdp/commitment_v1.to"
+    },
+    {
+      "kind": "pdp_challenge",
+      "path": "pdp/negative/duplicate_hot_leaf_challenge_v1.to"
+    }
+  ],
+  "version": 1,
+  "generated_at": 1700001234
+}

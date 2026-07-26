@@ -1,0 +1,14 @@
+{
+  "info.welcome": "\u2066Hyperledger Iroha\u2069 ءَ مارگ بوت!",
+  "error.trace_config_setup": "ترتیبءِ دنبالی تعین نہ بوت",
+  "error.config": "ترتیبءِ خطا!",
+  "error.logger": "لاگ سیسټم شروع نہ بوت",
+  "error.start": "\u2066Iroha\u2069 شروع نہ بوت",
+  "error.run": "\u2066Iroha\u2069 گَشتِن درانی خطا بوت",
+  "error.start_p2p": "\u2066P2P\u2069 نیٹوَرک شروع نہ بوت",
+  "error.init_kura": "\u2066Kura\u2069 (بلاک ذخیره) شروع نہ بوت",
+  "error.start_dev_telemetry": "پیشرفتءِ ٹیلیمیټری خدمت شروع نہ بوت",
+  "error.start_telemetry": "ٹیلیمیټری خدمت شروع نہ بوت",
+  "error.listen_os_signal": "OS نشانا سُنتاں آماده نہ بوت",
+  "error.start_torii": "\u2066Torii\u2069 (\u2066Iroha HTTP API\u2069 گیٹ وی) شروع نہ بوت"
+}

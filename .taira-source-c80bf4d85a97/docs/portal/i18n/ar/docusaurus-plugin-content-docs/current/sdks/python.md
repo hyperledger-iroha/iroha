@@ -1,0 +1,132 @@
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sdks/python.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
+# البدء السريع لـ SDK Python
+
+يعكس SDK الخاص بـ Python (`iroha-python`) مساعدات عميل Rust حتى تتمكن من التفاعل مع Torii من السكربتات أو الدفاتر أو الواجهات الخلفية. يغطي هذا البدء السريع التثبيت، إرسال المعاملات، وبث الأحداث. لمزيد من التفاصيل راجع `python/iroha_python/README.md` في المستودع.
+
+## 1. التثبيت
+
+```bash
+pip install iroha-python
+```
+
+إضافات اختيارية:
+
+- `pip install aiohttp` إذا كنت تخطط لتشغيل النسخ غير المتزامنة من مساعدات البث.
+- `pip install pynacl` عندما تحتاج إلى اشتقاق مفاتيح Ed25519 خارج الـ SDK.
+
+## 2. إنشاء عميل وموقّعين
+
+```python
+from iroha_python import (
+    ToriiClient,
+    derive_ed25519_keypair_from_seed,
+)
+
+pair = derive_ed25519_keypair_from_seed(b"demo-seed")  # replace with secure storage
+authority = pair.default_account_id("wonderland")
+
+client = ToriiClient(
+    torii_url="http://127.0.0.1:8080",
+    auth_token="dev-token",  # optional: omit if Torii does not require a token
+    telemetry_url="http://127.0.0.1:8080",  # optional
+)
+```
+
+`ToriiClient` يقبل معاملات إضافية مثل `timeout_ms` و`max_retries` و`tls_config`. يقوم `resolve_torii_client_config` بتحليل حمولة إعدادات JSON إذا رغبت في التكافؤ مع CLI الخاصة بـ Rust.
+
+## 3. إرسال معاملة
+
+يوفر الـ SDK بُنّاء تعليمات ومساعدات معاملات بحيث نادرًا ما تحتاج لبناء حمولة Norito يدويًا:
+
+```python
+from iroha_python import Instruction
+
+instruction = Instruction.register_domain("research")
+
+envelope, status = client.build_and_submit_transaction(
+    chain_id="local",
+    authority=authority,
+    private_key=pair.private_key,
+    instructions=[instruction],
+    wait=True,          # poll until the transaction reaches a terminal status
+    fetch_events=True,  # include intermediate pipeline events
+)
+
+print("Final status:", status)
+```
+
+`build_and_submit_transaction` يعيد كلًا من الـ envelope الموقّع وآخر حالة مرصودة (مثل `Committed` أو `Rejected`). إذا كان لديك envelope موقّع بالفعل، استخدم `client.submit_transaction_envelope(envelope)` أو `submit_transaction_json` المعتمد على JSON.
+
+## 4. استعلام الحالة
+
+كل نقاط REST لها مساعدات JSON وكثير منها يعرض dataclasses مُنَمَّطة. على سبيل المثال، سرد النطاقات:
+
+```python
+domains = client.list_domains_typed()
+for domain in domains.items:
+    print(domain.name)
+```
+
+المساعدات ذات الترقيم (مثل `list_accounts_typed`) تعيد كائنًا يحتوي على `items` و`next_cursor`.
+
+مساعدات جرد الحساب تقبل فلترًا اختياريًا `asset_id` عندما تهتم بأصل محدد فقط:
+
+```python
+asset_id = "norito:4e52543000000001"
+assets = client.list_account_assets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", asset_id=asset_id, limit=5)
+txs = client.list_account_transactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", asset_id=asset_id, limit=5)
+holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=asset_id, limit=5)
+print(assets, txs, holders)
+```
+
+## 5. Offline readiness
+
+Use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` through `get_kagemusha_readiness(asset_definition_id="xor#wonderland")` for offline feature discovery.
+Kagemusha readiness fields advertise the active offline payment implementation.
+
+```python
+from iroha_python import ToriiClient
+
+client = ToriiClient("http://127.0.0.1:8080")
+readiness = client.get_kagemusha_readiness(asset_definition_id="xor#wonderland")
+print("offline ready", readiness.ready, readiness.blockers)
+```
+## 6. بث الأحداث
+
+Torii SSE helpers return live-only generators. They may reconnect within the
+configured retry budget, but Torii retains no replay log: reconnects can leave
+a gap. Replay cursors and resume arguments are intentionally unsupported; query
+committed ledger state when complete history is required.
+
+```python
+for event in client.stream_pipeline_blocks(
+    status="Committed",
+    with_metadata=True,
+):
+    print("Block height", event.data.block.height)
+```
+
+Other convenience methods include `stream_pipeline_transactions`,
+`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+
+## 7. الخطوات التالية
+
+- استكشف الأمثلة تحت `python/iroha_python/src/iroha_python/examples/` لتدفقات شاملة تغطي الحوكمة ومساعدات ISO bridge وConnect.
+- استخدم `create_torii_client` / `resolve_torii_client_config` عندما تريد تهيئة العميل من ملف JSON لـ `iroha_config` أو من البيئة.
+- لواجهات Norito RPC أو Connect، راجع الوحدات المتخصصة مثل `iroha_python.norito_rpc` و`iroha_python.connect`.
+
+## أمثلة Norito ذات صلة
+
+- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — يعكس سير compile/run في هذا البدء السريع حتى تتمكن من نشر نفس العقد الابتدائي من Python.
+- [Register domain and mint assets](../norito/examples/register-and-mint) — يتطابق مع تدفقات النطاق + الأصل أعلاه وهو مفيد عندما تريد تنفيذ الدفتر بدلًا من بُنّاء الـ SDK.
+- [Transfer asset between accounts](../norito/examples/transfer-asset) — يعرض syscall `transfer_asset` لتتمكن من مقارنة التحويلات المدفوعة بالعقود مع مساعدات Python.
+
+بهذه اللبنات يمكنك تشغيل Torii من Python دون كتابة طبقة HTTP أو codecs Norito بنفسك. ومع نضوج الـ SDK ستُضاف بُنّاءات عالية المستوى؛ راجع README في دليل `python/iroha_python` لأحدث الحالة وملاحظات الترحيل.
+

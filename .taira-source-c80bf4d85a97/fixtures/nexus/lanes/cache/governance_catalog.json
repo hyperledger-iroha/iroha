@@ -1,0 +1,17 @@
+{
+  "default_module": "parliament",
+  "modules": {
+    "parliament": {
+      "module_type": "parliament",
+      "params": {
+        "epoch_length_slots": "1024"
+      }
+    },
+    "council": {
+      "module_type": "council_multisig",
+      "params": {
+        "quorum": "2"
+      }
+    }
+  }
+}

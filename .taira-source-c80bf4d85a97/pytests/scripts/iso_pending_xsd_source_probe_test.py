@@ -1,0 +1,1435 @@
+import array
+import contextlib
+import http.client
+import importlib.util
+import io
+import json
+import sys
+import unittest
+import urllib.error
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_PATH = REPO_ROOT / "scripts" / "iso_pending_xsd_source_probe.py"
+SPEC = importlib.util.spec_from_file_location("iso_pending_xsd_source_probe", SCRIPT_PATH)
+PROBE = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+sys.modules[SPEC.name] = PROBE
+SPEC.loader.exec_module(PROBE)
+
+
+class FakeHeaders(dict):
+    def get_content_type(self):
+        return self.get("content-type")
+
+
+class FakeResponse:
+    def __init__(self, data, *, status=206, content_type="application/xml"):
+        self.status = status
+        self.headers = FakeHeaders({"content-type": content_type})
+        self._data = data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, _size):
+        return self._data
+
+
+class FailingReadResponse(FakeResponse):
+    def __init__(self, error):
+        super().__init__(b"")
+        self._error = error
+
+    def read(self, _size):
+        raise self._error
+
+
+def run_probe(argv):
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        rc = PROBE.main(argv)
+    return rc, stdout.getvalue(), stderr.getvalue()
+
+
+def schema_payload(message_def_id, *, prefix="xs", prolog=b""):
+    namespace = PROBE._expected_target_namespace(message_def_id).encode("ascii")
+    if prefix is None:
+        root = (
+            b"<schema xmlns='http://www.w3.org/2001/XMLSchema' "
+            b"targetNamespace='"
+            + namespace
+            + b"'/>"
+        )
+    else:
+        encoded_prefix = prefix.encode("ascii")
+        root = (
+            b"<"
+            + encoded_prefix
+            + b":schema xmlns:"
+            + encoded_prefix
+            + b"='http://www.w3.org/2001/XMLSchema' targetNamespace='"
+            + namespace
+            + b"'/>"
+        )
+    return prolog + root
+
+
+def message_def_id_for_request(request):
+    for message_def_id, metadata in PROBE.xsd.KNOWN_PENDING_SCHEMA_SOURCE_METADATA.items():
+        if metadata["download_url"] == request.full_url:
+            return message_def_id
+    raise AssertionError(f"unknown request URL: {request.full_url}")
+
+
+class IsoPendingXsdSourceProbeTest(unittest.TestCase):
+    def test_canonical_json_bytes_rejects_non_finite_numbers(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    PROBE._canonical_json_bytes({"value": value})
+
+    def test_build_summary_records_reachable_xsd_probes_in_canonical_order(self):
+        calls = []
+        payloads = {}
+
+        def opener(request, *, timeout):
+            calls.append((request.full_url, timeout, request.headers.get("Range")))
+            message_def_id = message_def_id_for_request(request)
+            payloads[message_def_id] = schema_payload(message_def_id)
+            return FakeResponse(payloads[message_def_id])
+
+        summary = PROBE.build_summary(
+            message_def_ids=["sese.025.001.11", "colr.012.001.05"],
+            timeout_secs=1.5,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["probe_count"], 2)
+        self.assertEqual(summary["successful_probe_count"], 2)
+        self.assertEqual(
+            [probe["message_def_id"] for probe in summary["probes"]],
+            ["colr.012.001.05", "sese.025.001.11"],
+        )
+        self.assertTrue(all(probe["looks_like_xsd"] for probe in summary["probes"]))
+        self.assertTrue(all(probe["status"] == "reachable" for probe in summary["probes"]))
+        self.assertTrue(
+            all(
+                probe["sample_sha256"]
+                == PROBE.sha256_hex(payloads[probe["message_def_id"]])
+                for probe in summary["probes"]
+            )
+        )
+        self.assertTrue(
+            all(
+                probe["target_namespace"]
+                == PROBE._expected_target_namespace(probe["message_def_id"])
+                for probe in summary["probes"]
+            )
+        )
+        self.assertEqual([call[1] for call in calls], [1.5, 1.5])
+        self.assertEqual([call[2] for call in calls], ["bytes=0-127", "bytes=0-127"])
+        body = dict(summary)
+        digest = body.pop(PROBE.SUMMARY_DIGEST_FIELD)
+        self.assertEqual(digest, PROBE.sha256_hex(PROBE._canonical_json_bytes(body)))
+
+    def test_build_summary_accepts_default_namespace_xsd_marker(self):
+        payload = schema_payload("colr.012.001.05", prefix=None)
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FakeResponse(payload)
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=256,
+            opener=opener,
+        )
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["successful_probe_count"], 1)
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "reachable")
+        self.assertTrue(probe["looks_like_xsd"])
+        self.assertEqual(
+            probe["target_namespace"],
+            PROBE._expected_target_namespace("colr.012.001.05"),
+        )
+
+    def test_build_summary_accepts_commented_prefixed_xsd_root(self):
+        payload = schema_payload(
+            "colr.012.001.05",
+            prefix="xsd",
+            prolog=(
+            b"\xef\xbb\xbf<?xml version='1.0'?>\n"
+            b"<!-- generated by ISO -->\n"
+            b"<?iso-metadata ok?>\n"
+            ),
+        )
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FakeResponse(payload)
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=256,
+            opener=opener,
+        )
+
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["successful_probe_count"], 1)
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "reachable")
+        self.assertTrue(probe["looks_like_xsd"])
+        self.assertEqual(
+            probe["target_namespace"],
+            PROBE._expected_target_namespace("colr.012.001.05"),
+        )
+
+    def test_build_summary_records_wrong_target_namespace_as_unexpected(self):
+        payload = schema_payload("sese.025.001.11")
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FakeResponse(payload)
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=256,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["successful_probe_count"], 0)
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "unexpected")
+        self.assertEqual(
+            probe["target_namespace"],
+            PROBE._expected_target_namespace("sese.025.001.11"),
+        )
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertIsNone(probe["error_kind"])
+
+    def test_build_summary_omits_unsafe_target_namespace_metadata(self):
+        hidden = "probe-target-namespace-secret"
+        payload = (
+            b"<?xml version='1.0'?>"
+            b"<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema' "
+            b"targetNamespace='urn:iso:std:iso:20022:tech:xsd:client_secret="
+            + hidden.encode("utf-8")
+            + b"'/>"
+        )
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FakeResponse(payload)
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=512,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "unexpected")
+        self.assertIsNone(probe["target_namespace"])
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_records_non_xsd_success_response_as_unexpected(self):
+        payload = b"<html>not an XSD schema</html>"
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FakeResponse(payload, status=200, content_type="text/html")
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=256,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["successful_probe_count"], 0)
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "unexpected")
+        self.assertEqual(probe["http_status"], 200)
+        self.assertEqual(probe["content_type"], "text/html")
+        self.assertEqual(probe["downloaded_bytes"], len(payload))
+        self.assertEqual(probe["sample_sha256"], PROBE.sha256_hex(payload))
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertIsNone(probe["error_kind"])
+
+    def test_build_summary_records_xml_declaration_without_schema_as_unexpected(self):
+        payload = b"<?xml version='1.0'?><Document/>"
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FakeResponse(payload, status=200, content_type="application/xml")
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["successful_probe_count"], 0)
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "unexpected")
+        self.assertEqual(probe["http_status"], 200)
+        self.assertEqual(probe["downloaded_bytes"], len(payload))
+        self.assertEqual(probe["sample_sha256"], PROBE.sha256_hex(payload))
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertIsNone(probe["error_kind"])
+
+    def test_build_summary_rejects_embedded_or_unbound_schema_markers(self):
+        cases = (
+            (
+                "embedded-in-html",
+                b"<html><pre><xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'/></pre></html>",
+            ),
+            (
+                "nested-in-document",
+                b"<?xml version='1.0'?><Document><xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'/></Document>",
+            ),
+            (
+                "missing-prefix-namespace",
+                b"<?xml version='1.0'?><xs:schema/>",
+            ),
+            (
+                "wrong-prefix-namespace",
+                b"<?xml version='1.0'?><xs:schema xmlns:xs='urn:not-xsd'/>",
+            ),
+            (
+                "schema-substring",
+                b"<?xml version='1.0'?><xs:schematic xmlns:xs='http://www.w3.org/2001/XMLSchema'/>",
+            ),
+        )
+        for name, payload in cases:
+            with self.subTest(name=name):
+                def opener(_request, *, timeout):
+                    self.assertEqual(timeout, 1.0)
+                    return FakeResponse(payload, status=200, content_type="application/xml")
+
+                summary = PROBE.build_summary(
+                    message_def_ids=["colr.012.001.05"],
+                    timeout_secs=1.0,
+                    max_bytes=256,
+                    opener=opener,
+                )
+
+                self.assertFalse(summary["ok"])
+                self.assertEqual(summary["successful_probe_count"], 0)
+                probe = summary["probes"][0]
+                self.assertEqual(probe["status"], "unexpected")
+                self.assertEqual(probe["http_status"], 200)
+                self.assertEqual(probe["downloaded_bytes"], len(payload))
+                self.assertEqual(probe["sample_sha256"], PROBE.sha256_hex(payload))
+                self.assertFalse(probe["looks_like_xsd"])
+                self.assertIsNone(probe["error_kind"])
+
+    def test_build_summary_records_empty_success_response_as_network_error(self):
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FakeResponse(b"", status=204, content_type="text/plain")
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["successful_probe_count"], 0)
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "network_error")
+        self.assertIsNone(probe["http_status"])
+        self.assertIsNone(probe["content_type"])
+        self.assertEqual(probe["downloaded_bytes"], 0)
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertFalse(probe["truncated"])
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertEqual(probe["error_kind"], "NetworkError")
+
+    def test_build_summary_records_http_error_response_without_sample(self):
+        payload = (
+            b"<?xml version='1.0'?>"
+            b"<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'/>"
+        )
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FakeResponse(payload, status=503, content_type="application/xml")
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["successful_probe_count"], 0)
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "http_error")
+        self.assertEqual(probe["http_status"], 503)
+        self.assertEqual(probe["content_type"], "application/xml")
+        self.assertEqual(probe["downloaded_bytes"], 0)
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertFalse(probe["truncated"])
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertEqual(probe["error_kind"], "HTTPError")
+
+    def test_build_summary_rejects_redirect_xsd_response_without_sample(self):
+        hidden = "redirect-xsd-secret"
+        payload = (
+            b"<?xml version='1.0'?>"
+            b"<!-- token="
+            + hidden.encode("utf-8")
+            + b" -->"
+            + schema_payload("colr.012.001.05", prolog=b"")
+        )
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FakeResponse(payload, status=302, content_type="application/xml")
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=256,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["successful_probe_count"], 0)
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "network_error")
+        self.assertIsNone(probe["http_status"])
+        self.assertIsNone(probe["content_type"])
+        self.assertEqual(probe["downloaded_bytes"], 0)
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertFalse(probe["truncated"])
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_hashes_only_the_bounded_download_sample(self):
+        payload = (
+            b"<?xml version='1.0'?>"
+            b"<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'/>"
+        )
+        cases = (
+            ("bytes", payload, payload[:8]),
+            ("bytearray", bytearray(payload), payload[:8]),
+            ("memoryview", memoryview(payload), payload[:8]),
+            (
+                "wide-memoryview",
+                memoryview(array.array("H", [0x4142] * 16)),
+                memoryview(array.array("H", [0x4142] * 16)).cast("B")[:8].tobytes(),
+            ),
+        )
+        for name, returned, expected_sample in cases:
+            with self.subTest(name=name):
+                def opener(_request, *, timeout):
+                    self.assertEqual(timeout, 1.0)
+                    return FakeResponse(returned)
+
+                summary = PROBE.build_summary(
+                    message_def_ids=["colr.012.001.05"],
+                    timeout_secs=1.0,
+                    max_bytes=8,
+                    opener=opener,
+                )
+
+                probe = summary["probes"][0]
+                self.assertEqual(probe["downloaded_bytes"], 8)
+                self.assertTrue(probe["truncated"])
+                self.assertEqual(
+                    probe["sample_sha256"],
+                    PROBE.sha256_hex(expected_sample),
+                )
+                self.assertEqual(probe["status"], "unexpected")
+                self.assertFalse(probe["looks_like_xsd"])
+
+    def test_build_summary_rejects_hostile_bytes_subclasses_without_archiving(self):
+        hidden = "probe-hostile-bytes-secret"
+
+        class HostileBytes(bytes):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytes_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytes_len={hidden}")
+
+        class HostileBytearray(bytearray):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytearray_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytearray_len={hidden}")
+
+        cases = (
+            ("bytes-subclass", HostileBytes(b"<?xml version='1.0'?>")),
+            ("bytearray-subclass", HostileBytearray(b"<?xml version='1.0'?>")),
+        )
+        for name, payload in cases:
+            with self.subTest(name=name):
+                def opener(_request, *, timeout):
+                    self.assertEqual(timeout, 1.0)
+                    return FakeResponse(payload)
+
+                summary = PROBE.build_summary(
+                    message_def_ids=["colr.012.001.05"],
+                    timeout_secs=1.0,
+                    max_bytes=128,
+                    opener=opener,
+                )
+
+                self.assertFalse(summary["ok"])
+                self.assertEqual(summary["successful_probe_count"], 0)
+                probe = summary["probes"][0]
+                self.assertEqual(probe["status"], "network_error")
+                self.assertIsNone(probe["http_status"])
+                self.assertIsNone(probe["content_type"])
+                self.assertEqual(probe["downloaded_bytes"], 0)
+                self.assertIsNone(probe["sample_sha256"])
+                self.assertFalse(probe["truncated"])
+                self.assertFalse(probe["looks_like_xsd"])
+                self.assertEqual(probe["error_kind"], "NetworkError")
+                self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_records_timeout_without_echoing_error_details(self):
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 0.25)
+            raise TimeoutError("token=probe-secret should not be archived")
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=0.25,
+            max_bytes=64,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        self.assertEqual(summary["successful_probe_count"], 0)
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "timeout")
+        self.assertEqual(probe["error_kind"], "TimeoutError")
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertNotIn("probe-secret", json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_normalizes_malformed_read_output_without_archiving(self):
+        hidden = "probe-read-secret"
+        cases = (
+            ("text", f"<?xml version='1.0'?><Document token='{hidden}'/>"),
+            ("object", {"token": hidden}),
+        )
+        for name, payload in cases:
+            with self.subTest(name=name):
+                def opener(_request, *, timeout):
+                    self.assertEqual(timeout, 1.0)
+                    return FakeResponse(payload)
+
+                summary = PROBE.build_summary(
+                    message_def_ids=["colr.012.001.05"],
+                    timeout_secs=1.0,
+                    max_bytes=128,
+                    opener=opener,
+                )
+
+                self.assertFalse(summary["ok"])
+                self.assertEqual(summary["successful_probe_count"], 0)
+                probe = summary["probes"][0]
+                self.assertEqual(probe["status"], "network_error")
+                self.assertIsNone(probe["http_status"])
+                self.assertIsNone(probe["content_type"])
+                self.assertEqual(probe["downloaded_bytes"], 0)
+                self.assertIsNone(probe["sample_sha256"])
+                self.assertFalse(probe["truncated"])
+                self.assertFalse(probe["looks_like_xsd"])
+                self.assertEqual(probe["error_kind"], "NetworkError")
+                self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_normalizes_stream_read_failure_without_echo(self):
+        hidden = "probe-read-failure-secret"
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FailingReadResponse(
+                http.client.IncompleteRead(f"token={hidden}".encode("utf-8"))
+            )
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "network_error")
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_normalizes_runtime_read_failure_without_echo(self):
+        hidden = "probe-runtime-read-secret"
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FailingReadResponse(RuntimeError(f"token={hidden}"))
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "network_error")
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_normalizes_type_error_read_failure_without_echo(self):
+        hidden = "probe-type-read-secret"
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FailingReadResponse(TypeError(f"token={hidden}"))
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "network_error")
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_normalizes_network_error_kind_without_echo(self):
+        hidden = "probe-network-secret"
+        SecretNamedOSError = type(f"Token{hidden.replace('-', '')}Error", (OSError,), {})
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 0.25)
+            raise SecretNamedOSError(f"token={hidden} should not be archived")
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=0.25,
+            max_bytes=64,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "network_error")
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        self.assertIsNone(probe["sample_sha256"])
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+        self.assertNotIn("TokenprobenetworksecretError", encoded_summary)
+
+    def test_build_summary_normalizes_opener_runtime_failure_without_echo(self):
+        hidden = "probe-opener-runtime-secret"
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 0.25)
+            raise RuntimeError(f"token={hidden} should not be archived")
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=0.25,
+            max_bytes=64,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "network_error")
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_normalizes_opener_type_error_without_echo(self):
+        hidden = "probe-opener-type-secret"
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 0.25)
+            raise TypeError(f"client_secret={hidden}")
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=0.25,
+            max_bytes=64,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "network_error")
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_normalizes_context_enter_failure_without_echo(self):
+        hidden = "probe-context-enter-secret"
+
+        class FailingEnterResponse:
+            def __enter__(self):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FailingEnterResponse()
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=64,
+            opener=opener,
+        )
+
+        self.assertFalse(summary["ok"])
+        probe = summary["probes"][0]
+        self.assertEqual(probe["status"], "network_error")
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_ignores_context_exit_failure_without_echo(self):
+        payload = schema_payload("colr.012.001.05")
+        hidden = "probe-context-exit-secret"
+
+        class FailingExitResponse(FakeResponse):
+            def __exit__(self, exc_type, exc, tb):
+                raise RuntimeError(f"client_secret={hidden}")
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FailingExitResponse(payload, status=200)
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        probe = summary["probes"][0]
+        self.assertTrue(summary["ok"])
+        self.assertEqual(probe["status"], "reachable")
+        self.assertEqual(probe["error_kind"], None)
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+
+    def test_build_summary_ignores_response_close_failure_without_echo(self):
+        payload = schema_payload("colr.012.001.05")
+        hidden = "probe-close-secret"
+
+        class CloseOnlyResponse:
+            status = 200
+            headers = FakeHeaders({"content-type": "application/xml"})
+
+            def read(self, _size):
+                return payload
+
+            def close(self):
+                raise RuntimeError(f"token={hidden}")
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return CloseOnlyResponse()
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        probe = summary["probes"][0]
+        self.assertTrue(summary["ok"])
+        self.assertEqual(probe["status"], "reachable")
+        self.assertEqual(probe["error_kind"], None)
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+
+    def test_build_summary_ignores_response_close_accessor_failure_without_echo(self):
+        payload = schema_payload("colr.012.001.05")
+        hidden = "probe-close-access-secret"
+
+        class CloseAccessorFailureResponse:
+            status = 200
+            headers = FakeHeaders({"content-type": "application/xml"})
+
+            def read(self, _size):
+                return payload
+
+            @property
+            def close(self):
+                raise RuntimeError(f"password={hidden}")
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return CloseAccessorFailureResponse()
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        probe = summary["probes"][0]
+        self.assertTrue(summary["ok"])
+        self.assertEqual(probe["status"], "reachable")
+        self.assertEqual(probe["error_kind"], None)
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+
+    def test_build_summary_normalizes_noncallable_context_enter_without_echo(self):
+        hidden = "probe-noncallable-enter-secret"
+
+        class NoncallableEnterResponse:
+            __enter__ = f"token={hidden}"
+            status = 200
+            headers = FakeHeaders({"content-type": "application/xml"})
+
+            def read(self, _size):
+                raise RuntimeError("read should not run without a callable enter")
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return NoncallableEnterResponse()
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        probe = summary["probes"][0]
+        self.assertFalse(summary["ok"])
+        self.assertEqual(probe["status"], "network_error")
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+
+    def test_build_summary_omits_unsafe_content_type_metadata(self):
+        payload = schema_payload("colr.012.001.05")
+        hidden = "probe-content-secret"
+        cases = (
+            ("control", "application/xml\nx-leak"),
+            ("non-ascii", "application/xml;\u202ehidden"),
+            ("padded", " application/xml"),
+            ("secret", f"application/xml; token={hidden}"),
+            ("overlong", "application/" + ("x" * PROBE.MAX_CONTENT_TYPE_CHARS)),
+        )
+        for name, content_type in cases:
+            with self.subTest(name=name):
+                def opener(_request, *, timeout):
+                    return FakeResponse(payload, content_type=content_type)
+
+                summary = PROBE.build_summary(
+                    message_def_ids=["colr.012.001.05"],
+                    timeout_secs=1.0,
+                    max_bytes=128,
+                    opener=opener,
+                )
+
+                probe = summary["probes"][0]
+                self.assertTrue(summary["ok"])
+                self.assertIsNone(probe["content_type"])
+                self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_omits_hostile_content_type_without_failing_probe(self):
+        payload = schema_payload("colr.012.001.05")
+        hidden = "probe-content-type-normalize-secret"
+
+        class StripFailingContentType(str):
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"token={hidden}")
+
+        class OsFailingContentType(str):
+            def strip(self, *_args, **_kwargs):
+                raise OSError(5, f"token={hidden}")
+
+        class IterFailingContentType(str):
+            def __iter__(self):
+                raise RuntimeError(f"password={hidden}")
+
+        class UnexpectedFailingContentType(str):
+            def __iter__(self):
+                raise KeyError(f"client_secret={hidden}")
+
+        cases = (
+            ("strip", StripFailingContentType("application/xml")),
+            ("os", OsFailingContentType("application/xml")),
+            ("iter", IterFailingContentType("application/xml")),
+            ("unexpected", UnexpectedFailingContentType("application/xml")),
+        )
+        for name, content_type in cases:
+            with self.subTest(name=name):
+                def opener(_request, *, timeout):
+                    self.assertEqual(timeout, 1.0)
+                    return FakeResponse(payload, content_type=content_type)
+
+                summary = PROBE.build_summary(
+                    message_def_ids=["colr.012.001.05"],
+                    timeout_secs=1.0,
+                    max_bytes=128,
+                    opener=opener,
+                )
+
+                probe = summary["probes"][0]
+                self.assertTrue(summary["ok"])
+                self.assertEqual(probe["status"], "reachable")
+                self.assertIsNone(probe["content_type"])
+                self.assertEqual(probe["sample_sha256"], PROBE.sha256_hex(payload))
+                self.assertNotIn(hidden, json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_omits_content_type_when_header_access_fails(self):
+        payload = schema_payload("colr.012.001.05")
+        hidden = "probe-header-access-secret"
+
+        class FailingHeaders:
+            def get_content_type(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def get(self, _name):
+                raise RuntimeError(f"password={hidden}")
+
+        class FailingHeaderResponse(FakeResponse):
+            def __init__(self):
+                super().__init__(payload, status=200)
+                self.headers = FailingHeaders()
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FailingHeaderResponse()
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        probe = summary["probes"][0]
+        self.assertTrue(summary["ok"])
+        self.assertEqual(probe["status"], "reachable")
+        self.assertIsNone(probe["content_type"])
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+
+    def test_build_summary_omits_content_type_when_headers_attribute_fails(self):
+        payload = schema_payload("colr.012.001.05")
+        hidden = "probe-headers-attribute-secret"
+
+        class FailingHeadersAttributeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            @property
+            def headers(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def read(self, _size):
+                return payload
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FailingHeadersAttributeResponse()
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        probe = summary["probes"][0]
+        self.assertTrue(summary["ok"])
+        self.assertEqual(probe["status"], "reachable")
+        self.assertIsNone(probe["content_type"])
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+
+    def test_build_summary_rejects_noncanonical_http_status_metadata(self):
+        payload = (
+            b"<?xml version='1.0'?>"
+            b"<xs:schema xmlns:xs='http://www.w3.org/2001/XMLSchema'/>"
+        )
+        for status in (True, "206", 99, 600):
+            with self.subTest(status=status):
+                def opener(_request, *, timeout):
+                    return FakeResponse(payload, status=status)
+
+                summary = PROBE.build_summary(
+                    message_def_ids=["colr.012.001.05"],
+                    timeout_secs=1.0,
+                    max_bytes=128,
+                    opener=opener,
+                )
+
+                probe = summary["probes"][0]
+                self.assertFalse(summary["ok"])
+                self.assertEqual(probe["status"], "network_error")
+                self.assertIsNone(probe["http_status"])
+                self.assertIsNone(probe["content_type"])
+                self.assertEqual(probe["downloaded_bytes"], 0)
+                self.assertIsNone(probe["sample_sha256"])
+                self.assertFalse(probe["looks_like_xsd"])
+                self.assertEqual(probe["error_kind"], "NetworkError")
+
+    def test_build_summary_normalizes_status_accessor_failure(self):
+        hidden = "probe-status-access-secret"
+
+        class FailingStatusResponse:
+            headers = FakeHeaders({"content-type": "application/xml"})
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            @property
+            def status(self):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def getcode(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def read(self, _size):
+                raise RuntimeError("read should not run without a status")
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            return FailingStatusResponse()
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        probe = summary["probes"][0]
+        self.assertFalse(summary["ok"])
+        self.assertEqual(probe["status"], "network_error")
+        self.assertIsNone(probe["http_status"])
+        self.assertIsNone(probe["content_type"])
+        self.assertEqual(probe["downloaded_bytes"], 0)
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+
+    def test_build_summary_handles_noncanonical_http_error_status_metadata(self):
+        cases = (
+            (404, "http_error", 404, "HTTPError"),
+            (302, "network_error", None, "NetworkError"),
+            (True, "network_error", None, "NetworkError"),
+            (700, "network_error", None, "NetworkError"),
+        )
+        for code, expected_status, expected_http_status, expected_error_kind in cases:
+            with self.subTest(code=code):
+                def opener(_request, *, timeout):
+                    raise urllib.error.HTTPError(
+                        "https://www.iso20022.org/message/colr.012.001.05/download",
+                        code,
+                        "token=http-error-secret",
+                        FakeHeaders({"content-type": "application/xml; token=http-error-secret"}),
+                        None,
+                    )
+
+                summary = PROBE.build_summary(
+                    message_def_ids=["colr.012.001.05"],
+                    timeout_secs=1.0,
+                    max_bytes=128,
+                    opener=opener,
+                )
+
+                probe = summary["probes"][0]
+                self.assertFalse(summary["ok"])
+                self.assertEqual(probe["status"], expected_status)
+                self.assertEqual(probe["http_status"], expected_http_status)
+                self.assertEqual(probe["error_kind"], expected_error_kind)
+                self.assertIsNone(probe["content_type"])
+                self.assertNotIn("http-error-secret", json.dumps(summary, sort_keys=True))
+
+    def test_build_summary_normalizes_http_error_code_accessor_failure(self):
+        hidden = "probe-http-error-code-secret"
+
+        class FailingCodeHttpError(urllib.error.HTTPError):
+            def __init__(self):
+                Exception.__init__(self, f"client_secret={hidden}")
+
+            @property
+            def code(self):
+                raise RuntimeError(f"token={hidden}")
+
+            @property
+            def headers(self):
+                raise RuntimeError(f"password={hidden}")
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            raise FailingCodeHttpError()
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        probe = summary["probes"][0]
+        self.assertFalse(summary["ok"])
+        self.assertEqual(probe["status"], "network_error")
+        self.assertIsNone(probe["http_status"])
+        self.assertIsNone(probe["content_type"])
+        self.assertEqual(probe["downloaded_bytes"], 0)
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertEqual(probe["error_kind"], "NetworkError")
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+
+    def test_build_summary_omits_http_error_content_type_when_headers_fail(self):
+        hidden = "probe-http-error-header-secret"
+
+        class FailingHeadersHttpError(urllib.error.HTTPError):
+            def __init__(self):
+                Exception.__init__(self, f"token={hidden}")
+
+            @property
+            def code(self):
+                return 503
+
+            @property
+            def headers(self):
+                raise RuntimeError(f"password={hidden}")
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            raise FailingHeadersHttpError()
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        probe = summary["probes"][0]
+        self.assertFalse(summary["ok"])
+        self.assertEqual(probe["status"], "http_error")
+        self.assertEqual(probe["http_status"], 503)
+        self.assertIsNone(probe["content_type"])
+        self.assertEqual(probe["downloaded_bytes"], 0)
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertEqual(probe["error_kind"], "HTTPError")
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+
+    def test_build_summary_ignores_http_error_close_failure_without_echo(self):
+        hidden = "probe-http-error-close-secret"
+        closed = []
+
+        class FailingCloseHttpError(urllib.error.HTTPError):
+            def __init__(self):
+                Exception.__init__(self, f"token={hidden}")
+
+            @property
+            def code(self):
+                return 503
+
+            @property
+            def headers(self):
+                return FakeHeaders({"content-type": "application/xml"})
+
+            def close(self):
+                closed.append(True)
+                raise RuntimeError(f"password={hidden}")
+
+        def opener(_request, *, timeout):
+            self.assertEqual(timeout, 1.0)
+            raise FailingCloseHttpError()
+
+        summary = PROBE.build_summary(
+            message_def_ids=["colr.012.001.05"],
+            timeout_secs=1.0,
+            max_bytes=128,
+            opener=opener,
+        )
+
+        probe = summary["probes"][0]
+        self.assertEqual(closed, [True])
+        self.assertFalse(summary["ok"])
+        self.assertEqual(probe["status"], "http_error")
+        self.assertEqual(probe["http_status"], 503)
+        self.assertEqual(probe["content_type"], "application/xml")
+        self.assertEqual(probe["downloaded_bytes"], 0)
+        self.assertIsNone(probe["sample_sha256"])
+        self.assertFalse(probe["looks_like_xsd"])
+        self.assertEqual(probe["error_kind"], "HTTPError")
+        encoded_summary = json.dumps(summary, sort_keys=True)
+        self.assertNotIn(hidden, encoded_summary)
+
+    def test_selector_validation_rejects_unknown_and_duplicate_ids_without_network(self):
+        cases = (
+            (
+                ["--message-def-id", "pacs.999.001.01"],
+                "is not a known pending schema",
+            ),
+            (
+                [
+                    "--message-def-id",
+                    "colr.012.001.05",
+                    "--message-def-id",
+                    "colr.012.001.05",
+                ],
+                "duplicates --message-def-id[0]",
+            ),
+        )
+        for argv, message in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_probe(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(message, stderr)
+
+    def test_probe_limits_reject_boolean_aliases(self):
+        with self.assertRaisesRegex(PROBE.ProbeError, "positive finite number"):
+            PROBE.build_summary(timeout_secs=True)
+
+        with self.assertRaisesRegex(PROBE.ProbeError, "no larger than 300"):
+            PROBE.build_summary(timeout_secs=PROBE.MAX_TIMEOUT_SECS + 1)
+
+        with self.assertRaisesRegex(PROBE.ProbeError, "positive integer"):
+            PROBE.build_summary(max_bytes=False)
+
+    def test_direct_message_id_selector_must_be_repeatable_string_list(self):
+        with self.assertRaisesRegex(PROBE.ProbeError, "repeatable string list"):
+            PROBE.build_summary(message_def_ids="colr.012.001.05")
+
+        with self.assertRaisesRegex(PROBE.ProbeError, "repeatable string list"):
+            PROBE.build_summary(message_def_ids=True)
+
+        hidden = "probe-hostile-message-list-secret"
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+        with self.assertRaises(PROBE.ProbeError) as caught:
+            PROBE.build_summary(message_def_ids=HostileList(["colr.012.001.05"]))
+        self.assertIn("repeatable string list", str(caught.exception))
+        self.assertNotIn(hidden, str(caught.exception))
+
+        with self.assertRaisesRegex(PROBE.ProbeError, r"--message-def-id\[0\] must be a string"):
+            PROBE.build_summary(message_def_ids=[b"colr.012.001.05"])
+
+    def test_cli_text_helpers_normalize_hostile_str_subclasses_without_echo(self):
+        hidden = "probe-hostile-string-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __iter__(self):
+                raise KeyError(f"private_key={hidden}")
+
+        selected = PROBE._selected_message_ids([HostileText("colr.012.001.05")])
+        self.assertEqual(selected, ["colr.012.001.05"])
+        self.assertTrue(all(type(item) is str for item in selected))
+        timeout = PROBE._positive_float(HostileText("1"), "--timeout-secs")
+        self.assertEqual(timeout, 1.0)
+        max_bytes = PROBE._positive_int(HostileText("4096"), "--max-bytes")
+        self.assertEqual(max_bytes, 4096)
+
+        cases = (
+            (
+                "selector",
+                lambda: PROBE._selected_message_ids([HostileText("colr.012.001.05\x1b")]),
+            ),
+            (
+                "float",
+                lambda: PROBE._positive_float(HostileText("1\x1b"), "--timeout-secs"),
+            ),
+            (
+                "integer",
+                lambda: PROBE._positive_int(HostileText("4096\x1b"), "--max-bytes"),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(PROBE.ProbeError) as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+
+    def test_probe_limit_cli_rejects_non_ascii_and_padded_values_before_network(self):
+        cases = (
+            (["--timeout-secs", "１"], "must use ASCII digits"),
+            (["--timeout-secs", " 1"], "must not have surrounding whitespace"),
+            (["--timeout-secs", ".5"], "positive finite number"),
+            (["--timeout-secs", "01"], "positive finite number"),
+            (["--timeout-secs", "1e01"], "positive finite number"),
+            (["--timeout-secs", "1."], "positive finite number"),
+            (["--timeout-secs", "-0"], "positive finite number"),
+            (["--timeout-secs", "-0.0"], "positive finite number"),
+            (["--timeout-secs", "-0e0"], "positive finite number"),
+            (["--timeout-secs", "1e9999"], "positive finite number"),
+            (["--timeout-secs", "-1e9999"], "positive finite number"),
+            (["--timeout-secs=-0e0"], "positive finite number"),
+            (["--timeout-secs=1e9999"], "positive finite number"),
+            (["--timeout-secs", "301"], "no larger than 300"),
+            (["--max-bytes", "５１２"], "must use ASCII digits"),
+            (["--max-bytes", " 512"], "must not have surrounding whitespace"),
+            (["--max-bytes", "000512"], "positive integer"),
+            (["--max-bytes", "+512"], "positive integer"),
+            (["--max-bytes", "512.0"], "positive integer"),
+            (["--max-bytes", "-0"], "positive integer"),
+        )
+        for argv, message in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_probe(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(message, stderr)
+
+    def test_raw_cli_secret_material_is_rejected_before_argparse_echo(self):
+        hidden = "probe-raw-secret"
+        cases = (
+            ["token=" + hidden],
+            ["--unknown=token=" + hidden],
+            ["--summary-out", f"token={hidden}.summary.json"],
+            [f"--summary-out=token={hidden}.summary.json"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_probe(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("secret-looking material", stderr)
+                self.assertNotIn(hidden, stderr)
+
+    def test_direct_main_argv_inputs_are_normalized_before_preflight(self):
+        hidden = "token=probe-argv-secret"
+
+        class HostileArgv(list):
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __getitem__(self, _key):
+                raise RuntimeError(f"item={hidden}")
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def startswith(self, _prefix, *_args):
+                raise RuntimeError(f"startswith={hidden}")
+
+            def strip(self, *_args):
+                raise RuntimeError(f"strip={hidden}")
+
+        cases = (
+            (
+                "container",
+                HostileArgv(["--summary-out"]),
+                "argv must be a plain argument list",
+            ),
+            ("tuple", ("--summary-out",), "argv must be a plain argument list"),
+            ("non-string", [object()], "argv[0] must be a string"),
+            (
+                "hostile-string",
+                [HostileText("--summary-out")],
+                "--summary-out requires a path value",
+            ),
+        )
+        for name, argv, expected in cases:
+            with self.subTest(name=name):
+                rc, stdout, stderr = run_probe(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("probe-argv-secret", stderr)
+
+    def test_summary_out_requires_path_value_before_argparse(self):
+        cases = (
+            ["--summary-out"],
+            ["--summary-out", "--timeout-secs", "1"],
+            ["--summary-out="],
+            ["--summary-out=--timeout-secs"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_probe(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("--summary-out requires a path value", stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

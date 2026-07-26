@@ -1,0 +1,40 @@
+groups:
+  - name: ministry-transparency
+    interval: 1m
+    rules:
+      - alert: MinistryPublicationLagBreached
+        expr: max(ministry_transparency_publication_lag_seconds{environment="prod"}) > 1209600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Transparency packet is overdue"
+          description: |
+            Publication lag exceeded 14 days (value={{ printf "%.0f" $value }}s). Ensure the latest quarter is signed and uploaded.
+      - alert: MinistryAppealSlaRegression
+        expr: max(ministry_transparency_appeal_sla_miss_rate{environment="prod"}) > 0.05
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Appeal SLA miss rate above 5%"
+          description: |
+            The rolling appeal SLA miss rate crossed 5% (value={{ printf "%.2f%%" (mul $value 100) }}). Review backlog + staffing before next publication.
+      - alert: MinistryDpBudgetExhausted
+        expr: min(ministry_transparency_dp_budget_remaining{environment="prod"}) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DP budget nearly exhausted"
+          description: |
+            Only {{ printf "%.1f%%" (mul $value 100) }} of the quarterly DP budget remains. Rotate salts or refresh the privacy plan before publishing.
+      - alert: MinistryEmergencyCanonQueue
+        expr: sum(increase(ministry_transparency_denylist_emergency_total{environment="prod"}[30m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Emergency canon entries detected"
+          description: |
+            Emergency canon events were recorded during the last 30 minutes. Confirm TTLs and publish an incident summary with the transparency bundle.

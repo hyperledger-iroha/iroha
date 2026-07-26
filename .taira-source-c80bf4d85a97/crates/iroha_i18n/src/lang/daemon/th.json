@@ -1,0 +1,14 @@
+{
+  "info.welcome": "ยินดีต้อนรับสู่ Hyperledger Iroha!",
+  "error.trace_config_setup": "ไม่สามารถตั้งค่าการติดตามการกำหนดค่าได้",
+  "error.config": "เกิดข้อผิดพลาดในการกำหนดค่า!",
+  "error.logger": "ไม่สามารถเริ่มต้นระบบบันทึกเหตุการณ์ได้",
+  "error.start": "ไม่สามารถเริ่มต้น Iroha ได้",
+  "error.run": "เกิดข้อผิดพลาดระหว่างการทำงานของ Iroha",
+  "error.start_p2p": "ไม่สามารถเริ่มเครือข่าย P2P ได้",
+  "error.init_kura": "ไม่สามารถเริ่มต้น Kura (ที่เก็บบล็อก) ได้",
+  "error.start_dev_telemetry": "ไม่สามารถเริ่มบริการเทเลเมทรีสำหรับการพัฒนาได้",
+  "error.start_telemetry": "ไม่สามารถเริ่มบริการเทเลเมทรีได้",
+  "error.listen_os_signal": "ไม่สามารถตั้งค่าการรับสัญญาณจากระบบปฏิบัติการได้",
+  "error.start_torii": "ไม่สามารถเริ่ม Torii (เกตเวย์ Iroha HTTP API) ได้"
+}

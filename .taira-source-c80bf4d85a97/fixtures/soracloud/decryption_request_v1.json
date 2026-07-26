@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "request_id": "decrypt-req-0001",
+  "policy_name": "phi_threshold_policy",
+  "binding_name": "patient_records",
+  "state_key": "/state/health/patient-1",
+  "ciphertext_commitment": "hash:838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9FA0A1A3#D679",
+  "justification": "treatment continuity review",
+  "jurisdiction_tag": "us_hipaa",
+  "consent_evidence_hash": "hash:85868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9FA0A1A2A3A5#4586",
+  "requested_ttl_blocks": 120,
+  "break_glass": false,
+  "break_glass_reason": null,
+  "governance_tx_hash": "hash:8485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9FA0A1A2A3#4B1B"
+}

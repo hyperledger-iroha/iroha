@@ -1,0 +1,155 @@
+#![allow(unused)]
+
+//! This code can be used to measure memory usage of
+//! structs like `Account`, `Asset` and `Nft`.
+
+use iroha_core::prelude::*;
+use iroha_data_model::prelude::*;
+use util::*;
+
+const N: usize = 1 << 20;
+
+fn main() {
+    // measure_accounts_in_vec();
+    measure_accounts_in_world();
+    // measure_assets_in_world();
+    // measure_nfts_in_world();
+}
+
+fn measure_accounts_in_vec() {
+    let (genesis_domain, _genesis_account) = genesis_domain_and_account();
+    let domain_id = genesis_domain.id().clone();
+
+    let v = (0..N)
+        .map(|_| gen_account_in(genesis_domain.id()).0)
+        .map(|id| Account::new(id.clone()).into_account())
+        .collect::<Vec<_>>();
+    done(v);
+}
+
+fn measure_accounts_in_world() {
+    let (genesis_domain, _genesis_account) = genesis_domain_and_account();
+    let domain_id = genesis_domain.id().clone();
+
+    let accounts = (0..N)
+        .map(|_| gen_account_in(genesis_domain.id()).0)
+        .map(|id| Account::new(id.clone()).into_account());
+    let world = World::with_assets([], accounts, [], [], []);
+    done(world);
+}
+
+fn measure_assets_in_world() {
+    let (genesis_domain, _genesis_account) = genesis_domain_and_account();
+    let asset_definition_id = AssetDefinitionId::new(
+        genesis_domain.id().clone(),
+        "mandatory".parse().expect("valid asset name"),
+    );
+
+    let assets = (0..N).map(|_| gen_asset(asset_definition_id.clone()));
+    let world = World::with_assets([], [], [], assets, []);
+    done(world);
+}
+
+fn measure_nfts_in_world() {
+    let (genesis_domain, _genesis_account) = genesis_domain_and_account();
+    let owner = gen_account_in(genesis_domain.id()).0;
+
+    let nfts = (0..N).map(|_| gen_nft(&owner, genesis_domain.id()));
+    let world = World::with_assets([], [], [], [], nfts);
+    done(world);
+}
+
+fn print_world_memory_usage() {
+    macro_rules! r#gen {
+        ($($p:ident,)+) => {
+            $(
+                println!(
+                    "{}Id:  {} bytes\n{}:   {} bytes",
+                    stringify!($p),
+                    size_of::<<$p as Identifiable>::Id>(),
+                    stringify!($p),
+                    size_of::<$p>()
+                );
+            )+
+        };
+    }
+    r#gen!(Domain, Account, AssetDefinition, Asset, Nft, Role,);
+}
+
+mod util {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use iroha_core::smartcontracts::Registrable;
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::prelude::*;
+
+    static NEXT_SYNTHETIC_VALUE: AtomicU64 = AtomicU64::new(1);
+
+    fn next_synthetic_value() -> u64 {
+        NEXT_SYNTHETIC_VALUE.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn genesis_domain_and_account() -> (Domain, Account) {
+        let genesis_public_key: PublicKey =
+            "ed012003415E0E516BE83870CE5A2165605E8719216B5ECCCE4AEDFB0B2B77862B3798"
+                .parse()
+                .unwrap();
+        let genesis_account_id = AccountId::new(genesis_public_key);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let genesis_domain =
+            Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account.id);
+        (genesis_domain, genesis_account)
+    }
+
+    pub fn gen_account_in(domain: &DomainId) -> (AccountId, KeyPair) {
+        try_gen_account_in(domain).expect("memory example account key generation should succeed")
+    }
+
+    pub fn try_gen_account_in(
+        _domain: &DomainId,
+    ) -> Result<(AccountId, KeyPair), iroha_crypto::Error> {
+        let key_pair = KeyPair::try_random()?;
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        Ok((account_id, key_pair))
+    }
+
+    pub fn gen_asset(asset_definition: AssetDefinitionId) -> Asset {
+        let account_id = gen_account_in(asset_definition.domain()).0;
+        let asset_id = AssetId::new(asset_definition, account_id);
+        let value = next_synthetic_value();
+        Asset::new(asset_id, value)
+    }
+
+    pub fn gen_nft(owner: &AccountId, domain: &DomainId) -> Nft {
+        let value = next_synthetic_value();
+        let nft_id = format!("n{value}${domain}").parse().unwrap();
+        Nft::new(nft_id, Metadata::default()).build(owner)
+    }
+
+    pub fn done<T>(value: T) {
+        eprintln!("Done");
+        std::thread::sleep(std::time::Duration::from_secs(86400));
+        std::hint::black_box(value);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use iroha_crypto::Algorithm;
+
+        use super::*;
+
+        #[test]
+        fn try_gen_account_in_uses_checked_default_generation() {
+            let domain = DomainId::try_new("wonderland", "universal").expect("domain");
+            let (_account, key_pair) =
+                try_gen_account_in(&domain).expect("memory example account key pair");
+            assert_eq!(
+                key_pair
+                    .public_key()
+                    .try_algorithm()
+                    .expect("memory example public-key algorithm"),
+                Algorithm::default()
+            );
+        }
+    }
+}

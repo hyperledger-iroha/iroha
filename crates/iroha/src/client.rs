@@ -57,9 +57,11 @@ pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, ValidationFeeCurrentPolicyProofRequestV1,
-    ValidationFeeCurrentPolicyProofV1, ValidationFeeProposalDetailV1,
-    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
-    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalListV1,
+    ValidationFeeCurrentPolicyProofV1, ValidationFeePlainBallotDirectionV1,
+    ValidationFeePlainBallotDraftRequestV1, ValidationFeePlainBallotDraftResponseV1,
+    ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
+    ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
+    ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListV1,
     ValidationFeeProposalRecordV1, ValidationFeeVerifiedPolicyProjectionV1,
 };
 use iroha_torii_shared::{
@@ -2600,6 +2602,75 @@ fn validate_validation_fee_draft_response(
     {
         return Err(eyre!(
             "validation-fee draft returned a different native instruction"
+        ));
+    }
+    Ok(instruction)
+}
+
+fn validate_validation_fee_plain_ballot_draft_response(
+    response: &ValidationFeePlainBallotDraftResponseV1,
+    proposal_id: &str,
+    request: &ValidationFeePlainBallotDraftRequestV1,
+) -> Result<InstructionBox> {
+    if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1
+        || response.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1
+    {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot draft has an unsupported version"
+        ));
+    }
+    if response.proposal_id != proposal_id
+        || response.owner != request.owner
+        || response.direction != request.direction
+    {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot draft differs from the requested proposal, owner, or direction"
+        ));
+    }
+    let [draft] = response.tx_instructions.as_slice() else {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot draft must contain exactly one instruction"
+        ));
+    };
+    if draft.payload_hex.is_empty()
+        || draft.payload_hex.len() % 2 != 0
+        || !draft
+            .payload_hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot instruction payload must be lowercase canonical hex"
+        ));
+    }
+    let payload = hex::decode(&draft.payload_hex)
+        .wrap_err("failed to decode validation-fee PLAIN ballot draft")?;
+    let instruction = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &payload)
+        .wrap_err("failed to decode native validation-fee PLAIN ballot instruction")?;
+    let ballot = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::governance::CastPlainBallot>()
+        .ok_or_else(|| {
+            eyre!("validation-fee PLAIN ballot draft returned a different instruction type")
+        })?;
+    if ballot.referendum_id != proposal_id
+        || ballot.owner != request.owner
+        || ballot.amount.is_zero()
+        || ballot.duration_blocks == 0
+        || ballot.direction != request.direction.native_code()
+        || response.amount != ballot.amount.to_string()
+        || response.duration_blocks != ballot.duration_blocks.to_string()
+    {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot response differs from its exact native instruction"
+        ));
+    }
+    let (wire_id, canonical_payload) =
+        iroha_data_model::isi::framed_instruction_payload(&instruction)
+            .ok_or_else(|| eyre!("validation-fee PLAIN ballot instruction is not registered"))?;
+    if wire_id != draft.wire_id || hex::encode(canonical_payload) != draft.payload_hex {
+        return Err(eyre!(
+            "validation-fee PLAIN ballot instruction is not canonically framed"
         ));
     }
     Ok(instruction)
@@ -19510,6 +19581,51 @@ impl Client {
         self.submit(instruction, fee_payment)
     }
 
+    /// Draft one exact proposal-bound validation-fee PLAIN ballot for local signing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed proposal id, unsupported request
+    /// version, transport/HTTP/JSON failure, or a response whose owner,
+    /// direction, amount, duration, or native instruction differs from the
+    /// exact requested ballot.
+    pub fn post_validation_fee_plain_ballot_draft(
+        &self,
+        proposal_id: &str,
+        request: &ValidationFeePlainBallotDraftRequestV1,
+    ) -> Result<ValidationFeePlainBallotDraftResponseV1> {
+        Self::require_lower_hex_32(proposal_id, "proposal_id")?;
+        if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1 {
+            return Err(eyre!(
+                "validation-fee PLAIN ballot draft has an unsupported version"
+            ));
+        }
+        let path =
+            torii_uri::VALIDATION_FEE_PLAIN_BALLOT_DRAFT.replace("{proposal_id}", proposal_id);
+        let url = join_torii_url(&self.torii_url, &path);
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode validation-fee PLAIN ballot draft")?;
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES)
+                .body(body),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to draft validation-fee PLAIN ballot: {} {}",
+                response.status(),
+                std::str::from_utf8(response.body()).unwrap_or("")
+            ));
+        }
+        let result: ValidationFeePlainBallotDraftResponseV1 =
+            norito::json::from_slice(response.body())
+                .wrap_err("failed to decode validation-fee PLAIN ballot draft response")?;
+        let _ = validate_validation_fee_plain_ballot_draft_response(&result, proposal_id, request)?;
+        Ok(result)
+    }
+
     /// POST `/v1/gov/ballots/zk` with a JSON DTO body.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -24492,6 +24608,108 @@ mod tests {
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
     const TEST_WORKER_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    fn validation_fee_plain_ballot_draft_fixture() -> (
+        String,
+        ValidationFeePlainBallotDraftRequestV1,
+        ValidationFeePlainBallotDraftResponseV1,
+    ) {
+        let proposal_id = "11".repeat(32);
+        let request = ValidationFeePlainBallotDraftRequestV1 {
+            version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
+            owner: ALICE_ID.clone(),
+            direction: ValidationFeePlainBallotDirectionV1::Nay,
+        };
+        let ballot = iroha_data_model::isi::governance::CastPlainBallot {
+            referendum_id: proposal_id.clone(),
+            owner: request.owner.clone(),
+            amount: 150_u64.into(),
+            duration_blocks: 3_600,
+            direction: request.direction.native_code(),
+        };
+        let instruction: InstructionBox = ballot.into();
+        let (wire_id, payload) = iroha_data_model::isi::framed_instruction_payload(&instruction)
+            .expect("registered CastPlainBallot instruction");
+        let response = ValidationFeePlainBallotDraftResponseV1 {
+            version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
+            proposal_id: proposal_id.clone(),
+            owner: request.owner.clone(),
+            amount: "150".to_owned(),
+            duration_blocks: "3600".to_owned(),
+            direction: request.direction,
+            tx_instructions: vec![ValidationFeeProposalInstructionDraftV1 {
+                wire_id: wire_id.to_owned(),
+                payload_hex: hex::encode(payload),
+            }],
+        };
+        (proposal_id, request, response)
+    }
+
+    #[test]
+    fn validation_fee_plain_ballot_draft_client_uses_typed_route_and_exact_body() {
+        let (proposal_id, request, expected) = validation_fee_plain_ballot_draft_fixture();
+        let response_json =
+            norito::json::to_json(&expected).expect("encode exact PLAIN ballot response");
+        let response = json_response(StatusCode::OK, &response_json);
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let actual = with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url())
+                .post_validation_fee_plain_ballot_draft(&proposal_id, &request)
+        })
+        .expect("typed PLAIN ballot draft");
+        assert_eq!(actual, expected);
+
+        let snapshot = store.lock().expect("snapshot lock")[0].clone();
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft")
+        );
+        assert_eq!(snapshot.url.query(), None);
+        assert_eq!(
+            snapshot.max_response_bytes,
+            VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES
+        );
+        assert_single_accept_header(&snapshot, APPLICATION_JSON);
+        let submitted: ValidationFeePlainBallotDraftRequestV1 =
+            norito::json::from_slice(&snapshot.body).expect("decode exact draft request");
+        assert_eq!(submitted, request);
+    }
+
+    #[test]
+    fn validation_fee_plain_ballot_draft_rejects_response_substitution() {
+        let (proposal_id, request, response) = validation_fee_plain_ballot_draft_fixture();
+        validate_validation_fee_plain_ballot_draft_response(&response, &proposal_id, &request)
+            .expect("exact response");
+
+        let mut candidate = response.clone();
+        candidate.amount = "151".to_owned();
+        assert!(
+            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
+                .is_err()
+        );
+
+        candidate = response.clone();
+        candidate.duration_blocks = "03600".to_owned();
+        assert!(
+            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
+                .is_err()
+        );
+
+        candidate = response.clone();
+        candidate.direction = ValidationFeePlainBallotDirectionV1::Aye;
+        assert!(
+            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
+                .is_err()
+        );
+
+        candidate = response;
+        candidate.tx_instructions[0].payload_hex.push('0');
+        assert!(
+            validate_validation_fee_plain_ballot_draft_response(&candidate, &proposal_id, &request)
+                .is_err()
+        );
+    }
 
     #[test]
     fn validation_fee_governance_integer_strings_are_canonical_and_full_width() {

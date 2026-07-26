@@ -1,0 +1,166 @@
+[package]
+name = "iroha_data_model"
+autotests = false
+autobins = false
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["governance", "json", "pqc"]
+bridge = []
+# Retained for compatibility dependencies; no additional behavior is gated by `std` in this crate.
+std = []
+# Enable JSON-related functionality
+json = [
+    "iroha_version/json",
+    "iroha_primitives/json",
+    "iroha_crypto/json",
+    "norito/json",
+    "norito_derive",
+    "mv",
+]
+test-fixtures = []
+gost = ["iroha_crypto/gost"]
+bls = ["iroha_crypto/bls"]
+sm = ["iroha_crypto/sm"]
+# Compile the ABI-21 Kagemusha recursive backend as production-promoted.
+# This is deliberately non-default and is selected by the shipping bridge's
+# `privacy-production-enabled` feature; runtime readiness still requires an
+# authenticated eight-artifact release installation.
+kagemusha-production-enabled = []
+# Enable API for HTTP requests. Should be activated for HTTP clients
+http = []
+# Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)
+#ffi_import = ["iroha_ffi", "iroha_primitives/ffi_import", "iroha_crypto/ffi_import"]
+
+# Expose FFI API for dynamic linking (Internal use only)
+ffi_export = ["iroha_ffi", "iroha_primitives/ffi_export", "iroha_crypto/ffi_export"]
+# Expose API for mutating structures (Internal use only)
+transparent_api = ["iroha_data_model_derive/transparent_api"]
+# Enable fault injection to simulate malicious data tampering during testing.
+fault_injection = []
+fast_dsl = []
+trybuild-tests = ["dep:trybuild"]
+bench = []
+ids_projection = []
+# Authenticate governed registries against complete Parliament proposal preimages.
+governance = []
+pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
+zk-ballot = []
+# Recognize `packed-struct` used by derive macros in dependencies.
+# Not enabled by default; declared to silence unexpected-cfg warnings.
+packed-struct = []
+
+## The lightweight query DSL is now the default and unconditional.
+
+[dependencies]
+iroha_data_model_derive = { path = "../iroha_data_model_derive" }
+
+iroha_primitives = { workspace = true }
+iroha_crypto = { workspace = true }
+iroha_macro = { workspace = true }
+error-stack = { workspace = true }
+iroha_version = { workspace = true, features = ["derive"] }
+iroha_schema = { workspace = true }
+iroha_ffi = { workspace = true, optional = true }
+iroha_zkp_halo2 = { workspace = true }
+hex = { workspace = true }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+
+derive_more = { workspace = true, features = ["as_ref", "display", "debug", "constructor", "from_str", "from", "into", "try_into", "deref"] }
+norito = {workspace = true}
+norito_derive = { workspace = true, optional = true }
+mv = { path = "../mv", optional = true }
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
+sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
+thiserror = { workspace = true }
+displaydoc = { workspace = true, features = ["std"] }
+getset = { workspace = true }
+derive-where = { workspace = true }
+base64 = { workspace = true, features = ["alloc"] }
+bech32 = { workspace = true }
+nonzero_ext = { workspace = true }
+rustc-hash = { workspace = true }
+icu_normalizer = { version = "2.1.1", default-features = false, features = ["compiled_data"] }
+blake2 = "0.10.6"
+blake3 = { workspace = true }
+idna = { version = "1.1.0", default-features = false, features = ["std"] }
+bs58 = "0.5.1"
+time = { workspace = true }
+fastpq_isi = { path = "../fastpq_isi" }
+trybuild = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+iroha_crypto = { workspace = true, features = ["rand", "gost", "sm"] }
+hex-literal = { workspace = true }
+ivm = { path = "../ivm" }
+
+tempfile = { workspace = true }
+
+#[build-dependencies]
+# NOTE: This crate's build.rs only copies a file and does not require syn.
+# Removing syn from build-dependencies avoids compiling a heavy crate during build
+# which significantly speeds up workspace builds.
+
+[[bench]]
+name = "time_event_filter"
+harness = false
+
+
+[[bench]]
+name = "decode_registry"
+harness = false
+
+[[bench]]
+name = "enum_vs_trait"
+harness = false
+
+[[bench]]
+name = "chain_wire"
+harness = false
+
+[[test]]
+name = "ui"
+required-features = ["trybuild-tests"]
+
+[[bin]]
+name = "axt_fixtures"
+path = "src/bin/axt_fixtures.rs"
+required-features = ["test-fixtures"]
+
+[[bin]]
+name = "qr_stream_fixtures"
+path = "src/bin/qr_stream_fixtures.rs"
+required-features = ["test-fixtures"]
+
+[[bin]]
+name = "sumeragi_v2_wire_fixtures"
+path = "src/bin/sumeragi_v2_wire_fixtures.rs"
+
+[[bin]]
+name = "cbsi_offline_vectors"
+path = "src/bin/cbsi_offline_vectors.rs"
+required-features = ["test-fixtures", "transparent_api"]
+
+[[bin]]
+name = "cancel_asset_lock_fixtures"
+path = "src/bin/cancel_asset_lock_fixtures.rs"
+required-features = ["test-fixtures", "json"]
+
+# Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
+
+[[test]]
+name = "iroha_data_model_group_01"
+path = "tests/grouped/group_01.rs"
+
+[[test]]
+name = "iroha_data_model_group_02"
+path = "tests/grouped/group_02.rs"

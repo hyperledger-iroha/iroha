@@ -1,0 +1,84 @@
+{
+  "checks": [
+    {
+      "details": {
+        "counts": {
+          "brownout": 2400.0,
+          "completed": 98500.0,
+          "downgrade": 600.0,
+          "total": 101500.0
+        },
+        "success_ratio": 0.9704433497536946,
+        "threshold": 0.95
+      },
+      "name": "circuit_success_ratio",
+      "passed": true
+    },
+    {
+      "details": {
+        "brownout_ratio": 0.005,
+        "counts": {
+          "brownout": 120.0,
+          "total": 24000.0
+        },
+        "threshold": 0.01
+      },
+      "name": "fetch_brownout_ratio",
+      "passed": true
+    },
+    {
+      "details": {
+        "categories": [
+          {
+            "category": "anon_guard_pq",
+            "difference": 0.001882845188284521,
+            "expected_ratio": 0.55,
+            "observed_count": 13100.0,
+            "observed_ratio": 0.5481171548117155
+          },
+          {
+            "category": "anon_majority_pq",
+            "difference": 0.0012552301255230325,
+            "expected_ratio": 0.3,
+            "observed_count": 7200.0,
+            "observed_ratio": 0.301255230125523
+          },
+          {
+            "category": "anon_strict_pq",
+            "difference": 0.0006276150627615162,
+            "expected_ratio": 0.15,
+            "observed_count": 3600.0,
+            "observed_ratio": 0.1506276150627615
+          }
+        ],
+        "max_deviation": 0.001882845188284521,
+        "threshold": 0.1,
+        "total_observed": 23900.0,
+        "unexpected_categories": []
+      },
+      "name": "gar_mix_variance",
+      "passed": true
+    },
+    {
+      "details": {
+        "attempts": 15000.0,
+        "p95_seconds": 2.6,
+        "p95_threshold": 3.0,
+        "success_rate": 0.998,
+        "successes": 14970.0,
+        "threshold": 0.99
+      },
+      "name": "pow_success_rate",
+      "passed": true
+    },
+    {
+      "details": {
+        "p95_ms": 182.0,
+        "threshold_ms": 200.0
+      },
+      "name": "latency_p95",
+      "passed": true
+    }
+  ],
+  "status": "pass"
+}

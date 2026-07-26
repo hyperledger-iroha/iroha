@@ -1,0 +1,430 @@
+name: Privacy SDK Guard
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/pr_privacy_sdk_guard.yml"
+      - "ci/check_connect_norito_bridge_header.sh"
+      - "ci/check_no_tracked_python_bytecode.sh"
+      - "ci/check_privacy_csharp_sdk.sh"
+      - "ci/check_privacy_js_sdk.sh"
+      - "ci/check_privacy_jvm_sdk.sh"
+      - "ci/check_privacy_python_sdk.sh"
+      - "ci/check_privacy_sdk_guard.sh"
+      - "ci/check_privacy_swift_sdk.sh"
+      - "scripts/check_mobile_sdk_artifacts.sh"
+      - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "crates/connect_norito_bridge/Cargo.toml"
+      - "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+      - "crates/connect_norito_bridge/include/NoritoBridge.h"
+      - "crates/connect_norito_bridge/src/lib.rs"
+      - "crates/iroha_js_host/Cargo.toml"
+      - "crates/iroha_js_host/src/lib.rs"
+      - "crates/iroha_data_model/src/zk.rs"
+      - "python/iroha_python/iroha_python_rs/Cargo.toml"
+      - "python/iroha_python/iroha_python_rs/src/lib.rs"
+      - "javascript/iroha_js/src/crypto.js"
+      - "javascript/iroha_js/src/crypto.browser.js"
+      - "javascript/iroha_js/src/index.js"
+      - "javascript/iroha_js/src/instructionBuilders.js"
+      - "javascript/iroha_js/src/norito.js"
+      - "javascript/iroha_js/src/privacyAlgorithms.js"
+      - "javascript/iroha_js/dist/crypto.js"
+      - "javascript/iroha_js/dist/crypto.browser.js"
+      - "javascript/iroha_js/dist/index.js"
+      - "javascript/iroha_js/dist/instructionBuilders.js"
+      - "javascript/iroha_js/dist/norito.js"
+      - "javascript/iroha_js/dist/privacyAlgorithms.js"
+      - "javascript/iroha_js/index.d.ts"
+      - "javascript/iroha_js/README.md"
+      - "javascript/iroha_js/test/privacyFfiContractParity.test.js"
+      - "javascript/iroha_js/test/privacyCatalogParity.test.js"
+      - "javascript/iroha_js/test/privacyNative.test.js"
+      - "javascript/iroha_js/test/instructionBuilders.test.js"
+      - "javascript/iroha_js/test/package_dist.test.js"
+      - "javascript/iroha_js/test/crypto.browser.test.js"
+      - "python/iroha_python/src/iroha_python/__init__.py"
+      - "python/iroha_python/src/iroha_python/crypto.py"
+      - "python/iroha_python/src/iroha_python/privacy_catalog.py"
+      - "python/iroha_python/src/iroha_python/anonymous_pgc.py"
+      - "python/iroha_python/src/iroha_python/jindo.py"
+      - "python/iroha_python/src/iroha_python/silent_threshold.py"
+      - "python/iroha_python/src/iroha_python/sis_hints.py"
+      - "python/iroha_python/src/iroha_python/vega.py"
+      - "python/iroha_python/src/iroha_python/verange.py"
+      - "python/iroha_python/src/iroha_python/zk_ams.py"
+      - "python/iroha_python/src/iroha_python/zk_x509.py"
+      - "python/iroha_python/src/iroha_python/zkat.py"
+      - "python/iroha_python/tests/privacy_catalog_test.py"
+      - "python/iroha_python/tests/package_import_fallback_test.py"
+      - "python/iroha_python/tests/privacy_native_registry_test.py"
+      - "python/iroha_python/tests/crypto_algorithms_test.py"
+      - "python/iroha_python/tests/anonymous_pgc_test.py"
+      - "python/iroha_python/tests/jindo_test.py"
+      - "python/iroha_python/tests/silent_threshold_test.py"
+      - "python/iroha_python/tests/sis_hints_test.py"
+      - "python/iroha_python/tests/vega_test.py"
+      - "python/iroha_python/tests/verange_test.py"
+      - "python/iroha_python/tests/zk_ams_test.py"
+      - "python/iroha_python/tests/zk_x509_test.py"
+      - "python/iroha_python/tests/zkat_test.py"
+      - "python/iroha_python/README.md"
+      - "IrohaSwift/README.md"
+      - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+      - "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
+      - "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift"
+      - "java/iroha_android/README.md"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtils.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyRecordDescription.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyStatus.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"
+      - "kotlin/README.md"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTagTest.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
+      - "csharp/README.md"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Zk/VerifyingKeyBackendTag.cs"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs"
+      - "docs/source/offline_kagemusha.md"
+      - "roadmap.md"
+      - "status.md"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  privacy_native_bridge_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+      - name: Privacy native bridge tests
+        run: cargo test -p connect_norito_bridge privacy_ --lib -- --test-threads=1
+
+  privacy_swift_sdk_parse:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Privacy Swift SDK parse
+        run: ci/check_privacy_swift_sdk.sh
+
+  privacy_jvm_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+        with:
+          distribution: "temurin"
+          java-version: "21"
+      - name: Privacy JVM and Java SDK tests
+        run: ci/check_privacy_jvm_sdk.sh
+
+  privacy_csharp_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 8.0.x
+      - name: Privacy C# SDK tests
+        run: ci/check_privacy_csharp_sdk.sh
+
+  privacy_javascript_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Install JavaScript SDK dependencies
+        run: npm ci --prefix javascript/iroha_js
+      - name: Privacy JavaScript SDK tests
+        run: ci/check_privacy_js_sdk.sh
+
+  privacy_python_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Privacy Python SDK tests
+        run: ci/check_privacy_python_sdk.sh
+
+  privacy-sdk-guard:
+    needs: [privacy_native_bridge_tests, privacy_swift_sdk_parse, privacy_jvm_sdk_tests, privacy_csharp_sdk_tests, privacy_javascript_sdk_tests, privacy_python_sdk_tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Install JavaScript SDK dependencies
+        run: npm ci --prefix javascript/iroha_js
+      - name: NoritoBridge privacy header parity
+        run: ci/check_connect_norito_bridge_header.sh
+      - name: NoritoBridge privacy header negative controls
+        run: |
+          ci/check_connect_norito_bridge_header.sh --self-test-missing-privacy-header-symbol
+          ci/check_connect_norito_bridge_header.sh --self-test-bad-privacy-signature
+          ci/check_connect_norito_bridge_header.sh --self-test-missing-privacy-rust-symbol
+      - name: Reject tracked Python bytecode
+        run: bash ci/check_no_tracked_python_bytecode.sh
+      - name: Mobile SDK artifact readiness checker self-test
+        run: bash scripts/check_mobile_sdk_artifacts_test.sh
+      - name: Privacy SDK guard negative controls
+        run: |
+          ci/check_privacy_sdk_guard.sh --negative-control-bridge-header-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-bridge-header-command-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-bridge-header-negative-controls-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-bytecode-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-mobile-sdk-artifacts-selftest-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-workflow-command
+          ci/check_privacy_sdk_guard.sh --negative-control-backend-tag-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-browser-test-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity
+          ci/check_privacy_sdk_guard.sh --negative-control-readme-boundary
+          ci/check_privacy_sdk_guard.sh --negative-control-readme-api
+          ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-proof-builder-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-production-gate-fail-closed-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-python-zk-ace-production-gate-fail-closed-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-python-direct-zk-ace-production-gate-fail-closed-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-python-zk-ace-capability-production-gate-fail-closed-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-js-zk-ace-capability-production-gate-fail-closed-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-exact-row-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-row-order-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-display-text-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-category-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-maturity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-recommended-for-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-covered-criteria-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-public-input-schema-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-modes-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-security-notes-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-exact-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-sdk-entrypoint-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-planned-sdk-entrypoint-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-pq-layer-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-chain-requirement-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-required-state-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-setup-step-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-execution-step-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-python-catalog-bytecode-guard
+          ci/check_privacy_sdk_guard.sh --negative-control-python-ffi-catalog-bytecode-guard
+          ci/check_privacy_sdk_guard.sh --negative-control-source-reference-obfuscated-ipv4-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-source-reference-audit-readiness-url-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-source-reference-encoded-host-url-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-dev-fixture-entrypoint-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-catalog-defensive-copy-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-planned-entrypoint-quarantine-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-catalog-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-planned-entrypoint-dispatch-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-planned-entrypoint-rejection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-catalog-structure-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-rows-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-row-completeness-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-duplicate-row-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-public-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-allowlist-profile-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-verifier-key-registration-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-public-catalog-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-component-proof-only-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-planned-ledger-mutation-proof-builder-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-ledger-mutation-proof-pairing-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-capability-fail-closed-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-zk-ace-capability-fail-closed-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-capability-claim-quarantine-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-capability-archive-invariant-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-adversarial-fail-closed-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-verify-empty-public-inputs-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-operation-confusion-fail-closed-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-operation-required-material-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-non-proof-entrypoint-rejection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-vk-ref-backend-binding-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-vk-ref-shape-hardening-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-vk-ref-name-binding-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-production-disabled-gate-message-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-production-disabled-verify-gate-message-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-production-disabled-message-constant-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-zk-ace-production-disabled-request-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-failure-result-invariant-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-witness-helper-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-witness-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-proof-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-text-field-enumerator-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-oversized-request-field-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-oversized-request-payload-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-oversized-public-inputs-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-oversized-proof-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-control-request-field-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-control-vk-ref-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-non-ascii-request-field-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-non-ascii-vk-ref-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-unportable-request-field-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-unportable-vk-ref-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-required-request-fields-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-required-vk-ref-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-catalog-shape-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-entrypoint-catalog-shape-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-production-claim-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-vk-ref-production-claim-nonreflection-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-public-operation-schema-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-availability-output-hardening-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-availability-probe-gating-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-request-boundary-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-sliced-view-boundary-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-native-output-boundary-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-norito-request-schema-hardening-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-norito-request-field-bitset-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-norito-wrong-schema-request-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-request-decoder-bounds-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-c-bridge-output-buffer-precedence-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-adversarial-request-frame-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-request-copy-isolation-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-request-copy-zeroization-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-python-native-method-surface-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-privacy-abi-probe-bounds-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-public-proof-builder-native-error-sanitizer-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-malformed-request-no-dispatch-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-wrapper-isolation-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-public-archive-wrapper-norito-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-backend-alias-fail-closed-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-required-pending-backend-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-chain-backend-allowlist-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-backend-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-rust-backend-mapping
+          ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-public-backends
+          ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-row-scope
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-abi-surface-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-binding-loader-surface-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-ffi-error-contract-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-archive-max-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-sdk-bridge-method-surface-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-binary-only-norito-ffi-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-host-norito-only-ffi-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-production-gate-missing-reason-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-native-production-gate-missing-reason-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-norito-schema-operation-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-norito-operation-variant-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-capability-metadata-parity-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-mobile-zk-ace-capability-quarantine-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-capability-fail-closed-metadata-coverage
+          ci/check_privacy_sdk_guard.sh --negative-control-readme-error-code
+          ci/check_privacy_sdk_guard.sh --negative-control-browser-error-code
+          ci/check_privacy_sdk_guard.sh --negative-control-browser-dist-error-code
+          ci/check_privacy_sdk_guard.sh --negative-control-workflow-cancel-in-progress
+          ci/check_privacy_sdk_guard.sh --negative-control-native-bridge-job-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-native-bridge-runner-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-native-bridge-test-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-native-bridge-needs-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-swift-sdk-job-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-swift-sdk-runner-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-swift-sdk-parse-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-swift-sdk-version-script
+          ci/check_privacy_sdk_guard.sh --negative-control-swift-sdk-override-script
+          ci/check_privacy_sdk_guard.sh --negative-control-swift-sdk-needs-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-jvm-sdk-job-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-jvm-sdk-setup-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-jvm-sdk-distribution-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-jvm-sdk-java-version-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-jvm-sdk-setup-order-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-jvm-sdk-test-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-jvm-sdk-jdk21-script
+          ci/check_privacy_sdk_guard.sh --negative-control-jvm-sdk-java-home-override-script
+          ci/check_privacy_sdk_guard.sh --negative-control-jvm-sdk-java-home-reject-script
+          ci/check_privacy_sdk_guard.sh --negative-control-jvm-sdk-needs-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-csharp-sdk-job-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-csharp-sdk-setup-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-csharp-sdk-dotnet-version-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-csharp-sdk-setup-order-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-csharp-sdk-dotnet-version-script
+          ci/check_privacy_sdk_guard.sh --negative-control-csharp-sdk-dotnet-override-script
+          ci/check_privacy_sdk_guard.sh --negative-control-csharp-sdk-dotnet-major-script
+          ci/check_privacy_sdk_guard.sh --negative-control-csharp-sdk-test-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-csharp-sdk-needs-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-job-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-runner-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-setup-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-version-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-version-script
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-override-script
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-resolver-script
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-major-script
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-python-bytecode-script
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-cache-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-node-setup-order-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-install-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-test-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-install-order-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-test-order-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-js-sdk-needs-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-job-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-runner-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-setup-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-version-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-setup-order-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-rust-cache-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-timeout-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-version-script
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-override-script
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-resolver-script
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-major-script
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-venv-rebuild-script
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-native-build-script
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-venv-activation-script
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-bytecode-script
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-test-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-needs-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-main-rust-cache-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-main-timeout-workflow
+      - name: Privacy SDK parity and fail-closed guard
+        run: ci/check_privacy_sdk_guard.sh

@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "members": [
+    {
+      "member_id": "citizen:ada",
+      "weight": 2,
+      "role": "citizen",
+      "organization": "Artemis Cooperative"
+    },
+    {
+      "member_id": "citizen:bob",
+      "weight": 1,
+      "role": "citizen",
+      "organization": "Community Guild"
+    },
+    {
+      "member_id": "citizen:cath",
+      "weight": 1,
+      "role": "observer",
+      "organization": "Inspectorate"
+    },
+    {
+      "member_id": "citizen:dora",
+      "weight": 3,
+      "role": "citizen",
+      "organization": "Artemis Cooperative"
+    },
+    {
+      "member_id": "citizen:erin",
+      "weight": 1,
+      "role": "citizen",
+      "organization": "Community Guild",
+      "eligible": false
+    }
+  ]
+}

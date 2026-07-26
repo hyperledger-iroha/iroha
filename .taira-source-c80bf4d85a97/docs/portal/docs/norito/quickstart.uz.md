@@ -1,0 +1,156 @@
+---
+lang: uz
+direction: ltr
+source: docs/portal/docs/norito/quickstart.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
+title: Norito Quickstart
+description: Build, validate, and deploy a Kotodama contract with the release tooling and default single-peer network.
+slug: /norito/quickstart
+translator: machine-google-reviewed
+---
+
+Ushbu ko'rsatma ishlab chiquvchilar o'rganishda amal qilishini kutgan ish jarayonini aks ettiradi
+Norito va Kotodama birinchi marta: deterministik yagona teng tarmoqni yuklash,
+shartnoma tuzing, uni mahalliy sifatida quriting, keyin uni Torii orqali yuboring.
+CLIga havola.
+
+Shartnoma namunasi qo'ng'iroq qiluvchining hisobiga kalit/qiymat juftligini yozadi, shuning uchun siz qila olasiz
+yon ta'sirini darhol `iroha` bilan tekshiring.
+
+## Old shartlar
+
+- [Docker](https://docs.docker.com/engine/install/) Compose V2 yoqilgan (ishlatilgan)
+  `defaults/docker-compose.single.yml` da belgilangan namunaviy tengdoshni ishga tushirish uchun).
+- Yuklab olmasangiz yordamchi ikkilik fayllarni yaratish uchun Rust asboblar zanjiri (1.76+).
+  nashr etilganlar.
+- `koto build`, `ivm_run` va `iroha` ikkilik. Siz ularni dan qurishingiz mumkin
+  quyida ko'rsatilgandek ish joyini tekshirish yoki mos keladigan reliz artefaktlarini yuklab oling:
+
+```sh
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
+cargo install --locked --path crates/iroha_cli --bin iroha
+```
+
+> Yuqoridagi ikkilik fayllarni ish maydonining qolgan qismi bilan birga o'rnatish xavfsiz.
+> Ular hech qachon `serde`/`serde_json` ga ulanmaydi; Norito kodeklari oxirigacha qo'llaniladi.
+
+## 1. Yagona peerli ishlab chiquvchi tarmoqni ishga tushiring
+
+Repozitoriyga `kagami swarm` tomonidan yaratilgan Docker Compose toʻplami kiradi.
+(`defaults/docker-compose.single.yml`). Bu standart genezis, mijoz simlar
+Torii konfiguratsiyasi va sog'liq problari uchun `http://127.0.0.1:8080` manzilidan foydalanish mumkin.
+
+```sh
+docker compose -f defaults/docker-compose.single.yml up --build
+```
+
+Idishni ishlayotgan holda qoldiring (oldingi yoki ajratilgan holda). Hammasi
+keyingi CLI qo'ng'iroqlari `defaults/client.toml` orqali ushbu tengdoshni nishonga oladi.
+
+## 2. Shartnoma muallifi
+
+Ishchi katalog yarating va minimal Kotodama misolini saqlang:
+
+```sh
+mkdir -p target/quickstart
+cat > target/quickstart/hello.ko <<'KO'
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+KO
+```
+
+> Versiya boshqaruvida Kotodama manbalarini saqlash afzalroq. Portalda joylashgan misollar
+> agar siz [Norito misollar galereyasi](./examples/) ostida ham mavjud
+> boyroq boshlanish nuqtasini xohlaysiz.
+
+## 3. IVM bilan kompilyatsiya qiling va quruq ishga tushiring
+
+Shartnomani IVM/Norito bayt kodiga (`.to`) tuzing va uni mahalliy sifatida bajaring.
+tarmoqqa tegmasdan oldin xost tizimi qo'ng'iroqlari muvaffaqiyatli ekanligini tasdiqlang:
+
+```sh
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
+
+ivm_run target/quickstart/hello.to --args '{}'
+```
+
+Yuguruvchi `debug::info("Hello from Kotodama")` jurnalini chop etadi va bajaradi
+Masxara qilingan xostga qarshi `SET_ACCOUNT_DETAIL` tizimi. Agar ixtiyoriy `ivm_tool`
+ikkilik mavjud, `ivm_tool inspect target/quickstart/hello.to` ni ko'rsatadi
+ABI sarlavhasi, xususiyat bitlari va eksport qilingan kirish nuqtalari.
+
+## 4. Torii orqali bayt kodini yuboring
+
+Tugun ishlayotgan holda, kompilyatsiya qilingan baytekodni CLI yordamida Torii ga yuboring.
+Standart ishlab chiqish identifikatori ochiq kalitdan olingan
+`defaults/client.toml`, shuning uchun hisob identifikatori
+```
+<i105-account-id>
+```
+
+Torii URL manzili, zanjir identifikatori va imzo kalitini taʼminlash uchun konfiguratsiya faylidan foydalaning:
+
+```sh
+iroha --config defaults/client.toml \
+  transaction ivm \
+  --path target/quickstart/hello.to
+```
+
+CLI tranzaktsiyani Norito bilan kodlaydi, uni dev kaliti bilan imzolaydi va
+uni yugurayotgan tengdoshiga topshiradi. `set_account_detail` uchun Docker jurnallarini tomosha qiling
+syscall yoki bajarilgan tranzaksiya xesh uchun CLI chiqishini kuzatib boring.
+
+## 5. Holat o'zgarishini tekshiring
+
+Shartnomada yozilgan hisob ma'lumotlarini olish uchun bir xil CLI profilidan foydalaning:
+
+```sh
+iroha --config defaults/client.toml \
+  account meta get \
+  --id <i105-account-id> \
+  --key example | jq .
+```
+
+Siz Norito tomonidan qo'llab-quvvatlanadigan JSON foydali yukini ko'rishingiz kerak:
+
+```json
+{
+  "hello": "world"
+}
+```
+
+Agar qiymat etishmayotgan boʻlsa, Docker yozish xizmati hali ham ishlayotganligini tasdiqlang.
+ishlayotgani va `iroha` tomonidan xabar qilingan tranzaksiya xeshi `Committed` ga yetganligi
+davlat.
+
+## Keyingi qadamlar
+
+- Koʻrish uchun avtomatik yaratilgan [misol galereyasi](./examples/) bilan tanishing
+  Norito tizim chaqiruvlariga qanchalik rivojlangan Kotodama parchalari xaritasi.
+- Chuqurroq ma'lumot olish uchun [Norito ishga tushirish qo'llanmasini](./getting-started) o'qing.
+  kompilyator/yuguruvchi vositalarini tushuntirish, manifestni joylashtirish va IVM
+  metadata.
+- O'zingizning shartnomalaringizni takrorlashda `npm run sync-norito-snippets` dan foydalaning
+  portal hujjatlari va artefaktlar qolishi uchun yuklab olinadigan parchalarni qayta tiklash uchun ish maydoni
+  `crates/ivm/docs/examples/` ostidagi manbalar bilan sinxronlashtirilgan.

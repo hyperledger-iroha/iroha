@@ -1,0 +1,612 @@
+{
+  "format": "iroha.numeric.v1",
+  "generator": "ivm::numeric_tlv + iroha_primitives::numeric_abi",
+  "invalid": [
+    {
+      "decode_as": "int",
+      "expected": "noncanonical_mantissa",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a0005000000000000006bc087ddbfa5c997000100000000",
+      "id": "redundant_zero",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "noncanonical_mantissa",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000600000000000000bfe9000cfffad4c600020000000100",
+      "id": "redundant_positive_sign",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "noncanonical_mantissa",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a00060000000000000035429a01faced22f0002000000ffff",
+      "id": "redundant_negative_sign",
+      "input": "frame"
+    },
+    {
+      "decode_as": "decimal",
+      "expected": "noncanonical_decimal",
+      "hex": "4e5254300000ba2ffed52e4d8ee16f17efefe18285240005000000000000005abfe4ed619eca78000000000001",
+      "id": "decimal_zero_nonzero_scale",
+      "input": "frame"
+    },
+    {
+      "decode_as": "decimal",
+      "expected": "noncanonical_decimal",
+      "hex": "4e5254300000ba2ffed52e4d8ee16f17efefe18285240006000000000000006aa6756bf87e6e3a00010000000a01",
+      "id": "decimal_removable_zero",
+      "input": "frame"
+    },
+    {
+      "decode_as": "decimal",
+      "expected": "invalid_scale",
+      "hex": "4e5254300000ba2ffed52e4d8ee16f17efefe1828524000600000000000000869a33c8152c9d260001000000011d",
+      "id": "decimal_scale_29",
+      "input": "frame"
+    },
+    {
+      "decode_as": "quantity",
+      "expected": "negative_quantity",
+      "hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee300060000000000000026d5cbf36810f26d0001000000ff00",
+      "id": "negative_quantity",
+      "input": "frame"
+    },
+    {
+      "decode_as": "quantity",
+      "expected": "noncanonical_decimal",
+      "hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee30005000000000000005abfe4ed619eca78000000000001",
+      "id": "quantity_zero_nonzero_scale",
+      "input": "frame"
+    },
+    {
+      "decode_as": "quantity",
+      "expected": "noncanonical_decimal",
+      "hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee30006000000000000006aa6756bf87e6e3a00010000000a01",
+      "id": "quantity_removable_zero",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "frame_too_large",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a004500000000000000b84bd38e10be6d3a00410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000",
+      "id": "positive_mantissa_overflow",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "frame_too_large",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a0045000000000000007cb3f53be043001e0041000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7fff",
+      "id": "negative_mantissa_overflow",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "frame_too_short",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724",
+      "id": "frame_too_short",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "invalid_header",
+      "hex": "4f525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001",
+      "id": "invalid_frame_header",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "length_mismatch",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000600000000000000049f20de01e9e724000100000001",
+      "id": "declared_frame_length_mismatch",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "length_mismatch",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000e6ff6c8aa17090c0000200000001",
+      "id": "numeric_body_length_mismatch",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "schema_mismatch",
+      "hex": "4e5254300000ba2ffed52e4d8ee16f17efefe1828524000500000000000000049f20de01e9e724000100000001",
+      "id": "wrong_frame_schema",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "compression_not_allowed",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a010500000000000000049f20de01e9e724000100000001",
+      "id": "compressed_frame",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "layout_flags_not_allowed",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724010100000001",
+      "id": "layout_flags_frame",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "checksum_mismatch",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000000",
+      "id": "bad_frame_checksum",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "payload_hash_mismatch",
+      "hex": "0011010000002d4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7be",
+      "id": "bad_payload_hash",
+      "input": "envelope"
+    },
+    {
+      "decode_as": "decimal",
+      "expected": "wrong_type",
+      "hex": "0011010000002d4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
+      "id": "cross_type_envelope",
+      "input": "envelope"
+    },
+    {
+      "decode_as": "int",
+      "expected": "unknown_type",
+      "hex": "0013020000002d4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
+      "id": "unassigned_pointer_type",
+      "input": "envelope"
+    },
+    {
+      "decode_as": "int",
+      "expected": "wrong_type",
+      "hex": "0001020000002d4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
+      "id": "known_nonnumeric_pointer_precedes_version",
+      "input": "envelope"
+    },
+    {
+      "decode_as": "int",
+      "expected": "unknown_type",
+      "hex": "ffff010000002d4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
+      "id": "unknown_pointer_type",
+      "input": "envelope"
+    },
+    {
+      "decode_as": "int",
+      "expected": "invalid_envelope_version",
+      "hex": "0011020000002d4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
+      "id": "envelope_version_2",
+      "input": "envelope"
+    },
+    {
+      "decode_as": "int",
+      "expected": "oversized_length",
+      "hex": "0011010000006d4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
+      "id": "oversized_declared_frame",
+      "input": "envelope"
+    },
+    {
+      "decode_as": "int",
+      "expected": "truncated_envelope",
+      "hex": "001101000000",
+      "id": "truncated_envelope",
+      "input": "envelope"
+    },
+    {
+      "decode_as": "int",
+      "expected": "truncated_envelope",
+      "hex": "0011010000002c4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
+      "id": "envelope_length_mismatch",
+      "input": "envelope"
+    }
+  ],
+  "invalid_text": [
+    {
+      "expected": "invalid_text",
+      "id": "int_json_number",
+      "input": 1,
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_json_boolean",
+      "input": true,
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_leading_zero",
+      "input": "01",
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_plus_sign",
+      "input": "+1",
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_whitespace",
+      "input": " 1",
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_exponent",
+      "input": "1e0",
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_negative_zero",
+      "input": "-0",
+      "kind": "int"
+    },
+    {
+      "expected": "mantissa_overflow",
+      "id": "int_positive_overflow",
+      "input": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "kind": "int"
+    },
+    {
+      "expected": "mantissa_overflow",
+      "id": "int_negative_overflow",
+      "input": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042049",
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_json_number",
+      "input": 1,
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_json_boolean",
+      "input": true,
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_leading_zero",
+      "input": "01",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_plus_sign",
+      "input": "+1",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_negative_zero",
+      "input": "-0",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_missing_fraction",
+      "input": "1.",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_exponent",
+      "input": "1e0",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_whitespace",
+      "input": " 1",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_trailing_fractional_zero",
+      "input": "1.0",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_zero_fraction",
+      "input": "0.0",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_scale",
+      "id": "decimal_scale_29",
+      "input": "0.00000000000000000000000000001",
+      "kind": "decimal"
+    },
+    {
+      "expected": "mantissa_overflow",
+      "id": "decimal_mantissa_overflow",
+      "input": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "kind": "decimal"
+    },
+    {
+      "expected": "mantissa_overflow",
+      "id": "decimal_negative_mantissa_overflow",
+      "input": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042049",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_json_number",
+      "input": 1,
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_json_boolean",
+      "input": true,
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_leading_zero",
+      "input": "01",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_plus_sign",
+      "input": "+1",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_whitespace",
+      "input": " 1",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_negative_zero",
+      "input": "-0",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_trailing_fractional_zero",
+      "input": "1.0",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_zero_fraction",
+      "input": "0.0",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_scale",
+      "id": "quantity_scale_29",
+      "input": "0.00000000000000000000000000001",
+      "kind": "quantity"
+    },
+    {
+      "expected": "mantissa_overflow",
+      "id": "quantity_mantissa_overflow",
+      "input": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_exponent",
+      "input": "1e0",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_not_a_number",
+      "input": "NaN",
+      "kind": "quantity"
+    },
+    {
+      "expected": "negative_quantity",
+      "id": "quantity_negative",
+      "input": "-1",
+      "kind": "quantity"
+    }
+  ],
+  "maximum_scale": 28,
+  "signed_bits": 512,
+  "text": [
+    {
+      "canonical": "1",
+      "id": "decimal_removable_scale_29",
+      "input": "1.00000000000000000000000000000",
+      "kind": "decimal"
+    },
+    {
+      "canonical": "1",
+      "id": "quantity_removable_scale_29",
+      "input": "1.00000000000000000000000000000",
+      "kind": "quantity"
+    }
+  ],
+  "valid": [
+    {
+      "body_hex": "00000000",
+      "canonical": "0",
+      "envelope_hex": "0011010000002c4e525430000007c039457363b9e1d36bbd31d93dec4a0004000000000000004b9f1b1e3586a5f400000000006bc9b8f87ae788de509a6f90341333deb1b8a8046ac4868da1f98918475cc1d7",
+      "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a0004000000000000004b9f1b1e3586a5f40000000000",
+      "id": "int_zero",
+      "kind": "int",
+      "mantissa": "0",
+      "scale": null
+    },
+    {
+      "body_hex": "010000007f",
+      "canonical": "127",
+      "envelope_hex": "0011010000002d4e525430000007c039457363b9e1d36bbd31d93dec4a00050000000000000070f0676e595308be00010000007ff2c429b869fd0d5eb7075e6babd785f0665605c3442089f0125d654dab6e7c97",
+      "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a00050000000000000070f0676e595308be00010000007f",
+      "id": "int_127",
+      "kind": "int",
+      "mantissa": "127",
+      "scale": null
+    },
+    {
+      "body_hex": "020000008000",
+      "canonical": "128",
+      "envelope_hex": "0011010000002e4e525430000007c039457363b9e1d36bbd31d93dec4a00060000000000000047b88486a7f2c602000200000080001b8534c9f19f4b8be0939cd41cd22dbbd1933426f76005b7420b97300c3e1b89",
+      "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a00060000000000000047b88486a7f2c60200020000008000",
+      "id": "int_128",
+      "kind": "int",
+      "mantissa": "128",
+      "scale": null
+    },
+    {
+      "body_hex": "0100000080",
+      "canonical": "-128",
+      "envelope_hex": "0011010000002d4e525430000007c039457363b9e1d36bbd31d93dec4a00050000000000000029cf000a2af2a55e0001000000803306b21292962ef96819a83beada23d78010914edd7ac59576c89aef3059e04f",
+      "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a00050000000000000029cf000a2af2a55e000100000080",
+      "id": "int_neg_128",
+      "kind": "int",
+      "mantissa": "-128",
+      "scale": null
+    },
+    {
+      "body_hex": "020000007fff",
+      "canonical": "-129",
+      "envelope_hex": "0011010000002e4e525430000007c039457363b9e1d36bbd31d93dec4a000600000000000000c0e2ced730bf29bf00020000007fff6bd211023a5c2b516b4b9acf46713b52b830f196afff7705932c2dd5777fb4bb",
+      "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000600000000000000c0e2ced730bf29bf00020000007fff",
+      "id": "int_neg_129",
+      "kind": "int",
+      "mantissa": "-129",
+      "scale": null
+    },
+    {
+      "body_hex": "08000000ffffffffffffff7f",
+      "canonical": "9223372036854775807",
+      "envelope_hex": "001101000000344e525430000007c039457363b9e1d36bbd31d93dec4a000c0000000000000064f1696630749e970008000000ffffffffffffff7f80f9c9914f78c76a21e9f453cd21016d5cb983bee807fc27fb2e9cf41883ae2f",
+      "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000c0000000000000064f1696630749e970008000000ffffffffffffff7f",
+      "id": "int_2_pow_63_minus_1",
+      "kind": "int",
+      "mantissa": "9223372036854775807",
+      "scale": null
+    },
+    {
+      "body_hex": "09000000000000000000008000",
+      "canonical": "9223372036854775808",
+      "envelope_hex": "001101000000354e525430000007c039457363b9e1d36bbd31d93dec4a000d000000000000008afa36c0e72ffc6b00090000000000000000000080001ffdb8ea922740904382eed3e97f8bdd114380f183b8d137818f7bb5b630cecb",
+      "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000d000000000000008afa36c0e72ffc6b0009000000000000000000008000",
+      "id": "int_2_pow_63",
+      "kind": "int",
+      "mantissa": "9223372036854775808",
+      "scale": null
+    },
+    {
+      "body_hex": "4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000080",
+      "canonical": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "envelope_hex": "0011010000006c4e525430000007c039457363b9e1d36bbd31d93dec4a004400000000000000db5c4240ff98422400400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008051f5b252ed14e8e84f2b4df8a4310c170f8b469f766c81be005d8bef66a90e33",
+      "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a004400000000000000db5c4240ff984224004000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000080",
+      "id": "int_min",
+      "kind": "int",
+      "mantissa": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "scale": null
+    },
+    {
+      "body_hex": "40000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "canonical": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+      "envelope_hex": "0011010000006c4e525430000007c039457363b9e1d36bbd31d93dec4a004400000000000000f669f4518f58548c0040000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f12ea16a5b14fd7216ad8fc39b60284b44ff5bca0229815bb9ddf2635cd985301",
+      "frame_hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a004400000000000000f669f4518f58548c0040000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "id": "int_max",
+      "kind": "int",
+      "mantissa": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+      "scale": null
+    },
+    {
+      "body_hex": "0000000000",
+      "canonical": "0",
+      "envelope_hex": "0012010000002d4e5254300000ba2ffed52e4d8ee16f17efefe182852400050000000000000035e043eedfd2e4cb00000000000054a70417ac89962d52ca1848d6b958670ae3b897d6645cc020d889e29c6cba3f",
+      "frame_hex": "4e5254300000ba2ffed52e4d8ee16f17efefe182852400050000000000000035e043eedfd2e4cb000000000000",
+      "id": "decimal_zero",
+      "kind": "decimal",
+      "mantissa": "0",
+      "scale": 0
+    },
+    {
+      "body_hex": "400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000",
+      "canonical": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "envelope_hex": "0012010000006d4e5254300000ba2ffed52e4d8ee16f17efefe1828524004500000000000000fdd0a9a26cc3c37f004000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000080004fca6db2bcfbceaf06bb3d697de883de66f6bb8dbd12abbe6a8d41bd563a562b",
+      "frame_hex": "4e5254300000ba2ffed52e4d8ee16f17efefe1828524004500000000000000fdd0a9a26cc3c37f00400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000",
+      "id": "decimal_min",
+      "kind": "decimal",
+      "mantissa": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "scale": 0
+    },
+    {
+      "body_hex": "40000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f00",
+      "canonical": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+      "envelope_hex": "0012010000006d4e5254300000ba2ffed52e4d8ee16f17efefe18285240045000000000000006017e873ef9f03bb0040000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f00d60d14c5da27392c93fadcf9a97159f2d4b00a79ebe1979bc517c9ea0778c909",
+      "frame_hex": "4e5254300000ba2ffed52e4d8ee16f17efefe18285240045000000000000006017e873ef9f03bb0040000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f00",
+      "id": "decimal_max",
+      "kind": "decimal",
+      "mantissa": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+      "scale": 0
+    },
+    {
+      "body_hex": "010000008302",
+      "canonical": "-1.25",
+      "envelope_hex": "0012010000002e4e5254300000ba2ffed52e4d8ee16f17efefe182852400060000000000000041a3835da731f4a90001000000830204dc0bb3517ed28003bf2d8c5d853f61b7e6c14db4555d0546e40dabc7b0ebbb",
+      "frame_hex": "4e5254300000ba2ffed52e4d8ee16f17efefe182852400060000000000000041a3835da731f4a900010000008302",
+      "id": "decimal_neg_1_25",
+      "kind": "decimal",
+      "mantissa": "-125",
+      "scale": 2
+    },
+    {
+      "body_hex": "01000000011c",
+      "canonical": "0.0000000000000000000000000001",
+      "envelope_hex": "0012010000002e4e5254300000ba2ffed52e4d8ee16f17efefe1828524000600000000000000e9c594cbab60b3950001000000011c5ef4181c94f74080202ed4687de0d701bfabffefd02ba5d87dada7ca861ba647",
+      "frame_hex": "4e5254300000ba2ffed52e4d8ee16f17efefe1828524000600000000000000e9c594cbab60b3950001000000011c",
+      "id": "decimal_scale_28",
+      "kind": "decimal",
+      "mantissa": "1",
+      "scale": 28
+    },
+    {
+      "body_hex": "0000000000",
+      "canonical": "0",
+      "envelope_hex": "0010010000002d4e5254300000e4769984c81ce0e8b678f2eb06274ee300050000000000000035e043eedfd2e4cb000000000000ac6bac5276613e8b844e4bb4b2884c821df7dcbc45ad849ce57245343e114ced",
+      "frame_hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee300050000000000000035e043eedfd2e4cb000000000000",
+      "id": "quantity_zero",
+      "kind": "quantity",
+      "mantissa": "0",
+      "scale": 0
+    },
+    {
+      "body_hex": "010000007d02",
+      "canonical": "1.25",
+      "envelope_hex": "0010010000002e4e5254300000e4769984c81ce0e8b678f2eb06274ee300060000000000000092377e34d1a45fa000010000007d023f0e3afa38ff4e2c93d4aabffe4d4425d609167b01d21488023e22c2017a21e5",
+      "frame_hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee300060000000000000092377e34d1a45fa000010000007d02",
+      "id": "quantity_1_25",
+      "kind": "quantity",
+      "mantissa": "125",
+      "scale": 2
+    },
+    {
+      "body_hex": "40000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f00",
+      "canonical": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+      "envelope_hex": "0010010000006d4e5254300000e4769984c81ce0e8b678f2eb06274ee30045000000000000006017e873ef9f03bb0040000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0019751d0dcb0bbae9f2eff7526a251152bdefcc4b350b0b229698e8c218676341",
+      "frame_hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee30045000000000000006017e873ef9f03bb0040000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f00",
+      "id": "quantity_max",
+      "kind": "quantity",
+      "mantissa": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+      "scale": 0
+    },
+    {
+      "body_hex": "01000000011c",
+      "canonical": "0.0000000000000000000000000001",
+      "envelope_hex": "0010010000002e4e5254300000e4769984c81ce0e8b678f2eb06274ee3000600000000000000e9c594cbab60b3950001000000011c0b9a832aec0dbcc17cb413c211f4a059abccdca61b688fce801adfe1577d55cb",
+      "frame_hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee3000600000000000000e9c594cbab60b3950001000000011c",
+      "id": "quantity_scale_28",
+      "kind": "quantity",
+      "mantissa": "1",
+      "scale": 28
+    }
+  ]
+}

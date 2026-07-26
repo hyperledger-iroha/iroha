@@ -1,0 +1,108 @@
+rule_files:
+  - ../taikai_viewer_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="alpha",stream="main",le="1500"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="alpha",stream="main",le="2000"}'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7'
+      - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="alpha",stream="main",le="+Inf"}'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7'
+      - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="beta",stream="main",le="1500"}'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7'
+      - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="beta",stream="main",le="2000"}'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7'
+      - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="beta",stream="main",le="+Inf"}'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7'
+      - series: 'taikai_ingest_segment_errors_total{cluster="alpha",stream="main",reason="decode"}'
+        values: '0 0 0 1 2 3 4 5 6 7 8 9'
+      - series: 'taikai_viewer_cek_rotation_seconds_ago{lane="lane-a"}'
+        values: '0 0 0 200 200 200 200 200 200 200 200 200 200 200 200 200'
+      - series: 'torii_sorafs_proof_health_alerts_total{provider_id="prov-a",trigger="pdp",penalty="penalty_applied"}'
+        values: '0 0 0 0 1 1 1 2 2 2 3 3 3 3 3'
+      - series: 'torii_sorafs_proof_health_cooldown{provider_id="prov-a"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - alertname: TaikaiLiveEdgeDrift
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              cluster: alpha
+              severity: page
+              service: taikai-viewer
+              stream: main
+            exp_annotations:
+              summary: "Taikai live-edge drift above 1.5s (p99)"
+      - alertname: TaikaiIngestFailure
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              cluster: alpha
+              severity: warn
+              service: taikai-viewer
+              stream: main
+            exp_annotations:
+              summary: "Taikai ingest errors detected"
+      - alertname: TaikaiCekRotationLag
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              lane: lane-a
+              severity: warn
+              service: taikai-viewer
+            exp_annotations:
+              summary: "CEK rotation overdue"
+      - alertname: SorafsProofHealthPenalty
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              penalty: penalty_applied
+              provider_id: prov-a
+              severity: page
+              service: taikai-viewer
+              trigger: pdp
+            exp_annotations:
+              summary: "SoraFS proof-health penalty applied"
+      - alertname: SorafsProofHealthCooldown
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels:
+              provider_id: prov-a
+              severity: warn
+              service: taikai-viewer
+            exp_annotations:
+              summary: "SoraFS proof-health cooldown active"
+  - interval: 1m
+    input_series:
+      - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="alpha",stream="main",le="1500"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10'
+      - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="alpha",stream="main",le="2000"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10'
+      - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="alpha",stream="main",le="+Inf"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10'
+      - series: 'taikai_ingest_segment_errors_total{cluster="alpha",stream="main",reason="decode"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'taikai_viewer_cek_rotation_seconds_ago{lane="lane-a"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_proof_health_alerts_total{provider_id="prov-a",trigger="pdp",penalty="penalty_applied"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_proof_health_cooldown{provider_id="prov-a"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - alertname: TaikaiLiveEdgeDrift
+        eval_time: 12m
+        exp_alerts: []
+      - alertname: TaikaiIngestFailure
+        eval_time: 6m
+        exp_alerts: []
+      - alertname: TaikaiCekRotationLag
+        eval_time: 16m
+        exp_alerts: []
+      - alertname: SorafsProofHealthPenalty
+        eval_time: 12m
+        exp_alerts: []
+      - alertname: SorafsProofHealthCooldown
+        eval_time: 10m
+        exp_alerts: []

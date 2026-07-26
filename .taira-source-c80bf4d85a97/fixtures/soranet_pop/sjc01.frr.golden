@@ -1,0 +1,63 @@
+frr defaults datacenter
+hostname sora-sjc01-edge
+log syslog informational
+service integrated-vtysh-config
+!
+bfd
+  profile fast-default
+    transmit-interval 300
+    receive-interval 300
+    detect-multiplier 3
+  !
+!
+rpki
+  cache rpki1.sora.net 3323 description "primary cache"
+  cache rpki1.sora.net 3323 preference 100
+  cache rpki2.sora.net 3323 description "secondary cache"
+  cache rpki2.sora.net 3323 preference 90
+  logging
+!
+ip community-list standard SORANET-DRAIN permit no-export
+ip community-list standard SORANET-FAIL-OPEN permit graceful-shutdown
+ip community-list standard SORANET-BLACKHOLE permit no-advertise
+!
+router bgp 65110
+  bgp router-id 10.10.10.1
+  no bgp default ipv4-unicast
+  bgp deterministic-med
+  bgp bestpath as-path multipath-relax
+  timers bgp 3 9
+  neighbor 198.51.100.1 remote-as 64512
+  neighbor 198.51.100.1 description IX West upstream
+  neighbor 198.51.100.1 bfd profile fast-default
+  neighbor 198.51.100.1 timers 5 15
+  neighbor 198.51.100.1 send-community both
+  neighbor 198.51.100.1 maximum-prefix 250 80 restart 5
+  neighbor 198.51.100.1 route-map RM_ix-west_IMPORT in
+  neighbor 198.51.100.1 route-map RM_ix-west_EXPORT out
+  neighbor 2001:db8:feed::1 remote-as 64520
+  neighbor 2001:db8:feed::1 bfd profile fast-default
+  neighbor 2001:db8:feed::1 timers 5 15
+  neighbor 2001:db8:feed::1 ebgp-multihop 2
+  address-family ipv4 unicast
+    network 203.0.113.10
+    network 203.0.113.0/24
+    neighbor 198.51.100.1 activate
+  exit-address-family
+  address-family ipv6 unicast
+    network 2001:db8:10::a
+    network 2001:db8:10::/48
+    neighbor 2001:db8:feed::1 activate
+  exit-address-family
+!
+! Route-map definitions
+route-map RM_ix-west_IMPORT deny 5
+  match rpki invalid
+!
+route-map RM_ix-west_IMPORT permit 10
+  set local-preference 300
+!
+route-map RM_ix-west_EXPORT permit 10
+  set metric 20
+!
+! metadata: {"bfd_autofill_neighbors":[],"bfd_profiles":["fast-default"],"communities":{"blackhole":"no-advertise","drain":"no-export","fail_open":"graceful-shutdown"},"communities_from_descriptor":false,"neighbor_count":2,"pop_name":"sjc01"}

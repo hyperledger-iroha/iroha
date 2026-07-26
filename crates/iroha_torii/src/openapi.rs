@@ -3768,6 +3768,20 @@ fn governance_paths() -> Map {
         Value::Object(validation_fee_proposal_draft_operation()),
     );
     paths.insert(
+        iroha_torii_shared::uri::VALIDATION_FEE_PLAIN_BALLOT_DRAFT.to_owned(),
+        Value::Object(json_post_operation(
+            "Validation fee",
+            "Draft a proposal-bound PLAIN ballot.",
+            "Validate the authenticated citizen against the retained proposal electorate and return one exact CastPlainBallot instruction. Amount and duration are forced from the immutable proposal rules.",
+            "#/components/schemas/ValidationFeePlainBallotDraftRequestV1",
+            "#/components/schemas/ValidationFeePlainBallotDraftResponseV1",
+            vec![string_path_param(
+                "proposal_id",
+                "Exact lowercase 32-byte native proposal fingerprint.",
+            )],
+        )),
+    );
+    paths.insert(
         "/v1/gov/proposals/{id}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
@@ -14406,10 +14420,65 @@ fn validation_fee_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "ValidationFeePlainElectorateRulesV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "voting_asset_id", "ballot_amount", "ballot_duration_blocks",
+                "citizenship_amount", "max_members", "conviction_step_blocks",
+                "max_conviction", "min_turnout", "approval_threshold_numerator",
+                "approval_threshold_denominator", "eligibility_rule"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "voting_asset_id": { "type": "string", "minLength": 1 },
+                "ballot_amount": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "ballot_duration_blocks": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "citizenship_amount": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "max_members": { "type": "string", "const": "256" },
+                "conviction_step_blocks": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "max_conviction": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "min_turnout": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "approval_threshold_numerator": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "approval_threshold_denominator": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "eligibility_rule": {
+                    "type": "object",
+                    "required": ["rule", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "rule": {
+                            "const": "proposal_operator_at_or_before_gate_others_after_gate"
+                        },
+                        "value": { "type": "null" }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "ValidationFeeProposalDraftRequestV1".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["version", "proposal", "referendum_window", "mode"],
+            "required": [
+                "version", "proposal", "referendum_window", "mode",
+                "plain_electorate_rules"
+            ],
             "additionalProperties": false,
             "properties": {
                 "version": { "type": "integer", "format": "uint16", "const": 1 },
@@ -14438,6 +14507,9 @@ fn validation_fee_schemas(schemas: &mut Map) {
                     ],
                     "default": "Plain",
                     "description": "Zk is deliberately outside the first-release validation-fee contract."
+                },
+                "plain_electorate_rules": {
+                    "$ref": "#/components/schemas/ValidationFeePlainElectorateRulesV1"
                 }
             }
         }),
@@ -14466,6 +14538,57 @@ fn validation_fee_schemas(schemas: &mut Map) {
                 "version": { "type": "integer", "format": "uint16", "const": 1 },
                 "proposal_id": hex32,
                 "proposal_kind": { "$ref": "#/components/schemas/JsonValue" },
+                "tx_instructions": {
+                    "type": "array", "minItems": 1, "maxItems": 1,
+                    "items": {
+                        "$ref": "#/components/schemas/ValidationFeeProposalInstructionDraftV1"
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeePlainBallotDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "owner", "direction"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "owner": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "description": "Canonical account that must authenticate the signed ballot transaction."
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["AYE", "NAY", "ABSTAIN"]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeePlainBallotDraftResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "proposal_id", "owner", "amount", "duration_blocks",
+                "direction", "tx_instructions"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "proposal_id": hex32,
+                "owner": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                "amount": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+                "duration_blocks": {
+                    "type": "string", "pattern": "^[1-9][0-9]*$"
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["AYE", "NAY", "ABSTAIN"]
+                },
                 "tx_instructions": {
                     "type": "array", "minItems": 1, "maxItems": 1,
                     "items": {

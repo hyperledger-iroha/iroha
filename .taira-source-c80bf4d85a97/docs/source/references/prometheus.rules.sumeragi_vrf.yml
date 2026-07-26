@@ -1,0 +1,41 @@
+groups:
+  - name: sumeragi-vrf
+    rules:
+      - alert: SumeragiVrfNoParticipation
+        expr: increase(sumeragi_vrf_no_participation_total[140m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Validator skipped VRF commit and reveal windows"
+          description: |
+            Non-participation penalties incremented (count={{ $value }}). Inspect `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <current>`
+            to identify the offline signer and stage reconfiguration or slashing if the validator cannot recover.
+
+      - alert: SumeragiVrfNonReveal
+        expr: increase(sumeragi_vrf_non_reveal_penalties_total[140m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Validator missed VRF reveal deadline"
+          description: |
+            Non-reveal penalties incremented (count={{ $value }}). Use `sumeragi_vrf_non_reveal_by_signer` labels to page the validator and re-submit the reveal.
+
+      - alert: SumeragiVrfPayloadReject
+        expr: increase(sumeragi_vrf_rejects_total_by_reason{reason!="late"}[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "VRF payload rejected"
+          description: |
+            Instance {{ $labels.instance }} rejected a VRF payload for reason {{ $labels.reason }}. Confirm the validator is on the latest parameters and re-issue the payload.
+
+      - alert: SumeragiVrfCommitStall
+        expr: rate(sumeragi_vrf_commits_emitted_total[5m]) == 0 and increase(sumeragi_blocks_committed_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Epoch commitments stalled while blocks continue"
+          description: |
+            No VRF commitments observed during an active epoch. Verify validators are online and check `/v1/sumeragi/status.vrf_penalty_epoch`.

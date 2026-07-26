@@ -1,0 +1,53 @@
+---
+lang: dz
+direction: ltr
+source: docs/portal/docs/norito/examples/call-transfer-asset.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 4d7cdc798ae9f1b69608c2b287a76a06a3d8d51116185ff6a5326e755b7b05bd
+source_last_modified: "2026-04-08T09:19:38.794575+00:00"
+translation_last_reviewed: 2026-04-08
+translator: machine-google-reviewed
+---
+
+I18NH0000005X
+
+---
+slug: /norito/དཔེར་ན་/འབོད་བརྡ་-སྤོ་སོར་-རྒྱུ་དངོས་།
+temp: Kotodama ལས་ གཙོ་བོའི་གནས་སོར་སྤྲོད་ནི།
+འགྲེལ་བཤད་: Kotodama འཛུལ་སྒོ་ཅིག་གིས་ ནང་འཁོད་མེ་ཊ་ཌེ་ཊ་ བདེན་དཔྱད་དང་གཅིག་ཁར་ ཧོསིཊི་ `transfer_asset` བཀོད་རྒྱ་འདི་ ག་དེ་སྦེ་ འབོ་ཚུགསཔ་ཨིན་ན་ བརྡ་སྟོནམ་ཨིན།
+འབྱུང་ཁུངས་: ཀེརེསི་/ཨཝ་ཨེམ་/ཌོཀསི།
+---
+
+Kotodama འཛུལ་སྒོ་ཅིག་གིས་ ནང་འཁོད་མེ་ཊ་ཌེ་ཊ་བདེན་དཔྱད་དང་གཅིག་ཁར་ ཧོསིཊི་ `transfer_asset` བཀོད་རྒྱ་འདི་ ག་དེ་སྦེ་ འབོ་ཚུགསཔ་ཨིན་ན་ གསལ་སྟོན་འབདཝ་ཨིན།
+
+##
+
+- ཁག་འབག་གི་དབང་ཚད་ (དཔེར་ན་ I18NI0000012X) མ་དངུལ་འདི་ རྒྱུ་དངོས་དང་གཅིག་ཁར་ མ་དངུལ་སྤྲོད་ཞིནམ་ལས་ དབང་ཚད་འདི་ `CanTransfer` གི་འགན་ཁུར་ཡང་ན་ འདྲ་མཉམ་གྱི་གནང་བ་འདི་ སྤོ་བཤུད་འབད་དེ་ གནང་ནི་ཨིན།
+- I18NI000000014X འཛུལ་སྒོ་འདི་ གན་རྒྱ་རྩིས་ཐོ་ལས་ I18NI000000015X ལུ་ ཆ་ཚན་༥ སྤོ་བཤུད་འབད་ནི་ལུ་ ཁ་པར་གཏང་སྟེ་ རིམ་ཐེངས་རང་བཞིན་གྱིས་ ཁ་པར་ཚུ་ བཀབ་ཚུགས།
+- I18NI000000016X ཡང་ན་ I18NI000000017X བརྒྱུད་དེ་ ལྷག་ལུས་ཚུ་ བདེན་དཔྱད་འབད་ཞིནམ་ལས་ མེ་ཊ་ཌེ་ཊ་ ཉེན་སྐྱོབ་འདི་ སྤོ་བཤུད་ཀྱི་སྐབས་དོན་འདི་ ངེས་གཏན་བཟོ་ནི་ལུ་ བྱུང་ལས་ཚུ་ ཞིབ་དཔྱད་འབད།
+
+## འབྲེལ་བའི་ཨེས་ཌི་ཀེ་ལམ་སྟོན།
+
+- [ལམ་ལུགས་ ཨེསི་ཌི་ཀེ་ མགྱོགས་མྱུར་](/sdks/rust)
+- [པའི་ཐོན་ཨེས་ཌི་ཀེ་མགྱོགས་འགོ་བཙུགས་།](/sdks/python)
+- [ཇ་བ་ཨིསི་ཀིརིཔ་ཨེསི་ཌི་ཀེ་ མགྱོགས་འགོ་བཙུགས་](I18NU0000008X)
+
+[Kotodama འབྱུང་ཁུངས་](I18NU0000009X) ཕབ་ལེན།
+
+I18NF0000004X
+
+```kotodama
+// Direct builtin call (no raw call syntax) inside a seiyaku.
+seiyaku TransferCall {
+    kotoage fn pay() authorize("AssetTransferRole") {
+        ledger::asset::transfer(
+            source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", ),
+            destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", ),
+            asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            amount: 10,
+            dataspace: DataSpaceId::parse("0"),
+        );
+    }
+}
+```

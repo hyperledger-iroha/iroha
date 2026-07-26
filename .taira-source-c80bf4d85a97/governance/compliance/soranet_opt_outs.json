@@ -1,0 +1,14 @@
+{
+  "jurisdiction_opt_outs": [
+    "US",
+    "CA"
+  ],
+  "blinded_cid_opt_outs": [
+    "C6B434E5F23ABD318F01FEDB834B34BD16B46E0CC44CD70536233A632DFA3828",
+    "7F8B1E9D04878F1AEAB553C1DB0A3E3A2AB689F75FE6BE17469F85A4D201B4AC"
+  ],
+  "audit_contacts": [
+    "mailto:governance@soranet.org",
+    "https://status.soranet.org/gar-opt-outs"
+  ]
+}

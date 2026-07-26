@@ -1,0 +1,87 @@
+import XCTest
+import CryptoKit
+@testable import IrohaSwift
+
+final class ConnectCryptoTests: XCTestCase {
+    private func requireBridge() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
+                      "NoritoBridge connect crypto symbols not linked")
+    }
+
+    func testGenerateKeyPairProducesDeterministicLengths() throws {
+        try requireBridge()
+        let pair = try ConnectCrypto.generateKeyPair()
+        XCTAssertEqual(pair.publicKey.count, 32)
+        XCTAssertEqual(pair.privateKey.count, 32)
+
+        let derivedPublic = try ConnectCrypto.publicKey(fromPrivateKey: pair.privateKey)
+        XCTAssertEqual(derivedPublic, pair.publicKey)
+    }
+
+    func testDeriveDirectionKeysUsesBridge() throws {
+        try requireBridge()
+        let pair = try ConnectCrypto.generateKeyPair()
+        let sessionID = Data(repeating: 0xAB, count: 32)
+
+        let keys = try ConnectCrypto.deriveDirectionKeys(localPrivateKey: pair.privateKey,
+                                                         peerPublicKey: pair.publicKey,
+                                                         sessionID: sessionID)
+        XCTAssertEqual(keys.appToWallet.count, 32)
+        XCTAssertEqual(keys.walletToApp.count, 32)
+        XCTAssertNotEqual(keys.appToWallet, keys.walletToApp, "directional keys should differ")
+    }
+
+    func testDeriveDirectionKeysRejectsInvalidLengths() throws {
+        try requireBridge()
+        let validKey = Data(repeating: 0x01, count: 32)
+        let sessionID = Data(repeating: 0x02, count: 32)
+
+        XCTAssertThrowsError(
+            try ConnectCrypto.deriveDirectionKeys(localPrivateKey: Data(),
+                                                  peerPublicKey: validKey,
+                                                  sessionID: sessionID)
+        ) { error in
+            guard case ConnectCryptoError.invalidPrivateKeyLength = error else {
+                return XCTFail("expected invalidPrivateKeyLength")
+            }
+        }
+
+        XCTAssertThrowsError(
+            try ConnectCrypto.deriveDirectionKeys(localPrivateKey: validKey,
+                                                  peerPublicKey: Data(),
+                                                  sessionID: sessionID)
+        ) { error in
+            guard case ConnectCryptoError.invalidPublicKeyLength = error else {
+                return XCTFail("expected invalidPublicKeyLength")
+            }
+        }
+
+        XCTAssertThrowsError(
+            try ConnectCrypto.deriveDirectionKeys(localPrivateKey: validKey,
+                                                  peerPublicKey: validKey,
+                                                  sessionID: Data())
+        ) { error in
+            guard case ConnectCryptoError.invalidSessionIdentifierLength = error else {
+                return XCTFail("expected invalidSessionIdentifierLength")
+            }
+        }
+    }
+
+    func testRelayAuthHashUsesConnectDomain() throws {
+        let sessionID = Data((0..<32).map(UInt8.init))
+        var expectedInput = Data("iroha-connect|relay-auth|v1".utf8)
+        expectedInput.append(sessionID)
+        expectedInput.append(contentsOf: "relay-token".utf8)
+        let expected = Data(SHA256.hash(data: expectedInput))
+
+        XCTAssertEqual(try ConnectCrypto.relayAuthHash(sessionID: sessionID, relayToken: "relay-token"), expected)
+    }
+
+    func testRelayAuthHashMatchesSharedFixture() throws {
+        let sessionID = try XCTUnwrap(Data(hexString: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"))
+        XCTAssertEqual(
+            try ConnectCrypto.relayAuthHash(sessionID: sessionID, relayToken: "relay-token-vector").hexEncodedString(),
+            "65de07a9c6110f16b6b7c64e63c71437d88d122344e1a67d2c932a16187cce2f"
+        )
+    }
+}

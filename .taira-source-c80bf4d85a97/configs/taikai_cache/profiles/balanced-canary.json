@@ -1,0 +1,24 @@
+{
+  "profile_id": "balanced-canary",
+  "rollout_stage": "canary",
+  "description": "Conservative hot/warm tiers tuned for SNNet-14 canary deployments.",
+  "annotations": {
+    "ticket": "SNNet-14D",
+    "approved_by": "Ops Guild / Storage Team",
+    "profile_version": "2026-03-12"
+  },
+  "taikai_cache": {
+    "hot_capacity_bytes": 8388608,
+    "hot_retention_secs": 45,
+    "warm_capacity_bytes": 33554432,
+    "warm_retention_secs": 180,
+    "cold_capacity_bytes": 268435456,
+    "cold_retention_secs": 3600,
+    "qos": {
+      "priority_rate_bps": 83886080,
+      "standard_rate_bps": 41943040,
+      "bulk_rate_bps": 12582912,
+      "burst_multiplier": 4
+    }
+  }
+}

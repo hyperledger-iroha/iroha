@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Sugeng rawuh ring Hyperledger Iroha!",
+  "error.trace_config_setup": "Botên dados nyetel pelacak konfigurasi",
+  "error.config": "Kasalahan konfigurasi!",
+  "error.logger": "Botên dados nginisialisasi sistem log",
+  "error.start": "Iroha botên dados kawiwitan",
+  "error.run": "Kasalahan kadadosan ritatkala Iroha mlampah",
+  "error.start_p2p": "Jaringan P2P botên dados katandatang",
+  "error.init_kura": "Kura (panyimpen blok) botên dados nginisialisasi",
+  "error.start_dev_telemetry": "Layanan telemetri pangembang botên dados katandatang",
+  "error.start_telemetry": "Layanan telemetri botên dados katandatang",
+  "error.listen_os_signal": "Botên dados nyetel nglendengang sinyal OS",
+  "error.start_torii": "Torii (gerbang Iroha HTTP API) botên dados katandatang"
+}

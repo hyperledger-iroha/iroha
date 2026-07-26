@@ -1,0 +1,18 @@
+diff --git a/crates/iroha_data_model/src/account/address.rs b/crates/iroha_data_model/src/account/address.rs
+index d16c53db7..150678048 100644
+--- a/crates/iroha_data_model/src/account/address.rs
++++ b/crates/iroha_data_model/src/account/address.rs
+@@ -619,7 +621,12 @@ impl AccountAddress {
+         })
+     }
+ 
+-    pub(crate) fn ensure_domain_matches(
++    /// Check that the provided domain matches the selector embedded in this address.
++    ///
++    /// # Errors
++    ///
++    /// Returns [`AccountAddressError::DomainMismatch`] when domains do not match.
++    pub fn ensure_domain_matches(
+         &self,
+         domain: &DomainId,
+     ) -> Result<(), AccountAddressError> {

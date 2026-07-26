@@ -1,0 +1,20 @@
+<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
+  <pacs:FIToFIPmtStsRpt>
+    <pacs:GrpHdr>
+      <pacs:MsgId>STATUS-FIXTURE-1</pacs:MsgId>
+      <pacs:CreDtTm>2025-01-01T00:10:00Z</pacs:CreDtTm>
+    </pacs:GrpHdr>
+    <pacs:OrgnlGrpInfAndSts>
+      <pacs:OrgnlMsgId>STATUS-ORIG-1</pacs:OrgnlMsgId>
+      <pacs:OrgnlMsgNmId>pacs.008.001.08</pacs:OrgnlMsgNmId>
+      <pacs:GrpSts>ACSC</pacs:GrpSts>
+    </pacs:OrgnlGrpInfAndSts>
+    <pacs:TxInfAndSts>
+      <pacs:StsId>STATUS-TX-1</pacs:StsId>
+      <pacs:TxSts>ACSC</pacs:TxSts>
+      <pacs:StsRsnInf>
+        <pacs:AddtlInf>settled by fixture report</pacs:AddtlInf>
+      </pacs:StsRsnInf>
+    </pacs:TxInfAndSts>
+  </pacs:FIToFIPmtStsRpt>
+</pacs:Document>

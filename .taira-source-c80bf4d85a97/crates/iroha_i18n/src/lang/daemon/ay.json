@@ -1,0 +1,14 @@
+{
+  "info.welcome": "¡Hiperledger Iroha ukarux walikpun jutapxtaxa!",
+  "error.trace_config_setup": "Janiw configuración rastreo ukax utt’ayañjamäkiti",
+  "error.config": "Configuración ukan pantjasiwipa",
+  "error.logger": "Janiw logger qalltañjamäkiti",
+  "error.start": "Iroha qalltañax janiw atipkanti",
+  "error.run": "Pantjasiwix Iroha ukan t’ijtäwipanx utjawayi",
+  "error.start_p2p": "Janiw red de peer-to-peer ukax qalltañjamäkiti",
+  "error.init_kura": "Kura (bloque almacenamiento) ukax janiw qalltañjamäkiti .",
+  "error.start_dev_telemetry": "Janiw dev telemetría servicio qalltañjamäkiti",
+  "error.start_telemetry": "Janiwa servicio telemetría qalltañakiti",
+  "error.listen_os_signal": "Janiw OS señales ukanakatak ist’añ wakicht’añjamäkiti",
+  "error.start_torii": "Torii (Iroha HTTP API Gateway) ukax janiw qalltañjamäkiti."
+}

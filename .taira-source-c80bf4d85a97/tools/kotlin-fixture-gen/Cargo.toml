@@ -1,0 +1,11 @@
+[package]
+name = "kotlin-fixture-gen"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["json", "transparent_api"] }
+iroha_crypto = { path = "../../crates/iroha_crypto" }
+norito = { path = "../../crates/norito" }
+hex = { version = "0.4.3", default-features = false, features = ["std"] }

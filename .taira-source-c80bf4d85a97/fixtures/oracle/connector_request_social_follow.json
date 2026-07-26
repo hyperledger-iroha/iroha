@@ -1,0 +1,26 @@
+{
+  "body_hash": "hash:487DD96421AFF6F909C073A32BF866533D3711262500E7FD40C7FD0987069B87#0E75",
+  "connector_id": "twitter-follow",
+  "connector_version": 1,
+  "endpoint": "/v1/follow",
+  "feed_config_version": [
+    1
+  ],
+  "feed_id": [
+    "social_follow_twitter"
+  ],
+  "headers": {
+    "x-challenge-sig": {
+      "kind": "Hashed",
+      "value": "hash:4B17D11846718A3465E6FC5FC140E09A6B4ED9D4864CFBF7E9BE235573977701#5186"
+    }
+  },
+  "method": {
+    "method": "Get",
+    "value": null
+  },
+  "query": {
+    "handle": "sora_xor"
+  },
+  "slot": 15
+}

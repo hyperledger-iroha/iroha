@@ -1,0 +1,16 @@
+{
+  "version": "2024-05-01",
+  "source": "sample",
+  "entries": [
+    {
+      "settlement_account": "DLVRY-ACC",
+      "bic": "DEUTDEFF",
+      "account_id": "delivery@securities"
+    },
+    {
+      "settlement_account": "RCVG-ACC",
+      "bic": "MARKDEFF",
+      "account_id": "receiving@securities"
+    }
+  ]
+}

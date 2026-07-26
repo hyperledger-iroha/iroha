@@ -1,0 +1,287 @@
+{
+  "version": 1,
+  "pop": "soranet-pop-m0",
+  "scenarios": [
+    {
+      "id": "prefix-withdrawal",
+      "title": "Prefix withdrawal / failover",
+      "description": "Withdraw one upstream prefix, validate alerting, and prove cache + resolver health before restore.",
+      "alert": "BgpSessionFlap",
+      "benchmarks": {
+        "alert_budget_seconds": 300,
+        "recovery_budget_seconds": 900,
+        "max_backlog_percent": 10
+      },
+      "inject": [
+        {
+          "name": "Withdraw primary prefix",
+          "command": [
+            "echo",
+            "simulate prefix withdraw for soranet-pop-m0"
+          ],
+          "timeout_seconds": 120,
+          "evidence": [
+            "FRR drain timers observed"
+          ]
+        },
+        {
+          "name": "Observe scrape loss",
+          "command": [
+            "echo",
+            "watch GatewayScrapeMissing alert fire"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "Alertmanager entry captured"
+          ]
+        }
+      ],
+      "verify": [
+        {
+          "name": "Verify cache hit floor",
+          "command": [
+            "echo",
+            "ensure cache hit rate floor stays above 0.89"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "Grafana cache hit panel screenshot"
+          ]
+        },
+        {
+          "name": "Check backlog gauges",
+          "command": [
+            "echo",
+            "review hedging/backlog gauges for spillover"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "Backlog gauge snapshot"
+          ]
+        }
+      ],
+      "remediate": [
+        {
+          "name": "Restore prefix",
+          "command": [
+            "echo",
+            "restore primary prefix and clear drains"
+          ],
+          "timeout_seconds": 120,
+          "evidence": [
+            "FRR route state restored"
+          ]
+        },
+        {
+          "name": "Confirm alert recovery",
+          "command": [
+            "echo",
+            "ensure GatewayScrapeMissing clears"
+          ],
+          "timeout_seconds": 120,
+          "evidence": [
+            "Alert resolved with timestamp"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "trustless-verifier-failure",
+      "title": "Trustless verifier stalled pipeline",
+      "description": "Stop the trustless verifier path to force cache binding failures and prove quarantine + alerting.",
+      "alert": "GatewayVerifierStall",
+      "benchmarks": {
+        "alert_budget_seconds": 240,
+        "recovery_budget_seconds": 600,
+        "max_backlog_percent": 5
+      },
+      "inject": [
+        {
+          "name": "Pause verifier process",
+          "command": [
+            "echo",
+            "pause verifier service to trigger stall"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "Verifier pause command issued"
+          ]
+        },
+        {
+          "name": "Send probe",
+          "command": [
+            "echo",
+            "run probe fetch against gateway"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "Probe request id saved"
+          ]
+        }
+      ],
+      "verify": [
+        {
+          "name": "Check cache binding alerts",
+          "command": [
+            "echo",
+            "confirm moderation/cache-version alerts raised"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "Alert sample recorded"
+          ]
+        },
+        {
+          "name": "Inspect quarantine counters",
+          "command": [
+            "echo",
+            "inspect quarantine counters for stalled receipts"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "Quarantine counter snapshot"
+          ]
+        }
+      ],
+      "remediate": [
+        {
+          "name": "Resume verifier",
+          "command": [
+            "echo",
+            "resume verifier service and replay receipts"
+          ],
+          "timeout_seconds": 120,
+          "evidence": [
+            "Verifier resume log excerpt"
+          ]
+        },
+        {
+          "name": "Validate backpressure cleared",
+          "command": [
+            "echo",
+            "confirm backlog gauges below 5%"
+          ],
+          "timeout_seconds": 120,
+          "evidence": [
+            "Backlog cleared snapshot"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "resolver-brownout",
+      "title": "Resolver RAD sync brownout",
+      "description": "Throttle resolver RAD sync to prove ResolverProofStale alerting and GAR rollback steps.",
+      "alert": "ResolverProofStale",
+      "benchmarks": {
+        "alert_budget_seconds": 300,
+        "recovery_budget_seconds": 600,
+        "max_backlog_percent": 8
+      },
+      "inject": [
+        {
+          "name": "Throttle RAD sync",
+          "command": [
+            "echo",
+            "simulate RAD sync throttle for resolver"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "RAD sync throttle applied"
+          ]
+        },
+        {
+          "name": "Record proof age",
+          "command": [
+            "echo",
+            "capture proof age before alert"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "Proof age snapshot"
+          ]
+        }
+      ],
+      "verify": [
+        {
+          "name": "Watch ResolverProofStale",
+          "command": [
+            "echo",
+            "confirm ResolverProofStale alert triggers"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "Alertmanager screen grab"
+          ]
+        },
+        {
+          "name": "Validate GAR enforcement pause",
+          "command": [
+            "echo",
+            "check GAR enforcement paused for stale proofs"
+          ],
+          "timeout_seconds": 60,
+          "evidence": [
+            "GAR pause note"
+          ]
+        }
+      ],
+      "remediate": [
+        {
+          "name": "Restore RAD sync",
+          "command": [
+            "echo",
+            "restore RAD sync cadence"
+          ],
+          "timeout_seconds": 120,
+          "evidence": [
+            "RAD sync restored log"
+          ]
+        },
+        {
+          "name": "Re-arm enforcement",
+          "command": [
+            "echo",
+            "re-arm GAR enforcement and note proof ages"
+          ],
+          "timeout_seconds": 120,
+          "evidence": [
+            "Enforcement resume note"
+          ]
+        }
+      ]
+    }
+  ],
+  "schedule": [
+    {
+      "quarter": "2025-Q4",
+      "scenarios": [
+        "prefix-withdrawal"
+      ],
+      "owner": "sre-oncall"
+    },
+    {
+      "quarter": "2026-Q1",
+      "scenarios": [
+        "trustless-verifier-failure"
+      ],
+      "owner": "sre-oncall"
+    },
+    {
+      "quarter": "2026-Q2",
+      "scenarios": [
+        "resolver-brownout"
+      ],
+      "owner": "sre-oncall"
+    },
+    {
+      "quarter": "2026-Q3",
+      "scenarios": [
+        "prefix-withdrawal",
+        "trustless-verifier-failure",
+        "resolver-brownout"
+      ],
+      "owner": "sre-oncall"
+    }
+  ]
+}

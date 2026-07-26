@@ -1,0 +1,6 @@
+{
+  "policy_override": {
+    "transport_policy": "soranet-strict",
+    "anonymity_policy": "anon-strict-pq"
+  }
+}

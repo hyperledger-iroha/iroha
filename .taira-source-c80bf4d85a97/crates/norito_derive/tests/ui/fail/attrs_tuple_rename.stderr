@@ -1,0 +1,5 @@
+error: #[norito(rename = ...)] is only allowed on named fields
+ --> tests/ui/fail/attrs_tuple_rename.rs:4:12
+  |
+4 | struct Tup(#[norito(rename = "x")] u32, String);
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^

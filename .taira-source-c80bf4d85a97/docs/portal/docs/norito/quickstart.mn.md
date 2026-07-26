@@ -1,0 +1,156 @@
+---
+lang: mn
+direction: ltr
+source: docs/portal/docs/norito/quickstart.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
+title: Norito Quickstart
+description: Build, validate, and deploy a Kotodama contract with the release tooling and default single-peer network.
+slug: /norito/quickstart
+translator: machine-google-reviewed
+---
+
+Энэхүү танилцуулга нь хөгжүүлэгчид суралцахдаа дагаж мөрдөх ёстой ажлын урсгалыг тусгасан болно
+Norito болон Kotodama нь анх удаа: тодорхойлогч нэг үет сүлжээг ачаалах,
+гэрээг эмхэтгэж, дотооддоо хатаагаад дараа нь Torii-ээр дамжуулан илгээнэ үү.
+лавлагаа CLI.
+
+Гэрээний жишээ нь дуудлага хийгчийн дансанд түлхүүр/утга хос бичдэг тул та боломжтой
+`iroha` ашиглан гаж нөлөөг нэн даруй шалгана уу.
+
+## Урьдчилсан нөхцөл
+
+- Compose V2-г идэвхжүүлсэн [Docker](https://docs.docker.com/engine/install/) (ашигласан)
+  `defaults/docker-compose.single.yml`-д тодорхойлсон түүврийн үе тэнгийн загварыг эхлүүлэх).
+- Хэрэв та татаж авахгүй бол туслах хоёртын файлыг бүтээхэд зориулсан Rust toolchain (1.76+).
+  хэвлэгдсэн нь.
+- `koto build`, `ivm_run`, `iroha` хоёртын файлууд. Та тэдгээрийг дээрээс нь барьж болно
+  Доор үзүүлсэн шиг ажлын талбарыг шалгах эсвэл тохирох хувилбарыг татаж авах:
+
+```sh
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
+cargo install --locked --path crates/iroha_cli --bin iroha
+```
+
+> Дээрх хоёртын файлуудыг бусад ажлын талбартай зэрэгцүүлэн суулгахад аюулгүй.
+> Тэд хэзээ ч `serde`/`serde_json`-тэй холбогддог; Norito кодекууд нь төгсгөлөөс төгсгөл хүртэл хэрэгждэг.
+
+## 1. Нэг үет хөгжүүлэлтийн сүлжээг эхлүүлэх
+
+Хадгалах газар нь `kagami swarm` үүсгэсэн Docker Compose багцыг агуулдаг.
+(`defaults/docker-compose.single.yml`). Энэ нь анхдагч генезийг утсаар холбодог, үйлчлүүлэгч
+тохиргоо, эрүүл мэндийн датчикууд, тиймээс Torii `http://127.0.0.1:8080` хаягаар холбогдож болно.
+
+```sh
+docker compose -f defaults/docker-compose.single.yml up --build
+```
+
+Савыг ажиллуулж орхи (урд талд эсвэл салгасан). Бүгд
+дараагийн CLI дуудлагууд нь `defaults/client.toml`-ээр дамжуулан энэ үе тэнгийнхэн рүү чиглэдэг.
+
+## 2. Гэрээг зохиогч
+
+Ажлын лавлах үүсгээд хамгийн бага Kotodama жишээг хадгал:
+
+```sh
+mkdir -p target/quickstart
+cat > target/quickstart/hello.ko <<'KO'
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+KO
+```
+
+> Kotodama эх сурвалжийг хувилбарын удирдлагад байлгахыг илүүд үзнэ үү. Портал дээр байрлуулсан жишээнүүд
+> мөн хэрэв та [Norito жишээ галлерей](./examples/) дээрээс авах боломжтой.
+> илүү баялаг эхлэлийн цэгийг хүсч байна.
+
+## 3. IVM ашиглан эмхэтгэж хуурай ажиллуулна
+
+Гэрээг IVM/Norito байт код (`.to`) болгон эмхэтгэж, дотооддоо гүйцэтгэнэ.
+Сүлжээнд хүрэхээсээ өмнө хост системийн дуудлагууд амжилттай ажиллаж байгааг баталгаажуулна уу:
+
+```sh
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
+
+ivm_run target/quickstart/hello.to --args '{}'
+```
+
+Гүйгч нь `debug::info("Hello from Kotodama")` бүртгэлийг хэвлэж, гүйцэтгэнэ
+Дооглогдсон хостын эсрэг `SET_ACCOUNT_DETAIL` систем. Хэрэв нэмэлт `ivm_tool`
+хоёртын хувилбар боломжтой, `ivm_tool inspect target/quickstart/hello.to`-г харуулна
+ABI толгой хэсэг, онцлог битүүд болон экспортлогдсон нэвтрэх цэгүүд.
+
+## 4. Torii-ээр дамжуулан байт кодыг илгээнэ үү
+
+Зангилаа ажиллаж байгаа үед CLI ашиглан эмхэтгэсэн байт кодыг Torii руу илгээнэ үү.
+Өгөгдмөл хөгжүүлэлтийн таних тэмдэг нь нийтийн түлхүүрээс үүсэлтэй
+`defaults/client.toml` тул дансны ID нь байна
+```
+<i105-account-id>
+```
+
+Torii URL, гинжин ID болон гарын үсэг зурах түлхүүрийг оруулахын тулд тохиргооны файлыг ашиглана уу:
+
+```sh
+iroha --config defaults/client.toml \
+  transaction ivm \
+  --path target/quickstart/hello.to
+```
+
+CLI нь гүйлгээг Norito-ээр кодлож, dev түлхүүрээр гарын үсэг зурж,
+гүйж байгаа үе тэнгийнхэнд нь оруулдаг. `set_account_detail`-ийн Docker бүртгэлийг үзээрэй
+syscall эсвэл хийсэн гүйлгээний хэшийн CLI гаралтыг хянах.
+
+## 5. Төрийн өөрчлөлтийг баталгаажуулна уу
+
+Гэрээнд бичсэн дансны дэлгэрэнгүй мэдээллийг авахын тулд CLI профайлыг ашиглана уу:
+
+```sh
+iroha --config defaults/client.toml \
+  account meta get \
+  --id <i105-account-id> \
+  --key example | jq .
+```
+
+Та Norito дэмждэг JSON ачааллыг харах ёстой:
+
+```json
+{
+  "hello": "world"
+}
+```
+
+Хэрэв утга байхгүй бол Docker бичих үйлчилгээ хэвээр байгаа эсэхийг баталгаажуулна уу.
+ажиллаж байгаа бөгөөд `iroha`-ийн мэдээлсэн гүйлгээний хэш нь `Committed`-д хүрсэн байна.
+муж.
+
+## Дараагийн алхамууд
+
+- Автоматаар үүсгэгдсэн [жишээ галерей](./examples/)-тай танилцана уу.
+  Norito системтэй Norito илүү дэвшилтэт хэсгүүдийн зураглал.
+- Илүү гүнзгийрүүлэхийн тулд [Norito эхлэх гарын авлагыг](./getting-started) уншина уу.
+  хөрвүүлэгч/гүйгч хэрэгслийн тайлбар, манифест байршуулалт, IVM
+  мета өгөгдөл.
+- Өөрийнхөө гэрээг давтахдаа `npm run sync-norito-snippets`-г ашиглана уу
+  ажлын талбар нь татаж авах боломжтой хэсгүүдийг сэргээхийн тулд портал баримт бичиг болон олдворууд үлдэх болно
+  `crates/ivm/docs/examples/` доорх эх сурвалжуудтай синхрончлогдсон.

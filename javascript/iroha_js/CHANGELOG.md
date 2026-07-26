@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Bound validation-fee policy and payout-lifecycle proposal fingerprints to
+  the complete first-release PLAIN electorate rules. Both native exports now
+  validate exact JSON and compute canonical `ProposalKind` fingerprints, and
+  the JavaScript/TypeScript package exposes both required-argument helpers
+  without a fallback hashing path.
 - Bound the `CancelAssetLock` lock-ID preimage to the public V1 limit of 4,096
   UTF-8 bytes while preserving the fixed 32-byte `EscrowId` wire field.
 - Added strict JavaScript/TypeScript `CancelAssetLock` parity. The new builder

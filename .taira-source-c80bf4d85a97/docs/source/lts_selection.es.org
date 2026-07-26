@@ -1,0 +1,196 @@
+#+LANGUAGE: es
+#+DIRECTION: ltr
+#+SOURCE: docs/source/lts_selection.org
+#+STATUS: complete
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: 1535fc970027c05003b4e03135f47b565d1434f8dc3c42946525a1b16252d40d
+#+SOURCE_LAST_MODIFIED: 2026-01-04T16:47:58+00:00
+#+TRANSLATION_LAST_REVIEWED: 2026-02-07
+
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+#+TRANSLATOR: machine-google-reviewed
+
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* Acerca de
+
+Con el fin de preservar los recursos de ingeniería, es de nuestro interés
+intereses limitar el alcance del apoyo posterior a la liberación. si uno tiene
+varias versiones de Iroha ejecutándose en paralelo, es posible que deban
+Replicar el trabajo de soporte tantas veces como paralelos haya.
+versiones.
+
+En lugar de intentar mal soportar múltiples versiones, intentamos
+atender el 80% de los casos de uso con el 20% del esfuerzo y alcanzar un
+compromiso entre admitir todas las versiones publicadas por igual y solo
+compatible con la última versión estable.
+
+Específicamente, admitimos la última versión =stable=. A menudo esto
+La versión no está tan bien probada, bien documentada o
+bien respaldado por los SDK, además de cambiar a menudo en términos de
+por lo tanto tener una cadencia de lanzamiento mensual y se elige un lanzamiento por año
+ser el objetivo de apoyo y desarrollo a largo plazo.
+
+* Criterios de selección de LTS
+
+La siguiente es una lista no exhaustiva de consideraciones recomendadas.
+para seleccionar una versión particular como candidata a LTS
+
+1. Es poco probable que la versión contenga problemas importantes /conocidos/ que
+   impediría que fuera útil.
+
+   Más específicamente, el comunicado debe tener una buena cobertura de un
+   caso de uso básico, por ejemplo, (Pre-)RC-6[fn:1] fue la última versión que
+   contenía el antiguo motor de consenso. Dado que el actor basado
+   consenso tenía un rendimiento estable máximo de 10 TPS, (Pre-)RC-6 fue
+   no está etiquetado como LTS, a pesar de haberse utilizado como tal.
+
+   RC-9 contenía todas las funciones necesarias para ejecutar un nodo Iroha
+   sobre el nuevo consenso, algunos cambios en la estructura del
+   configuración y algunas correcciones al subsistema =p2p=. Podría haber
+   llenó todos los nichos posibles de cualquier proyecto basado en Iroha, y
+   como tal, fue etiquetado como un lanzamiento LTS a pesar de estar peor
+   probado.
+
+   Los lanzamientos RC8, RC12, RC13 y RC17 fueron descalificados por esta razón.
+   criterio.
+
+2. Si hay una característica importante que implica una rotura de API, el
+   lanzamiento que tiene la versión más estable de la "vieja forma de hacer
+   cosas" debe tener prioridad como candidato a LTS.
+
+   Por ejemplo, RC12 y RC13, fueron las últimas versiones de Iroha que
+   todavía usaba un validador de permisos codificado. Están siendo etiquetados
+   como candidato a LTS se vio impedido por los principales problemas conocidos,
+   particularmente con la estabilidad, la mala cobertura y porque la liberación
+   un LTS después de RC9 habría dividido los recursos de desarrollo
+   de solucionar el problema de los validadores de permisos rígidos y no modificables.
+
+   RC14 y RC15, por otro lado, estaban en el proceso de un lento
+   migración de características. Como tal, las últimas versiones serían
+   consideradas actualizaciones directas sobre la anterior, teniendo más
+   optimizaciones y mejor cobertura de funciones.
+
+3. La versión debe tener todas las funciones para un caso de uso.Esto es diferente al punto 1, porque mientras RC10 y RC13 eran gratuitos
+   de problemas importantes, no ofrecían una cobertura suficientemente completa
+   de las características requeridas por los principales interesados del proyecto.
+
+4. La versión debe ser compatible con todos los SDK.
+
+   Si bien el soporte en Iroha Python se limita en gran medida a LTS
+   candidatos, creando una situación sin salida, es una excepción. el
+   Otros dos SDK importantes, a saber, Kotlin y TypeScript, deben ser compatibles
+   el candidato LTS. Si no se puede hacer que el SDK admita el
+   candidato, la liberación del candidato queda descalificada.
+
+5. La liberación debe ser bien probada.
+
+   Este punto complementa el punto 1, en que falta de características conocidas
+   combinado con una mala cobertura de las pruebas no significa, de hecho, estar libre de
+   problemas importantes.
+
+   Esto generalmente se aplica a todas las versiones posteriores a RC6 y hasta RC17, como
+   Al equipo de desarrollo se le habló de una forma de reestructurar el
+   pruebas de integración, pero el proceso sólo terminó con RC17 y el
+   introducción del marco =pytest=.
+
+   Si bien pasar las pruebas de integración es necesario, no es suficiente,
+   Se requieren las siguientes pruebas mínimas para calificar una versión como
+   un candidato LTS
+
+   1. Pruebas unitarias y de integración. Hay que tener cuidado de ejecutar todos
+      pruebas de integración, incluidas las largas y complicadas. si las pruebas
+      son inusualmente escamosos, lo que es indicativo de un problema, y el
+      la liberación debe ser descalificada (ver [[../../flakyness.org]]).
+
+   2. Pruebas =pytest=, que técnicamente califican como integración
+      pruebas.
+
+   3. Pruebas de longevidad. El candidato debe ser evaluado durante al menos dos
+      semanas para calificar. Si el candidato es aceptado como LTS, el
+      Las pruebas de longevidad deben realizarse durante al menos cuatro semanas.
+
+   4. Pruebas de carga. El candidato a LTS debe cumplir todos los criterios.
+      establecidos por el equipo de control de calidad como operativos y de desarrollo
+      requisitos bajo carga (también conocido como extrafuncional, y
+      erróneamente como no funcional). No producir bloques en un
+      manera oportuna es una descalificación automática. Otro
+      Los criterios de descalificación se dejan a discreción del QA.
+      equipo.
+
+   5. Debe implementarse como contenedor =development= en al menos un
+      proyecto durante al menos dos semanas, sin mayores problemas. RC9 lo hizo
+      no pasar esta prueba y habría sido descalificado con la
+      criterios actualizados enumerados en el presente documento.
+
+6. La liberación debe estar bien documentada.
+
+   No debe contener múltiples características nuevas que carezcan
+   documentación. Cualquier déficit en términos de cobertura de documentación.
+   debe poder repararse dentro del plazo máximo de la ventana de lanzamiento
+   para el candidato. No hacerlo supone una descalificación automática.
+
+Además del procedimiento de liberación regular descrito en
+[[release_procedure.org]], el LTS debe cumplir con los siguientes requisitos adicionales
+pasos.Además/ de realizar un lanzamiento regular, un PR separado con el
+título =[release]: <semver> LTS= donde =<semver>= es la semántica
+Se debe crear una versión del código de la rama de desarrollo. el
+Se debe evitar la lista de verificación regular y, en su lugar, se debe realizar la solicitud de extracción.
+ser revisado por el mismo personal que revisó y aprobó el
+Lanzamiento =stable=. Se necesitan como máximo dos revisiones para garantizar que todos
+los cambios se realizarán en el orden correcto y que no
+los problemas de indocumentados se escaparon.
+
+Una vez que se realiza el lanzamiento de LTS, el CI producirá un contenedor acoplable
+con la versión LTS en la plataforma Alpine Linux y en Ubuntu Linux,
+utilizando la versión nativa de la plataforma de =glibc=. La IC también debe producir
+todos los paquetes compatibles y publicarlos en sus respectivos
+repositorios. Esto significa, por ejemplo, que el paquete AUR se actualiza
+después de que la solicitud de extracción se fusione y produzca el paquete correcto. el
+La página de lanzamiento de GitHub debe completarse con una versión separada titulada
+LTS y que contiene el archivo único =AppImage=. Estas liberaciones deben
+vienen como paquetes separados que están marcados como no instalables junto con el
+versión estable.
+
+* Política de portabilidad
+
+En general, se desaconseja la conversión al LTS. lo siguiente
+Las razones de la portabilidad se consideran aceptables:
+1. Adición que no está vinculada a la API Iroha, como por ejemplo. un general
+   herramienta de ayuda y/o documentación.
+2. Reparar una vulnerabilidad de seguridad importante.
+3. Corregir un error importante.
+4. Corregir un descuido importante del diseño que impide su uso, siempre que
+   Las partes interesadas/usuarios clave de la LTS actual han
+   certificado que un backport es una solución preferible.
+
+Los back-ports deben anunciarse a través de los mismos canales que el lanzamiento.
+mismo. Los cambios requeridos deben etiquetarse como respaldados tanto en el
+versión ascendente en la que se solucionaron y la versión en la que
+han sido retroportados.
+
+El anuncio debe explicar
+1. Por qué se eligió el backport (consulte los motivos anteriores)
+2. ¿Cuál debe ser el impacto del backport?
+3. ¿Cuál es el estado actual de funcionamiento, integración y
+   Pruebas de carga/longevidad.
+
+* Aplicabilidad
+
+La política de lanzamiento LTS/estable debe revisarse tan pronto como se publique la primera
+Se anuncia la versión con todas las funciones de Iroha (v2.0.0). dado no más
+desarrollo activo, el equipo central de desarrollo puede (y debe) ser capaz
+centrarse más en el apoyo a las versiones divergentes.
+
+* Notas a pie de página[nota:1] La convención de nomenclatura se estabilizó mucho antes de que cualquier plan para
+lanzamiento se realizó una versión de Iroha.  Como tal llamar a cualquier versión de
+Iroha una versión candidata tiene algunas implicaciones.  Llamándolos pre
+liberar candidatos es un tipo similar de nombre inapropiado, pero menos atroz,
+porque más que una mala aplicación de un término existente, se trata de una
+invención de un término que /podría/ tener diferencias sutiles con respecto a un
+candidato de liberación.  En realidad estos deberían haberse llamado
+*instantáneas de desarrollo*.  Pero para no romper también la continuidad
+En gran medida con los SDK existentes se optó por un compromiso.

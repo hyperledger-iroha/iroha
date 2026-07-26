@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Welkom bij Hyperledger Iroha!",
+  "error.trace_config_setup": "Kon configuratietracering niet instellen",
+  "error.config": "Configuratiefout",
+  "error.logger": "Kon logger niet initialiseren",
+  "error.start": "Starten van Iroha mislukt",
+  "error.run": "Er is een fout opgetreden tijdens het uitvoeren van Iroha",
+  "error.start_p2p": "Kan peer-to-peer-netwerk niet starten",
+  "error.init_kura": "Kan Kura niet initialiseren (blokopslag)",
+  "error.start_dev_telemetry": "Kan DEV-telemetrieservice niet starten",
+  "error.start_telemetry": "Kan telemetrieservice niet starten",
+  "error.listen_os_signal": "Luisteren naar OS-signalen kan niet worden ingesteld",
+  "error.start_torii": "Kan Torii niet starten (Iroha HTTP API Gateway)"
+}

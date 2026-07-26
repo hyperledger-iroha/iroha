@@ -1,0 +1,12 @@
+extends = ["minimal_with_trusted_peers.toml"]
+
+[streaming.soranet]
+enabled = true
+exit_multiaddr = "/dns/test-exit/quic"
+padding_budget_ms = 42
+access_kind = "read-only"
+channel_salt = "custom.seed.v1"
+provision_spool_dir = "./storage/streaming/soranet_routes_override"
+provision_spool_max_bytes = 0
+provision_window_segments = 4
+provision_queue_capacity = 256

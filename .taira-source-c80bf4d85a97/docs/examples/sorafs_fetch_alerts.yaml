@@ -1,0 +1,41 @@
+groups:
+  - name: sorafs-orchestrator
+    rules:
+      - alert: SoraFSFetchSuccessLow
+        expr: |
+          (sum(rate(sorafs_orchestrator_fetch_failures_total[5m])) /
+           clamp_min(sum(rate(sorafs_orchestrator_fetch_duration_ms_count[5m])), 1))
+          > 0.01
+        for: 10m
+        labels:
+          severity: page
+          team: storage
+        annotations:
+          summary: "SoraFS orchestrator failure rate above 1%"
+          runbook_url: https://docs.iroha.tech/sorafs/runbooks/orchestrator_failures
+      - alert: SoraFSFetchLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (region, le)(rate(sorafs_orchestrator_fetch_duration_ms_bucket[5m]))
+          ) > 250
+        for: 5m
+        labels:
+          severity: page
+          team: storage
+        annotations:
+          summary: "SoraFS orchestrator p95 latency exceeds 250ms"
+          runbook_url: https://docs.iroha.tech/sorafs/runbooks/orchestrator_latency
+      - alert: SoraFSProviderFailureSpike
+        expr: |
+          topk(
+            1,
+            sum by (provider_id)(rate(sorafs_orchestrator_provider_failures_total[5m]))
+          ) > 10
+        for: 15m
+        labels:
+          severity: ticket
+          team: storage
+        annotations:
+          summary: "Provider exhibits sustained orchestrator failures (>10 per 5m)"
+          runbook_url: https://docs.iroha.tech/sorafs/runbooks/orchestrator_provider_health

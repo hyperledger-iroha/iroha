@@ -1,0 +1,87 @@
+[
+  {
+    "id": "http.request",
+    "description": "Ingress HTTP/3 requests processed by the SoraGlobal Gateway data plane.",
+    "unit": "request",
+    "price_micros": 5,
+    "region_multipliers_bps": {
+      "NA": 10000,
+      "EU": 9500,
+      "APAC": 11000,
+      "LATAM": 10250
+    },
+    "discount_tiers": [
+      { "threshold": 1000000, "discount_bps": 500 },
+      { "threshold": 5000000, "discount_bps": 900 }
+    ]
+  },
+  {
+    "id": "http.egress_gib",
+    "description": "Egress bandwidth served from the gateway cache/origin, measured in GiB.",
+    "unit": "gibibyte",
+    "price_micros": 250000,
+    "region_multipliers_bps": {
+      "NA": 10000,
+      "EU": 9500,
+      "APAC": 11000,
+      "LATAM": 10250
+    },
+    "discount_tiers": [
+      { "threshold": 100, "discount_bps": 300 },
+      { "threshold": 300, "discount_bps": 1000 }
+    ]
+  },
+  {
+    "id": "dns.doh_query",
+    "description": "DNS-over-HTTPS/QUIC queries relayed by the gateway resolver layer.",
+    "unit": "request",
+    "price_micros": 3,
+    "region_multipliers_bps": {
+      "NA": 10000,
+      "EU": 9800,
+      "APAC": 10500,
+      "LATAM": 10000
+    },
+    "discount_tiers": [
+      { "threshold": 2000000, "discount_bps": 1000 }
+    ]
+  },
+  {
+    "id": "waf.decision",
+    "description": "WAF enforcement decisions (block/challenge/allow) evaluated on ingress traffic.",
+    "unit": "decision",
+    "price_micros": 20,
+    "region_multipliers_bps": {
+      "GLOBAL": 10000
+    },
+    "discount_tiers": []
+  },
+  {
+    "id": "car.verification_ms",
+    "description": "Aggregated milliseconds spent verifying trustless CAR payloads (Merkle/KZG/SDR).",
+    "unit": "ms",
+    "price_micros": 10,
+    "region_multipliers_bps": {
+      "GLOBAL": 10000
+    },
+    "discount_tiers": [
+      { "threshold": 500000, "discount_bps": 1500 }
+    ]
+  },
+  {
+    "id": "storage.gib_month",
+    "description": "Pinned storage billed in GiB-month with SoraNS anchor retention.",
+    "unit": "gib-month",
+    "price_micros": 180000,
+    "region_multipliers_bps": {
+      "NA": 10000,
+      "EU": 9700,
+      "APAC": 10300,
+      "LATAM": 10000
+    },
+    "discount_tiers": [
+      { "threshold": 50, "discount_bps": 500 },
+      { "threshold": 200, "discount_bps": 1000 }
+    ]
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Mauya kuHyperledger Iroha!",
+  "error.trace_config_setup": "Hatina kukwanisa kugadzirisa kutevera konfigurazheni",
+  "error.config": "Kukanganisa kwekonfigurazheni!",
+  "error.logger": "Hatina kukwanisa kutanga sisitimu yekunyora marekodhi",
+  "error.start": "Hatina kukwanisa kutanga Iroha",
+  "error.run": "Kukanganisa kwakaitika panguva yekumhanya Iroha",
+  "error.start_p2p": "Hatina kukwanisa kutanga network yeP2P",
+  "error.init_kura": "Hatina kukwanisa kutanga Kura (chengetedzo yema block)",
+  "error.start_dev_telemetry": "Hatina kukwanisa kutanga sevhisi ye telemetry yevanogadzira",
+  "error.start_telemetry": "Hatina kukwanisa kutanga sevhisi ye telemetry",
+  "error.listen_os_signal": "Hatina kukwanisa kugadzirisa kunzwa masaini eOS",
+  "error.start_torii": "Hatina kukwanisa kutanga Torii (gedhi reIroha HTTP API)"
+}

@@ -1,0 +1,60 @@
+<!-- Auto-generated stub for Chinese (Simplified) (zh-hans) translation. Replace this content with the full translation. -->
+
+---
+lang: zh-hans
+direction: ltr
+source: docs/portal/docs/norito/examples/register-and-mint.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 4e686495c642a08740504c4bb5f88e623c89a896787388b61e4451f550f87af6
+source_last_modified: "2026-03-26T13:01:47.376183+00:00"
+translation_last_reviewed: 2026-04-08
+translator: machine-google-reviewed
+---
+
+---
+slug: /norito/examples/register-and-mint
+title: 注册域名和铸币资产
+description: 演示许可的域创建、资产注册和确定性铸币。
+source: crates/ivm/docs/examples/13_register_and_mint.ko
+---
+
+演示许可的域创建、资产注册和确定性铸币。
+
+## 账本演练
+
+- 确保目标帐户（例如，Alice 的 `<i105-account-id>`）存在，镜像每个 SDK 快速入门中的设置阶段。
+- 调用 `register_and_mint` 入口点来创建 ROSE 资产定义并在一笔交易中向 Alice 铸造 250 个单位。
+- 通过`client.request(FindAccountAssets)`或`iroha ledger asset list all --verbose`验证余额以确认铸币成功。
+
+## 相关SDK指南
+
+- [Rust SDK 快速入门](/sdks/rust)
+- [Python SDK 快速入门](/sdks/python)
+- [JavaScript SDK 快速入门](/sdks/javascript)
+
+[下载Kotodama源码](/norito-snippets/register-and-mint.ko)
+
+```kotodama
+// Register a new asset and mint some to the specified account.
+seiyaku RegisterAndMint {
+    kotoage fn register_and_mint() authorize("AssetManager") {
+        // name, symbol, quantity (precision or supply depending on host), mintable flag
+        let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+        let symbol = "ROSE";
+        let qty = 1000;
+        // interpretation depends on data model (example only)
+        let mintable = 1;
+        // 1 = mintable, 0 = fixed
+        ledger::asset::register(
+            asset_definition: asset,
+            name: symbol,
+            scale: qty,
+            mintable: mintable,
+        );
+        // Mint 250 ROSE to Alice
+        let to = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", );
+        ledger::asset::mint(account: to, asset_definition: asset, amount: 250);
+    }
+}
+```

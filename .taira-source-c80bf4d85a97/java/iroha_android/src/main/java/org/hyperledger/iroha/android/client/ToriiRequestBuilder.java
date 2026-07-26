@@ -1,0 +1,189 @@
+package org.hyperledger.iroha.android.client;
+
+import java.net.URI;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.Objects;
+import org.hyperledger.iroha.android.client.transport.TransportRequest;
+import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
+import org.hyperledger.iroha.android.tx.SignedTransaction;
+
+/** Builds Torii HTTP requests for submitting signed transactions. */
+final class ToriiRequestBuilder {
+  private static final String SUBMIT_PATH = "/v1/pipeline/transactions";
+  private static final String SUBMIT_ENTRYPOINT_PATH = "/v1/pipeline/transaction-entrypoints";
+  private static final String STATUS_PATH = "/v1/pipeline/transactions/status";
+
+  private ToriiRequestBuilder() {}
+
+  static TransportRequest buildSubmitRequest(
+      final URI baseUri,
+      final SignedTransaction transaction,
+      final Duration timeout,
+      final Map<String, String> extraHeaders,
+      final String acceptHeader) {
+    Objects.requireNonNull(baseUri, "baseUri");
+    Objects.requireNonNull(transaction, "transaction");
+    final URI target = resolve(baseUri, SUBMIT_PATH);
+    final byte[] norito;
+    try {
+      norito = SignedTransactionEncoder.encodeVersioned(transaction);
+    } catch (final NoritoException ex) {
+      throw new IllegalStateException("Failed to encode signed transaction", ex);
+    }
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport", baseUri, target, extraHeaders, norito);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Content-Type", "application/x-norito")
+            .addHeader("Accept", acceptHeader)
+            .setBody(norito);
+    applyHeaders(builder, extraHeaders);
+    applyTimeout(builder, timeout);
+    return builder.build();
+  }
+
+  static TransportRequest buildSubmitJsonRequest(
+      final URI baseUri,
+      final byte[] encodedVersionedTransactionJson,
+      final Duration timeout,
+      final Map<String, String> extraHeaders,
+      final String acceptHeader) {
+    return buildJsonIngressRequest(
+        baseUri,
+        SUBMIT_PATH,
+        encodedVersionedTransactionJson,
+        timeout,
+        extraHeaders,
+        acceptHeader,
+        "encodedVersionedTransactionJson");
+  }
+
+  static TransportRequest buildSubmitEntrypointRequest(
+      final URI baseUri,
+      final byte[] encodedVersionedEntrypoint,
+      final Duration timeout,
+      final Map<String, String> extraHeaders,
+      final String acceptHeader) {
+    Objects.requireNonNull(baseUri, "baseUri");
+    Objects.requireNonNull(encodedVersionedEntrypoint, "encodedVersionedEntrypoint");
+    if (encodedVersionedEntrypoint.length == 0) {
+      throw new IllegalArgumentException("encodedVersionedEntrypoint must not be empty");
+    }
+    final URI target = resolve(baseUri, SUBMIT_ENTRYPOINT_PATH);
+    final byte[] body =
+        Arrays.copyOf(encodedVersionedEntrypoint, encodedVersionedEntrypoint.length);
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport", baseUri, target, extraHeaders, body);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Content-Type", "application/x-norito")
+            .addHeader("Accept", acceptHeader)
+            .setBody(body);
+    applyHeaders(builder, extraHeaders);
+    applyTimeout(builder, timeout);
+    return builder.build();
+  }
+
+  static TransportRequest buildSubmitEntrypointJsonRequest(
+      final URI baseUri,
+      final byte[] encodedVersionedEntrypointJson,
+      final Duration timeout,
+      final Map<String, String> extraHeaders,
+      final String acceptHeader) {
+    return buildJsonIngressRequest(
+        baseUri,
+        SUBMIT_ENTRYPOINT_PATH,
+        encodedVersionedEntrypointJson,
+        timeout,
+        extraHeaders,
+        acceptHeader,
+        "encodedVersionedEntrypointJson");
+  }
+
+  static TransportRequest buildStatusRequest(
+      final URI baseUri,
+      final String hashHex,
+      final Duration timeout,
+      final Map<String, String> extraHeaders) {
+    Objects.requireNonNull(baseUri, "baseUri");
+    final String normalizedHash = Objects.requireNonNull(hashHex, "hashHex");
+    if (!normalizedHash.matches("[0-9a-f]{64}")) {
+      throw new IllegalArgumentException(
+          "hashHex must be a canonical lowercase 32-byte transaction hash");
+    }
+    final URI target =
+        resolve(baseUri, STATUS_PATH + "?hash=" + normalizedHash + "&scope=auto");
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport", baseUri, target, extraHeaders, null);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder().setUri(target).setMethod("GET").addHeader("Accept", "application/json");
+    applyHeaders(builder, extraHeaders);
+    applyTimeout(builder, timeout);
+    return builder.build();
+  }
+
+  private static TransportRequest buildJsonIngressRequest(
+      final URI baseUri,
+      final String path,
+      final byte[] bodyBytes,
+      final Duration timeout,
+      final Map<String, String> extraHeaders,
+      final String acceptHeader,
+      final String bodyName) {
+    Objects.requireNonNull(baseUri, "baseUri");
+    Objects.requireNonNull(bodyBytes, bodyName);
+    if (bodyBytes.length == 0) {
+      throw new IllegalArgumentException(bodyName + " must not be empty");
+    }
+    final URI target = resolve(baseUri, path);
+    final byte[] body = Arrays.copyOf(bodyBytes, bodyBytes.length);
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport", baseUri, target, extraHeaders, body);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(target)
+            .setMethod("POST")
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Accept", acceptHeader)
+            .setBody(body);
+    applyHeaders(builder, extraHeaders);
+    applyTimeout(builder, timeout);
+    return builder.build();
+  }
+
+  private static URI resolve(final URI baseUri, final String path) {
+    final String base = baseUri.toString();
+    final String normalizedPath = path.startsWith("/") ? path.substring(1) : path;
+    final String joined = base.endsWith("/")
+        ? base + normalizedPath
+        : base + "/" + normalizedPath;
+    return URI.create(joined);
+  }
+
+  private static void applyHeaders(
+      final TransportRequest.Builder builder, final Map<String, String> headers) {
+    if (headers == null || headers.isEmpty()) {
+      return;
+    }
+    for (Map.Entry<String, String> entry : headers.entrySet()) {
+      if (entry.getKey() != null && entry.getValue() != null) {
+        builder.addHeader(entry.getKey(), entry.getValue());
+      }
+    }
+  }
+
+  private static void applyTimeout(
+      final TransportRequest.Builder builder, final Duration timeout) {
+    if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+      return;
+    }
+    builder.setTimeout(timeout);
+  }
+}

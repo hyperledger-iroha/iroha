@@ -1,0 +1,9 @@
+{
+  "base_fixture": "../1.0.0",
+  "mutations": {
+    "gateway.allowed_compression": []
+  },
+  "notes": [
+    "Ensure the gateway rejects gzip-compressed responses for trustless CAR streaming."
+  ]
+}

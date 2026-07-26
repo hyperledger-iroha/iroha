@@ -1,0 +1,57 @@
+{
+  "descriptor": {
+    "dsids": [
+      1,
+      7
+    ],
+    "touches": [
+      {
+        "dsid": 1,
+        "read": [
+          "orders/",
+          "payments/"
+        ],
+        "write": [
+          "ledger/"
+        ]
+      },
+      {
+        "dsid": 7,
+        "read": [
+          "reports/"
+        ],
+        "write": [
+          "aggregates/",
+          "audits/"
+        ]
+      }
+    ]
+  },
+  "descriptor_hex": "4e525430000023ad8d76e5fa9c3985e46bb6648cf09d009d00000000000000c994722d12fb2071021c020000000000000009080100000000000000090807000000000000007f020000000000000039090801000000000000001c020000000000000008076f72646572732f0a097061796d656e74732f11010000000000000008076c65646765722f3c0908070000000000000012010000000000000009087265706f7274732f1e02000000000000000c0b616767726567617465732f08076175646974732f",
+  "touch_manifest": [
+    {
+      "dsid": 1,
+      "manifest": {
+        "read": [
+          "orders/root"
+        ],
+        "write": [
+          "ledger/settlement"
+        ]
+      }
+    },
+    {
+      "dsid": 7,
+      "manifest": {
+        "read": [
+          "reports/monthly"
+        ],
+        "write": [
+          "aggregates/monthly",
+          "audits/summary"
+        ]
+      }
+    }
+  ],
+  "binding_hex": "0359d52f1553d60009bb07c198dfc7915dba10e36771ee05344c5bfd985bc50b"
+}

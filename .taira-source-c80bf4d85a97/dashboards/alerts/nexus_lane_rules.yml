@@ -1,0 +1,22 @@
+groups:
+  - name: nexus-lane-telemetry
+    interval: 1m
+    rules:
+      - alert: NexusLaneFinalityLagExceeded
+        expr: max_over_time(nexus_lane_finality_lag_slots[10m]) > 12
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Lane finality lag above policy"
+          description: |
+            Lane {{ $labels.lane }} in dataspace {{ $labels.dataspace }} trails the global head by {{ printf "%.0f" $value }} slots (>12). Investigate scheduling health, DA readiness, and pacemaker timers before queues grow.
+      - alert: NexusLaneBacklogHigh
+        expr: max_over_time(nexus_lane_settlement_backlog_xor[10m]) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Lane settlement backlog high"
+          description: |
+            Lane {{ $labels.lane }} in dataspace {{ $labels.dataspace }} accumulated {{ printf "%.2f" $value }} XOR of backlog (>1000 XOR). Review liquidity buffers, router policy, and settlement receipts before breaching regulator thresholds.

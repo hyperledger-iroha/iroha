@@ -1,0 +1,19 @@
+rule_files:
+  - ../soranet_policy_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_orchestrator_brownouts_total'
+        values: '0 0 0 1 2 3 3 3'
+    alert_rule_test:
+      - alertname: SoranetAnonymityBrownout
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoranetAnonymityBrownout
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraNet anonymity brownout triggered"

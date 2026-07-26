@@ -1,0 +1,2 @@
+[console_scripts]
+norito-dump = norito.cli:main

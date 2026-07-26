@@ -1,0 +1,121 @@
+{
+  "title": "SoraFS Capacity Penalties",
+  "uid": "sorafs-capacity",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "tags": ["sorafs", "capacity"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Datasource",
+        "type": "datasource",
+        "pluginId": "prometheus",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "Prometheus"
+        }
+      },
+      {
+        "name": "provider",
+        "label": "Provider",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(sorafs_credit_under_delivery_strikes_total, provider_id)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Under-Delivery Strikes / min",
+      "id": 1,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (provider_id) (rate(sorafs_credit_under_delivery_strikes_total{provider_id=~\"$provider\"}[$__rate_interval]))",
+          "legendFormat": "{{provider_id}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "1/min",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Penalty Events / hr",
+      "id": 2,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum(rate(sorafs_credit_penalty_events_total[$__rate_interval]))",
+          "legendFormat": "events",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "1/h",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Collateral Slashed (nano-XOR)",
+      "id": 3,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum(sorafs_credit_penalty_slashed_total_nano)",
+          "legendFormat": "slashed",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "title": "Providers Below Low-Balance Threshold",
+      "id": 4,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (provider_id) (sorafs_credit_low_balance_flag{provider_id=~\"$provider\"})",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    }
+  ]
+}

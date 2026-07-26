@@ -1,0 +1,32 @@
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/reference/torii-swagger.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+importar SwaggerUiPanel de '@site/src/components/SwaggerUiPanel.jsx';
+
+#API Torii (IU Swagger)
+
+Esta página incorpora o documento Torii OpenAPI usando `swagger-ui-react`. Use-o quando
+você deseja o layout familiar do Swagger, solicitar amostras e a capacidade de experimentar
+solicitações diretamente no navegador.
+
+## Dicas de uso
+
+- Forneça um token de portador no painel para pré-autorizar cada solicitação. Os tokens são
+  encaminhados para o proxy usando o cabeçalho `X-TryIt-Auth` e nunca são persistidos.
+- Configure `TRYIT_PROXY_PUBLIC_URL` ao servir o portal para o widget
+  encaminha solicitações por meio do proxy de teste empacotado. Um banner de aviso aparece
+  se o proxy estiver desabilitado.
+- Escolha um instantâneo OpenAPI no menu suspenso para alternar entre as especificações mais recentes
+  e versões arquivadas geradas por `npm run sync-openapi`.
+- Experimente o console “[Try it](/api/overview#try-it-sandbox-docs-3)” apoiado por proxy
+  para ambientes preparados onde o CORS impede o acesso direto Torii.
+- Mantenha o instantâneo OpenAPI atualizado com `cargo xtask openapi` (consulte
+  `docs/portal/static/openapi/torii.json`).
+

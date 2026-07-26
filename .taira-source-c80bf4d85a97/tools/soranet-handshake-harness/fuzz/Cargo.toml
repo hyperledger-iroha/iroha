@@ -1,0 +1,24 @@
+[package]
+name = "soranet-handshake-harness-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata.cargo-fuzz]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4.10", features = ["arbitrary-derive"] }
+arbitrary = { version = "1.4.2", features = ["derive"] }
+rand = { version = "0.9.2", features = ["std", "std_rng"] }
+soranet-handshake-harness = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "handshake_state_machine"
+path = "fuzz_targets/handshake_state_machine.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,33 @@
+# Reviewed lane summaries are runtime evidence artifacts; do not commit
+# bearer tokens, signing keys, raw payloads, or other runtime-only secrets here.
+--out-dir artifacts/sorafs/production-readiness
+--summary-out artifacts/sorafs/production-readiness/sorafs-production-readiness-summary.json
+--require-gate ai_prescreen,appeal_finance,gateway_compliance,gateway_load,governance_dag,hedging_billing,moderation_panel,orderbook,pdp,pop_credentials,por,potr,reference_sdk_release,repair,reputation,reserve_rent,transparency
+--ai-prescreen-summary artifacts/sorafs/ai-prescreen/summary.json
+--appeal-finance-summary artifacts/sorafs/appeal-finance/summary.json
+--gateway-compliance-summary artifacts/sorafs/gateway-compliance/summary.json
+--gateway-load-summary artifacts/sorafs/gateway-load/summary.json
+--governance-dag-summary artifacts/sorafs/governance-dag/summary.json
+--hedging-billing-summary artifacts/sorafs/hedging-billing/summary.json
+--moderation-panel-summary artifacts/sorafs/moderation-panel/summary.json
+--orderbook-summary artifacts/sorafs/orderbook/summary.json
+--pdp-summary artifacts/sorafs/pdp/summary.json
+--pop-credentials-summary artifacts/sorafs/pop-credentials/summary.json
+--por-summary artifacts/sorafs/por/summary.json
+--potr-summary artifacts/sorafs/potr/summary.json
+--reference-sdk-release-summary artifacts/sorafs/reference-sdk-release/summary.json
+--repair-summary artifacts/sorafs/repair/summary.json
+--reputation-summary artifacts/sorafs/reputation/summary.json
+--reserve-rent-summary artifacts/sorafs/reserve-rent/summary.json
+--transparency-summary artifacts/sorafs/transparency/summary.json
+# Shape-only public trust/continuity values below are not production evidence.
+# Load all four from the reviewed release record before use.
+--foundational-prerequisite-summary artifacts/sorafs/production-readiness/foundational-prerequisites.json
+--foundational-prerequisite-signer-public-key-hex d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
+--foundational-prerequisite-release-sequence 7
+--foundational-prerequisite-previous-envelope-sha256 1111111111111111111111111111111111111111111111111111111111111111
+--deployment-id sorafs-mainnet-2026-06
+--environment production
+--now-unix 1800400000
+--max-summary-artifact-age-secs 1209600
+--dry-run

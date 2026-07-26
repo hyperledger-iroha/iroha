@@ -1,0 +1,519 @@
+# Sora Taira (testnet) validator configuration
+# Network prefix: `taira`
+# Render a per-validator config first, then start with:
+# `irohad --sora --config <rendered-validator-config.toml>`
+# This is the checked-in peer-1 template. Runtime-only validator private keys,
+# onboarding/faucet authorities, and streaming identity keys must come from a
+# user-local `validator_secrets.local.toml` rendered through
+# `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`.
+
+chain = "fc56984b-2be7-431d-840e-21514d1883f0"
+chain_discriminant = 369
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"
+
+trusted_peers = [
+  "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@taira-validator-1.sora.org:1337",
+]
+trusted_peers_pop = [
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" },
+]
+
+[sumeragi]
+role = "validator"
+
+[ivm.banner]
+show = true
+beep = true
+
+[network]
+address = "addr:0.0.0.0:1337#BF18"
+public_address = "addr:taira-validator-1.sora.org:1337#D426"
+max_frame_bytes_tx_gossip = 1048576
+p2p_queue_cap_high = 65536
+p2p_queue_cap_low = 32768
+p2p_post_queue_cap = 65536
+p2p_outbound_frame_queue_max_high_frames = 65536
+p2p_outbound_frame_queue_max_low_frames = 32768
+p2p_subscriber_queue_cap = 65536
+deferred_send_max_per_peer = 8192
+deferred_send_max_bytes_per_peer = 268435456
+deferred_send_max_bytes_total = 134217728
+disconnect_on_post_overflow = false
+
+[torii]
+address = "addr:0.0.0.0:18080#2F16"
+preauth_allow_cidrs = ["127.0.0.1/32", "207.254.29.242/32"]
+max_content_len = 1_073_741_824
+deploy_rate_per_origin_per_sec = 1000
+deploy_burst_per_origin = 2000
+query_rate_per_authority_per_sec = 160
+query_burst_per_authority = 320
+webhooks_enabled = false
+zk_attachments_enabled = false
+
+[torii.cors]
+enabled = true
+allowed_origins = [
+  "http://127.0.0.1:3000",
+  "http://localhost:3000",
+  "https://test.soraswap.org",
+  "https://dweb.link",
+  "https://ipfs.io",
+  "https://cloudflare-ipfs.com",
+  "https://w3s.link",
+  "https://nftstorage.link",
+  "https://bokolo.soramitsu.io",
+  "https://cbsi-banking.soramitsu.io",
+  "https://cbsi-core.soramitsu.io",
+  "https://bokolo-pob.soramitsu.io",
+  "https://bokolo-bred.soramitsu.io",
+  "https://bokolo-anz.soramitsu.io",
+  "https://bokolo-bsp.soramitsu.io",
+  "https://bokolo-m-selen.soramitsu.io",
+  "https://bokolo-ezipei.soramitsu.io",
+  "https://bpng.soramitsu.io",
+  "https://bokolo-explorer.soramitsu.io",
+]
+allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
+allowed_headers = [
+  "accept",
+  "authorization",
+  "content-type",
+  "idempotency-key",
+  "x-api-token",
+  "x-iroha-onboarding-token",
+  "x-iroha-account",
+  "x-iroha-signature",
+  "x-iroha-timestamp-ms",
+  "x-iroha-nonce",
+]
+exposed_headers = ["etag", "location", "retry-after"]
+
+[torii.mcp]
+enabled = true
+profile = "writer"
+expose_operator_routes = false
+allow_tool_prefixes = ["iroha."]
+
+[torii.kagemusha_commands]
+enabled = true
+private_key = "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
+minimum_xor_balance = "1"
+max_tx_value = "1000000000"
+
+[settlement.offline]
+escrow_required = true
+escrow_accounts = { "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" = "REPLACE_WITH_TAIRA_OFFLINE_ESCROW_ACCOUNT" }
+kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"
+kagemusha_artifact_dir = "/var/lib/iroha/kagemusha/v4"
+kagemusha_max_decoded_bytes = 268435456
+
+[torii.account_onboarding]
+authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
+private_key_file = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
+lease_term_years = 1
+additional_permissions = []
+fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
+
+[[torii.account_onboarding.credentials]]
+id = "REPLACE_WITH_TAIRA_ONBOARDING_CREDENTIAL_ID"
+scope = { dataspace = "REPLACE_WITH_TAIRA_ONBOARDING_SCOPE" }
+token_hash = "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
+
+[torii.faucet]
+enabled = true
+authority = "REPLACE_WITH_TAIRA_FAUCET_AUTHORITY"
+private_key_file = "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY_FILE"
+asset_definition_id = "xor#universal"
+amount = "25000"
+pow_difficulty_bits = 4
+pow_scrypt_log_n = 13
+pow_scrypt_r = 8
+pow_scrypt_p = 1
+pow_max_anchor_age_blocks = 256
+pow_adaptive_lookback_blocks = 64
+pow_adaptive_claims_per_extra_bit = 0
+pow_adaptive_max_extra_bits = 0
+pow_vrf_seed_enabled = true
+
+[sorafs.discovery]
+discovery_enabled = true
+known_capabilities = ["torii_gateway", "chunk_range_fetch", "potr_mldsa"]
+
+[sorafs.discovery.admission]
+envelopes_dir = "configs/soranexus/taira/sorafs_admission"
+trusted_council_keys = ["REPLACE_WITH_TAIRA_SORAFS_COUNCIL_PUBLIC_KEY"]
+signature_threshold = "REPLACE_WITH_TAIRA_SORAFS_COUNCIL_SIGNATURE_THRESHOLD"
+
+[sorafs.discovery.publish]
+gateway_base_url = "https://taira.sora.org"
+pin_torii_urls = [
+  "https://taira-validator-1.sora.org",
+  "https://taira-validator-2.sora.org",
+  "https://taira-validator-3.sora.org",
+  "https://taira-validator-4.sora.org",
+]
+
+[sorafs.gateway.untrusted_hosting]
+enabled = true
+path_gateway_redirect = true
+redirect_html_only = true
+
+[sorafs.gateway.untrusted_hosting.cid_host_suffixes]
+live = "sorafs.sora.org"
+taira = "sorafs.taira.sora.org"
+
+[sorafs.repair]
+enabled = false
+claim_ttl_secs = 900
+heartbeat_interval_secs = 60
+max_attempts = 3
+worker_concurrency = 4
+
+[sorafs.gc]
+enabled = false
+interval_secs = 900
+max_deletions_per_run = 500
+retention_grace_secs = 86400
+
+[soracloud_runtime]
+production_mode = true
+
+[soracloud_runtime.inrou]
+enabled = true
+max_concurrent_vms = 8
+proxy_only = false
+start_grace_ms = 30000
+stop_grace_ms = 10000
+
+[soracloud_runtime.submission]
+fee_payer = "sponsor"
+fee_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
+fee_program_revision = 1
+
+[soracloud_runtime.egress]
+default_allow = false
+allowed_hosts = []
+rate_per_minute = 600
+max_bytes_per_minute = 104857600
+
+[sumeragi.block]
+max_transactions = 96
+max_payload_bytes = 16777216
+proposal_queue_scan_multiplier = 4
+
+[sumeragi.queues]
+# The checked-in baseline covers four validators, two authenticated
+# non-validator source lanes, and anonymous delivery.
+# The validator-bundle renderer scales body_bytes to at least
+# (N + authenticated_non_validator_sources + 1) * body_source_bytes.
+authenticated_non_validator_sources = 2
+body_bytes = 242221056
+body_source_bytes = 34603008
+
+[confidential]
+enabled = true
+max_proof_size_bytes = 8388608
+max_proof_bytes_block = 16777216
+
+[zk]
+
+[zk.sccp]
+# One bridge proof plus its receipt fits below the governed 10 MiB transaction ceiling. Four
+# independent proofs may share a block; CPU-heavy work is reserved before cryptographic dispatch.
+# Pending payload state covers 128 maximally full SCCP blocks and is released per accepted proof.
+max_pending_outbound_messages = 65536
+max_pending_outbound_payload_bytes = 268435456
+max_proofs_per_transaction = 1
+max_proofs_per_block = 4
+max_proof_bytes_per_proof = 8388608
+max_proof_bytes_per_transaction = 8388608
+max_proof_bytes_per_block = 33554432
+max_native_headers_per_transaction = 1004
+max_native_headers_per_block = 4016
+max_ethereum_light_client_updates_per_transaction = 128
+max_ethereum_light_client_updates_per_block = 512
+max_native_header_bytes_per_transaction = 8388608
+max_native_header_bytes_per_block = 33554432
+max_secp256k1_recoveries_per_transaction = 1005
+max_secp256k1_recoveries_per_block = 4020
+max_bls_aggregate_checks_per_transaction = 1004
+max_bls_aggregate_checks_per_block = 4016
+max_bls_signer_contributions_per_transaction = 131713
+max_bls_signer_contributions_per_block = 526852
+max_bn254_pairing_checks_per_transaction = 1
+max_bn254_pairing_checks_per_block = 4
+
+[zk.halo2]
+enabled = true
+
+[zk.stark]
+enabled = true
+
+[pipeline.ivm_proved]
+enabled = true
+skip_replay = true
+allowed_circuits = ["ivm-execution-v1"]
+
+[pipeline.gas]
+tech_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+# Fee quoting selects this canonical Base58 asset for the signature-bound
+# pipeline-gas component. The live `xor#universal` alias resolves to this id.
+accepted_assets = ["6TEAJqbb8oEPmLncoNiMRbLEK6tw"]
+[[pipeline.gas.units_per_gas]]
+asset = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+# Nexus fees already charge gas via [nexus.fees].per_gas_unit_fee; this admits
+# signature-bound gas in `FeePaymentIntent` without a second pipeline transfer.
+units_per_gas = 0
+twap_local_per_xor = "1"
+liquidity_profile = "tier1"
+volatility_class = "stable"
+
+[genesis]
+public_key = "ed0120CEF83A365F125EF1CB8F040290A4C5D23561A24CC4C6782AC07506C77003AF00"
+
+[streaming]
+identity_public_key = "REPLACE_WITH_STREAMING_IDENTITY_PUBLIC_KEY"
+identity_private_key = "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY"
+feature_bits = 0b11
+
+[crypto]
+enable_sm_openssl_preview = false
+default_hash = "blake2b-256"
+allowed_signing = ["ed25519", "secp256k1", "bls_normal"]
+sm2_distid_default = "1234567812345678"
+
+[crypto.curves]
+allowed_curve_ids = [1, 3, 4]
+
+[nexus]
+enabled = true
+lane_count = 4
+
+[nexus.registry]
+# Public Taira governance lanes require a manifest with explicit validator
+# account-to-peer bindings. Rendered validator bundles rewrite this to the
+# co-located `manifests` directory.
+manifest_directory = "configs/soranexus/taira/manifests"
+cache_directory = "configs/soranexus/taira/manifests"
+poll_interval_ms = 10000
+
+[nexus.autoscale]
+enabled = true
+# Legacy names: this half-open lane-id range reserves lane 4 for deterministic creation.
+min_lanes = 4
+max_lanes = 5
+target_block_ms = 1000
+scale_out_latency_ratio = 1.50
+scale_in_latency_ratio = 1.10
+scale_out_utilization_ratio = 0.75
+scale_in_utilization_ratio = 0.25
+scale_out_window_blocks = 48
+scale_in_window_blocks = 192
+cooldown_blocks = 128
+per_lane_target_tps = 32
+
+[nexus.staking]
+public_validator_mode = "stake_elected"
+restricted_validator_mode = "admin_managed"
+min_validator_stake = "1"
+stake_asset_id = "xor#universal"
+stake_escrow_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+slash_sink_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+
+[nexus.fees]
+fee_asset_id = "xor#universal"
+fee_sink_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+base_fee = "0"
+per_byte_fee = "0"
+per_instruction_fee = "0.001"
+per_gas_unit_fee = "0.00005"
+sponsor_vault_custody_account_id = "testuﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT"
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "core"
+description = "Primary execution lane"
+dataspace = "universal"
+metadata = { "scheduler.teu_capacity" = "50000000" }
+
+[[nexus.lane_catalog]]
+index = 1
+alias = "governance"
+description = "Governance & parliament traffic"
+dataspace = "governance"
+governance = "parliament"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "zk"
+description = "Zero-knowledge attachments"
+dataspace = "zk"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 3
+alias = "external-poc"
+description = "External PoC traffic"
+dataspace = "is"
+metadata = { "scheduler.teu_capacity" = "25000000" }
+
+[[nexus.dataspace_catalog]]
+alias = "universal"
+id = 0
+description = "Single-lane data space"
+fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
+
+[[nexus.dataspace_catalog]]
+alias = "governance"
+id = 1
+manifest_hash = "0100000000000000000000000000000000000000000000000000000000000000"
+description = "Governance proposals & manifests"
+
+[[nexus.dataspace_catalog]]
+alias = "zk"
+id = 2
+manifest_hash = "0200000000000000000000000000000000000000000000000000000000000000"
+description = "Zero-knowledge proofs and attachments"
+
+[[nexus.dataspace_catalog]]
+alias = "is"
+id = 6647857470246403404
+manifest_hash = "4cbd76b725ef415c000000000000000000000000000000000000000000000000"
+description = "External PoC data space"
+fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
+
+[nexus.governance]
+default_module = "parliament"
+
+[nexus.governance.modules.parliament]
+module_type = "parliament_sortition_jit"
+
+[nexus.governance.modules.parliament.params]
+selection = "multibody_sortition"
+approval_flow = "jit"
+
+[nexus.routing_policy]
+default_lane = 0
+default_dataspace = "universal"
+
+[[nexus.routing_policy.rules]]
+lane = 1
+dataspace = "governance"
+[nexus.routing_policy.rules.matcher]
+instruction = "governance"
+description = "Route governance instructions to the governance lane"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "smartcontract::deploy"
+description = "Route contract deployments to the external IS lane for PoC proof tracking"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "shield"
+description = "Route shield instructions to the external IS lane for dataspace-scoped balances"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "zk::zk_transfer"
+description = "Route private ZK transfers to the external IS lane for dataspace-scoped balances"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "unshield"
+description = "Route unshield instructions to the external IS lane for dataspace-scoped balances"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "register_asset_hidden_zk_pool"
+description = "Route asset-hidden pool registration to the external IS lane"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "asset_hidden_zk_transfer"
+description = "Route asset-hidden ZK transfers to the external IS lane"
+
+[nexus.fusion]
+floor_teu = 2500
+exit_teu = 50000000
+observation_slots = 2
+max_window_slots = 12
+
+[nexus.commit]
+window_slots = 2
+
+[nexus.da]
+q_in_slot_total = 1024
+q_in_slot_per_ds_min = 4
+sample_size_base = 48
+sample_size_max = 64
+threshold_base = 32
+per_attester_shards = 16
+
+[nexus.da.audit]
+sample_size = 16
+window_count = 12
+interval_ms = 600000
+
+[nexus.da.recovery]
+request_timeout_ms = 43200000
+
+[nexus.da.rotation]
+max_hits_per_window = 4
+window_slots = 48
+seed_tag = "iroha:da:rotate:v1\u0000"
+latency_decay = 0.25
+
+[gov]
+plain_voting_enabled = true
+min_bond_amount = "150"
+min_enactment_delay = 600
+window_span = 3600
+min_turnout = 1
+# The reviewed validation-fee policy enacts exactly 3,600 blocks after its
+# referendum closes. The deadline is inclusive; the following block fails closed.
+pipeline_enactment_sla_blocks = 3600
+voting_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+citizenship_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+citizenship_bond_amount = "10000"
+citizenship_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+bond_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+slash_receiver_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+viral_incentive_pool_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+viral_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+parliament_committee_size = 21
+parliament_term_blocks = 43200
+parliament_min_stake = "1"
+parliament_eligibility_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+parliament_alternate_size = 21
+parliament_quorum_bps = 6667
+rules_committee_size = 7
+agenda_council_size = 9
+interest_panel_size = 11
+review_panel_size = 13
+policy_jury_size = 25
+oversight_committee_size = 7
+fma_committee_size = 5
+
+[gov.sorafs_pin_policy]
+# Public SoraFS pinning is permissionless and fee-gated; do not require
+# governance/council signatures on user-submitted manifests.
+require_council_signatures = false
+
+[gov.sorafs_telemetry]
+submitters = ["testuﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T"]

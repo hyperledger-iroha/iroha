@@ -1,0 +1,84 @@
+rule_files:
+  - ../sorafs_governance_dag_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_governance_dag_publish_total{payload_kind="deal_settlement",result="failure",sink="filesystem"}'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'sorafs_governance_dag_backlog{sink="filesystem"}'
+        values: '11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11'
+      - series: 'sorafs_governance_dag_head_age_seconds{sink="filesystem"}'
+        values: '4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000 4000'
+      - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="deal_settlement",sink="filesystem"}'
+        values: '1000+0x100'
+    alert_rule_test:
+      - alertname: SoraFSGovernanceDagPublishFailures
+        eval_time: 1m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagPublishFailures
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              payload_kind: deal_settlement
+              result: failure
+              severity: critical
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS Governance DAG publication failures detected"
+      - alertname: SoraFSGovernanceDagBacklogHigh
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagBacklogHigh
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS Governance DAG publication backlog is high"
+      - alertname: SoraFSGovernanceDagHeadStale
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagHeadStale
+        eval_time: 15m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS Governance DAG head is stale"
+      - alertname: SoraFSGovernanceDagNoRecentPublish
+        eval_time: 60m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagNoRecentPublish
+        eval_time: 92m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              sink: filesystem
+            exp_annotations:
+              summary: "SoraFS Governance DAG has no recent successful publication"
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_governance_dag_publish_total{payload_kind="deal_settlement",result="failure",sink="filesystem"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'sorafs_governance_dag_backlog{sink="filesystem"}'
+        values: '0 1 1 2 2 3 3 2 2 1 0 0'
+      - series: 'sorafs_governance_dag_head_age_seconds{sink="filesystem"}'
+        values: '0 60 120 180 240 300 360 420 480 540 600 660'
+      - series: 'sorafs_governance_dag_last_publish_timestamp_seconds{payload_kind="deal_settlement",sink="filesystem"}'
+        values: '0 60 120 180 240 300 360 420 480 540 600 660'
+    alert_rule_test:
+      - alertname: SoraFSGovernanceDagPublishFailures
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagBacklogHigh
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagHeadStale
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: SoraFSGovernanceDagNoRecentPublish
+        eval_time: 11m
+        exp_alerts: []

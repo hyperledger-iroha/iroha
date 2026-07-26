@@ -1,0 +1,48 @@
+groups:
+  - name: sorafs-por
+    interval: 1m
+    rules:
+      - alert: SoraFSPoRSchedulerFailures
+        expr: increase(torii_sorafs_por_challenges_total{result="failed"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS PoR scheduler ticks are failing"
+          description: |
+            The PoR coordinator runtime reported at least one failed scheduler tick in the last
+            15 minutes. Check Torii logs, governance DAG storage, and SoraFS storage availability
+            before challenge issuance stalls.
+      - alert: SoraFSPoRForcedChallenges
+        expr: increase(torii_sorafs_por_forced_challenges_total[2h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS PoR forced challenges emitted"
+          description: |
+            The PoR scheduler emitted forced challenges within the last 2 hours, which means VRF
+            material was missing for at least one epoch. Verify provider VRF publication and
+            governance ingestion before forced challenges become sustained.
+      - alert: SoraFSPoRIngestBacklogHigh
+        expr: torii_sorafs_por_ingest_backlog > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS PoR ingestion backlog above threshold"
+          description: |
+            Provider {{ $labels.provider }} has more than three pending PoR ingestion items for
+            manifest {{ $labels.manifest }} for 10 minutes. Check provider proof submission,
+            Torii ingestion, and repair escalation before challenge deadlines expire.
+      - alert: SoraFSPoRDuplicateSamplesHigh
+        expr: increase(torii_sorafs_por_sampling_duplicates_total[1h]) > 100
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS PoR duplicate sample count is high"
+          description: |
+            The PoR scheduler recorded more than 100 duplicate samples in the last hour. Review
+            sample tier sizing and manifest chunk distribution before duplicate-heavy challenges
+            weaken audit coverage.

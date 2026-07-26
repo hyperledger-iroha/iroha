@@ -1,0 +1,24 @@
+# Trustless verifier skeleton for SN15-M0 (streaming Merkle/KZG checks)
+version = 1
+
+[merkle]
+chunk_window = 32
+max_parallel_streams = 8
+
+[kzg]
+trusted_setup = "/var/lib/soranet/kzg/trusted_setup.params"
+proof_cache = "/var/lib/soranet/kzg/cache"
+max_gap_ms = 250
+
+[sdr]
+receipt_dir = "/var/lib/soranet/sdr/receipts"
+max_lag_seconds = 4
+
+[pipeline]
+allow_hybrid_manifest = true
+reject_stale_cache_versions = true
+verify_cache_binding_header = true
+
+[logging]
+level = "info"
+emit_metrics = true

@@ -1,0 +1,7 @@
+error: `#[entrypoint]` macro for Executor entrypoints accepts no attributes
+ --> tests/ui/fail/entrypoint_with_args.rs:5:1
+  |
+5 | #[entrypoint(invalid)]
+  | ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `entrypoint` (in Nightly builds, run with -Z macro-backtrace for more info)

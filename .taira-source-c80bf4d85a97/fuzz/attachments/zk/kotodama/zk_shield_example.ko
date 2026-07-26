@@ -1,0 +1,20 @@
+// Kotodama sample: shield-like host interaction demo (logs and asset ops)
+seiyaku ZkShieldDemo {
+    // Public kotoage declaration: demonstrates pointer constructors and host calls
+    kotoage fn run() authorize("Admin") {
+        let who = AccountId::parse("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", );
+        let ad = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+        debug::info("ZkShieldDemo: start");
+        let proof_env = b"ENV-SHIELD";
+        crypto::zk::verify_transfer(proof_env);
+        // Example: set an account detail (host syscall)
+        ledger::account::set_detail(
+            account: who,
+            key: Name::parse("zk_demo"),
+            value: Json::parse("{\"run\":true}"),
+        );
+        // Example: mint a tiny amount (host syscall)
+        ledger::asset::mint(account: who, asset_definition: ad, amount: 1);
+        debug::info("ZkShieldDemo: done");
+    }
+}

@@ -1,0 +1,52 @@
+//! End-to-end canonical entity registration calls through the pointer ABI.
+
+use std::collections::HashMap;
+
+use ivm::{
+    IVM, MockWorldStateView, PermissionToken, kotodama::compiler::Compiler as KotodamaCompiler,
+    mock_wsv::WsvHost,
+};
+mod common;
+
+#[test]
+fn kotodama_register_account_and_unregister_asset() {
+    // Program: register domain, then register an account, then register asset and unregister it
+    let src = r#"
+        seiyaku RegisterAndUnregisterEntities {
+        kotoage fn main() authorize("ManageEntities") {
+          ledger::domain::register(DomainId::parse("default.universal"));
+          ledger::account::register(AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"));
+          ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", scale: 0, mintable: 1);
+          ledger::asset::unregister(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
+          ledger::account::unregister(AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"));
+        }
+        }
+    "#;
+    let compiler = KotodamaCompiler::new();
+    let prog = compiler.compile_source(src).expect("compile");
+
+    // Prepare WSV host with permissions for the caller
+    let _domain: ivm::mock_wsv::DomainId =
+        iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
+    let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            .parse()
+            .expect("public key"),
+    );
+    let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(caller.clone());
+    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+    wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
+    wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+
+    let account_map: HashMap<u64, ivm::mock_wsv::AccountId> = HashMap::new();
+    let asset_map: HashMap<u64, ivm::AssetDefinitionId> = HashMap::new();
+    let host = WsvHost::new_with_subject_map(wsv, caller.clone(), account_map, asset_map);
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(host);
+    vm.load_program(&prog).expect("load");
+    common::select_kotodama_entrypoint(&mut vm, &prog, "main");
+    vm.run()
+        .expect("program should run with WsvHost TLV validation");
+}

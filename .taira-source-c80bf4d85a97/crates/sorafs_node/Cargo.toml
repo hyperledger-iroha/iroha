@@ -1,0 +1,50 @@
+[package]
+name = "sorafs_node"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "SoraFS node integration primitives."
+
+[features]
+# Recognize norito derive macro cfg probes to avoid unexpected-cfg warnings.
+# No behavior change.
+schema-structural = []
+packed-struct = []
+compact-len = []
+
+[dependencies]
+axum = { workspace = true, features = ["http1", "tokio", "json"] }
+clap = { workspace = true, features = ["derive"] }
+eyre = { workspace = true }
+iroha_config = { path = "../iroha_config" }
+iroha_data_model = { path = "../iroha_data_model" }
+iroha_logger = { workspace = true }
+iroha_telemetry = { path = "../iroha_telemetry" }
+norito = { workspace = true }
+sorafs_manifest = { path = "../sorafs_manifest" }
+thiserror = "2.0.17"
+sorafs_car = { path = "../sorafs_car", features = ["manifest"] }
+hex = { workspace = true }
+blake3 = "1.8.2"
+sorafs_chunker = { path = "../sorafs_chunker" }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+base64 = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
+time = { workspace = true }
+iroha_crypto = { path = "../iroha_crypto" }
+ed25519-dalek = "2.2.0"
+reqwest = { workspace = true, features = ["multipart", "rustls-tls", "stream"] }
+url.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2.1.1"
+blake3 = "1.8.2"
+# Unit-test fixtures deliberately construct and corrupt typed ledger events.
+# Keep that construction surface test-only; production users retain the
+# getter-only data-model API.
+iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
+tower = { version = "0.5.2", features = ["util"] }
+base64 = { workspace = true }

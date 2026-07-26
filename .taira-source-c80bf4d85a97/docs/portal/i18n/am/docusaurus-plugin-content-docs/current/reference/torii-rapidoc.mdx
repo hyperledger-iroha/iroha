@@ -1,0 +1,32 @@
+---
+lang: am
+direction: ltr
+source: docs/portal/docs/reference/torii-rapidoc.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+RapiDocPanel ከ'@site/src/components/RapiDocPanel.jsx' አስመጣ;
+
+# Torii API (RapiDoc)
+
+`RapiDoc` የታመቀ፣ ሰነድ-የመጀመሪያው ተመሳሳይ Torii ያቀርባል።
+OpenAPI ሰነድ. ጥቅጥቅ ያለ አጠቃላይ እይታ ወይም ተነባቢ-ብቻ ግምገማ ሲፈልጉ ይጠቀሙበት
+ጥያቄ / ምላሽ ሞዴሎች.
+
+## የአጠቃቀም ምክሮች
+
+- መስተጋብራዊ ጥሪዎችን ለማንቃት የተሸካሚ ማስመሰያ አስገባ። እሴቱ እንደ ሀ
+  `X-TryIt-Auth` ራስጌ እና በፕሮክሲው የተለመደ።
+- ፖርታሉን በሚያገለግልበት ጊዜ I18NI0000007Xን ያዋቅሩ
+  ጥያቄዎች በፕሮክሲው በኩል ይላካሉ። መግብሩ ተኪው በሚሆንበት ጊዜ ያስጠነቅቃል
+  URL ጠፍቷል።
+- የታተሙ ታሪካዊ ዝርዝሮችን ለመጫን የ«OpenAPI ቅጽበተ-ፎቶ» ተቆልቋዩን ይጠቀሙ
+  `npm run sync-openapi`; የ `Latest (tracked)` አማራጭ ሁል ጊዜ መፍትሄ ይሰጣል
+  `/openapi/torii.json`.
+- ከ "[ ይሞክሩት](/api/overview#try-it-sandbox-docs-3)" ኮንሶል ጋር ያዋህዱ ጊዜ
+  ፕሮክሲውን ከሚጠይቁ የመግቢያ መንገዶች ጋር መስራት።
+
+<RapiDocPanel />

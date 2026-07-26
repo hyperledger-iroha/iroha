@@ -32,7 +32,7 @@ use iroha_data_model::{
     },
     isi::{
         SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
-        governance::{AtWindow, EnactReferendum},
+        governance::{AtWindow, EnactReferendum, FinalizeReferendum},
     },
     nexus::DataSpaceId,
     parameter::Parameter,
@@ -588,6 +588,7 @@ fn seed_open_proposal(
             .ensure_stage(body, 1, 1, 10_000)
             .record(account(250).0);
     }
+    approvals.approval_gate_height = Some(window.lower.saturating_sub(1));
     state_transaction
         .world
         .governance_stage_approvals_mut()
@@ -630,7 +631,7 @@ fn install_validation_fee_policy(
     let proposal_id = policy_proposal(&policy).fingerprint();
 
     // H=2: install the immutable payout runtime and persist an open lifecycle
-    // referendum. An enactment attempt before auto-finalization must fail closed.
+    // referendum. An enactment attempt before explicit finalization must fail closed.
     {
         let mut block = state.block(block_header(
             TEST_LIFECYCLE_WINDOW_END_HEIGHT,
@@ -768,7 +769,7 @@ fn install_validation_fee_policy(
         );
     }
 
-    // H=3: State::block performs the genuine Plain auto-close, retaining
+    // H=3: explicitly finalize the protected PLAIN referendum, retaining
     // evidence anchored to inclusive H=2. Enact only after that evidence exists.
     {
         let mut block = state.block(block_header(
@@ -776,12 +777,18 @@ fn install_validation_fee_policy(
             1_700_000_002_000,
         ));
         let mut stx = block.transaction();
+        FinalizeReferendum {
+            referendum_id: hex::encode(lifecycle_id),
+            proposal_id: lifecycle_id,
+        }
+        .execute(authority, &mut stx)
+        .expect("explicitly finalize validation-fee payout lifecycle");
         let proposal = stx
             .world
             .governance_proposals()
             .get(&lifecycle_id)
             .cloned()
-            .expect("auto-finalized lifecycle proposal");
+            .expect("explicitly finalized lifecycle proposal");
         assert_eq!(
             proposal.status,
             iroha_core::state::GovernanceProposalStatus::Approved
@@ -800,7 +807,7 @@ fn install_validation_fee_policy(
             at_window: lifecycle_window,
         }
         .execute(authority, &mut stx)
-        .expect("enact auto-finalized validation-fee payout lifecycle");
+        .expect("enact explicitly finalized validation-fee payout lifecycle");
         stx.apply();
         block.commit().expect("commit lifecycle enactment");
     }
@@ -910,21 +917,29 @@ fn install_validation_fee_policy(
         block.commit().expect("commit open policy referendum");
     }
 
-    // H=5: genuine auto-close persists an approval anchored to inclusive H=4.
-    state
-        .block(block_header(
+    // H=5: explicit finalization persists an approval anchored to inclusive H=4.
+    {
+        let mut block = state.block(block_header(
             TEST_POLICY_WINDOW_END_HEIGHT + 1,
             1_700_000_004_000,
-        ))
-        .commit()
-        .expect("commit policy auto-finalization");
+        ));
+        let mut stx = block.transaction();
+        FinalizeReferendum {
+            referendum_id: hex::encode(proposal_id),
+            proposal_id,
+        }
+        .execute(authority, &mut stx)
+        .expect("explicitly finalize validation-fee policy");
+        stx.apply();
+        block.commit().expect("commit explicit policy finalization");
+    }
     {
         let view = state.view();
         let proposal = view
             .world()
             .governance_proposals()
             .get(&proposal_id)
-            .expect("persisted auto-finalized policy");
+            .expect("persisted explicitly finalized policy");
         assert_eq!(
             proposal.status,
             iroha_core::state::GovernanceProposalStatus::Approved

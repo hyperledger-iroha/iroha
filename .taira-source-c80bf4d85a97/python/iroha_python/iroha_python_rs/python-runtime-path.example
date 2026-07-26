@@ -1,0 +1,4 @@
+# Absolute path to the CPython shared library used when running `cargo test -p iroha_python_rs`.
+# Uncomment and update the line below to match your local installation, then copy the file
+# to `python-runtime-path` (listed in .gitignore) to keep local changes out of version control.
+#/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Python3

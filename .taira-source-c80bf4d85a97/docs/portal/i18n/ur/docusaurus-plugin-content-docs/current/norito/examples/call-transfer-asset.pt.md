@@ -1,0 +1,47 @@
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/norito/examples/call-transfer-asset.pt.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+---
+سلگ:/نوریٹو/مثالوں/کال ٹرانسفر-اثاثہ
+عنوان: Kotodama سے میزبان میزبان کی منتقلی
+تفصیل: یہ ظاہر کرتا ہے کہ کس طرح Kotodama انٹری پوائنٹ `transfer_asset` میزبان ہدایت کو ان لائن میٹا ڈیٹا کی توثیق کے ساتھ کال کرسکتا ہے۔
+ماخذ: کریٹس/IVM/دستاویزات/مثالوں/08_Call_transfer_asset.ko
+---
+
+یہ ظاہر کرتا ہے کہ کس طرح Kotodama انٹری پوائنٹ `transfer_asset` میزبان ہدایت کو ان لائن میٹا ڈیٹا کی توثیق کے ساتھ کال کرسکتا ہے۔
+
+## لیجر اسکرپٹ
+
+- معاہدہ اتھارٹی (مثال کے طور پر `<i105-account-id>`) کو اس اثاثہ کے ساتھ فنڈ دیں جو اس نے منتقل کیا ہے اور اتھارٹی کو کاغذ `CanTransfer` یا مساوی اجازت دیں۔
+- معاہدہ اکاؤنٹ سے 5 یونٹوں کو `<i105-account-id>` میں منتقل کرنے کے لئے انٹری پوائنٹ `call_transfer_asset` پر کال کریں ، اس بات کی عکاسی کرتے ہوئے کہ آن چین آٹومیشن میں میزبان کالوں کو کس طرح شامل کیا جاسکتا ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account <i105-account-id>` کے ذریعے توازن چیک کریں اور اس بات کی تصدیق کے لئے واقعات کا معائنہ کریں کہ میٹا ڈیٹا گارڈ نے منتقلی کے سیاق و سباق کو ریکارڈ کیا۔
+
+## متعلقہ SDK گائیڈز
+
+- [مورچا SDK کوئیک اسٹارٹ] (/sdks/rust)
+- [ازگر ایس ڈی کے کوئیک اسٹارٹ] (/sdks/python)
+- [جاوا اسکرپٹ SDK کوئیک اسٹارٹ] (/sdks/javascript)
+
+[ماخذ Kotodama ڈاؤن لوڈ کریں] (/norito-snippets/call-transfer-asset.ko)
+
+```kotodama
+// Direct builtin call (no raw call syntax) inside a seiyaku.
+seiyaku TransferCall {
+    kotoage fn pay() authorize("AssetTransferRole") {
+        ledger::asset::transfer(
+            source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", ),
+            destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", ),
+            asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            amount: 10,
+            dataspace: DataSpaceId::parse("0"),
+        );
+    }
+}
+```

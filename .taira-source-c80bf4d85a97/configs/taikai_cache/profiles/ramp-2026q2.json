@@ -1,0 +1,24 @@
+{
+  "profile_id": "ramp-2026q2",
+  "rollout_stage": "ramp",
+  "description": "Default profile for the 2026-Q2 regional ramp window.",
+  "annotations": {
+    "ticket": "SNNet-14D",
+    "approved_by": "Ops Guild / SRE",
+    "profile_version": "2026-06-01"
+  },
+  "taikai_cache": {
+    "hot_capacity_bytes": 268435456,
+    "hot_retention_secs": 90,
+    "warm_capacity_bytes": 4294967296,
+    "warm_retention_secs": 900,
+    "cold_capacity_bytes": 17179869184,
+    "cold_retention_secs": 86400,
+    "qos": {
+      "priority_rate_bps": 167772160,
+      "standard_rate_bps": 83886080,
+      "bulk_rate_bps": 20971520,
+      "burst_multiplier": 5
+    }
+  }
+}

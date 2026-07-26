@@ -1,0 +1,19 @@
+[package]
+name = "kaigi_zk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Halo2 circuits for Kaigi roster privacy proofs"
+repository.workspace = true
+categories = ["cryptography"]
+
+[lib]
+name = "kaigi_zk"
+path = "src/lib.rs"
+
+[dependencies]
+iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["std"] }
+halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["circuit-params"] }
+
+[dev-dependencies]
+rand_core_06 = { workspace = true }

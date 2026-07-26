@@ -1,0 +1,19 @@
+[package]
+name = "mint_rose_trigger_data_model"
+
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+
+license.workspace = true
+
+[dependencies]
+iroha_data_model.workspace = true
+norito = {workspace = true}
+
+[features]
+default = []
+compact-len = []
+json = []
+packed-struct = []
+schema-structural = []

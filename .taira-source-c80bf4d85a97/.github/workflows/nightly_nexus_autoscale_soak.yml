@@ -1,0 +1,46 @@
+name: Nightly Nexus Autoscale Soak
+
+on:
+  schedule:
+    - cron: "20 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-nexus-autoscale-soak
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  NORITO_SKIP_BINDINGS_SYNC: "1"
+  IROHA_AUTOSCALE_SOAK_ARTIFACT_DIR: /tmp/nexus_autoscale_soak
+
+jobs:
+  soak:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+      - name: Prepare soak artifact path
+        run: mkdir -p "${IROHA_AUTOSCALE_SOAK_ARTIFACT_DIR}"
+      - name: Run ten-seed Nexus autoscale soak matrix
+        run: >
+          scripts/nexus/run_autoscale_soak_matrix.sh
+          --runs 10
+          --output-dir "${IROHA_AUTOSCALE_SOAK_ARTIFACT_DIR}"
+          --cargo-jobs 2
+          --test-threads 1
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nexus-autoscale-soak-${{ github.run_id }}
+          path: |
+            ${{ env.IROHA_AUTOSCALE_SOAK_ARTIFACT_DIR }}
+            /tmp/irohad_test_network_*
+          if-no-files-found: warn
+          retention-days: 7

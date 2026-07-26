@@ -1,0 +1,5 @@
+error: Socket address must have a colon in it
+ --> tests/ui/fail/socket_addr_missing_colon.rs:5:26
+  |
+5 |     let _ = socket_addr!(127.0.0.1);
+  |                          ^^^^^

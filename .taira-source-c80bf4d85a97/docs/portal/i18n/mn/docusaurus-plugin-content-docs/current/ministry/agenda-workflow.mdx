@@ -1,0 +1,177 @@
+---
+lang: mn
+direction: ltr
+source: docs/portal/docs/ministry/agenda-workflow.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Agenda Council Workflow
+description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+CodeBlock-ийг '@theme/CodeBlock'-оос импортлох;
+'@site/docs/examples/ministry/agenda_sortition_summary_example.json'-с импортын эрэмбэлэх хураангуй;
+
+const хураангуй = sortitionSummary;
+
+функц эрэмбэлэх хураангуй хүснэгт({мөр}) {
+  буцах (
+    <хүснэгт>
+      <толгой>
+        <tr>
+          <th>Slot</th>
+          <th>Гишүүн</th>
+          <th>Үүрэг</th>
+          <th>Org</th>
+          <th>Жин</th>
+          <th>Энтропи (тасарсан)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((мөр, индекс) => (
+          <tr түлхүүр={`${row.member_id}-${row.draw_position}`}>
+            <td>{индекс + 1}</td>
+            <td><code>{row.member_id}</code></td>
+            <td>{row.role}</td>
+            <td>{row.organization}</td>
+            <td>{row.weight}</td>
+            <td><code>{row.draw_entropy_hex.slice(0, 16)}...</code></td>
+          </tr>
+        ))}
+      </tbody>
+    </хүснэгт>
+  );
+}
+
+## Тойм
+
+Замын зургийн **MINFO-2** зүйлд санал болгохоос эхлээд тодорхой замыг шаарддаг
+Олон нийтийн маргаантай нотлох баримтууд нь хэрэг хэрхэн хэлэлцэх асуудлын дараалалд хүрсэнийг хэн ч батлах боломжтой
+зөвлөл. Энэ хуудас нь өмнө нь суулгасан CLI туслахуудыг шууд утсаар холбодог
+хөгжүүлэгч портал, ингэснээр санал болгогчид, аудиторууд болон платформын багууд үүнийг дагаж мөрдөх боломжтой
+моно-репо хэлэлгүйгээр шалгах хуудас.
+
+Ажлын урсгал нь гурван давтагдах алхмыг хамарна:
+
+1. `AgendaProposalV1` ачааллыг дотооддоо баталгаажуулж, давхардсан хэшээс татгалзаарай
+   мэдүүлэг зохицуулах дараалалд хүрэхээс өмнө.
+2. Зөвлөлийн ажилчид боломжтой байхын тулд саналын хажууд давхардсан бүртгэлийг нийтлээрэй.
+   Детерминизмыг алдалгүйгээр өмнөх тохиолдлуудыг мөшгих.
+3. Ангилах туслагчийг ажиллуулж, Merkle proof багцыг барьж аваад гадаргуу дээр гарга
+   Портал дотроос сонгогдсон жагсаалтыг иргэд сугалааг дахин тоглуулах боломжтой.
+
+Бүх туслахууд `cargo xtask ministry-agenda`-д амьдардаг; Norito схем нь
+`docs/source/ministry/agenda_council_proposal.md` дор баримтжуулсан.
+
+## 1. Орон нутгийн саналыг баталгаажуулах
+
+CLI-г ашиглан JSON-ийн ачааллыг тодруулж, шаардлагатай нотлох баримтыг баталгаажуулна уу (хэш
+гэр бүл, хэллэгийн урт, хэлний шошго, илгээгчтэй холбоо барих) байна. The
+баталгаажуулагч кодыг Torii залгих замтай хуваалцдаг тул санал нь дамждаг
+энд бас порталаар дамжуулан байршуулах үед дамжих болно.
+
+<CodeBlock language="bash">{`ачааны xtask яам-хэлэлцэх хөтөлбөрийг баталгаажуулах \\
+  --proposal docs/examples/ministry/agenda_proposal_example.json \\
+  --registry docs/examples/ministry/agenda_duplicate_registry.json`}</CodeBlock>
+
+- Түүхэн ачааллыг шалгахдаа `--allow-registry-conflicts` нэмэх; шинэ
+  Хурууны хээ аль хэдийн байгаа үед илгээлт хурдан бүтэлгүйтэх ёстой.
+- Жишээнүүдийн лавлах нь лавлагааны санал болон бүртгэлийг SDK-д хүргэх боломжтой
+  хувийн ачааллыг хатуу кодлохгүйгээр форматыг ашиглах.
+
+## 2. Давхардсан бүртгэлийн контекстийг нийтлэх
+
+Хүлээн зөвшөөрөгдсөн санал болгонд өмнө нь зөвлөлдөж байсан бүртгэлийн хураамж багтана
+залгих. Тухайн бүртгэлийн SoraFS CID эсвэл Torii манифест замыг авч, нэмнэ үү.
+Үүнийг таны илгээсэн мета өгөгдөлд оруулснаар зөвлөлийн хянагчид ижил JSON-г баталгаажуулах боломжтой.
+
+```json title="Duplicate registry (excerpt)"
+{
+  "entries": [
+    {
+      "hash_family": "blake3-256",
+      "hash_hex": "0d714bed4b7c63c23a2cf8ee9ce6c3cde1007907c427b4a0754e8ad31c91338d",
+      "proposal_id": "AC-2025-014",
+      "note": "Already handled in 2025-08 incident"
+    }
+  ]
+}
+```
+
+CLI нь мөргөлдөөний талаар мэдээлэх үед портал нь холбосон саналын ID-г харуулна
+операторууд нэгтгэх эсвэл дахин илгээхээс татгалзах боломжтой.
+
+## 3. Эрэмбэлэх хураангуйг ажиллуулж нийтлэх
+
+Докет бэлэн болмогц детерминистик ангилах туслагчийг ажиллуулна уу. Энэ нь хэрэглэдэг
+roster JSON, үр, зорилтот слотын тоо, дараа нь Merkle-proof-backed ялгаруулдаг
+хураангуй. JSON-ийн хураангуй нь **Зөвлөлийн сугалааны**-д портал үзүүлсэн зүйл юм.
+самбар.
+
+<CodeBlock language="bash">{`ачааны xtask яам-хэлэлцэх асуудлын эрэмбэ \\
+  --roster docs/examples/ministry/agenda_council_roster.json \\
+  --слот 3 \\
+  --үр 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
+  --output artefacts/ministry/sortition/2026-03-12.json`}</CodeBlock>
+
+Үүссэн JSON-г SoraFS (эсвэл гарын үсэг зурсан хэлэлцэх асуудлын багцын хажууд) дээр хадгалах ба
+CID-г саналын хөтөч дээр холбоно уу. Хөгжүүлэгчийн портал ч мөн адил хэрэглэдэг
+JSON бүтэц; Доорх жишээ нь багцыг харуулж байна
+`agenda_sortition_summary_example.json`.
+
+### Зөвлөлийн сугалааны жишээ<хүснэгт>
+  <толгой>
+    <tr>
+      <th>Талбар</th>
+      <th>Утга</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Алгоритм</td>
+      <td><code>{summary.algorithm}</code></td>
+    </tr>
+    <tr>
+      <td>Жагсаалтын жагсаалт (BLAKE3)</td>
+      <td><code>{summary.roster_digest.blake3_hex}</code></td>
+    </tr>
+    <tr>
+      <td>Нэрсийн жагсаалт (SHA-256)</td>
+      <td><code>{summary.roster_digest.sha256_hex}</code></td>
+    </tr>
+    <tr>
+      <td>Үр</td>
+      <td><code>{summary.seed_hex}</code></td>
+    </tr>
+    <tr>
+      <td>Слотууд</td>
+      <td>{summary.slots}</td>
+    </tr>
+    <tr>
+      <td>Эрх бүхий гишүүд</td>
+      <td>{summary.eligible_members}</td>
+    </tr>
+    <tr>
+      <td>Merkle root</td>
+      <td><code>{summary.merkle_root_hex}</code></td>
+    </tr>
+  </tbody>
+</хүснэгт>
+
+<SortitionSummaryTable rows={summary.selected} />
+
+Сонгосон гишүүн бүр дараахь зүйлийг агуулна.
+
+- `draw_entropy_hex` (32 BLAKE3 байт) тул хэн ч RNG гаралтыг дахин тооцоолох боломжтой.
+- `eligible_index` болон `original_index`, ингэснээр аудиторууд татгалзсан гэдгийг батлах боломжтой.
+  хүндэтгэсэн.
+- Бүртгэлийн хуудсыг хамарсан Merkle баталгаа; модыг үржүүлэх нь үүнийг баталж байна
+  багц дотор нийтлэгдсэн жагсаалт сугалаа таарч байна.
+
+### Шийдвэрийн бүртгэл
+
+Зөвлөлийн саналаар санал хураахад шийдвэрийн тэмдэглэл болон бичгийг хавсаргана
+ангилах хураангуй CID-г засаглалын арга хэмжээнд (Torii `/v1/gov/*` оруулга). Портал
+Хуудсууд дээр дурдсан санамж, саналын дүн, JSON-г үйлдэл бүрээр холбодог
+**MINFO-2**-д шаардагдах нотлох баримтын бүрэн сүлжээг агуулна.

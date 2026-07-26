@@ -1,0 +1,24 @@
+# Copy this file to a runtime-only path such as
+# `/run/secrets/taira-canary-client.toml`, replace the placeholder key material,
+# and keep the populated file out of the repo.
+#
+# `check_mcp_rollout.sh` rewrites `torii_url` to the chosen local/public target,
+# so only `chain`, `basic_auth` (optional), and `[account]` are required here.
+# The rollout scripts now auto-generate and onboard this runtime-only signer
+# when the file is missing or still contains placeholders. Onboarding must
+# return HTTP 202 with a QUEUED receipt, which the bootstrap follows through
+# `/v1/pipeline/transactions/status` before the signer is used. The first-release
+# `/v1` API does not use an `x-iroha-api-version` request header.
+
+chain = "fc56984b-2be7-431d-840e-21514d1883f0"
+
+[account]
+domain = "wonderland.universal"
+profile = "taira"
+public_key = "REPLACE_WITH_CANARY_PUBLIC_KEY"
+private_key = "REPLACE_WITH_CANARY_PRIVATE_KEY"
+
+[transaction]
+time_to_live_ms = 120000
+status_timeout_ms = 120000
+nonce = false

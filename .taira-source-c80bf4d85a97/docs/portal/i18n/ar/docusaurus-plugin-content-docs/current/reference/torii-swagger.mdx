@@ -1,0 +1,32 @@
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/reference/torii-swagger.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+استيراد SwaggerUiPanel من '@site/src/components/SwaggerUiPanel.jsx'؛
+
+# Torii API (واجهة مستخدم Swagger)
+
+تتضمن هذه الصفحة المستند Torii OpenAPI باستخدام `swagger-ui-react`. استخدامه عندما
+تريد تخطيط Swagger المألوف وطلب العينات والقدرة على المحاولة
+طلبات الخروج مباشرة داخل المتصفح.
+
+## نصائح الاستخدام
+
+- توفير رمز حامل في اللوحة للتفويض المسبق لكل طلب. الرموز هي
+  يتم إعادة توجيهها إلى الوكيل باستخدام رأس `X-TryIt-Auth` ولا يتم استمرارها أبدًا.
+- قم بتكوين `TRYIT_PROXY_PUBLIC_URL` عند خدمة البوابة الإلكترونية بحيث تكون القطعة
+  إعادة توجيه الطلبات من خلال الوكيل المرحلي المجمع. يظهر شعار تحذير
+  إذا تم تعطيل الوكيل.
+- اختر لقطة OpenAPI من القائمة المنسدلة للتبديل بين أحدث المواصفات
+  والإصدارات المؤرشفة التي تم إنشاؤها بواسطة `npm run sync-openapi`.
+- جرب وحدة التحكم "[جربها](/api/overview#try-it-sandbox-docs-3)" المدعومة بالوكيل
+  للبيئات المرحلية حيث يمنع CORS الوصول المباشر إلى Torii.
+- احتفظ بلقطة OpenAPI جديدة باستخدام `cargo xtask openapi` (راجع
+  `docs/portal/static/openapi/torii.json`).
+

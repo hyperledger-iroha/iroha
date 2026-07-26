@@ -1,0 +1,108 @@
+{
+  "$schema": "https://grafana.com/docs/grafana/latest/dashboards/reference/json-model/",
+  "title": "Sumeragi Consensus Overview",
+  "timezone": "",
+  "editable": false,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Highest vs Locked commit certificate Height",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sumeragi_highest_qc_height",
+          "legendFormat": "highest_qc_height"
+        },
+        {
+          "expr": "sumeragi_locked_qc_height",
+          "legendFormat": "locked_qc_height"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Proposal Drop Rates (5m)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "increase(sumeragi_gossip_fallback_total[5m])",
+          "legendFormat": "gossip_fallback_total"
+        },
+        {
+          "expr": "increase(sumeragi_block_created_dropped_by_lock_total[5m])",
+          "legendFormat": "block_created_dropped_by_lock_total"
+        },
+        {
+          "expr": "increase(sumeragi_block_created_hint_mismatch_total[5m])",
+          "legendFormat": "block_created_hint_mismatch_total"
+        },
+        {
+          "expr": "increase(sumeragi_block_created_proposal_mismatch_total[5m])",
+          "legendFormat": "block_created_proposal_mismatch_total"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Proposal Drop Totals",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sumeragi_gossip_fallback_total",
+          "legendFormat": "gossip_fallback_total"
+        },
+        {
+          "expr": "sumeragi_block_created_dropped_by_lock_total",
+          "legendFormat": "block_created_dropped_by_lock_total"
+        },
+        {
+          "expr": "sumeragi_block_created_hint_mismatch_total",
+          "legendFormat": "block_created_hint_mismatch_total"
+        },
+        {
+          "expr": "sumeragi_block_created_proposal_mismatch_total",
+          "legendFormat": "block_created_proposal_mismatch_total"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "VRF Penalties (epoch window)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "increase(sumeragi_vrf_non_reveal_penalties_total[140m])",
+          "legendFormat": "non_reveal_penalties"
+        },
+        {
+          "expr": "increase(sumeragi_vrf_no_participation_total[140m])",
+          "legendFormat": "no_participation_penalties"
+        },
+        {
+          "expr": "increase(sumeragi_vrf_reveals_late_total[140m])",
+          "legendFormat": "late_reveals"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "VRF Counters",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "sumeragi_vrf_non_reveal_penalties_total",
+          "legendFormat": "non_reveal_penalties_total"
+        },
+        {
+          "expr": "sumeragi_vrf_no_participation_total",
+          "legendFormat": "no_participation_total"
+        },
+        {
+          "expr": "sumeragi_vrf_reveals_late_total",
+          "legendFormat": "late_reveals_total"
+        }
+      ]
+    }
+  ]
+}

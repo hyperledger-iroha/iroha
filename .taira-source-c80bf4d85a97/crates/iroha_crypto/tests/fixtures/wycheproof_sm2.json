@@ -1,0 +1,577 @@
+{
+  "algorithm": "SM2",
+  "generatorVersion": "iroha-sm2-fixture-extended-v2025-11-01",
+  "numberOfTests": 52,
+  "testGroups": [
+    {
+      "distid": "1234567812345678",
+      "groupId": 1,
+      "key": {
+        "uncompressed": "04262ECCC27FAA5DBB66D84E0878FF8A841638702F68877ED1D09B95E86737842A5F97A6112A7FC314B05D0B88392722B95E139FF11146F6275EC97C0F3E9ED0AB"
+      },
+      "tests": [
+        {
+          "comment": "Empty message valid signature",
+          "flags": [],
+          "msg": "",
+          "result": "valid",
+          "sig": "3045022100CCE8984C398BB6FAAD71259514D108B870C84EC9EB11537F3128AE35EDB36EF70220756709E1CCBD61B76CF8B0E0268C97203C82D93F19924E07B0B86927D8BF4299",
+          "tcId": 1
+        },
+        {
+          "comment": "Empty message valid signature with mutated message",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "01",
+          "result": "invalid",
+          "sig": "3045022100CCE8984C398BB6FAAD71259514D108B870C84EC9EB11537F3128AE35EDB36EF70220756709E1CCBD61B76CF8B0E0268C97203C82D93F19924E07B0B86927D8BF4299",
+          "tcId": 2
+        },
+        {
+          "comment": "Empty message valid signature with signature bit flip",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "",
+          "result": "invalid",
+          "sig": "3045022100CCE8984C398BB6FAAD71259514D108B870C84EC9EB11537F3128AE35EDB36EF70220756709E1CCBD61B76CF8B0E0268C97203C82D93F19924E07B0B86927D8BF4219",
+          "tcId": 3
+        },
+        {
+          "comment": "Empty message valid signature with truncated DER",
+          "flags": [
+            "TruncatedDER"
+          ],
+          "msg": "",
+          "result": "invalid",
+          "sig": "3045022100CCE8984C398BB6FAAD71259514D108B870C84EC9EB11537F3128AE35EDB36EF70220756709E1CCBD61B76CF8B0E0268C97203C82D93F19924E07B0B86927D8",
+          "tcId": 4
+        },
+        {
+          "comment": "Short message valid signature",
+          "flags": [],
+          "msg": "6162",
+          "result": "valid",
+          "sig": "3045022020BC2B77E0C5FF81D38A7982035415E4C205D35E6F9ECCFBFFD1084626C890E90221009DD8CB01EA222636800F0496A14DBDF0CAC57F575B149EFE0540ADD47FA26D80",
+          "tcId": 5
+        },
+        {
+          "comment": "Short message valid signature with mutated message",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "616201",
+          "result": "invalid",
+          "sig": "3045022020BC2B77E0C5FF81D38A7982035415E4C205D35E6F9ECCFBFFD1084626C890E90221009DD8CB01EA222636800F0496A14DBDF0CAC57F575B149EFE0540ADD47FA26D80",
+          "tcId": 6
+        },
+        {
+          "comment": "Short message valid signature with signature bit flip",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "6162",
+          "result": "invalid",
+          "sig": "3045022020BC2B77E0C5FF81D38A7982035415E4C205D35E6F9ECCFBFFD1084626C890E90221009DD8CB01EA222636800F0496A14DBDF0CAC57F575B149EFE0540ADD47FA26D00",
+          "tcId": 7
+        },
+        {
+          "comment": "Short message valid signature with truncated DER",
+          "flags": [
+            "TruncatedDER"
+          ],
+          "msg": "6162",
+          "result": "invalid",
+          "sig": "3045022020BC2B77E0C5FF81D38A7982035415E4C205D35E6F9ECCFBFFD1084626C890E90221009DD8CB01EA222636800F0496A14DBDF0CAC57F575B149EFE0540ADD47F",
+          "tcId": 8
+        },
+        {
+          "comment": "Long message valid signature",
+          "flags": [],
+          "msg": "54686520717569636B2062726F776E20666F78206A756D7073206F76657220746865206C617A7920646F67",
+          "result": "valid",
+          "sig": "3045022100DB8B706BFFFB2F399355D38BDA3F11C29C231E1BF553B4C68BC601EDF263AA1D02201A5E05A5A563C81B1D0D9688823CCBCB73A8AAD843057283B9E3A1BCF01CBF16",
+          "tcId": 9
+        },
+        {
+          "comment": "Long message valid signature with mutated message",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "54686520717569636B2062726F776E20666F78206A756D7073206F76657220746865206C617A7920646F6701",
+          "result": "invalid",
+          "sig": "3045022100DB8B706BFFFB2F399355D38BDA3F11C29C231E1BF553B4C68BC601EDF263AA1D02201A5E05A5A563C81B1D0D9688823CCBCB73A8AAD843057283B9E3A1BCF01CBF16",
+          "tcId": 10
+        },
+        {
+          "comment": "Long message valid signature with signature bit flip",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "54686520717569636B2062726F776E20666F78206A756D7073206F76657220746865206C617A7920646F67",
+          "result": "invalid",
+          "sig": "3045022100DB8B706BFFFB2F399355D38BDA3F11C29C231E1BF553B4C68BC601EDF263AA1D02201A5E05A5A563C81B1D0D9688823CCBCB73A8AAD843057283B9E3A1BCF01CBF96",
+          "tcId": 11
+        },
+        {
+          "comment": "Long message valid signature with truncated DER",
+          "flags": [
+            "TruncatedDER"
+          ],
+          "msg": "54686520717569636B2062726F776E20666F78206A756D7073206F76657220746865206C617A7920646F67",
+          "result": "invalid",
+          "sig": "3045022100DB8B706BFFFB2F399355D38BDA3F11C29C231E1BF553B4C68BC601EDF263AA1D02201A5E05A5A563C81B1D0D9688823CCBCB73A8AAD843057283B9E3A1BCF0",
+          "tcId": 12
+        },
+        {
+          "comment": "All-zero components",
+          "flags": [
+            "ZeroComponent"
+          ],
+          "msg": "00",
+          "result": "invalid",
+          "sig": "3006020100020100",
+          "tcId": 13
+        },
+        {
+          "comment": "Components exceeding curve order",
+          "flags": [
+            "ComponentOutOfRange"
+          ],
+          "msg": "DEADBEEF",
+          "result": "invalid",
+          "sig": "3046022100FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF022100AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "tcId": 14
+        },
+        {
+          "comment": "Valid signature with mismatched distinguishing ID",
+          "flags": [
+            "WrongDistinguishedId"
+          ],
+          "msg": "646973746964206D69736D617463682073686F756C64206661696C",
+          "result": "invalid",
+          "sig": "30450220031CBD11E7A53ADA9EF344CED8DC9A99EA45B817BA49D07F774AB09B969FEAC3022100BADDF1B1EBD637D4FE2C7D82D04B68FA59CA62310C49B8ECCF1D25F6A0E1E3AA",
+          "tcId": 15
+        },
+        {
+          "tcId": 27,
+          "comment": "Bit-flipped signature derived from tcId 1",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "",
+          "result": "invalid",
+          "sig": "B045022100CCE8984C398BB6FAAD71259514D108B870C84EC9EB11537F3128AE35EDB36EF70220756709E1CCBD61B76CF8B0E0268C97203C82D93F19924E07B0B86927D8BF4299"
+        },
+        {
+          "tcId": 28,
+          "comment": "Truncated signature derived from tcId 1",
+          "flags": [
+            "TruncatedSignature"
+          ],
+          "msg": "",
+          "result": "invalid",
+          "sig": "3045022100CCE8984C398BB6FAAD71259514D108B870C84EC9EB11537F3128AE35EDB36EF70220756709E1CCBD61B76CF8B0E0268C97203C82D93F19924E07B0B86927D8BF42"
+        },
+        {
+          "tcId": 29,
+          "comment": "Bit-flipped signature derived from tcId 5",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "6162",
+          "result": "invalid",
+          "sig": "B045022020BC2B77E0C5FF81D38A7982035415E4C205D35E6F9ECCFBFFD1084626C890E90221009DD8CB01EA222636800F0496A14DBDF0CAC57F575B149EFE0540ADD47FA26D80"
+        },
+        {
+          "tcId": 30,
+          "comment": "Message bit flip derived from tcId 5",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "6062",
+          "result": "invalid",
+          "sig": "3045022020BC2B77E0C5FF81D38A7982035415E4C205D35E6F9ECCFBFFD1084626C890E90221009DD8CB01EA222636800F0496A14DBDF0CAC57F575B149EFE0540ADD47FA26D80"
+        },
+        {
+          "tcId": 31,
+          "comment": "Truncated signature derived from tcId 5",
+          "flags": [
+            "TruncatedSignature"
+          ],
+          "msg": "6162",
+          "result": "invalid",
+          "sig": "3045022020BC2B77E0C5FF81D38A7982035415E4C205D35E6F9ECCFBFFD1084626C890E90221009DD8CB01EA222636800F0496A14DBDF0CAC57F575B149EFE0540ADD47FA26D"
+        },
+        {
+          "tcId": 32,
+          "comment": "Bit-flipped signature derived from tcId 9",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "54686520717569636B2062726F776E20666F78206A756D7073206F76657220746865206C617A7920646F67",
+          "result": "invalid",
+          "sig": "B045022100DB8B706BFFFB2F399355D38BDA3F11C29C231E1BF553B4C68BC601EDF263AA1D02201A5E05A5A563C81B1D0D9688823CCBCB73A8AAD843057283B9E3A1BCF01CBF16"
+        },
+        {
+          "tcId": 33,
+          "comment": "Message bit flip derived from tcId 9",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "55686520717569636B2062726F776E20666F78206A756D7073206F76657220746865206C617A7920646F67",
+          "result": "invalid",
+          "sig": "3045022100DB8B706BFFFB2F399355D38BDA3F11C29C231E1BF553B4C68BC601EDF263AA1D02201A5E05A5A563C81B1D0D9688823CCBCB73A8AAD843057283B9E3A1BCF01CBF16"
+        },
+        {
+          "tcId": 34,
+          "comment": "Truncated signature derived from tcId 9",
+          "flags": [
+            "TruncatedSignature"
+          ],
+          "msg": "54686520717569636B2062726F776E20666F78206A756D7073206F76657220746865206C617A7920646F67",
+          "result": "invalid",
+          "sig": "3045022100DB8B706BFFFB2F399355D38BDA3F11C29C231E1BF553B4C68BC601EDF263AA1D02201A5E05A5A563C81B1D0D9688823CCBCB73A8AAD843057283B9E3A1BCF01CBF"
+        }
+      ]
+    },
+    {
+      "distid": "device:wycheproof-fixture",
+      "groupId": 2,
+      "key": {
+        "uncompressed": "049DE2608510001E36151BFD9657E46FA02EEB52B75241E845CE82B22C3BB06F06BDFC2541CAAD7993C4144C5BEF4AC46958CFF24AF972486E893051D6F2080DD3"
+      },
+      "tests": [
+        {
+          "comment": "Unicode payload valid signature",
+          "flags": [],
+          "msg": "E5A591E7B484E38292E689BFE8AA8DE38199E3828B",
+          "result": "valid",
+          "sig": "30450220729FAF0C6AEBBC1D6705DD8A1091203C0548F4FE2059544993052BDECB31024D02210088E9F8A030BA6D3D2D652A293B67FF9A9FBE4BA8E448553F79D784A12B35CD76",
+          "tcId": 16
+        },
+        {
+          "comment": "Unicode payload valid signature with mutated message",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "E5A591E7B484E38292E689BFE8AA8DE38199E3828B01",
+          "result": "invalid",
+          "sig": "30450220729FAF0C6AEBBC1D6705DD8A1091203C0548F4FE2059544993052BDECB31024D02210088E9F8A030BA6D3D2D652A293B67FF9A9FBE4BA8E448553F79D784A12B35CD76",
+          "tcId": 17
+        },
+        {
+          "comment": "Unicode payload valid signature with signature bit flip",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "E5A591E7B484E38292E689BFE8AA8DE38199E3828B",
+          "result": "invalid",
+          "sig": "30450220729FAF0C6AEBBC1D6705DD8A1091203C0548F4FE2059544993052BDECB31024D02210088E9F8A030BA6D3D2D652A293B67FF9A9FBE4BA8E448553F79D784A12B35CDF6",
+          "tcId": 18
+        },
+        {
+          "comment": "Unicode payload valid signature with truncated DER",
+          "flags": [
+            "TruncatedDER"
+          ],
+          "msg": "E5A591E7B484E38292E689BFE8AA8DE38199E3828B",
+          "result": "invalid",
+          "sig": "30450220729FAF0C6AEBBC1D6705DD8A1091203C0548F4FE2059544993052BDECB31024D02210088E9F8A030BA6D3D2D652A293B67FF9A9FBE4BA8E448553F79D784A12B",
+          "tcId": 19
+        },
+        {
+          "comment": "Binary payload valid signature",
+          "flags": [],
+          "msg": "007369676E6174757265FF626F756E64617279",
+          "result": "valid",
+          "sig": "304502207CC92D455106C32383FC903B4A392834CAF1F0AB92E861D60D8818978ADC944F022100F5CFC8A8FE0FE97D55A6BDE38F80D77EC44615F408EEC7509E6BED11987BE236",
+          "tcId": 20
+        },
+        {
+          "comment": "Binary payload valid signature with mutated message",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "007369676E6174757265FF626F756E6461727901",
+          "result": "invalid",
+          "sig": "304502207CC92D455106C32383FC903B4A392834CAF1F0AB92E861D60D8818978ADC944F022100F5CFC8A8FE0FE97D55A6BDE38F80D77EC44615F408EEC7509E6BED11987BE236",
+          "tcId": 21
+        },
+        {
+          "comment": "Binary payload valid signature with signature bit flip",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "007369676E6174757265FF626F756E64617279",
+          "result": "invalid",
+          "sig": "304502207CC92D455106C32383FC903B4A392834CAF1F0AB92E861D60D8818978ADC944F022100F5CFC8A8FE0FE97D55A6BDE38F80D77EC44615F408EEC7509E6BED11987BE2B6",
+          "tcId": 22
+        },
+        {
+          "comment": "Binary payload valid signature with truncated DER",
+          "flags": [
+            "TruncatedDER"
+          ],
+          "msg": "007369676E6174757265FF626F756E64617279",
+          "result": "invalid",
+          "sig": "304502207CC92D455106C32383FC903B4A392834CAF1F0AB92E861D60D8818978ADC944F022100F5CFC8A8FE0FE97D55A6BDE38F80D77EC44615F408EEC7509E6BED1198",
+          "tcId": 23
+        },
+        {
+          "comment": "All-zero components",
+          "flags": [
+            "ZeroComponent"
+          ],
+          "msg": "00",
+          "result": "invalid",
+          "sig": "3006020100020100",
+          "tcId": 24
+        },
+        {
+          "comment": "Components exceeding curve order",
+          "flags": [
+            "ComponentOutOfRange"
+          ],
+          "msg": "DEADBEEF",
+          "result": "invalid",
+          "sig": "3046022100FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF022100AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "tcId": 25
+        },
+        {
+          "comment": "Valid signature with mismatched distinguishing ID",
+          "flags": [
+            "WrongDistinguishedId"
+          ],
+          "msg": "646973746964206D69736D617463682073686F756C64206661696C",
+          "result": "invalid",
+          "sig": "304502201AB61C72253E68EB29A7F476E893FC99BE20AA95A3F5069272337420A8BD8AEC022100E7AA8AC7060300577A1F4BB3D5D3536087869FDDDA9CB05A076BD34876AECB81",
+          "tcId": 26
+        },
+        {
+          "tcId": 35,
+          "comment": "Bit-flipped signature derived from tcId 16",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "E5A591E7B484E38292E689BFE8AA8DE38199E3828B",
+          "result": "invalid",
+          "sig": "B0450220729FAF0C6AEBBC1D6705DD8A1091203C0548F4FE2059544993052BDECB31024D02210088E9F8A030BA6D3D2D652A293B67FF9A9FBE4BA8E448553F79D784A12B35CD76"
+        },
+        {
+          "tcId": 36,
+          "comment": "Message bit flip derived from tcId 16",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "E4A591E7B484E38292E689BFE8AA8DE38199E3828B",
+          "result": "invalid",
+          "sig": "30450220729FAF0C6AEBBC1D6705DD8A1091203C0548F4FE2059544993052BDECB31024D02210088E9F8A030BA6D3D2D652A293B67FF9A9FBE4BA8E448553F79D784A12B35CD76"
+        },
+        {
+          "tcId": 37,
+          "comment": "Truncated signature derived from tcId 16",
+          "flags": [
+            "TruncatedSignature"
+          ],
+          "msg": "E5A591E7B484E38292E689BFE8AA8DE38199E3828B",
+          "result": "invalid",
+          "sig": "30450220729FAF0C6AEBBC1D6705DD8A1091203C0548F4FE2059544993052BDECB31024D02210088E9F8A030BA6D3D2D652A293B67FF9A9FBE4BA8E448553F79D784A12B35CD"
+        },
+        {
+          "tcId": 38,
+          "comment": "Bit-flipped signature derived from tcId 20",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "007369676E6174757265FF626F756E64617279",
+          "result": "invalid",
+          "sig": "B04502207CC92D455106C32383FC903B4A392834CAF1F0AB92E861D60D8818978ADC944F022100F5CFC8A8FE0FE97D55A6BDE38F80D77EC44615F408EEC7509E6BED11987BE236"
+        },
+        {
+          "tcId": 39,
+          "comment": "Message bit flip derived from tcId 20",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "017369676E6174757265FF626F756E64617279",
+          "result": "invalid",
+          "sig": "304502207CC92D455106C32383FC903B4A392834CAF1F0AB92E861D60D8818978ADC944F022100F5CFC8A8FE0FE97D55A6BDE38F80D77EC44615F408EEC7509E6BED11987BE236"
+        },
+        {
+          "tcId": 40,
+          "comment": "Truncated signature derived from tcId 20",
+          "flags": [
+            "TruncatedSignature"
+          ],
+          "msg": "007369676E6174757265FF626F756E64617279",
+          "result": "invalid",
+          "sig": "304502207CC92D455106C32383FC903B4A392834CAF1F0AB92E861D60D8818978ADC944F022100F5CFC8A8FE0FE97D55A6BDE38F80D77EC44615F408EEC7509E6BED11987BE2"
+        }
+      ]
+    },
+    {
+      "distid": "iroha-sdk-sm2-fixture",
+      "groupId": 4,
+      "key": {
+        "uncompressed": "0494642A475196A8D8FED24B92D68E447325DD6C73808D88C037AA3CDDE4D40D573AD27FF3A5D08794355E935A4F7E68859B3F0706B6A8182762D423E33A6F9B61"
+      },
+      "comment": "Extended fixture sm2-rust-sdk-fixture-v1",
+      "tests": [
+        {
+          "tcId": 44,
+          "comment": "Shared deterministic signing fixture used across Rust/Python/JavaScript SDK parity tests (seed encoded as UTF-8).",
+          "flags": [],
+          "msg": "527573742053444B20534D32207369676E696E672066697874757265207631",
+          "result": "valid",
+          "sig": "304402204E026F2E0FB75A6418C95C046D70DB7B95558BE30FB2001906EBE2091FA1AF760220299CFF374026D9E0C49C6BD4A99A1473BA17EFF429B3FAD083B1577F7559BDF5"
+        }
+      ]
+    },
+    {
+      "distid": "ALICE123@YAHOO.COM",
+      "groupId": 5,
+      "key": {
+        "uncompressed": "040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857"
+      },
+      "comment": "Extended fixture gm-t-0003-annex-d-example1",
+      "tests": [
+        {
+          "tcId": 48,
+          "comment": "Bit-flipped signature derived from fixture gm-t-0003-annex-d-example1",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "6D65737361676520646967657374",
+          "result": "invalid",
+          "sig": "3044022040F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D102206FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE6"
+        },
+        {
+          "tcId": 49,
+          "comment": "Message bit flip derived from fixture gm-t-0003-annex-d-example1",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "6D65737361676520646967657375",
+          "result": "invalid",
+          "sig": "3044022040F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D102206FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7"
+        }
+      ]
+    },
+    {
+      "distid": "1234567812345678",
+      "groupId": 6,
+      "key": {
+        "uncompressed": "04361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F"
+      },
+      "comment": "Extended fixture sm2-fixture-default-v1",
+      "tests": [
+        {
+          "tcId": 50,
+          "comment": "Deterministic SM2 fixture retained as the default top-level reference for SDKs.",
+          "flags": [],
+          "msg": "69726F686120736D2073646B2066697874757265",
+          "result": "valid",
+          "sig": "304502201877845D5FFE0305946EEA3046D0279BE886B866EF620B7325413602CAD17C7F022100F72EBF26C29E77AAAB2226EDFBEE2D6D6ABC0D6C9B2C9A2248E2BD9324A12268"
+        },
+        {
+          "tcId": 51,
+          "comment": "Bit-flipped signature derived from fixture sm2-fixture-default-v1",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "69726F686120736D2073646B2066697874757265",
+          "result": "invalid",
+          "sig": "304502201877845D5FFE0305946EEA3046D0279BE886B866EF620B7325413602CAD17C7F022100F72EBF26C29E77AAAB2226EDFBEE2D6D6ABC0D6C9B2C9A2248E2BD9324A12269"
+        },
+        {
+          "tcId": 52,
+          "comment": "Message bit flip derived from fixture sm2-fixture-default-v1",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "68726F686120736D2073646B2066697874757265",
+          "result": "invalid",
+          "sig": "304502201877845D5FFE0305946EEA3046D0279BE886B866EF620B7325413602CAD17C7F022100F72EBF26C29E77AAAB2226EDFBEE2D6D6ABC0D6C9B2C9A2248E2BD9324A12268"
+        }
+      ]
+    },
+    {
+      "distid": "iroha-sdk-sm2-fixture",
+      "groupId": 7,
+      "key": {
+        "uncompressed": "0494642A475196A8D8FED24B92D68E447325DD6C73808D88C037AA3CDDE4D40D573AD27FF3A5D08794355E935A4F7E68859B3F0706B6A8182762D423E33A6F9B61"
+      },
+      "comment": "Extended fixture sm2-rust-sdk-fixture-v1",
+      "tests": [
+        {
+          "tcId": 53,
+          "comment": "Shared deterministic signing fixture used across Rust/Python/JavaScript SDK parity tests (seed encoded as UTF-8).",
+          "flags": [],
+          "msg": "527573742053444B20534D32207369676E696E672066697874757265207631",
+          "result": "valid",
+          "sig": "304402204E026F2E0FB75A6418C95C046D70DB7B95558BE30FB2001906EBE2091FA1AF760220299CFF374026D9E0C49C6BD4A99A1473BA17EFF429B3FAD083B1577F7559BDF5"
+        },
+        {
+          "tcId": 54,
+          "comment": "Bit-flipped signature derived from fixture sm2-rust-sdk-fixture-v1",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "527573742053444B20534D32207369676E696E672066697874757265207631",
+          "result": "invalid",
+          "sig": "304402204E026F2E0FB75A6418C95C046D70DB7B95558BE30FB2001906EBE2091FA1AF760220299CFF374026D9E0C49C6BD4A99A1473BA17EFF429B3FAD083B1577F7559BDF4"
+        },
+        {
+          "tcId": 55,
+          "comment": "Message bit flip derived from fixture sm2-rust-sdk-fixture-v1",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "537573742053444B20534D32207369676E696E672066697874757265207631",
+          "result": "invalid",
+          "sig": "304402204E026F2E0FB75A6418C95C046D70DB7B95558BE30FB2001906EBE2091FA1AF760220299CFF374026D9E0C49C6BD4A99A1473BA17EFF429B3FAD083B1577F7559BDF5"
+        }
+      ]
+    },
+    {
+      "distid": "ALICE123@YAHOO.COM",
+      "groupId": 8,
+      "key": {
+        "uncompressed": "040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857"
+      },
+      "comment": "Extended fixture gm-t-0003-annex-d-example1",
+      "tests": [
+        {
+          "tcId": 56,
+          "comment": "GM/T 0003 Annex D Example 1; public key and signature sourced from official specification.",
+          "flags": [],
+          "msg": "6D65737361676520646967657374",
+          "result": "valid",
+          "sig": "3044022040F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D102206FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7"
+        },
+        {
+          "tcId": 57,
+          "comment": "Bit-flipped signature derived from fixture gm-t-0003-annex-d-example1",
+          "flags": [
+            "BitFlippedSignature"
+          ],
+          "msg": "6D65737361676520646967657374",
+          "result": "invalid",
+          "sig": "3044022040F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D102206FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE6"
+        },
+        {
+          "tcId": 58,
+          "comment": "Message bit flip derived from fixture gm-t-0003-annex-d-example1",
+          "flags": [
+            "MessageModified"
+          ],
+          "msg": "6C65737361676520646967657374",
+          "result": "invalid",
+          "sig": "3044022040F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D102206FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+[graph]
+targets = []
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2024-0388", reason = "Transitive arkworks/w3f-bls proc-macro debt; no safe upgrade is currently available and the workspace does not use derivative directly." },
+    { id = "RUSTSEC-2024-0436", reason = "Transitive proc-macro debt from pqcrypto-mldsa, halo2curves, parquet, and ratatui; no safe upgrade is currently available without vendoring or replacing multiple upstream stacks." },
+    { id = "RUSTSEC-2026-0161", reason = "The ML-KEM wrapper is protocol-pinned; replacement requires reviewed cross-SDK vectors and a coordinated network upgrade." },
+    { id = "RUSTSEC-2026-0162", reason = "The post-quantum traits package is protocol-pinned with ML-KEM/ML-DSA and must migrate as one coordinated network upgrade." },
+    { id = "RUSTSEC-2026-0163", reason = "The PQClean internals package is protocol-pinned; no safe compatible replacement is currently available." },
+    { id = "RUSTSEC-2026-0166", reason = "The ML-DSA wrapper is protocol-pinned; replacement requires reviewed cross-SDK vectors and a coordinated network upgrade." },
+    { id = "RUSTSEC-2026-0173", reason = "Build-time procedural macro dependency with no maintained compatible replacement; it is not linked into validator runtime behavior." },
+]
+unmaintained = "all"
+yanked = "warn"
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+allow-workspace = false
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

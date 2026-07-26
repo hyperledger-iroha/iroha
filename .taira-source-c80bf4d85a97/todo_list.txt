@@ -1,0 +1,545 @@
+First-party follow-up marker inventory refreshed on 2026-07-06.
+
+No active first-party implementation follow-up markers remain in the current
+source scan outside intentional guard-test fixtures and repository policy text.
+SCCP production diagnostic fixture surface removal was completed on 2026-07-09.
+SCCP live JSON duplicate-key exact-string hardening was completed on 2026-07-09.
+SCCP all-lanes destination-live metadata exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes evidence-loader path exact-type hardening was completed on
+2026-07-09.
+SCCP release JSON/artifact native-path hardening was completed on 2026-07-09.
+SCCP release-bundle source-copy native-path hardening was completed on
+2026-07-09.
+SCCP release-bundle output-path native-path hardening was completed on
+2026-07-09.
+SCCP standalone readiness output-collision native-path hardening was completed
+on 2026-07-09.
+SCCP release-bundle generated/relative path native-path hardening was completed
+on 2026-07-09.
+SCCP strict release-bundle source-inventory path hardening was completed on
+2026-07-09.
+SCCP strict release-bundle source-inventory adjunct path hardening was completed
+on 2026-07-09.
+SCCP all-lanes route-canary ingress exact-key hardening was completed on
+2026-07-09.
+SCCP active all-lanes copied-summary exact-key hardening was completed on
+2026-07-09.
+SCCP readiness public crypto direct-helper exact-key hardening was completed on
+2026-07-09.
+SCCP source-inventory Markdown exact-key hardening was completed on 2026-07-09.
+SCCP strict release-checklist Markdown exact-key hardening was completed on
+2026-07-09.
+SCCP user-prover Markdown exact-key hardening was completed on 2026-07-09.
+SCCP lane-readiness Markdown exact-key hardening was completed on 2026-07-09.
+SCCP native-prover Markdown invariant exact-key hardening was completed on
+2026-07-09.
+SCCP native-prover Markdown row exact-key hardening was completed on 2026-07-09.
+SCCP input-artifact Markdown exact-key hardening was completed on 2026-07-09.
+SCCP corridor Markdown exact-root-key hardening was completed on 2026-07-09.
+SCCP expected submission-surface exact phase-key hardening was completed on
+2026-07-09.
+SCCP corridor Markdown invariant exact-key hardening was completed on
+2026-07-09.
+SCCP native-prover Markdown invariant status exact-string hardening was
+completed on 2026-07-09.
+SCCP corridor phase-status exact-string hardening was completed on 2026-07-09.
+SCCP readiness public corridor phase-status exact-string hardening was completed
+on 2026-07-09.
+SCCP optional fixed-hex empty sentinel exact-string hardening was completed on
+2026-07-09.
+SCCP readiness native EVM redaction status exact-string hardening was completed
+on 2026-07-09.
+SCCP Solana source-network selector exact-string hardening was completed on
+2026-07-09.
+SCCP EVM source-live copied-summary exact-string hardening was completed on
+2026-07-09.
+SCCP EVM source-live RPC receipt-status exact-string hardening was completed on
+2026-07-09.
+SCCP EVM destination scalar literal exact-string hardening was completed on
+2026-07-09.
+SCCP TON destination helper exact-string hardening was completed on 2026-07-09.
+SCCP EVM strip-0x helper exact-string hardening was completed on 2026-07-09.
+SCCP EVM live function selector exact-string hardening was completed on
+2026-07-09.
+SCCP TRON strip-0x helper exact-string hardening was completed on 2026-07-09.
+SCCP all-lanes canonical text helper exact-string hardening was completed on
+2026-07-09.
+SCCP strict-verifier Solana base58 exact-string hardening was completed on
+2026-07-09.
+SCCP public blocker decode helper exact-string hardening was completed on
+2026-07-09.
+SCCP per-lane public blocker decode helper exact-string hardening was completed
+on 2026-07-09.
+SCCP runtime URL host-classifier exact-string hardening was completed on
+2026-07-09.
+SCCP all-lanes EVM source receipt-status exact-string hardening was completed on
+2026-07-09.
+SCCP all-lanes route-canary status exact-string hardening was completed on
+2026-07-09.
+SCCP Solana live owner/commitment exact-string hardening was completed on
+2026-07-09.
+SCCP ETH/BSC source block-tag exact-string hardening was completed on
+2026-07-09.
+SCCP Solana live summary commitment exact-string hardening was completed on
+2026-07-09.
+SCCP TON live account-status exact-string hardening was completed on
+2026-07-09.
+SCCP EVM live route-canary receipt-status exact-string hardening was completed
+on 2026-07-09.
+SCCP EVM live route-canary verifier exact-string hardening was completed on
+2026-07-09.
+SCCP CLI error redaction stringification hardening was completed on 2026-07-09.
+SCCP TRON live route-canary verifier exact-string hardening was completed on
+2026-07-09.
+SCCP EVM live destination/full-TOML exact-string hardening was completed on
+2026-07-09.
+SCCP TRON live route-canary verifier exact-integer hardening was completed on
+2026-07-09.
+SCCP TRON live source-event verifier exact-value hardening was completed on
+2026-07-09.
+SCCP TRON live transaction parser exact-string hardening was completed on
+2026-07-09.
+SCCP live/evidence exact-literal sweep was completed on 2026-07-09.
+SCCP release-bundle BSC testnet profile selector exact-string hardening was
+completed on 2026-07-09.
+SCCP active-launch EVM live block-tag exact-string hardening was completed on
+2026-07-09.
+BFV full-bootstrap adversarial placeholder samples preserve marker bytes via
+escaped literals so release-audit and native-payload rejection coverage stays
+intact without presenting as open source follow-up markers.
+Historical documentation, generated localization snapshots, and vendored
+third-party code can still contain archived marker text; those are not tracked
+as active Iroha release work in this inventory.
+Swift status feed checksum sidecars and health-output observability were
+implemented on 2026-07-06 and are no longer tracked as deferred release work.
+Stale documentation deferred-work headings and completed root follow-up labels
+were retired on 2026-07-06; remaining canonical marker scan hits are repository
+policy text and intentional guard-test fixtures.
+SCCP release-readiness public-container subclass hardening and BSC/TRON
+route-manifest CLI marker inventory alignment were completed on 2026-07-06.
+SCCP strict-verifier native EVM copied-container subclass hardening was
+completed on 2026-07-06.
+SCCP strict-verifier native EVM status/summary-schema/fixture copied-container
+subclass hardening was completed on 2026-07-07.
+SCCP strict-verifier user-prover/corridor copied-container subclass hardening
+was completed on 2026-07-07.
+SCCP strict-verifier active-launch/public-helper copied-container subclass
+sweep was completed on 2026-07-07.
+SCCP release-bundle generator copied-container subclass sweep was completed on
+2026-07-07.
+SCCP release-tool copied-scalar subclass sweep was completed on 2026-07-07.
+SCCP Solana live-evidence copied-container/bytes subclass sweep was completed on
+2026-07-07.
+SCCP TON live-evidence copied-container/bytes subclass sweep was completed on
+2026-07-07.
+SCCP Solana/TON destination and source-state evidence copied-bytes subclass
+sweep was completed on 2026-07-07.
+SCCP ETH/BSC/EVM source, destination, receipt, and live evidence copied
+container/bytes subclass sweep was completed on 2026-07-07.
+SCCP TRON source-bridge/live evidence copied container/bytes/numeric subclass
+sweep was completed on 2026-07-07.
+SCCP all-lanes evidence and source-template hash copied container subclass
+sweep was completed on 2026-07-07.
+SCCP production-corridor .NET TRX mixed-assembly hardening was completed on
+2026-07-07.
+SCCP unready/test-fixtures release manifest scan expansion was completed on
+2026-07-07.
+SCCP .NET TRX release-evidence marker sync was completed on 2026-07-07.
+SCCP material-only manifest bypass hardening was completed on 2026-07-07.
+SCCP Cargo feature-alias test-fixtures hardening was completed on 2026-07-07.
+SCCP non-vendor Cargo manifest discovery hardening was completed on 2026-07-07.
+SCCP governed live-verifier Required Release Evidence line binding was
+completed on 2026-07-07.
+SCCP all-lanes placeholder-material exact-boolean hardening was completed on
+2026-07-07.
+SCCP Solana immutable boolean/comment exactness was completed on 2026-07-07.
+SCCP Solana route-canary immutable-comment exactness was completed on 2026-07-07.
+SCCP all-lanes route-canary actual-boolean exactness was completed on
+2026-07-07.
+SCCP release CLI placeholder-aware redaction was completed on 2026-07-07.
+SCCP helper transport-redaction inventory exactness was completed on 2026-07-07.
+SCCP duplicate-JSON context-suppression inventory exactness was completed on
+2026-07-07.
+SCCP not-ready nested semantic inventory exactness was completed on 2026-07-07.
+SCCP active required-record inventory exactness was completed on 2026-07-07.
+SCCP production-corridor Gradle override/log-dir inventory exactness was
+completed on 2026-07-07.
+SCCP input-provenance artifact inventory exactness was completed on 2026-07-07.
+SCCP release/readiness meta-test inventory closure was completed on
+2026-07-07.
+SCCP file-specific pytest inventory sweep closure was completed on 2026-07-07.
+SCCP Required Release Evidence tab-alias hardening was completed on 2026-07-07.
+SCCP active blocker numbering inventory exactness was completed on 2026-07-07.
+SCCP public blocker-list numbering inventory exactness was completed on
+2026-07-07.
+SCCP submission-surface numbering inventory exactness was completed on
+2026-07-07.
+SCCP corridor phase-key numbering inventory exactness was completed on
+2026-07-07.
+SCCP crypto evidence numbering inventory exactness was completed on
+2026-07-07.
+SCCP active component blocker inventory exactness was completed on 2026-07-07.
+SCCP manifest artifact numbering inventory exactness was completed on
+2026-07-07.
+SCCP source-inventory gate-name numbering inventory exactness was completed on
+2026-07-07.
+SCCP repeated diagnostics source-inventory closure was completed on
+2026-07-07.
+SCCP deep blocker decoding inventory pin was completed on 2026-07-07.
+SCCP decoded sensitive path-family inventory pin was completed on 2026-07-07.
+SCCP native duplicate-key marker-family inventory pin was completed on
+2026-07-07.
+SCCP crypto audit-key redaction inventory pin was completed on 2026-07-07.
+SCCP crypto exact nested-key inventory pin was completed on 2026-07-07.
+SCCP active exact-key readiness inventory pin was completed on 2026-07-07.
+SCCP all-lanes exact-key strict inventory pin was completed on 2026-07-07.
+SCCP native EVM alias helper inventory pin was completed on 2026-07-07.
+SCCP native EVM fixture alias inventory pin was completed on 2026-07-07.
+SCCP public helper boundary inventory pin was completed on 2026-07-07.
+SCCP native EVM generator helper inventory pin was completed on 2026-07-07.
+SCCP user-prover helper-set inventory pin was completed on 2026-07-07.
+SCCP readiness public blocker subclass inventory pin was completed on
+2026-07-07.
+SCCP source-inventory required-gates subclass pin was completed on 2026-07-07.
+SCCP bundle-side schema marker inventory pin was completed on 2026-07-07.
+SCCP readiness guard-name inventory pin was completed on 2026-07-07.
+SCCP source-adapter deployment readiness validation was completed on 2026-07-07.
+SCCP source-template tuple-subclass inventory pin was completed on 2026-07-07.
+SCCP all-lanes minimal-TOML array-subclass inventory pin was completed on
+2026-07-07.
+SCCP all-lanes route-canary malformed-summary inventory pin was completed on
+2026-07-07.
+SCCP all-lanes parser/schema negative inventory pin was completed on
+2026-07-07.
+SCCP all-lanes role-separation inventory pin was completed on 2026-07-07.
+SCCP all-lanes EVM live metadata inventory pin was completed on 2026-07-07.
+SCCP all-lanes EVM/TRON route-canary inventory pin was completed on
+2026-07-07.
+SCCP all-lanes TRON live metadata inventory pin was completed on 2026-07-07.
+SCCP all-lanes Solana live metadata inventory pin was completed on 2026-07-07.
+SCCP all-lanes TON live metadata inventory pin was completed on 2026-07-07.
+SCCP all-lanes source-gate/checklist inventory closure was completed on
+2026-07-07.
+SCCP TRON live source-event/route-canary adversarial inventory pin was
+completed on 2026-07-07.
+SCCP TRON live adversarial inventory closure was completed on 2026-07-07.
+SCCP Required Release Evidence unready wording alignment was completed on
+2026-07-07.
+SCCP TRON source-bridge inventory closure was completed on 2026-07-07.
+SCCP ETH/BSC source-bridge inventory closure was completed on 2026-07-07.
+SCCP Solana/TON source-state inventory closure was completed on 2026-07-07.
+SCCP Solana/TON destination inventory closure was completed on 2026-07-07.
+SCCP Solana live inventory closure was completed on 2026-07-07.
+SCCP TON live inventory closure was completed on 2026-07-07.
+SCCP EVM helper bytes/container subclass inventory pin was completed on
+2026-07-07.
+SCCP EVM receipt-proof inventory closure was completed on 2026-07-07.
+SCCP EVM production-helper inventory closure was completed on 2026-07-07.
+SCCP all evidence helper subclass inventory closure was completed on
+2026-07-07.
+SCCP Required Release Evidence Unicode-spacing hardening was completed on
+2026-07-07.
+SCCP Blocking Items Unicode-spacing hardening was completed on 2026-07-07.
+SCCP table-cell blocker exactness hardening was completed on 2026-07-07.
+SCCP public blocker internal-space duplicate hardening was completed on
+2026-07-07.
+SCCP helper sensitive-marker internal-space redaction was completed on
+2026-07-07.
+SCCP JS public-blocker repeated-space hardening was completed on 2026-07-07.
+SCCP Required Evidence JS blocker wording was completed on 2026-07-07.
+SCCP BSC route-manifest symlink-parent collision pin was completed on
+2026-07-07.
+SCCP JS public-blocker current-tree reconciliation was completed on
+2026-07-07.
+SCCP BSC publish symlink-parent collision pin was completed on 2026-07-07.
+SCCP Solana route output/temp symlink collision pin was completed on
+2026-07-07.
+SCCP BSC/TRON deploy and transaction symlink-parent collision pin was completed
+on 2026-07-07.
+SCCP BSC native-prover bundle symlink-parent collision pin was completed on
+2026-07-07.
+SCCP BSC Groth16 attestation/handoff symlink-parent collision pin was completed
+on 2026-07-07.
+SCCP BSC Groth16 signing private-key collision hardening was completed on
+2026-07-07.
+SCCP BSC Groth16 finalization symlink-parent collision pin was completed on
+2026-07-07.
+SCCP BSC Groth16 toolchain/proof symlink-parent collision pin was completed on
+2026-07-07.
+SCCP BSC Groth16 template writer symlink-parent collision pin was completed on
+2026-07-07.
+SCCP BSC Groth16 generate/materialize symlink-parent collision pin was completed
+on 2026-07-07.
+SCCP BSC source-proof, public validator-set, and shared JS integer writer guards
+were completed on 2026-07-07.
+SCCP Python/Kotlin/Java integer writer guards were completed and locally
+validated with a temporary JDK 21 on 2026-07-07.
+SCCP Swift BSC validator-set aggregate guards were completed on 2026-07-07.
+SCCP .NET BSC validator-set payload parity was completed and locally validated
+with a temporary .NET SDK on 2026-07-07.
+SCCP .NET BSC commit-seal signer/quorum parity was completed and locally
+validated with a temporary .NET SDK on 2026-07-07.
+SCCP .NET BSC commit-message helper parity was completed and locally validated
+with a temporary .NET SDK on 2026-07-07.
+SCCP ETH source-adapter coherent deployment replay coverage was completed on
+2026-07-07.
+SCCP Solana/TON local-admission replay coverage was completed on 2026-07-07.
+SCCP TRON local-admission replay coverage was completed on 2026-07-07.
+SCCP EVM local-admission recovery replay coverage was completed on 2026-07-07.
+SCCP source-proof recovery replay coverage was completed on 2026-07-07.
+SCCP spliced source-proof recovery replay coverage was completed on 2026-07-08.
+SCCP spliced source-proof bundle admission coverage was completed on 2026-07-08.
+SCCP spliced source-proof builder rejection coverage was completed on 2026-07-08.
+SCCP source-material extractor deployment-evidence hardening was completed on
+2026-07-08.
+SCCP deployment-only source-context rejection coverage was completed on
+2026-07-08.
+SCCP deployment-only packaging-context rejection coverage was completed on
+2026-07-08.
+SCCP foreign-target Groth16 source-context-free rejection coverage was completed
+on 2026-07-08.
+SCCP foreign-target TRON Groth16 source-context-free rejection coverage was
+completed on 2026-07-08.
+SCCP foreign-target Solana/TON native source-context-free rejection coverage was
+completed on 2026-07-08.
+SCCP source-aware foreign-target Solana/TON native packaging rejection coverage
+was completed on 2026-07-08.
+SCCP source-aware foreign-target EVM/TRON Groth16 packaging rejection coverage
+was completed on 2026-07-08.
+SCCP source-aware foreign-target EVM/TRON verification rejection coverage was
+completed on 2026-07-08.
+SCCP source-aware foreign-target Solana/TON native verification rejection
+coverage was completed on 2026-07-08.
+SCCP source-aware foreign-target all-lane recovery rejection coverage was
+completed on 2026-07-08.
+SCCP source-aware foreign-target all-lane artifact-to-job rejection coverage was
+completed on 2026-07-08.
+SCCP source-aware foreign-target context-free verifier/recovery rejection
+coverage was completed on 2026-07-08.
+SCCP SORA-origin source-context splicing verifier/recovery rejection coverage
+was completed on 2026-07-08.
+SCCP EVM-family source-proof non-SORA deployment-target recovery rejection
+coverage was completed on 2026-07-08.
+SCCP Solana/TON local-admission recovery gate coverage was completed on
+2026-07-08.
+SCCP TRON local-admission recovery gate coverage was completed on 2026-07-08.
+SCCP BSC/ETH local-admission recovery inventory pin was completed on 2026-07-08.
+SCCP Solana/TON local-admission non-SORA deployment-target rejection coverage
+was completed on 2026-07-08.
+SCCP BSC/ETH local-admission non-SORA deployment-target rejection coverage was
+completed on 2026-07-08.
+SCCP all-lane material-only transparent-builder rejection coverage was completed
+on 2026-07-08.
+SCCP all-lane transparent-builder wrong-source/wrong-target source-proof
+rejection coverage was completed on 2026-07-08.
+SCCP foreign-target source-material extractor rejection coverage was completed
+on 2026-07-08.
+SCCP TON SORA-origin extraneous source-proof request rejection coverage was
+completed on 2026-07-08.
+SCCP TRON/TON proof-result swapped-bundle request rejection coverage was
+completed on 2026-07-08.
+SCCP EVM remote-source proof-request wrapper inventory pin was completed on
+2026-07-08.
+SCCP source-proof structural preflight release inventory pin was completed on
+2026-07-08.
+SCCP BSC proof-request and EVM material-only facade inventory pin was completed
+on 2026-07-08.
+SCCP Solana/TON route-canary role-replay inventory pin was completed on
+2026-07-08.
+SCCP EVM/TRON route-canary canonical-spelling inventory pin was completed on
+2026-07-08.
+SCCP route-allowlist canonical scalar inventory pin was completed on
+2026-07-08.
+SCCP BSC route-config duplicate-alias artifact inventory pin was completed on
+2026-07-08.
+SCCP TRON route-config exact-alias inventory pin was completed on 2026-07-08.
+SCCP Solana route-manifest no-overwrite inventory pin was completed on
+2026-07-08.
+SCCP TON route-manifest nanoTON no-overwrite inventory pin was completed on
+2026-07-08.
+SCCP TRON runtime blocker diagnostics inventory pin was completed on
+2026-07-08.
+SCCP all-lanes proof-context pre-render inventory pin was completed on
+2026-07-08.
+SCCP governed blocker diagnostic inventory pin was completed on 2026-07-08.
+SCCP placeholder-material redaction inventory pin was completed on 2026-07-08.
+SCCP route-canary summary malformed-container inventory pin was completed on
+2026-07-08.
+SCCP active required-record unknown-field inventory pin was completed on
+2026-07-08.
+SCCP strict bundle required-record unknown-field regression was completed on
+2026-07-08.
+SCCP active required-record malformed-field inventory pin was completed on
+2026-07-08.
+SCCP active blocker diagnostic inventory pin was completed on 2026-07-08.
+SCCP active blocker decoded-domain inventory pin was completed on 2026-07-08.
+SCCP active blocker plain-prefix routing coverage was completed on 2026-07-08.
+SCCP route-allowlist dual-gate malformed-container coverage was completed on
+2026-07-08.
+SCCP active hash role-reuse inventory matrix pin was completed on 2026-07-08.
+SCCP active route-canary unbound blocker masking coverage was completed on
+2026-07-08.
+SCCP route-canary binding-hash case inventory pin was completed on 2026-07-08.
+SCCP route-canary binding-hash blocker masking coverage was completed on
+2026-07-08.
+SCCP route-canary sibling binding-root coverage was completed on 2026-07-08.
+SCCP Rust production-admission focused validation was completed on 2026-07-08.
+SCCP native EVM expected destination binding-root coverage was completed on
+2026-07-08.
+SCCP public crypto missing embedded-root binding coverage was completed on
+2026-07-08.
+SCCP public crypto required-boolean missing-root coverage was completed on
+2026-07-08.
+SCCP standalone readiness public crypto lane binding was completed on
+2026-07-08.
+SCCP standalone readiness user-prover corridor binding was completed on
+2026-07-08.
+SCCP standalone readiness release-checklist source binding was completed on
+2026-07-08.
+SCCP standalone readiness missing-root ready-report guard was completed on
+2026-07-08.
+SCCP standalone readiness claimed-ready subroot consistency was completed on
+2026-07-08.
+SCCP standalone readiness not-ready blocker-summary guard was completed on
+2026-07-08.
+
+SCCP release-checklist not-ready explanation guard was completed on
+2026-07-08.
+
+SCCP corridor not-ready explanation guard was completed on
+2026-07-08.
+
+SCCP release-bundle preflight not-ready explanation guard was completed on
+2026-07-09.
+
+SCCP all-lanes not-ready explanation guard was completed on
+2026-07-09.
+
+SCCP all-lanes source-adapter-gate not-ready explanation guard was completed on
+2026-07-09.
+
+SCCP blocked validation-row explanation guard was completed on 2026-07-09.
+
+SCCP standalone blocked validation-root regression coverage was completed on
+2026-07-09.
+
+SCCP active checklist native-prover blocked-status guard was completed on
+2026-07-09.
+
+SCCP exact validation-status subclass hardening was completed on 2026-07-09.
+SCCP source-material evidence parser exact-string hardening was completed on
+2026-07-09.
+SCCP all-lanes minimal TOML exact-string hardening was completed on 2026-07-09.
+SCCP all-lanes minimal TOML diagnostic helper exact-string hardening was
+completed on 2026-07-09.
+SCCP runtime-bytecode file helper native-path hardening was completed on
+2026-07-09.
+SCCP Solana/TON/TRON file helper native-path hardening was completed on
+2026-07-09.
+SCCP release path text scanner exact-string hardening was completed on
+2026-07-09.
+SCCP phase/output path exact-string hardening was completed on 2026-07-09.
+SCCP readiness output collision exact-string hardening was completed on
+2026-07-09.
+SCCP bundle phase-assignment builder exact-string hardening was completed on
+2026-07-09.
+SCCP phase-prefix environment assignment exact-string hardening was completed on
+2026-07-09.
+SCCP effective command token exact-string hardening was completed on 2026-07-09.
+SCCP phase command text exact-string hardening was completed on 2026-07-09.
+SCCP command option helper exact-string hardening was completed on 2026-07-09.
+SCCP command diagnostic helper exact-string hardening was completed on
+2026-07-09.
+SCCP phase output-line helper exact-string hardening was completed on
+2026-07-09.
+SCCP phase block/transcript helper exact-string hardening was completed on
+2026-07-09.
+SCCP .NET diagnostic/path helper exact-string hardening was completed on
+2026-07-09.
+SCCP phase command matcher helper exact-string hardening was completed on
+2026-07-09.
+SCCP phase success-window helper exact-type hardening was completed on
+2026-07-09.
+SCCP phase transcript artifact entry exact-key hardening was completed on
+2026-07-09.
+SCCP public Markdown artifact row exact-key hardening was completed on
+2026-07-09.
+SCCP release-notes attachment artifact row exact-key hardening was completed on
+2026-07-09.
+SCCP native EVM artifact metadata exact-key hardening was completed on
+2026-07-09.
+SCCP readiness Markdown invariant artifact-key hardening was completed on
+2026-07-09.
+SCCP release bundle artifact metadata exact-key hardening was completed on
+2026-07-09.
+SCCP native EVM Markdown artifact cell exact-key hardening was completed on
+2026-07-09.
+SCCP native EVM artifact redaction exact-key hardening was completed on
+2026-07-09.
+SCCP input-artifact provenance exact-key hardening was completed on 2026-07-09.
+SCCP readiness Markdown native hash invariant exact-key hardening was completed on
+2026-07-09.
+SCCP corridor phase artifact path exact-key hardening was completed on
+2026-07-09.
+SCCP corridor phase evidence lookup exact-key hardening was completed on
+2026-07-09.
+SCCP readiness corridor phase evidence lookup exact-key hardening was completed
+on 2026-07-09.
+SCCP readiness public-root exact-key hardening was completed on 2026-07-09.
+SCCP readiness Markdown root exact-key hardening was completed on 2026-07-09.
+SCCP release manifest root exact-key hardening was completed on 2026-07-09.
+SCCP route allowlist/canary copied-evidence exact-key hardening was completed
+on 2026-07-09.
+SCCP active source-adapter gate copied-evidence exact-key hardening was
+completed on 2026-07-09.
+SCCP active source-record and destination-binding copied-evidence exact-key
+hardening was completed on 2026-07-09.
+SCCP native EVM copied-manifest exact-key hardening was completed on 2026-07-09.
+SCCP source-context deployment-match hardening was completed on 2026-07-09.
+SCCP all-lanes source material/deployment exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes source-live metadata exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes release-checklist exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle/strict route-canary exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes public lane schema exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes public summary root exact-key hardening was completed on
+2026-07-09.
+SCCP all-lanes release-checklist required-key exact-key hardening was completed
+on 2026-07-09.
+SCCP all-lanes evidence section exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle crypto row scalar exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle crypto route-canary exact-key hardening was completed on
+2026-07-09.
+SCCP strict-verifier crypto row exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle submission-surface exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle EVM live metadata exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle report root/corridor exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle provenance/artifact exact-key hardening was completed on
+2026-07-09.
+SCCP strict-verifier manifest artifact exact-key hardening was completed on
+2026-07-09.
+SCCP release-bundle all-lanes summary exact-key hardening was completed on
+2026-07-09.
+SCCP release readiness/bundle checklist and Markdown exact-key hardening was
+completed on 2026-07-09.
+SCCP EVM source-verifier emitter-address production gate was completed on
+2026-07-09.
+SCCP all-lanes route-allowlist recompute exact-key hardening was completed on
+2026-07-09.
+SCCP EVM live copied-summary exact-key hardening was completed on 2026-07-09.
+SCCP TRON live copied-summary exact-key hardening was completed on 2026-07-09.
+SCCP release-bundle route-canary exact-key hardening was completed on
+2026-07-09.
+SCCP EVM live route-canary/destination exact-key inventory was completed on
+2026-07-09.

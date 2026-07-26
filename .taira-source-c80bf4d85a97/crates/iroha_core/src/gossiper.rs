@@ -1,0 +1,6739 @@
+//! Gossiper actor responsible for transaction gossiping.
+
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    io::Write,
+    num::{NonZeroU32, NonZeroUsize},
+    sync::{Arc, OnceLock},
+    time::{Duration, Instant},
+};
+
+use iroha_config::parameters::actual::{
+    DataspaceGossip, DataspaceGossipFallback, LaneConfig as LaneGeometry, Network as NetworkConfig,
+    Nexus, RestrictedPublicPayload, TransactionGossiper as Config,
+};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_data_model::{
+    ChainId, DataSpaceId,
+    account::AccountId,
+    isi::InstructionBox,
+    nexus::{DataSpaceCatalog, LaneCatalog, LaneId, LaneVisibility},
+    peer::PeerId,
+    transaction::{SignedTransaction, signed::TransactionEntrypoint},
+};
+use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_p2p::{Broadcast, Post, Priority};
+use iroha_primitives::time::TimeSource;
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    codec::{Decode, Encode},
+    core as ncore,
+};
+use tokio::sync::mpsc;
+
+use crate::{
+    IrohaNetwork, NetworkMessage,
+    queue::{
+        GossipBatchEntry, Queue, RoutingDecision, RoutingPlan, resolve_routing_decision,
+        resolve_routing_plan_against_catalogs,
+    },
+    state::{State, StatelessValidationContext, TransactionsReadOnly},
+    tx::{
+        AcceptTransactionFail, AcceptedTransaction, PreparedTransactionMetadata,
+        SignatureRejectionCode, SignatureVerificationFail,
+    },
+};
+
+/// Grouped gossip entries and the lanes they originated from.
+#[derive(Default)]
+struct DataspaceBatch {
+    entries: Vec<GossipBatchEntry>,
+    lanes: BTreeSet<LaneId>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RestrictedTargetPlan {
+    Send {
+        targets: Vec<PeerId>,
+        fallback_used: bool,
+        fallback_surface: Option<&'static str>,
+        reason: Option<&'static str>,
+    },
+    Drop {
+        reason: &'static str,
+        fallback_used: bool,
+        fallback_surface: Option<&'static str>,
+        targets: Vec<PeerId>,
+    },
+}
+
+const DROP_REASON_NO_RESTRICTED_TARGETS: &str = "no_restricted_targets";
+const DROP_REASON_PUBLIC_OVERLAY_REFUSED: &str = "restricted_public_overlay_refused";
+const DROP_REASON_ROUTE_MISMATCH: &str = "route_mismatch";
+const DROP_REASON_NONCANONICAL_ROUTING_PLAN: &str = "noncanonical_routing_plan";
+const DROP_REASON_INACTIVE_LANE: &str = "inactive_lane";
+const DROP_REASON_PEER_RECENT_SUPPRESSION: &str = "peer_recent_suppression";
+const OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY: &str = "peer_recent_suppression_replay";
+const OUTCOME_PUBLIC_OVERLAY_FORWARD: &str = "restricted_public_overlay_forward";
+const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
+const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
+const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
+const GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS: usize = 8;
+const TX_GOSSIP_FRAME_PROBE_KEY_SEED: &[u8] = b"iroha:tx-gossip-frame-probe:v1";
+
+fn active_gossip_lane_ids(state: &State, nexus: &Nexus) -> Option<BTreeSet<LaneId>> {
+    nexus.enabled.then(|| {
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .filter_map(|lane| {
+                state
+                    .is_lane_active_for_authority(lane.id)
+                    .then_some(lane.id)
+            })
+            .collect()
+    })
+}
+
+#[derive(Debug, Clone)]
+struct PeerRecentSuppressionEntry {
+    peer_id: PeerId,
+    tx_hash: HashOf<SignedTransaction>,
+    expires_tick: u64,
+}
+
+fn tx_gossip_frame_payload_cap(
+    network_cfg: &NetworkConfig,
+    chain_id: &ChainId,
+    self_peer_id: &PeerId,
+    max_peer_id: &PeerId,
+) -> usize {
+    let plaintext_cap = network_cfg
+        .max_frame_bytes_tx_gossip
+        .min(iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes));
+    if plaintext_cap == 0 {
+        return 0;
+    }
+    let dummy_keypair = tx_gossip_frame_probe_keypair();
+    let dummy_authority = AccountId::new(dummy_keypair.public_key().clone());
+    let dummy_signed = match iroha_data_model::transaction::TransactionBuilder::new(
+        chain_id.clone(),
+        dummy_authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(std::iter::empty::<InstructionBox>())
+    .try_sign(dummy_keypair.private_key())
+    {
+        Ok(transaction) => transaction,
+        Err(err) => {
+            iroha_logger::warn!(
+                %err,
+                "failed to sign transaction gossip frame-size probe"
+            );
+            return 0;
+        }
+    };
+    let probe_payload_len = plaintext_cap;
+    let payload = Arc::new(vec![0u8; probe_payload_len]);
+    let probe_gossip = TransactionGossip {
+        txs: vec![GossipTransaction::with_encoded(dummy_signed, payload)],
+        routes: vec![GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        }],
+        plans: vec![RoutingPlan::single(RoutingDecision::default())],
+        plane: GossipPlane::Public,
+    };
+    let gossip_len = probe_gossip
+        .encoded_len_exact()
+        .or_else(|| probe_gossip.encoded_len_hint())
+        .unwrap_or(0);
+    let payload = NetworkMessage::TransactionGossiper(Arc::new(probe_gossip));
+    let direct_len = iroha_p2p::network::data_frame_wire_len(
+        self_peer_id,
+        Some(max_peer_id),
+        network_cfg.relay_ttl,
+        Priority::Low,
+        &payload,
+    );
+    let broadcast_len = iroha_p2p::network::data_frame_wire_len(
+        self_peer_id,
+        None,
+        network_cfg.relay_ttl,
+        Priority::Low,
+        &payload,
+    );
+    let envelope_len = direct_len.max(broadcast_len).saturating_sub(gossip_len);
+    plaintext_cap.saturating_sub(envelope_len)
+}
+
+fn tx_gossip_frame_probe_keypair() -> KeyPair {
+    KeyPair::try_from_seed(TX_GOSSIP_FRAME_PROBE_KEY_SEED.to_vec(), Algorithm::Ed25519)
+        .expect("fixed transaction gossip frame probe Ed25519 seed must derive")
+}
+
+fn splitmix64(mut state: u64) -> u64 {
+    state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+#[derive(Debug)]
+struct GossipTargetSeed {
+    seed: u64,
+    last_reshuffle: Instant,
+    reshuffle_period: Duration,
+}
+
+impl GossipTargetSeed {
+    fn new(seed: u64, reshuffle_period: Duration, now: Instant) -> Self {
+        Self {
+            seed,
+            last_reshuffle: now,
+            reshuffle_period,
+        }
+    }
+
+    fn current(&mut self, now: Instant) -> u64 {
+        if now.saturating_duration_since(self.last_reshuffle) >= self.reshuffle_period {
+            self.seed = splitmix64(self.seed);
+            self.last_reshuffle = now;
+        }
+        self.seed
+    }
+}
+
+/// [`TransactionGossiper`] actor handle.
+#[derive(Clone)]
+pub struct TransactionGossiperHandle {
+    message_sender: mpsc::Sender<Arc<TransactionGossip>>,
+}
+
+impl TransactionGossiperHandle {
+    /// Send [`TransactionGossip`] to actor.
+    ///
+    /// Messages are best-effort: if the queue is full, the gossip is dropped
+    /// to avoid blocking consensus traffic.
+    pub fn gossip(&self, gossip: Arc<TransactionGossip>) {
+        let txs = gossip.txs.len();
+        let plane = gossip_plane_label(gossip.plane);
+        match self.message_sender.try_send(gossip) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                iroha_logger::debug!(
+                    plane,
+                    txs,
+                    "transaction gossiper queue full; dropping gossip"
+                );
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                iroha_logger::warn!(
+                    plane,
+                    txs,
+                    "transaction gossiper channel closed; dropping gossip"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod handle_tests {
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    #[test]
+    fn gossip_drops_when_queue_full() {
+        let (message_sender, mut message_receiver) = mpsc::channel(1);
+        let handle = TransactionGossiperHandle { message_sender };
+
+        let msg1 = TransactionGossip {
+            txs: Vec::new(),
+            routes: Vec::new(),
+            plans: Vec::new(),
+            plane: GossipPlane::Public,
+        };
+        let msg2 = TransactionGossip {
+            txs: Vec::new(),
+            routes: Vec::new(),
+            plans: Vec::new(),
+            plane: GossipPlane::Restricted,
+        };
+
+        handle
+            .message_sender
+            .try_send(Arc::new(msg1))
+            .expect("queue has space");
+        handle.gossip(Arc::new(msg2));
+
+        let received = message_receiver
+            .try_recv()
+            .expect("expected queued message");
+        assert_eq!(received.plane, GossipPlane::Public);
+        assert!(matches!(
+            message_receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+}
+
+/// Actor which gossips transactions and receives transaction gossips
+pub struct TransactionGossiper {
+    /// Unique id of the blockchain. Used for simple replay attack protection.
+    chain_id: ChainId,
+    /// The time between gossip messages. More frequent gossiping shortens
+    /// the time to sync, but can overload the network.
+    gossip_period: Duration,
+    /// Maximum size of a batch that is being gossiped. Smaller size leads
+    /// to longer time to synchronise, useful if you have high packet loss.
+    gossip_size: NonZeroU32,
+    /// Number of gossip periods to wait before re-sending the same transactions.
+    gossip_resend_ticks: NonZeroU32,
+    /// Monotonic tick counter for gossip resend pacing.
+    gossip_tick: u64,
+    /// Deferred gossip hashes bucketed by resend tick.
+    gossip_deferred: Vec<Vec<HashOf<SignedTransaction>>>,
+    /// Recently-sent transaction hashes tracked per peer to suppress duplicate fanout.
+    peer_recently_sent: BTreeMap<PeerId, HashMap<HashOf<SignedTransaction>, u64>>,
+    /// Expiry ring for per-peer suppression entries (tick-based TTL).
+    peer_recent_ring: Vec<Vec<PeerRecentSuppressionEntry>>,
+    /// Subscriber-queue drop counter at the last backpressure observation.
+    last_drop_count: u64,
+    /// Timestamp of the last observed subscriber-queue drop.
+    last_drop_at: Option<Instant>,
+    network: IrohaNetwork,
+    queue: Arc<Queue>,
+    state: Arc<State>,
+    tx_frame_cap: usize,
+    dataspace_cfg: DataspaceGossip,
+    public_seed: GossipTargetSeed,
+    restricted_seed: GossipTargetSeed,
+}
+
+impl TransactionGossiper {
+    /// Start [`Self`] actor.
+    pub fn start(self, shutdown_signal: ShutdownSignal) -> (TransactionGossiperHandle, Child) {
+        let (message_sender, message_receiver) = mpsc::channel(1);
+        (
+            TransactionGossiperHandle { message_sender },
+            Child::new(
+                tokio::task::spawn(self.run(message_receiver, shutdown_signal)),
+                OnShutdown::Abort,
+            ),
+        )
+    }
+
+    /// Construct [`Self`] from configuration
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    pub fn from_config(
+        chain_id: ChainId,
+        Config {
+            gossip_period,
+            gossip_size,
+            gossip_resend_ticks,
+            dataspace,
+        }: Config,
+        network_cfg: &NetworkConfig,
+        self_peer_id: PeerId,
+        max_peer_id: PeerId,
+        network: IrohaNetwork,
+        queue: Arc<Queue>,
+        state: Arc<State>,
+    ) -> Self {
+        let now = Instant::now();
+        let dataspace_cfg = dataspace;
+        let public_seed = GossipTargetSeed::new(
+            Self::initial_target_seed(
+                &chain_id,
+                &self_peer_id,
+                &max_peer_id,
+                GOSSIP_SEED_PUBLIC_DOMAIN,
+            ),
+            dataspace_cfg.public_target_reshuffle,
+            now,
+        );
+        let restricted_seed = GossipTargetSeed::new(
+            Self::initial_target_seed(
+                &chain_id,
+                &self_peer_id,
+                &max_peer_id,
+                GOSSIP_SEED_RESTRICTED_DOMAIN,
+            ),
+            dataspace_cfg.restricted_target_reshuffle,
+            now,
+        );
+        // Keep gossip batches below the plaintext per-topic cap while respecting the encrypted
+        // frame ceiling and the P2P message envelope overhead.
+        let tx_frame_cap =
+            tx_gossip_frame_payload_cap(network_cfg, &chain_id, &self_peer_id, &max_peer_id);
+        let gossip_deferred = vec![Vec::new(); gossip_resend_ticks.get() as usize];
+        let peer_recent_ring = vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS];
+        Self {
+            chain_id,
+            gossip_period,
+            gossip_size,
+            gossip_resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred,
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring,
+            last_drop_count: 0,
+            last_drop_at: None,
+            network,
+            queue,
+            state,
+            tx_frame_cap,
+            dataspace_cfg,
+            public_seed,
+            restricted_seed,
+        }
+    }
+
+    async fn run(
+        mut self,
+        mut message_receiver: mpsc::Receiver<Arc<TransactionGossip>>,
+        shutdown_signal: ShutdownSignal,
+    ) {
+        let mut gossip_period = tokio::time::interval(self.gossip_period);
+        gossip_period.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = gossip_period.tick() => self.gossip_transactions(),
+                Some(transaction_gossip) = message_receiver.recv() => {
+                    self.handle_transaction_gossip(transaction_gossip);
+                }
+                () = shutdown_signal.receive() => {
+                    iroha_logger::debug!("Shutting down transactions gossiper");
+                    break;
+                },
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    fn deferred_index(&self) -> usize {
+        let len = u64::from(self.gossip_resend_ticks.get());
+        let len_usize = usize::try_from(len).expect("gossip_resend_ticks fits usize");
+        debug_assert!(len > 0, "gossip_resend_ticks must be non-zero");
+        debug_assert_eq!(
+            self.gossip_deferred.len(),
+            len_usize,
+            "gossip_deferred must match gossip_resend_ticks"
+        );
+        usize::try_from(self.gossip_tick % len).expect("gossip_resend_ticks fits usize")
+    }
+
+    fn backpressure_cooldown(&self) -> Duration {
+        self.gossip_period
+            .checked_mul(self.gossip_resend_ticks.get())
+            .unwrap_or(self.gossip_period)
+    }
+
+    fn gossip_backpressure_active(&mut self, now: Instant) -> bool {
+        let current = iroha_p2p::network::subscriber_queue_full_count();
+        if current > self.last_drop_count {
+            self.last_drop_count = current;
+            self.last_drop_at = Some(now);
+        }
+        let cooldown = self.backpressure_cooldown();
+        self.last_drop_at
+            .is_some_and(|last| now.saturating_duration_since(last) < cooldown)
+    }
+
+    fn release_deferred_gossip(&mut self) {
+        if self.gossip_deferred.is_empty() {
+            return;
+        }
+        let index = self.deferred_index();
+        let hashes = std::mem::take(&mut self.gossip_deferred[index]);
+        if hashes.is_empty() {
+            return;
+        }
+        self.queue.requeue_gossip_hashes(hashes);
+    }
+
+    fn defer_gossip_hashes(&mut self, hashes: impl IntoIterator<Item = HashOf<SignedTransaction>>) {
+        if self.gossip_deferred.is_empty() {
+            return;
+        }
+        let index = self.deferred_index();
+        let slot = &mut self.gossip_deferred[index];
+        let mut seen: HashSet<_> = slot.iter().copied().collect();
+        for hash in hashes {
+            if seen.insert(hash) {
+                slot.push(hash);
+            }
+        }
+    }
+
+    fn retry_public_broadcast_hashes(&mut self, hashes: Vec<HashOf<SignedTransaction>>) {
+        self.defer_gossip_hashes(hashes);
+    }
+
+    fn advance_gossip_tick(&mut self) {
+        self.gossip_tick = self.gossip_tick.wrapping_add(1);
+    }
+
+    fn peer_recent_slot_for_tick(&self, tick: u64) -> usize {
+        let slots = self.peer_recent_ring.len();
+        if slots == 0 {
+            return 0;
+        }
+        let slots_u64 = u64::try_from(slots).expect("peer_recent_ring length fits u64");
+        usize::try_from(tick % slots_u64).expect("slot index fits usize")
+    }
+
+    fn expire_peer_recent_suppression(&mut self) {
+        if self.peer_recent_ring.is_empty() {
+            return;
+        }
+        let slot_idx = self.peer_recent_slot_for_tick(self.gossip_tick);
+        let expiring = std::mem::take(&mut self.peer_recent_ring[slot_idx]);
+        if expiring.is_empty() {
+            return;
+        }
+        let mut empty_peers = BTreeSet::new();
+        let mut deferred = Vec::new();
+        for entry in expiring {
+            let peer_id = entry.peer_id.clone();
+            if let Some(peer_map) = self.peer_recently_sent.get_mut(&peer_id) {
+                match peer_map.get(&entry.tx_hash).copied() {
+                    Some(expiry) if expiry == entry.expires_tick && expiry <= self.gossip_tick => {
+                        peer_map.remove(&entry.tx_hash);
+                    }
+                    Some(expiry) if expiry == entry.expires_tick => {
+                        deferred.push(entry);
+                    }
+                    Some(_) | None => {
+                        // A newer send replaced this peer/hash expiry, or the
+                        // hash was already removed. Drop the stale ring entry.
+                    }
+                }
+                if peer_map.is_empty() {
+                    empty_peers.insert(peer_id);
+                }
+            }
+        }
+        for peer in empty_peers {
+            self.peer_recently_sent.remove(&peer);
+        }
+        for entry in deferred {
+            let deferred_slot = self.peer_recent_slot_for_tick(entry.expires_tick);
+            self.peer_recent_ring[deferred_slot].push(entry);
+        }
+    }
+
+    fn peer_recently_seen_all_hashes(
+        &self,
+        peer_id: &PeerId,
+        tx_hashes: &[HashOf<SignedTransaction>],
+    ) -> bool {
+        self.peer_recently_sent
+            .get(peer_id)
+            .is_some_and(|seen| tx_hashes.iter().all(|hash| seen.contains_key(hash)))
+    }
+
+    fn filter_targets_by_peer_recent_suppression(
+        &self,
+        targets: Vec<PeerId>,
+        tx_hashes: &[HashOf<SignedTransaction>],
+    ) -> (Vec<PeerId>, usize) {
+        if tx_hashes.is_empty() || targets.is_empty() {
+            return (targets, 0);
+        }
+        let mut filtered = Vec::with_capacity(targets.len());
+        let mut suppressed = 0usize;
+        for peer in &targets {
+            if self.peer_recently_seen_all_hashes(peer, tx_hashes) {
+                suppressed = suppressed.saturating_add(1);
+            } else {
+                filtered.push(peer.clone());
+            }
+        }
+        (filtered, suppressed)
+    }
+
+    fn filter_targets_or_replay_recent_suppressed(
+        &self,
+        targets: Vec<PeerId>,
+        tx_hashes: &[HashOf<SignedTransaction>],
+    ) -> (Vec<PeerId>, usize, bool) {
+        if tx_hashes.is_empty() || targets.is_empty() {
+            return (targets, 0, false);
+        }
+        let (targets, suppressed) =
+            self.filter_targets_by_peer_recent_suppression(targets, tx_hashes);
+        (targets, suppressed, false)
+    }
+
+    fn filter_targets_for_priority(
+        &self,
+        targets: Vec<PeerId>,
+        tx_hashes: &[HashOf<SignedTransaction>],
+        priority: Priority,
+    ) -> (Vec<PeerId>, usize, bool) {
+        if matches!(priority, Priority::High) {
+            (targets, 0, false)
+        } else {
+            self.filter_targets_or_replay_recent_suppressed(targets, tx_hashes)
+        }
+    }
+
+    fn remember_peer_recent_sends(
+        &mut self,
+        targets: &[PeerId],
+        tx_hashes: &[HashOf<SignedTransaction>],
+    ) {
+        if targets.is_empty() || tx_hashes.is_empty() || self.peer_recent_ring.is_empty() {
+            return;
+        }
+        let ttl_ticks =
+            u64::try_from(self.peer_recent_ring.len()).expect("peer_recent_ring length fits u64");
+        let expires_tick = self.gossip_tick.saturating_add(ttl_ticks);
+        let slot_idx = self.peer_recent_slot_for_tick(expires_tick);
+        let slot = &mut self.peer_recent_ring[slot_idx];
+        for peer_id in targets {
+            let peer_map = self.peer_recently_sent.entry(peer_id.clone()).or_default();
+            for tx_hash in tx_hashes {
+                if peer_map.insert(*tx_hash, expires_tick) != Some(expires_tick) {
+                    slot.push(PeerRecentSuppressionEntry {
+                        peer_id: peer_id.clone(),
+                        tx_hash: *tx_hash,
+                        expires_tick,
+                    });
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn gossip_transactions(&mut self) {
+        let now = Instant::now();
+        let queue_active_len = self.queue.active_len();
+        let targeted_backlog_active =
+            Self::targeted_backlog_requires_gossip(self.gossip_size, queue_active_len);
+        if self.gossip_backpressure_active(now) && !targeted_backlog_active {
+            iroha_logger::trace!(
+                drops = self.last_drop_count,
+                cooldown_ms = self.backpressure_cooldown().as_millis(),
+                "transaction gossiper skipping gossip due to relay backpressure"
+            );
+            return;
+        }
+        if targeted_backlog_active && self.last_drop_at.is_some() {
+            iroha_logger::debug!(
+                queue_active_len,
+                gossip_size = self.gossip_size.get(),
+                drops = self.last_drop_count,
+                cooldown_ms = self.backpressure_cooldown().as_millis(),
+                "transaction gossiper continuing under targeted backlog despite relay backpressure"
+            );
+        }
+        self.expire_peer_recent_suppression();
+        self.release_deferred_gossip();
+        let (
+            entries,
+            lane_config,
+            lane_catalog,
+            dataspace_catalog,
+            active_lane_ids,
+            commit_topology,
+        ) = {
+            let nexus = self.state.nexus_snapshot();
+            let lane_config = nexus.lane_config.clone();
+            let lane_catalog = nexus.lane_catalog.clone();
+            let dataspace_catalog = nexus.dataspace_catalog.clone();
+            let active_lane_ids = active_gossip_lane_ids(&self.state, &nexus);
+            let entries = self
+                .queue
+                .gossip_batch_with_state(self.gossip_size.get(), &self.state);
+            let commit_topology = self.state.commit_topology_snapshot();
+            (
+                entries,
+                lane_config,
+                lane_catalog,
+                dataspace_catalog,
+                active_lane_ids,
+                commit_topology,
+            )
+        };
+
+        if entries.is_empty() {
+            self.advance_gossip_tick();
+            return;
+        }
+        let public_seed = self.public_seed.current(now);
+        let restricted_seed = self.restricted_seed.current(now);
+
+        #[cfg(feature = "telemetry")]
+        {
+            self.record_gossip_caps();
+        }
+
+        let mut grouped: BTreeMap<DataSpaceId, DataspaceBatch> = BTreeMap::new();
+        for entry in entries {
+            let route = GossipRoute {
+                lane_id: entry.routing.lane_id,
+                dataspace_id: entry.routing.dataspace_id,
+            };
+            if let Err(reason) = validate_route(
+                &lane_catalog,
+                &dataspace_catalog,
+                active_lane_ids.as_ref(),
+                route,
+            ) {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    reason,
+                    "dropping transaction gossip entry before broadcast"
+                );
+                let plane = dataspace_plane(&lane_config, route.dataspace_id)
+                    .unwrap_or(GossipPlane::Restricted);
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    reason,
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    0,
+                    0,
+                );
+                continue;
+            }
+
+            let entry_slot = grouped.entry(entry.routing.dataspace_id).or_default();
+            entry_slot.lanes.insert(route.lane_id);
+            entry_slot.entries.push(entry);
+        }
+
+        for (dataspace_id, batch) in grouped {
+            let mut lane_ids = Vec::with_capacity(batch.lanes.len());
+            lane_ids.extend(batch.lanes.iter().copied());
+            let entries = batch.entries;
+            let plane = dataspace_plane(&lane_config, dataspace_id).or({
+                if self.dataspace_cfg.drop_unknown_dataspace {
+                    None
+                } else {
+                    Some(GossipPlane::Restricted)
+                }
+            });
+
+            let Some(plane) = plane else {
+                iroha_logger::warn!(
+                    dataspace = %dataspace_id,
+                    "dataspace missing from lane catalog; requeueing gossip batch"
+                );
+                self.defer_gossip_hashes(entries.iter().map(|entry| entry.tx.hash()));
+                self.record_drop_metric(
+                    GossipPlane::Restricted,
+                    dataspace_id,
+                    &lane_ids,
+                    "unknown_dataspace",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(GossipPlane::Restricted),
+                    entries.len(),
+                    0,
+                );
+                continue;
+            };
+
+            match plane {
+                GossipPlane::Public => {
+                    self.gossip_public(dataspace_id, &lane_ids, entries, public_seed);
+                }
+                GossipPlane::Restricted => self.gossip_restricted(
+                    dataspace_id,
+                    &lane_ids,
+                    entries,
+                    &commit_topology,
+                    restricted_seed,
+                ),
+            }
+        }
+        self.advance_gossip_tick();
+    }
+
+    fn gossip_priority(&self) -> Priority {
+        let pressure = self.queue.pressure_snapshot();
+        if pressure.saturated_by_age || pressure.saturated_by_count {
+            Priority::High
+        } else {
+            Priority::Low
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn gossip_public(
+        &mut self,
+        dataspace_id: DataSpaceId,
+        lane_ids: &[LaneId],
+        entries: Vec<GossipBatchEntry>,
+        gossip_seed: u64,
+    ) {
+        if entries.is_empty() {
+            return;
+        }
+        let PartitionedGossipBatch {
+            message,
+            requeue,
+            encoded_len,
+        } = partition_gossip_batch(
+            self.gossip_size.get() as usize,
+            self.tx_frame_cap,
+            GossipPlane::Public,
+            entries,
+        );
+
+        if !requeue.is_empty() {
+            self.defer_gossip_hashes(requeue);
+        }
+
+        if message.txs.is_empty() {
+            iroha_logger::debug!(
+                frame_cap = self.tx_frame_cap,
+                "Skipping transaction gossip broadcast because current frame cap cannot fit any transaction"
+            );
+            self.record_drop_metric(
+                GossipPlane::Public,
+                dataspace_id,
+                lane_ids,
+                "frame_cap_too_small",
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(GossipPlane::Public),
+                0,
+                encoded_len,
+            );
+            return;
+        }
+
+        let mut sent_hashes = Vec::with_capacity(message.txs.len());
+        for tx in &message.txs {
+            sent_hashes.push(tx.hash());
+        }
+        let batch_txs = message.txs.len();
+        let frame_bytes = encoded_len;
+
+        let targets: Vec<PeerId> = self
+            .network
+            .online_peers(|online| online.iter().map(|peer| peer.id().clone()).collect());
+        let total_online = targets.len();
+        let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_PUBLIC_DOMAIN);
+        let priority = self.gossip_priority();
+        let public_target_cap = if matches!(priority, Priority::High) {
+            None
+        } else {
+            Self::effective_public_target_cap(
+                self.dataspace_cfg.public_target_cap,
+                self.gossip_size,
+                self.queue.active_len(),
+                self.queue.current_backpressure().is_saturated(),
+            )
+        };
+        let (targets, suppressed_targets, replaying_suppressed_targets) =
+            self.filter_targets_for_priority(targets, &sent_hashes, priority);
+        let (targets, _) = Self::select_targets_with_seed(targets, public_target_cap, seed);
+
+        if targets.is_empty() {
+            iroha_logger::debug!(
+                tx_count = batch_txs,
+                dataspace = %dataspace_id,
+                suppressed_targets,
+                "skipping public gossip batch after per-peer suppression"
+            );
+            self.defer_gossip_hashes(sent_hashes);
+            self.record_drop_metric(
+                GossipPlane::Public,
+                dataspace_id,
+                lane_ids,
+                DROP_REASON_PEER_RECENT_SUPPRESSION,
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(GossipPlane::Public),
+                batch_txs,
+                frame_bytes,
+            );
+            return;
+        }
+
+        let message = Arc::new(message);
+        if public_target_cap.is_some() {
+            iroha_logger::debug!(
+                tx_count = batch_txs,
+                size_bytes = encoded_len,
+                targets = targets.len(),
+                high_priority = matches!(priority, Priority::High),
+                suppressed_targets,
+                replaying_suppressed_targets,
+                online_peers = total_online,
+                dataspace = %dataspace_id,
+                "gossiping public transaction batch to capped target set"
+            );
+            let payload = NetworkMessage::TransactionGossiper(Arc::clone(&message));
+            for peer_id in &targets {
+                self.network.post(Post {
+                    data: payload.clone(),
+                    peer_id: peer_id.clone(),
+                    priority,
+                });
+            }
+            self.record_sent_metric(
+                GossipPlane::Public,
+                dataspace_id,
+                lane_ids,
+                &targets,
+                public_target_cap,
+                batch_txs,
+                frame_bytes,
+                false,
+                None,
+                replaying_suppressed_targets.then_some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY),
+            );
+            self.remember_peer_recent_sends(&targets, &sent_hashes);
+            // Re-enqueue sent hashes when we gossip to a capped target set so the batch can
+            // continue spreading to other peers in subsequent rounds.
+            self.defer_gossip_hashes(sent_hashes);
+        } else {
+            if suppressed_targets == 0 {
+                iroha_logger::debug!(
+                    tx_count = batch_txs,
+                    size_bytes = encoded_len,
+                    high_priority = matches!(priority, Priority::High),
+                    online_peers = total_online,
+                    dataspace = %dataspace_id,
+                    "broadcasting transaction gossip batch"
+                );
+                self.network.broadcast(Broadcast {
+                    data: NetworkMessage::TransactionGossiper(Arc::clone(&message)),
+                    priority,
+                });
+            } else {
+                iroha_logger::debug!(
+                    tx_count = batch_txs,
+                    size_bytes = encoded_len,
+                    targets = targets.len(),
+                    high_priority = matches!(priority, Priority::High),
+                    suppressed_targets,
+                    replaying_suppressed_targets,
+                    online_peers = total_online,
+                    dataspace = %dataspace_id,
+                    "gossiping public transaction batch to unsuppressed peer subset"
+                );
+                let payload = NetworkMessage::TransactionGossiper(Arc::clone(&message));
+                for peer_id in &targets {
+                    self.network.post(Post {
+                        data: payload.clone(),
+                        peer_id: peer_id.clone(),
+                        priority,
+                    });
+                }
+            }
+            self.record_sent_metric(
+                GossipPlane::Public,
+                dataspace_id,
+                lane_ids,
+                &targets,
+                public_target_cap,
+                batch_txs,
+                frame_bytes,
+                false,
+                None,
+                replaying_suppressed_targets.then_some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY),
+            );
+            self.remember_peer_recent_sends(&targets, &sent_hashes);
+            // Broadcast is best-effort during startup and under targeted ingress load. Keep
+            // pending transactions on the resend ring until consensus removes them from the queue.
+            self.retry_public_broadcast_hashes(sent_hashes);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn gossip_restricted(
+        &mut self,
+        dataspace_id: DataSpaceId,
+        lane_ids: &[LaneId],
+        entries: Vec<GossipBatchEntry>,
+        commit_topology: &[PeerId],
+        gossip_seed: u64,
+    ) {
+        if entries.is_empty() {
+            return;
+        }
+
+        let PartitionedGossipBatch {
+            message,
+            requeue,
+            encoded_len,
+        } = partition_gossip_batch(
+            self.gossip_size.get() as usize,
+            self.tx_frame_cap,
+            GossipPlane::Restricted,
+            entries,
+        );
+
+        if !requeue.is_empty() {
+            self.defer_gossip_hashes(requeue);
+        }
+
+        if message.txs.is_empty() {
+            iroha_logger::debug!(
+                frame_cap = self.tx_frame_cap,
+                %dataspace_id,
+                "Skipping restricted transaction gossip because current frame cap cannot fit any transaction"
+            );
+            self.record_drop_metric(
+                GossipPlane::Restricted,
+                dataspace_id,
+                lane_ids,
+                "frame_cap_too_small",
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(GossipPlane::Restricted),
+                0,
+                encoded_len,
+            );
+            return;
+        }
+
+        let batch_txs = message.txs.len();
+        let frame_bytes = encoded_len;
+        let mut sent_hashes = Vec::with_capacity(message.txs.len());
+        for tx in &message.txs {
+            sent_hashes.push(tx.hash());
+        }
+
+        let seed = Self::seed_for_plane(gossip_seed, dataspace_id, GOSSIP_SEED_RESTRICTED_DOMAIN);
+        let priority = self.gossip_priority();
+        let plan = self.restricted_target_plan(
+            commit_topology,
+            batch_txs,
+            seed,
+            matches!(priority, Priority::High),
+        );
+        let (targets, fallback_used, fallback_surface, reason) = match plan {
+            RestrictedTargetPlan::Send {
+                targets,
+                fallback_used,
+                fallback_surface,
+                reason,
+            } => (targets, fallback_used, fallback_surface, reason),
+            RestrictedTargetPlan::Drop {
+                reason,
+                fallback_used,
+                fallback_surface,
+                targets,
+            } => {
+                self.defer_gossip_hashes(sent_hashes);
+                self.record_drop_metric(
+                    GossipPlane::Restricted,
+                    dataspace_id,
+                    lane_ids,
+                    reason,
+                    fallback_used,
+                    fallback_surface,
+                    &targets,
+                    self.target_cap_for_plane(GossipPlane::Restricted),
+                    batch_txs,
+                    encoded_len,
+                );
+                return;
+            }
+        };
+        let (targets, suppressed_targets, replaying_suppressed_targets) =
+            self.filter_targets_for_priority(targets, &sent_hashes, priority);
+        if targets.is_empty() {
+            self.defer_gossip_hashes(sent_hashes);
+            self.record_drop_metric(
+                GossipPlane::Restricted,
+                dataspace_id,
+                lane_ids,
+                DROP_REASON_PEER_RECENT_SUPPRESSION,
+                fallback_used,
+                fallback_surface,
+                &[],
+                self.target_cap_for_plane(GossipPlane::Restricted),
+                batch_txs,
+                encoded_len,
+            );
+            return;
+        }
+
+        let message = Arc::new(message);
+        let payload = NetworkMessage::TransactionGossiper(Arc::clone(&message));
+        for peer_id in &targets {
+            self.network.post(Post {
+                data: payload.clone(),
+                peer_id: peer_id.clone(),
+                priority,
+            });
+        }
+
+        iroha_logger::debug!(
+            tx_count = message.txs.len(),
+            size_bytes = encoded_len,
+            targets = targets.len(),
+            high_priority = matches!(priority, Priority::High),
+            suppressed_targets,
+            replaying_suppressed_targets,
+            %dataspace_id,
+            "gossiping restricted transactions to online commit topology"
+        );
+        self.record_sent_metric(
+            GossipPlane::Restricted,
+            dataspace_id,
+            lane_ids,
+            &targets,
+            self.dataspace_cfg.restricted_target_cap,
+            batch_txs,
+            frame_bytes,
+            fallback_used,
+            fallback_surface,
+            if replaying_suppressed_targets {
+                Some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY)
+            } else {
+                reason
+            },
+        );
+        self.remember_peer_recent_sends(&targets, &sent_hashes);
+        self.defer_gossip_hashes(sent_hashes);
+    }
+
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    #[allow(clippy::unused_self)]
+    #[allow(clippy::too_many_arguments)]
+    fn record_drop_metric(
+        &self,
+        plane: GossipPlane,
+        dataspace: DataSpaceId,
+        lane_ids: &[LaneId],
+        reason: &str,
+        fallback_used: bool,
+        fallback_surface: Option<&str>,
+        targets: &[PeerId],
+        target_cap: Option<NonZeroUsize>,
+        batch_txs: usize,
+        frame_bytes: usize,
+    ) {
+        iroha_logger::debug!(
+            %dataspace,
+            reason,
+            plane = gossip_plane_label(plane),
+            fallback_used,
+            lanes = ?lane_ids,
+            "transaction gossip drop recorded for dataspace"
+        );
+        #[cfg(not(feature = "telemetry"))]
+        {
+            let _ = (
+                fallback_surface,
+                targets,
+                target_cap,
+                batch_txs,
+                frame_bytes,
+            );
+        }
+        #[cfg(feature = "telemetry")]
+        {
+            self.state.telemetry.record_tx_gossip_attempt(
+                plane,
+                dataspace,
+                lane_ids,
+                targets,
+                target_cap,
+                false,
+                Some(reason),
+                fallback_used,
+                fallback_surface,
+                batch_txs,
+                frame_bytes,
+            );
+        }
+    }
+
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    #[allow(clippy::unused_self)]
+    #[allow(clippy::too_many_arguments)]
+    fn record_sent_metric(
+        &self,
+        plane: GossipPlane,
+        dataspace: DataSpaceId,
+        lane_ids: &[LaneId],
+        targets: &[PeerId],
+        target_cap: Option<NonZeroUsize>,
+        batch_txs: usize,
+        frame_bytes: usize,
+        fallback_used: bool,
+        fallback_surface: Option<&str>,
+        reason: Option<&str>,
+    ) {
+        iroha_logger::debug!(
+            %dataspace,
+            targets = targets.len(),
+            plane = gossip_plane_label(plane),
+            fallback_used,
+            lanes = ?lane_ids,
+            "transaction gossip sent metric recorded"
+        );
+        #[cfg(not(feature = "telemetry"))]
+        {
+            let _ = (target_cap, batch_txs, frame_bytes, fallback_surface, reason);
+        }
+        #[cfg(feature = "telemetry")]
+        {
+            self.state.telemetry.record_tx_gossip_attempt(
+                plane,
+                dataspace,
+                lane_ids,
+                targets,
+                target_cap,
+                true,
+                reason,
+                fallback_used,
+                fallback_surface,
+                batch_txs,
+                frame_bytes,
+            );
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn record_gossip_caps(&self) {
+        self.state.telemetry.record_tx_gossip_caps(
+            self.tx_frame_cap,
+            self.dataspace_cfg.public_target_cap.map(NonZeroUsize::get),
+            self.dataspace_cfg
+                .restricted_target_cap
+                .map(NonZeroUsize::get),
+            self.dataspace_cfg.drop_unknown_dataspace,
+            self.dataspace_cfg.restricted_fallback,
+            self.dataspace_cfg.restricted_public_payload,
+            self.dataspace_cfg.public_target_reshuffle,
+            self.dataspace_cfg.restricted_target_reshuffle,
+        );
+    }
+
+    fn target_cap_for_plane(&self, plane: GossipPlane) -> Option<NonZeroUsize> {
+        match plane {
+            GossipPlane::Public => self.dataspace_cfg.public_target_cap,
+            GossipPlane::Restricted => self.dataspace_cfg.restricted_target_cap,
+        }
+    }
+
+    fn effective_public_target_cap(
+        configured_cap: Option<NonZeroUsize>,
+        gossip_size: NonZeroU32,
+        queue_active_len: usize,
+        queue_saturated: bool,
+    ) -> Option<NonZeroUsize> {
+        let configured_cap = configured_cap?;
+        if queue_saturated {
+            return None;
+        }
+
+        let backlog_threshold = (gossip_size.get() as usize)
+            .max(configured_cap.get())
+            .saturating_mul(2);
+        if queue_active_len >= backlog_threshold {
+            None
+        } else {
+            Some(configured_cap)
+        }
+    }
+
+    fn targeted_backlog_requires_gossip(gossip_size: NonZeroU32, queue_active_len: usize) -> bool {
+        let backlog_threshold = (gossip_size.get() as usize).saturating_mul(2);
+        queue_active_len >= backlog_threshold
+    }
+
+    fn seed_for_plane(seed: u64, dataspace_id: DataSpaceId, domain: u64) -> u64 {
+        splitmix64(seed ^ dataspace_id.as_u64() ^ domain)
+    }
+
+    fn initial_target_seed(
+        chain_id: &ChainId,
+        self_peer_id: &PeerId,
+        max_peer_id: &PeerId,
+        domain: u64,
+    ) -> u64 {
+        let material = format!(
+            "iroha:tx-gossip-target-seed:v1\n{domain:016x}\n{chain_id}\n{self_peer_id}\n{max_peer_id}"
+        );
+        let digest = Hash::new(material.as_bytes());
+        let mut seed = [0_u8; 8];
+        seed.copy_from_slice(&digest.as_ref()[..8]);
+        u64::from_le_bytes(seed)
+    }
+
+    /// Deterministically shuffle targets by seed and return a capped subset.
+    fn select_targets_with_seed(
+        mut targets: Vec<PeerId>,
+        cap: Option<NonZeroUsize>,
+        seed: u64,
+    ) -> (Vec<PeerId>, usize) {
+        targets.sort();
+        targets.dedup();
+        let total = targets.len();
+        let Some(cap) = cap else {
+            return (targets, total);
+        };
+        let cap = cap.get();
+        if total <= cap {
+            return (targets, total);
+        }
+        let mut scored: Vec<(u64, PeerId)> = Vec::with_capacity(total);
+        for peer in targets {
+            scored.push((Self::peer_target_score(&peer, seed), peer));
+        }
+        scored.sort_by_key(|(score, _)| *score);
+        scored.truncate(cap);
+        let mut targets = Vec::with_capacity(scored.len());
+        for (_, peer) in scored {
+            targets.push(peer);
+        }
+        (targets, total)
+    }
+
+    /// Stable score for a peer keyed by the gossip seed.
+    fn peer_target_score(peer_id: &PeerId, seed: u64) -> u64 {
+        let mut state = seed;
+        let payload = match peer_id.public_key().try_to_bytes() {
+            Ok((algorithm, payload)) => {
+                state ^= u64::from(algorithm as u8);
+                payload
+            }
+            Err(_) => {
+                state ^= u64::from(u8::MAX);
+                let marker = peer_id.public_key().to_string();
+                for chunk in marker.as_bytes().chunks(8) {
+                    let mut buf = [0u8; 8];
+                    buf[..chunk.len()].copy_from_slice(chunk);
+                    state = splitmix64(state ^ u64::from_le_bytes(buf));
+                }
+                return splitmix64(state);
+            }
+        };
+        for chunk in payload.chunks(8) {
+            let mut buf = [0u8; 8];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            state = splitmix64(state ^ u64::from_le_bytes(buf));
+        }
+        splitmix64(state)
+    }
+
+    fn restricted_target_plan_with_targets(
+        commit_topology: Vec<PeerId>,
+        fallback_targets: Vec<PeerId>,
+        target_cap: Option<NonZeroUsize>,
+        fallback_policy: DataspaceGossipFallback,
+        payload_policy: RestrictedPublicPayload,
+        tx_count: usize,
+        seed: u64,
+    ) -> RestrictedTargetPlan {
+        let online: BTreeSet<_> = fallback_targets.iter().cloned().collect();
+        let mut filtered_commit = Vec::with_capacity(commit_topology.len());
+        for peer in commit_topology {
+            if online.contains(&peer) {
+                filtered_commit.push(peer);
+            }
+        }
+        let commit_topology = filtered_commit;
+        let (capped_commit, _) = Self::select_targets_with_seed(commit_topology, target_cap, seed);
+        if !capped_commit.is_empty() {
+            return RestrictedTargetPlan::Send {
+                targets: capped_commit,
+                fallback_used: false,
+                fallback_surface: None,
+                reason: None,
+            };
+        }
+
+        let (capped_fallback, _) =
+            Self::select_targets_with_seed(fallback_targets, target_cap, seed);
+        decide_restricted_target_plan(capped_fallback, fallback_policy, payload_policy, tx_count)
+    }
+
+    fn restricted_target_plan(
+        &self,
+        commit_topology: &[PeerId],
+        tx_count: usize,
+        seed: u64,
+        urgent_gossip: bool,
+    ) -> RestrictedTargetPlan {
+        let fallback_targets: Vec<PeerId> = self.network.online_peers(|online| {
+            let mut peers = Vec::with_capacity(online.len());
+            for peer in online {
+                peers.push(peer.id().clone());
+            }
+            peers
+        });
+        Self::restricted_target_plan_with_targets(
+            commit_topology.to_vec(),
+            fallback_targets,
+            if urgent_gossip {
+                None
+            } else {
+                self.dataspace_cfg.restricted_target_cap
+            },
+            self.dataspace_cfg.restricted_fallback,
+            self.dataspace_cfg.restricted_public_payload,
+            tx_count,
+            seed,
+        )
+    }
+
+    fn is_transaction_known_locally(
+        &self,
+        tx_hash: HashOf<SignedTransaction>,
+        committed_transactions: &impl TransactionsReadOnly,
+    ) -> bool {
+        if self.queue.contains_transaction_hash(tx_hash) {
+            return true;
+        }
+        committed_transactions.get(&tx_hash).is_some()
+    }
+
+    fn is_transaction_known_locally_cached(
+        &self,
+        tx_hash: HashOf<SignedTransaction>,
+        committed_transactions: &impl TransactionsReadOnly,
+    ) -> bool {
+        if GOSSIP_KNOWN_TX_HASH_CACHE.with(|cache| cache.borrow().contains(tx_hash)) {
+            return true;
+        }
+        if self.is_transaction_known_locally(tx_hash, committed_transactions) {
+            GOSSIP_KNOWN_TX_HASH_CACHE.with(|cache| cache.borrow_mut().remember(tx_hash));
+            return true;
+        }
+        false
+    }
+
+    fn handle_transaction_gossip(&self, gossip: Arc<TransactionGossip>) {
+        match Arc::try_unwrap(gossip) {
+            Ok(owned) => self.handle_transaction_gossip_owned(owned),
+            Err(shared) => self.handle_transaction_gossip_shared(shared.as_ref()),
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn handle_transaction_gossip_owned(
+        &self,
+        TransactionGossip {
+            txs,
+            routes,
+            plans,
+            plane,
+        }: TransactionGossip,
+    ) {
+        iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
+        let batch_txs = txs.len();
+
+        if routes.is_empty() {
+            iroha_logger::warn!("dropping transaction gossip without routing metadata");
+            self.record_drop_metric(
+                plane,
+                DataSpaceId::UNIVERSAL,
+                &[],
+                "missing_routes",
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(plane),
+                batch_txs,
+                0,
+            );
+            return;
+        }
+
+        if routes.len() > txs.len() || plans.len() > txs.len() {
+            let reason = match (routes.len() > txs.len(), plans.len() > txs.len()) {
+                (true, true) => "extra_route_and_plan_metadata",
+                (true, false) => "extra_route_metadata",
+                (false, true) => "extra_plan_metadata",
+                (false, false) => {
+                    unreachable!("extra metadata guard only runs on overlong vectors")
+                }
+            };
+            iroha_logger::warn!(
+                routes = routes.len(),
+                plans = plans.len(),
+                txs = txs.len(),
+                reason,
+                "dropping transaction gossip with unpaired routing metadata"
+            );
+            self.record_drop_metric(
+                plane,
+                DataSpaceId::UNIVERSAL,
+                &[],
+                reason,
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(plane),
+                batch_txs,
+                0,
+            );
+            return;
+        }
+
+        if routes.len() != txs.len() {
+            iroha_logger::warn!(
+                routes = routes.len(),
+                txs = txs.len(),
+                "transaction gossip route/tx length mismatch; dropping entries with missing metadata"
+            );
+        }
+        if plans.len() != txs.len() {
+            iroha_logger::warn!(
+                plans = plans.len(),
+                txs = txs.len(),
+                "transaction gossip plan/tx length mismatch; dropping entries with missing metadata"
+            );
+        }
+
+        let nexus = self.state.nexus_snapshot();
+        let lane_catalog = nexus.lane_catalog.clone();
+        let dataspace_catalog = nexus.dataspace_catalog.clone();
+        let lane_config = nexus.lane_config.clone();
+        let (max_clock_drift, tx_limits) = {
+            let world_view = self.state.world_view();
+            let params = &world_view.parameters;
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let crypto_cfg = self.state.crypto();
+        let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
+        let state = self.state.as_ref();
+        let committed_transactions = state.transactions.view();
+        let ed25519_batch_cap = self.state.pipeline.signature_batch_max_ed25519;
+        let stateless_cache_cap = self.state.pipeline.stateless_cache_cap;
+        let active_lane_ids = active_gossip_lane_ids(state, &nexus);
+
+        struct MaterializedGossipCandidate {
+            entrypoint: TransactionEntrypoint,
+            payload: Arc<Vec<u8>>,
+            entrypoint_hash: HashOf<TransactionEntrypoint>,
+            route: GossipRoute,
+            plan: RoutingPlan,
+            tx_hash: HashOf<SignedTransaction>,
+            prepared: Option<PreparedTransactionMetadata>,
+            ed25519_prechecked: bool,
+            precheck_rejection: Option<AcceptTransactionFail>,
+        }
+
+        let mut materialized = Vec::with_capacity(batch_txs);
+        for (idx, tx) in txs.into_iter().enumerate() {
+            let Some(route) = routes.get(idx).copied() else {
+                iroha_logger::warn!("route metadata missing for transaction gossip entry");
+                self.record_drop_metric(
+                    plane,
+                    DataSpaceId::UNIVERSAL,
+                    &[],
+                    "missing_route_entry",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            };
+            let Some(plan) = plans.get(idx).cloned() else {
+                iroha_logger::warn!("routing plan metadata missing for transaction gossip entry");
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "missing_plan_entry",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            };
+            if plan.coordinator_route() != RoutingDecision::new(route.lane_id, route.dataspace_id) {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    "dropping transaction gossip entry due to route/plan coordinator mismatch"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "route_plan_mismatch",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            if let Err(reason) = validate_route(
+                &lane_catalog,
+                &dataspace_catalog,
+                active_lane_ids.as_ref(),
+                route,
+            ) {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    reason,
+                    "dropping transaction gossip entry due to invalid route"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    reason,
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            if let Err(reason) = validate_advertised_routing_plan(
+                &lane_catalog,
+                &dataspace_catalog,
+                active_lane_ids.as_ref(),
+                &plan,
+            ) {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    reason,
+                    "dropping transaction gossip entry due to invalid routing plan"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    reason,
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            let expected_plane = dataspace_plane(&lane_config, route.dataspace_id).or({
+                if self.dataspace_cfg.drop_unknown_dataspace {
+                    None
+                } else {
+                    Some(GossipPlane::Restricted)
+                }
+            });
+            let Some(expected_plane) = expected_plane else {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    "dropping transaction gossip entry due to unknown dataspace"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "unknown_dataspace",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            };
+            if plane == GossipPlane::Restricted && route.dataspace_id == DataSpaceId::UNIVERSAL {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    "restricted plane reported universal dataspace; dropping entry"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "restricted_universal_dataspace",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            if expected_plane != plane {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    plane = ?plane,
+                    expected_plane = ?expected_plane,
+                    "dropping transaction gossip entry due to plane mismatch"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "plane_mismatch",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+
+            let tx_hash = tx.hash();
+            if !batch_seen_hashes.insert(tx_hash.clone()) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
+            if self.is_transaction_known_locally_cached(tx_hash, &committed_transactions) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
+            let entrypoint_hash = tx.hash_as_entrypoint();
+            let (entrypoint, payload) = match tx.into_entrypoint_with_payload() {
+                Ok(decoded) => decoded,
+                Err(err) => {
+                    iroha_logger::warn!(
+                        %tx_hash,
+                        ?err,
+                        "dropping transaction gossip entry due to entrypoint decode failure"
+                    );
+                    self.record_drop_metric(
+                        plane,
+                        route.dataspace_id,
+                        &[route.lane_id],
+                        "entrypoint_decode",
+                        false,
+                        None,
+                        &[],
+                        self.target_cap_for_plane(plane),
+                        1,
+                        0,
+                    );
+                    continue;
+                }
+            };
+            let prepared = match &entrypoint {
+                TransactionEntrypoint::External(signed) => {
+                    Some(AcceptedTransaction::prepare_gossip_signed_metadata(
+                        signed,
+                        entrypoint_hash,
+                        Arc::clone(&payload),
+                    ))
+                }
+                _ => None,
+            };
+            materialized.push(MaterializedGossipCandidate {
+                entrypoint,
+                payload,
+                entrypoint_hash,
+                route,
+                plan,
+                tx_hash,
+                prepared,
+                ed25519_prechecked: false,
+                precheck_rejection: None,
+            });
+        }
+
+        if stateless_cache_cap > 0 && !materialized.is_empty() {
+            let cache_context = StatelessValidationContext::new(
+                self.chain_id.clone(),
+                u64::try_from(max_clock_drift.as_millis()).unwrap_or(u64::MAX),
+                tx_limits,
+                crypto_cfg.allowed_signing.clone(),
+            );
+            let cache_now_ms = TimeSource::new_system().get_unix_time().as_millis();
+            let mut cache = state.stateless_validation_cache().lock();
+            cache.set_cap(stateless_cache_cap);
+            cache.ensure_context(cache_context);
+            for candidate in &mut materialized {
+                let Some(prepared) = candidate.prepared.as_ref() else {
+                    continue;
+                };
+                if prepared.single_ed25519_key.is_some()
+                    && cache.get_ok(&prepared.signed_hash, cache_now_ms)
+                {
+                    candidate.ed25519_prechecked = true;
+                }
+            }
+        }
+
+        if ed25519_batch_cap > 0 {
+            #[derive(Clone, Copy)]
+            struct Ed25519BatchItem {
+                idx: usize,
+            }
+
+            fn verify_ed25519_batch_slices<'a>(
+                messages: &[&'a [u8]],
+                signatures: &[&'a [u8]],
+                public_keys: &[iroha_crypto::Ed25519ParsedPublicKey],
+                scratch: &mut iroha_crypto::Ed25519BatchScratch<'a>,
+            ) -> Result<(), iroha_crypto::Error> {
+                iroha_crypto::ed25519_verify_batch_preparsed_deterministic_with_scratch(
+                    messages,
+                    signatures,
+                    public_keys,
+                    [0; 32],
+                    scratch,
+                )
+            }
+
+            fn signature_error(tx: &SignedTransaction, detail: String) -> AcceptTransactionFail {
+                AcceptTransactionFail::SignatureVerification(SignatureVerificationFail::new(
+                    tx.signature().clone(),
+                    SignatureRejectionCode::InvalidSignature,
+                    detail,
+                ))
+            }
+
+            let mut batch_items = Vec::new();
+            let mut messages = Vec::new();
+            let mut signatures = Vec::new();
+            let mut public_keys = Vec::new();
+            for (idx, candidate) in materialized.iter().enumerate() {
+                if candidate.ed25519_prechecked {
+                    continue;
+                }
+                let TransactionEntrypoint::External(signed) = &candidate.entrypoint else {
+                    continue;
+                };
+                let signature = signed.signature().payload().payload();
+                if signature.len() != crate::tx::ED25519_SIGNATURE_LENGTH {
+                    continue;
+                }
+                let Some(prepared) = candidate.prepared.as_ref() else {
+                    continue;
+                };
+                let Some(public_key) = prepared.single_ed25519_key else {
+                    continue;
+                };
+                let message: &[u8] = prepared.payload_hash.as_ref();
+                batch_items.push(Ed25519BatchItem { idx });
+                messages.push(message);
+                signatures.push(signature);
+                public_keys.push(public_key);
+            }
+            let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
+            let mut prechecked_indices = Vec::new();
+            let mut precheck_rejections = Vec::new();
+            for range_start in (0..batch_items.len()).step_by(ed25519_batch_cap) {
+                let range_end = range_start
+                    .saturating_add(ed25519_batch_cap)
+                    .min(batch_items.len());
+                let batch = &batch_items[range_start..range_end];
+                let batch_messages = &messages[range_start..range_end];
+                let batch_signatures = &signatures[range_start..range_end];
+                let batch_public_keys = &public_keys[range_start..range_end];
+                let batch_result = verify_ed25519_batch_slices(
+                    batch_messages,
+                    batch_signatures,
+                    batch_public_keys,
+                    &mut scratch,
+                )
+                .map_err(|err| {
+                    iroha_crypto::ed25519_first_bad_preparsed_deterministic_with_scratch(
+                        batch_messages,
+                        batch_signatures,
+                        batch_public_keys,
+                        [0; 32],
+                        &mut scratch,
+                    )
+                    .map_or_else(|| (0, err.to_string()), |bad| bad)
+                });
+                match batch_result {
+                    Ok(()) => prechecked_indices.extend(batch.iter().map(|item| item.idx)),
+                    Err((relative_idx, detail)) => {
+                        if let Some(item) = batch.get(relative_idx)
+                            && let TransactionEntrypoint::External(signed) =
+                                &materialized[item.idx].entrypoint
+                        {
+                            precheck_rejections.push((item.idx, signature_error(signed, detail)));
+                        }
+                    }
+                }
+            }
+            drop(batch_items);
+            drop(messages);
+            drop(signatures);
+            drop(public_keys);
+
+            for idx in prechecked_indices {
+                materialized[idx].ed25519_prechecked = true;
+            }
+            for (idx, err) in precheck_rejections {
+                materialized[idx].precheck_rejection = Some(err);
+            }
+        }
+
+        for mut candidate in materialized {
+            let route = candidate.route;
+            let advertised_plan = candidate.plan;
+            let tx_hash = candidate.tx_hash;
+            let payload = Some(Arc::clone(&candidate.payload));
+            let accepted = if let Some(err) = candidate.precheck_rejection.take() {
+                Err(err)
+            } else {
+                AcceptedTransaction::accept_gossip_entrypoint_with_payload_and_prepared_metadata(
+                    candidate.entrypoint,
+                    Arc::clone(&candidate.payload),
+                    candidate.entrypoint_hash,
+                    &self.chain_id,
+                    max_clock_drift,
+                    tx_limits,
+                    crypto_cfg.as_ref(),
+                    candidate.prepared.as_ref(),
+                    candidate.ed25519_prechecked,
+                )
+            };
+            match accepted {
+                Ok(tx) => {
+                    let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
+                    let local_plan = match self.queue.route_plan_for_gossip_with_state(&tx, state) {
+                        Ok(plan) => plan,
+                        Err(err) => {
+                            iroha_logger::warn!(
+                                %tx_hash,
+                                reason = %err,
+                                reason_label = err.as_label(),
+                                "dropping transaction gossip entry due to unresolved local route"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                route.dataspace_id,
+                                &[route.lane_id],
+                                "route_unresolved",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                            continue;
+                        }
+                    };
+                    let local_route = local_plan.coordinator_route();
+                    if local_route != advertised_route {
+                        iroha_logger::warn!(
+                                %tx_hash,
+                                advertised_lane_id = %route.lane_id,
+                                advertised_dataspace_id = %route.dataspace_id,
+                            expected_lane_id = %local_route.lane_id,
+                            expected_dataspace_id = %local_route.dataspace_id,
+                            "dropping transaction gossip entry due to routing mismatch"
+                        );
+                        self.record_drop_metric(
+                            plane,
+                            local_route.dataspace_id,
+                            &[local_route.lane_id],
+                            DROP_REASON_ROUTE_MISMATCH,
+                            false,
+                            None,
+                            &[],
+                            self.target_cap_for_plane(plane),
+                            1,
+                            0,
+                        );
+                        continue;
+                    }
+                    if local_plan != advertised_plan {
+                        iroha_logger::warn!(
+                            %tx_hash,
+                            advertised_digest = %advertised_plan.digest(),
+                            expected_digest = %local_plan.digest(),
+                            "dropping transaction gossip entry due to routing plan mismatch"
+                        );
+                        self.record_drop_metric(
+                            plane,
+                            local_route.dataspace_id,
+                            &[local_route.lane_id],
+                            DROP_REASON_ROUTE_MISMATCH,
+                            false,
+                            None,
+                            &[],
+                            self.target_cap_for_plane(plane),
+                            1,
+                            0,
+                        );
+                        continue;
+                    }
+                    match self
+                        .queue
+                        .push_with_gossip_payload_with_state_and_routing_plan(
+                            tx, state, local_plan, payload,
+                        ) {
+                        Ok(()) => {
+                            iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::InBlockchain,
+                        }) => {
+                            iroha_logger::debug!(
+                                tx = %tx.hash(),
+                                "Transaction already in blockchain, ignoring..."
+                            )
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::IsInQueue,
+                        }) => {
+                            iroha_logger::trace!(
+                                tx = %tx.hash(),
+                                "Transaction already in the queue, ignoring..."
+                            )
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::NexusFeeAdmissionRejected { code, reason },
+                        }) => {
+                            iroha_logger::debug!(
+                                tx = %tx.hash(),
+                                code = %code,
+                                reason,
+                                "Dropping gossiped transaction rejected by Nexus fee admission"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                local_route.dataspace_id,
+                                &[local_route.lane_id],
+                                "nexus_fee_rejected",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err:
+                                crate::queue::Error::NexusFeeAdmissionConfigInvalid { code, reason },
+                        }) => {
+                            iroha_logger::warn!(
+                                tx = %tx.hash(),
+                                code = %code,
+                                reason,
+                                "Dropping gossiped transaction due to invalid Nexus fee configuration"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                local_route.dataspace_id,
+                                &[local_route.lane_id],
+                                "nexus_fee_config_invalid",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                        }
+                        Err(crate::queue::Failure { tx, err }) => {
+                            if matches!(err, crate::queue::Error::Full) {
+                                iroha_logger::debug!(
+                                    tx = %tx.hash(),
+                                    "queue rejected gossiped transaction due to backpressure"
+                                );
+                            } else {
+                                iroha_logger::error!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "Failed to enqueue transaction."
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(err) => iroha_logger::error!(%err, "Transaction rejected"),
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn handle_transaction_gossip_shared(&self, gossip: &TransactionGossip) {
+        let txs = &gossip.txs;
+        let routes = &gossip.routes;
+        let plans = &gossip.plans;
+        let plane = gossip.plane;
+
+        iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
+        let batch_txs = txs.len();
+
+        if routes.is_empty() {
+            iroha_logger::warn!("dropping transaction gossip without routing metadata");
+            self.record_drop_metric(
+                plane,
+                DataSpaceId::UNIVERSAL,
+                &[],
+                "missing_routes",
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(plane),
+                batch_txs,
+                0,
+            );
+            return;
+        }
+
+        if routes.len() > txs.len() || plans.len() > txs.len() {
+            let reason = match (routes.len() > txs.len(), plans.len() > txs.len()) {
+                (true, true) => "extra_route_and_plan_metadata",
+                (true, false) => "extra_route_metadata",
+                (false, true) => "extra_plan_metadata",
+                (false, false) => {
+                    unreachable!("extra metadata guard only runs on overlong vectors")
+                }
+            };
+            iroha_logger::warn!(
+                routes = routes.len(),
+                plans = plans.len(),
+                txs = txs.len(),
+                reason,
+                "dropping transaction gossip with unpaired routing metadata"
+            );
+            self.record_drop_metric(
+                plane,
+                DataSpaceId::UNIVERSAL,
+                &[],
+                reason,
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(plane),
+                batch_txs,
+                0,
+            );
+            return;
+        }
+
+        if routes.len() != txs.len() {
+            iroha_logger::warn!(
+                routes = routes.len(),
+                txs = txs.len(),
+                "transaction gossip route/tx length mismatch; dropping entries with missing metadata"
+            );
+        }
+        if plans.len() != txs.len() {
+            iroha_logger::warn!(
+                plans = plans.len(),
+                txs = txs.len(),
+                "transaction gossip plan/tx length mismatch; dropping entries with missing metadata"
+            );
+        }
+
+        let nexus = self.state.nexus_snapshot();
+        let lane_catalog = nexus.lane_catalog.clone();
+        let dataspace_catalog = nexus.dataspace_catalog.clone();
+        let lane_config = nexus.lane_config.clone();
+        let (max_clock_drift, tx_limits) = {
+            let world_view = self.state.world_view();
+            let params = &world_view.parameters;
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+        let crypto_cfg = self.state.crypto();
+        let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
+        let state = self.state.as_ref();
+        let committed_transactions = state.transactions.view();
+        let active_lane_ids = active_gossip_lane_ids(state, &nexus);
+
+        for (idx, tx) in txs.iter().enumerate() {
+            let Some(route) = routes.get(idx).copied() else {
+                iroha_logger::warn!("route metadata missing for transaction gossip entry");
+                self.record_drop_metric(
+                    plane,
+                    DataSpaceId::UNIVERSAL,
+                    &[],
+                    "missing_route_entry",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            };
+            let Some(advertised_plan) = plans.get(idx).cloned() else {
+                iroha_logger::warn!("routing plan metadata missing for transaction gossip entry");
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "missing_plan_entry",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            };
+            if advertised_plan.coordinator_route()
+                != RoutingDecision::new(route.lane_id, route.dataspace_id)
+            {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    "dropping transaction gossip entry due to route/plan coordinator mismatch"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "route_plan_mismatch",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            if let Err(reason) = validate_route(
+                &lane_catalog,
+                &dataspace_catalog,
+                active_lane_ids.as_ref(),
+                route,
+            ) {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    reason,
+                    "dropping transaction gossip entry due to invalid route"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    reason,
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            if let Err(reason) = validate_advertised_routing_plan(
+                &lane_catalog,
+                &dataspace_catalog,
+                active_lane_ids.as_ref(),
+                &advertised_plan,
+            ) {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    reason,
+                    "dropping transaction gossip entry due to invalid routing plan"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    reason,
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            let expected_plane = dataspace_plane(&lane_config, route.dataspace_id).or({
+                if self.dataspace_cfg.drop_unknown_dataspace {
+                    None
+                } else {
+                    Some(GossipPlane::Restricted)
+                }
+            });
+            let Some(expected_plane) = expected_plane else {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    "dropping transaction gossip entry due to unknown dataspace"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "unknown_dataspace",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            };
+            if plane == GossipPlane::Restricted && route.dataspace_id == DataSpaceId::UNIVERSAL {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    "restricted plane reported universal dataspace; dropping entry"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "restricted_universal_dataspace",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+            if expected_plane != plane {
+                iroha_logger::warn!(
+                    lane_id = %route.lane_id,
+                    dataspace_id = %route.dataspace_id,
+                    plane = ?plane,
+                    expected_plane = ?expected_plane,
+                    "dropping transaction gossip entry due to plane mismatch"
+                );
+                self.record_drop_metric(
+                    plane,
+                    route.dataspace_id,
+                    &[route.lane_id],
+                    "plane_mismatch",
+                    false,
+                    None,
+                    &[],
+                    self.target_cap_for_plane(plane),
+                    1,
+                    0,
+                );
+                continue;
+            }
+
+            let tx_hash = tx.hash();
+            if !batch_seen_hashes.insert(tx_hash.clone()) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
+            if self.is_transaction_known_locally_cached(tx_hash, &committed_transactions) {
+                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                continue;
+            }
+            let entrypoint_hash = tx.hash_as_entrypoint();
+            let entrypoint = match tx.materialize_entrypoint() {
+                Ok(entrypoint) => (*entrypoint).clone(),
+                Err(err) => {
+                    iroha_logger::warn!(
+                        %tx_hash,
+                        ?err,
+                        "dropping transaction gossip entry due to invalid entrypoint payload"
+                    );
+                    self.record_drop_metric(
+                        plane,
+                        route.dataspace_id,
+                        &[route.lane_id],
+                        "invalid_entrypoint_payload",
+                        false,
+                        None,
+                        &[],
+                        self.target_cap_for_plane(plane),
+                        1,
+                        0,
+                    );
+                    continue;
+                }
+            };
+            let payload = tx.payload();
+            let accepted = AcceptedTransaction::accept_gossip_entrypoint_with_payload(
+                entrypoint,
+                Arc::clone(&payload),
+                entrypoint_hash,
+                &self.chain_id,
+                max_clock_drift,
+                tx_limits,
+                crypto_cfg.as_ref(),
+            );
+            match accepted {
+                Ok(tx) => {
+                    let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
+                    let local_plan = match self.queue.route_plan_for_gossip_with_state(&tx, state) {
+                        Ok(plan) => plan,
+                        Err(err) => {
+                            iroha_logger::warn!(
+                                %tx_hash,
+                                reason = %err,
+                                reason_label = err.as_label(),
+                                "dropping transaction gossip entry due to unresolved local route"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                route.dataspace_id,
+                                &[route.lane_id],
+                                "route_unresolved",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                            continue;
+                        }
+                    };
+                    let local_route = local_plan.coordinator_route();
+                    if local_route != advertised_route {
+                        iroha_logger::warn!(
+                                %tx_hash,
+                                advertised_lane_id = %route.lane_id,
+                                advertised_dataspace_id = %route.dataspace_id,
+                            expected_lane_id = %local_route.lane_id,
+                            expected_dataspace_id = %local_route.dataspace_id,
+                            "dropping transaction gossip entry due to routing mismatch"
+                        );
+                        self.record_drop_metric(
+                            plane,
+                            local_route.dataspace_id,
+                            &[local_route.lane_id],
+                            DROP_REASON_ROUTE_MISMATCH,
+                            false,
+                            None,
+                            &[],
+                            self.target_cap_for_plane(plane),
+                            1,
+                            0,
+                        );
+                        continue;
+                    }
+                    if local_plan != advertised_plan {
+                        iroha_logger::warn!(
+                            %tx_hash,
+                            advertised_digest = %advertised_plan.digest(),
+                            expected_digest = %local_plan.digest(),
+                            "dropping transaction gossip entry due to routing plan mismatch"
+                        );
+                        self.record_drop_metric(
+                            plane,
+                            local_route.dataspace_id,
+                            &[local_route.lane_id],
+                            DROP_REASON_ROUTE_MISMATCH,
+                            false,
+                            None,
+                            &[],
+                            self.target_cap_for_plane(plane),
+                            1,
+                            0,
+                        );
+                        continue;
+                    }
+                    match self
+                        .queue
+                        .push_with_gossip_payload_with_state_and_routing_plan(
+                            tx,
+                            state,
+                            local_plan,
+                            Some(payload),
+                        ) {
+                        Ok(()) => {
+                            iroha_logger::debug!(%tx_hash, "transaction enqueued from gossip");
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::InBlockchain,
+                        }) => {
+                            iroha_logger::debug!(
+                                tx = %tx.hash(),
+                                "Transaction already in blockchain, ignoring..."
+                            )
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::IsInQueue,
+                        }) => {
+                            iroha_logger::trace!(
+                                tx = %tx.hash(),
+                                "Transaction already in the queue, ignoring..."
+                            )
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err: crate::queue::Error::NexusFeeAdmissionRejected { code, reason },
+                        }) => {
+                            iroha_logger::debug!(
+                                tx = %tx.hash(),
+                                code = %code,
+                                reason,
+                                "Dropping gossiped transaction rejected by Nexus fee admission"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                local_route.dataspace_id,
+                                &[local_route.lane_id],
+                                "nexus_fee_rejected",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                        }
+                        Err(crate::queue::Failure {
+                            tx,
+                            err:
+                                crate::queue::Error::NexusFeeAdmissionConfigInvalid { code, reason },
+                        }) => {
+                            iroha_logger::warn!(
+                                tx = %tx.hash(),
+                                code = %code,
+                                reason,
+                                "Dropping gossiped transaction due to invalid Nexus fee configuration"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                local_route.dataspace_id,
+                                &[local_route.lane_id],
+                                "nexus_fee_config_invalid",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                        }
+                        Err(crate::queue::Failure { tx, err }) => {
+                            if matches!(err, crate::queue::Error::Full) {
+                                iroha_logger::debug!(
+                                    tx = %tx.hash(),
+                                    "queue rejected gossiped transaction due to backpressure"
+                                );
+                            } else {
+                                iroha_logger::error!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "Failed to enqueue transaction."
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(err) => iroha_logger::error!(%err, "Transaction rejected"),
+            }
+        }
+    }
+}
+
+fn decide_restricted_target_plan(
+    fallback_targets: Vec<PeerId>,
+    fallback_policy: DataspaceGossipFallback,
+    payload_policy: RestrictedPublicPayload,
+    tx_count: usize,
+) -> RestrictedTargetPlan {
+    match fallback_policy {
+        DataspaceGossipFallback::Drop => RestrictedTargetPlan::Drop {
+            reason: DROP_REASON_NO_RESTRICTED_TARGETS,
+            fallback_used: false,
+            fallback_surface: None,
+            targets: fallback_targets,
+        },
+        DataspaceGossipFallback::UsePublicOverlay => {
+            if fallback_targets.is_empty() {
+                iroha_logger::warn!(tx_count, "restricted gossip fallback found no online peers");
+                return RestrictedTargetPlan::Drop {
+                    reason: DROP_REASON_NO_RESTRICTED_TARGETS,
+                    fallback_used: true,
+                    fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
+                    targets: fallback_targets,
+                };
+            }
+            match payload_policy {
+                RestrictedPublicPayload::Forward => {
+                    iroha_logger::warn!(
+                        tx_count,
+                        targets = fallback_targets.len(),
+                        "restricted gossip forwarded to public overlay per configuration"
+                    );
+                    RestrictedTargetPlan::Send {
+                        targets: fallback_targets,
+                        fallback_used: true,
+                        fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
+                        reason: Some(OUTCOME_PUBLIC_OVERLAY_FORWARD),
+                    }
+                }
+                RestrictedPublicPayload::Refuse => {
+                    iroha_logger::warn!(
+                        tx_count,
+                        targets = fallback_targets.len(),
+                        "restricted gossip fallback refused due to overlay policy"
+                    );
+                    RestrictedTargetPlan::Drop {
+                        reason: DROP_REASON_PUBLIC_OVERLAY_REFUSED,
+                        fallback_used: true,
+                        fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
+                        targets: fallback_targets,
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn validate_route(
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+    route: GossipRoute,
+) -> Result<(), &'static str> {
+    let resolved = resolve_routing_decision(
+        RoutingDecision::new(route.lane_id, route.dataspace_id),
+        lane_catalog,
+        dataspace_catalog,
+    )
+    .map_err(|err| err.as_label())?;
+    if let Some(active_lane_ids) = active_lane_ids
+        && !active_lane_ids.contains(&resolved.lane_id)
+    {
+        return Err(DROP_REASON_INACTIVE_LANE);
+    }
+    Ok(())
+}
+
+fn validate_advertised_routing_plan(
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+    plan: &RoutingPlan,
+) -> Result<(), &'static str> {
+    let resolved =
+        resolve_routing_plan_against_catalogs(plan.clone(), lane_catalog, dataspace_catalog)
+            .map_err(|err| err.as_label())?;
+    if resolved != *plan {
+        return Err(DROP_REASON_NONCANONICAL_ROUTING_PLAN);
+    }
+    if let Some(active_lane_ids) = active_lane_ids {
+        for leg in resolved.legs() {
+            if !active_lane_ids.contains(&leg.route.lane_id) {
+                return Err(DROP_REASON_INACTIVE_LANE);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn dataspace_plane(lane_config: &LaneGeometry, dataspace_id: DataSpaceId) -> Option<GossipPlane> {
+    let mut plane: Option<GossipPlane> = None;
+    for entry in lane_config.entries() {
+        if entry.dataspace_id != dataspace_id {
+            continue;
+        }
+        let entry_plane = match entry.visibility {
+            LaneVisibility::Public => GossipPlane::Public,
+            LaneVisibility::Restricted => GossipPlane::Restricted,
+        };
+        plane = match plane {
+            Some(GossipPlane::Restricted) => Some(GossipPlane::Restricted),
+            Some(GossipPlane::Public) if entry_plane == GossipPlane::Restricted => {
+                Some(GossipPlane::Restricted)
+            }
+            Some(existing) => Some(existing),
+            None => Some(entry_plane),
+        };
+        if entry_plane == GossipPlane::Restricted {
+            break;
+        }
+    }
+    plane
+}
+
+pub(crate) fn gossip_plane_label(plane: GossipPlane) -> &'static str {
+    match plane {
+        GossipPlane::Public => "public",
+        GossipPlane::Restricted => "restricted",
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn dataspace_label(dataspace: DataSpaceId) -> String {
+    dataspace.as_u64().to_string()
+}
+
+/// Message for gossiping batches of transactions.
+#[derive(Debug, Clone)]
+pub struct TransactionGossip {
+    /// Batch of transactions.
+    pub txs: Vec<GossipTransaction>,
+    /// Routing metadata aligned with `txs`.
+    pub routes: Vec<GossipRoute>,
+    /// Full routing plans aligned with `txs`.
+    pub plans: Vec<RoutingPlan>,
+    /// Visibility plane this batch targets.
+    pub plane: GossipPlane,
+}
+
+impl TransactionGossip {
+    /// Constructor.
+    pub fn new(txs: Vec<AcceptedTransaction<'static>>) -> Self {
+        let mut gossip_txs = Vec::with_capacity(txs.len());
+        gossip_txs.extend(txs.into_iter().map(GossipTransaction::new));
+        Self {
+            // Converting into non-accepted transaction because it's not possible
+            // to guarantee that the sending peer checked transaction limits
+            txs: gossip_txs,
+            routes: Vec::new(),
+            plans: Vec::new(),
+            plane: GossipPlane::Public,
+        }
+    }
+}
+
+fn decode_len_prefixed_field<T>(bytes: &[u8], offset: usize) -> Result<(T, usize), ncore::Error>
+where
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
+    let field = bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?;
+    let (field_len, header_len) = ncore::read_len_from_slice(field)?;
+    let payload_start = offset
+        .checked_add(header_len)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let payload_end = payload_start
+        .checked_add(field_len)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let payload = bytes
+        .get(payload_start..payload_end)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let (value, used) = ncore::decode_field_canonical::<T>(payload)?;
+    if used != field_len {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    Ok((value, payload_end))
+}
+
+fn decode_transaction_gossip_payload(
+    bytes: &[u8],
+) -> Result<(TransactionGossip, usize), ncore::Error> {
+    let (txs, offset) = decode_len_prefixed_field::<Vec<GossipTransaction>>(bytes, 0)?;
+    let (routes, offset) = decode_len_prefixed_field::<Vec<GossipRoute>>(bytes, offset)?;
+    let (plans, offset) = decode_len_prefixed_field::<Vec<RoutingPlan>>(bytes, offset)?;
+    let (plane, offset) = decode_len_prefixed_field::<GossipPlane>(bytes, offset)?;
+    Ok((
+        TransactionGossip {
+            txs,
+            routes,
+            plans,
+            plane,
+        },
+        offset,
+    ))
+}
+
+impl NoritoSerialize for TransactionGossip {
+    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+        let mut tmp = ncore::DeriveSmallBuf::new();
+        ncore::write_len_prefixed_exact(&mut writer, &self.txs, &mut tmp)?;
+        ncore::write_len_prefixed_exact(&mut writer, &self.routes, &mut tmp)?;
+        ncore::write_len_prefixed_exact(&mut writer, &self.plans, &mut tmp)?;
+        ncore::write_len_prefixed_exact(&mut writer, &self.plane, &mut tmp)?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.encoded_len_exact()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        let txs_payload_len = gossip_vec_payload_len_cached(self.txs.iter())
+            .or_else(|| gossip_vec_payload_len_exact(self.txs.iter()))?;
+        let routes_payload_len = gossip_routes_payload_len(self.routes.len())?;
+        let plans_payload_len = gossip_encoded_vec_payload_len_exact(self.plans.iter())?;
+        gossip_message_encoded_len(txs_payload_len, routes_payload_len, plans_payload_len)
+    }
+}
+
+impl<'a> NoritoDeserialize<'a> for TransactionGossip {
+    fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("decode transaction gossip")
+    }
+
+    fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let (message, consumed) = decode_transaction_gossip_payload(bytes)?;
+        ncore::note_payload_access(bytes, consumed);
+        Ok(message)
+    }
+}
+
+impl<'a> ncore::DecodeFromSlice<'a> for TransactionGossip {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        decode_transaction_gossip_payload(bytes)
+    }
+}
+
+/// Gossip payload wrapper for transaction entrypoints.
+#[derive(Debug)]
+pub struct GossipTransaction {
+    entrypoint: Arc<OnceLock<Arc<TransactionEntrypoint>>>,
+    encoded: Arc<Vec<u8>>,
+    tx_hash: HashOf<SignedTransaction>,
+}
+
+impl Clone for GossipTransaction {
+    fn clone(&self) -> Self {
+        Self {
+            entrypoint: Arc::clone(&self.entrypoint),
+            encoded: Arc::clone(&self.encoded),
+            tx_hash: self.tx_hash,
+        }
+    }
+}
+
+const GOSSIP_TX_DECODE_CACHE_LIMIT: usize = 2048;
+const GOSSIP_TX_DECODE_CACHE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
+const GOSSIP_KNOWN_TX_HASH_CACHE_LIMIT: usize = 8192;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct GossipTxDecodeCacheKey {
+    len: u32,
+    prefix: u128,
+    suffix: u128,
+}
+
+impl GossipTxDecodeCacheKey {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+        let mut prefix_bytes = [0u8; 16];
+        let mut suffix_bytes = [0u8; 16];
+
+        let prefix_len = bytes.len().min(prefix_bytes.len());
+        prefix_bytes[..prefix_len].copy_from_slice(&bytes[..prefix_len]);
+
+        let suffix_len = bytes.len().min(suffix_bytes.len());
+        if suffix_len > 0 {
+            suffix_bytes[..suffix_len].copy_from_slice(&bytes[bytes.len() - suffix_len..]);
+        }
+
+        Self {
+            len,
+            prefix: u128::from_le_bytes(prefix_bytes),
+            suffix: u128::from_le_bytes(suffix_bytes),
+        }
+    }
+}
+
+struct GossipTxDecodeCacheEntry {
+    encoded: Arc<Vec<u8>>,
+    tx_hash: HashOf<SignedTransaction>,
+    consumed: usize,
+}
+
+struct GossipTxDecodeCache {
+    map: HashMap<GossipTxDecodeCacheKey, GossipTxDecodeCacheEntry>,
+    bytes: usize,
+    count_limit: usize,
+    byte_limit: usize,
+}
+
+impl GossipTxDecodeCache {
+    fn new() -> Self {
+        Self::with_limits(
+            GOSSIP_TX_DECODE_CACHE_LIMIT,
+            GOSSIP_TX_DECODE_CACHE_BYTE_LIMIT,
+        )
+    }
+
+    fn with_limits(count_limit: usize, byte_limit: usize) -> Self {
+        Self {
+            map: HashMap::new(),
+            bytes: 0,
+            count_limit,
+            byte_limit,
+        }
+    }
+
+    fn get(&self, key: &GossipTxDecodeCacheKey) -> Option<&GossipTxDecodeCacheEntry> {
+        self.map.get(key)
+    }
+
+    fn insert(&mut self, key: GossipTxDecodeCacheKey, entry: GossipTxDecodeCacheEntry) {
+        let entry_len = entry.encoded.len();
+        if entry_len > self.byte_limit {
+            if let Some(previous) = self.map.remove(&key) {
+                self.bytes = self.bytes.saturating_sub(previous.encoded.len());
+            }
+            return;
+        }
+        if let Some(previous) = self.map.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(previous.encoded.len());
+        }
+        if self.map.len() >= self.count_limit
+            || self.bytes.saturating_add(entry_len) > self.byte_limit
+        {
+            // Simple bounded cache: clear rather than paying LRU bookkeeping cost.
+            self.map.clear();
+            self.bytes = 0;
+        }
+        self.bytes = self.bytes.saturating_add(entry_len);
+        self.map.insert(key, entry);
+    }
+}
+
+thread_local! {
+    static GOSSIP_TX_DECODE_CACHE: RefCell<GossipTxDecodeCache> =
+        RefCell::new(GossipTxDecodeCache::new());
+}
+
+#[derive(Default)]
+struct GossipKnownTxHashCache {
+    known: HashMap<HashOf<SignedTransaction>, ()>,
+}
+
+impl GossipKnownTxHashCache {
+    fn contains(&self, tx_hash: HashOf<SignedTransaction>) -> bool {
+        self.known.contains_key(&tx_hash)
+    }
+
+    fn remember(&mut self, tx_hash: HashOf<SignedTransaction>) {
+        if self.known.len() >= GOSSIP_KNOWN_TX_HASH_CACHE_LIMIT {
+            // Simple bounded cache: clear when full to keep overhead predictable.
+            self.known.clear();
+        }
+        self.known.insert(tx_hash, ());
+    }
+}
+
+thread_local! {
+    static GOSSIP_KNOWN_TX_HASH_CACHE: RefCell<GossipKnownTxHashCache> =
+        RefCell::new(GossipKnownTxHashCache::default());
+}
+
+fn framed_payload_len(payload_len: usize, align: usize) -> Option<usize> {
+    let padding = if align <= 1 {
+        0
+    } else {
+        let rem = ncore::Header::SIZE % align;
+        if rem == 0 { 0 } else { align - rem }
+    };
+    ncore::Header::SIZE
+        .checked_add(padding)?
+        .checked_add(payload_len)
+}
+
+struct FramedPrefixInfo {
+    consumed: usize,
+}
+
+fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixInfo, ncore::Error> {
+    const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
+
+    if bytes.len() < ncore::Header::SIZE {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    if bytes[..4] != ncore::MAGIC {
+        return Err(ncore::Error::InvalidMagic);
+    }
+    if bytes.get(4) != Some(&ncore::VERSION_MAJOR) {
+        return Err(ncore::Error::UnsupportedVersion {
+            found: bytes[4],
+            expected: ncore::VERSION_MAJOR,
+        });
+    }
+    if bytes.get(5) != Some(&ncore::VERSION_MINOR) {
+        return Err(ncore::Error::UnsupportedMinorVersion {
+            found: bytes[5],
+            supported: ncore::VERSION_MINOR,
+        });
+    }
+    let schema = bytes.get(6..22).ok_or(ncore::Error::LengthMismatch)?;
+    if schema != <T as NoritoSerialize>::schema_hash().as_slice() {
+        return Err(ncore::Error::SchemaMismatch);
+    }
+    let compression = *bytes.get(22).ok_or(ncore::Error::LengthMismatch)?;
+    if compression != ncore::Compression::None as u8 {
+        return Err(ncore::Error::unsupported_compression_with(
+            compression,
+            &[ncore::Compression::None],
+        ));
+    }
+    let len_bytes = bytes
+        .get(LEN_OFF..LEN_OFF + 8)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let mut length = [0u8; 8];
+    length.copy_from_slice(len_bytes);
+    let payload_len =
+        usize::try_from(u64::from_le_bytes(length)).map_err(|_| ncore::Error::LengthMismatch)?;
+    let _padding = if core::mem::align_of::<ncore::Archived<T>>() <= 1 {
+        0
+    } else {
+        let rem = ncore::Header::SIZE % core::mem::align_of::<ncore::Archived<T>>();
+        if rem == 0 {
+            0
+        } else {
+            core::mem::align_of::<ncore::Archived<T>>() - rem
+        }
+    };
+    let consumed = framed_payload_len(payload_len, core::mem::align_of::<ncore::Archived<T>>())
+        .filter(|size| *size <= bytes.len())
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let _flags = *bytes
+        .get(ncore::Header::SIZE - 1)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    Ok(FramedPrefixInfo { consumed })
+}
+
+fn encode_transaction_entrypoint(entrypoint: &TransactionEntrypoint) -> Vec<u8> {
+    ncore::to_bytes(entrypoint).expect("encode transaction entrypoint")
+}
+
+fn signed_hash_from_entrypoint_hash(
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> HashOf<SignedTransaction> {
+    HashOf::<SignedTransaction>::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash))
+}
+
+fn decode_framed_transaction_entrypoint(
+    framed: &[u8],
+) -> Result<TransactionEntrypoint, ncore::Error> {
+    norito::decode_from_bytes::<TransactionEntrypoint>(framed)
+}
+
+fn decode_gossip_transaction_payload(
+    bytes: &[u8],
+) -> Result<(Arc<Vec<u8>>, HashOf<SignedTransaction>, usize), ncore::Error> {
+    if let Some(hit) = GOSSIP_TX_DECODE_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let key = GossipTxDecodeCacheKey::from_bytes(bytes);
+        cache.get(&key).and_then(|entry| {
+            // Key collisions must not produce incorrect transactions. Confirm the actual bytes
+            // match the cached encoded payload before reusing it.
+            if entry.consumed <= bytes.len() && entry.encoded.as_slice() == &bytes[..entry.consumed]
+            {
+                Some((Arc::clone(&entry.encoded), entry.tx_hash, entry.consumed))
+            } else {
+                None
+            }
+        })
+    }) {
+        return Ok(hit);
+    }
+
+    let prefix = framed_prefix_info::<TransactionEntrypoint>(bytes)?;
+    let framed = bytes
+        .get(..prefix.consumed)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let entrypoint_hash = crate::tx::entrypoint_hash_from_framed_bytes(framed)?;
+    let tx_hash = signed_hash_from_entrypoint_hash(entrypoint_hash);
+    let encoded = Arc::new(framed.to_vec());
+    let entry = GossipTxDecodeCacheEntry {
+        encoded: encoded.clone(),
+        tx_hash,
+        consumed: prefix.consumed,
+    };
+    let key = GossipTxDecodeCacheKey::from_bytes(bytes);
+    GOSSIP_TX_DECODE_CACHE.with(|cache| cache.borrow_mut().insert(key, entry));
+    Ok((encoded, tx_hash, prefix.consumed))
+}
+
+impl GossipTransaction {
+    /// Wrap an accepted transaction, dropping acceptance metadata for gossip.
+    pub fn new(tx: AcceptedTransaction<'static>) -> Self {
+        let encoded = tx.entrypoint_bytes();
+        let tx_hash = tx.hash();
+        let entrypoint = tx.entrypoint().clone();
+        let entrypoint_cache = OnceLock::new();
+        let _ = entrypoint_cache.set(Arc::new(entrypoint));
+        Self {
+            entrypoint: Arc::new(entrypoint_cache),
+            encoded,
+            tx_hash,
+        }
+    }
+
+    /// Wrap an entrypoint with cached default full-frame bytes.
+    pub fn with_encoded(
+        entrypoint: impl Into<TransactionEntrypoint>,
+        encoded: Arc<Vec<u8>>,
+    ) -> Self {
+        let entrypoint = entrypoint.into();
+        let tx_hash = crate::tx::entrypoint_hash_from_framed_bytes(encoded.as_slice())
+            .map(signed_hash_from_entrypoint_hash)
+            .unwrap_or_else(|_| signed_hash_from_entrypoint_hash(entrypoint.hash()));
+        let entrypoint_cache = OnceLock::new();
+        let _ = entrypoint_cache.set(Arc::new(entrypoint));
+        Self {
+            entrypoint: Arc::new(entrypoint_cache),
+            encoded,
+            tx_hash,
+        }
+    }
+
+    fn lazy_from_encoded(encoded: Arc<Vec<u8>>, tx_hash: HashOf<SignedTransaction>) -> Self {
+        Self {
+            entrypoint: Arc::new(OnceLock::new()),
+            encoded,
+            tx_hash,
+        }
+    }
+
+    /// Whether this gossip item has already materialized its transaction entrypoint.
+    #[cfg(test)]
+    fn is_entrypoint_materialized(&self) -> bool {
+        self.entrypoint.get().is_some()
+    }
+
+    /// Return the cached framed entrypoint bytes.
+    fn payload(&self) -> Arc<Vec<u8>> {
+        Arc::clone(&self.encoded)
+    }
+
+    /// Materialize the owned entrypoint only when admission needs semantic validation.
+    fn materialize_entrypoint(&self) -> Result<Arc<TransactionEntrypoint>, ncore::Error> {
+        if let Some(entrypoint) = self.entrypoint.get() {
+            return Ok(Arc::clone(entrypoint));
+        }
+        let entrypoint = Arc::new(decode_framed_transaction_entrypoint(
+            self.encoded.as_slice(),
+        )?);
+        let _ = self.entrypoint.set(Arc::clone(&entrypoint));
+        Ok(self.entrypoint.get().map_or(entrypoint, Arc::clone))
+    }
+
+    /// Borrow the transaction entrypoint payload.
+    pub fn as_entrypoint(&self) -> &TransactionEntrypoint {
+        if self.entrypoint.get().is_none() {
+            self.materialize_entrypoint()
+                .expect("decode gossip transaction entrypoint");
+        }
+        self.entrypoint
+            .get()
+            .expect("entrypoint materialized above")
+            .as_ref()
+    }
+
+    /// Borrow the signed transaction payload when this gossip item exposes one.
+    pub fn as_signed(&self) -> &SignedTransaction {
+        match self.as_entrypoint() {
+            TransactionEntrypoint::External(signed) => signed,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::PrivateKaigi(_)
+            | TransactionEntrypoint::Time(_) => {
+                panic!("gossip entrypoint is not a signed transaction")
+            }
+        }
+    }
+
+    /// Return the transaction hash without rehashing.
+    pub fn hash(&self) -> HashOf<SignedTransaction> {
+        self.tx_hash
+    }
+
+    /// Return the entrypoint hash without rehashing.
+    pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
+        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(iroha_crypto::Hash::from(
+            self.tx_hash,
+        ))
+    }
+
+    /// Consume the wrapper and return the entrypoint and cached full-frame payload.
+    pub fn into_entrypoint_with_payload(
+        self,
+    ) -> Result<(TransactionEntrypoint, Arc<Vec<u8>>), ncore::Error> {
+        let entrypoint = self.materialize_entrypoint()?;
+        let entrypoint = Arc::try_unwrap(entrypoint).unwrap_or_else(|arc| (*arc).clone());
+        Ok((entrypoint, self.encoded))
+    }
+}
+
+impl From<SignedTransaction> for GossipTransaction {
+    fn from(signed: SignedTransaction) -> Self {
+        let entrypoint = TransactionEntrypoint::External(signed);
+        let tx_hash = signed_hash_from_entrypoint_hash(entrypoint.hash());
+        let encoded = Arc::new(encode_transaction_entrypoint(&entrypoint));
+        let entrypoint_cache = OnceLock::new();
+        let _ = entrypoint_cache.set(Arc::new(entrypoint));
+        Self {
+            entrypoint: Arc::new(entrypoint_cache),
+            encoded,
+            tx_hash,
+        }
+    }
+}
+
+impl NoritoSerialize for GossipTransaction {
+    fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+        writer.write_all(self.encoded.as_slice())?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(self.encoded.len())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(self.encoded.len())
+    }
+}
+
+impl<'a> NoritoDeserialize<'a> for GossipTransaction {
+    fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("decode gossip transaction")
+    }
+
+    fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let (encoded, tx_hash, consumed) = decode_gossip_transaction_payload(bytes)?;
+        ncore::note_payload_access(bytes, consumed);
+        Ok(Self::lazy_from_encoded(encoded, tx_hash))
+    }
+}
+
+impl<'a> ncore::DecodeFromSlice<'a> for GossipTransaction {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let (encoded, tx_hash, consumed) = decode_gossip_transaction_payload(bytes)?;
+        Ok((Self::lazy_from_encoded(encoded, tx_hash), consumed))
+    }
+}
+
+/// Visibility plane for transaction gossip frames.
+#[derive(Decode, Encode, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GossipPlane {
+    /// Public lanes/dataspaces; broadcast is permitted.
+    Public,
+    /// Restricted lanes/dataspaces; targets must be explicitly selected.
+    Restricted,
+}
+
+fn gossip_route_encoded_len() -> Option<usize> {
+    let route = GossipRoute {
+        lane_id: LaneId::SINGLE,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+    };
+    route
+        .encoded_len_exact()
+        .or_else(|| route.encoded_len_hint())
+}
+
+fn gossip_plane_encoded_len() -> Option<usize> {
+    GossipPlane::Public
+        .encoded_len_exact()
+        .or_else(|| GossipPlane::Public.encoded_len_hint())
+}
+
+fn gossip_message_empty_len() -> Option<usize> {
+    let txs_payload_len = ncore::seq_len_prefix_len(0);
+    let routes_payload_len = ncore::seq_len_prefix_len(0);
+    let plans_payload_len = ncore::seq_len_prefix_len(0);
+    gossip_message_encoded_len(txs_payload_len, routes_payload_len, plans_payload_len)
+}
+
+fn gossip_message_encoded_len(
+    txs_payload_len: usize,
+    routes_payload_len: usize,
+    plans_payload_len: usize,
+) -> Option<usize> {
+    let plane_payload_len = gossip_plane_encoded_len()?;
+    let mut total = ncore::len_prefix_len(txs_payload_len).checked_add(txs_payload_len)?;
+    total = total
+        .checked_add(ncore::len_prefix_len(routes_payload_len))?
+        .checked_add(routes_payload_len)?;
+    total = total
+        .checked_add(ncore::len_prefix_len(plans_payload_len))?
+        .checked_add(plans_payload_len)?;
+    total = total
+        .checked_add(ncore::len_prefix_len(plane_payload_len))?
+        .checked_add(plane_payload_len)?;
+    Some(total)
+}
+
+#[allow(single_use_lifetimes)]
+fn gossip_vec_payload_len_exact<'a>(
+    items: impl Iterator<Item = &'a GossipTransaction>,
+) -> Option<usize> {
+    let mut count = 0usize;
+    let mut total = 0usize;
+    for item in items {
+        count = count.checked_add(1)?;
+        let item_len = item.encoded_len_exact()?;
+        total = total.checked_add(ncore::len_prefix_len(item_len))?;
+        total = total.checked_add(item_len)?;
+    }
+    ncore::seq_len_prefix_len(count).checked_add(total)
+}
+
+#[allow(single_use_lifetimes)]
+fn gossip_vec_payload_len_cached<'a>(
+    items: impl Iterator<Item = &'a GossipTransaction>,
+) -> Option<usize> {
+    let mut count = 0usize;
+    let mut total = 0usize;
+    for item in items {
+        count = count.checked_add(1)?;
+        let item_len = item.encoded.len();
+        total = total.checked_add(ncore::len_prefix_len(item_len))?;
+        total = total.checked_add(item_len)?;
+    }
+    ncore::seq_len_prefix_len(count).checked_add(total)
+}
+
+fn gossip_encoded_vec_payload_len_exact<'a, T>(items: impl Iterator<Item = &'a T>) -> Option<usize>
+where
+    T: NoritoSerialize + 'a,
+{
+    let mut count = 0usize;
+    let mut total = 0usize;
+    for item in items {
+        count = count.checked_add(1)?;
+        let item_len = item
+            .encoded_len_exact()
+            .or_else(|| item.encoded_len_hint())?;
+        total = total.checked_add(ncore::len_prefix_len(item_len))?;
+        total = total.checked_add(item_len)?;
+    }
+    ncore::seq_len_prefix_len(count).checked_add(total)
+}
+
+fn gossip_routes_payload_len(len: usize) -> Option<usize> {
+    let route_len = gossip_route_encoded_len()?;
+    let per_elem = ncore::len_prefix_len(route_len).checked_add(route_len)?;
+    let elems = per_elem.checked_mul(len)?;
+    ncore::seq_len_prefix_len(len).checked_add(elems)
+}
+
+/// Lane/dataspace tags carried alongside gossiped transactions for visibility gating.
+#[derive(Debug, Clone, Copy, Decode, Encode)]
+pub struct GossipRoute {
+    /// Lane assigned to the transaction at the sender.
+    pub lane_id: LaneId,
+    /// Dataspace assigned to the transaction at the sender.
+    pub dataspace_id: DataSpaceId,
+}
+
+struct PartitionedGossipBatch {
+    message: TransactionGossip,
+    requeue: Vec<HashOf<SignedTransaction>>,
+    encoded_len: usize,
+}
+
+fn partition_gossip_batch(
+    max_count: usize,
+    frame_cap_bytes: usize,
+    plane: GossipPlane,
+    txs: Vec<GossipBatchEntry>,
+) -> PartitionedGossipBatch {
+    let mut message = TransactionGossip {
+        txs: Vec::new(),
+        routes: Vec::new(),
+        plans: Vec::new(),
+        plane,
+    };
+    let reserved = max_count.min(txs.len());
+    message.txs.reserve(reserved);
+    message.routes.reserve(reserved);
+    message.plans.reserve(reserved);
+    let mut requeue = Vec::with_capacity(txs.len());
+    let mut encoded_len = gossip_message_empty_len().unwrap_or(0);
+    let Some(route_len) = gossip_route_encoded_len() else {
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash()));
+        return PartitionedGossipBatch {
+            message,
+            requeue,
+            encoded_len,
+        };
+    };
+    let Some(route_entry_len) = ncore::len_prefix_len(route_len).checked_add(route_len) else {
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash()));
+        return PartitionedGossipBatch {
+            message,
+            requeue,
+            encoded_len,
+        };
+    };
+
+    if frame_cap_bytes == 0 {
+        requeue.extend(txs.into_iter().map(|entry| entry.tx.hash()));
+        return PartitionedGossipBatch {
+            message,
+            requeue,
+            encoded_len,
+        };
+    }
+
+    for entry in txs {
+        let hash = entry.tx.hash();
+
+        if message.txs.len() >= max_count {
+            requeue.push(hash);
+            continue;
+        }
+
+        let routing = entry.routing;
+        let routing_plan = entry.routing_plan;
+        let tx_payload_len = entry.payload.len();
+        let Some(tx_entry_len) = ncore::len_prefix_len(tx_payload_len).checked_add(tx_payload_len)
+        else {
+            requeue.push(hash);
+            continue;
+        };
+        let plan_len = routing_plan
+            .encoded_len_exact()
+            .or_else(|| routing_plan.encoded_len_hint())
+            .unwrap_or_else(|| routing_plan.encode().len());
+        let Some(plan_entry_len) = ncore::len_prefix_len(plan_len).checked_add(plan_len) else {
+            requeue.push(hash);
+            continue;
+        };
+        let Some(next_encoded_len) = encoded_len
+            .checked_add(tx_entry_len)
+            .and_then(|total| total.checked_add(route_entry_len))
+            .and_then(|total| total.checked_add(plan_entry_len))
+        else {
+            requeue.push(hash);
+            continue;
+        };
+        if next_encoded_len > frame_cap_bytes {
+            requeue.push(hash);
+            continue;
+        }
+
+        message.txs.push(GossipTransaction::with_encoded(
+            entry.tx.entrypoint().clone(),
+            entry.payload,
+        ));
+        message.routes.push(GossipRoute {
+            lane_id: routing.lane_id,
+            dataspace_id: routing.dataspace_id,
+        });
+        message.plans.push(routing_plan);
+        encoded_len = next_encoded_len;
+    }
+
+    let mut exact_len = message.encoded_len_exact().unwrap_or(encoded_len);
+    while exact_len > frame_cap_bytes && !message.txs.is_empty() {
+        if let Some(removed) = message.txs.pop() {
+            requeue.push(removed.hash());
+        }
+        message.routes.pop();
+        message.plans.pop();
+        exact_len = message.encoded_len_exact().unwrap_or(exact_len);
+    }
+
+    PartitionedGossipBatch {
+        message,
+        requeue,
+        encoded_len: exact_len,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        borrow::Cow,
+        collections::BTreeSet,
+        num::{NonZeroU32, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
+    };
+
+    use iroha_config::{
+        kura::{FsyncMode, InitMode},
+        parameters::{
+            actual::{
+                DataspaceGossipFallback, Kura as KuraConfig, LaneConfig as LaneGeometry,
+                LaneProfile, Queue as QueueConfig, RelayMode, RestrictedPublicPayload,
+                SoranetHandshake, SoranetPrivacy, SoranetVpn,
+            },
+            defaults,
+        },
+    };
+    use iroha_config_base::WithOrigin;
+    use iroha_crypto::{
+        Algorithm, BfvEvaluationKeyBundle, BfvParameters, KeyPair, RamLfeBackend,
+        RamLfeVerificationMode, bfv_programmed_policy_commitment_with_program,
+        default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
+        ram_lfe_bfv_parameters_v1, try_bfv_programmed_public_parameters_with_program,
+    };
+    use iroha_data_model::{
+        ChainId, DataSpaceId, Level,
+        domain::{Domain, DomainId},
+        identifier::IdentifierPolicyId,
+        isi::{Instruction, InstructionBox, Log, Register, ram_lfe::RegisterRamLfeProgramPolicy},
+        nexus::{
+            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId, LaneVisibility,
+        },
+        ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
+        transaction::{
+            TransactionBuilder,
+            signed::{
+                SealedTransactionCommitmentPayload, SignedSealedTransactionCommitment,
+                TransactionSignature, compute_sealed_transaction_commitment,
+            },
+        },
+    };
+    use iroha_primitives::{addr::socket_addr, numeric::Quantity, time::TimeSource};
+    use iroha_test_samples::{
+        ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
+    };
+    use norito::{codec::Decode, core as ncore};
+    use tempfile::tempdir;
+
+    use crate::NetworkMessage;
+
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::{LaneRouter, RoutingDecision},
+        state::{State, World},
+    };
+
+    fn build_transaction(message: &str) -> (SignedTransaction, AcceptedTransaction<'static>) {
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let authority = (*ALICE_ID).clone();
+        let signed = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, message.to_string())])
+        .sign(ALICE_KEYPAIR.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
+        (signed, accepted)
+    }
+
+    fn install_active_single_lane_nexus(state: &State) {
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(1).expect("non-zero lane count"),
+            vec![LaneConfig::default()],
+        )
+        .expect("authoritative default lane catalog");
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = false;
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = DataSpaceCatalog::default();
+        nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy::default();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
+    }
+
+    fn payload_for(tx: &SignedTransaction) -> Arc<Vec<u8>> {
+        Arc::new(encode_transaction_entrypoint(
+            &TransactionEntrypoint::External(tx.clone()),
+        ))
+    }
+
+    fn plan_for_route(route: GossipRoute) -> RoutingPlan {
+        RoutingPlan::single(RoutingDecision::new(route.lane_id, route.dataspace_id))
+    }
+
+    fn default_plan() -> RoutingPlan {
+        RoutingPlan::single(RoutingDecision::default())
+    }
+
+    fn decode_gossip_message(message: &TransactionGossip) -> TransactionGossip {
+        let encoded = message.encode();
+        Decode::decode(&mut encoded.as_slice()).expect("decode transaction gossip")
+    }
+
+    fn corrupt_signature(tx: &mut SignedTransaction) {
+        let mut signature_payload = tx.signature().payload().payload().to_vec();
+        let flip_index = signature_payload
+            .len()
+            .checked_sub(1)
+            .expect("transaction signature payload should never be empty");
+        signature_payload[flip_index] ^= 0xFF;
+        let forged_signature = iroha_crypto::Signature::try_from_bytes(&signature_payload)
+            .expect("tampered gossip signature remains structurally admissible");
+        tx.set_signature(TransactionSignature(
+            iroha_crypto::SignatureOf::from_signature(forged_signature),
+        ));
+    }
+
+    #[test]
+    fn gossip_transaction_hash_from_framed_entrypoint_matches_canonical_hash() {
+        let (signed, _accepted) = build_transaction("framed-entrypoint-hash");
+        let entrypoint = TransactionEntrypoint::External(signed);
+        let payload = Arc::new(encode_transaction_entrypoint(&entrypoint));
+
+        let hash = crate::tx::entrypoint_hash_from_framed_bytes(payload.as_slice())
+            .expect("hash framed entrypoint payload");
+
+        assert_eq!(hash, entrypoint.hash());
+        let gossip_tx = GossipTransaction::with_encoded(entrypoint, payload);
+        assert_eq!(gossip_tx.hash_as_entrypoint(), hash);
+    }
+
+    fn build_sealed_commitment_entrypoint() -> TransactionEntrypoint {
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let authority = (*ALICE_ID).clone();
+        let inner = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed-inner".to_string())])
+        .sign(ALICE_KEYPAIR.private_key());
+        let reveal_deadline_height = 10;
+        let commitment = compute_sealed_transaction_commitment(
+            &chain_id,
+            &inner,
+            [0x5A; 32],
+            reveal_deadline_height,
+        );
+        let payload = SealedTransactionCommitmentPayload::new(
+            chain_id,
+            authority,
+            commitment,
+            5,
+            reveal_deadline_height,
+            None,
+        );
+        TransactionEntrypoint::SealedCommitment(SignedSealedTransactionCommitment::sign(
+            payload,
+            ALICE_KEYPAIR.private_key(),
+        ))
+    }
+
+    fn identifier_bfv_parameters() -> BfvParameters {
+        ram_lfe_bfv_parameters_v1()
+    }
+
+    fn checked_ram_lfe_policy_signer() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked RAM-LFE policy signer")
+    }
+
+    fn register_ram_lfe_program_policy_tx() -> SignedTransaction {
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let owner = (*ALICE_ID).clone();
+        let signer = checked_ram_lfe_policy_signer();
+        let policy_id = "email#retail"
+            .parse::<IdentifierPolicyId>()
+            .expect("valid policy id");
+        let program_id = policy_id
+            .to_string()
+            .replace('#', "_")
+            .parse::<RamLfeProgramId>()
+            .expect("valid program id");
+        let hidden_program = default_bfv_programmed_hidden_program();
+        let (public_parameters, _, relinearization_key) = derive_identifier_key_material_from_seed(
+            &identifier_bfv_parameters(),
+            63,
+            b"email-secret",
+            &norito::to_bytes(&program_id).expect("encode program id"),
+        )
+        .expect("derive key material");
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
+            bootstrap_key: None,
+        };
+        let programmed_public_parameters = try_bfv_programmed_public_parameters_with_program(
+            public_parameters,
+            evaluation_keys,
+            &hidden_program,
+            RamLfeVerificationMode::Signed,
+            None,
+        )
+        .expect("build programmed BFV public parameters");
+        let encoded_public_parameters =
+            norito::to_bytes(&programmed_public_parameters).expect("encode public parameters");
+        let commitment = bfv_programmed_policy_commitment_with_program(
+            b"email-secret",
+            &encoded_public_parameters,
+            &hidden_program,
+        )
+        .expect("policy commitment");
+        let policy = RamLfeProgramPolicy::new(
+            program_id,
+            owner.clone(),
+            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeVerificationMode::Signed,
+            commitment,
+            signer.public_key().clone(),
+        );
+        let instructions: [InstructionBox; 1] =
+            [Box::new(RegisterRamLfeProgramPolicy { policy }).into_instruction_box()];
+
+        TransactionBuilder::new(
+            chain_id,
+            owner,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .sign(ALICE_KEYPAIR.private_key())
+    }
+
+    #[test]
+    fn gossip_transaction_decode_cache_reuses_arcs() {
+        let (signed, _accepted) = build_transaction("gossip-decode-cache-test");
+        let payload = payload_for(&signed);
+        let bytes = payload.as_ref().as_slice();
+
+        let (first, used1) =
+            <GossipTransaction as ncore::DecodeFromSlice>::decode_from_slice(bytes)
+                .expect("decode first gossip transaction");
+        let (second, used2) =
+            <GossipTransaction as ncore::DecodeFromSlice>::decode_from_slice(bytes)
+                .expect("decode second gossip transaction");
+
+        assert_eq!(used1, bytes.len());
+        assert_eq!(used2, bytes.len());
+        assert!(
+            !first.is_entrypoint_materialized(),
+            "decode must defer semantic entrypoint materialization"
+        );
+        assert!(
+            !second.is_entrypoint_materialized(),
+            "cached decode must stay lazy"
+        );
+        assert!(
+            Arc::ptr_eq(&first.encoded, &second.encoded),
+            "encoded bytes must be reused from cache"
+        );
+        assert_eq!(first.as_signed().hash(), signed.hash());
+        assert!(first.is_entrypoint_materialized());
+    }
+
+    #[test]
+    fn gossip_transaction_decode_cache_is_byte_bounded() {
+        let (signed, _accepted) = build_transaction("gossip-decode-cache-byte-bound");
+        let tx_hash = signed.hash();
+        let mut cache = GossipTxDecodeCache::with_limits(8, 10);
+
+        let first = Arc::new(vec![1_u8; 6]);
+        let first_key = GossipTxDecodeCacheKey::from_bytes(first.as_slice());
+        cache.insert(
+            first_key,
+            GossipTxDecodeCacheEntry {
+                encoded: Arc::clone(&first),
+                tx_hash,
+                consumed: first.len(),
+            },
+        );
+        assert!(cache.get(&first_key).is_some());
+        assert_eq!(cache.bytes, first.len());
+
+        let second = Arc::new(vec![2_u8; 6]);
+        let second_key = GossipTxDecodeCacheKey::from_bytes(second.as_slice());
+        cache.insert(
+            second_key,
+            GossipTxDecodeCacheEntry {
+                encoded: Arc::clone(&second),
+                tx_hash,
+                consumed: second.len(),
+            },
+        );
+        assert!(
+            cache.get(&first_key).is_none(),
+            "inserting past the byte cap should clear older cached payloads"
+        );
+        assert!(cache.get(&second_key).is_some());
+        assert_eq!(cache.bytes, second.len());
+
+        let oversized = Arc::new(vec![3_u8; 11]);
+        cache.insert(
+            second_key,
+            GossipTxDecodeCacheEntry {
+                encoded: oversized,
+                tx_hash,
+                consumed: 11,
+            },
+        );
+        assert!(
+            cache.get(&second_key).is_none(),
+            "oversized payloads should not remain cached"
+        );
+        assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
+    fn gossip_transaction_try_deserialize_uses_decode_cache() {
+        let (signed, _accepted) = build_transaction("gossip-try-deserialize-cache-test");
+        let payload = payload_for(&signed);
+        let gossip_tx = GossipTransaction::with_encoded(
+            TransactionEntrypoint::External(signed),
+            Arc::clone(&payload),
+        );
+        let encoded = gossip_tx.encode();
+
+        let first: GossipTransaction =
+            Decode::decode(&mut encoded.as_slice()).expect("decode first gossip transaction");
+        let second: GossipTransaction =
+            Decode::decode(&mut encoded.as_slice()).expect("decode second gossip transaction");
+
+        assert!(
+            !first.is_entrypoint_materialized(),
+            "try_deserialize must defer semantic entrypoint materialization"
+        );
+        assert!(
+            !second.is_entrypoint_materialized(),
+            "cached try_deserialize must stay lazy"
+        );
+        assert!(
+            Arc::ptr_eq(&first.encoded, &second.encoded),
+            "try_deserialize must reuse encoded bytes from cache"
+        );
+    }
+
+    fn test_network_config(addr: iroha_primitives::addr::SocketAddr) -> NetworkConfig {
+        let public_addr = addr.clone();
+        NetworkConfig {
+            address: WithOrigin::inline(addr),
+            public_address: WithOrigin::inline(public_addr),
+            relay_mode: RelayMode::Disabled,
+            relay_hub_addresses: Vec::new(),
+            relay_ttl: defaults::network::RELAY_TTL,
+            soranet_handshake: SoranetHandshake::default(),
+            soranet_privacy: SoranetPrivacy::default(),
+            soranet_vpn: SoranetVpn::default(),
+            lane_profile: LaneProfile::Core,
+            require_sm_handshake_match: defaults::network::REQUIRE_SM_HANDSHAKE_MATCH,
+            require_sm_openssl_preview_match: defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
+            idle_timeout: defaults::network::IDLE_TIMEOUT,
+            reply_writer_flush_timeout: defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
+            connect_startup_delay: defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: defaults::network::DIAL_TIMEOUT,
+            peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
+            peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
+            trust_gossip: defaults::network::TRUST_GOSSIP,
+            trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
+            trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
+            trust_penalty_unknown_peer: defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
+            trust_min_score: defaults::network::TRUST_MIN_SCORE,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS),
+            deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+            deferred_send_max_bytes_per_peer: defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+            deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
+            dns_refresh_interval: None,
+            dns_refresh_ttl: None,
+            p2p_proxy: None,
+            p2p_proxy_required: false,
+            p2p_no_proxy: Vec::new(),
+            p2p_proxy_tls_verify: true,
+            p2p_proxy_tls_pinned_cert_der_base64: None,
+            scion: iroha_config::parameters::actual::ScionConfig::default(),
+            quic_enabled: false,
+            quic_datagrams_enabled: defaults::network::QUIC_DATAGRAMS_ENABLED,
+            quic_datagram_max_payload_bytes: defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
+            quic_datagram_receive_buffer_bytes: defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+            quic_datagram_send_buffer_bytes: defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
+            tls_enabled: false,
+            tls_fallback_to_plain: true,
+            tls_listen_address: None,
+            tls_inbound_only: false,
+            prefer_ws_fallback: false,
+            p2p_queue_cap_high: defaults::network::P2P_QUEUE_CAP_HIGH,
+            p2p_queue_cap_low: defaults::network::P2P_QUEUE_CAP_LOW,
+            p2p_post_queue_cap: defaults::network::P2P_POST_QUEUE_CAP,
+            p2p_outbound_frame_queue_max_high_bytes:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
+            p2p_subscriber_queue_cap: defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+            consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
+            consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
+            consensus_ingress_bytes_per_sec: defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
+            consensus_ingress_bytes_burst: defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
+            consensus_ingress_critical_rate_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
+            consensus_ingress_critical_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
+            consensus_ingress_critical_bytes_per_sec:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
+            consensus_ingress_critical_bytes_burst:
+                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
+            consensus_ingress_penalty_threshold:
+                defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
+            consensus_ingress_penalty_window: Duration::from_millis(
+                defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
+            ),
+            consensus_ingress_penalty_cooldown: Duration::from_millis(
+                defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
+            ),
+            happy_eyeballs_stagger: defaults::network::HAPPY_EYEBALLS_STAGGER,
+            addr_ipv6_first: false,
+            max_incoming: None,
+            max_total_connections: None,
+            accept_rate_per_ip_per_sec: None,
+            accept_burst_per_ip: None,
+            max_accept_buckets: defaults::network::MAX_ACCEPT_BUCKETS,
+            accept_bucket_idle: defaults::network::ACCEPT_BUCKET_IDLE,
+            accept_prefix_v4_bits: defaults::network::ACCEPT_PREFIX_V4_BITS,
+            accept_prefix_v6_bits: defaults::network::ACCEPT_PREFIX_V6_BITS,
+            accept_rate_per_prefix_per_sec: None,
+            accept_burst_per_prefix: None,
+            low_priority_rate_per_sec: None,
+            low_priority_burst: None,
+            low_priority_bytes_per_sec: None,
+            low_priority_bytes_burst: None,
+            allowlist_only: false,
+            allow_keys: Vec::new(),
+            deny_keys: Vec::new(),
+            allow_cidrs: Vec::new(),
+            deny_cidrs: Vec::new(),
+            disconnect_on_post_overflow: defaults::network::DISCONNECT_ON_POST_OVERFLOW,
+            max_frame_bytes: defaults::network::MAX_FRAME_BYTES.get(),
+            tcp_nodelay: defaults::network::TCP_NODELAY,
+            tcp_keepalive: Some(defaults::network::TCP_KEEPALIVE),
+            max_frame_bytes_consensus: defaults::network::MAX_FRAME_BYTES_CONSENSUS.get(),
+            max_frame_bytes_control: defaults::network::MAX_FRAME_BYTES_CONTROL.get(),
+            max_frame_bytes_block_sync: defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get(),
+            max_frame_bytes_tx_gossip: defaults::network::MAX_FRAME_BYTES_TX_GOSSIP.get(),
+            max_frame_bytes_peer_gossip: defaults::network::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
+            max_frame_bytes_health: defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
+            max_frame_bytes_other: defaults::network::MAX_FRAME_BYTES_OTHER.get(),
+            tls_only_v1_3: true,
+            quic_max_idle_timeout: None,
+        }
+    }
+
+    fn closed_test_gossiper(resend_ticks: NonZeroU32) -> TransactionGossiper {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        install_active_single_lane_nexus(state.as_ref());
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+        let now = Instant::now();
+        TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network: IrohaNetwork::closed_for_tests(),
+            queue,
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        }
+    }
+
+    #[test]
+    fn transaction_gossip_priority_elevates_under_queue_age_pressure() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(2).expect("nonzero resend ticks"));
+        let (_signed, accepted) = build_transaction("priority-pressure");
+
+        gossiper
+            .queue
+            .push(accepted, gossiper.state.view())
+            .expect("queue accepts tx");
+        gossiper
+            .queue
+            .set_pressure_age_budget_for_tests(Duration::from_secs(60));
+        assert_eq!(gossiper.gossip_priority(), Priority::Low);
+
+        gossiper
+            .queue
+            .set_pressure_age_budget_for_tests(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(2));
+
+        assert_eq!(gossiper.gossip_priority(), Priority::High);
+    }
+
+    #[test]
+    fn tx_gossip_frame_probe_keypair_uses_checked_ed25519_derivation() {
+        let keypair = tx_gossip_frame_probe_keypair();
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("checked probe public key algorithm"),
+            Algorithm::Ed25519
+        );
+        let chain_id: ChainId = "probe-signing".parse().expect("chain id");
+        let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(std::iter::empty::<InstructionBox>())
+        .try_sign(keypair.private_key())
+        .expect("checked transaction gossip frame probe signing");
+        transaction
+            .verify_signature()
+            .expect("transaction gossip frame probe signature should verify");
+    }
+
+    #[test]
+    fn ram_lfe_policy_signer_uses_checked_ed25519_generation() {
+        let keypair = checked_ram_lfe_policy_signer();
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("checked RAM-LFE policy signer algorithm"),
+            Algorithm::Ed25519
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossiper_tx_frame_cap_respects_encrypted_frame_limit() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let mut network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
+        network_cfg.max_frame_bytes = 512;
+        network_cfg.max_frame_bytes_tx_gossip = 1024;
+        let self_peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
+        let max_peer_id = self_peer_id.clone();
+        let chain_id: ChainId = "test-chain".parse().expect("chain id");
+        let expected =
+            tx_gossip_frame_payload_cap(&network_cfg, &chain_id, &self_peer_id, &max_peer_id);
+
+        let network = IrohaNetwork::closed_for_tests();
+
+        let gossiper = TransactionGossiper::from_config(
+            chain_id,
+            Config {
+                gossip_period: Duration::from_millis(1000),
+                gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+                gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+                dataspace: DataspaceGossip::default(),
+            },
+            &network_cfg,
+            self_peer_id,
+            max_peer_id,
+            network,
+            queue,
+            Arc::clone(&state),
+        );
+
+        assert_eq!(gossiper.tx_frame_cap, expected);
+    }
+
+    #[test]
+    fn gossip_defers_requeue_until_resend_tick() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        install_active_single_lane_nexus(state.as_ref());
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let (_signed, accepted) = build_transaction("defer");
+        queue
+            .push(accepted, state.view())
+            .expect("queue accepts tx");
+        let batch = queue.gossip_batch(1, &state.view());
+        assert_eq!(batch.len(), 1);
+        let hash = batch[0].tx.hash();
+
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let now = Instant::now();
+        let mut gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network: IrohaNetwork::closed_for_tests(),
+            queue: Arc::clone(&queue),
+            state: Arc::clone(&state),
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        gossiper.release_deferred_gossip();
+        gossiper.defer_gossip_hashes(vec![hash]);
+        gossiper.advance_gossip_tick();
+        assert!(queue.gossip_batch(1, &state.view()).is_empty());
+
+        gossiper.release_deferred_gossip();
+        gossiper.advance_gossip_tick();
+        assert!(queue.gossip_batch(1, &state.view()).is_empty());
+
+        gossiper.release_deferred_gossip();
+        let batch = queue.gossip_batch(1, &state.view());
+        assert_eq!(batch.len(), 1);
+    }
+
+    #[test]
+    fn gossip_deferred_slot_deduplicates_repeated_hashes() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+
+        let (_signed, accepted) = build_transaction("deferred-dedup");
+        let hash = accepted.hash();
+        gossiper
+            .queue
+            .push(accepted, gossiper.state.view())
+            .expect("queue accepts tx");
+
+        gossiper.defer_gossip_hashes([hash, hash]);
+        gossiper.defer_gossip_hashes([hash]);
+
+        assert_eq!(
+            gossiper.gossip_deferred[gossiper.deferred_index()].len(),
+            1,
+            "same transaction hash should be retained once per resend slot"
+        );
+    }
+
+    #[test]
+    fn public_broadcast_retry_hashes_return_to_gossip_backlog() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+
+        let (_signed, accepted) = build_transaction("public-broadcast-retry");
+        gossiper
+            .queue
+            .push(accepted, gossiper.state.view())
+            .expect("queue accepts tx");
+        let first_batch = gossiper.queue.gossip_batch(1, &gossiper.state.view());
+        assert_eq!(first_batch.len(), 1);
+        let hash = first_batch[0].tx.hash();
+        assert!(
+            gossiper
+                .queue
+                .gossip_batch(1, &gossiper.state.view())
+                .is_empty()
+        );
+
+        gossiper.retry_public_broadcast_hashes(vec![hash]);
+        gossiper.advance_gossip_tick();
+        gossiper.release_deferred_gossip();
+        assert!(
+            gossiper
+                .queue
+                .gossip_batch(1, &gossiper.state.view())
+                .is_empty(),
+            "retry should wait until the configured resend tick"
+        );
+
+        gossiper.advance_gossip_tick();
+        gossiper.release_deferred_gossip();
+        let retried_batch = gossiper.queue.gossip_batch(1, &gossiper.state.view());
+        assert_eq!(retried_batch.len(), 1);
+    }
+
+    #[test]
+    fn gossip_backpressure_cooldown_respects_last_drop() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let now = Instant::now();
+        let mut gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: resend_ticks,
+            gossip_tick: 0,
+            gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
+            last_drop_count: u64::MAX,
+            last_drop_at: Some(now),
+            network: IrohaNetwork::closed_for_tests(),
+            queue,
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        assert!(gossiper.gossip_backpressure_active(now));
+
+        let cooldown = gossiper.backpressure_cooldown();
+        let past = now
+            .checked_sub(cooldown.saturating_add(Duration::from_millis(1)))
+            .unwrap_or(now);
+        gossiper.last_drop_at = Some(past);
+        assert!(!gossiper.gossip_backpressure_active(now));
+    }
+
+    #[test]
+    fn peer_recent_suppression_expires_after_ttl_ticks() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("suppression-expiry");
+        let tx_hash = signed.hash();
+
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+        let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
+            vec![peer.clone()],
+            std::slice::from_ref(&tx_hash),
+        );
+        assert!(
+            targets.is_empty(),
+            "all-suppressed target sets should wait for resend TTL instead of replaying immediately"
+        );
+        assert_eq!(suppressed, 1);
+
+        for _ in 0..GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS {
+            gossiper.expire_peer_recent_suppression();
+            gossiper.advance_gossip_tick();
+        }
+        gossiper.expire_peer_recent_suppression();
+
+        let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
+            vec![peer.clone()],
+            std::slice::from_ref(&tx_hash),
+        );
+        assert_eq!(targets, vec![peer]);
+        assert_eq!(suppressed, 0);
+    }
+
+    #[test]
+    fn peer_recent_suppression_deduplicates_same_tick_entries() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("suppression-same-tick-dedup");
+        let tx_hash = signed.hash();
+        let slot = gossiper.peer_recent_slot_for_tick(
+            gossiper
+                .gossip_tick
+                .saturating_add(GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS as u64),
+        );
+
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+
+        assert_eq!(
+            gossiper.peer_recent_ring[slot].len(),
+            1,
+            "same peer/hash expiry should have one ring entry"
+        );
+    }
+
+    #[test]
+    fn peer_recent_suppression_drops_stale_replaced_ring_entries() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("suppression-stale-ring-entry");
+        let tx_hash = signed.hash();
+        let ttl = GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS as u64;
+        let first_expiry = gossiper.gossip_tick.saturating_add(ttl);
+        let first_slot = gossiper.peer_recent_slot_for_tick(first_expiry);
+
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+        gossiper.advance_gossip_tick();
+        let second_expiry = gossiper.gossip_tick.saturating_add(ttl);
+        let second_slot = gossiper.peer_recent_slot_for_tick(second_expiry);
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+
+        assert_eq!(gossiper.peer_recent_ring[first_slot].len(), 1);
+        assert_eq!(gossiper.peer_recent_ring[second_slot].len(), 1);
+
+        gossiper.gossip_tick = first_expiry;
+        gossiper.expire_peer_recent_suppression();
+        assert!(
+            gossiper.peer_recent_ring[first_slot].is_empty(),
+            "overwritten expiry entry should be dropped instead of retained forever"
+        );
+        assert!(
+            gossiper
+                .peer_recently_sent
+                .get(&peer)
+                .is_some_and(|seen| seen.get(&tx_hash) == Some(&second_expiry)),
+            "newer suppression expiry should remain active"
+        );
+
+        gossiper.gossip_tick = second_expiry;
+        gossiper.expire_peer_recent_suppression();
+        assert!(
+            !gossiper.peer_recently_sent.contains_key(&peer),
+            "current suppression entry should still expire normally"
+        );
+    }
+
+    #[test]
+    fn peer_recent_suppression_keeps_peers_missing_any_hash() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer_a: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
+        let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
+        let (signed_a, _) = build_transaction("peer-a");
+        let (signed_b, _) = build_transaction("peer-b");
+        let tx_hash_a = signed_a.hash();
+        let tx_hash_b = signed_b.hash();
+        let all_hashes = vec![tx_hash_a.clone(), tx_hash_b.clone()];
+
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_a), &[tx_hash_a]);
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_b), &all_hashes);
+
+        let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
+            vec![peer_a.clone(), peer_b.clone()],
+            &all_hashes,
+        );
+        assert_eq!(targets, vec![peer_a]);
+        assert_eq!(suppressed, 1);
+    }
+
+    #[test]
+    fn peer_recent_suppression_defers_when_every_target_was_recently_sent() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer_a: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
+        let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("peer-recent-defer");
+        let tx_hash = signed.hash();
+        let targets = vec![peer_a.clone(), peer_b.clone()];
+
+        gossiper.remember_peer_recent_sends(&targets, std::slice::from_ref(&tx_hash));
+
+        let (targets, suppressed, replayed) = gossiper
+            .filter_targets_or_replay_recent_suppressed(targets, std::slice::from_ref(&tx_hash));
+
+        assert!(targets.is_empty());
+        assert_eq!(suppressed, 2);
+        assert!(!replayed);
+    }
+
+    #[test]
+    fn partition_respects_frame_cap() {
+        let (small_signed, small_accepted) = build_transaction("small");
+        let (large_signed, large_accepted) = build_transaction(&"x".repeat(512));
+
+        let small_route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let large_route = GossipRoute {
+            lane_id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(7),
+        };
+        let small_len = norito::codec::Encode::encode(&TransactionGossip {
+            txs: vec![small_signed.clone().into()],
+            routes: vec![small_route],
+            plans: vec![plan_for_route(small_route)],
+            plane: GossipPlane::Public,
+        })
+        .len();
+        let both_len = norito::codec::Encode::encode(&TransactionGossip {
+            txs: vec![small_signed.clone().into(), large_signed.clone().into()],
+            routes: vec![small_route, large_route],
+            plans: vec![plan_for_route(small_route), plan_for_route(large_route)],
+            plane: GossipPlane::Public,
+        })
+        .len();
+        let frame_cap = small_len + 8;
+        assert!(frame_cap < both_len, "cap should exclude both transactions");
+
+        let partitioned = partition_gossip_batch(
+            usize::MAX,
+            frame_cap,
+            GossipPlane::Public,
+            vec![
+                GossipBatchEntry {
+                    tx: small_accepted,
+                    routing: RoutingDecision::default(),
+                    routing_plan: default_plan(),
+                    payload: payload_for(&small_signed),
+                },
+                GossipBatchEntry {
+                    tx: large_accepted,
+                    routing: RoutingDecision::default(),
+                    routing_plan: default_plan(),
+                    payload: payload_for(&large_signed),
+                },
+            ],
+        );
+
+        let partitioned_hashes: Vec<_> = partitioned
+            .message
+            .txs
+            .iter()
+            .map(|tx| tx.as_signed().hash())
+            .collect();
+        assert_eq!(partitioned_hashes, vec![small_signed.hash()]);
+        assert_eq!(
+            partitioned.encoded_len,
+            norito::codec::Encode::encode(&partitioned.message).len()
+        );
+        assert_eq!(partitioned.requeue, vec![large_signed.hash()]);
+    }
+
+    #[test]
+    fn gossip_roundtrip_preserves_cached_payload() {
+        let (signed, _accepted) = build_transaction("cached");
+        let payload = payload_for(&signed);
+        let message = TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                Arc::clone(&payload),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        };
+
+        let encoded = message.encode();
+        let decoded: TransactionGossip =
+            Decode::decode(&mut encoded.as_slice()).expect("decode gossip");
+
+        assert_eq!(decoded.txs.len(), 1);
+        assert_eq!(decoded.routes.len(), 1);
+        assert_eq!(decoded.txs[0].as_signed().hash(), signed.hash());
+        assert_eq!(decoded.txs[0].encoded.as_slice(), payload.as_slice());
+        assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
+        assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
+        assert_eq!(decoded.plane, GossipPlane::Public);
+        assert_eq!(decoded.txs[0].encode().as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn gossip_roundtrip_preserves_sealed_commitment_entrypoint() {
+        let entrypoint = build_sealed_commitment_entrypoint();
+        let payload = Arc::new(encode_transaction_entrypoint(&entrypoint));
+        let expected_hash = entrypoint.hash();
+        let message = TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                entrypoint,
+                Arc::clone(&payload),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        };
+
+        let encoded = message.encode();
+        let decoded: TransactionGossip =
+            Decode::decode(&mut encoded.as_slice()).expect("decode gossip");
+
+        assert_eq!(decoded.txs.len(), 1);
+        assert!(matches!(
+            decoded.txs[0].as_entrypoint(),
+            TransactionEntrypoint::SealedCommitment(_)
+        ));
+        assert_eq!(decoded.txs[0].as_entrypoint().hash(), expected_hash);
+        assert_eq!(decoded.txs[0].encoded.as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn partition_gossip_batch_keeps_sealed_commitments() {
+        let entrypoint = build_sealed_commitment_entrypoint();
+        let accepted =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+        let payload = Arc::new(encode_transaction_entrypoint(&entrypoint));
+
+        let partitioned = partition_gossip_batch(
+            usize::MAX,
+            usize::MAX,
+            GossipPlane::Public,
+            vec![GossipBatchEntry {
+                tx: accepted,
+                routing: RoutingDecision::default(),
+                routing_plan: default_plan(),
+                payload,
+            }],
+        );
+
+        assert_eq!(partitioned.message.txs.len(), 1);
+        assert!(partitioned.requeue.is_empty());
+        assert!(matches!(
+            partitioned.message.txs[0].as_entrypoint(),
+            TransactionEntrypoint::SealedCommitment(_)
+        ));
+    }
+
+    #[test]
+    fn gossip_transaction_len_hints_use_cached_payload() {
+        let (signed, _accepted) = build_transaction("hint");
+        let payload = payload_for(&signed);
+        let tx = GossipTransaction::with_encoded(signed, Arc::clone(&payload));
+
+        assert_eq!(
+            ncore::NoritoSerialize::encoded_len_hint(&tx),
+            Some(payload.len())
+        );
+        assert_eq!(
+            ncore::NoritoSerialize::encoded_len_exact(&tx),
+            Some(payload.len())
+        );
+    }
+
+    #[test]
+    fn gossip_route_encoded_len_matches_wire() {
+        let route = GossipRoute {
+            lane_id: LaneId::new(3),
+            dataspace_id: DataSpaceId::new(7),
+        };
+
+        let encoded = route.encode();
+        let expected = gossip_route_encoded_len().expect("gossip route len");
+        assert_eq!(encoded.len(), expected);
+
+        let decoded: GossipRoute =
+            Decode::decode(&mut encoded.as_slice()).expect("decode gossip route");
+        assert_eq!(decoded.lane_id, route.lane_id);
+        assert_eq!(decoded.dataspace_id, route.dataspace_id);
+    }
+
+    #[test]
+    fn transaction_gossip_encoded_len_exact_matches_encode() {
+        let (signed, _accepted) = build_transaction("len");
+        let payload = payload_for(&signed);
+        let message = TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed,
+                Arc::clone(&payload),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        };
+
+        let encoded = message.encode();
+        assert_eq!(
+            ncore::NoritoSerialize::encoded_len_exact(&message),
+            Some(encoded.len())
+        );
+    }
+
+    #[test]
+    fn gossip_transaction_decode_rejects_trailing_bytes() {
+        let (signed, _accepted) = build_transaction("trailing");
+        let mut encoded = ncore::to_bytes(&TransactionEntrypoint::External(signed))
+            .expect("encode transaction entrypoint");
+        encoded.extend_from_slice(&[0xAA, 0xBB]);
+
+        let err =
+            ncore::decode_field_canonical::<GossipTransaction>(&encoded).expect_err("bad bytes");
+        assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn gossip_network_message_roundtrip_cached_payload_is_context_free() {
+        let (signed, _accepted) = build_transaction("cached-network-flags");
+        let canonical_payload = payload_for(&signed);
+        let payload = {
+            let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
+            Arc::new(
+                ncore::to_bytes(&TransactionEntrypoint::External(signed.clone()))
+                    .expect("encode transaction entrypoint"),
+            )
+        };
+        std::thread::spawn(move || {
+            let message = TransactionGossip {
+                txs: vec![GossipTransaction::with_encoded(
+                    signed.clone(),
+                    Arc::clone(&payload),
+                )],
+                routes: vec![GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                }],
+                plans: vec![default_plan()],
+                plane: GossipPlane::Public,
+            };
+            let encoded = NetworkMessage::TransactionGossiper(Arc::new(message)).encode();
+            let decoded: NetworkMessage =
+                Decode::decode(&mut encoded.as_slice()).expect("decode network message");
+
+            match decoded {
+                NetworkMessage::TransactionGossiper(message) => {
+                    assert_eq!(message.txs.len(), 1);
+                    assert_eq!(
+                        message.txs[0].encoded.as_slice(),
+                        canonical_payload.as_slice()
+                    );
+                    assert!(message.txs[0].encoded.starts_with(&ncore::MAGIC));
+                }
+                other => panic!("unexpected network message: {other:?}"),
+            }
+        })
+        .join()
+        .expect("context-free network gossip thread");
+    }
+
+    #[test]
+    fn transaction_gossip_roundtrip_cached_payload_is_context_free() {
+        let (signed, _accepted) = build_transaction("cached-txgossip-flags");
+        let canonical_payload = payload_for(&signed);
+        let payload = {
+            let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
+            Arc::new(
+                ncore::to_bytes(&TransactionEntrypoint::External(signed.clone()))
+                    .expect("encode transaction entrypoint"),
+            )
+        };
+        std::thread::spawn(move || {
+            let message = TransactionGossip {
+                txs: vec![GossipTransaction::with_encoded(
+                    signed.clone(),
+                    Arc::clone(&payload),
+                )],
+                routes: vec![GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                }],
+                plans: vec![default_plan()],
+                plane: GossipPlane::Public,
+            };
+            let encoded = message.encode();
+            let decoded: TransactionGossip =
+                Decode::decode(&mut encoded.as_slice()).expect("decode transaction gossip");
+
+            assert_eq!(decoded.txs.len(), 1);
+            assert_eq!(
+                decoded.txs[0].encoded.as_slice(),
+                canonical_payload.as_slice()
+            );
+            assert!(decoded.txs[0].encoded.starts_with(&ncore::MAGIC));
+            assert_eq!(decoded.routes.len(), 1);
+            assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
+            assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
+            assert_eq!(decoded.plane, GossipPlane::Public);
+        })
+        .join()
+        .expect("context-free transaction gossip thread");
+    }
+
+    #[test]
+    fn gossip_roundtrip_preserves_large_ram_lfe_policy_transaction() {
+        let signed = register_ram_lfe_program_policy_tx();
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
+        let signed_encoded = signed.encode();
+        let signed_decoded: SignedTransaction =
+            Decode::decode(&mut signed_encoded.as_slice()).expect("decode signed transaction");
+        assert_eq!(signed_decoded.hash(), signed.hash());
+        let gossip_tx = GossipTransaction::new(accepted.clone());
+        let gossip_tx_encoded = gossip_tx.encode();
+        let gossip_tx_decoded: GossipTransaction =
+            Decode::decode(&mut gossip_tx_encoded.as_slice()).expect("decode gossip transaction");
+        assert_eq!(gossip_tx_decoded.as_signed().hash(), signed.hash());
+        let message = TransactionGossip {
+            txs: vec![gossip_tx],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        };
+
+        let encoded = message.encode();
+        let decoded: TransactionGossip =
+            Decode::decode(&mut encoded.as_slice()).expect("decode gossip");
+
+        assert_eq!(decoded.txs.len(), 1);
+        assert_eq!(decoded.txs[0].as_signed().hash(), signed.hash());
+    }
+
+    #[test]
+    fn gossip_network_message_roundtrip_preserves_cached_payload() {
+        let (signed, _accepted) = build_transaction("cached-network");
+        let payload = payload_for(&signed);
+        let message = TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                Arc::clone(&payload),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        };
+
+        let network = NetworkMessage::TransactionGossiper(Arc::new(message));
+        let encoded = network.encode();
+        let decoded: NetworkMessage =
+            Decode::decode(&mut encoded.as_slice()).expect("decode network gossip");
+
+        match decoded {
+            NetworkMessage::TransactionGossiper(message) => {
+                assert_eq!(message.txs.len(), 1);
+                assert_eq!(message.routes.len(), 1);
+                assert_eq!(message.txs[0].as_signed().hash(), signed.hash());
+                assert_eq!(message.txs[0].encoded.as_slice(), payload.as_slice());
+                assert_eq!(message.routes[0].lane_id, LaneId::SINGLE);
+                assert_eq!(message.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
+                assert_eq!(message.plane, GossipPlane::Public);
+            }
+            other => panic!("unexpected network message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn partition_yields_empty_when_cap_too_small() {
+        let (signed, accepted) = build_transaction("tiny");
+        let cap = 1;
+        let partitioned = partition_gossip_batch(
+            usize::MAX,
+            cap,
+            GossipPlane::Public,
+            vec![GossipBatchEntry {
+                tx: accepted,
+                routing: RoutingDecision::default(),
+                routing_plan: default_plan(),
+                payload: payload_for(&signed),
+            }],
+        );
+        assert!(partitioned.message.txs.is_empty());
+        assert!(partitioned.message.routes.is_empty());
+        assert_eq!(partitioned.requeue, vec![signed.hash()]);
+    }
+
+    #[test]
+    fn partition_preserves_native_amx_full_routing_plan() {
+        let (signed, accepted) = build_transaction("native-amx-gossip");
+        let coordinator = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(7));
+        let first_participant = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(7));
+        let second_participant = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(8));
+        let plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![
+                crate::queue::RouteLeg::new(
+                    first_participant,
+                    crate::queue::RouteLegRole::Participant,
+                ),
+                crate::queue::RouteLeg::new(
+                    second_participant,
+                    crate::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let partitioned = partition_gossip_batch(
+            usize::MAX,
+            usize::MAX,
+            GossipPlane::Public,
+            vec![GossipBatchEntry {
+                tx: accepted,
+                routing: coordinator,
+                routing_plan: plan.clone(),
+                payload: payload_for(&signed),
+            }],
+        );
+
+        assert!(partitioned.requeue.is_empty());
+        assert_eq!(partitioned.message.plans, vec![plan.clone()]);
+        let decoded = decode_gossip_message(&partitioned.message);
+        assert_eq!(decoded.plans, vec![plan]);
+        let RoutingPlan::NativeAmx(native_plan) = &decoded.plans[0] else {
+            panic!("decoded gossip plan should remain native AMX");
+        };
+        assert_eq!(
+            native_plan
+                .participants
+                .iter()
+                .map(|leg| leg.route)
+                .collect::<Vec<_>>(),
+            vec![first_participant, second_participant]
+        );
+    }
+
+    #[test]
+    fn partition_respects_max_count() {
+        let (tx_a_signed, tx_a_accepted) = build_transaction("a");
+        let (tx_b_signed, tx_b_accepted) = build_transaction("b");
+
+        let cap = norito::codec::Encode::encode(&TransactionGossip {
+            txs: vec![tx_a_signed.clone().into(), tx_b_signed.clone().into()],
+            plans: vec![
+                default_plan(),
+                RoutingPlan::single(RoutingDecision::new(LaneId::new(2), DataSpaceId::new(5))),
+            ],
+            routes: vec![
+                GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+                GossipRoute {
+                    lane_id: LaneId::new(2),
+                    dataspace_id: DataSpaceId::new(5),
+                },
+            ],
+            plane: GossipPlane::Public,
+        })
+        .len()
+            + 16;
+
+        let partitioned = partition_gossip_batch(
+            1,
+            cap,
+            GossipPlane::Public,
+            vec![
+                GossipBatchEntry {
+                    tx: tx_a_accepted,
+                    routing: RoutingDecision::default(),
+                    routing_plan: default_plan(),
+                    payload: payload_for(&tx_a_signed),
+                },
+                GossipBatchEntry {
+                    tx: tx_b_accepted,
+                    routing: RoutingDecision::default(),
+                    routing_plan: default_plan(),
+                    payload: payload_for(&tx_b_signed),
+                },
+            ],
+        );
+        let hashes: Vec<_> = partitioned
+            .message
+            .txs
+            .iter()
+            .map(|tx| tx.as_signed().hash())
+            .collect();
+        assert_eq!(hashes, vec![tx_a_signed.hash()]);
+        assert_eq!(partitioned.requeue, vec![tx_b_signed.hash()]);
+    }
+
+    #[test]
+    fn validate_route_rejects_missing_lane() {
+        let catalog = LaneCatalog::default();
+        let dataspace_catalog = DataSpaceCatalog::default();
+        let route = GossipRoute {
+            lane_id: LaneId::new(5),
+            dataspace_id: DataSpaceId::new(7),
+        };
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, None, route),
+            Err("unknown_lane")
+        );
+    }
+
+    #[test]
+    fn validate_route_rejects_dataspace_mismatch() {
+        let lane = iroha_data_model::nexus::LaneConfig {
+            id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(2),
+            alias: "alpha".to_string(),
+            visibility: LaneVisibility::Public,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(4).expect("nonzero lanes"),
+            vec![lane],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::new(2),
+                alias: "lane-dataspace".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: DataSpaceId::new(3),
+                alias: "route-dataspace".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let route = GossipRoute {
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(3),
+        };
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, None, route),
+            Err("lane_dataspace_mismatch")
+        );
+    }
+
+    #[test]
+    fn validate_route_rejects_missing_dataspace() {
+        let lane = iroha_data_model::nexus::LaneConfig {
+            id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(9),
+            alias: "dangling".to_string(),
+            visibility: LaneVisibility::Restricted,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(2).expect("nonzero lanes"),
+            vec![lane],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::default();
+        let route = GossipRoute {
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(9),
+        };
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, None, route),
+            Err("unknown_dataspace")
+        );
+    }
+
+    #[test]
+    fn validate_route_accepts_matching_lane() {
+        let lane = iroha_data_model::nexus::LaneConfig {
+            id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(9),
+            alias: "beta".to_string(),
+            visibility: LaneVisibility::Restricted,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(3).expect("nonzero lanes"),
+            vec![lane],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::new(9),
+            alias: "beta-dataspace".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+        let route = GossipRoute {
+            lane_id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(9),
+        };
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, None, route),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validate_route_rejects_inactive_lane() {
+        let lane = iroha_data_model::nexus::LaneConfig {
+            id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(9),
+            alias: "inactive".to_string(),
+            visibility: LaneVisibility::Restricted,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(3).expect("nonzero lanes"),
+            vec![lane],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::new(9),
+            alias: "inactive-dataspace".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+        let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
+        let route = GossipRoute {
+            lane_id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(9),
+        };
+
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, Some(&active_lane_ids), route),
+            Err(DROP_REASON_INACTIVE_LANE)
+        );
+    }
+
+    #[test]
+    fn validate_advertised_routing_plan_rejects_inactive_participant_lane() {
+        let coordinator = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let participant = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(9));
+        let catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(3).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: participant.lane_id,
+                    dataspace_id: participant.dataspace_id,
+                    alias: "inactive-participant".to_string(),
+                    visibility: LaneVisibility::Restricted,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: participant.dataspace_id,
+                alias: "participant-dataspace".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![crate::queue::RouteLeg::new(
+                participant,
+                crate::queue::RouteLegRole::Participant,
+            )],
+        );
+        let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
+
+        assert_eq!(
+            validate_advertised_routing_plan(
+                &catalog,
+                &dataspace_catalog,
+                Some(&active_lane_ids),
+                &plan,
+            ),
+            Err(DROP_REASON_INACTIVE_LANE)
+        );
+    }
+
+    #[test]
+    fn dataspace_plane_favors_restricted_when_mixed() {
+        let lanes = vec![
+            iroha_data_model::nexus::LaneConfig {
+                id: LaneId::new(0),
+                dataspace_id: DataSpaceId::new(42),
+                alias: "public-lane".to_string(),
+                visibility: LaneVisibility::Public,
+                ..iroha_data_model::nexus::LaneConfig::default()
+            },
+            iroha_data_model::nexus::LaneConfig {
+                id: LaneId::new(1),
+                dataspace_id: DataSpaceId::new(42),
+                alias: "restricted-lane".to_string(),
+                visibility: LaneVisibility::Restricted,
+                ..iroha_data_model::nexus::LaneConfig::default()
+            },
+        ];
+        let catalog =
+            LaneCatalog::new(core::num::NonZeroU32::new(2).expect("nonzero lanes"), lanes)
+                .expect("lane catalog");
+        let lane_config = LaneGeometry::from_catalog(&catalog);
+        assert_eq!(
+            dataspace_plane(&lane_config, DataSpaceId::new(42)),
+            Some(GossipPlane::Restricted)
+        );
+    }
+
+    #[test]
+    fn dataspace_plane_handles_unknown_dataspace() {
+        let catalog = LaneCatalog::default();
+        let lane_config = LaneGeometry::from_catalog(&catalog);
+        assert_eq!(dataspace_plane(&lane_config, DataSpaceId::new(999)), None);
+    }
+
+    #[test]
+    fn gossip_plane_labels_are_stable() {
+        assert_eq!(gossip_plane_label(GossipPlane::Public), "public");
+        assert_eq!(gossip_plane_label(GossipPlane::Restricted), "restricted");
+    }
+
+    #[test]
+    fn dataspace_label_renders_numeric_id() {
+        let dataspace = DataSpaceId::new(42);
+        assert_eq!(dataspace_label(dataspace), "42");
+    }
+
+    #[test]
+    fn restricted_plan_refuses_public_overlay_policy() {
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let plan = decide_restricted_target_plan(
+            vec![peer.clone()],
+            DataspaceGossipFallback::UsePublicOverlay,
+            RestrictedPublicPayload::Refuse,
+            2,
+        );
+        assert_eq!(
+            plan,
+            RestrictedTargetPlan::Drop {
+                reason: DROP_REASON_PUBLIC_OVERLAY_REFUSED,
+                fallback_used: true,
+                fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
+                targets: vec![peer.clone()],
+            }
+        );
+    }
+
+    #[test]
+    fn restricted_plan_drops_when_fallback_policy_is_drop() {
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let plan = decide_restricted_target_plan(
+            vec![peer.clone()],
+            DataspaceGossipFallback::Drop,
+            RestrictedPublicPayload::Forward,
+            3,
+        );
+        assert_eq!(
+            plan,
+            RestrictedTargetPlan::Drop {
+                reason: DROP_REASON_NO_RESTRICTED_TARGETS,
+                fallback_used: false,
+                fallback_surface: None,
+                targets: vec![peer],
+            }
+        );
+    }
+
+    #[test]
+    fn restricted_plan_drops_when_no_fallback_targets() {
+        let plan = decide_restricted_target_plan(
+            Vec::new(),
+            DataspaceGossipFallback::UsePublicOverlay,
+            RestrictedPublicPayload::Forward,
+            1,
+        );
+        assert_eq!(
+            plan,
+            RestrictedTargetPlan::Drop {
+                reason: DROP_REASON_NO_RESTRICTED_TARGETS,
+                fallback_used: true,
+                fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
+                targets: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn restricted_plan_forwards_public_overlay_when_allowed() {
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let plan = decide_restricted_target_plan(
+            vec![peer.clone()],
+            DataspaceGossipFallback::UsePublicOverlay,
+            RestrictedPublicPayload::Forward,
+            1,
+        );
+        assert_eq!(
+            plan,
+            RestrictedTargetPlan::Send {
+                targets: vec![peer],
+                fallback_used: true,
+                reason: Some(OUTCOME_PUBLIC_OVERLAY_FORWARD),
+                fallback_surface: Some(SURFACE_PUBLIC_OVERLAY),
+            }
+        );
+    }
+
+    #[test]
+    fn select_targets_dedups_and_caps_with_seed() {
+        let targets = vec![
+            (*ALICE_KEYPAIR).public_key().clone().into(),
+            (*BOB_KEYPAIR).public_key().clone().into(),
+            (*ALICE_KEYPAIR).public_key().clone().into(),
+            (*PEER_KEYPAIR).public_key().clone().into(),
+        ];
+        let cap = NonZeroUsize::new(2).expect("non-zero cap");
+        let seed = 0xA5A5_1234;
+
+        let (selected, total) =
+            TransactionGossiper::select_targets_with_seed(targets.clone(), Some(cap), seed);
+
+        let unique: BTreeSet<_> = targets.into_iter().collect();
+        assert_eq!(total, unique.len(), "total should count unique targets");
+        assert_eq!(selected.len(), cap.get(), "selection should respect cap");
+        assert!(
+            selected.iter().all(|peer| unique.contains(peer)),
+            "selection must be a subset of inputs"
+        );
+    }
+
+    #[test]
+    fn select_targets_is_deterministic_for_seed() {
+        let targets = vec![
+            (*ALICE_KEYPAIR).public_key().clone().into(),
+            (*BOB_KEYPAIR).public_key().clone().into(),
+            (*PEER_KEYPAIR).public_key().clone().into(),
+            (*CARPENTER_KEYPAIR).public_key().clone().into(),
+        ];
+        let cap = NonZeroUsize::new(3).expect("non-zero cap");
+        let seed = 0xDEAD_BEEF;
+
+        let (first, _) =
+            TransactionGossiper::select_targets_with_seed(targets.clone(), Some(cap), seed);
+        let (second, _) = TransactionGossiper::select_targets_with_seed(targets, Some(cap), seed);
+
+        assert_eq!(
+            first, second,
+            "selection should be stable for the same seed"
+        );
+    }
+
+    #[test]
+    fn public_gossip_fanout_keeps_cap_without_backlog() {
+        let cap = NonZeroUsize::new(4).expect("non-zero cap");
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        let effective =
+            TransactionGossiper::effective_public_target_cap(Some(cap), gossip_size, 7, false);
+
+        assert_eq!(effective, Some(cap));
+    }
+
+    #[test]
+    fn public_gossip_fanout_widens_under_targeted_backlog() {
+        let cap = NonZeroUsize::new(4).expect("non-zero cap");
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        let effective =
+            TransactionGossiper::effective_public_target_cap(Some(cap), gossip_size, 16, false);
+
+        assert_eq!(
+            effective, None,
+            "backlogged public ingress should feed the whole online validator set"
+        );
+    }
+
+    #[test]
+    fn public_gossip_fanout_widens_when_queue_is_saturated() {
+        let cap = NonZeroUsize::new(4).expect("non-zero cap");
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        let effective =
+            TransactionGossiper::effective_public_target_cap(Some(cap), gossip_size, 1, true);
+
+        assert_eq!(effective, None);
+    }
+
+    #[test]
+    fn targeted_backlog_keeps_gossip_active_at_threshold() {
+        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
+
+        assert!(!TransactionGossiper::targeted_backlog_requires_gossip(
+            gossip_size,
+            15
+        ));
+        assert!(TransactionGossiper::targeted_backlog_requires_gossip(
+            gossip_size,
+            16
+        ));
+    }
+
+    #[test]
+    fn seed_for_plane_changes_with_dataspace() {
+        let base = 0xCAFE_BABE;
+        let first = TransactionGossiper::seed_for_plane(
+            base,
+            DataSpaceId::new(1),
+            GOSSIP_SEED_PUBLIC_DOMAIN,
+        );
+        let second = TransactionGossiper::seed_for_plane(
+            base,
+            DataSpaceId::new(2),
+            GOSSIP_SEED_PUBLIC_DOMAIN,
+        );
+        assert_ne!(first, second, "dataspace should perturb the gossip seed");
+    }
+
+    #[test]
+    fn initial_target_seed_is_stable_and_peer_specific() {
+        let chain_id: ChainId = "test-chain".parse().expect("chain id");
+        let self_peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let other_peer: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
+        let max_peer: PeerId = (*CARPENTER_KEYPAIR).public_key().clone().into();
+
+        let seed = TransactionGossiper::initial_target_seed(
+            &chain_id,
+            &self_peer,
+            &max_peer,
+            GOSSIP_SEED_PUBLIC_DOMAIN,
+        );
+        assert_eq!(
+            seed,
+            TransactionGossiper::initial_target_seed(
+                &chain_id,
+                &self_peer,
+                &max_peer,
+                GOSSIP_SEED_PUBLIC_DOMAIN,
+            ),
+            "initial target seed should be stable for the same identity inputs"
+        );
+        assert_ne!(
+            seed,
+            TransactionGossiper::initial_target_seed(
+                &chain_id,
+                &self_peer,
+                &max_peer,
+                GOSSIP_SEED_RESTRICTED_DOMAIN,
+            ),
+            "public and restricted gossip planes should start from distinct seeds"
+        );
+        assert_ne!(
+            seed,
+            TransactionGossiper::initial_target_seed(
+                &chain_id,
+                &other_peer,
+                &max_peer,
+                GOSSIP_SEED_PUBLIC_DOMAIN,
+            ),
+            "local peer identity should perturb initial target seed"
+        );
+    }
+
+    #[test]
+    fn gossip_target_seed_holds_until_reshuffle_period() {
+        let now = Instant::now();
+        let mut seed = GossipTargetSeed::new(0xA5A5_1234, Duration::from_secs(5), now);
+        let first = seed.current(now);
+        let still = seed.current(now + Duration::from_secs(4));
+        assert_eq!(first, still, "seed should remain stable before reshuffle");
+    }
+
+    #[test]
+    fn gossip_target_seed_advances_after_reshuffle_period() {
+        let now = Instant::now();
+        let mut seed = GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(5), now);
+        let first = seed.current(now);
+        let updated = seed.current(now + Duration::from_secs(5));
+        assert_eq!(
+            updated,
+            splitmix64(first),
+            "seed should advance on reshuffle"
+        );
+    }
+
+    #[test]
+    fn restricted_plan_caps_commit_topology() {
+        let commit = vec![
+            (*ALICE_KEYPAIR).public_key().clone().into(),
+            (*BOB_KEYPAIR).public_key().clone().into(),
+            (*PEER_KEYPAIR).public_key().clone().into(),
+        ];
+        let cap = NonZeroUsize::new(2);
+        let seed = 0x5A5A_0F0F;
+
+        let plan = TransactionGossiper::restricted_target_plan_with_targets(
+            commit.clone(),
+            commit.clone(),
+            cap,
+            DataspaceGossipFallback::UsePublicOverlay,
+            RestrictedPublicPayload::Forward,
+            3,
+            seed,
+        );
+
+        match plan {
+            RestrictedTargetPlan::Send {
+                targets,
+                fallback_used,
+                fallback_surface,
+                reason,
+            } => {
+                let unique: BTreeSet<_> = commit.into_iter().collect();
+                assert_eq!(targets.len(), cap.unwrap().get());
+                assert!(
+                    targets.iter().all(|peer| unique.contains(peer)),
+                    "targets must be drawn from the commit topology"
+                );
+                assert!(!fallback_used);
+                assert!(fallback_surface.is_none());
+                assert!(reason.is_none());
+            }
+            other => panic!("expected capped commit plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn restricted_plan_dedups_commit_topology() {
+        let duplicated = vec![
+            (*ALICE_KEYPAIR).public_key().clone().into(),
+            (*BOB_KEYPAIR).public_key().clone().into(),
+            (*ALICE_KEYPAIR).public_key().clone().into(),
+        ];
+        let seed = 0x0102_0304;
+
+        let plan = TransactionGossiper::restricted_target_plan_with_targets(
+            duplicated.clone(),
+            duplicated.clone(),
+            None,
+            DataspaceGossipFallback::UsePublicOverlay,
+            RestrictedPublicPayload::Forward,
+            1,
+            seed,
+        );
+
+        match plan {
+            RestrictedTargetPlan::Send { targets, .. } => {
+                let mut expected = duplicated;
+                expected.sort();
+                expected.dedup();
+                assert_eq!(targets, expected, "duplicates should be removed");
+            }
+            other => panic!("expected deduped commit plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn restricted_plan_filters_commit_topology_to_online_peers() {
+        let online_peer: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
+        let offline_peer: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
+        let seed = 0xDEC0_1DED;
+
+        let plan = TransactionGossiper::restricted_target_plan_with_targets(
+            vec![online_peer.clone(), offline_peer],
+            vec![online_peer.clone()],
+            None,
+            DataspaceGossipFallback::UsePublicOverlay,
+            RestrictedPublicPayload::Forward,
+            1,
+            seed,
+        );
+
+        match plan {
+            RestrictedTargetPlan::Send { targets, .. } => {
+                assert_eq!(targets, vec![online_peer]);
+            }
+            other => panic!("expected filtered commit plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn restricted_plan_caps_fallback_targets() {
+        let fallback = vec![
+            (*PEER_KEYPAIR).public_key().clone().into(),
+            (*BOB_KEYPAIR).public_key().clone().into(),
+            (*ALICE_KEYPAIR).public_key().clone().into(),
+        ];
+        let cap = NonZeroUsize::new(2);
+        let seed = 0x0BAD_F00D;
+
+        let plan = TransactionGossiper::restricted_target_plan_with_targets(
+            Vec::new(),
+            fallback.clone(),
+            cap,
+            DataspaceGossipFallback::UsePublicOverlay,
+            RestrictedPublicPayload::Forward,
+            2,
+            seed,
+        );
+
+        match plan {
+            RestrictedTargetPlan::Send {
+                targets,
+                fallback_used,
+                fallback_surface,
+                reason,
+            } => {
+                let unique: BTreeSet<_> = fallback.into_iter().collect();
+                assert_eq!(targets.len(), cap.unwrap().get());
+                assert!(
+                    targets.iter().all(|peer| unique.contains(peer)),
+                    "fallback targets must be drawn from available peers"
+                );
+                assert!(fallback_used);
+                assert_eq!(fallback_surface, Some(SURFACE_PUBLIC_OVERLAY));
+                assert_eq!(reason, Some(OUTCOME_PUBLIC_OVERLAY_FORWARD));
+            }
+            other => panic!("expected capped fallback plan, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossip_accepts_valid_entries_with_invalid_routes_present() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        install_active_single_lane_nexus(state.as_ref());
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network: IrohaNetwork::closed_for_tests(),
+            queue: Arc::clone(&queue),
+            state: Arc::clone(&state),
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        let (invalid_signed, _) = build_transaction("invalid");
+        let (valid_signed, _) = build_transaction("valid");
+        let invalid_route = GossipRoute {
+            lane_id: LaneId::new(9),
+            dataspace_id: DataSpaceId::new(9),
+        };
+        let valid_route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![invalid_signed.into(), valid_signed.into()],
+            routes: vec![invalid_route, valid_route],
+            plans: vec![plan_for_route(invalid_route), plan_for_route(valid_route)],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn gossip_accepts_valid_prefix_when_route_metadata_is_short() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (valid, _) = build_transaction("valid-before-missing-route");
+        let (missing_route, _) = build_transaction("missing-route");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![valid.into(), missing_route.into()],
+            routes: vec![route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            1,
+            "missing suffix route metadata must not suppress aligned valid entries"
+        );
+    }
+
+    #[test]
+    fn gossip_accepts_valid_prefix_when_plan_metadata_is_short() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (valid, _) = build_transaction("valid-before-missing-plan");
+        let (missing_plan, _) = build_transaction("missing-plan");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![valid.into(), missing_plan.into()],
+            routes: vec![route, route],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            1,
+            "missing suffix plan metadata must not suppress aligned valid entries"
+        );
+    }
+
+    #[test]
+    fn gossip_drops_batch_with_extra_routing_metadata() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (extra_route_tx, _) = build_transaction("extra-route-metadata");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![extra_route_tx.into()],
+            routes: vec![route, route],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            0,
+            "unpaired extra route metadata must reject the whole gossip frame"
+        );
+
+        let (extra_plan_tx, _) = build_transaction("extra-plan-metadata");
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![extra_plan_tx.into()],
+            routes: vec![route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            0,
+            "unpaired extra plan metadata must reject the whole gossip frame"
+        );
+    }
+
+    #[test]
+    fn shared_gossip_accepts_valid_prefix_when_route_metadata_is_short() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (valid, _) = build_transaction("shared-valid-before-missing-route");
+        let (missing_route, _) = build_transaction("shared-missing-route");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![
+                GossipTransaction::with_encoded(valid.clone(), payload_for(&valid)),
+                GossipTransaction::with_encoded(missing_route.clone(), payload_for(&missing_route)),
+            ],
+            routes: vec![route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(!decoded.txs[1].is_entrypoint_materialized());
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            1,
+            "shared route-short gossip must keep aligned valid entries"
+        );
+        assert!(
+            !retained.txs[1].is_entrypoint_materialized(),
+            "missing route metadata must drop before entrypoint materialization"
+        );
+    }
+
+    #[test]
+    fn shared_gossip_accepts_valid_prefix_when_plan_metadata_is_short() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (valid, _) = build_transaction("shared-valid-before-missing-plan");
+        let (missing_plan, _) = build_transaction("shared-missing-plan");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![
+                GossipTransaction::with_encoded(valid.clone(), payload_for(&valid)),
+                GossipTransaction::with_encoded(missing_plan.clone(), payload_for(&missing_plan)),
+            ],
+            routes: vec![route, route],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(!decoded.txs[1].is_entrypoint_materialized());
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            1,
+            "shared plan-short gossip must keep aligned valid entries"
+        );
+        assert!(
+            !retained.txs[1].is_entrypoint_materialized(),
+            "missing plan metadata must drop before entrypoint materialization"
+        );
+    }
+
+    #[test]
+    fn shared_gossip_drops_batch_with_extra_routing_metadata_without_materialization() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (valid, _) = build_transaction("shared-extra-routing-metadata");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                valid.clone(),
+                payload_for(&valid),
+            )],
+            routes: vec![route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(!decoded.txs[0].is_entrypoint_materialized());
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            0,
+            "shared gossip with unpaired extra metadata must reject the whole frame"
+        );
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "extra routing metadata must drop before entrypoint materialization"
+        );
+    }
+
+    #[test]
+    fn gossip_drops_unknown_native_amx_participant_plan_but_keeps_valid_entry() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (invalid, _) = build_transaction("unknown-native-amx-participant");
+        let (valid, _) = build_transaction("valid-after-unknown-native-amx-participant");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let invalid_participant = RoutingDecision::new(LaneId::new(7), DataSpaceId::new(7));
+        let invalid_plan = RoutingPlan::native_amx(
+            RoutingDecision::default(),
+            vec![crate::queue::RouteLeg::new(
+                invalid_participant,
+                crate::queue::RouteLegRole::Participant,
+            )],
+        );
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![invalid.into(), valid.into()],
+            routes: vec![route, route],
+            plans: vec![invalid_plan, default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            1,
+            "catalog-invalid Native AMX participant plan must not suppress valid entries"
+        );
+    }
+
+    #[test]
+    fn shared_gossip_drops_unknown_native_amx_participant_plan_without_materialization() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (invalid, _) = build_transaction("shared-unknown-native-amx-participant");
+        let (valid, _) = build_transaction("shared-valid-after-unknown-native-amx-participant");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let invalid_participant = RoutingDecision::new(LaneId::new(7), DataSpaceId::new(7));
+        let invalid_plan = RoutingPlan::native_amx(
+            RoutingDecision::default(),
+            vec![crate::queue::RouteLeg::new(
+                invalid_participant,
+                crate::queue::RouteLegRole::Participant,
+            )],
+        );
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![
+                GossipTransaction::with_encoded(invalid.clone(), payload_for(&invalid)),
+                GossipTransaction::with_encoded(valid.clone(), payload_for(&valid)),
+            ],
+            routes: vec![route, route],
+            plans: vec![invalid_plan, default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(!decoded.txs[0].is_entrypoint_materialized());
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            1,
+            "shared invalid Native AMX participant plan must keep valid entries"
+        );
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "catalog-invalid Native AMX participant plan must drop before materialization"
+        );
+    }
+
+    #[test]
+    fn shared_gossip_drops_forged_native_amx_digest_without_materialization() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (invalid, _) = build_transaction("shared-forged-native-amx-digest");
+        let (valid, _) = build_transaction("shared-valid-after-forged-native-amx-digest");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let mut forged_plan = RoutingPlan::native_amx(
+            RoutingDecision::default(),
+            vec![crate::queue::RouteLeg::new(
+                RoutingDecision::default(),
+                crate::queue::RouteLegRole::Participant,
+            )],
+        );
+        let RoutingPlan::NativeAmx(plan) = &mut forged_plan else {
+            panic!("expected Native AMX plan");
+        };
+        plan.plan_digest = Hash::new(b"forged-gossip-native-amx-plan-digest");
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![
+                GossipTransaction::with_encoded(invalid.clone(), payload_for(&invalid)),
+                GossipTransaction::with_encoded(valid.clone(), payload_for(&valid)),
+            ],
+            routes: vec![route, route],
+            plans: vec![forged_plan, default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(!decoded.txs[0].is_entrypoint_materialized());
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            1,
+            "shared forged Native AMX digest must keep valid entries"
+        );
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "forged Native AMX digest must drop before materialization"
+        );
+    }
+
+    #[test]
+    fn shared_gossip_drops_duplicate_native_amx_participants_without_materialization() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (invalid, _) = build_transaction("shared-duplicate-native-amx-participants");
+        let (valid, _) = build_transaction("shared-valid-after-duplicate-native-amx-participants");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let canonical_plan = RoutingPlan::native_amx(
+            RoutingDecision::default(),
+            vec![crate::queue::RouteLeg::new(
+                RoutingDecision::default(),
+                crate::queue::RouteLegRole::Participant,
+            )],
+        );
+        let RoutingPlan::NativeAmx(native_plan) = canonical_plan else {
+            panic!("expected Native AMX plan");
+        };
+        let duplicate_participant = native_plan.participants[0];
+        let duplicate_plan = RoutingPlan::NativeAmx(crate::queue::NativeAmxRoutingPlan {
+            plan_digest: native_plan.plan_digest,
+            coordinator: native_plan.coordinator,
+            participants: vec![duplicate_participant, duplicate_participant],
+        });
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![
+                GossipTransaction::with_encoded(invalid.clone(), payload_for(&invalid)),
+                GossipTransaction::with_encoded(valid.clone(), payload_for(&valid)),
+            ],
+            routes: vec![route, route],
+            plans: vec![duplicate_plan, default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(!decoded.txs[0].is_entrypoint_materialized());
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            1,
+            "shared duplicate Native AMX participants must keep valid entries"
+        );
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "duplicate Native AMX participants must drop before materialization"
+        );
+    }
+
+    #[test]
+    fn shared_gossip_drops_noncanonical_single_plan_without_materialization() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (invalid, _) = build_transaction("shared-noncanonical-single-plan");
+        let (valid, _) = build_transaction("shared-valid-after-noncanonical-single-plan");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let noncanonical_plan = RoutingPlan::Single(crate::queue::RouteLeg::new(
+            RoutingDecision::default(),
+            crate::queue::RouteLegRole::Participant,
+        ));
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![
+                GossipTransaction::with_encoded(invalid.clone(), payload_for(&invalid)),
+                GossipTransaction::with_encoded(valid.clone(), payload_for(&valid)),
+            ],
+            routes: vec![route, route],
+            plans: vec![noncanonical_plan, default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(!decoded.txs[0].is_entrypoint_materialized());
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            1,
+            "shared noncanonical routing plan must keep valid entries"
+        );
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "noncanonical routing plan must drop before materialization"
+        );
+    }
+
+    #[test]
+    fn route_invalid_gossip_drop_does_not_materialize_entrypoint() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (signed, _) = build_transaction("lazy-invalid-route");
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                payload_for(&signed),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::new(9),
+                dataspace_id: DataSpaceId::new(9),
+            }],
+            plans: vec![RoutingPlan::single(RoutingDecision::new(
+                LaneId::new(9),
+                DataSpaceId::new(9),
+            ))],
+            plane: GossipPlane::Public,
+        });
+        assert!(
+            !decoded.txs[0].is_entrypoint_materialized(),
+            "decoded gossip should start without semantic entrypoint materialization"
+        );
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "route rejection should not force entrypoint decode"
+        );
+        assert_eq!(gossiper.queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn inactive_autoscale_route_gossip_drop_does_not_materialize_entrypoint() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let inactive_lane = LaneId::new(1);
+        let mut autoscale_lane = iroha_data_model::nexus::LaneConfig {
+            id: inactive_lane,
+            alias: "elastic-lane-1".to_string(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_string(),
+            "true".to_string(),
+        );
+        autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_string(),
+            "7".to_string(),
+        );
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
+        let lane_catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(2).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                autoscale_lane,
+            ],
+        )
+        .expect("future-created autoscale lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_config: LaneGeometry::from_catalog(&lane_catalog),
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("nonzero max lanes");
+        {
+            let mut current = gossiper.state.nexus.write();
+            *current = nexus;
+        }
+        assert_eq!(
+            crate::state::nexus_active_lane_dataspace_at_height(
+                inactive_lane,
+                &gossiper.state.nexus_snapshot(),
+                7,
+            ),
+            Some(DataSpaceId::UNIVERSAL),
+            "future-created autoscale gossip fixture must be a valid elastic lane at its creation height"
+        );
+        assert!(
+            !gossiper.state.is_lane_active_for_authority(inactive_lane),
+            "future-created autoscale gossip fixture must be inactive at the committed lane-authority height"
+        );
+
+        let route = GossipRoute {
+            lane_id: inactive_lane,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let (signed, _) = build_transaction("lazy-inactive-autoscale-route");
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                payload_for(&signed),
+            )],
+            routes: vec![route],
+            plans: vec![plan_for_route(route)],
+            plane: GossipPlane::Public,
+        });
+        assert!(
+            !decoded.txs[0].is_entrypoint_materialized(),
+            "decoded gossip should start without semantic entrypoint materialization"
+        );
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "inactive route rejection should not force entrypoint decode"
+        );
+        assert_eq!(gossiper.queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn known_duplicate_gossip_drop_does_not_materialize_entrypoint() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (signed, accepted) = build_transaction("lazy-known-duplicate");
+        gossiper
+            .queue
+            .push(accepted, gossiper.state.view())
+            .expect("seed queue with known transaction");
+
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                payload_for(&signed),
+            )],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(!decoded.txs[0].is_entrypoint_materialized());
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "known duplicate rejection should not force entrypoint decode"
+        );
+        assert_eq!(gossiper.queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn gossip_ed25519_batch_precheck_accepts_all_valid_single_key_transactions() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (first, _) = build_transaction("batch-valid-a");
+        let (second, _) = build_transaction("batch-valid-b");
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![first.into(), second.into()],
+            routes: vec![
+                GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+                GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+            ],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(gossiper.queue.queued_len(), 2);
+    }
+
+    #[test]
+    fn gossip_ed25519_batch_precheck_drops_invalid_single_key_signature() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (valid, _) = build_transaction("batch-valid-before-invalid");
+        let (mut invalid, _) = build_transaction("batch-invalid-signature");
+        corrupt_signature(&mut invalid);
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![valid.into(), invalid.into()],
+            routes: vec![
+                GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+                GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+            ],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(gossiper.queue.queued_len(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossip_skips_already_known_transaction_hashes() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        install_active_single_lane_nexus(state.as_ref());
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let network = IrohaNetwork::closed_for_tests();
+
+        let (known_signed, _) = build_transaction("known");
+        queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(known_signed.clone())),
+                state.view(),
+            )
+            .expect("seed queue with known tx");
+        assert_eq!(queue.queued_len(), 1, "queue should contain the seeded tx");
+
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network,
+            queue: Arc::clone(&queue),
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![known_signed.into()],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(
+            queue.queued_len(),
+            1,
+            "already-known gossip should be ignored without queue churn"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossip_drops_route_mismatch() {
+        struct FixedRouter {
+            lane: LaneId,
+            dataspace: DataSpaceId,
+        }
+
+        impl LaneRouter for FixedRouter {
+            fn route(&self, _tx: &dyn crate::queue::TransactionRoutingView) -> RoutingDecision {
+                RoutingDecision::new(self.lane, self.dataspace)
+            }
+        }
+
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let mismatched_lane = LaneId::new(1);
+        let mismatched_dataspace = DataSpaceId::new(7);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: mismatched_lane,
+                    dataspace_id: mismatched_dataspace,
+                    alias: "mismatched".to_string(),
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: mismatched_dataspace,
+                alias: "mismatched".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = false;
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+        }
+        let lane_catalog = Arc::new(lane_catalog);
+        let dataspace_catalog = Arc::new(dataspace_catalog);
+        let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
+            QueueConfig::default(),
+            tokio::sync::broadcast::Sender::new(1),
+            Arc::new(FixedRouter {
+                lane: mismatched_lane,
+                dataspace: mismatched_dataspace,
+            }),
+            crate::queue::QueueLimits::default(),
+            &lane_catalog,
+            &dataspace_catalog,
+            None,
+        ));
+        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
+
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network: IrohaNetwork::closed_for_tests(),
+            queue: Arc::clone(&queue),
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        let (signed, _) = build_transaction("route-mismatch");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![signed.into()],
+            routes: vec![route],
+            plans: vec![plan_for_route(route)],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossip_drops_stale_native_amx_participant_plan_but_keeps_valid_entry() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let first_lane = LaneId::new(2);
+        let second_lane = LaneId::new(3);
+        let stale_participant = RoutingDecision::new(LaneId::new(4), DataSpaceId::new(9));
+
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(4).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: first_lane,
+                    dataspace_id: first_dataspace,
+                    alias: "acme".to_owned(),
+                    visibility: LaneVisibility::Public,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+                iroha_data_model::nexus::LaneConfig {
+                    id: second_lane,
+                    dataspace_id: second_dataspace,
+                    alias: "bank".to_owned(),
+                    visibility: LaneVisibility::Public,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: first_dataspace,
+                alias: "acme".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: second_dataspace,
+                alias: "bank".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = false;
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+        }
+        assert!(state.is_lane_active_for_authority(first_lane));
+        assert!(state.is_lane_active_for_authority(second_lane));
+        assert!(!state.is_lane_active_for_authority(stale_participant.lane_id));
+
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+        let mixed_domain_signed = |primary: &str, secondary: &str| {
+            let chain_id: ChainId = "test-chain".parse().expect("chain id");
+            TransactionBuilder::new(
+                chain_id,
+                (*ALICE_ID).clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new(primary, "acme").expect("first dataspace domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new(secondary, "bank").expect("second dataspace domain id"),
+                ))),
+            ])
+            .sign(ALICE_KEYPAIR.private_key())
+        };
+        let stale_signed = mixed_domain_signed("stalenativeamx", "stalenativepeer");
+        let valid_signed = mixed_domain_signed("validnativeamx", "validnativepeer");
+        let valid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(valid_signed.clone()));
+        let current_plan = queue
+            .route_plan_for_gossip_with_state(&valid_accepted, state.as_ref())
+            .expect("current Native AMX plan should resolve through config router");
+        let RoutingPlan::NativeAmx(native_plan) = &current_plan else {
+            panic!("mixed dataspace writes should build a Native AMX plan");
+        };
+        assert_eq!(
+            native_plan.coordinator.route,
+            RoutingDecision::new(first_lane, first_dataspace)
+        );
+        assert!(
+            native_plan
+                .participants
+                .iter()
+                .any(|leg| { leg.route == RoutingDecision::new(second_lane, second_dataspace) }),
+            "current Native AMX plan should include the second dataspace participant"
+        );
+        let stale_plan = RoutingPlan::native_amx(
+            native_plan.coordinator.route,
+            vec![crate::queue::RouteLeg::new(
+                stale_participant,
+                crate::queue::RouteLegRole::Participant,
+            )],
+        );
+        assert_eq!(
+            stale_plan.coordinator_route(),
+            current_plan.coordinator_route()
+        );
+        assert_ne!(stale_plan, current_plan);
+        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network: IrohaNetwork::closed_for_tests(),
+            queue: Arc::clone(&queue),
+            state,
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        let route = GossipRoute {
+            lane_id: current_plan.coordinator_route().lane_id,
+            dataspace_id: current_plan.coordinator_route().dataspace_id,
+        };
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![stale_signed.into(), valid_signed.into()],
+            routes: vec![route, route],
+            plans: vec![stale_plan, current_plan],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(
+            queue.queued_len(),
+            1,
+            "stale Native AMX participant plan must drop without suppressing valid gossip entries"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::too_many_lines)]
+    async fn gossip_accepts_restricted_route_match() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+
+        let restricted_dataspace = DataSpaceId::new(7);
+        let restricted_lane = LaneId::new(1);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig {
+                    id: LaneId::SINGLE,
+                    alias: "public".to_string(),
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+                iroha_data_model::nexus::LaneConfig {
+                    id: restricted_lane,
+                    dataspace_id: restricted_dataspace,
+                    alias: "restricted".to_string(),
+                    visibility: LaneVisibility::Restricted,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: restricted_dataspace,
+                alias: "restricted".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = false;
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
+            nexus.dataspace_catalog = dataspace_catalog;
+            nexus.routing_policy.default_lane = restricted_lane;
+            nexus.routing_policy.default_dataspace = restricted_dataspace;
+        }
+        assert!(state.is_lane_active_for_authority(restricted_lane));
+
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let now = Instant::now();
+        let gossiper = TransactionGossiper {
+            chain_id: "test-chain".parse().expect("chain id"),
+            gossip_period: Duration::from_millis(50),
+            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
+            gossip_tick: 0,
+            gossip_deferred: vec![
+                Vec::new();
+                defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS.get() as usize
+            ],
+            peer_recently_sent: BTreeMap::new(),
+            peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            network: IrohaNetwork::closed_for_tests(),
+            queue: Arc::clone(&queue),
+            state: Arc::clone(&state),
+            tx_frame_cap: 1024,
+            dataspace_cfg: DataspaceGossip::default(),
+            public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
+            restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
+        };
+
+        let (signed, _) = build_transaction("restricted-route");
+        let route = GossipRoute {
+            lane_id: restricted_lane,
+            dataspace_id: restricted_dataspace,
+        };
+        assert_eq!(
+            dataspace_plane(&state.nexus.read().lane_config, route.dataspace_id),
+            Some(GossipPlane::Restricted)
+        );
+        assert_eq!(
+            queue
+                .route_plan_for_gossip_with_state(
+                    &AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone())),
+                    state.as_ref(),
+                )
+                .expect("restricted route should resolve locally"),
+            plan_for_route(route)
+        );
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![signed.into()],
+            routes: vec![route],
+            plans: vec![plan_for_route(route)],
+            plane: GossipPlane::Restricted,
+        }));
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+}
