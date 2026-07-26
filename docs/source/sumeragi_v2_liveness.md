@@ -1203,9 +1203,10 @@ and latches restart before any further output drains.
 
 The responder owns one bounded unified `server_streams` table and one bounded
 request-gate table; attempts are bounded within their gates. Service generation
-rolls only when the server-stream table needs compaction and every predecessor
-stream, gate, transfer, and flush is terminal. Gate pressure alone cannot force
-a roll. Active-state exhaustion and generation-counter overflow return
+rolls only when the server-stream table needs compaction because it is full or
+its certified roster geometry is replaced, and every predecessor stream, gate,
+transfer, and flush is terminal. Gate pressure alone cannot force a roll.
+Active-state exhaustion and generation-counter overflow return
 `Capacity` atomically without advancing a floor, clearing a table, or emitting
 a Hint. A finality handoff cannot override this compaction and terminality
 gate.

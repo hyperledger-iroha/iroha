@@ -74,6 +74,13 @@ impl ExecuteTriggerEventFilter {
         self
     }
 
+    /// Returns the trigger identifier constraint configured for this filter, if any.
+    #[must_use]
+    #[inline]
+    pub fn trigger_id(&self) -> Option<&TriggerId> {
+        self.trigger_id.as_ref()
+    }
+
     /// Returns the authority constraint configured for this filter, if any.
     #[must_use]
     #[inline]

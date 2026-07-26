@@ -876,8 +876,6 @@ pub fn decode_canonical_zk_batch(
 #[must_use]
 pub const fn map_open_verify_validation_error(error: OpenVerifyEnvelopeValidationError) -> u64 {
     match error {
-        OpenVerifyEnvelopeValidationError::UnsupportedBackend
-        | OpenVerifyEnvelopeValidationError::PendingProductionBackend { .. } => ERR_BACKEND,
         OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash => ERR_VK_MISSING,
         OpenVerifyEnvelopeValidationError::NonEmptyAux => ERR_VK_MISMATCH,
         OpenVerifyEnvelopeValidationError::ProofBytesTooLarge { .. } => ERR_PROOF_LEN,

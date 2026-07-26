@@ -166,14 +166,14 @@
     },
     {
       "id": "chain-durable-receipt-agreement",
-      "requirement": "Under IndexedChainSpec, any durable Decision or Application receipts whose exact slots context.height + 1 are equal carry the same frozen context and subject, including the terminal MaxHeight + 1 slot. The proof must derive agreement from joined-source ownership and each joined Core instance's DecisionAgreement invariant, never from decidedAt or CanonicalCommitForSlot; the current proof script is SANY-clean but remains unproved until fresh strict TLAPS succeeds",
+      "requirement": "Under IndexedChainSpec, any durable Decision or Application receipts whose exact slots context.height + 1 are equal carry the same frozen context and subject, including the terminal MaxHeight + 1 slot. Canonical prefix history decidedAt[1..h] may identify the unique joined source context, but current-slot subject agreement must come from joined-source ownership and each joined Core instance's DecisionAgreement invariant, never from decidedAt[h+1] or CanonicalCommitForSlot. IndexedFreshReceiptActionHasProductExtension must remain independently proved so the product cannot obtain agreement by filtering a conflicting fresh Core receipt step; the current proof script is SANY-clean but remains unproved until fresh strict TLAPS succeeds",
       "module": "SumeragiV2ChainReceiptAgreementProofs",
       "symbol": "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
       "status": "specified_unproved"
     },
     {
       "id": "terminal-ingress-process-lifetime-absorbency",
-      "requirement": "Within one terminal-runner process instance, TerminalReadOnly and TerminalRetired are absorbing, the history-service owner exists exactly in TerminalReadOnly, owner exit atomically enters TerminalRetired and clears detached and ingress owners, and no successful admission occurs after owner loss. This is suffix safety only: restart creates a fresh instance, no eventual service-exit fairness is claimed, and the abstract theorem is not a Rust refinement; the current proof script is SANY-clean but remains unproved until fresh strict TLAPS succeeds",
+      "requirement": "Within one terminal-runner process instance, the set {TerminalReadOnly, TerminalRetired} is forward-closed and TerminalRetired is individually absorbing; the history-service owner exists exactly in TerminalReadOnly, owner exit atomically enters TerminalRetired, clears detached and ingress owners, and preserves the successful-admission count, and no later successful admission occurs after owner loss. This is suffix safety only: restart creates a fresh instance, no eventual service-exit fairness is claimed, and the abstract theorem is not a Rust refinement. The existing ProductionTerminalApplicationWithoutSuccessorActivationTraceRefinesIndexedTerminal sentinel covers only terminal application/successor suppression and does not map terminal-ingress lifecycle actions; the current proof script is SANY-clean but remains unproved until fresh strict TLAPS succeeds",
       "module": "SumeragiV2TerminalIngressLifecycleProofs",
       "symbol": "TerminalIngressProcessLifetimeAbsorbencyObligation",
       "status": "specified_unproved"
@@ -327,7 +327,7 @@
     },
     {
       "id": "rotating-leader-liveness",
-      "requirement": "After GST, every undecided execution either decides before another rotation is needed or reaches a view in which the responsive honest scheduled leader itself is active; from such a leader view all responsive validators eventually decide",
+      "requirement": "Under AsyncLiveSpecAt(initialContext), including the explicit finite AsyncInstallGenerationBudget premise, every post-GST undecided execution either decides before another rotation is needed or reaches a view in which the responsive honest scheduled leader itself is active; from such a leader view all responsive validators eventually decide",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "RotatingLeaderProgressObligation",
       "status": "specified_unproved"
@@ -383,14 +383,14 @@
     },
     {
       "id": "genesis-height-successor-handoff",
-      "requirement": "Under the concrete genesis asynchronous chain product, every responsive validator eventually records the exact first successor context when a successor height exists; the terminal finite horizon is vacuous",
+      "requirement": "Under AsyncLiveChainSpec, which conjoins the concrete genesis asynchronous chain product with the explicit finite AsyncInstallGenerationBudget premise, every responsive validator eventually records the exact first successor context when a successor height exists; the terminal finite horizon is vacuous",
       "module": "SumeragiV2ChainEpochRefinement",
       "symbol": "GenesisHeightSuccessorHandoffObligation",
       "status": "specified_unproved"
     },
     {
       "id": "height-liveness",
-      "requirement": "Every joined post-GST context eventually applies at the terminal MaxHeight, or advances every responsive validator into a successor context when nonterminal",
+      "requirement": "Under IndexedLiveChainSpec, which keeps the per-context finite IndexedInstallGenerationBudgetPremise explicit, every joined post-GST context eventually applies at the terminal MaxHeight, or advances every responsive validator into a successor context when nonterminal",
       "module": "SumeragiV2ChainLivenessProofs",
       "symbol": "HeightLivenessObligation",
       "status": "specified_unproved"
@@ -439,16 +439,16 @@
     },
     {
       "id": "typed-rollover-handoff-model-safety",
-      "requirement": "In the orthogonal typed rollover model, TypedRolloverSpec always preserves the complete 21-conjunct TypedRolloverSafetyInvariant; from an invariant state, every non-stuttering Next step also satisfies the four torn-history, foreign-owner, predecessor-mismatch, and wrong-successor step-safety predicates. The latter theorem is a one-step kernel, not a temporal proof of the four action-property wrappers. Production source seals constrain alignment with the abstraction but do not prove Rust-to-TLA semantic refinement",
+      "requirement": "In the orthogonal sole-V2 typed rollover model, the proofless obligations require TypedRolloverSpec to preserve TypedRolloverSafetyInvariant: responder generation compaction is terminal-only, persists one atomic LifecycleSnapshotV2 successor with empty server-stream and request-gate tables before memory publication, restores the durable predecessor or successor across the modeled crash points, allocates requester epochs durably before use without reuse, preserves exact handoff identity, isolates late callbacks, and returns Capacity fail-atomically for active-state or counter exhaustion. Finite TLC and the mutation matrix are bounded evidence only; no Rust-to-TLA semantic refinement theorem is claimed",
       "module": "SumeragiV2TypedRolloverHandoffProofs",
-      "symbol": "TypedRolloverSpecAlwaysSafe / TypedRolloverNextSatisfiesActionSafety",
+      "symbol": "TypedRolloverSpecAlwaysSafeObligation / TypedRolloverNextPreservesSafetyObligation",
       "status": "specified_unproved"
     },
     {
       "id": "typed-rollover-handoff-conditional-local-liveness",
-      "requirement": "In the orthogonal typed rollover proof, an inductive eight-rank control partition plus persistent weakly fair invalid-candidate rejection derives that ResponsiveTypedRolloverSpec satisfies conditional changed-roster local handoff progress under NoRolloverFailure. The exact ten finite local weak-fair service actions cover the rank descents and fail-stop candidate rejections. The theorem does not prove recovery after failure, eventual finality validation, network delivery, writer flush, repeated rollover, end-to-end liveness, or Rust-to-TLA semantic refinement; fresh strict TLAPS remains required",
+      "requirement": "In the orthogonal sole-V2 typed rollover model, ResponsiveChangedRosterRolloverLiveness is retained only as a proofless temporal target. No derivation from fairness is claimed: recovery after failure, eventual finality validation, network delivery, writer flush, rotating-leader progress, repeated rollover, end-to-end liveness, and Rust-to-TLA semantic refinement remain outside this obligation. It remains specified_unproved until a fresh strict TLAPS proof establishes the target",
       "module": "SumeragiV2TypedRolloverHandoffProofs",
-      "symbol": "ResponsiveChangedRosterRolloverLivenessFromWeakFairness",
+      "symbol": "ResponsiveChangedRosterRolloverLivenessObligation",
       "status": "specified_unproved"
     },
     {

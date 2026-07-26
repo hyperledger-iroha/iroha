@@ -76,7 +76,7 @@ use iroha_crypto::{
 #[cfg(test)]
 use iroha_data_model::da::types::DaRentQuote;
 use iroha_data_model::{
-    ChainId,
+    ChainId, HasMetadata,
     account::{
         Account, AccountId, NewAccount,
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
@@ -156,10 +156,10 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
     transaction::{
-        Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, IvmProved,
-        PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
-        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
-        TransactionPayload, TransactionSubmissionReceipt,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, PrivateCreateKaigi,
+        PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction, PrivateKaigiArtifacts,
+        PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionPayload,
+        TransactionSubmissionReceipt,
         executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
     },
@@ -183,6 +183,7 @@ use kaigi_zk::{
     compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, empty_roster_root_hash,
     roster_root_limbs,
 };
+use kotodama_lang::{encoding, instruction, metadata::ProgramMetadata, syscalls};
 use napi::{
     ValueType,
     bindgen_prelude::{
@@ -1975,13 +1976,12 @@ fn subscription_syscall_program_bytes(syscall: u32, max_cycles: NonZeroU64) -> V
     let opcode = u8::try_from(syscall).expect("subscription syscall opcode fits in u8");
     let mut code = Vec::new();
     code.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(ivm::instruction::wide::system::SCALL, opcode)
-            .to_le_bytes(),
+        &encoding::wide::encode_sys(instruction::wide::system::SCALL, opcode).to_le_bytes(),
     );
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let mut artifact = ivm::ProgramMetadata {
+    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    let mut artifact = ProgramMetadata {
         max_cycles: max_cycles.get(),
-        ..ivm::ProgramMetadata::default()
+        ..ProgramMetadata::default()
     }
     .encode();
     artifact.extend_from_slice(&code);
@@ -2012,7 +2012,7 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
             "subscription trigger executable must be exact IVM bytecode",
         ));
     };
-    let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref()).map_err(norito_to_napi)?;
+    let parsed = ProgramMetadata::parse(bytecode.as_ref()).map_err(norito_to_napi)?;
     let max_cycles = NonZeroU64::new(parsed.metadata.max_cycles).ok_or_else(|| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -2020,12 +2020,12 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
         )
     })?;
     let program_kind = if bytecode.as_ref()
-        == subscription_syscall_program_bytes(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL, max_cycles)
+        == subscription_syscall_program_bytes(syscalls::SYSCALL_SUBSCRIPTION_BILL, max_cycles)
     {
         "billing"
     } else if bytecode.as_ref()
         == subscription_syscall_program_bytes(
-            ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+            syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
             max_cycles,
         )
     {
@@ -2123,7 +2123,7 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
                     "usage subscription trigger must use an execute-trigger filter",
                 ));
             };
-            let trigger_id = filter.trigger_id().as_ref().ok_or_else(|| {
+            let trigger_id = filter.trigger_id().ok_or_else(|| {
                 napi::Error::new(
                     napi::Status::InvalidArg,
                     "usage subscription trigger filter must bind a trigger id",
@@ -3783,7 +3783,7 @@ pub struct JsDaProofRecord {
     #[doc = "Hex digests for each segment-level branch."]
     pub chunk_segments_hex: Vec<String>,
     #[doc = "Total number of chunks committed by the PoR root."]
-    pub chunk_count: u64,
+    pub chunk_count: JsU64,
     #[doc = "Hex digests in the chunk-level Merkle authentication path."]
     pub chunk_merkle_path_hex: Vec<String>,
     #[doc = "Whether the proof verified against the supplied root."]
@@ -3985,7 +3985,7 @@ fn proof_to_js_record(report: &ProofReport) -> JsDaProofRecord {
         leaf_bytes_b64: STANDARD.encode(&report.proof.leaf_bytes),
         segment_leaves_hex: hex_list(&report.proof.segment_leaves),
         chunk_segments_hex: hex_list(&report.proof.chunk_segments),
-        chunk_count: report.proof.chunk_count,
+        chunk_count: JsU64(report.proof.chunk_count),
         chunk_merkle_path_hex: hex_list(&report.proof.chunk_merkle_path),
         verified: report.verified,
     }
@@ -5913,7 +5913,7 @@ fn parse_da_proof_record(value: &Value, index: usize) -> napi::Result<JsDaProofR
         leaf_bytes_b64: string_field_ctx(map, "leaf_bytes_b64", &ctx)?,
         segment_leaves_hex: string_list_field_ctx(map, "segment_leaves", &ctx)?,
         chunk_segments_hex: string_list_field_ctx(map, "chunk_segments", &ctx)?,
-        chunk_count: u64_field_ctx(map, "chunk_count", &ctx)?,
+        chunk_count: JsU64(u64_field_ctx(map, "chunk_count", &ctx)?),
         chunk_merkle_path_hex: string_list_field_ctx(map, "chunk_merkle_path", &ctx)?,
         verified: bool_field_ctx(map, "verified", &ctx)?,
     })

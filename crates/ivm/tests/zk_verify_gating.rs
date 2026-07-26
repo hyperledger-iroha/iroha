@@ -2,7 +2,7 @@ use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
     gas::ZkGasScheduleV1,
-    host::{self, DefaultHost, ZkCurve, ZkHalo2Backend, ZkHalo2Config},
+    host::{self, DefaultHost, ZkHalo2Backend, ZkHalo2Config},
     syscalls,
 };
 
@@ -72,24 +72,6 @@ fn verify_syscalls_gating_returns_status_when_disabled() {
 }
 
 #[test]
-fn verify_syscalls_reject_legacy_bn254_envelopes() {
-    let mut vm = IVM::new(u64::MAX);
-    let mut host = DefaultHost::new();
-    let envelope = canonical_envelope(BackendTag::Halo2Bn254, host::LABEL_TRANSFER);
-    let payload = encode_envelope(&envelope);
-
-    let gas = run_verify(
-        syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-        &mut host,
-        &mut vm,
-        &payload,
-    );
-    assert_eq!(gas, actual_verify_gas(&envelope, payload.len()));
-    assert_eq!(vm.register(10), 0);
-    assert_eq!(vm.register(11), host::ERR_BACKEND);
-}
-
-#[test]
 fn default_host_fails_closed_for_canonical_pasta_envelopes() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = DefaultHost::new().with_zk_halo2_config(ZkHalo2Config {
@@ -110,29 +92,6 @@ fn default_host_fails_closed_for_canonical_pasta_envelopes() {
             "standalone host has no verifier-key registry for {number:x}"
         );
     }
-}
-
-#[test]
-fn curve_configuration_does_not_admit_legacy_bn254() {
-    let mut vm = IVM::new(u64::MAX);
-    let mut host = DefaultHost::new().with_zk_halo2_config(ZkHalo2Config {
-        enabled: true,
-        curve: ZkCurve::Bn254,
-        backend: ZkHalo2Backend::Ipa,
-        ..ZkHalo2Config::default()
-    });
-    let envelope = canonical_envelope(BackendTag::Halo2Bn254, host::LABEL_TRANSFER);
-    let payload = encode_envelope(&envelope);
-
-    let gas = run_verify(
-        syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-        &mut host,
-        &mut vm,
-        &payload,
-    );
-    assert_eq!(gas, actual_verify_gas(&envelope, payload.len()));
-    assert_eq!(vm.register(10), 0);
-    assert_eq!(vm.register(11), host::ERR_BACKEND);
 }
 
 #[test]
@@ -199,11 +158,7 @@ fn verify_syscalls_backend_tag_matrix_is_fail_closed() {
     let mut vm = IVM::new(u64::MAX);
     let mut host = DefaultHost::new();
 
-    for backend in [
-        BackendTag::Halo2IpaPasta,
-        BackendTag::Halo2Bn254,
-        BackendTag::Unsupported,
-    ] {
+    for backend in [BackendTag::Halo2IpaPasta, BackendTag::Stark] {
         let envelope = canonical_envelope(backend, host::LABEL_TRANSFER);
         let payload = encode_envelope(&envelope);
         run_verify(

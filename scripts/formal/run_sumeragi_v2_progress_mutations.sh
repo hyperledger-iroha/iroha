@@ -267,8 +267,8 @@ run_case historical-locked-recovery-fresh-commit-bug \
 run_case ownership-invariant-n1 \
   SumeragiV2OwnershipInvariantCheck.tla ownership_n1.cfg 0 \
   "Model checking completed. No error has been found." \
-  "983041 states generated, 99328 distinct states found" \
-  "depth of the complete state graph search is 49"
+  "616705 states generated, 62464 distinct states found" \
+  "depth of the complete state graph search is 37"
 
 run_case reply-route-fixed \
   SumeragiV2ReplyRouteOwnershipMutation.tla reply_route_fixed.cfg 0 \

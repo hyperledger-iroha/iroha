@@ -47,6 +47,16 @@ VARIABLES
   closeSentThrough,
   closeAcknowledgedThrough,
   closeRetryGeneration,
+  serviceGeneration,
+  responderGeneration,
+  durableResponderGeneration,
+  requesterNextStreamEpoch,
+  requesterStreamEpoch,
+  closeStreamEpoch,
+  closedPrefix,
+  attemptLifecycleIdentities,
+  pendingHintResets,
+  discardedPartialIdentities,
   acceptedInvalidCapability,
   phase
 
@@ -74,13 +84,27 @@ MutationRoute ==
     rrClosePendingThrough <- closePendingThrough,
     rrCloseSentThrough <- closeSentThrough,
     rrCloseAcknowledgedThrough <- closeAcknowledgedThrough,
-    rrCloseRetryGeneration <- closeRetryGeneration
+    rrCloseRetryGeneration <- closeRetryGeneration,
+    rrServiceGeneration <- serviceGeneration,
+    rrResponderGeneration <- responderGeneration,
+    rrDurableResponderGeneration <- durableResponderGeneration,
+    rrRequesterNextStreamEpoch <- requesterNextStreamEpoch,
+    rrRequesterStreamEpoch <- requesterStreamEpoch,
+    rrCloseStreamEpoch <- closeStreamEpoch,
+    rrClosedPrefix <- closedPrefix,
+    rrAttemptLifecycleIdentities <- attemptLifecycleIdentities,
+    rrPendingHintResets <- pendingHintResets,
+    rrDiscardedPartialIdentities <- discardedPartialIdentities
 
-MutationRouteVars == MutationRoute!ReplyRouteVars
+MutationRouteVars == MutationRoute!ReplyRouteV2Vars
 MutationLifecycleVars ==
   <<semanticSequence, semanticHash, requesterNextSequence,
     requesterClosedThrough, closePendingThrough, closeSentThrough,
-    closeAcknowledgedThrough, closeRetryGeneration>>
+    closeAcknowledgedThrough, closeRetryGeneration,
+    serviceGeneration, responderGeneration, durableResponderGeneration,
+    requesterNextStreamEpoch, requesterStreamEpoch, closeStreamEpoch,
+    closedPrefix, attemptLifecycleIdentities, pendingHintResets,
+    discardedPartialIdentities>>
 MutationVars == <<MutationRouteVars, acceptedInvalidCapability, phase>>
 
 RequestA == "request-a"
@@ -92,6 +116,36 @@ CloseRequestA ==
 CloseRequestAAcknowledgement ==
   MutationRoute!ReplyCanonicalCloseAcknowledgement(
     0, 0, CloseThroughRequestA)
+
+ExactGenerationHint ==
+  LET observedMessageHash ==
+        MutationRoute!ReplyOutstandingRequestHash(
+          0, RequestA, 0)
+  IN MutationRoute!ReplyGenerationHint(
+       0, 0, 0, "Request", RequestA,
+       1, 2, observedMessageHash,
+       0, 0, 1, 2, observedMessageHash)
+
+ForgedResponderGenerationHint ==
+  LET observedMessageHash ==
+        MutationRoute!ReplyOutstandingRequestHash(
+          0, RequestA, 0)
+  IN MutationRoute!ReplyGenerationHint(
+       0, 0, 1, "Request", RequestA,
+       1, 2, observedMessageHash,
+       0, 0, 1, 2, observedMessageHash)
+
+UncorrelatedGenerationHint ==
+  LET observedMessageHash ==
+        {MutationRoute!ReplyCanonicalRequestIdentity(
+           1, 1, 2, RequestB, 0, 0)}
+  IN MutationRoute!ReplyGenerationHint(
+       0, 0, 0, "Request", RequestA,
+       1, 2, observedMessageHash,
+       0, 0, 1, 2, observedMessageHash)
+
+PendingGenerationReset ==
+  CHOOSE reset \in pendingHintResets: TRUE
 
 SourceAttempt(semantic, source) ==
   MutationRoute!ReplyAttemptFor(0, semantic, source)
@@ -296,6 +350,26 @@ BuggyAcceptRetiredOrdinalCollision ==
 
 RouteMutationInit ==
   /\ MutationRoute!ReplyRouteInit
+  /\ serviceGeneration =
+       [owner \in MutationOwners |->
+          [source \in MutationSources |-> 1]]
+  /\ responderGeneration =
+       [source \in MutationSources |-> 1]
+  /\ durableResponderGeneration =
+       [source \in MutationSources |-> 1]
+  /\ requesterNextStreamEpoch =
+       [owner \in MutationOwners |-> 2]
+  /\ requesterStreamEpoch =
+       [owner \in MutationOwners |->
+          [source \in MutationSources |-> 1]]
+  /\ closeStreamEpoch = requesterStreamEpoch
+  /\ closedPrefix =
+       [owner \in MutationOwners |->
+          [source \in MutationSources |->
+             MutationRoute!ReplyOccurrenceCoordinate(0, 0, 0)]]
+  /\ attemptLifecycleIdentities = {}
+  /\ pendingHintResets = {}
+  /\ discardedPartialIdentities = {}
   /\ acceptedInvalidCapability = FALSE
   /\ phase = 0
 
@@ -303,22 +377,68 @@ ClosePendingRetryStep ==
   /\ phase = 22
   /\ RouteMutationMode = "CloseLifecycleFixed"
   /\ AdvancePhase(
-       MutationRoute!RetryCloseSemanticRequest(CloseRequestA), 23)
+       MutationRoute!RetryCloseSemanticRequestV2(CloseRequestA), 23)
 
 CloseAcknowledgementStep ==
   /\ phase = 23
   /\ RouteMutationMode = "CloseLifecycleFixed"
   /\ AdvancePhase(
-       MutationRoute!AcknowledgeCloseSemanticRequest(
+       MutationRoute!AcknowledgeCloseSemanticRequestV2(
          CloseRequestAAcknowledgement), 24)
 
+GenerationPersistStep ==
+  /\ phase = 0
+  /\ RouteMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationRoute!PersistTerminalResponderGeneration(0), 40)
+
+GenerationInstallStep ==
+  /\ phase = 40
+  /\ RouteMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationRoute!InstallPersistedResponderGeneration(0), 41)
+
+GenerationStaleRequestStep ==
+  /\ phase = 41
+  /\ RouteMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationRoute!ObserveNewReplySourceV2(
+         0, RequestA, 0), 42)
+
+GenerationHintPersistenceStep ==
+  /\ phase = 42
+  /\ RouteMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationRoute!PersistFreshEpochForGenerationHint(
+         ExactGenerationHint), 43)
+
+GenerationDiscardStep ==
+  /\ phase = 43
+  /\ RouteMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationRoute!DiscardPersistedHintPartialState(
+         PendingGenerationReset), 44)
+
+FutureGenerationRejectStep ==
+  /\ phase = 44
+  /\ RouteMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationRoute!RejectFutureGenerationWithoutMutation(
+         0, 0, 3), 45)
+
 RouteMutationNext ==
+  \/ GenerationPersistStep
+  \/ GenerationInstallStep
+  \/ GenerationStaleRequestStep
+  \/ GenerationHintPersistenceStep
+  \/ GenerationDiscardStep
+  \/ FutureGenerationRejectStep
   \/ /\ phase = 0
      /\ RouteMutationMode \notin
           {"TargetSubstitution", "IntrinsicTenureSubstitution",
-           "SourceCapacitySubstitution"}
+           "SourceCapacitySubstitution", "GenerationEpochFixed"}
      /\ AdvancePhase(
-          MutationRoute!ObserveNewReplySource(0, RequestA, 0), 1)
+          MutationRoute!ObserveNewReplySourceV2(0, RequestA, 0), 1)
   \/ /\ RouteMutationMode = "TargetSubstitution"
      /\ BuggyAcceptSourceAsSemanticTarget
   \/ /\ RouteMutationMode = "IntrinsicTenureSubstitution"
@@ -327,85 +447,85 @@ RouteMutationNext ==
      /\ BuggyAcceptSourceCapacitySubstitution
   \/ /\ phase = 1
      /\ AdvancePhase(
-          MutationRoute!AcquireReplyTicket(0, RequestA, 0), 2)
+          MutationRoute!AcquireReplyTicketV2(0, RequestA, 0), 2)
   \/ /\ phase = 2
      /\ RouteMutationMode # "TicketPayloadReuse"
      /\ AdvancePhase(
-          MutationRoute!ServiceReplyRoute(0, RequestA), 3)
+          MutationRoute!ServiceReplyRouteV2(0, RequestA), 3)
   \/ /\ RouteMutationMode = "TicketPayloadReuse"
      /\ BuggyReuseTicketForNextPayload
   \/ /\ phase = 3
      /\ AdvancePhase(
-          MutationRoute!ObserveNewReplySource(0, RequestB, 0), 4)
+          MutationRoute!ObserveNewReplySourceV2(0, RequestB, 0), 4)
   \/ /\ phase = 4
      /\ AdvancePhase(
-          MutationRoute!AcquireReplyTicket(0, RequestB, 0), 5)
+          MutationRoute!AcquireReplyTicketV2(0, RequestB, 0), 5)
   \/ /\ phase = 5
      /\ AdvancePhase(
-          MutationRoute!ServiceReplyRoute(0, RequestB), 6)
+          MutationRoute!ServiceReplyRouteV2(0, RequestB), 6)
   \/ /\ phase = 6
      /\ AdvancePhase(
-          MutationRoute!RetryExactReplySource(0, RequestA, 0), 7)
+          MutationRoute!RetryExactReplySourceV2(0, RequestA, 0), 7)
   \/ /\ phase = 7
      /\ AdvancePhase(
-          MutationRoute!ObserveLaterReplyDelivery(0, RequestA, 0), 8)
+          MutationRoute!ObserveLaterReplyDeliveryV2(0, RequestA, 0), 8)
   \/ /\ phase = 8
      /\ AdvancePhase(
-          MutationRoute!ObserveNewReplySource(0, RequestA, 1), 9)
+          MutationRoute!ObserveNewReplySourceV2(0, RequestA, 1), 9)
   \/ /\ phase = 9
      /\ AdvancePhase(
-          MutationRoute!AcquireReplyTicket(0, RequestA, 1), 10)
+          MutationRoute!AcquireReplyTicketV2(0, RequestA, 1), 10)
   \/ /\ phase = 10
      /\ AdvancePhase(
-          MutationRoute!ServiceReplyRoute(0, RequestA), 11)
+          MutationRoute!ServiceReplyRouteV2(0, RequestA), 11)
   \/ /\ phase = 11
      /\ RouteMutationMode \in
           {"Fixed", "CloseLifecycleFixed", "CursorReset",
            "RetiredOrdinalCollision"}
      /\ AdvancePhase(
-          MutationRoute!ObserveLaterReplyDelivery(0, RequestA, 0), 12)
+          MutationRoute!ObserveLaterReplyDeliveryV2(0, RequestA, 0), 12)
   \/ /\ RouteMutationMode = "SourceReplacement"
      /\ BuggyLaterDeliveryReplacesAlternateSource
   \/ /\ phase = 11
      /\ RouteMutationMode = "ReconnectSiblingTicket"
      /\ AdvancePhase(
-          MutationRoute!AcquireReplyTicket(0, RequestB, 0), 17)
+          MutationRoute!AcquireReplyTicketV2(0, RequestB, 0), 17)
   \/ /\ RouteMutationMode = "ReconnectSiblingTicket"
      /\ BuggyReconnectRetainsSiblingTicket
   \/ /\ phase = 12
      /\ RouteMutationMode \in
           {"Fixed", "CloseLifecycleFixed", "CursorReset",
            "RetiredOrdinalCollision"}
-     /\ AdvancePhase(MutationRoute!RetireReplySource(0, 0), 13)
+     /\ AdvancePhase(MutationRoute!RetireReplySourceV2(0, 0), 13)
   \/ /\ phase = 13
      /\ RouteMutationMode
           \in {"Fixed", "CloseLifecycleFixed",
                "RetiredOrdinalCollision"}
      /\ AdvancePhase(
-          MutationRoute!ReconnectReplySource(0, RequestA, 0), 14)
+          MutationRoute!ReconnectReplySourceV2(0, RequestA, 0), 14)
   \/ /\ RouteMutationMode = "CursorReset"
      /\ BuggyReconnectResetsCursor
   \/ /\ phase = 14
      /\ RouteMutationMode \in {"Fixed", "CloseLifecycleFixed",
                                "CursorReset"}
      /\ AdvancePhase(
-          MutationRoute!ObserveLaterReplyDelivery(0, RequestB, 0), 15)
+          MutationRoute!ObserveLaterReplyDeliveryV2(0, RequestB, 0), 15)
   \/ /\ RouteMutationMode = "RetiredOrdinalCollision"
      /\ BuggyAcceptRetiredOrdinalCollision
   \/ /\ phase = 15
      /\ RouteMutationMode = "CloseLifecycleFixed"
      /\ AdvancePhase(
-          MutationRoute!CloseSemanticRequest(CloseRequestA), 22)
+          MutationRoute!CloseSemanticRequestV2(CloseRequestA), 22)
   \/ ClosePendingRetryStep
   \/ CloseAcknowledgementStep
   \/ /\ phase = 24
      /\ RouteMutationMode = "CloseLifecycleFixed"
      /\ AdvancePhase(
-          MutationRoute!RetryCloseSemanticRequest(CloseRequestA), 25)
+          MutationRoute!RetryCloseSemanticRequestV2(CloseRequestA), 25)
   \/ /\ phase = 25
      /\ RouteMutationMode = "CloseLifecycleFixed"
      /\ AdvancePhase(
-          MutationRoute!AcknowledgeCloseSemanticRequest(
+          MutationRoute!AcknowledgeCloseSemanticRequestV2(
             CloseRequestAAcknowledgement), 26)
 
 BothSemanticAttemptsRetained ==
@@ -513,7 +633,7 @@ CloseLifecycleIsCumulativeAndIdempotent ==
           ELSE closeRetryGeneration[0][0] = 1
 
 RouteMutationSafety ==
-  /\ MutationRoute!ReplyRouteFullSafetyInvariant
+  /\ MutationRoute!ReplyRouteV2SafetyInvariant
   /\ SourceAsSemanticTargetNeverAccepted
   /\ IntrinsicTenureSubstitutionNeverAccepted
   /\ SourceCapacitySubstitutionNeverAccepted
@@ -527,6 +647,44 @@ RouteMutationSafety ==
   /\ ReconnectPreservesCurrentCursor
   /\ PerAttemptRebindPreservesCurrentCursor
   /\ CloseLifecycleIsCumulativeAndIdempotent
+
+GenerationEpochLifecycleSafety ==
+  /\ RouteMutationSafety
+  /\ RouteMutationMode # "GenerationEpochFixed"
+       \/ /\ phase \in {0, 40, 41, 42, 43, 44, 45}
+          /\ (phase = 40 =>
+                /\ durableResponderGeneration[0] = 2
+                /\ responderGeneration[0] = 1
+                /\ MutationRoute!ReplyResponderStateTerminal(0))
+          /\ (phase \in {41, 42} =>
+                /\ durableResponderGeneration[0] = 2
+                /\ responderGeneration[0] = 2
+                /\ serviceGeneration[0][0] = 1)
+          /\ (phase = 42 =>
+                /\ MutationRoute!ReplyGenerationHintValid(
+                     ExactGenerationHint)
+                /\ ~MutationRoute!ReplyGenerationHintValid(
+                     ForgedResponderGenerationHint)
+                /\ ~MutationRoute!ReplyGenerationHintValid(
+                     UncorrelatedGenerationHint))
+          /\ (phase = 43 =>
+                /\ serviceGeneration[0][0] = 2
+                /\ requesterStreamEpoch[0][0] = 2
+                /\ requesterNextStreamEpoch[0] = 3
+                /\ Cardinality(pendingHintResets) = 1
+                /\ SourceAttempt(RequestA, 0).messageCursor = 0
+                /\ Cardinality(discardedPartialIdentities) = 0)
+          /\ (phase \in {44, 45} =>
+                LET successor ==
+                      MutationRoute!ReplyAttemptLifecycleIdentityFor(
+                        0, RequestA, 0)
+                IN /\ successor.serviceGeneration = 2
+                   /\ successor.streamEpoch = 2
+                   /\ successor.semanticSequence = 1
+                   /\ Cardinality(pendingHintResets) = 0
+                   /\ Cardinality(discardedPartialIdentities) = 1
+                   /\ MutationRoute!
+                        ReplyStaleArtifactCannotAffectSuccessor)
 
 RouteMutationTemporalProperties ==
   /\ MutationRoute!ReplyTenureAwareReplay
