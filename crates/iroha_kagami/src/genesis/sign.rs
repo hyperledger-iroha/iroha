@@ -8,7 +8,10 @@ use std::{
 
 use clap::Parser;
 use color_eyre::eyre::{WrapErr, eyre};
-use iroha_config::{base::toml::TomlSource, parameters::actual};
+use iroha_config::{
+    base::toml::TomlSource,
+    parameters::{actual, defaults},
+};
 use iroha_core::{
     block::ValidBlock,
     compliance::LaneComplianceEngine,
@@ -21,9 +24,13 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
 use iroha_data_model::{
-    account::address::ChainDiscriminantGuard, asset::AssetDefinitionAlias,
-    block::consensus_v2::ConsensusMode as WireConsensusMode, da::commitment::DaProofPolicyBundle,
-    isi::RegisterPublicLaneValidator, parameter::system::SumeragiConsensusMode, prelude::*,
+    account::address::{AccountAddress, ChainDiscriminantGuard},
+    asset::AssetDefinitionAlias,
+    block::consensus_v2::ConsensusMode as WireConsensusMode,
+    da::commitment::DaProofPolicyBundle,
+    isi::RegisterPublicLaneValidator,
+    parameter::system::SumeragiConsensusMode,
+    prelude::*,
 };
 use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::time::TimeSource;
@@ -517,7 +524,7 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
         LiveQueryStore::start_test(),
         genesis.chain_id().clone(),
     );
-    configure_staged_genesis_state(&mut state, config)?;
+    configure_staged_genesis_state(&mut state, genesis, config)?;
     install_staged_nexus_policies(&mut state, genesis, config)?;
 
     let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
@@ -589,8 +596,66 @@ fn staged_genesis_pipeline(mut pipeline: actual::Pipeline) -> actual::Pipeline {
     pipeline
 }
 
+fn staged_default_account_literal(
+    literal: &str,
+    target_discriminant: u16,
+    label: &'static str,
+) -> Result<String, color_eyre::eyre::Error> {
+    let address = AccountAddress::from_i105_for_discriminant(
+        literal,
+        Some(defaults::common::chain_discriminant()),
+    )
+    .map_err(|error| eyre!("invalid built-in {label}: {error}"))?;
+    address
+        .to_i105_for_discriminant(target_discriminant)
+        .map_err(|error| eyre!("re-encode built-in {label} for staged genesis: {error}"))
+}
+
+fn staged_default_nexus(
+    genesis: &RawGenesisTransaction,
+) -> Result<actual::Nexus, color_eyre::eyre::Error> {
+    let discriminant = genesis.chain_discriminant();
+    let mut nexus = actual::Nexus::default();
+    nexus.staking.stake_escrow_account_id = staged_default_account_literal(
+        &nexus.staking.stake_escrow_account_id,
+        discriminant,
+        "nexus.staking.stake_escrow_account_id",
+    )?;
+    nexus.staking.slash_sink_account_id = staged_default_account_literal(
+        &nexus.staking.slash_sink_account_id,
+        discriminant,
+        "nexus.staking.slash_sink_account_id",
+    )?;
+    nexus.fees.fee_sink_account_id = staged_default_account_literal(
+        &nexus.fees.fee_sink_account_id,
+        discriminant,
+        "nexus.fees.fee_sink_account_id",
+    )?;
+    if let Some(authority) = nexus.relay_worker.authority_account_id.as_mut() {
+        *authority = staged_default_account_literal(
+            authority,
+            discriminant,
+            "nexus.relay_worker.authority_account_id",
+        )?;
+    }
+    Ok(nexus)
+}
+
+fn staged_default_pipeline(
+    genesis: &RawGenesisTransaction,
+) -> Result<actual::Pipeline, color_eyre::eyre::Error> {
+    let mut pipeline = actual::Pipeline::default();
+    pipeline.gas.tech_account_id = staged_default_account_literal(
+        &pipeline.gas.tech_account_id,
+        genesis.chain_discriminant(),
+        "pipeline.gas.tech_account_id",
+    )?;
+    Ok(staged_genesis_pipeline(pipeline))
+}
+
 fn configure_staged_genesis_state(
     state: &mut State,
+    genesis: &RawGenesisTransaction,
     config: Option<&actual::Root>,
 ) -> Result<(), color_eyre::eyre::Error> {
     if let Some(config) = config {
@@ -609,9 +674,9 @@ fn configure_staged_genesis_state(
             .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
         state.set_crypto(config.crypto.clone());
     } else {
-        state.set_pipeline(staged_genesis_pipeline(actual::Pipeline::default()));
+        state.set_pipeline(staged_default_pipeline(genesis)?);
         state
-            .set_nexus(actual::Nexus::default())
+            .set_nexus(staged_default_nexus(genesis)?)
             .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
         state.set_crypto(actual::Crypto::default());
     }
@@ -690,6 +755,10 @@ impl<T: Write> RunArgs<T> for Args {
         let consensus_mode_override = self.consensus_mode.map(SumeragiConsensusMode::from);
 
         let mut genesis = RawGenesisTransaction::from_path(&self.genesis_file)?;
+        // Keep every same-thread rebuild, config parse, and bound-manifest
+        // serialization on the manifest's network. Staged execution re-enters
+        // this discriminant on its worker thread.
+        let _chain_discriminant = staged_genesis_chain_discriminant(&genesis);
         let manifest_consensus_mode = genesis.consensus_mode();
         require_v2_wire_protocol_only(&genesis)?;
         let consensus_mode = consensus_mode_override.unwrap_or(manifest_consensus_mode);
@@ -759,6 +828,7 @@ impl<T: Write> RunArgs<T> for Args {
         let prepared_genesis = if direct_sign_safe {
             genesis.with_consensus_mode(consensus_mode)
         } else {
+            let chain_discriminant = genesis.chain_discriminant();
             let mut builder = genesis.into_builder();
 
             if let Some(topology) = topology_override.as_ref() {
@@ -783,6 +853,7 @@ impl<T: Write> RunArgs<T> for Args {
 
             builder
                 .build_raw()
+                .with_chain_discriminant(chain_discriminant)
                 .with_consensus_mode(consensus_mode)
                 .with_consensus_meta()
         };
@@ -1019,7 +1090,7 @@ mod tests {
     };
 
     use super::*;
-    use iroha_crypto::KeyPair as CryptoKeyPair;
+    use iroha_crypto::{KeyPair as CryptoKeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId,
         asset::AssetDefinitionAlias,
@@ -2415,21 +2486,21 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 
     #[test]
     fn public_taira_auto_bootstrap_uses_alias_bound_xor_without_config() {
-        let peer = PeerId::new(
-            checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
+        let peer_key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal);
+        let peer_pop = bls_normal_pop_prove(peer_key_pair.private_key())
+            .expect("generate checked Taira validator proof of possession");
+        let peer = PeerId::new(peer_key_pair.public_key().clone());
         let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
         let configured_asset_id: AssetDefinitionId = crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID
             .parse()
             .expect("valid canonical asset id");
+        let bound_manifest = tempfile::NamedTempFile::new().expect("create bound manifest file");
         let args = Args {
             genesis_file: public_taira_alias_backed_npos_genesis_file(),
             out_file: None,
-            bound_manifest_out: None,
+            bound_manifest_out: Some(bound_manifest.path().to_path_buf()),
             topology: Some(topology_json),
-            peer_pops: vec![format!("{}=00", peer.public_key())],
+            peer_pops: vec![format!("{}={}", peer.public_key(), hex::encode(peer_pop))],
             private_key: Some(test_private_key_hex()),
             private_key_file: None,
             seed: None,
@@ -2443,6 +2514,14 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         writer.flush().expect("flush output");
         let bytes = writer.into_inner().expect("extract buffer");
         let block = decode_framed_signed_block(&bytes).expect("decode signed block");
+        let rebound = RawGenesisTransaction::from_path(bound_manifest.path())
+            .expect("parse config-bound Taira manifest");
+        assert_eq!(rebound.chain_id().as_str(), "iroha3-taira");
+        assert_eq!(
+            rebound.chain_discriminant(),
+            crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT,
+            "NPoS bootstrap rebuild must preserve Taira's I105 network prefix"
+        );
 
         let mut minted_asset_ids = std::collections::BTreeSet::new();
         let mut registered_asset_ids = std::collections::BTreeSet::new();

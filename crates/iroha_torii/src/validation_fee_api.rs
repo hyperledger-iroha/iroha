@@ -6,12 +6,19 @@ use axum::{
 };
 use iroha_core::state::{StateReadOnly as _, WorldReadOnly as _};
 use iroha_data_model::{
+    account::AccountId,
     governance::types::{AtWindow, ProposalKind},
     isi::{
         InstructionBox, frame_instruction_payload,
-        governance::{ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy, VotingMode},
+        governance::{
+            CastPlainBallot, ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy,
+            VotingMode,
+        },
     },
-    validation_fee::{ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotCommitmentV1},
+    validation_fee::{
+        ValidationFeePlainElectorateRulesV1, ValidationFeePolicyRegistryV1,
+        ValidationFeePolicySnapshotCommitmentV1,
+    },
 };
 use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES,
@@ -22,6 +29,8 @@ use iroha_torii_shared::validation_fee_api::{
     ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
     ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
     ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListV1,
+    ValidationFeePlainBallotDirectionV1, ValidationFeePlainBallotDraftRequestV1,
+    ValidationFeePlainBallotDraftResponseV1,
     ValidationFeeProposalLockV1, ValidationFeeProposalLocksV1,
     ValidationFeeProposalPipelineStageV1, ValidationFeeProposalPipelineV1,
     ValidationFeeProposalRecordV1, ValidationFeeProposalReferendumV1,
@@ -32,6 +41,7 @@ use mv::storage::StorageReadOnly as _;
 
 use crate::{
     Error, JsonBody, NoritoBody, NoritoJson, NoritoQuery, SharedAppState, check_access,
+    gov::validation_fee_plain_electorate_rules,
     utils::extractors::NoritoOnly,
 };
 
@@ -71,6 +81,28 @@ fn parse_proposal_id(value: &str) -> Result<[u8; 32], Error> {
     bytes
         .try_into()
         .map_err(|_| bad_request("proposal_id must decode to exactly 32 bytes"))
+}
+
+fn retained_plain_electorate_rules(
+    proposal_kind: &ProposalKind,
+) -> Result<&ValidationFeePlainElectorateRulesV1, Error> {
+    let rules = match proposal_kind {
+        ProposalKind::ValidationFeePolicy(payload) => &payload.plain_electorate_rules,
+        ProposalKind::ValidationFeePayoutLifecycle(payload) => &payload.plain_electorate_rules,
+        ProposalKind::DeployContract(_)
+        | ProposalKind::RuntimeUpgrade(_)
+        | ProposalKind::SccpRouteGovernance(_) => {
+            return Err(inconsistent(
+                "non-validation-fee proposal reached the typed validation-fee projection",
+            ));
+        }
+    };
+    if let Some(reason) = rules.invariant_error() {
+        return Err(inconsistent(format!(
+            "validation-fee proposal retained invalid PLAIN electorate rules: {reason}"
+        )));
+    }
+    Ok(rules)
 }
 
 fn parliament_body_progress(
@@ -395,6 +427,7 @@ pub(crate) async fn handler_proposal_detail(
     ) {
         return Err(not_found("validation-fee proposal was not found"));
     }
+    let plain_electorate_rules = retained_plain_electorate_rules(&proposal.kind)?;
     let referendum = world
         .governance_referenda()
         .get(&proposal_id)
@@ -410,6 +443,17 @@ pub(crate) async fn handler_proposal_detail(
     )?;
     let (approve, reject, abstain, approved) =
         if let Some(evidence) = proposal.finalization_evidence.as_ref() {
+            if evidence.mode != VotingMode::Plain
+                || evidence.min_turnout != plain_electorate_rules.min_turnout
+                || evidence.approval_threshold_numerator
+                    != plain_electorate_rules.approval_threshold_numerator
+                || evidence.approval_threshold_denominator
+                    != plain_electorate_rules.approval_threshold_denominator
+            {
+                return Err(inconsistent(
+                    "validation-fee finalization evidence differs from retained PLAIN electorate rules",
+                ));
+            }
             (
                 evidence.approve,
                 evidence.reject,
@@ -420,8 +464,8 @@ pub(crate) async fn handler_proposal_detail(
             let (approve, reject, abstain) = live_plain_tally(
                 world.governance_locks().get(&proposal_id),
                 referendum.h_end,
-                gov.conviction_step_blocks,
-                gov.max_conviction,
+                plain_electorate_rules.conviction_step_blocks,
+                plain_electorate_rules.max_conviction,
             )?;
             (approve, reject, abstain, None)
         };
@@ -441,9 +485,13 @@ pub(crate) async fn handler_proposal_detail(
             reject: reject.to_string(),
             abstain: abstain.to_string(),
             turnout: turnout.to_string(),
-            min_turnout: gov.min_turnout.to_string(),
-            approval_threshold_numerator: gov.approval_threshold_q_num.to_string(),
-            approval_threshold_denominator: gov.approval_threshold_q_den.to_string(),
+            min_turnout: plain_electorate_rules.min_turnout.to_string(),
+            approval_threshold_numerator: plain_electorate_rules
+                .approval_threshold_numerator
+                .to_string(),
+            approval_threshold_denominator: plain_electorate_rules
+                .approval_threshold_denominator
+                .to_string(),
             approved,
         },
         locks: public_locks(world.governance_locks().get(&proposal_id)),
@@ -469,7 +517,14 @@ fn canonical_draft_instruction(
             "validation-fee governance supports plain referendum voting only",
         ));
     }
-    let proposal_kind = request.proposal.proposal_kind();
+    if let Some(reason) = request.plain_electorate_rules.invariant_error() {
+        return Err(bad_request(format!(
+            "invalid validation-fee PLAIN electorate rules: {reason}"
+        )));
+    }
+    let proposal_kind = request
+        .proposal
+        .proposal_kind(&request.plain_electorate_rules);
     let instruction: InstructionBox = match &request.proposal {
         ValidationFeeProposalDraftPayloadV1::Policy {
             policy,
@@ -502,6 +557,7 @@ fn canonical_draft_instruction(
                 payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
                 referendum_window: request.referendum_window,
                 mode: Some(VotingMode::Plain),
+                plain_electorate_rules: request.plain_electorate_rules.clone(),
             }
             .into()
         }
@@ -525,6 +581,7 @@ fn canonical_draft_instruction(
                 payout_binding: payout_binding.clone(),
                 referendum_window: request.referendum_window,
                 mode: Some(VotingMode::Plain),
+                plain_electorate_rules: request.plain_electorate_rules.clone(),
             }
             .into()
         }
@@ -568,6 +625,22 @@ fn validate_draft_referendum_window(
     Ok(())
 }
 
+fn framed_instruction_draft(
+    instruction: &InstructionBox,
+) -> Result<ValidationFeeProposalInstructionDraftV1, Error> {
+    let wire_id = iroha_data_model::isi::Instruction::id(&**instruction).to_string();
+    let payload = iroha_data_model::isi::Instruction::dyn_encode(&**instruction);
+    let framed = frame_instruction_payload(&wire_id, &payload).map_err(|error| {
+        inconsistent(format!(
+            "failed to frame native validation-fee instruction: {error}"
+        ))
+    })?;
+    Ok(ValidationFeeProposalInstructionDraftV1 {
+        wire_id,
+        payload_hex: hex::encode(framed),
+    })
+}
+
 /// Build one exact native validation-fee proposal instruction for local signing.
 pub(crate) async fn handler_proposal_draft(
     State(app): State<SharedAppState>,
@@ -583,31 +656,191 @@ pub(crate) async fn handler_proposal_draft(
     )
     .await?;
     let (proposal_kind, instruction) = canonical_draft_instruction(&request)?;
+    let gov = app.state.governance_snapshot();
+    if !gov.plain_voting_enabled {
+        return Err(inconsistent(
+            "validation-fee proposal drafting requires active PLAIN governance voting",
+        ));
+    }
+    if gov.voting_asset_id != gov.citizenship_asset_id {
+        return Err(inconsistent(
+            "validation-fee PLAIN governance requires one shared voting and citizenship asset",
+        ));
+    }
+    let expected_plain_electorate_rules = validation_fee_plain_electorate_rules(&gov);
+    if let Some(reason) = expected_plain_electorate_rules.invariant_error() {
+        return Err(inconsistent(format!(
+            "active governance cannot form valid validation-fee PLAIN electorate rules: {reason}"
+        )));
+    }
+    if request.plain_electorate_rules != expected_plain_electorate_rules {
+        return Err(bad_request(
+            "validation-fee PLAIN electorate rules differ from active governance policy",
+        ));
+    }
     let current_tip = u64::try_from(app.state.committed_height())
         .map_err(|_| inconsistent("ledger height does not fit validation-fee draft timing"))?;
     validate_draft_referendum_window(
         request.referendum_window,
         current_tip,
-        app.state.gov.min_enactment_delay,
-        app.state.gov.window_span,
+        gov.min_enactment_delay,
+        gov.window_span,
     )
     .map_err(bad_request)?;
     let proposal_id = proposal_kind.fingerprint();
-    let wire_id = iroha_data_model::isi::Instruction::id(&*instruction).to_string();
-    let payload = iroha_data_model::isi::Instruction::dyn_encode(&*instruction);
-    let framed = frame_instruction_payload(&wire_id, &payload).map_err(|error| {
-        inconsistent(format!(
-            "failed to frame native validation-fee proposal instruction: {error}"
-        ))
-    })?;
+    let instruction = framed_instruction_draft(&instruction)?;
     Ok(JsonBody(ValidationFeeProposalDraftResponseV1 {
         version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
         proposal_id: hex::encode(proposal_id),
         proposal_kind,
-        tx_instructions: vec![ValidationFeeProposalInstructionDraftV1 {
-            wire_id,
-            payload_hex: hex::encode(framed),
-        }],
+        tx_instructions: vec![instruction],
+    }))
+}
+
+fn canonical_plain_ballot(
+    proposal_id: &str,
+    owner: AccountId,
+    direction: ValidationFeePlainBallotDirectionV1,
+    rules: &ValidationFeePlainElectorateRulesV1,
+) -> CastPlainBallot {
+    CastPlainBallot {
+        referendum_id: proposal_id.to_owned(),
+        owner,
+        amount: rules.ballot_amount.clone(),
+        duration_blocks: rules.ballot_duration_blocks,
+        direction: direction.native_code(),
+    }
+}
+
+/// Build one exact proposal-bound PLAIN ballot instruction for local signing.
+pub(crate) async fn handler_plain_ballot_draft(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
+    Path(proposal_id): Path<String>,
+    NoritoJson(request): NoritoJson<ValidationFeePlainBallotDraftRequestV1>,
+) -> Result<JsonBody<ValidationFeePlainBallotDraftResponseV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft",
+    )
+    .await?;
+    if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1 {
+        return Err(bad_request(
+            "unsupported validation-fee PLAIN ballot draft version",
+        ));
+    }
+
+    let proposal_id_bytes = parse_proposal_id(&proposal_id)?;
+    let world = app.state.world_view();
+    let proposal = world
+        .governance_proposals()
+        .get(&proposal_id_bytes)
+        .ok_or_else(|| not_found("validation-fee proposal was not found"))?;
+    if proposal.kind.fingerprint() != proposal_id_bytes {
+        return Err(inconsistent(
+            "validation-fee proposal identifier differs from its native fingerprint",
+        ));
+    }
+    let rules = retained_plain_electorate_rules(&proposal.kind)?;
+    let referendum = world
+        .governance_referenda()
+        .get(&proposal_id)
+        .copied()
+        .ok_or_else(|| inconsistent("validation-fee proposal has no exact retained referendum"))?;
+    if referendum.mode != iroha_core::state::GovernanceReferendumMode::Plain {
+        return Err(inconsistent(
+            "validation-fee proposal retained a non-plain referendum",
+        ));
+    }
+    let next_height = u64::try_from(app.state.committed_height())
+        .map_err(|_| inconsistent("ledger height does not fit validation-fee ballot timing"))?
+        .checked_add(1)
+        .ok_or_else(|| inconsistent("validation-fee ballot inclusion height overflows"))?;
+    if !matches!(
+        referendum.status,
+        iroha_core::state::GovernanceReferendumStatus::Open
+    ) || next_height < referendum.h_start
+        || next_height > referendum.h_end
+    {
+        return Err(bad_request(
+            "validation-fee referendum is not open at the next possible inclusion height",
+        ));
+    }
+
+    if world
+        .governance_locks()
+        .get(&proposal_id)
+        .is_some_and(|locks| locks.locks.contains_key(&request.owner))
+    {
+        return Err(bad_request(
+            "validation-fee referendum accepts one effective ballot per account",
+        ));
+    }
+    let citizen = world.citizens().get(&request.owner).ok_or_else(|| {
+        bad_request("validation-fee ballot owner has no retained citizen record")
+    })?;
+    if citizen.amount < rules.citizenship_amount {
+        return Err(bad_request(
+            "validation-fee ballot owner is below the proposal-bound citizenship amount",
+        ));
+    }
+    let approvals = world
+        .governance_stage_approvals()
+        .get(&proposal_id)
+        .ok_or_else(|| {
+            inconsistent("validation-fee proposal has no retained Parliament approval gate")
+        })?;
+    let gate_height = approvals.approval_gate_height.ok_or_else(|| {
+        inconsistent("validation-fee proposal has not crossed its Parliament approval gate")
+    })?;
+    let eligible = if request.owner == proposal.proposer {
+        citizen.bonded_height <= gate_height
+    } else {
+        citizen.bonded_height > gate_height
+    };
+    if !eligible {
+        return Err(bad_request(
+            "ballot owner is outside the proposal-bound citizen eligibility rule",
+        ));
+    }
+    let eligible_count = world
+        .citizens()
+        .iter()
+        .filter(|(account_id, record)| {
+            record.amount >= rules.citizenship_amount
+                && if *account_id == &proposal.proposer {
+                    record.bonded_height <= gate_height
+                } else {
+                    record.bonded_height > gate_height
+                }
+        })
+        .count();
+    if u64::try_from(eligible_count).unwrap_or(u64::MAX) > rules.max_members {
+        return Err(inconsistent(
+            "validation-fee electorate exceeds its immutable member cap",
+        ));
+    }
+
+    let ballot = canonical_plain_ballot(
+        &proposal_id,
+        request.owner.clone(),
+        request.direction,
+        rules,
+    );
+    let amount = ballot.amount.to_string();
+    let duration_blocks = ballot.duration_blocks.to_string();
+    let instruction: InstructionBox = ballot.into();
+    Ok(JsonBody(ValidationFeePlainBallotDraftResponseV1 {
+        version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
+        proposal_id,
+        owner: request.owner,
+        amount,
+        duration_blocks,
+        direction: request.direction,
+        tx_instructions: vec![framed_instruction_draft(&instruction)?],
     }))
 }
 

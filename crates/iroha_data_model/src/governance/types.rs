@@ -31,7 +31,10 @@ use crate::{
     },
     runtime::RuntimeUpgradeManifest,
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
-    validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
+    validation_fee::{
+        ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
+        ValidationFeeTreasuryPayoutBindingV1,
+    },
 };
 
 /// Errors emitted when parsing hex-encoded hashes used by governance payloads.
@@ -479,6 +482,8 @@ pub struct ValidationFeePolicyProposal {
     pub policy: ValidationFeePolicyV1,
     /// Exact previously enacted payout lifecycle required by a policy carrying a payout binding.
     pub payout_lifecycle_proposal_id: Option<[u8; 32]>,
+    /// Exact PLAIN electorate rules committed at proposal creation.
+    pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
 
 /// Proposal payload authorizing one exact validation-fee payout lifecycle.
@@ -494,6 +499,8 @@ pub struct ValidationFeePayoutLifecycleProposal {
     /// payload, so the native proposal fingerprint binds the seal transitively
     /// without accepting a redundant caller-supplied value.
     pub payout_binding: ValidationFeeTreasuryPayoutBindingV1,
+    /// Exact PLAIN electorate rules committed at proposal creation.
+    pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
 
 /// Inclusive execution window for enactment certificates.
